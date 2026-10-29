@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use rampage_api::{WasmList, pyinstaller_archive, wasm_module};
+use rampage_api::{PyInstallerPage, PyInstallerResult, WasmList, pyinstaller_archive, wasm_module};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name)
@@ -47,9 +47,16 @@ fn malformed_component_and_foreign_files_are_bounded_answers() {
     assert!(wasm_module(&fixture("module.wasm"), None, None, Some(101)).is_err());
 }
 
+fn archive_page(name: &str, offset: Option<usize>, limit: Option<usize>) -> PyInstallerPage {
+    match pyinstaller_archive(&fixture(name), offset, limit).unwrap() {
+        Some(PyInstallerResult::Archive(page)) => *page,
+        other => panic!("{name}: {other:?}"),
+    }
+}
+
 #[test]
 fn pyinstaller_archives_with_both_cookie_layouts_page_their_toc() {
-    let page = pyinstaller_archive(&fixture("pyinstaller-312.elf"), Some(3), Some(2)).unwrap().unwrap();
+    let page = archive_page("pyinstaller-312.elf", Some(3), Some(2));
     let archive = &page.archive;
     assert_eq!(archive.python_version, "3.12");
     assert_eq!(archive.python_library.as_deref(), Some("libpython3.12.so.1.0"));
@@ -63,10 +70,23 @@ fn pyinstaller_archives_with_both_cookie_layouts_page_their_toc() {
     let bytes = std::fs::read(fixture("pyinstaller-312.elf")).unwrap();
     assert_eq!(&bytes[pyz.offset as usize..][..4], b"PYZ\0");
 
-    let legacy = pyinstaller_archive(&fixture("pyinstaller-27.macho"), None, None).unwrap().unwrap();
+    let legacy = archive_page("pyinstaller-27.macho", None, None);
     assert_eq!((legacy.archive.cookie_size, legacy.archive.python_version.as_str()), (24, "2.7"));
     assert_eq!(legacy.archive.pyz.as_ref().unwrap().python_version, Some("2.7"));
     assert_eq!((legacy.returned, legacy.more), (3, false));
     assert!(pyinstaller_archive(&fixture("hello-x64.elf"), None, None).unwrap().is_none());
     assert!(pyinstaller_archive(&fixture("hello-x64.elf"), None, Some(0)).is_err());
+}
+
+#[test]
+fn a_stray_cookie_magic_is_no_archive_with_the_rejected_candidates() {
+    let path = std::env::temp_dir().join(format!("rampage-stray-magic-{}.bin", std::process::id()));
+    std::fs::write(&path, b"a bootloader holding MEI\x0c\x0b\x0a\x0b\x0e as a constant").unwrap();
+    let result = pyinstaller_archive(&path, None, None);
+    std::fs::remove_file(&path).unwrap();
+    let Some(PyInstallerResult::NoCookie(miss)) = result.unwrap() else { panic!("expected no cookie") };
+    assert_eq!(miss.rejected_candidates.len(), 1);
+    assert!(miss.rejected_candidates[0].contains("cookie magic at 0x15"), "{:?}", miss.rejected_candidates);
+    let json = serde_json::to_value(&miss).unwrap();
+    assert!(json["archive"].is_null());
 }

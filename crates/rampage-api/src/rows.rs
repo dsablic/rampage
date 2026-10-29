@@ -4,6 +4,7 @@ use rampage_arch::Arch;
 use rampage_loaders::{Format, Section, Segment};
 use serde::{Deserialize, Serialize};
 
+use crate::ApiError;
 use crate::annotations::Field;
 
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
@@ -66,6 +67,107 @@ impl<T> Page<T> {
     }
 }
 
+/// A page of a list fitted to the tool-result JSON budget as well as to `limit`: whole items only, and always at
+/// least the first one (a first item too large for the budget is an error, so paging always progresses).
+#[derive(Debug, Serialize)]
+pub struct FittedPage<T> {
+    pub total: usize,
+    pub offset: usize,
+    pub items: Vec<T>,
+    /// Where the next page starts; `None` on the last page.
+    pub next_offset: Option<usize>,
+    /// Whether the JSON byte budget, not `limit`, ended the page.
+    pub byte_capped: bool,
+}
+
+impl<T: Serialize> FittedPage<T> {
+    /// An empty page, standing in for the real one while the rest of a result is measured.
+    pub(crate) fn empty() -> Self {
+        Self { total: 0, offset: 0, items: Vec::new(), next_offset: None, byte_capped: false }
+    }
+
+    /// The items after the first `offset` of `items`, as many as `limit` allows and fit `budget` JSON bytes.
+    pub(crate) fn of(
+        items: Vec<T>,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        budget: usize,
+    ) -> Result<Self, ApiError> {
+        let total = items.len();
+        let offset = offset.unwrap_or(0).min(total);
+        Self::fit(total, offset, limit, budget, items.into_iter().skip(offset))
+    }
+
+    /// Like [`FittedPage::of`] for `rest`, the items of a `total`-long list from `offset` on, produced lazily.
+    pub(crate) fn fit(
+        total: usize,
+        offset: usize,
+        limit: Option<usize>,
+        budget: usize,
+        rest: impl IntoIterator<Item = T>,
+    ) -> Result<Self, ApiError> {
+        let window = fit_window(rest, limit.unwrap_or(usize::MAX), budget)?;
+        let next = offset.saturating_add(window.items.len());
+        Ok(Self {
+            total,
+            offset,
+            next_offset: (next < total).then_some(next),
+            items: window.items,
+            byte_capped: window.byte_capped,
+        })
+    }
+}
+
+/// The items of one page and whether the byte budget ended it.
+pub(crate) struct Window<T> {
+    pub items: Vec<T>,
+    pub byte_capped: bool,
+}
+
+/// Bytes kept free beside a measured header for the paging numbers it does not hold yet.
+const PAGING_SLACK: usize = 96;
+
+/// The JSON bytes a result's list items may take once `header` (the result without them) is in it.
+pub(crate) fn item_budget(header: &impl Serialize) -> Result<usize, ApiError> {
+    crate::tools::MAX_RESULT_CHARS
+        .checked_sub(json_size(header)? + PAGING_SLACK)
+        .ok_or_else(|| ApiError::Invalid("the result's fixed fields exceed its JSON byte budget".to_owned()))
+}
+
+/// At most `limit` items from the start of `items`, as many whole ones as fit `budget` JSON bytes. A first item
+/// that cannot fit is an error rather than an empty page, so paging always progresses.
+pub(crate) fn fit_window<T: Serialize>(
+    items: impl IntoIterator<Item = T>,
+    limit: usize,
+    budget: usize,
+) -> Result<Window<T>, ApiError> {
+    let mut window = Window { items: Vec::new(), byte_capped: false };
+    let mut used = 0;
+    for item in items.into_iter().take(limit) {
+        // One more byte for the separating comma.
+        let size = json_size(&item)? + 1;
+        if used + size > budget {
+            if window.items.is_empty() {
+                return Err(ApiError::Invalid(format!(
+                    "one item is {size} JSON bytes, over the {budget} this result has room for"
+                )));
+            }
+            window.byte_capped = true;
+            break;
+        }
+        used += size;
+        window.items.push(item);
+    }
+    Ok(window)
+}
+
+/// The compact JSON length of `value`, as a tool result is sent.
+pub(crate) fn json_size(value: &impl Serialize) -> Result<usize, ApiError> {
+    serde_json::to_vec(value)
+        .map(|bytes| bytes.len())
+        .map_err(|error| ApiError::Invalid(format!("result is not JSON-serializable: {error}")))
+}
+
 /// How a unit enum variant (a kind, a confidence) reads in JSON, so text output uses the same words.
 pub fn label(value: &impl Serialize) -> String {
     match serde_json::to_value(value) {
@@ -100,6 +202,21 @@ mod tests {
         assert_eq!(super::label(&rampage_detect::Kind::Packer), "packer");
         assert_eq!(super::label(&rampage_detect::Kind::Runtime), "runtime");
         assert_eq!(super::label(&3), "3");
+    }
+
+    #[test]
+    fn fitted_pages_hold_whole_items_within_the_budget() {
+        let items: Vec<String> = (0..10).map(|index| format!("{index}{}", "x".repeat(98))).collect();
+        // Each item is 101 JSON bytes plus a comma.
+        let page = super::FittedPage::of(items.clone(), Some(2), Some(5), 350).unwrap();
+        assert_eq!((page.items.len(), page.byte_capped, page.next_offset, page.total), (3, true, Some(5), 10));
+        assert!(page.items[0].starts_with('2'));
+        let page = super::FittedPage::of(items.clone(), Some(8), None, 10_000).unwrap();
+        assert_eq!((page.items.len(), page.byte_capped, page.next_offset), (2, false, None));
+        let page = super::FittedPage::of(items.clone(), Some(20), None, 10_000).unwrap();
+        assert_eq!((page.offset, page.items.len(), page.next_offset), (10, 0, None));
+        let error = super::FittedPage::of(items, None, None, 50).unwrap_err();
+        assert!(error.to_string().contains("one item is 102 JSON bytes"), "{error}");
     }
 }
 

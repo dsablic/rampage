@@ -4,6 +4,10 @@
 //! IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS debug entry and cross-checks the load config against the
 //! DllCharacteristics mitigations triage reports.
 
+use std::mem::{offset_of, size_of};
+
+use object::LittleEndian as LE;
+use object::pe::{ImageLoadConfigDirectory32, ImageLoadConfigDirectory64};
 use object::read::pe::{ImageNtHeaders, ImageOptionalHeader, PeFile, SectionTable};
 use serde::Serialize;
 
@@ -20,6 +24,8 @@ const IMAGE_GUARD_CF_INSTRUMENTED: u32 = 0x100;
 const IMAGE_GUARD_CF_FUNCTION_TABLE_PRESENT: u32 = 0x400;
 const IMAGE_GUARD_CF_FUNCTION_TABLE_SIZE_MASK: u32 = 0xf000_0000;
 const IMAGE_DLLCHARACTERISTICS_EX_CET_COMPAT: u32 = 0x01;
+/// IMAGE_COR20_HEADER.Flags, at offset 16: the image holds IL only, no native code.
+const COMIMAGE_FLAGS_ILONLY: u32 = 0x01;
 
 /// The load config, CET and mitigation evidence of one PE image.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -132,47 +138,35 @@ struct Layout {
     eh_count: usize,
 }
 
-const LAYOUT_32: Layout = Layout {
-    word: 4,
-    security_cookie: 60,
-    se_handler_table: 64,
-    se_handler_count: 68,
-    guard_cf_check: 72,
-    guard_cf_dispatch: 76,
-    guard_cf_table: 80,
-    guard_cf_count: 84,
-    guard_flags: 88,
-    iat_table: 104,
-    iat_count: 108,
-    long_jump_table: 112,
-    long_jump_count: 116,
-    dynamic_value_reloc_table: 120,
-    dynamic_value_reloc_offset: 136,
-    dynamic_value_reloc_section: 140,
-    eh_table: 164,
-    eh_count: 168,
-};
+/// The [`Layout`] of an object crate load config structure. The object crate stops at VolatileMetadataPointer; the
+/// EH continuation table and count follow it.
+macro_rules! layout {
+    ($structure:ty, $word:expr) => {
+        Layout {
+            word: $word,
+            security_cookie: offset_of!($structure, security_cookie),
+            se_handler_table: offset_of!($structure, sehandler_table),
+            se_handler_count: offset_of!($structure, sehandler_count),
+            guard_cf_check: offset_of!($structure, guard_cf_check_function_pointer),
+            guard_cf_dispatch: offset_of!($structure, guard_cf_dispatch_function_pointer),
+            guard_cf_table: offset_of!($structure, guard_cf_function_table),
+            guard_cf_count: offset_of!($structure, guard_cf_function_count),
+            guard_flags: offset_of!($structure, guard_flags),
+            iat_table: offset_of!($structure, guard_address_taken_iat_entry_table),
+            iat_count: offset_of!($structure, guard_address_taken_iat_entry_count),
+            long_jump_table: offset_of!($structure, guard_long_jump_target_table),
+            long_jump_count: offset_of!($structure, guard_long_jump_target_count),
+            dynamic_value_reloc_table: offset_of!($structure, dynamic_value_reloc_table),
+            dynamic_value_reloc_offset: offset_of!($structure, dynamic_value_reloc_table_offset),
+            dynamic_value_reloc_section: offset_of!($structure, dynamic_value_reloc_table_section),
+            eh_table: size_of::<$structure>(),
+            eh_count: size_of::<$structure>() + $word,
+        }
+    };
+}
 
-const LAYOUT_64: Layout = Layout {
-    word: 8,
-    security_cookie: 88,
-    se_handler_table: 96,
-    se_handler_count: 104,
-    guard_cf_check: 112,
-    guard_cf_dispatch: 120,
-    guard_cf_table: 128,
-    guard_cf_count: 136,
-    guard_flags: 144,
-    iat_table: 160,
-    iat_count: 168,
-    long_jump_table: 176,
-    long_jump_count: 184,
-    dynamic_value_reloc_table: 192,
-    dynamic_value_reloc_offset: 224,
-    dynamic_value_reloc_section: 228,
-    eh_table: 264,
-    eh_count: 272,
-};
+const LAYOUT_32: Layout = layout!(ImageLoadConfigDirectory32, 4);
+const LAYOUT_64: Layout = layout!(ImageLoadConfigDirectory64, 8);
 
 const GUARD_FLAGS: [(u32, &str); 17] = [
     (0x0000_0100, "cf_instrumented"),
@@ -258,6 +252,9 @@ fn read<Pe: ImageNtHeaders>(bytes: &[u8], bits: u8, layout: &Layout) -> Result<P
         image_base: optional.image_base(),
         size_of_image: optional.size_of_image(),
     };
+    // SafeSEH is an x86 mechanism: other 32-bit machines (ARMNT) have none, and IL-only .NET images need none.
+    let safe_seh_applies = file.nt_headers().file_header().machine.get(LE) == object::pe::IMAGE_FILE_MACHINE_I386
+        && !il_only(&file, &image);
     let mut report = PeLoadConfig {
         bits,
         dll_characteristics: crate::details::pe_mitigations(optional.dll_characteristics().0),
@@ -269,12 +266,24 @@ fn read<Pe: ImageNtHeaders>(bytes: &[u8], bits: u8, layout: &Layout) -> Result<P
     if let Some(directory) = file.data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG) {
         let (rva, size) = directory.address_range();
         if rva != 0 {
-            report.load_config = Some(directory_fields(&image, rva, size, layout, &mut report.warnings));
+            let config = directory_fields(&image, rva, size, layout, safe_seh_applies, &mut report.warnings);
+            report.load_config = Some(config);
         }
     }
     report.cet = extended_characteristics(&file, &image, &mut report.warnings);
-    report.findings = cross_check(&report);
+    report.findings = cross_check(&report, safe_seh_applies);
     Ok(report)
+}
+
+/// Whether the image's COM descriptor (CLR header) marks it IL-only.
+fn il_only<Pe: ImageNtHeaders>(file: &PeFile<Pe>, image: &Image) -> bool {
+    let Some(directory) = file.data_directory(object::pe::IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR) else {
+        return false;
+    };
+    let (rva, _) = directory.address_range();
+    let header = image.sections.pe_data_at(image.bytes, rva).and_then(|data| data.get(16..20));
+    header
+        .is_some_and(|flags| u32::from_le_bytes([flags[0], flags[1], flags[2], flags[3]]) & COMIMAGE_FLAGS_ILONLY != 0)
 }
 
 fn directory_fields(
@@ -282,6 +291,7 @@ fn directory_fields(
     rva: u32,
     directory_size: u32,
     layout: &Layout,
+    safe_seh_applies: bool,
     warnings: &mut Vec<String>,
 ) -> LoadConfig {
     let mapped = image.sections.pe_data_at(image.bytes, rva).unwrap_or_default();
@@ -353,7 +363,7 @@ fn directory_fields(
     // The guard tables carry the metadata bytes GuardFlags declares after each RVA.
     let stride = 4 + (guard_flags.unwrap_or(0) & IMAGE_GUARD_CF_FUNCTION_TABLE_SIZE_MASK).checked_shr(28).unwrap_or(0);
     let table = |pair: Option<(u64, u64)>| pair.map(|(va, count)| image.table(va, count, stride));
-    let safe_seh = (word == 4).then_some(se_handlers).flatten().map(|(va, count)| {
+    let safe_seh = safe_seh_applies.then_some(se_handlers).flatten().map(|(va, count)| {
         let table = image.table(va, count, 4);
         let wanted = usize::try_from(count).unwrap_or(usize::MAX).min(MAX_SAFESEH_HANDLERS);
         let handlers: Vec<u32> = if table.in_image {
@@ -444,7 +454,7 @@ fn extended_characteristics<Pe: ImageNtHeaders>(
 }
 
 /// Disagreements between the load config and the DllCharacteristics triage reports.
-fn cross_check(report: &PeLoadConfig) -> Vec<String> {
+fn cross_check(report: &PeLoadConfig, safe_seh_applies: bool) -> Vec<String> {
     let mut findings = Vec::new();
     let declares = |name: &str| report.dll_characteristics.contains(&name);
     let config = report.load_config.as_ref();
@@ -468,12 +478,11 @@ fn cross_check(report: &PeLoadConfig) -> Vec<String> {
     {
         findings.push("GuardFlags declare a CF function table that is absent or outside the image".to_owned());
     }
-    if report.bits == 32 {
+    if safe_seh_applies {
         let handlers = config.and_then(|config| config.safe_seh.as_ref()).map_or(0, |seh| seh.table.count);
         match (declares("no_seh"), handlers) {
             (false, 0) => findings.push(
-                "32-bit image without no_seh or a SafeSEH handler table: exception handlers are not validated"
-                    .to_owned(),
+                "x86 image without no_seh or a SafeSEH handler table: exception handlers are not validated".to_owned(),
             ),
             (true, count) if count > 0 => findings
                 .push(format!("DllCharacteristics declares no_seh yet the load config lists {count} SafeSEH handlers")),

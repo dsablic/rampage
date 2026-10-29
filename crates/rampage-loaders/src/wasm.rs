@@ -9,6 +9,7 @@ use wasmparser::{CompositeInnerType, KnownCustom, Name, Parser, Payload, TypeRef
 
 use crate::LoadError;
 use crate::carve::map_regular_file;
+use crate::warnings::CappedWarnings;
 
 /// The most sections retained in [`WasmModule::sections`]; later ones are counted only.
 pub const MAX_SECTIONS: usize = 64;
@@ -25,6 +26,9 @@ pub const MAX_TEXT_BYTES: usize = 256;
 pub const MAX_LABEL_BYTES: usize = 64;
 const MAX_PRODUCER_FIELDS: usize = 8;
 const MAX_PRODUCER_VALUES: usize = 8;
+/// The most limitations listed; one of each kind is listed and repeats are counted (see [`Limit`]).
+const MAX_LIMITATIONS: usize = 32;
+const LIMITATIONS: CappedWarnings = CappedWarnings::new(MAX_LIMITATIONS, "WebAssembly");
 
 /// What a `.wasm` file holds: a core module is parsed, a component (layer 1) is only recognised.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -190,7 +194,15 @@ pub fn parse(data: &[u8]) -> Option<WasmModule> {
         });
         return Some(module);
     }
-    Walk { module: &mut module, decoded: 0, types: Vec::new(), defined: 0, names: Vec::new() }.run(data);
+    Walk {
+        module: &mut module,
+        decoded: 0,
+        types: Vec::new(),
+        defined: 0,
+        names: std::collections::BTreeMap::new(),
+        repeats: Vec::new(),
+    }
+    .run(data);
     Some(module)
 }
 
@@ -201,8 +213,35 @@ struct Walk<'m> {
     types: Vec<String>,
     /// Code-section bodies seen, matched to defined functions in order.
     defined: usize,
-    /// Function names from the `name` section, applied once the function list is complete.
-    names: Vec<(u32, String)>,
+    /// Function names from the `name` section by function index (the first of repeats), applied once the function
+    /// list is complete.
+    names: std::collections::BTreeMap<u32, String>,
+    /// How often each kind of limitation recurred after its first, listed, occurrence.
+    repeats: Vec<(Limit, usize)>,
+}
+
+/// What kind of limitation a parse met. Only the first of each kind is described; the rest are counted, so hostile
+/// input (millions of unknown sections) cannot grow the list or make recording it quadratic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Limit {
+    Malformed,
+    Budget,
+    Sections,
+    Imports,
+    Exports,
+    Functions,
+    CustomSection,
+    UnknownSection,
+    RepeatedName,
+    ProducerFields,
+    ProducerValues,
+}
+
+impl Limit {
+    /// Whether each repeat is a separate problem in the input worth counting, rather than one cap hit again.
+    fn repeats_are_findings(self) -> bool {
+        matches!(self, Limit::CustomSection | Limit::UnknownSection | Limit::RepeatedName | Limit::ProducerValues)
+    }
 }
 
 impl Walk<'_> {
@@ -211,32 +250,45 @@ impl Walk<'_> {
             let payload = match payload {
                 Ok(payload) => payload,
                 Err(error) => {
-                    self.limit(format!("malformed at file offset {:#x}: {}", error.offset(), error.message()));
+                    let text = format!("malformed at file offset {:#x}: {}", error.offset(), error.message());
+                    self.limit(Limit::Malformed, || text);
                     break;
                 }
             };
             if let Some((id, range)) = payload.as_section() {
+                // Sections are charged to the decode budget too, so a file of millions of empty ones stays cheap.
+                if !self.budget() {
+                    break;
+                }
                 self.section(id, &payload, range);
             }
             if let Err(error) = self.payload(payload) {
-                self.limit(format!("malformed at file offset {:#x}: {}", error.offset(), error.message()));
+                let text = format!("malformed at file offset {:#x}: {}", error.offset(), error.message());
+                self.limit(Limit::Malformed, || text);
                 break;
             }
         }
         self.finish();
     }
 
-    fn limit(&mut self, text: String) {
+    /// Records a limitation of `kind`: described by `text` the first time, counted after that.
+    fn limit(&mut self, kind: Limit, text: impl FnOnce() -> String) {
         self.module.complete = false;
-        if !self.module.limitations.contains(&text) {
-            self.module.limitations.push(text);
+        match self.repeats.iter_mut().find(|(seen, _)| *seen == kind) {
+            Some((_, count)) => *count += 1,
+            None => {
+                self.repeats.push((kind, 0));
+                LIMITATIONS.push(&mut self.module.limitations, text());
+            }
         }
     }
 
     /// Counts one decoded item against [`MAX_DECODED`]; false once the budget is spent.
     fn budget(&mut self) -> bool {
         if self.decoded >= MAX_DECODED {
-            self.limit(format!("decode budget of {MAX_DECODED} section items spent; later items are not listed"));
+            self.limit(Limit::Budget, || {
+                format!("decode budget of {MAX_DECODED} sections and section items spent; later ones are not listed")
+            });
             return false;
         }
         self.decoded += 1;
@@ -264,7 +316,9 @@ impl Walk<'_> {
                 size: (range.end - range.start) as u64,
             });
         } else if self.module.sections.len() == MAX_SECTIONS {
-            self.limit(format!("more than {MAX_SECTIONS} sections; later sections are counted, not listed"));
+            self.limit(Limit::Sections, || {
+                format!("more than {MAX_SECTIONS} sections; later sections are counted, not listed")
+            });
         }
     }
 
@@ -355,7 +409,9 @@ impl Walk<'_> {
                             description,
                         });
                     } else {
-                        self.limit(format!("more than {MAX_ITEMS} imports; later imports are counted, not listed"));
+                        self.limit(Limit::Imports, || {
+                            format!("more than {MAX_ITEMS} imports; later imports are counted, not listed")
+                        });
                     }
                 }
             }
@@ -387,7 +443,9 @@ impl Walk<'_> {
                         return Ok(());
                     }
                     if self.module.exports.len() >= MAX_ITEMS {
-                        self.limit(format!("more than {MAX_ITEMS} exports; later exports are counted, not listed"));
+                        self.limit(Limit::Exports, || {
+                            format!("more than {MAX_ITEMS} exports; later exports are counted, not listed")
+                        });
                         break;
                     }
                     self.module.exports.push(WasmExport {
@@ -417,16 +475,20 @@ impl Walk<'_> {
                 };
                 // A malformed custom section is skipped, not fatal: the module's own sections stand without it.
                 if let Err(error) = parsed {
-                    self.limit(format!(
-                        "custom section `{}` malformed at file offset {:#x}: {}",
-                        label(custom.name()),
-                        error.offset(),
-                        error.message()
-                    ));
+                    self.limit(Limit::CustomSection, || {
+                        format!(
+                            "custom section `{}` malformed at file offset {:#x}: {}",
+                            label(custom.name()),
+                            error.offset(),
+                            error.message()
+                        )
+                    });
                 }
             }
             Payload::UnknownSection { id, range, .. } => {
-                self.limit(format!("unknown section id {id} at file offset {:#x} skipped", range.start));
+                self.limit(Limit::UnknownSection, || {
+                    format!("unknown section id {id} at file offset {:#x} skipped", range.start)
+                });
             }
             _ => {}
         }
@@ -441,7 +503,9 @@ impl Walk<'_> {
         if self.module.functions.len() < MAX_ITEMS {
             self.module.functions.push(function);
         } else {
-            self.limit(format!("more than {MAX_ITEMS} functions; later functions are counted, not listed"));
+            self.limit(Limit::Functions, || {
+                format!("more than {MAX_ITEMS} functions; later functions are counted, not listed")
+            });
         }
     }
 
@@ -455,8 +519,19 @@ impl Walk<'_> {
                         if !self.budget() {
                             return Ok(());
                         }
-                        if (naming.index as usize) < MAX_ITEMS {
-                            self.names.push((naming.index, clip(naming.name)));
+                        if (naming.index as usize) >= MAX_ITEMS {
+                            continue;
+                        }
+                        match self.names.entry(naming.index) {
+                            std::collections::btree_map::Entry::Vacant(entry) => {
+                                entry.insert(clip(naming.name));
+                            }
+                            std::collections::btree_map::Entry::Occupied(_) => {
+                                let index = naming.index;
+                                self.limit(Limit::RepeatedName, || {
+                                    format!("the name section names function {index} again; the first name is kept")
+                                });
+                            }
                         }
                     }
                 }
@@ -470,14 +545,18 @@ impl Walk<'_> {
         for field in reader {
             let field = field?;
             if self.module.producers.len() >= MAX_PRODUCER_FIELDS {
-                self.limit(format!("more than {MAX_PRODUCER_FIELDS} producers fields; later fields are not listed"));
+                self.limit(Limit::ProducerFields, || {
+                    format!("more than {MAX_PRODUCER_FIELDS} producers fields; later fields are not listed")
+                });
                 break;
             }
             let mut values = Vec::new();
             for value in field.values {
                 let value = value?;
                 if values.len() >= MAX_PRODUCER_VALUES {
-                    self.limit(format!("more than {MAX_PRODUCER_VALUES} values in a producers field"));
+                    self.limit(Limit::ProducerValues, || {
+                        format!("more than {MAX_PRODUCER_VALUES} values in a producers field")
+                    });
                     break;
                 }
                 values.push(WasmProducerValue { name: label(value.name), version: label(value.version) });
@@ -492,7 +571,13 @@ impl Walk<'_> {
         if self.module.complete && self.defined != defined {
             let text = format!("{} code bodies for {defined} declared functions", self.defined);
             self.module.complete = false;
-            self.module.limitations.push(text);
+            LIMITATIONS.push(&mut self.module.limitations, text);
+        }
+        let repeated: usize =
+            self.repeats.iter().filter(|(kind, _)| kind.repeats_are_findings()).map(|(_, count)| count).sum();
+        if repeated > 0 {
+            let text = format!("{repeated} further limitations repeat a kind listed above and are not listed");
+            LIMITATIONS.push(&mut self.module.limitations, text);
         }
         for (index, name) in self.names {
             if let Some(function) = self.module.functions.get_mut(index as usize) {
@@ -548,14 +633,10 @@ fn label(text: &str) -> String {
 }
 
 fn cut(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.to_owned();
+    match crate::text::clip(text, max) {
+        (text, false) => text.to_owned(),
+        (text, true) => format!("{text}..."),
     }
-    let mut end = max;
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", &text[..end])
 }
 
 #[cfg(test)]
@@ -705,6 +786,80 @@ mod tests {
             "{:?}",
             module.limitations
         );
+    }
+
+    #[test]
+    fn many_unknown_sections_are_counted_not_listed_and_charged_to_the_budget() {
+        let mut bytes = b"\0asm\x01\0\0\0".to_vec();
+        bytes.extend([0x20, 0].repeat(MAX_DECODED + 10));
+        let started = std::time::Instant::now();
+        let module = parse(&bytes).unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
+        assert!(!module.complete);
+        assert_eq!(module.sections_total, MAX_DECODED);
+        assert!(module.limitations.len() <= MAX_LIMITATIONS, "{}", module.limitations.len());
+        assert!(module.limitations[0].contains("unknown section id 32"), "{:?}", module.limitations);
+        assert!(module.limitations.iter().any(|text| text.contains("decode budget")), "{:?}", module.limitations);
+        assert!(
+            module.limitations.last().unwrap().contains("further limitations repeat a kind"),
+            "{:?}",
+            module.limitations
+        );
+    }
+
+    #[test]
+    fn duplicate_misordered_and_surplus_code_bodies_are_flagged() {
+        // A second code section: the parser stops at it, keeping what came before.
+        let mut duplicate = module();
+        duplicate.extend(section(10, &[1, 2, 0, 0x0b]));
+        let parsed = parse(&duplicate).unwrap();
+        assert!(!parsed.complete);
+        assert_eq!(parsed.functions[1].body_size, Some(7), "the first body stays matched");
+        assert!(parsed.limitations.iter().any(|text| text.contains("out of order")), "{:?}", parsed.limitations);
+
+        // The code section before the function section declaring its function.
+        let mut misordered = b"\0asm\x01\0\0\0".to_vec();
+        misordered.extend(section(1, &[1, 0x60, 0, 0]));
+        misordered.extend(section(10, &[1, 2, 0, 0x0b]));
+        misordered.extend(section(3, &[1, 0]));
+        let parsed = parse(&misordered).unwrap();
+        assert!(!parsed.complete);
+        assert!(parsed.functions.iter().all(|function| function.body_offset.is_none()));
+
+        // More bodies than declared functions.
+        let mut surplus = b"\0asm\x01\0\0\0".to_vec();
+        surplus.extend(section(1, &[1, 0x60, 0, 0]));
+        surplus.extend(section(3, &[1, 0]));
+        surplus.extend(section(10, &[2, 2, 0, 0x0b, 2, 0, 0x0b]));
+        let parsed = parse(&surplus).unwrap();
+        assert!(!parsed.complete);
+        assert_eq!(parsed.functions.len(), 1);
+        assert!(parsed.limitations.iter().any(|text| text.contains("inconsistent")), "{:?}", parsed.limitations);
+    }
+
+    #[test]
+    fn a_name_section_repeating_an_index_keeps_the_first_name() {
+        let mut bytes = b"\0asm\x01\0\0\0".to_vec();
+        bytes.extend(section(1, &[1, 0x60, 0, 0]));
+        bytes.extend(section(3, &[1, 0]));
+        bytes.extend(section(10, &[1, 2, 0, 0x0b]));
+        let repeats = 5_000;
+        let mut map = Vec::new();
+        leb(repeats, &mut map);
+        for index in 0..repeats {
+            map.push(0);
+            map.extend(string(&format!("f{index}")));
+        }
+        let mut names = string("name");
+        names.push(1);
+        leb(map.len(), &mut names);
+        names.extend(map);
+        bytes.extend(section(0, &names));
+        let module = parse(&bytes).unwrap();
+        assert_eq!(module.functions[0].name.as_deref(), Some("f0"));
+        assert!(!module.complete);
+        assert!(module.limitations.len() <= 3, "{:?}", module.limitations);
+        assert!(module.limitations[0].contains("names function 0 again"), "{:?}", module.limitations);
     }
 
     #[test]

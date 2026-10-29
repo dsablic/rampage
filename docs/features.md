@@ -254,17 +254,21 @@ decompression, automatic member opening or execution occurs. See [archive invent
 stripping:
 
 - Go build info (what `go version -m` prints) from `.go.buildinfo` (ELF), `__go_buildinfo` (Mach-O), or a
-  16-byte aligned scan of the data sections (PE, or images without the section). Both the go1.18+ inline layout
+  16-byte aligned scan of the writable data sections (PE, or images without the section), as Go's
+  `debug/buildinfo` does: a magic in read-only data is a constant, not a record, and a candidate that does not
+  decode (its version must start with `go` or `devel`) does not hide a later one. Both the go1.18+ inline layout
   and the older pointer layout (resolved through file-backed segments) are read. Output: Go version, main package
   path, main module, dependency modules with `=>` replacements, build settings such as `-compiler`, `CGO_ENABLED`,
   `GOARCH`, `vcs.revision` and `vcs.time`, and whether the version agrees with the pclntab layout the loader found.
 - Rust dependency lists that [cargo-auditable](https://github.com/rust-secure-code/cargo-auditable) embeds in a
   `.dep-v0` section (`__DATA,.dep-v0` on Mach-O): zlib-compressed JSON, decompressed under its documented 8 MiB
-  cap. Output: root package(s) and every package's name, version, source, kind and dependency indices.
+  cap. Output: root package(s) and every package's name, version, source, kind and dependency indices, and the
+  zlib stream's length (`compressed_bytes`, without the section's padding).
 
-Each record is absent, present, or found but unreadable (with a reason); malformed lines and dangling indices are
-kept as warnings. Dependency modules and packages are paged. The data is self-reported by the build and is not
-verified against code; there is no vulnerability lookup.
+Each record is absent, present, or found but unreadable (with a reason); malformed lines and dangling indices are kept
+as warnings. Dependency modules and packages are paged, each page also fitted to the 60,000-byte result; build
+settings and up to 16 roots are listed within byte shares, with their totals. The data is self-reported by the build
+and is not verified against code; there is no vulnerability lookup.
 
 ## PyInstaller archives and WebAssembly modules
 
@@ -276,7 +280,8 @@ per-typecode counts and paged TOC entries: record and data file offsets, compres
 compression flag, typecode and its meaning (script, module, package, PYZ, zipfile, binary, data, runtime option,
 dependency, nested package, splash, symlink) and name. An uncompressed PYZ entry's header gives the pyc magic and
 its Python version; the PYZ TOC is not decompressed. Magic matches that do not validate (a bootloader holds the
-magic as a constant) are skipped; the walk stops at a malformed TOC record with a warning. Nothing is extracted,
+magic as a constant) are skipped, and when none validates the result is `archive: null` with each rejected
+candidate's reason rather than an error; the walk stops at a malformed TOC record with a warning. Nothing is extracted,
 decompressed, decrypted or decompiled: hand the data offsets to `decode_file_range` or `carve`.
 
 `binary wasm-module` and the `wasm_module` file tool summarise a core WebAssembly module with `wasmparser`: header
@@ -287,7 +292,9 @@ kind, index) or functions (imports first, with type signature, body offset and s
 Project loading accepts native executables only and rejects `.wasm`, so these work on the raw file without a
 Project. A component-model binary (layer 1) is reported as unsupported without reading its sections. Parsing is
 bounded (1,048,576 decoded items, 65,536 retained per list, names cut at 256 bytes); malformed input returns what
-parsed before the error with `complete` false and the error offset in `limitations`. Modules are not validated,
+parsed before the error with `complete` false and the error offset in `limitations`. Limitations list the first
+of each kind (at most 32) and count repeats, and sections count against the decode budget, so a file of millions of
+unknown sections stays cheap. Modules are not validated,
 compiled, executed or disassembled.
 
 ## PE resources and load config
@@ -295,20 +302,23 @@ compiled, executed or disassembled.
 `binary pe-resources` and the `pe_resources` MCP tool list resource directory leaves: type (`RT_*` name, `#id` or
 string name), name or id, language, data RVA, size, code page, offset in the image and whether the bytes are in the
 file. The type/name/language walk stops at 3 levels, 4096 tables, 65,536 entries and 16,384 leaves, and a table
-reached twice (a loop or alias) is skipped with a warning. Version resources are decoded into VS_FIXEDFILEINFO
-(file/product versions, flags, OS, file type), StringFileInfo key/value pairs per language and code page, and
-VarFileInfo translations, within 64 KiB, 1024 nodes and 256 strings. Manifests return up to 16 KiB of UTF-8 text
-plus `requestedExecutionLevel` and `dependentAssembly` names from a bounded textual scan of the first 64 KiB; it is
-not an XML parser. Icons, dialogs, string tables and other payloads are located but not interpreted or extracted.
+reached twice (a loop or alias) is skipped with a warning. A declared directory size that overruns its section's file
+data (packers write these) is ignored, as Windows ignores it, and the tree is read from its RVA. Leaves are counted
+per type, keeping numeric and string-named types apart, and filtered by `RT_*` name, bare name, `16` or `#16`; pages
+hold whole rows within 60,000 JSON bytes and always decode their first payload. Version resources are decoded into
+VS_FIXEDFILEINFO (file/product versions, flags, OS, file type), StringFileInfo key/value pairs per language and code
+page, and VarFileInfo translations, within 64 KiB, 1024 nodes and 256 strings. Manifests return up to 16 KiB of UTF-8
+text plus `requestedExecutionLevel` and `dependentAssembly` names from a bounded textual scan of the first 64 KiB; it
+is not an XML parser. Icons, dialogs, string tables and other payloads are located but not interpreted or extracted.
 
 `binary pe-load-config` and `pe_load_config` read IMAGE_LOAD_CONFIG_DIRECTORY (32- and 64-bit) up to the Size the
-structure declares; fields past it are reported absent rather than read. They report the security cookie VA,
-SafeSEH handler count and up to 256 handler RVAs (32-bit), CFG GuardFlags names, check/dispatch pointers and
-function table placement, address-taken IAT, long-jump and EH continuation table counts, and dynamic value
-relocation table presence. CET flags come from the IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS debug entry. Findings note
-where the load config disagrees with the DllCharacteristics mitigations triage reports, such as CFG instrumentation
-without `GUARD_CF` or a 32-bit image with neither SafeSEH nor `NO_SEH`. Table contents other than SafeSEH handlers,
-CHPE, hot-patch, enclave and volatile metadata are not decoded.
+structure declares; fields past it are reported absent rather than read. They report the security cookie VA, SafeSEH
+handler count and up to 256 handler RVAs (native x86 only: not ARM32 or IL-only .NET), CFG GuardFlags names,
+check/dispatch pointers and function table placement, address-taken IAT, long-jump and EH continuation table counts,
+and dynamic value relocation table presence. CET flags come from the IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS debug
+entry. Findings note where the load config disagrees with the DllCharacteristics mitigations triage reports, such as
+CFG instrumentation without `GUARD_CF` or an x86 image with neither SafeSEH nor `NO_SEH`. Table contents other than
+SafeSEH handlers, CHPE, hot-patch, enclave and volatile metadata are not decoded.
 
 ## Managed assemblies
 

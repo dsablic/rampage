@@ -1,7 +1,5 @@
 use super::*;
 use crate::pe_test_image::{SECTION_RVA, TestPe};
-use object::pe::{ImageLoadConfigDirectory32, ImageLoadConfigDirectory64};
-use std::mem::{offset_of, size_of};
 
 const LOAD_CONFIG: usize = object::pe::IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG;
 const DEBUG: usize = object::pe::IMAGE_DIRECTORY_ENTRY_DEBUG;
@@ -9,31 +7,15 @@ const CFG: u16 = 0x4000;
 const NO_SEH: u16 = 0x0400;
 
 #[test]
-fn layouts_match_the_object_crate_structures() {
-    macro_rules! check {
-        ($layout:expr, $structure:ty) => {
-            assert_eq!($layout.security_cookie, offset_of!($structure, security_cookie));
-            assert_eq!($layout.se_handler_table, offset_of!($structure, sehandler_table));
-            assert_eq!($layout.se_handler_count, offset_of!($structure, sehandler_count));
-            assert_eq!($layout.guard_cf_check, offset_of!($structure, guard_cf_check_function_pointer));
-            assert_eq!($layout.guard_cf_dispatch, offset_of!($structure, guard_cf_dispatch_function_pointer));
-            assert_eq!($layout.guard_cf_table, offset_of!($structure, guard_cf_function_table));
-            assert_eq!($layout.guard_cf_count, offset_of!($structure, guard_cf_function_count));
-            assert_eq!($layout.guard_flags, offset_of!($structure, guard_flags));
-            assert_eq!($layout.iat_table, offset_of!($structure, guard_address_taken_iat_entry_table));
-            assert_eq!($layout.iat_count, offset_of!($structure, guard_address_taken_iat_entry_count));
-            assert_eq!($layout.long_jump_table, offset_of!($structure, guard_long_jump_target_table));
-            assert_eq!($layout.long_jump_count, offset_of!($structure, guard_long_jump_target_count));
-            assert_eq!($layout.dynamic_value_reloc_table, offset_of!($structure, dynamic_value_reloc_table));
-            assert_eq!($layout.dynamic_value_reloc_offset, offset_of!($structure, dynamic_value_reloc_table_offset));
-            assert_eq!($layout.dynamic_value_reloc_section, offset_of!($structure, dynamic_value_reloc_table_section));
-            // The object crate stops at VolatileMetadataPointer; the EH continuation table follows it.
-            assert_eq!($layout.eh_table, size_of::<$structure>());
-            assert_eq!($layout.eh_count, size_of::<$structure>() + $layout.word);
-        };
-    }
-    check!(LAYOUT_32, ImageLoadConfigDirectory32);
-    check!(LAYOUT_64, ImageLoadConfigDirectory64);
+fn layouts_match_the_documented_offsets() {
+    // IMAGE_LOAD_CONFIG_DIRECTORY offsets from the PE format documentation.
+    let offsets = |layout: &Layout| {
+        [layout.security_cookie, layout.se_handler_count, layout.guard_flags, layout.dynamic_value_reloc_section]
+    };
+    assert_eq!(offsets(&LAYOUT_32), [60, 68, 88, 140]);
+    assert_eq!(offsets(&LAYOUT_64), [88, 104, 144, 228]);
+    assert_eq!((LAYOUT_32.eh_table, LAYOUT_32.eh_count), (164, 168));
+    assert_eq!((LAYOUT_64.eh_table, LAYOUT_64.eh_count), (264, 272));
 }
 
 fn put(bytes: &mut [u8], at: usize, width: usize, value: u64) {
@@ -161,6 +143,31 @@ fn cross_checks_against_dll_characteristics() {
     let report = parse(&pe);
     assert!(report.load_config.is_none() && report.cet.is_none());
     assert_eq!(report.findings.len(), 1);
+}
+
+#[test]
+fn safe_seh_is_only_read_and_expected_for_native_x86() {
+    // A 32-bit ARM (ARMNT) image: no SafeSEH, so no table is read and none is expected.
+    let mut pe = image(32, 72, |_, _, _| {});
+    pe.dll_characteristics = 0;
+    pe.machine = Some(object::pe::IMAGE_FILE_MACHINE_ARMNT.0);
+    let report = parse(&pe);
+    assert!(report.load_config.unwrap().safe_seh.is_none());
+    assert_eq!(report.findings, Vec::<String>::new());
+
+    // An IL-only .NET image (COR20 header at 0x380 with COMIMAGE_FLAGS_ILONLY) without a load config.
+    let mut section = vec![0; 0x400];
+    put(&mut section, 0x380, 4, 72);
+    put(&mut section, 0x380 + 16, 4, 1);
+    let mut pe =
+        TestPe::new(32, section).directory(object::pe::IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR, SECTION_RVA + 0x380, 72);
+    let report = parse(&pe);
+    assert_eq!(report.findings, Vec::<String>::new());
+
+    // The same image with a native (mixed-mode) CLR header is expected to have SafeSEH.
+    pe.section[0x380 + 16] = 0;
+    let report = parse(&pe);
+    assert!(report.findings.iter().any(|finding| finding.contains("not validated")), "{:?}", report.findings);
 }
 
 #[test]

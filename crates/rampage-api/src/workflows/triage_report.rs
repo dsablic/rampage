@@ -282,8 +282,10 @@ impl Project {
         } else {
             report.step("find_main", json!({}), "Locate the program's own entry logic past the runtime startup code.");
         }
-        let go = rampage_loaders::buildinfo::go::read(&self.binary).is_some();
-        let rust = self.binary.sections.iter().any(|section| section.name == rampage_loaders::buildinfo::rust::SECTION);
+        // Only records that decode: an empty or garbage .dep-v0, or a stray Go magic, is no build metadata.
+        use rampage_loaders::buildinfo::{BlobStatus, go, rust};
+        let go = go::read(&self.binary).is_some_and(|info| info.status == BlobStatus::Present);
+        let rust = rust::read(&self.binary).is_some_and(|audit| audit.status == BlobStatus::Present);
         if go || rust {
             let what = if go { "Go build info" } else { "a cargo-auditable dependency list" };
             report.step(

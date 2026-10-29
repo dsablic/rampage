@@ -9,6 +9,7 @@ use rampage_loaders::linkage::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::rows::json_size;
 use crate::{ApiError, Project};
 
 pub const MAX_MODULE_REFERENCE_MODULES: usize = 8;
@@ -863,10 +864,4 @@ pub fn module_references(
     }
     validate_module_reference_inputs(inputs)?;
     Ok(report)
-}
-
-fn json_size(value: &impl Serialize) -> Result<usize, ApiError> {
-    serde_json::to_vec(value)
-        .map(|bytes| bytes.len())
-        .map_err(|error| ApiError::Invalid(format!("module reference JSON serialization failed: {error}")))
 }

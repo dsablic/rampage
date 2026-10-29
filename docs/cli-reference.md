@@ -19,6 +19,8 @@ directory, and `ADDRESS` an address or supported name. Brackets describe optiona
 | `binary detect FILE [--peid userdb.txt]` | `detect` | Producing toolchain/packer evidence |
 | `binary capabilities FILE` | `capabilities` | Corroborated behavior indicators, not proof |
 | `binary build-info FILE [--offset N --limit N]` | — | Embedded Go build info and cargo-auditable crates; self-reported |
+| `binary pyinstaller-archive FILE [--offset N --limit N]` | — | PyInstaller cookie and TOC page; no extraction |
+| `binary wasm-module FILE [--list KIND --offset N]` | — | WebAssembly summary and one list page |
 | `binary audit FILE [--include-discovery]` | `audit` | Bounded decode coverage and unreliable-code evidence |
 | `binary carve FILE [--max-candidates N]` | `carve` | Validated embedded headers; no extraction/decompression |
 | `binary inventory DIR` | `inventory` | Binaries in bundles/extracted packages; no execution |

@@ -12,11 +12,13 @@ pub(crate) struct TestPe {
     /// (directory index, RVA, size).
     pub(crate) directories: Vec<(usize, u32, u32)>,
     pub(crate) dll_characteristics: u16,
+    /// The COFF Machine; `None` for x86 or x64 by `bits`.
+    pub(crate) machine: Option<u16>,
 }
 
 impl TestPe {
     pub(crate) fn new(bits: u8, section: Vec<u8>) -> Self {
-        Self { bits, section, directories: Vec::new(), dll_characteristics: 0 }
+        Self { bits, section, directories: Vec::new(), dll_characteristics: 0, machine: None }
     }
 
     pub(crate) fn directory(mut self, index: usize, rva: u32, size: u32) -> Self {
@@ -35,7 +37,7 @@ impl TestPe {
         put32(&mut bytes, 0x3c, 0x80);
         bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
         let wide = self.bits == 64;
-        put16(&mut bytes, 0x84, if wide { 0x8664 } else { 0x14c });
+        put16(&mut bytes, 0x84, self.machine.unwrap_or(if wide { 0x8664 } else { 0x14c }));
         put16(&mut bytes, 0x86, 1);
         let optional_size: u16 = if wide { 240 } else { 224 };
         put16(&mut bytes, 0x94, optional_size);

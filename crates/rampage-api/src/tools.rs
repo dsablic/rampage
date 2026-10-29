@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 /// Results longer than this are cut, so that one large answer cannot crowd out the conversation. Workflow reports
 /// and import receipts fit themselves below it instead, preserving valid JSON and whole-operation status.
-const MAX_RESULT_CHARS: usize = 60_000;
+pub(crate) const MAX_RESULT_CHARS: usize = 60_000;
 const MAX_SLEIGH_REQUEST_BYTES: usize = 1024 * 1024;
 const DEFAULT_PAGE: usize = 100;
 const MAX_PDB_DETAIL_BYTES: usize = 4096;
@@ -575,13 +575,15 @@ pub fn file_tools() -> Vec<FileTool> {
                           Reports cookie_offset, cookie_layout, package_offset/length, toc_offset/length, Python \
                           version (312 -> 3.12) and library name, typecode counts, and the PYZ entry's header (pyc \
                           magic and its Python version) when that entry is stored uncompressed. Pages TOC entries \
-                          (offset/limit, at most 100 and 60000 JSON bytes): each has its record and data file \
-                          offsets, compressed and uncompressed sizes, compression flag, typecode with its meaning \
-                          (s script, m module, M package, z PYZ, Z zipfile, b binary, x data, o runtime option, d \
-                          dependency, a nested package, l splash, n symlink) and name. Returns null when there is no \
-                          cookie magic, and an error when magic matches but no cookie validates. Read-only: no \
-                          extraction, decompression, decryption or pyc decompilation; use the file offsets with \
-                          decode_file_range or carve.",
+                          (offset/limit, at most 100 and 60000 JSON bytes; next_offset, and byte_capped when the \
+                          byte budget ended the page): each has its record and data file offsets, compressed and \
+                          uncompressed sizes, compression flag, typecode with its meaning (s script, m module, M \
+                          package, z PYZ, Z zipfile, b binary, x data, o runtime option, d dependency, a nested \
+                          package, l splash, n symlink) and name. Returns null when there is no cookie magic; when \
+                          magic matches (a bootloader holds it as a constant) but none validates as a cookie, \
+                          returns {file_path, archive: null, rejected_candidates} with why each was rejected. \
+                          Read-only: no extraction, decompression, decryption or pyc decompilation; use the file \
+                          offsets with decode_file_range or carve.",
             input_schema: schema::<PyInstallerArchiveArgs>(),
             handler: |_, input| {
                 let args: PyInstallerArchiveArgs = arguments(input)?;
@@ -599,11 +601,13 @@ pub fn file_tools() -> Vec<FileTool> {
                           of types, imports, functions, tables, memories, globals, tags, exports and data/elem \
                           segments, the start function, custom-section names, the name section's module name and \
                           the producers section (language, processed-by, sdk). list pages one list (offset/limit, \
-                          at most 100 and 60000 JSON bytes): imports (module, name, kind, type), exports (name, \
+                          at most 100 and 60000 JSON bytes; total, next_offset, and byte_capped when the byte \
+                          budget ended the page): imports (module, name, kind, type), exports (name, \
                           kind, index) or functions (index, imported first; type signature; body offset and size; \
                           name-section name). A component-model binary (layer 1) is reported as unsupported, with \
                           no sections read. Malformed input returns what parsed before the error with complete \
-                          false and the error in limitations. Returns null when the file has no \\0asm magic. Not \
+                          false and the error in limitations (the first of each kind, at most 32, repeats counted). \
+                          Returns null when the file has no \\0asm magic. Not \
                           validated, compiled, executed or disassembled.",
             input_schema: schema::<WasmModuleArgs>(),
             handler: |_, input| {
@@ -2374,18 +2378,21 @@ pub fn tools() -> Vec<Tool> {
             Group::Formats,
             "build_info",
             "Toolchain build metadata embedded in the image. go: Go build info (the `go version -m` record) from \
-             .go.buildinfo, __go_buildinfo or a 16-byte aligned scan of PE/data sections, with go_version, main \
+             .go.buildinfo, __go_buildinfo or a 16-byte aligned scan of writable data sections (a magic in \
+             read-only data is a constant, not a record; the first record that decodes wins), with go_version, main \
              package path, main module, dependency modules with their => replacements, build settings (-compiler, \
              CGO_ENABLED, GOOS/GOARCH, vcs.revision, vcs.time...) and a cross-check of the version against the \
              pclntab layout; go1.18+ inline strings and older pointer layouts are both read. rust: the \
              cargo-auditable .dep-v0 section (zlib JSON, 8 MiB cap) with root package(s) and every package's \
              name, version, source, kind and dependency indices. Each is null when not present, or has status \
              present/unreadable (with a reason) when found. offset/limit page go.deps and rust.packages \
-             independently (default 100, at most 1000). Self-reported build data, not verified against code; no \
-             vulnerability lookup, no network access.",
+             independently (default 100, at most 1000), each page also cut to fit 60000 JSON bytes (next_offset, \
+             byte_capped); build settings are listed up to a byte share (settings_total, settings_byte_capped) and \
+             roots up to 16 (roots_total). compressed_bytes is the zlib stream's length. Self-reported build data, \
+             not verified against code; no vulnerability lookup, no network access.",
             |project, args: BuildInfoArgs| {
                 let query = crate::BuildInfoQuery { offset: args.offset, limit: page_limit(args.limit) };
-                Ok::<_, ApiError>(project.build_info(&query))
+                project.build_info(&query)
             },
         ),
         tool(
@@ -2394,13 +2401,16 @@ pub fn tools() -> Vec<Tool> {
             "PE resource directory leaves: type (RT_* name, #id or string name), name/id, language, data RVA, size, \
              code page, offset within the image and whether the bytes are in the file. The type/name/language tree \
              is walked with depth, table, entry and leaf limits and loop detection; irregular trees and unreadable \
-             entries become warnings. RT_VERSION is decoded (VS_FIXEDFILEINFO versions, flags, OS and type; \
+             entries become warnings, and a directory size overrunning its section is read from the RVA as Windows \
+             does. types counts leaves per type (type: id or string name; at most 256 rows, types_total, \
+             types_truncated). RT_VERSION is decoded (VS_FIXEDFILEINFO versions, flags, OS and type; \
              StringFileInfo key/value pairs per language/code page; VarFileInfo translations) and RT_MANIFEST \
              returns capped UTF-8 text with requestedExecutionLevel and dependentAssembly names from a bounded \
-             textual scan, not an XML parse. Decoding stops once a page spends 24000 payload bytes \
-             (decode_skipped counts the rest). Other payloads (icons, dialogs, string tables, RCDATA) are located, \
-             never interpreted or extracted. Filter with type (RT_VERSION, VERSION, 16 or a string type name); \
-             offset/limit page the matching leaves. Returns null for a non-PE image.",
+             textual scan, not an XML parse. A page's first payload is always decoded; later ones stop once the \
+             page spends 24000 payload bytes (decode_skipped counts the rest). Other payloads (icons, dialogs, \
+             string tables, RCDATA) are located, never interpreted or extracted. Filter with type (RT_VERSION, \
+             VERSION, 16, #16 or a string type name); offset/limit page the matching leaves, each page also cut to \
+             fit 60000 JSON bytes (resources.next_offset, resources.byte_capped). Returns null for a non-PE image.",
             |project, args: PeResourcesArgs| {
                 let query = crate::PeResourcesQuery {
                     type_filter: args.r#type,
@@ -2415,13 +2425,14 @@ pub fn tools() -> Vec<Tool> {
             "pe_load_config",
             "PE IMAGE_LOAD_CONFIG_DIRECTORY (32- and 64-bit), honouring its own Size: fields past it are listed in \
              absent_fields and never read. Reports the security cookie VA; SafeSEH handler table count and up to \
-             256 handler RVAs (32-bit); CFG GuardFlags names, check/dispatch function pointers and function table \
+             256 handler RVAs (x86); CFG GuardFlags names, check/dispatch function pointers and function table \
              count, entry size and whether it lies inside the image; address-taken IAT, long-jump and EH \
              continuation table counts; and dynamic value relocation table presence. Also the CET flags of the \
              IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS debug entry, the DllCharacteristics mitigations triage reports, \
-             and findings where the two disagree (CFG declared but not instrumented or the reverse, 32-bit images \
-             without SafeSEH or NO_SEH). Table contents beyond SafeSEH handlers, CHPE, hot-patch, enclave and \
-             volatile metadata are not decoded. Returns null for a non-PE image.",
+             and findings where the two disagree (CFG declared but not instrumented or the reverse, x86 images \
+             without SafeSEH or NO_SEH; SafeSEH is read only for native x86, not ARM32 or IL-only .NET). Table \
+             contents beyond SafeSEH handlers, CHPE, hot-patch, enclave and volatile metadata are not decoded. \
+             Returns null for a non-PE image.",
             |project, _: Nothing| project.pe_load_config(),
         ),
         tool(

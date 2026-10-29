@@ -166,6 +166,7 @@ fn lists_every_leaf_with_its_type_name_and_language() {
         assert_eq!(decode(&image, custom), None);
         assert!(report.leaves[1].matches_type("rt_version") && report.leaves[1].matches_type("VERSION"));
         assert!(report.leaves[1].matches_type("16") && !report.leaves[1].matches_type("RT_ICON"));
+        assert!(report.leaves[1].matches_type("#16") && !report.leaves[1].matches_type("#24"));
         assert!(custom.matches_type("fixture") && !custom.matches_type("7"));
     }
 }
@@ -273,12 +274,12 @@ fn oversized_entry_counts_are_reported_not_read() {
 }
 
 #[test]
-fn a_truncated_directory_is_a_warning() {
+fn an_unmapped_directory_is_a_warning() {
     let tree = regular_tree();
-    let image = TestPe::new(64, tree.bytes).directory(DIRECTORY, SECTION_RVA, 0x2000).build();
+    let image = TestPe::new(64, tree.bytes).directory(DIRECTORY, 0x9000, 0x100).build();
     let report = parse_resources(&image).unwrap().unwrap();
     assert!(report.leaves.is_empty());
-    assert!(report.warnings[0].contains("directory at RVA 0x1000 is unreadable"), "{:?}", report.warnings);
+    assert!(report.warnings[0].contains("directory at RVA 0x9000 is unreadable"), "{:?}", report.warnings);
 }
 
 #[test]
@@ -373,4 +374,13 @@ fn manifest_scanning_is_bounded() {
     let wide = format!("a{}", "é".repeat(MAX_MANIFEST_TEXT));
     let manifest = manifest::parse(wide.as_bytes());
     assert!(manifest.text.len() <= MAX_MANIFEST_TEXT && !manifest.text.contains('\u{fffd}'));
+}
+
+#[test]
+fn an_oversized_directory_size_still_reads_the_tree_from_its_rva() {
+    let image = TestPe::new(64, regular_tree().bytes).directory(DIRECTORY, SECTION_RVA, 0x10_0000).build();
+    let report = parse_resources(&image).unwrap().unwrap();
+    assert_eq!(report.leaves.len(), 3);
+    assert_eq!(report.directory_size, Some(0x10_0000));
+    assert!(report.warnings[0].contains("overruns its section's file data"), "{:?}", report.warnings);
 }
