@@ -40,6 +40,7 @@ mod module_references;
 mod packs;
 mod patch_frontends;
 mod pdb;
+mod pe_metadata;
 mod plugin_triage;
 mod pointer_compare;
 mod pointer_observation;

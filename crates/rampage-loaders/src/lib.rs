@@ -34,5 +34,9 @@ pub mod dotnet;
 pub mod gopclntab;
 pub mod objc;
 pub mod pdb;
+pub mod pe_load_config;
+pub mod pe_resources;
+#[cfg(test)]
+mod pe_test_image;
 pub mod pyinstaller;
 pub mod wasm;

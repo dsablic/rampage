@@ -17,6 +17,7 @@ mod inspect_sleigh;
 mod packs;
 mod patches;
 mod pdb;
+mod pe_metadata;
 mod plugin_triage;
 mod pointer_observation;
 mod raw_project;

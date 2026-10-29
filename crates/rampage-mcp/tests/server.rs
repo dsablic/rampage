@@ -131,6 +131,8 @@ async fn lists_all_tools_with_instructions() {
         "observe_indirect_branch",
         "observe_pointer",
         "patch_bytes",
+        "pe_load_config",
+        "pe_resources",
         "persistence_surface",
         "propagate_types",
         "pyinstaller_archive",

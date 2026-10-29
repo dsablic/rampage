@@ -774,6 +774,8 @@ fn allowed_name(name: &str, config: &AgentConfig) -> bool {
                 | "inspect_jump_table"
                 | "dotnet_metadata"
                 | "dotnet_il"
+                | "pe_resources"
+                | "pe_load_config"
                 | "inspect_raw_code"
                 | "inspect_data"
                 | "read_data"

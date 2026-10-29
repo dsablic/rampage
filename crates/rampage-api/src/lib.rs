@@ -37,6 +37,7 @@ mod offset;
 mod operand_types;
 pub mod packs;
 mod patches;
+mod pe_inspect;
 mod plugin_triage;
 mod pointer_compare;
 mod pointer_observation;
@@ -161,6 +162,9 @@ pub use packs::{ContentInfo, ContentStatus, PackInfo, PackManifest, Packs};
 pub use patches::{
     BytePatch, MAX_ACTIVE_PATCHES, MAX_PATCH_BYTES, MAX_PATCH_SOURCE_BYTES, MAX_TOTAL_PATCH_BYTES, PatchExport,
     PatchOutcome, PatchReceipt,
+};
+pub use pe_inspect::{
+    MAX_RESOURCE_DECODE_BYTES, PeResourcesQuery, PeResourcesSummary, ResourceEntry, ResourceTypeCount,
 };
 pub use plugin_triage::{
     MAX_PLUGIN_TRIAGE_REPORT_BYTES, MAX_PLUGIN_TRIAGE_SOURCE_BYTES, PluginTriageProvenance, PluginTriageReport,

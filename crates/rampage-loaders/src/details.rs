@@ -287,19 +287,6 @@ fn pe<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>)
     let headers = file.nt_headers();
     let optional = headers.optional_header();
     let timestamp = headers.file_header().time_date_stamp.get(LE);
-    const MITIGATIONS: [(u16, &str); 11] = [
-        (0x0020, "high_entropy_va"),
-        (0x0040, "aslr"),
-        (0x0080, "force_integrity"),
-        (0x0100, "dep"),
-        (0x0200, "no_isolation"),
-        (0x0400, "no_seh"),
-        (0x0800, "no_bind"),
-        (0x1000, "appcontainer"),
-        (0x2000, "wdm_driver"),
-        (0x4000, "cfg"),
-        (0x8000, "terminal_server_aware"),
-    ];
     let flags = optional.dll_characteristics().0;
     let subsystem = match optional.subsystem().0 {
         1 => "native",
@@ -349,10 +336,28 @@ fn pe<'data, Pe: ImageNtHeaders, R: ReadRef<'data>>(file: &PeFile<'data, Pe, R>)
         subsystem,
         linker_version: format!("{}.{}", optional.major_linker_version(), optional.minor_linker_version()),
         checksum: optional.check_sum(),
-        characteristics: MITIGATIONS.iter().filter(|(bit, _)| flags & bit != 0).map(|&(_, name)| name).collect(),
+        characteristics: pe_mitigations(flags),
         signed: pe_certificate(file).is_some(),
         rich,
     }
+}
+
+/// The names of the DllCharacteristics bits set in `flags`: aslr, high_entropy_va, dep, cfg, no_seh, ...
+pub(crate) fn pe_mitigations(flags: u16) -> Vec<&'static str> {
+    const MITIGATIONS: [(u16, &str); 11] = [
+        (0x0020, "high_entropy_va"),
+        (0x0040, "aslr"),
+        (0x0080, "force_integrity"),
+        (0x0100, "dep"),
+        (0x0200, "no_isolation"),
+        (0x0400, "no_seh"),
+        (0x0800, "no_bind"),
+        (0x1000, "appcontainer"),
+        (0x2000, "wdm_driver"),
+        (0x4000, "cfg"),
+        (0x8000, "terminal_server_aware"),
+    ];
+    MITIGATIONS.iter().filter(|(bit, _)| flags & bit != 0).map(|&(_, name)| name).collect()
 }
 
 /// pefile's `get_imphash`: MD5 of `library.function` for each regular (not delay-load) import, lowercased, with
