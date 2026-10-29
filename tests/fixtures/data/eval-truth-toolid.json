@@ -442,6 +442,8 @@
     "../bin/debug-x64.macho": "no committed build script records its toolchain",
     "../bin/hello.lib": "an import-library archive, which no loader opens",
     "../bin/Microsoft.Bcl.HashCode.dll.LICENSE.txt": "not a binary",
+    "../bin/pe-metadata-x64.exe": "same zig-cc-windows-gnu toolchain as ../bin/hello-x64.exe (scored); built by build-pe-metadata.sh for resource and load config coverage",
+    "../bin/pe-metadata-x86.exe": "same zig-cc-windows-gnu toolchain as ../bin/hello-x64.exe (scored); built by build-pe-metadata.sh for resource and load config coverage",
     "../malformed/badimport.exe": "craft.py patches ../bin/hello-x64.exe (scored) into a loader regression",
     "../malformed/bigcert.exe": "craft.py patches ../bin/hello-x64.exe (scored) into a loader regression",
     "../malformed/bigpdata.exe": "craft.py patches ../bin/hello-x64.exe (scored) into a loader regression",

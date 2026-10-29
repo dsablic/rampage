@@ -13,6 +13,8 @@ directory, and `ADDRESS` an address or supported name. Brackets describe optiona
 | --- | --- | --- |
 | `binary inspect FILE` | `info FILE` | Format, architecture, entry, segments and sections |
 | `binary triage FILE` | `triage FILE` | Hashes, entropy, format details, overlay and hints |
+| `binary pe-resources FILE [--type TYPE]` | — | PE resource leaves; RT_VERSION and RT_MANIFEST decoded |
+| `binary pe-load-config FILE` | — | PE load config, CFG/SafeSEH tables, CET and mitigation findings |
 | `binary analyze FILE` | `analyze FILE` | Bounded multi-slice workflow/decompilation report |
 | `binary detect FILE [--peid userdb.txt]` | `detect` | Producing toolchain/packer evidence |
 | `binary capabilities FILE` | `capabilities` | Corroborated behavior indicators, not proof |

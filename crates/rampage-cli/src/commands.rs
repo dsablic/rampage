@@ -1779,6 +1779,175 @@ fn render_capabilities(
     Ok(())
 }
 
+pub fn pe_resources(
+    out: &mut impl Write,
+    path: &Path,
+    query: &rampage_api::PeResourcesQuery,
+    options: &Options,
+) -> Result<()> {
+    use rampage_loaders::pe_resources::{ResourceKey, ResourcePayload};
+    let Some(summary) = open(path, options)?.pe_resources(query)? else {
+        if options.json {
+            return write_json(out, &serde_json::Value::Null);
+        }
+        writeln!(out, "not a PE image")?;
+        return Ok(());
+    };
+    if options.json {
+        return write_json(out, &summary);
+    }
+    let key = |key: &Option<ResourceKey>| match key {
+        Some(ResourceKey::Id(id)) => format!("{id:#x}"),
+        Some(ResourceKey::Name(name)) => format!("\"{name}\""),
+        None => "-".to_owned(),
+    };
+    match (summary.directory_rva, summary.directory_size) {
+        (Some(rva), Some(size)) => writeln!(
+            out,
+            "resources  RVA {rva:#x}, {size} bytes: {} leaves ({} tables, {} entries visited{})",
+            summary.total_leaves,
+            summary.tables_visited,
+            summary.entries_visited,
+            if summary.truncated { ", walk truncated" } else { "" }
+        )?,
+        _ => writeln!(out, "resources  none")?,
+    }
+    if !summary.types.is_empty() {
+        let types: Vec<String> =
+            summary.types.iter().map(|count| format!("{} {}", count.type_name, count.count)).collect();
+        writeln!(out, "types      {}", types.join(", "))?;
+    }
+    for entry in &summary.resources.items {
+        let leaf = &entry.leaf;
+        let location = match (leaf.file_offset, leaf.in_file) {
+            (Some(offset), true) => format!("offset {offset:#x}"),
+            _ => "not in the file".to_owned(),
+        };
+        writeln!(
+            out,
+            "{:<14} name {:<8} lang {:<7} RVA {:#x} size {} code page {} {location}",
+            leaf.type_name,
+            key(&leaf.name),
+            key(&leaf.language),
+            leaf.data_rva,
+            leaf.size,
+            leaf.code_page
+        )?;
+        match &entry.decoded {
+            Some(ResourcePayload::Version(version)) => {
+                if let Some(fixed) = &version.fixed {
+                    writeln!(
+                        out,
+                        "  version    file {} product {} flags [{}] os {} type {}",
+                        fixed.file_version,
+                        fixed.product_version,
+                        fixed.flag_names.join(", "),
+                        fixed.os_name.map_or_else(|| format!("{:#x}", fixed.os), str::to_owned),
+                        fixed.file_type_name.map_or_else(|| format!("{:#x}", fixed.file_type), str::to_owned)
+                    )?;
+                }
+                for table in &version.string_tables {
+                    for string in &table.strings {
+                        writeln!(out, "  {:<10} {} = {}", table.key, string.key, string.value)?;
+                    }
+                }
+                for translation in &version.translations {
+                    writeln!(out, "  language   {:#06x} code page {}", translation.language, translation.code_page)?;
+                }
+            }
+            Some(ResourcePayload::Manifest(manifest)) => {
+                if let Some(level) = &manifest.requested_execution_level {
+                    let ui_access = level.ui_access.as_deref().unwrap_or("-");
+                    writeln!(out, "  level      {} (uiAccess {ui_access})", level.level.as_deref().unwrap_or("-"))?;
+                }
+                for assembly in &manifest.dependent_assemblies {
+                    writeln!(out, "  depends    {assembly}")?;
+                }
+            }
+            None => {}
+        }
+    }
+    let shown = summary.resources.offset + summary.resources.items.len();
+    if shown < summary.resources.total {
+        writeln!(out, "\n... {} more (page with --offset {shown})", summary.resources.total - shown)?;
+    }
+    if summary.decode_skipped > 0 {
+        writeln!(out, "{} payloads left undecoded by the page budget; filter with --type", summary.decode_skipped)?;
+    }
+    for warning in &summary.warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
+    Ok(())
+}
+
+pub fn pe_load_config(out: &mut impl Write, path: &Path, options: &Options) -> Result<()> {
+    let Some(report) = open(path, options)?.pe_load_config()? else {
+        if options.json {
+            return write_json(out, &serde_json::Value::Null);
+        }
+        writeln!(out, "not a PE image")?;
+        return Ok(());
+    };
+    if options.json {
+        return write_json(out, &report);
+    }
+    let table = |table: &Option<rampage_loaders::pe_load_config::GuardTable>| match table {
+        Some(table) => format!(
+            "{} at {:#x}{}",
+            table.count,
+            table.va,
+            if table.in_image || table.va == 0 { "" } else { " (outside the image)" }
+        ),
+        None => "absent".to_owned(),
+    };
+    let optional = |value: Option<u64>| value.map_or_else(|| "absent".to_owned(), |value| format!("{value:#x}"));
+    writeln!(out, "PE{}      flags {}", report.bits, report.dll_characteristics.join(", "))?;
+    match &report.load_config {
+        Some(config) => {
+            let declared = config.declared_size.map_or_else(|| "unreadable".to_owned(), |size| size.to_string());
+            writeln!(out, "config    RVA {:#x}, size {declared} ({} read)", config.rva, config.read_size)?;
+            writeln!(out, "cookie    {}", optional(config.security_cookie))?;
+            if let Some(seh) = &config.safe_seh {
+                writeln!(out, "safeseh   {}", table(&Some(seh.table)))?;
+            }
+            match &config.guard {
+                Some(guard) => {
+                    writeln!(out, "guard     {:#x} [{}]", guard.flags, guard.flag_names.join(", "))?;
+                    writeln!(out, "  check   {}", optional(guard.check_function_pointer))?;
+                    writeln!(out, "  dispatch {}", optional(guard.dispatch_function_pointer))?;
+                    writeln!(out, "  targets {}", table(&guard.function_table))?;
+                }
+                None => writeln!(out, "guard     absent")?,
+            }
+            writeln!(out, "longjump  {}", table(&config.long_jump_targets))?;
+            writeln!(out, "ehcont    {}", table(&config.eh_continuations))?;
+            let dynamic = config
+                .dynamic_value_relocations
+                .map_or("absent", |dynamic| if dynamic.present { "present" } else { "none" });
+            writeln!(out, "dvrt      {dynamic}")?;
+            if !config.absent_fields.is_empty() {
+                writeln!(out, "absent    {}", config.absent_fields.join(", "))?;
+            }
+        }
+        None => writeln!(out, "config    none")?,
+    }
+    if let Some(cet) = &report.cet {
+        writeln!(
+            out,
+            "cet       {} [{}]",
+            if cet.cet_compatible { "compatible" } else { "no" },
+            cet.flag_names.join(", ")
+        )?;
+    }
+    for finding in &report.findings {
+        writeln!(out, "finding: {finding}")?;
+    }
+    for warning in &report.warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
+    Ok(())
+}
+
 pub fn dotnet(out: &mut impl Write, path: &Path, query: &rampage_api::DotNetQuery, options: &Options) -> Result<()> {
     let Some(summary) = open(path, options)?.dotnet_metadata(query)? else {
         if options.json {

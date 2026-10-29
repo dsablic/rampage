@@ -238,6 +238,26 @@ sizes, CRCs and local-header offsets remain unverified payload declarations. Met
 revalidated but not atomic, and tail search may overlap member data. No member offset is followed, and no extraction,
 decompression, automatic member opening or execution occurs. See [archive inventory](archive-inventory.md).
 
+## PE resources and load config
+
+`binary pe-resources` and the `pe_resources` MCP tool list resource directory leaves: type (`RT_*` name, `#id` or
+string name), name or id, language, data RVA, size, code page, offset in the image and whether the bytes are in the
+file. The type/name/language walk stops at 3 levels, 4096 tables, 65,536 entries and 16,384 leaves, and a table
+reached twice (a loop or alias) is skipped with a warning. Version resources are decoded into VS_FIXEDFILEINFO
+(file/product versions, flags, OS, file type), StringFileInfo key/value pairs per language and code page, and
+VarFileInfo translations, within 64 KiB, 1024 nodes and 256 strings. Manifests return up to 16 KiB of UTF-8 text
+plus `requestedExecutionLevel` and `dependentAssembly` names from a bounded textual scan of the first 64 KiB; it is
+not an XML parser. Icons, dialogs, string tables and other payloads are located but not interpreted or extracted.
+
+`binary pe-load-config` and `pe_load_config` read IMAGE_LOAD_CONFIG_DIRECTORY (32- and 64-bit) up to the Size the
+structure declares; fields past it are reported absent rather than read. They report the security cookie VA,
+SafeSEH handler count and up to 256 handler RVAs (32-bit), CFG GuardFlags names, check/dispatch pointers and
+function table placement, address-taken IAT, long-jump and EH continuation table counts, and dynamic value
+relocation table presence. CET flags come from the IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS debug entry. Findings note
+where the load config disagrees with the DllCharacteristics mitigations triage reports, such as CFG instrumentation
+without `GUARD_CF` or a 32-bit image with neither SafeSEH nor `NO_SEH`. Table contents other than SafeSEH handlers,
+CHPE, hot-patch, enclave and volatile metadata are not decoded.
+
 ## Managed assemblies
 
 ECMA-335 metadata includes assembly identity, references, entry point and one paged list:

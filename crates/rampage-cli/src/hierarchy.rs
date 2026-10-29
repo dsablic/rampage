@@ -87,6 +87,8 @@ impl RootCommand {
             Self::Binary(BinaryCommand::InspectRaw(args)) => Command::InspectRaw(args),
             Self::Binary(BinaryCommand::Decode(args)) => Command::DecodeFile(args),
             Self::Binary(BinaryCommand::Triage(args)) => Command::Triage(args),
+            Self::Binary(BinaryCommand::PeResources(args)) => Command::PeResources(args),
+            Self::Binary(BinaryCommand::PeLoadConfig(args)) => Command::PeLoadConfig(args),
             Self::Binary(BinaryCommand::Analyze(args)) => Command::Analyze(args),
             Self::Binary(BinaryCommand::Detect(args)) => Command::Detect(args),
             Self::Binary(BinaryCommand::Capabilities(args)) => Command::Capabilities(args),
@@ -175,6 +177,10 @@ pub(crate) enum BinaryCommand {
     Decode(DecodeFileArgs),
     /// Hashes, entropy, format details, overlay and hints of packing or weak hardening
     Triage(FileArgs),
+    /// PE resource leaves (type, name, language, location), with RT_VERSION and RT_MANIFEST decoded
+    PeResources(crate::args::PeResourcesArgs),
+    /// PE load config: security cookie, SafeSEH, CFG tables, CET and DllCharacteristics cross-checks
+    PeLoadConfig(FileArgs),
     /// Run bounded workflows and selected decompilations as one multi-architecture analysis report
     Analyze(crate::analyze::AnalyzeArgs),
     /// Identify the producing tools (packer/compiler/protector/installer/linker/runtime) from heuristic signatures

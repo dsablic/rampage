@@ -72,11 +72,20 @@ pub enum Group {
     Diagnostics,
     DotNet,
     Carve,
+    Formats,
 }
 
 impl Group {
-    pub const ALL: [Group; 7] =
-        [Group::Core, Group::Detection, Group::Types, Group::Runtime, Group::Diagnostics, Group::DotNet, Group::Carve];
+    pub const ALL: [Group; 8] = [
+        Group::Core,
+        Group::Detection,
+        Group::Types,
+        Group::Runtime,
+        Group::Diagnostics,
+        Group::DotNet,
+        Group::Carve,
+        Group::Formats,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -87,6 +96,7 @@ impl Group {
             Group::Diagnostics => "diagnostics",
             Group::DotNet => "dotnet",
             Group::Carve => "carve",
+            Group::Formats => "formats",
         }
     }
 
@@ -119,6 +129,9 @@ impl Group {
                 "Scan files for embedded executables/containers and inventory ",
                 "standalone ZIP32 metadata without extraction."
             ),
+            Group::Formats => {
+                "Toolchain and container metadata: Go build info, Rust dependency audit data, PE resources and load config, PyInstaller archives and WebAssembly modules."
+            }
         }
     }
 }
@@ -1750,6 +1763,20 @@ struct DotNetArgs {
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
+struct PeResourcesArgs {
+    /// Only leaves of this resource type: an RT_* name with or without the prefix (RT_VERSION, MANIFEST), a
+    /// numeric type id (16), or a string type name, ignoring case.
+    #[serde(default)]
+    r#type: Option<String>,
+    /// Matching leaves to skip, for paging.
+    #[serde(default)]
+    offset: Option<usize>,
+    /// Leaves per page (default 100, at most 1000).
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
 struct DetectToolsArgs {
     /// Optional file path of a user-supplied PeID `userdb.txt`, overlaid on the bundled starter database.
     #[serde(default)]
@@ -2258,6 +2285,42 @@ pub fn tools() -> Vec<Tool> {
                 };
                 project.dotnet_il(&query)
             },
+        ),
+        tool(
+            Group::Formats,
+            "pe_resources",
+            "PE resource directory leaves: type (RT_* name, #id or string name), name/id, language, data RVA, size, \
+             code page, offset within the image and whether the bytes are in the file. The type/name/language tree \
+             is walked with depth, table, entry and leaf limits and loop detection; irregular trees and unreadable \
+             entries become warnings. RT_VERSION is decoded (VS_FIXEDFILEINFO versions, flags, OS and type; \
+             StringFileInfo key/value pairs per language/code page; VarFileInfo translations) and RT_MANIFEST \
+             returns capped UTF-8 text with requestedExecutionLevel and dependentAssembly names from a bounded \
+             textual scan, not an XML parse. Decoding stops once a page spends 24000 payload bytes \
+             (decode_skipped counts the rest). Other payloads (icons, dialogs, string tables, RCDATA) are located, \
+             never interpreted or extracted. Filter with type (RT_VERSION, VERSION, 16 or a string type name); \
+             offset/limit page the matching leaves. Returns null for a non-PE image.",
+            |project, args: PeResourcesArgs| {
+                let query = crate::PeResourcesQuery {
+                    type_filter: args.r#type,
+                    offset: args.offset,
+                    limit: page_limit(args.limit),
+                };
+                project.pe_resources(&query)
+            },
+        ),
+        tool(
+            Group::Formats,
+            "pe_load_config",
+            "PE IMAGE_LOAD_CONFIG_DIRECTORY (32- and 64-bit), honouring its own Size: fields past it are listed in \
+             absent_fields and never read. Reports the security cookie VA; SafeSEH handler table count and up to \
+             256 handler RVAs (32-bit); CFG GuardFlags names, check/dispatch function pointers and function table \
+             count, entry size and whether it lies inside the image; address-taken IAT, long-jump and EH \
+             continuation table counts; and dynamic value relocation table presence. Also the CET flags of the \
+             IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS debug entry, the DllCharacteristics mitigations triage reports, \
+             and findings where the two disagree (CFG declared but not instrumented or the reverse, 32-bit images \
+             without SafeSEH or NO_SEH). Table contents beyond SafeSEH handlers, CHPE, hot-patch, enclave and \
+             volatile metadata are not decoded. Returns null for a non-PE image.",
+            |project, _: Nothing| project.pe_load_config(),
         ),
         tool(
             Group::Detection,

@@ -18,6 +18,7 @@ mod pdb;
 #[path = "../../../tests/fixtures/pdb/support.rs"]
 #[allow(dead_code)]
 mod pdb_support;
+mod pe_metadata;
 mod raw_code;
 mod raw_project;
 mod runtime_compare;

@@ -35,6 +35,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 - `diagnostics`: `analysis_diagnostics`, `entry_diagnostics`, `inspect_jump_table`.
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
 - `carve`: `carve`, `archive_inventory`.
+- `formats`: `pe_resources`, `pe_load_config`.
 
 Calling `enable_tools` without arguments lists each group's description, tool names/count and enabled state.
 `{"groups": ["detection"]}` enables that group; `{"groups": ["all"]}` enables every group. Enabling sends
@@ -128,6 +129,14 @@ metadata evidence. CIL is never treated as native code; see [managed assemblies]
 Resources preserve raw metadata and offset/reference availability, with independent inventory counts and truncation.
 Embedded mapping evidence does not validate payload extents; external targets and resource payloads are not read.
 `parent_token` is an attribute-target filter, not a resource-owner selector.
+
+`pe_resources` pages PE resource leaves with `offset`/`limit`, filtered by `type` (`RT_VERSION`, `VERSION`, `16` or a
+string type name). Each leaf carries its type, name, language, data RVA, size, code page, image offset and whether
+its bytes are in the file. RT_VERSION and RT_MANIFEST leaves on the page are decoded until 24,000 payload bytes are
+spent (`decode_skipped` counts the rest); other payloads are located only. `pe_load_config` reads the load config
+up to its own declared Size, listing later fields in `absent_fields`, and adds CET flags and findings against the
+DllCharacteristics that triage reports. Both return null for a non-PE image. See
+[PE resources and load config](features.md#pe-resources-and-load-config).
 
 `carve` accepts any file path rather than requiring a loadable binary. Pages use `offset`/`limit` and `more`,
 not a total; scanning stops at the candidate after the page. It extracts/decompresses nothing.

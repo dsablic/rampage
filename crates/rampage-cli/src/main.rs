@@ -123,6 +123,10 @@ enum Command {
     /// Likely behaviors inferred from imports and strings (triage evidence, not proof)
     #[command(hide = true)]
     Capabilities(FileArgs),
+    #[command(skip)]
+    PeResources(args::PeResourcesArgs),
+    #[command(skip)]
+    PeLoadConfig(FileArgs),
     /// .NET metadata: identity, references, entry point, signatures, P/Invoke, attributes and resource links
     #[command(hide = true)]
     Dotnet(DotnetArgs),
@@ -355,6 +359,15 @@ fn main() -> ExitCode {
         Command::ExportCfg(FileArgs { file }) => commands::export_cfg(&mut out, &file, &options),
         Command::Triage(FileArgs { file }) => commands::triage(&mut out, &file, &options),
         Command::Capabilities(FileArgs { file }) => commands::capabilities(&mut out, &file, &options),
+        Command::PeResources(args::PeResourcesArgs { file, type_filter, offset, limit }) => {
+            let query = rampage_api::PeResourcesQuery {
+                type_filter,
+                offset: Some(offset),
+                limit: Some(usize::try_from(limit).unwrap_or(usize::MAX)),
+            };
+            commands::pe_resources(&mut out, &file, &query, &options)
+        }
+        Command::PeLoadConfig(FileArgs { file }) => commands::pe_load_config(&mut out, &file, &options),
         Command::Dotnet(DotnetArgs { file, il: Some(method), offset, limit, at, .. }) => {
             let query = rampage_api::DotNetIlQuery {
                 method,

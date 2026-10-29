@@ -1,0 +1,42 @@
+// SPDX-License-Identifier: Apache-2.0
+// Resources for the pe_resources fixtures: a version block, a manifest, a string table and a named custom type.
+1 24 "pe-resources.manifest"
+
+STRINGTABLE
+LANGUAGE 0x09, 0x01
+BEGIN
+  1 "rampage fixture string one"
+  2 "second string"
+END
+
+FIXTURE BLOB
+BEGIN
+  "custom payload\0"
+END
+
+1 VERSIONINFO
+FILEVERSION 1,2,3,4
+PRODUCTVERSION 5,6,7,8
+FILEFLAGSMASK 0x3F
+FILEFLAGS 0x2
+FILEOS 0x40004
+FILETYPE 0x1
+FILESUBTYPE 0x0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Rampage Fixtures"
+      VALUE "FileDescription", "PE resource fixture"
+      VALUE "FileVersion", "1.2.3.4"
+      VALUE "OriginalFilename", "pe-resources.exe"
+      VALUE "ProductName", "rampage"
+      VALUE "ProductVersion", "5.6.7.8"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

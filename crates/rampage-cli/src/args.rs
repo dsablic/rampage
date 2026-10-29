@@ -660,6 +660,20 @@ pub(crate) struct DotnetArgs {
     pub(crate) limit: u64,
 }
 
+#[derive(Args)]
+pub(crate) struct PeResourcesArgs {
+    pub(crate) file: PathBuf,
+    /// Only leaves of this type: RT_VERSION, VERSION, 16 or a string type name (case-insensitive)
+    #[arg(long = "type")]
+    pub(crate) type_filter: Option<String>,
+    /// Matching leaves to skip, for paging
+    #[arg(long, default_value_t = 0)]
+    pub(crate) offset: usize,
+    /// Leaves per page
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..))]
+    pub(crate) limit: u64,
+}
+
 fn parse_dotnet_list(text: &str) -> Result<rampage_api::DotNetList, String> {
     text.parse()
 }
