@@ -700,6 +700,8 @@ fn read_only_tool(name: &str) -> bool {
             | "decode_file_range"
             | "archive_inventory"
             | "carve"
+            | "pyinstaller_archive"
+            | "wasm_module"
             | "identify_functions"
     )
 }

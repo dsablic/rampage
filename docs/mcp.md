@@ -36,7 +36,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 - `diagnostics`: `analysis_diagnostics`, `entry_diagnostics`, `inspect_jump_table`.
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
 - `carve`: `carve`, `archive_inventory`.
-- `formats`: `build_info`.
+- `formats`: `build_info`, `pyinstaller_archive`, `wasm_module`.
 
 Calling `enable_tools` without arguments lists each group's description, tool names/count and enabled state.
 `{"groups": ["detection"]}` enables that group; `{"groups": ["all"]}` enables every group. Enabling sends
@@ -46,7 +46,8 @@ nothing. `--all-tools` lists all groups at startup; `RAMPAGE_MCP_TOOLS=all` or a
 
 Workflow reports name the `group` of suggested next tools. The desktop assistant offers every binary tool
 without group gating, plus the interactive `show_address`; it does not offer file tools
-`carve`/`archive_inventory`/`list_packs`/`query_debugger`/`inspect_data`/`decode_file_range`/`inspect_raw_code`.
+`carve`/`archive_inventory`/`list_packs`/`query_debugger`/`inspect_data`/`decode_file_range`/`inspect_raw_code`/
+`pyinstaller_archive`/`wasm_module`.
 `show_address` is not an MCP tool because the server has no interactive listing to navigate.
 
 The [parity scorecard](parity-scorecard.md) records static metrics and task definitions separately from
@@ -141,6 +142,12 @@ JSON pages stay within 60,000 bytes and errors within 4,096 bytes. See [archive 
 `.dep-v0` packages. Each is `null` when absent, or has `status` `present` or `unreadable` with a `reason`. `offset`/
 `limit` page `go.deps` and `rust.packages` independently; settings come whole (at most 1024). Both records are
 self-reported by the toolchain, not verified against code. See [toolchain build info](features.md#toolchain-build-info).
+
+`pyinstaller_archive` and `wasm_module` are file tools too: they take any file path and open no project. The first
+returns the CArchive cookie, package, Python version and a page of TOC entries (null without a cookie); the second
+returns a core WebAssembly module summary and, with `list`, a page of imports, exports or functions (null without
+the `\0asm` magic). Both pages hold whole items within 60,000 JSON bytes and report `next_offset`. See
+[PyInstaller and WebAssembly](features.md#pyinstaller-archives-and-webassembly-modules).
 `observe_pointer` exposes a captured slot without modifying discovery or asserting a call edge. See
 [runtime snapshots](runtime-snapshots.md) for runtime evidence limits and [data packs](data-packs.md) for pack warnings.
 

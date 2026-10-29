@@ -406,6 +406,163 @@ pub fn archive_inventory(
     Ok(())
 }
 
+pub fn pyinstaller_archive(
+    out: &mut impl Write,
+    path: &Path,
+    offset: usize,
+    limit: usize,
+    options: &Options,
+) -> Result<()> {
+    let page = rampage_api::pyinstaller_archive(path, Some(offset), Some(limit))?;
+    if options.json {
+        return write_json(out, &page);
+    }
+    let Some(page) = page else {
+        writeln!(out, "no PyInstaller cookie in the last 8 MiB of {}", path.display())?;
+        return Ok(());
+    };
+    let archive = &page.archive;
+    writeln!(
+        out,
+        "cookie at {:#x} ({} bytes, {:?}); package {:#x}+{:#x}; TOC {:#x}+{:#x}; {} trailing bytes",
+        archive.cookie_offset,
+        archive.cookie_size,
+        archive.cookie_layout,
+        archive.package_offset,
+        archive.package_length,
+        archive.toc_offset,
+        archive.toc_length,
+        archive.trailing_bytes
+    )?;
+    writeln!(
+        out,
+        "Python {} ({}){}",
+        archive.python_version,
+        archive.python_version_raw,
+        archive.python_library.as_deref().map(|library| format!(", library {library}")).unwrap_or_default()
+    )?;
+    if let Some(pyz) = &archive.pyz {
+        writeln!(
+            out,
+            "PYZ at {:#x}: magic {}, pyc magic {} ({}), TOC at +{:#x}",
+            pyz.offset,
+            if pyz.magic_valid { "valid" } else { "INVALID" },
+            pyz.pyc_magic,
+            pyz.python_version.unwrap_or("unknown Python"),
+            pyz.toc_offset
+        )?;
+    }
+    for entry in &page.entries {
+        writeln!(
+            out,
+            "#{} {} {:<14} data {:#010x} size {:#x}/{:#x} flag {}{} {}{}",
+            entry.index,
+            entry.typecode,
+            entry.kind,
+            entry.data_offset,
+            entry.compressed_size,
+            entry.uncompressed_size,
+            entry.compression_flag,
+            if entry.data_in_bounds { "" } else { " [out of bounds]" },
+            entry.name,
+            if entry.name_truncated { " [name truncated]" } else { "" }
+        )?;
+    }
+    writeln!(out, "{} of {} entries from {}", page.returned, archive.entries_total, page.offset)?;
+    if let Some(next) = page.next_offset {
+        writeln!(out, "more entries; continue with --offset {next}")?;
+    }
+    for warning in &archive.warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
+    for limitation in &page.limitations {
+        writeln!(out, "note: {limitation}")?;
+    }
+    Ok(())
+}
+
+pub fn wasm_module(
+    out: &mut impl Write,
+    path: &Path,
+    list: Option<rampage_api::WasmList>,
+    offset: usize,
+    limit: usize,
+    options: &Options,
+) -> Result<()> {
+    let page = rampage_api::wasm_module(path, list, Some(offset), Some(limit))?;
+    if options.json {
+        return write_json(out, &page);
+    }
+    let Some(page) = page else {
+        writeln!(out, "not a WebAssembly binary (no \\0asm magic): {}", path.display())?;
+        return Ok(());
+    };
+    let module = &page.module;
+    writeln!(out, "WebAssembly {:?} version {} layer {}", module.encoding, module.version, module.layer)?;
+    if let Some(name) = &module.module_name {
+        writeln!(out, "module name: {name}")?;
+    }
+    for section in &module.sections {
+        writeln!(
+            out,
+            "section {:>2} {:<12} {:#010x} size {:#x}",
+            section.id, section.name, section.offset, section.size
+        )?;
+    }
+    let counts = &module.counts;
+    writeln!(
+        out,
+        "{} types, {} imports ({} functions), {} functions, {} tables, {} memories, {} globals, {} exports, \
+         {} data and {} elem segments",
+        counts.types,
+        counts.imports,
+        counts.imported_functions,
+        counts.functions,
+        counts.tables,
+        counts.memories,
+        counts.globals,
+        counts.exports,
+        counts.data_segments,
+        counts.elem_segments
+    )?;
+    if let Some(start) = module.start_function {
+        writeln!(out, "start function: {start}")?;
+    }
+    for field in &module.producers {
+        let values: Vec<String> =
+            field.values.iter().map(|value| format!("{} {}", value.name, value.version).trim().to_owned()).collect();
+        writeln!(out, "{}: {}", field.field, values.join(", "))?;
+    }
+    for import in page.imports.iter().flatten() {
+        writeln!(
+            out,
+            "import #{} {}.{} {} {}",
+            import.index, import.module, import.name, import.kind, import.description
+        )?;
+    }
+    for export in page.exports.iter().flatten() {
+        writeln!(out, "export {} {} {}", export.name, export.kind, export.index)?;
+    }
+    for function in page.functions.iter().flatten() {
+        writeln!(
+            out,
+            "func {} {}{} {}{}",
+            function.index,
+            function.name.as_deref().unwrap_or("-"),
+            if function.imported { " (imported)" } else { "" },
+            function.signature.as_deref().unwrap_or("?"),
+            function.body_size.map(|size| format!(" body {size:#x}")).unwrap_or_default()
+        )?;
+    }
+    if let Some(next) = page.next_offset {
+        writeln!(out, "more items; continue with --offset {next}")?;
+    }
+    for limitation in &module.limitations {
+        writeln!(out, "note: {limitation}")?;
+    }
+    Ok(())
+}
+
 pub fn carve(out: &mut impl Write, path: &Path, max_candidates: usize, options: &Options) -> Result<()> {
     let carving = rampage_api::carve(path, Some(max_candidates))?;
     if options.json {

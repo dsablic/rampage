@@ -43,6 +43,7 @@ mod pointer_observation;
 mod project;
 mod project_workspace;
 mod propagation;
+mod pyinstaller;
 mod range_source;
 mod raw_code;
 mod raw_file;
@@ -63,6 +64,7 @@ mod type_headers;
 mod type_library;
 mod typed_data;
 mod variables;
+mod wasm;
 pub mod workflows;
 mod xrefs;
 
@@ -182,6 +184,7 @@ pub use propagation::{
     PropagationConflict, PropagationCounts, PropagationHintEdit, PropagationRequest, PropagationResult,
     PropagationSkip,
 };
+pub use pyinstaller::{MAX_FORMAT_RESULT_BYTES, MAX_PYINSTALLER_PAGE, PyInstallerPage, pyinstaller_archive};
 pub use rampage_analysis::triage::Triage;
 pub use rampage_capabilities::Capability;
 pub use rampage_decompiler::VariableStorage;
@@ -223,6 +226,7 @@ pub use typed_data::{
     TypedDataObject, TypedDataQuery, TypedDataReport,
 };
 pub use variables::{VariableDescriptor, VariableEditRequest, VariableEditResult};
+pub use wasm::{MAX_WASM_PAGE, WasmList, WasmModulePage, wasm_module};
 pub use workflows::{
     Confidence as FindingConfidence, Excerpt, Finding, NextStep, ReportLimits, ReportTarget, Section, WorkflowReport,
 };

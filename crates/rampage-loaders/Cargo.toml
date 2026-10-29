@@ -18,6 +18,8 @@ serde.workspace = true
 thiserror.workspace = true
 pdb = "0.8.0"
 flate2 = "1.1.10"
+# The version rampage-plugin pins, so the workspace builds one copy.
+wasmparser = "=0.248.0"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.5", features = ["fs"] }

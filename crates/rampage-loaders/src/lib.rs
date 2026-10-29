@@ -34,3 +34,5 @@ pub mod dotnet;
 pub mod gopclntab;
 pub mod objc;
 pub mod pdb;
+pub mod pyinstaller;
+pub mod wasm;

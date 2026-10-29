@@ -164,6 +164,35 @@ pub(crate) struct ArchiveInventoryArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct PyInstallerArchiveArgs {
+    pub(crate) file: PathBuf,
+    /// TOC entries to skip, for paging
+    #[arg(long, default_value_t = 0)]
+    pub(crate) offset: usize,
+    /// TOC entries per page (1..=100), additionally bounded to 60000 JSON bytes
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..=100))]
+    pub(crate) limit: u64,
+}
+
+#[derive(Args)]
+pub(crate) struct WasmModuleArgs {
+    pub(crate) file: PathBuf,
+    /// Also page one list: imports, exports or functions
+    #[arg(long, value_parser = parse_wasm_list)]
+    pub(crate) list: Option<rampage_api::WasmList>,
+    /// List items to skip, for paging
+    #[arg(long, default_value_t = 0, requires = "list")]
+    pub(crate) offset: usize,
+    /// List items per page (1..=100), additionally bounded to 60000 JSON bytes
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..=100))]
+    pub(crate) limit: u64,
+}
+
+fn parse_wasm_list(text: &str) -> Result<rampage_api::WasmList, String> {
+    text.parse()
+}
+
+#[derive(Args)]
 pub(crate) struct QueryDebuggerArgs {
     /// Explicit absolute path to an operator-started LLDB Unix socket (no attach or discovery)
     #[arg(long)]

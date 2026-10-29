@@ -53,4 +53,5 @@ mod search_wrapper;
 mod signature_import;
 mod sleigh_surface;
 mod test_targets;
+mod wasm_pyinstaller;
 mod workflows;

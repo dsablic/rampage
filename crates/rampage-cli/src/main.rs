@@ -106,6 +106,10 @@ enum Command {
     ListFindings(args::ListFindingsArgs),
     #[command(skip)]
     BuildInfo(args::BuildInfoArgs),
+    #[command(skip)]
+    PyInstallerArchive(args::PyInstallerArchiveArgs),
+    #[command(skip)]
+    WasmModule(args::WasmModuleArgs),
     #[command(hide = true)]
     QueryDebugger(QueryDebuggerArgs),
     /// Run bounded workflows and selected decompilations as one multi-architecture analysis report
@@ -276,12 +280,20 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if matches!(&command, Command::ArchiveInventory(..) | Command::DecodeFile(..) | Command::InspectRaw(..))
-        && (cli.arch.is_some() || cli.image_offset.is_some() || cli.image_length.is_some())
+    if matches!(
+        &command,
+        Command::ArchiveInventory(..)
+            | Command::DecodeFile(..)
+            | Command::InspectRaw(..)
+            | Command::PyInstallerArchive(..)
+            | Command::WasmModule(..)
+    ) && (cli.arch.is_some() || cli.image_offset.is_some() || cli.image_length.is_some())
     {
         let name = match &command {
             Command::DecodeFile(..) => "decode",
             Command::InspectRaw(..) => "inspect-raw (put architecture and mapping in --request)",
+            Command::PyInstallerArchive(..) => "pyinstaller-archive",
+            Command::WasmModule(..) => "wasm-module",
             _ => "archive-inventory",
         };
         eprintln!("rampage: binary {name} does not accept --arch, --image-offset or --image-length");
@@ -335,6 +347,12 @@ fn main() -> ExitCode {
                 contains: args.contains,
             };
             commands::archive_inventory(&mut out, &args.file, &query, &options)
+        }
+        Command::PyInstallerArchive(args) => {
+            commands::pyinstaller_archive(&mut out, &args.file, args.offset, args.limit as usize, &options)
+        }
+        Command::WasmModule(args) => {
+            commands::wasm_module(&mut out, &args.file, args.list, args.offset, args.limit as usize, &options)
         }
         Command::QueryDebugger(args) => debugger_query(&mut out, args),
         Command::Analyze(args) => analyze::analyze(&mut out, &args, &options),
@@ -574,6 +592,8 @@ fn without_one_image(command: &Command) -> Option<&'static str> {
         Command::Carve(..) => "carve",
         Command::Inventory(..) => "inventory",
         Command::ArchiveInventory(..) => "binary archive-inventory",
+        Command::PyInstallerArchive(..) => "binary pyinstaller-archive",
+        Command::WasmModule(..) => "binary wasm-module",
         Command::DecodeFile(..) => "binary decode",
         Command::InspectRaw(..) => "binary inspect-raw",
         Command::Packs { .. } => "packs",

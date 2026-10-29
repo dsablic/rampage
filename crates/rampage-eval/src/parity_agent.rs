@@ -781,6 +781,8 @@ fn allowed_name(name: &str, config: &AgentConfig) -> bool {
                 | "archive_inventory"
                 | "carve"
                 | "build_info"
+                | "pyinstaller_archive"
+                | "wasm_module"
                 | "identify_functions"
                 | "import_debug_signatures"
                 | "import_debug_layouts"

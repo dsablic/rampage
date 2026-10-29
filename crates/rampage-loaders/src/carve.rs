@@ -210,19 +210,32 @@ impl Carving {
 
 /// Carves the regular file at `path`, mapping it read-only.
 pub fn carve_file(path: &Path, limits: &Limits) -> Result<Carving, LoadError> {
+    Ok(match map_regular_file(path)? {
+        Some(data) => scan(&data, limits),
+        None => scan(&[], limits),
+    })
+}
+
+/// Opens `path` for reading, refusing anything but a regular file.
+pub(crate) fn open_regular_file(path: &Path) -> Result<File, LoadError> {
     let io_error = |source| LoadError::Io { path: path.to_owned(), source };
     // Checked before opening: opening a FIFO for reading blocks until a writer appears.
     if !std::fs::metadata(path).map_err(io_error)?.is_file() {
         return Err(io_error(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a regular file")));
     }
-    let file = File::open(path).map_err(io_error)?;
+    File::open(path).map_err(io_error)
+}
+
+/// Maps the regular file at `path` read-only, or `None` when it is empty (an empty file cannot be mapped).
+pub(crate) fn map_regular_file(path: &Path) -> Result<Option<Mmap>, LoadError> {
+    let io_error = |source| LoadError::Io { path: path.to_owned(), source };
+    let file = open_regular_file(path)?;
     if file.metadata().map_err(io_error)?.len() == 0 {
-        return Ok(scan(&[], limits));
+        return Ok(None);
     }
     // SAFETY: the mapping is read-only; a concurrent external truncation of the input is out of scope, the same
     // assumption `Binary::open` makes.
-    let data = unsafe { Mmap::map(&file) }.map_err(io_error)?;
-    Ok(scan(&data, limits))
+    Ok(Some(unsafe { Mmap::map(&file) }.map_err(io_error)?))
 }
 
 /// Scans `data` for embedded executables and containers, in offset order.

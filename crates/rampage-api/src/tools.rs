@@ -272,6 +272,32 @@ struct CarveArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct PyInstallerArchiveArgs {
+    /// Path to any regular file, such as a PyInstaller-built executable; it is not opened as a project.
+    path: std::path::PathBuf,
+    /// TOC entries to skip, for paging.
+    offset: Option<usize>,
+    /// TOC entries per page, 1..=100 (default 100), additionally bounded to 60000 JSON bytes.
+    #[schemars(range(min = 1, max = 100))]
+    limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WasmModuleArgs {
+    /// Path to any regular file, such as a .wasm module; it is not opened as a project.
+    path: std::path::PathBuf,
+    /// The list to page; omit it for the summary alone.
+    list: Option<crate::WasmList>,
+    /// List items to skip, for paging.
+    offset: Option<usize>,
+    /// List items per page, 1..=100 (default 100), additionally bounded to 60000 JSON bytes.
+    #[schemars(range(min = 1, max = 100))]
+    limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ArchiveInventoryArgs {
     /// Explicit standalone single-disk ZIP32 file; never a binary or member path.
     path: std::path::PathBuf,
@@ -535,6 +561,54 @@ pub fn file_tools() -> Vec<FileTool> {
                 let args: CarveArgs =
                     serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))?;
                 let page = crate::carve_page(std::path::Path::new(&args.path), args.offset, args.limit)
+                    .map_err(|error| error_chain(&error))?;
+                serde_json::to_value(page).map_err(|error| error.to_string())
+            },
+        },
+        FileTool {
+            group: Group::Formats,
+            name: "pyinstaller_archive",
+            description: "Inspect the PyInstaller CArchive appended to any file (a PyInstaller-built ELF, PE or \
+                          Mach-O), without opening it as a project. Finds the cookie (magic MEI\\x0c\\x0b\\x0a\\x0b\\x0e) \
+                          by searching backwards through the file's last 8 MiB, so a signature appended after the \
+                          archive is stepped over, and accepts both the 24-byte pre-2.1 and the 88-byte cookie. \
+                          Reports cookie_offset, cookie_layout, package_offset/length, toc_offset/length, Python \
+                          version (312 -> 3.12) and library name, typecode counts, and the PYZ entry's header (pyc \
+                          magic and its Python version) when that entry is stored uncompressed. Pages TOC entries \
+                          (offset/limit, at most 100 and 60000 JSON bytes): each has its record and data file \
+                          offsets, compressed and uncompressed sizes, compression flag, typecode with its meaning \
+                          (s script, m module, M package, z PYZ, Z zipfile, b binary, x data, o runtime option, d \
+                          dependency, a nested package, l splash, n symlink) and name. Returns null when there is no \
+                          cookie magic, and an error when magic matches but no cookie validates. Read-only: no \
+                          extraction, decompression, decryption or pyc decompilation; use the file offsets with \
+                          decode_file_range or carve.",
+            input_schema: schema::<PyInstallerArchiveArgs>(),
+            handler: |_, input| {
+                let args: PyInstallerArchiveArgs = arguments(input)?;
+                let page = crate::pyinstaller_archive(&args.path, args.offset, args.limit)
+                    .map_err(|error| error_chain(&error))?;
+                serde_json::to_value(page).map_err(|error| error.to_string())
+            },
+        },
+        FileTool {
+            group: Group::Formats,
+            name: "wasm_module",
+            description: "Summarise a core WebAssembly module in any file, without opening it as a project (the \
+                          project loaders take native executables only). The summary has the version and layer \
+                          fields, the section list (id, name, contents offset and size; at most 64 listed), counts \
+                          of types, imports, functions, tables, memories, globals, tags, exports and data/elem \
+                          segments, the start function, custom-section names, the name section's module name and \
+                          the producers section (language, processed-by, sdk). list pages one list (offset/limit, \
+                          at most 100 and 60000 JSON bytes): imports (module, name, kind, type), exports (name, \
+                          kind, index) or functions (index, imported first; type signature; body offset and size; \
+                          name-section name). A component-model binary (layer 1) is reported as unsupported, with \
+                          no sections read. Malformed input returns what parsed before the error with complete \
+                          false and the error in limitations. Returns null when the file has no \\0asm magic. Not \
+                          validated, compiled, executed or disassembled.",
+            input_schema: schema::<WasmModuleArgs>(),
+            handler: |_, input| {
+                let args: WasmModuleArgs = arguments(input)?;
+                let page = crate::wasm_module(&args.path, args.list, args.offset, args.limit)
                     .map_err(|error| error_chain(&error))?;
                 serde_json::to_value(page).map_err(|error| error.to_string())
             },
