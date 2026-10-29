@@ -739,6 +739,22 @@ on held-out, per-slice improvement with provenance and rollback.
 
 ## Ideas from adjacent projects (REA, Ghidra-MCP)
 
+### REA gap-closing wave 1 (2026-10-29)
+
+- [x] Format tools in a new `formats` group: `build_info` (Go build info, cargo-auditable `.dep-v0`),
+  `pe_resources` (resource tree, RT_VERSION, RT_MANIFEST), `pe_load_config` (cookie, SafeSEH, CFG, CET),
+  `pyinstaller_archive` (CArchive cookie and TOC) and `wasm_module` (core module summary and lists). All pages are
+  byte-fitted through one shared helper in `rows.rs`.
+- [x] Durable findings ledger: `record_finding` / `list_findings` in the annotation log, with stable ids, undo/redo
+  and image-change flags. Writes keep a quarter of every reader limit free; every annotation writer now refuses an
+  append that would leave the log unopenable, and debug signature import is all-or-nothing.
+- [ ] Annotation log compaction. Without it, a log at its limits can only be read: renames, undo and the ledger
+  are refused. Compaction would also close the remaining gap: a log whose checked state was cleared is still
+  replayed checked on open, but ordinary sessions don't apply the checked cache budget, so more than about 2,000
+  names there would make the checked open fail.
+- [ ] Ledger: deleting entries, clearing optional fields, appending evidence on update.
+
+
 REA ("Reverse Engineer Anything") is an open CLI+MCP orchestrator over external engines (Ghidra/Hopper/IDA) with
 multi-format front-ends and guided workflows. rampage builds its own engine and embeds Ghidra, so the value is
 in UX/workflow ideas, not the multi-engine dispatch:
