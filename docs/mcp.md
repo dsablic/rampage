@@ -21,7 +21,8 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 - `core`: `triage`, `binary_info`, `list_functions`, `disassemble`, `decompile`, `function_graph`,
   `assemble`, `patch_bytes`, `revert_patch`, `list_patches`, `export_patched`,
   `function_summary`, `xrefs`, `search`, `list_strings`, `list_imports`, `list_exports`, `rename`, `set_comment`,
-  `annotate_batch`, `batch`, `check_names`, `undo`, `redo`, `discard_undo`, `list_annotations`, `triage_report`,
+  `annotate_batch`, `batch`, `check_names`, `undo`, `redo`, `discard_undo`, `list_annotations`, `record_finding`,
+  `list_findings`, `triage_report`,
   `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`, `inspect_data`,
   `decode_file_range`, `inspect_raw_code`, `inspect_sleigh`.
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
@@ -188,6 +189,17 @@ and explicit null clears; it does not expose raw patch or export operations. See
 Types/signatures/globals also persist, with dependency checks rather than inferred class layouts.
 The explicit [PDB name-import tool](pdb-symbols.md#shared-tool-and-mcp) previews by default and applies eligible
 names as one undoable batch only with `apply: true`. Detail pagination does not restrict the batch's writes.
+
+`record_finding` keeps an investigation ledger in the same log: `kind` (`finding`, `unknown` or `question`), `text`
+(at most 2000 bytes), optional `address`, `function` (stored as the containing function's start), up to 8
+`evidence` references `{tool, detail}`, `confidence` (`low`/`medium`/`high`), `status` (`open` by default,
+`resolved`, `rejected`) and `resolution`. Without `id` it creates an entry and returns its id, which is never
+reused, even after an undo; with `id` it changes only the fields given. Each call is one undo step, and ids are
+allocated under the log's cross-process lock. `list_findings` filters by `kind`, `status`, `address`, `function`
+and `contains`, pages with `offset`/`limit` (default 50, at most 100, and at most 48 KB of JSON), and reports
+open/resolved/rejected counts per kind over the whole ledger. Entries recorded on another build of the binary are
+kept and flagged `image_changed`; giving an entry a new `address` or `function` re-records it on this build.
+Raw Projects do not offer the ledger, as their annotations are not persisted.
 
 `undo`/`redo` revert/reapply one session step, including a whole batch. When another client's edit blocks undo,
 `discard_undo` drops the blocked step from session history, leaving its edits in effect and the log unchanged,

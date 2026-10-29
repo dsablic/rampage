@@ -58,7 +58,9 @@ function_summary, a structural CFG/reference summary, where no decompiler specif
 or function_graph it, and follow references with xrefs. list_imports and list_strings are good starting points for \
 finding behavior. Record findings with rename and set_comment, or many at once with annotate_batch (all or nothing; \
 check_names pre-flights candidate names): they persist beside the binary and every client of the same binary, \
-including the rampage UI, picks them up. undo and redo revert or reapply one step, which may be a whole batch; when \
+including the rampage UI, picks them up. record_finding keeps a ledger there of what you established, still don't \
+know or want answered, with supporting tool calls and a status, so a later session or another agent can resume \
+from list_findings. undo and redo revert or reapply one step, which may be a whole batch; when \
 another client's edit blocks undoing a step, discard_undo drops it from the undo history (its edits stay) so earlier \
 steps can be undone; it refuses a step undo could still revert unless force is true, since the user's UI may share \
 that history. Memory snapshots and bundle directories use the same tools. inspect_raw_code provides bounded \

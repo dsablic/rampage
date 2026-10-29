@@ -10,6 +10,7 @@ mod debugger;
 mod decode;
 mod entry_scope;
 mod ergonomics;
+mod findings;
 mod function_frame;
 mod inspect_sleigh;
 mod local_variables;

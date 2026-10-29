@@ -382,6 +382,7 @@ impl App {
             Field::TypeHint => format!("Derived type hints {:#x}", editing.address),
             Field::DebugTypes => "Checked debug type imports".to_owned(),
             Field::Patch => format!("Byte patch {:#x}", editing.address),
+            Field::Finding => format!("Finding {}", editing.address),
         };
         let mut done = false;
         let mut cancel = false;

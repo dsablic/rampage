@@ -100,6 +100,10 @@ enum Command {
     Search(args::SearchArgs),
     #[command(skip)]
     ArchiveInventory(ArchiveInventoryArgs),
+    #[command(skip)]
+    RecordFinding(args::RecordFindingArgs),
+    #[command(skip)]
+    ListFindings(args::ListFindingsArgs),
     #[command(hide = true)]
     QueryDebugger(QueryDebuggerArgs),
     /// Run bounded workflows and selected decompilations as one multi-architecture analysis report
@@ -505,6 +509,8 @@ fn main() -> ExitCode {
         }
         Command::CheckNames(CheckNamesArgs { file, names }) => commands::check_names(&mut out, &file, &names, &options),
         Command::Annotations(FileArgs { file }) => commands::annotations(&mut out, &file, &options),
+        Command::RecordFinding(args) => commands::record_finding(&mut out, &args, &options),
+        Command::ListFindings(args) => commands::list_findings(&mut out, &args, &options),
         Command::DebugTypes(DebugTypesArgs { file, apply }) => commands::debug_types(&mut out, &file, apply, &options),
         Command::ImportPdbNames(args) => commands::import_pdb_names(&mut out, &args, &options),
         Command::ImportDebugLayouts(args) => commands::import_debug_layouts(&mut out, &args, &options),

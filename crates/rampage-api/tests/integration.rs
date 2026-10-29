@@ -33,6 +33,7 @@ mod diagnostics;
 mod dotnet;
 mod embedded;
 mod ergonomics;
+mod findings;
 mod jumptable;
 mod module_references;
 mod packs;

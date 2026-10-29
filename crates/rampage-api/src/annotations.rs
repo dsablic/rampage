@@ -41,6 +41,8 @@ pub enum Field {
     DataType,
     OperandType,
     Patch,
+    /// An investigation ledger entry (see `crate::findings`), keyed by its id rather than an address.
+    Finding,
 }
 
 /// An exact named data type or explicitly encoded string at an image address.
@@ -822,6 +824,9 @@ pub struct Annotations {
     data_types: BTreeMap<u64, String>,
     operand_types: BTreeMap<u64, String>,
     patches: BTreeMap<u64, String>,
+    /// Ledger entries by id, and the highest id any logged edit has used, so an id is never handed out twice.
+    findings: BTreeMap<u64, String>,
+    finding_high: u64,
     patch_validator: Option<PatchValidator>,
     patch_freezer: Option<PatchFreezer>,
     unpatched_view: Option<std::sync::Arc<Annotations>>,
@@ -1107,6 +1112,7 @@ impl Annotations {
             .saturating_add(self.data_types.len())
             .saturating_add(self.operand_types.len())
             .saturating_add(self.patches.len())
+            .saturating_add(self.findings.len())
             .saturating_add(self.addresses.len())
             .saturating_add(self.name_owners.len());
         if rows > CHECKED_RECORDS {
@@ -1131,6 +1137,7 @@ impl Annotations {
             .chain(self.data_types.values())
             .chain(self.operand_types.values())
             .chain(self.patches.values())
+            .chain(self.findings.values())
             .chain(self.addresses.keys())
             .chain(self.name_owners.keys())
         {
@@ -1233,6 +1240,8 @@ impl Annotations {
             data_types: self.data_types.clone(),
             operand_types: self.operand_types.clone(),
             patches: self.patches.clone(),
+            findings: self.findings.clone(),
+            finding_high: self.finding_high,
             patch_validator: self.patch_validator.clone(),
             patch_freezer: None,
             unpatched_view: self.unpatched_view.clone(),
@@ -1367,6 +1376,8 @@ impl Annotations {
                 self.patches_revision = std::sync::Arc::new(());
             }
             self.patches.clear();
+            self.findings.clear();
+            self.finding_high = 0;
             self.managed_layouts = 0;
         }
         for edit in &edits {
@@ -1428,6 +1439,13 @@ impl Annotations {
                 Some(value) => drop(self.comments.insert(edit.address, value.clone())),
                 None => drop(self.comments.remove(&edit.address)),
             },
+            Field::Finding => {
+                self.finding_high = self.finding_high.max(edit.address);
+                match &edit.value {
+                    Some(value) => drop(self.findings.insert(edit.address, value.clone())),
+                    None => drop(self.findings.remove(&edit.address)),
+                }
+            }
             Field::Signature
             | Field::Types
             | Field::TypeLibrary
@@ -2070,6 +2088,7 @@ impl Annotations {
             Field::DataType => &self.data_types,
             Field::OperandType => &self.operand_types,
             Field::Patch => &self.patches,
+            Field::Finding => &self.findings,
         }
     }
 
@@ -2131,6 +2150,22 @@ impl Annotations {
 
     pub fn operand_types(&self) -> &BTreeMap<u64, String> {
         &self.operand_types
+    }
+
+    /// Ledger entries by id, as logged JSON.
+    pub fn findings(&self) -> &BTreeMap<u64, String> {
+        &self.findings
+    }
+
+    /// The id the next new ledger entry takes: one past every id any logged edit has used, including entries
+    /// since undone, so a later session never sees one id name two different entries.
+    pub(crate) fn next_finding_id(&self) -> u64 {
+        self.finding_high.saturating_add(1)
+    }
+
+    /// The SHA-256 (hex) of the image these annotations are applied to, when known.
+    pub(crate) fn image_sha256(&self) -> Option<&str> {
+        self.log.as_ref().and_then(|log| log.image.as_deref())
     }
 
     pub fn patches(&self) -> &BTreeMap<u64, String> {
