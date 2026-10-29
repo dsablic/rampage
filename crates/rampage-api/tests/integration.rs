@@ -7,6 +7,7 @@ mod archive;
 mod assembly;
 mod benchmark;
 mod branch_observation;
+mod build_info;
 mod bundled_signatures;
 mod capture_session;
 mod compiled_arm64;

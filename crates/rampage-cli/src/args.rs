@@ -700,6 +700,17 @@ pub(crate) struct ReportArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct BuildInfoArgs {
+    pub(crate) file: PathBuf,
+    /// Go dependency modules and Rust packages to skip, for paging (each list independently)
+    #[arg(long, default_value_t = 0)]
+    pub(crate) offset: usize,
+    /// Entries per page of each list
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u64).range(1..))]
+    pub(crate) limit: u64,
+}
+
+#[derive(Args)]
 pub(crate) struct DotnetArgs {
     pub(crate) file: PathBuf,
     /// The list to page: types, pinvokes, attributes or resources (metadata links only, never payloads)

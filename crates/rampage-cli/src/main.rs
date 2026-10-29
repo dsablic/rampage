@@ -104,6 +104,8 @@ enum Command {
     RecordFinding(args::RecordFindingArgs),
     #[command(skip)]
     ListFindings(args::ListFindingsArgs),
+    #[command(skip)]
+    BuildInfo(args::BuildInfoArgs),
     #[command(hide = true)]
     QueryDebugger(QueryDebuggerArgs),
     /// Run bounded workflows and selected decompilations as one multi-architecture analysis report
@@ -359,6 +361,13 @@ fn main() -> ExitCode {
         Command::ExportCfg(FileArgs { file }) => commands::export_cfg(&mut out, &file, &options),
         Command::Triage(FileArgs { file }) => commands::triage(&mut out, &file, &options),
         Command::Capabilities(FileArgs { file }) => commands::capabilities(&mut out, &file, &options),
+        Command::BuildInfo(args::BuildInfoArgs { file, offset, limit }) => {
+            let query = rampage_api::BuildInfoQuery {
+                offset: Some(offset),
+                limit: Some(usize::try_from(limit).unwrap_or(usize::MAX)),
+            };
+            commands::build_info(&mut out, &file, &query, &options)
+        }
         Command::Dotnet(DotnetArgs { file, il: Some(method), offset, limit, at, .. }) => {
             let query = rampage_api::DotNetIlQuery {
                 method,

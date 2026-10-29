@@ -282,6 +282,16 @@ impl Project {
         } else {
             report.step("find_main", json!({}), "Locate the program's own entry logic past the runtime startup code.");
         }
+        let go = rampage_loaders::buildinfo::go::read(&self.binary).is_some();
+        let rust = self.binary.sections.iter().any(|section| section.name == rampage_loaders::buildinfo::rust::SECTION);
+        if go || rust {
+            let what = if go { "Go build info" } else { "a cargo-auditable dependency list" };
+            report.step(
+                "build_info",
+                json!({}),
+                format!("The image embeds {what}: read its toolchain version, modules or crates and build settings."),
+            );
+        }
         if networking || network_strings {
             report.step(
                 "network_surface",

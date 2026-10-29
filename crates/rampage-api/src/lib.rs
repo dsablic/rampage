@@ -6,6 +6,7 @@ mod assembly;
 mod batch;
 mod benchmark;
 mod branch_observation;
+mod build_info;
 mod capabilities;
 mod carve;
 mod correlation;
@@ -82,6 +83,7 @@ pub use batch::{
 };
 pub use benchmark::{Comparison, ReferenceAnalysis};
 pub use branch_observation::{BranchObservation, BranchSlotStatus};
+pub use build_info::{BuildInfo, BuildInfoQuery, GoBuildInfo, PclntabCheck, RustAudit};
 pub use carve::{CarvingPage, MAX_CARVE_PAGE, carve, carve_page};
 pub use correlation::RuntimeCorrelation;
 pub use data::{

@@ -246,6 +246,24 @@ sizes, CRCs and local-header offsets remain unverified payload declarations. Met
 revalidated but not atomic, and tail search may overlap member data. No member offset is followed, and no extraction,
 decompression, automatic member opening or execution occurs. See [archive inventory](archive-inventory.md).
 
+## Toolchain build info
+
+`binary build-info` and the MCP tool `build_info` read the build metadata toolchains embed, which survives
+stripping:
+
+- Go build info (what `go version -m` prints) from `.go.buildinfo` (ELF), `__go_buildinfo` (Mach-O), or a
+  16-byte aligned scan of the data sections (PE, or images without the section). Both the go1.18+ inline layout
+  and the older pointer layout (resolved through file-backed segments) are read. Output: Go version, main package
+  path, main module, dependency modules with `=>` replacements, build settings such as `-compiler`, `CGO_ENABLED`,
+  `GOARCH`, `vcs.revision` and `vcs.time`, and whether the version agrees with the pclntab layout the loader found.
+- Rust dependency lists that [cargo-auditable](https://github.com/rust-secure-code/cargo-auditable) embeds in a
+  `.dep-v0` section (`__DATA,.dep-v0` on Mach-O): zlib-compressed JSON, decompressed under its documented 8 MiB
+  cap. Output: root package(s) and every package's name, version, source, kind and dependency indices.
+
+Each record is absent, present, or found but unreadable (with a reason); malformed lines and dangling indices are
+kept as warnings. Dependency modules and packages are paged. The data is self-reported by the build and is not
+verified against code; there is no vulnerability lookup.
+
 ## Managed assemblies
 
 ECMA-335 metadata includes assembly identity, references, entry point and one paged list:

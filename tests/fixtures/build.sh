@@ -48,3 +48,5 @@ zig cc -target x86_64-linux-gnu -O1 -g0 -c -o bin/hello-x64-elf.o "$src"
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/hello-go-x64.elf src/hello.go
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/hello-go-arm64.elf src/hello.go
 python3 craft.py malformed
+# Go build info and cargo-auditable `.dep-v0` fixtures.
+./build-buildinfo.sh

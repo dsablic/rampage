@@ -449,3 +449,23 @@ fn identify_overlays_or_replaces_the_bundled_database() {
     assert_eq!(overlaid["matched"], bundled["matched"]);
     assert_eq!(alone["matched"], 0, "{alone}");
 }
+
+#[test]
+fn binary_build_info_prints_go_modules_and_rust_crates() {
+    rampage(&["binary", "build-info"], "buildinfo-go-x64.exe")
+        .success()
+        .stdout(contains("path       example.com/buildinfo"))
+        .stdout(contains("dep        example.com/greet v0.1.0 => ./greet (devel)"))
+        .stdout(contains("build      GOOS=windows"))
+        .stdout(contains("rust       not present"));
+    rampage(&["binary", "build-info", "--offset", "1", "--limit", "1"], "auditable-x64.elf")
+        .success()
+        .stdout(contains("go         not present"))
+        .stdout(contains("root       auditable-fixture 0.1.0"))
+        .stdout(contains("crate      serde 1.0.210 crates.io runtime"))
+        .stdout(contains("crates     1 shown from 1 of 4"))
+        .stdout(contains("crate      cc").not());
+    let info = json(&["--json", "binary", "build-info"], "auditable-x64.elf");
+    assert_eq!(info["rust"]["packages"]["total"], 4);
+    assert_eq!(info["go"], serde_json::Value::Null);
+}
