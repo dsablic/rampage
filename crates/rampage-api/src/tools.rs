@@ -18,8 +18,10 @@ const DEFAULT_PAGE: usize = 100;
 const MAX_PDB_DETAIL_BYTES: usize = 4096;
 const MAX_PDB_ERROR_BYTES: usize = 1024;
 
+mod debug_tools;
 #[cfg(test)]
 mod patch_dispatch_tests;
+pub use debug_tools::{DebugTool, debug_tools};
 mod patch_page;
 pub(crate) mod search_page;
 mod signature_page;
@@ -73,6 +75,9 @@ pub enum Group {
     DotNet,
     Carve,
     Formats,
+    /// Read-only sessions with operator-started GDB remote stubs. Not in [`Group::ALL`]: only an MCP server started
+    /// with debug endpoints has it.
+    Debug,
 }
 
 impl Group {
@@ -97,6 +102,7 @@ impl Group {
             Group::DotNet => "dotnet",
             Group::Carve => "carve",
             Group::Formats => "formats",
+            Group::Debug => "debug",
         }
     }
 
@@ -131,6 +137,10 @@ impl Group {
             ),
             Group::Formats => {
                 "Toolchain and container metadata: Go build info, Rust dependency audit data, PE resources and load config, PyInstaller archives and WebAssembly modules."
+            }
+            Group::Debug => {
+                "Read-only sessions with the operator-allowed GDB remote stubs: connect, status, registers, memory, \
+                 modules and memory maps, snapshot to a file, detach. No resume, step, breakpoints, writes or kill."
             }
         }
     }

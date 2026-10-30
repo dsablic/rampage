@@ -578,6 +578,10 @@ pub(crate) struct McpArgs {
     /// List every tool group from the start, for clients that do not refresh their tool list
     #[arg(long)]
     pub(crate) all_tools: bool,
+    /// Allow the debug tools to connect to an operator-started GDB remote stub at HOST:PORT or unix:/PATH
+    /// (repeatable; RAMPAGE_DEBUG_ENDPOINTS adds a comma-separated list). Without one there is no debug group
+    #[arg(long = "debug-endpoint", value_name = "ENDPOINT")]
+    pub(crate) debug_endpoints: Vec<String>,
 }
 
 #[derive(Args)]

@@ -21,6 +21,7 @@ rampage-capabilities = { path = "crates/rampage-capabilities" }
 rampage-detect = { path = "crates/rampage-detect" }
 rampage-yara = { path = "crates/rampage-yara" }
 rampage-constants = { path = "crates/rampage-constants" }
+rampage-debug = { path = "crates/rampage-debug" }
 rampage-plugin = { path = "crates/rampage-plugin" }
 rampage-plugin-contract = { path = "crates/rampage-plugin-contract" }
 anyhow = "1.0.104"

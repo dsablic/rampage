@@ -4557,6 +4557,7 @@ dependencies = [
  "rampage-arch",
  "rampage-capabilities",
  "rampage-constants",
+ "rampage-debug",
  "rampage-decode",
  "rampage-decompiler",
  "rampage-detect",
@@ -4627,6 +4628,16 @@ dependencies = [
  "rampage-loaders",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "rampage-debug"
+version = "0.1.0"
+dependencies = [
+ "quick-xml 0.42.0",
+ "rampage-debug",
+ "serde",
  "thiserror 2.0.21",
 ]
 
@@ -4706,6 +4717,7 @@ version = "0.1.0"
 dependencies = [
  "rampage-api",
  "rampage-arch",
+ "rampage-debug",
  "rampage-loaders",
  "rmcp",
  "serde_json",

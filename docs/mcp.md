@@ -37,17 +37,21 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
 - `carve`: `carve`, `archive_inventory`.
 - `formats`: `build_info`, `pe_resources`, `pe_load_config`, `pyinstaller_archive`, `wasm_module`.
+- `debug`, only on a server started with a debug endpoint: `debug_connect`, `debug_status`, `debug_registers`,
+  `debug_read_memory`, `debug_modules`, `debug_snapshot`, `debug_disconnect`.
 
 Calling `enable_tools` without arguments lists each group's description, tool names/count and enabled state.
 `{"groups": ["detection"]}` enables that group; `{"groups": ["all"]}` enables every group. Enabling sends
 `notifications/tools/list_changed`. A call to a disabled group's tool fails with the group to enable and runs
 nothing. `--all-tools` lists all groups at startup; `RAMPAGE_MCP_TOOLS=all` or a comma-separated list such as
-`detection,types` also selects startup groups. `core` is always served.
+`detection,types` also selects startup groups. `core` is always served. The `debug` group exists only when the
+server is started with `--debug-endpoint HOST:PORT|unix:/PATH` (repeatable) or `RAMPAGE_DEBUG_ENDPOINTS`; without
+one, `enable_tools` does not list it and its tools cannot be called.
 
 Workflow reports name the `group` of suggested next tools. The desktop assistant offers every binary tool
 without group gating, plus the interactive `show_address`; it does not offer file tools
 `carve`/`archive_inventory`/`list_packs`/`query_debugger`/`inspect_data`/`decode_file_range`/`inspect_raw_code`/
-`inspect_sleigh`/`pyinstaller_archive`/`wasm_module`.
+`inspect_sleigh`/`pyinstaller_archive`/`wasm_module` or the `debug` tools.
 `show_address` is not an MCP tool because the server has no interactive listing to navigate.
 
 The [parity scorecard](parity-scorecard.md) records static metrics and task definitions separately from
@@ -173,6 +177,17 @@ annotation sidecar. An LLDB operator must start the stopped-session endpoint; th
 evaluate expressions or write target memory. Initial session queries return a token required for subsequent
 queries. Stale tokens fail without automatic refresh. Responses retain the backend's error/observation envelope
 and remain non-atomic. See [LLDB queries](lldb-query.md) for request operations, endpoint policy and limits.
+
+The `debug` tools talk to a GDB remote stub the operator started and allowed (gdbserver, QEMU, OpenOCD...).
+`debug_connect` takes only an allowed endpoint and returns a session ID; at most four sessions are open per MCP
+connection, and they detach when it ends. `debug_status`, `debug_registers`, `debug_read_memory` (at most the
+session's `max_read_length` bytes per call, short reads reported per chunk) and `debug_modules` read the stopped target and report the stop
+epoch they read at. `debug_snapshot` writes a new `rampage-snapshot-v1` file (a file write) and refuses targets
+whose data byte order is unknown. `debug_disconnect` detaches, which lets the target run; a refused detach keeps the session open.
+Nothing resumes, steps, sets breakpoints, writes or
+kills. Errors start with a code: `unknown_session`, `endpoint_not_allowed`, `session_limit`, `timeout`,
+`connection_lost`, `protocol_error`, `target_error`, `unsupported`, `session_not_stopped` or `invalid_argument`.
+See [debug control](debug-control.md).
 
 ## Raw projects
 

@@ -100,7 +100,7 @@ recorded in the project's findings ledger with the debug session as evidence.
 
 | Step | Scope | Risk |
 |---|---|---|
-| 9.1 | `rampage-debug` crate: framing, parser fuzzing, scripted fake stub for tests; read-only tools (`connect`, `status`, `registers`, `read_memory`, `modules`, `snapshot`, `disconnect` with detach). No execution. | Low: equivalent to today's read-only LLDB bridge over a different transport. |
+| 9.1 | **Done 2026-10-29** (`55f9f22`; live QEMU Cortex-M3 acceptance passes). `rampage-debug` crate: framing, parser fuzzing, scripted fake stub for tests; read-only tools (`connect`, `status`, `registers`, `read_memory`, `modules`, `snapshot`, `disconnect` with detach). No execution. | Low: equivalent to today's read-only LLDB bridge over a different transport. |
 | 9.2 | Execution control: continue/wait/interrupt, step, breakpoints and watchpoints; stop epochs enforced. | Medium. |
 | 9.3 | Static correlation: binding, slides, symbolic breakpoints, step-over via rampage decoders, stop-location enrichment. | Medium. |
 | 9.4 | Writes behind `--debug-writes`; kill behind `--debug-kill`. | Higher; reviewed separately. |
@@ -138,3 +138,10 @@ Each step follows the wave cadence: implementation, fresh-context review, fixes,
    macOS `debugserver` follow.
 4. **Home:** a new `rampage-debug` crate for the protocol client, target descriptions and session thread, with no
    dependency on the analysis stack. `rampage-api` adds the tools and static/runtime correlation.
+
+## Deviations recorded during implementation
+
+- **9.1, cancellation:** the `AtomicBool` cancellation in "Limits" is not implemented. MCP tool calls in rampage
+  have no cancellation path to plumb it to, so a `debug_snapshot` of up to 64 MiB runs until it completes, fails,
+  or a request (10 s each, per 64 KiB read) times out. It is bounded but not cancellable. Revisit with 9.2's
+  `debug_continue`/`debug_wait`, which need a cancellable wait anyway.

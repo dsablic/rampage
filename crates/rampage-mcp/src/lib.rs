@@ -6,8 +6,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use rampage_api::tools::{self, FileTool, Group, Tool};
-use rampage_api::{FileOffset, Packs, Project, RawProjectRequest, Session};
+use rampage_api::tools::{self, DebugTool, FileTool, Group, Tool};
+use rampage_api::{DebugRegistry, FileOffset, Packs, Project, RawProjectRequest, Session};
 use rampage_arch::Arch;
 use rampage_loaders::ImageAt;
 use rmcp::model::{
@@ -23,6 +23,10 @@ pub const ENABLE_TOOLS: &str = "enable_tools";
 
 /// The environment variable choosing the groups served from the start: `all`, or a comma-separated list.
 pub const TOOLS_ENV: &str = "RAMPAGE_MCP_TOOLS";
+
+/// The environment variable listing debug endpoints (`host:port` or `unix:/path`, comma-separated) the operator
+/// allows, in addition to `--debug-endpoint`. Without any, the server has no `debug` group.
+pub const DEBUG_ENDPOINTS_ENV: &str = "RAMPAGE_DEBUG_ENDPOINTS";
 
 const ENABLE_TOOLS_DESCRIPTION: &str = "\
 List rampage's tool groups (name, one-line description, tool count and names, whether enabled), or enable groups \
@@ -119,10 +123,23 @@ embedded executables and containers by validated header, with offsets and header
 decompresses nothing. Pass an executable candidate's offset as image_offset to any binary tool to analyze it in place, \
 with annotations kept apart from the outer file's.";
 
-fn instructions(packs: &Packs) -> String {
-    let groups: String =
-        Group::ALL.iter().map(|group| format!("\n- {}: {}", group.name(), group.description())).collect();
+const INSTRUCTIONS_DEBUG: &str = "\
+Debug: the operator allowed GDB remote stubs at these endpoints: {endpoints}. debug_connect opens a read-only \
+session (the stub must already be running; rampage launches and attaches to nothing), then debug_status, \
+debug_registers, debug_read_memory and debug_modules inspect the stopped target, debug_snapshot writes a \
+rampage-snapshot-v1 file the other tools can open, and debug_disconnect detaches. Nothing resumes, steps, sets \
+breakpoints, writes or kills; runtime bytes stay local.";
+
+fn instructions(packs: &Packs, debug: Option<&DebugRegistry>) -> String {
+    let groups: String = available_groups(debug.is_some())
+        .iter()
+        .map(|group| format!("\n- {}: {}", group.name(), group.description()))
+        .collect();
     let mut text = format!("{INSTRUCTIONS_INTRO}{groups}\n\n{INSTRUCTIONS_USAGE}");
+    if let Some(registry) = debug {
+        text.push_str("\n\n");
+        text.push_str(&INSTRUCTIONS_DEBUG.replace("{endpoints}", &registry.endpoints().join(", ")));
+    }
     let profiles: Vec<_> = rampage_loaders::RawProfile::ALL.iter().map(|profile| profile.language_id()).collect();
     text.push_str(&format!("\n\nRaw profiles: {}.", profiles.join(", ")));
     // Only a server given packs loads them here; the problem count must be known before any tool runs.
@@ -141,18 +158,51 @@ fn instructions(packs: &Packs) -> String {
 /// The groups to serve from the start: every group with `all_tools`, else those `env` names (`all` or a
 /// comma-separated list), else core alone. Core is always served.
 pub fn initial_groups(all_tools: bool, env: Option<&str>) -> Result<BTreeSet<Group>, String> {
+    initial_groups_with_debug(all_tools, env, false)
+}
+
+/// [`initial_groups`] for a server that has the `debug` group when `debug` is true.
+pub fn initial_groups_with_debug(all_tools: bool, env: Option<&str>, debug: bool) -> Result<BTreeSet<Group>, String> {
+    let available = available_groups(debug);
     if all_tools {
-        return Ok(Group::ALL.into());
+        return Ok(available.into_iter().collect());
     }
     let mut groups = BTreeSet::from([Group::Core]);
     for name in env.unwrap_or("").split(',').map(str::trim).filter(|name| !name.is_empty()) {
         if name == "all" {
-            groups.extend(Group::ALL);
+            groups.extend(available.iter().copied());
         } else {
-            groups.insert(name.parse()?);
+            groups.insert(parse_group(name, debug)?);
         }
     }
     Ok(groups)
+}
+
+/// Every group a server has: [`Group::ALL`], and `debug` when debug endpoints are configured.
+fn available_groups(debug: bool) -> Vec<Group> {
+    Group::ALL.into_iter().chain(debug.then_some(Group::Debug)).collect()
+}
+
+fn parse_group(name: &str, debug: bool) -> Result<Group, String> {
+    if debug && name == Group::Debug.name() {
+        return Ok(Group::Debug);
+    }
+    name.parse()
+}
+
+/// Parses the operator's debug endpoints: each `--debug-endpoint` value, then the comma-separated `env` list.
+/// `None` when there are none, so the server has no `debug` group.
+pub fn debug_registry(flags: &[String], env: Option<&str>) -> Result<Option<DebugRegistry>, String> {
+    let endpoints: Vec<String> = flags
+        .iter()
+        .map(|flag| flag.trim().to_owned())
+        .chain(env.unwrap_or("").split(',').map(|item| item.trim().to_owned()))
+        .filter(|endpoint| !endpoint.is_empty())
+        .collect();
+    if endpoints.is_empty() {
+        return Ok(None);
+    }
+    DebugRegistry::new(&endpoints).map(Some)
 }
 
 /// A tool's schema with the arguments every tool takes besides its own: which binary, which slice of a universal
@@ -254,8 +304,8 @@ fn raw_refusal(name: &str) -> String {
     )
 }
 
-fn enable_tools_schema() -> Map<String, Value> {
-    let names: Vec<&str> = Group::ALL.iter().map(|group| group.name()).chain(["all"]).collect();
+fn enable_tools_schema(debug: bool) -> Map<String, Value> {
+    let names: Vec<&str> = available_groups(debug).iter().map(|group| group.name()).chain(["all"]).collect();
     let schema = json!({
         "type": "object",
         "properties": {
@@ -270,11 +320,14 @@ fn enable_tools_schema() -> Map<String, Value> {
 }
 
 /// One MCP connection's server. The loaded binaries are shared with its clones; the enabled groups are not, so a
-/// clone serving another connection starts from the groups enabled when it was cloned.
+/// clone serving another connection starts from the groups enabled when it was cloned. Debug sessions belong to the
+/// connection: clones share them, and they detach when the server and its clones are dropped.
 pub struct RampageServer {
     session: Arc<Session>,
     tools: Arc<Vec<Tool>>,
     file_tools: Arc<Vec<FileTool>>,
+    debug: Option<Arc<DebugRegistry>>,
+    debug_tools: Arc<Vec<DebugTool>>,
     enabled: Mutex<BTreeSet<Group>>,
 }
 
@@ -284,6 +337,8 @@ impl Clone for RampageServer {
             session: Arc::clone(&self.session),
             tools: Arc::clone(&self.tools),
             file_tools: Arc::clone(&self.file_tools),
+            debug: self.debug.clone(),
+            debug_tools: Arc::clone(&self.debug_tools),
             enabled: Mutex::new(self.enabled()),
         }
     }
@@ -305,8 +360,20 @@ impl RampageServer {
             session: Arc::default(),
             tools: Arc::new(tools),
             file_tools: Arc::new(tools::file_tools()),
+            debug: None,
+            debug_tools: Arc::new(tools::debug_tools()),
             enabled: Mutex::new(enabled),
         }
+    }
+
+    /// This server with the `debug` group, connecting only to the endpoints `registry` allows. Its sessions belong
+    /// to this server's connection.
+    pub fn with_debug(self, registry: DebugRegistry) -> Self {
+        Self { debug: Some(Arc::new(registry)), ..self }
+    }
+
+    fn groups(&self) -> Vec<Group> {
+        available_groups(self.debug.is_some())
     }
 
     /// This server opening binaries in `session`, with its settings.
@@ -333,7 +400,8 @@ impl RampageServer {
     fn catalog(&self) -> impl Iterator<Item = (Group, &'static str)> + '_ {
         let tools = self.tools.iter().map(|tool| (tool.group, tool.name));
         let file_tools = self.file_tools.iter().map(|tool| (tool.group, tool.name));
-        tools.chain(file_tools)
+        let debug = self.debug.is_some().then(|| self.debug_tools.iter().map(|tool| (Group::Debug, tool.name)));
+        tools.chain(file_tools).chain(debug.into_iter().flatten())
     }
 
     /// Enables the groups `arguments` names, returning the groups with their tools and the ones newly enabled.
@@ -344,9 +412,9 @@ impl RampageServer {
             Some(Value::Array(names)) => {
                 for name in names {
                     match name.as_str() {
-                        Some("all") => requested.extend(Group::ALL),
+                        Some("all") => requested.extend(self.groups()),
                         Some(name) => {
-                            requested.insert(name.parse::<Group>()?);
+                            requested.insert(parse_group(name, self.debug.is_some())?);
                         }
                         None => return Err("`groups` must be a list of group names".to_owned()),
                     }
@@ -359,7 +427,8 @@ impl RampageServer {
             let newly: Vec<Group> = requested.into_iter().filter(|group| enabled.insert(*group)).collect();
             (newly, enabled.clone())
         };
-        let groups: Vec<Value> = Group::ALL
+        let groups: Vec<Value> = self
+            .groups()
             .iter()
             .map(|&group| {
                 let names: Vec<&str> =
@@ -393,6 +462,15 @@ impl RampageServer {
     /// Runs a tool on the binary its arguments name. Failures are results the caller sees, not protocol errors.
     fn run(&self, name: &str, mut arguments: Map<String, Value>) -> CallToolResult {
         let raw = arguments.remove(RAW).filter(|raw| !raw.is_null());
+        if let (Some(registry), Some(tool)) = (&self.debug, self.debug_tools.iter().find(|tool| tool.name == name)) {
+            if raw.is_some() {
+                return CallToolResult::error(vec![ContentBlock::text(raw_refusal(name))]);
+            }
+            return match tool.call(registry, Value::Object(arguments)) {
+                Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
+                Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
+            };
+        }
         if let Some(tool) = self.file_tools.iter().find(|tool| tool.name == name) {
             if raw.is_some() {
                 return CallToolResult::error(vec![ContentBlock::text(raw_refusal(name))]);
@@ -513,7 +591,7 @@ impl ServerHandler for RampageServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tool_list_changed().build())
             .with_server_info(Implementation::new("rampage", env!("CARGO_PKG_VERSION")))
-            .with_instructions(instructions(&self.packs()))
+            .with_instructions(instructions(&self.packs(), self.debug.as_deref()))
     }
 
     async fn list_tools(
@@ -522,7 +600,8 @@ impl ServerHandler for RampageServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let enabled = self.enabled();
-        let meta = rmcp::model::Tool::new(ENABLE_TOOLS, ENABLE_TOOLS_DESCRIPTION, enable_tools_schema());
+        let meta =
+            rmcp::model::Tool::new(ENABLE_TOOLS, ENABLE_TOOLS_DESCRIPTION, enable_tools_schema(self.debug.is_some()));
         let tools = self.tools.iter().filter(|tool| enabled.contains(&tool.group)).map(|tool| {
             rmcp::model::Tool::new(tool.name, tool.description, with_binary_arguments(tool.name, &tool.input_schema))
         });
@@ -530,7 +609,12 @@ impl ServerHandler for RampageServer {
             let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
             rmcp::model::Tool::new(tool.name, tool.description, schema)
         });
-        let all = std::iter::once(meta).chain(tools).chain(file_tools);
+        let debug_enabled = self.debug.is_some() && enabled.contains(&Group::Debug);
+        let debug_tools = self.debug_tools.iter().filter(|_| debug_enabled).map(|tool| {
+            let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
+            rmcp::model::Tool::new(tool.name, tool.description, schema)
+        });
+        let all = std::iter::once(meta).chain(tools).chain(file_tools).chain(debug_tools);
         Ok(ListToolsResult::with_all_items(all.collect()))
     }
 
@@ -576,12 +660,18 @@ impl ServerHandler for RampageServer {
 }
 
 /// Serves MCP over stdin/stdout until the client disconnects, listing `groups` (and core) from the start, with
-/// `packs` layered over the bundled databases.
+/// `packs` layered over the bundled databases and, when `debug` is given, the `debug` group. Debug sessions detach
+/// when the client disconnects.
 pub async fn serve_stdio(
     groups: BTreeSet<Group>,
     packs: Arc<Packs>,
+    debug: Option<DebugRegistry>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    RampageServer::with_groups(groups).with_packs(packs).serve(rmcp::transport::stdio()).await?.waiting().await?;
+    let mut server = RampageServer::with_groups(groups).with_packs(packs);
+    if let Some(registry) = debug {
+        server = server.with_debug(registry);
+    }
+    server.serve(rmcp::transport::stdio()).await?.waiting().await?;
     Ok(())
 }
 
@@ -612,7 +702,7 @@ mod tests {
     #[test]
     fn every_registered_workflow_is_served_in_its_group_and_named_in_the_instructions() {
         let server = RampageServer::default();
-        let text = instructions(&Packs::default());
+        let text = instructions(&Packs::default(), None);
         for workflow in rampage_api::workflows::WORKFLOWS {
             let name = workflow.name();
             assert!(server.catalog().any(|entry| entry == (workflow.group(), name)), "{name} is not served");
@@ -641,7 +731,8 @@ mod tests {
                 documented.get_mut(group).unwrap().extend(names);
             }
         }
-        let server = RampageServer::default();
+        let registry = DebugRegistry::new(&["127.0.0.1:2345".to_owned()]).unwrap();
+        let server = RampageServer::default().with_debug(registry);
         let mut served = BTreeMap::<String, Vec<String>>::new();
         for (group, name) in server.catalog() {
             served.entry(group.name().to_owned()).or_default().push(name.to_owned());

@@ -18,6 +18,8 @@ use crate::{ApiError, DebuggerAddress, DebuggerPermissions, DebuggerRequest, Deb
 
 const RESPONSE_BYTES: usize = 65_536;
 const DOCUMENT_BYTES: usize = 1024 * 1024;
+/// The most bytes any caller may publish: a debug snapshot's 64 MiB of memory as hex, plus its other fields.
+pub(crate) const MAX_PRIVATE_DOCUMENT_BYTES: usize = 2 * rampage_loaders::snapshot::MAX_SNAPSHOT_BYTES + 1024 * 1024;
 const READ_SEMANTICS: &str = "LLDB ReadMemory may normalize software-breakpoint trap bytes";
 const ADDRESS_SEMANTICS: &str = "LLDB file virtual address, not a file byte offset";
 
@@ -189,9 +191,20 @@ pub(crate) enum PublicationCheckPhase {
 pub(crate) fn publish_private_document_observed(
     output: &Path,
     document: &[u8],
+    validate: impl FnMut(PublicationCheckPhase) -> Result<(), ApiError>,
+) -> Result<PublicationOutcome, ApiError> {
+    publish_private_document_limited(output, document, DOCUMENT_BYTES, validate)
+}
+
+/// [`publish_private_document_observed`] for a caller whose documents may exceed one MiB, up to `limit` (at most
+/// [`MAX_PRIVATE_DOCUMENT_BYTES`]).
+pub(crate) fn publish_private_document_limited(
+    output: &Path,
+    document: &[u8],
+    limit: usize,
     mut validate: impl FnMut(PublicationCheckPhase) -> Result<(), ApiError>,
 ) -> Result<PublicationOutcome, ApiError> {
-    if document.is_empty() || document.len() > DOCUMENT_BYTES {
+    if document.is_empty() || document.len() > limit.min(MAX_PRIVATE_DOCUMENT_BYTES) {
         return Err(ApiError::Invalid("private document exceeds its publication byte budget".into()));
     }
     validate(PublicationCheckPhase::BeforeStaging)?;
@@ -1297,7 +1310,8 @@ mod local {
             excluded: Option<&OsStr>,
             mut next_name: impl FnMut() -> OsString,
         ) -> Result<Self, ApiError> {
-            if document.is_empty() || document.len() > DOCUMENT_BYTES {
+            // Callers enforce their own (usually one-MiB) policy first; this is the ceiling for every caller.
+            if document.is_empty() || document.len() > MAX_PRIVATE_DOCUMENT_BYTES {
                 return Err(invalid("capture document exceeds local bounded-byte policy"));
             }
             for _ in 0..64 {

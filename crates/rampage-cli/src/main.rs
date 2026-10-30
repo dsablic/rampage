@@ -337,8 +337,8 @@ fn main() -> ExitCode {
     // Loaded on first use, so that commands which consult no heuristic database do not read any pack.
     let packs = Arc::new(Packs::lazy_with_env(&cli.packs));
     let warn = !matches!(command, Command::Packs { .. });
-    if let Command::Mcp(McpArgs { all_tools }) = command {
-        return serve_mcp(all_tools, packs);
+    if let Command::Mcp(McpArgs { all_tools, debug_endpoints }) = command {
+        return serve_mcp(all_tools, &debug_endpoints, packs);
     }
     let image = cli.image_offset.map(|offset| rampage_loaders::ImageAt::new(offset, cli.image_length));
     let options = Options { json: cli.json, arch: cli.arch, image, raw, packs: Arc::clone(&packs) };
@@ -675,9 +675,17 @@ fn debugger_query(out: &mut impl Write, args: QueryDebuggerArgs) -> anyhow::Resu
     Ok(())
 }
 
-fn serve_mcp(all_tools: bool, packs: Arc<Packs>) -> ExitCode {
+fn serve_mcp(all_tools: bool, debug_endpoints: &[String], packs: Arc<Packs>) -> ExitCode {
+    let debug_env = std::env::var(rampage_mcp::DEBUG_ENDPOINTS_ENV).ok();
+    let debug = match rampage_mcp::debug_registry(debug_endpoints, debug_env.as_deref()) {
+        Ok(debug) => debug,
+        Err(error) => {
+            eprintln!("rampage: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let env = std::env::var(rampage_mcp::TOOLS_ENV).ok();
-    let groups = match rampage_mcp::initial_groups(all_tools, env.as_deref()) {
+    let groups = match rampage_mcp::initial_groups_with_debug(all_tools, env.as_deref(), debug.is_some()) {
         Ok(groups) => groups,
         Err(error) => {
             eprintln!("rampage: {}: {error}", rampage_mcp::TOOLS_ENV);
@@ -691,7 +699,7 @@ fn serve_mcp(all_tools: bool, packs: Arc<Packs>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(rampage_mcp::serve_stdio(groups, packs)) {
+    match runtime.block_on(rampage_mcp::serve_stdio(groups, packs, debug)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("rampage: mcp server failed: {error}");

@@ -1,0 +1,22 @@
+[package]
+name = "rampage-debug"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+autotests = false
+
+[features]
+# The scripted gdbserver used by this crate's tests and by the API and MCP tests of the debug tools.
+fake-stub = []
+
+[dependencies]
+quick-xml = "0.42.0"
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rampage-debug = { path = ".", features = ["fake-stub"] }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

@@ -16,6 +16,7 @@ rampage-capabilities.workspace = true
 rampage-detect.workspace = true
 rampage-yara.workspace = true
 rampage-constants.workspace = true
+rampage-debug.workspace = true
 rampage-plugin.workspace = true
 rampage-plugin-contract.workspace = true
 schemars.workspace = true
@@ -30,6 +31,7 @@ regex = "1.13.1"
 rustix = { version = "1.1.5", features = ["fs"] }
 
 [dev-dependencies]
+rampage-debug = { workspace = true, features = ["fake-stub"] }
 rampage-decompiler.workspace = true
 rampage-signatures.workspace = true
 rampage-capabilities.workspace = true

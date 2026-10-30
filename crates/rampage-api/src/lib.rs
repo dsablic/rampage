@@ -11,6 +11,7 @@ mod capabilities;
 mod carve;
 mod correlation;
 mod data;
+mod debug_control;
 mod debug_import;
 mod debug_layout_import;
 pub(crate) mod debug_type_import;
@@ -92,6 +93,10 @@ pub use correlation::RuntimeCorrelation;
 pub use data::{
     DataImport, DataInspection, DataQuery, DataSpan, DataStatus, DataTarget, DataWord, MAX_DATA_BYTES,
     MAX_DATA_RESULT_BYTES, inspect_native_data, resolve_data_address,
+};
+pub use debug_control::{
+    DebugBytes, DebugConnection, DebugDisconnected, DebugMemory, DebugModules, DebugRange, DebugRegisters,
+    DebugRegistry, DebugSnapshot, DebugStatus, MAX_DEBUG_SESSIONS, tool_read_limit,
 };
 pub use debug_import::DebugImport;
 pub use debug_layout_import::{

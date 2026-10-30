@@ -1,0 +1,447 @@
+//! The request/reply layer over a transport: acknowledgements and retransmission, no-ack mode, console output,
+//! deadlines and the read-only packet allowlist.
+
+use std::io::ErrorKind;
+use std::time::Instant;
+
+use crate::packet::{self, Frame, Framer};
+use crate::transport::Transport;
+use crate::{DebugError, MAX_CONSOLE_BYTES};
+
+/// Times a packet is sent again after the stub NAKs it, and damaged replies tolerated per command.
+const RETRANSMITS: usize = 3;
+/// Bytes outside any packet tolerated per command before the stream is declared desynchronized.
+const MAX_NOISE: usize = 4096;
+/// Console-output and notification frames tolerated per command, so a chatty stub cannot hold a command open.
+pub const MAX_ASYNC_FRAMES: usize = 256;
+
+/// Whether `payload` is a packet this client may send. Only queries, register and memory reads, thread selection
+/// for reads, no-ack negotiation and detach are allowed: nothing that resumes, steps, sets breakpoints, writes or
+/// kills can leave this client, whatever a caller asks for.
+pub fn allowed(payload: &str) -> bool {
+    let hex = |text: &str| !text.is_empty() && text.len() <= 16 && text.bytes().all(|byte| byte.is_ascii_hexdigit());
+    let range = |text: &str| text.split_once(',').is_some_and(|(address, length)| hex(address) && hex(length));
+    let annex = |text: &str| {
+        let Some((annex, offsets)) = text.split_once(':') else { return false };
+        annex.len() <= 64
+            && annex.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/'))
+            && range(offsets)
+    };
+    match payload {
+        "?" | "g" | "qfThreadInfo" | "qsThreadInfo" | "qOffsets" | "qAttached" | "QStartNoAckMode" | "D" => true,
+        _ if payload.starts_with("qSupported") => {
+            payload.len() <= 512 && payload.bytes().all(|byte| byte.is_ascii_graphic() && byte != b'#' && byte != b'$')
+        }
+        _ => {
+            if let Some(rest) = payload.strip_prefix("qXfer:") {
+                let Some((object, rest)) = rest.split_once(":read:") else { return false };
+                return matches!(object, "features" | "libraries-svr4" | "libraries" | "exec-file" | "memory-map")
+                    && annex(rest);
+            }
+            if let Some(thread) = payload.strip_prefix("qThreadExtraInfo,").or_else(|| payload.strip_prefix("Hg")) {
+                return crate::ThreadId::parse(thread).is_some() || thread == "0";
+            }
+            if let Some(pid) = payload.strip_prefix("D;") {
+                return hex(pid);
+            }
+            if let Some(register) = payload.strip_prefix('p') {
+                return hex(register);
+            }
+            match payload.strip_prefix('m').or_else(|| payload.strip_prefix('x')) {
+                Some(rest) => range(rest),
+                None => false,
+            }
+        }
+    }
+}
+
+/// Console output (`O` packets) collected from the stub, bounded.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct Console {
+    pub text: String,
+    /// Bytes dropped once `text` reached its bound.
+    pub dropped_bytes: usize,
+}
+
+impl Console {
+    fn push(&mut self, bytes: &[u8]) {
+        let room = MAX_CONSOLE_BYTES.saturating_sub(self.text.len());
+        let kept = &bytes[..bytes.len().min(room)];
+        self.text.push_str(&String::from_utf8_lossy(kept));
+        self.dropped_bytes += bytes.len() - kept.len();
+    }
+}
+
+pub struct Client<T: Transport> {
+    transport: T,
+    framer: Framer,
+    ack_mode: bool,
+    in_sync: bool,
+    pub console: Console,
+}
+
+impl<T: Transport> Client<T> {
+    pub fn new(transport: T) -> Self {
+        Self {
+            transport,
+            framer: Framer::new(packet::MAX_PACKET_BYTES),
+            ack_mode: true,
+            in_sync: true,
+            console: Console::default(),
+        }
+    }
+
+    /// Whether every command so far got its reply, so the next reply belongs to the next request.
+    pub fn in_sync(&self) -> bool {
+        self.in_sync
+    }
+
+    pub fn ack_mode(&self) -> bool {
+        self.ack_mode
+    }
+
+    /// Stops sending and expecting acknowledgements, after the stub accepted `QStartNoAckMode`.
+    pub fn disable_acks(&mut self) {
+        self.ack_mode = false;
+    }
+
+    /// Closes the connection and releases any buffered bytes.
+    pub fn shutdown(&mut self) {
+        self.transport.shutdown();
+        self.in_sync = false;
+        self.framer = Framer::new(0);
+    }
+
+    /// Sends `payload` and returns the stub's reply, collecting console output on the way. Any error other than a
+    /// refused packet leaves the stream in an unknown state, so the caller must treat the connection as lost.
+    pub fn command(&mut self, payload: &str, deadline: Instant) -> Result<Vec<u8>, DebugError> {
+        if !allowed(payload) {
+            return Err(DebugError::Forbidden(payload.chars().take(64).collect()));
+        }
+        if !self.in_sync {
+            return Err(DebugError::Lost("the reply stream is out of step with requests".into()));
+        }
+        let result = self.exchange(payload, deadline);
+        if result.is_err() {
+            self.in_sync = false;
+        }
+        result
+    }
+
+    fn exchange(&mut self, payload: &str, deadline: Instant) -> Result<Vec<u8>, DebugError> {
+        let request = packet::encode(payload.as_bytes());
+        self.write(&request)?;
+        let mut naks = 0;
+        let mut corrupt = 0;
+        let mut noise = 0;
+        let mut asynchronous = 0;
+        let mut acknowledged = !self.ack_mode;
+        loop {
+            let next = match self.framer.next_frame() {
+                Ok(next) => next,
+                Err(error) => return Err(DebugError::Protocol(error.to_string())),
+            };
+            let Some(frame) = next else {
+                self.fill(deadline)?;
+                continue;
+            };
+            match frame {
+                Frame::Ack => acknowledged = true,
+                Frame::Nak if !acknowledged => {
+                    naks += 1;
+                    if naks > RETRANSMITS {
+                        return Err(DebugError::Protocol(format!("stub refused `{payload}` {naks} times")));
+                    }
+                    self.write(&request)?;
+                }
+                // A NAK after the acknowledgement, or in no-ack mode, has nothing to retransmit.
+                Frame::Nak => {}
+                Frame::Notification => {
+                    asynchronous += 1;
+                    if asynchronous > MAX_ASYNC_FRAMES {
+                        return Err(DebugError::Protocol("too many notifications during one command".into()));
+                    }
+                }
+                Frame::Noise(_) => {
+                    noise += 1;
+                    if noise > MAX_NOISE {
+                        return Err(DebugError::Protocol("too many bytes outside packets".into()));
+                    }
+                }
+                Frame::Corrupt => {
+                    corrupt += 1;
+                    if !self.ack_mode || corrupt > RETRANSMITS {
+                        return Err(DebugError::Protocol("reply checksum mismatch".into()));
+                    }
+                    self.write(b"-")?;
+                }
+                Frame::Packet(reply) => {
+                    // Some stubs reply without acknowledging first; the reply implies the request arrived.
+                    if self.ack_mode {
+                        self.write(b"+")?;
+                    }
+                    if let Some(output) = console_output(&reply) {
+                        self.console.push(&output);
+                        asynchronous += 1;
+                        if asynchronous > MAX_ASYNC_FRAMES {
+                            return Err(DebugError::Protocol("too much console output during one command".into()));
+                        }
+                        continue;
+                    }
+                    return Ok(reply);
+                }
+            }
+        }
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<(), DebugError> {
+        self.transport.write_all(bytes).and_then(|()| self.transport.flush()).map_err(|error| match error.kind() {
+            ErrorKind::WouldBlock | ErrorKind::TimedOut => DebugError::Timeout("writing to the stub".into()),
+            _ => DebugError::Lost(format!("write failed: {error}")),
+        })
+    }
+
+    fn fill(&mut self, deadline: Instant) -> Result<(), DebugError> {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| DebugError::Timeout("no reply before the command deadline".into()))?;
+        self.transport.set_read_timeout(remaining).map_err(|error| DebugError::Lost(error.to_string()))?;
+        let mut buffer = [0; 16 * 1024];
+        loop {
+            match self.transport.read(&mut buffer) {
+                Ok(0) => return Err(DebugError::Lost("the stub closed the connection".into())),
+                Ok(count) => {
+                    self.framer.push(&buffer[..count]);
+                    return Ok(());
+                }
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                    return Err(DebugError::Timeout("no reply before the command deadline".into()));
+                }
+                Err(error) => return Err(DebugError::Lost(format!("read failed: {error}"))),
+            }
+        }
+    }
+}
+
+/// The text of an `O` console-output packet: `O` then a nonempty even run of hex digits. `OK` is not one.
+fn console_output(reply: &[u8]) -> Option<Vec<u8>> {
+    let hex = reply.strip_prefix(b"O")?;
+    if hex.is_empty() {
+        return None;
+    }
+    packet::decode_hex(hex)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::io::{self, Read, Write};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    /// An in-memory transport: reads come from scripted chunks, writes are recorded.
+    #[derive(Clone, Default)]
+    pub(crate) struct Pipe {
+        pub(crate) input: Arc<Mutex<VecDeque<Vec<u8>>>>,
+        pub(crate) output: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Pipe {
+        pub(crate) fn with(chunks: &[&[u8]]) -> Self {
+            let pipe = Pipe::default();
+            pipe.input.lock().unwrap().extend(chunks.iter().map(|chunk| chunk.to_vec()));
+            pipe
+        }
+
+        pub(crate) fn written(&self) -> String {
+            String::from_utf8_lossy(&self.output.lock().unwrap()).into_owned()
+        }
+    }
+
+    impl Read for Pipe {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            match self.input.lock().unwrap().pop_front() {
+                Some(chunk) => {
+                    assert!(chunk.len() <= buffer.len());
+                    buffer[..chunk.len()].copy_from_slice(&chunk);
+                    Ok(chunk.len())
+                }
+                None => Err(io::Error::new(ErrorKind::WouldBlock, "no more scripted input")),
+            }
+        }
+    }
+
+    impl Write for Pipe {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.output.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Transport for Pipe {
+        fn set_read_timeout(&mut self, _: Duration) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn shutdown(&mut self) {}
+    }
+
+    fn deadline() -> Instant {
+        Instant::now() + Duration::from_secs(5)
+    }
+
+    #[test]
+    fn only_read_only_packets_leave_the_client() {
+        for packet in [
+            "?",
+            "g",
+            "p19",
+            "m20000000,40",
+            "x1000,10",
+            "Hgp1.1",
+            "Hg1f",
+            "qfThreadInfo",
+            "qThreadExtraInfo,p2a.2b",
+            "qXfer:features:read:target.xml:0,ffb",
+            "qXfer:libraries-svr4:read::0,fff",
+            "qXfer:exec-file:read:2a:0,fff",
+            "qSupported:multiprocess+;swbreak+",
+            "QStartNoAckMode",
+            "D",
+            "D;2a",
+        ] {
+            assert!(allowed(packet), "{packet}");
+        }
+        for packet in [
+            "c",
+            "C05",
+            "s",
+            "S05",
+            "vCont;c",
+            "vCont;s:1",
+            "vCont?",
+            "Z0,1000,4",
+            "z0,1000,4",
+            "Z2,1000,4",
+            "M1000,1:00",
+            "X1000,1:\0",
+            "G00",
+            "P1=00",
+            "k",
+            "vKill;1",
+            "vRun;",
+            "vAttach;1",
+            "R00",
+            "r",
+            "!",
+            "Hc1",
+            "qRcmd,7265736574",
+            "qXfer:features:write:target.xml:0,1",
+            "qXfer:siginfo:read::0,1",
+            "qXfer:features:read:a:b:0,1",
+            "m1000",
+            "pzz",
+            "D;zz",
+            "",
+        ] {
+            assert!(!allowed(packet), "{packet:?}");
+        }
+    }
+
+    #[test]
+    fn forbidden_packets_are_refused_before_anything_is_written() {
+        let pipe = Pipe::default();
+        let mut client = Client::new(pipe.clone());
+        assert!(matches!(client.command("c", deadline()), Err(DebugError::Forbidden(_))));
+        assert!(pipe.written().is_empty());
+    }
+
+    #[test]
+    fn retransmits_on_nak_and_acknowledges_replies() {
+        let pipe = Pipe::with(&[b"-", b"+$OK#9a"]);
+        let mut client = Client::new(pipe.clone());
+        assert_eq!(client.command("?", deadline()).unwrap(), b"OK");
+        assert_eq!(pipe.written(), "$?#3f$?#3f+");
+    }
+
+    #[test]
+    fn gives_up_after_repeated_naks() {
+        let pipe = Pipe::with(&[b"-", b"-", b"-", b"-"]);
+        let mut client = Client::new(pipe);
+        assert!(matches!(client.command("?", deadline()), Err(DebugError::Protocol(_))));
+    }
+
+    #[test]
+    fn naks_corrupt_replies_and_accepts_the_retransmission() {
+        let pipe = Pipe::with(&[b"+$OK#00", b"$OK#9a"]);
+        let mut client = Client::new(pipe.clone());
+        assert_eq!(client.command("?", deadline()).unwrap(), b"OK");
+        assert_eq!(pipe.written(), "$?#3f-+");
+    }
+
+    #[test]
+    fn corrupt_replies_in_no_ack_mode_are_fatal() {
+        let pipe = Pipe::with(&[b"$OK#00"]);
+        let mut client = Client::new(pipe.clone());
+        client.disable_acks();
+        assert!(matches!(client.command("?", deadline()), Err(DebugError::Protocol(_))));
+        assert_eq!(pipe.written(), "$?#3f");
+    }
+
+    #[test]
+    fn collects_console_output_without_ending_the_command() {
+        let output = packet::encode(format!("O{}", packet::encode_hex(b"hello\n")).as_bytes());
+        let reply = packet::encode(b"T05thread:1;");
+        let pipe = Pipe::with(&[b"+", &output, &reply]);
+        let mut client = Client::new(pipe);
+        assert_eq!(client.command("?", deadline()).unwrap(), b"T05thread:1;");
+        assert_eq!(client.console.text, "hello\n");
+        assert_eq!(console_output(b"OK"), None);
+        assert_eq!(console_output(b"O"), None);
+    }
+
+    #[test]
+    fn ignores_notifications_and_reports_silence_as_a_timeout() {
+        let pipe = Pipe::with(&[b"+%Stop:T05#00", b"$OK#9a"]);
+        let mut client = Client::new(pipe);
+        assert_eq!(client.command("?", deadline()).unwrap(), b"OK");
+        let mut client = Client::new(Pipe::with(&[b"+"]));
+        assert!(matches!(client.command("?", deadline()), Err(DebugError::Timeout(_))));
+    }
+
+    /// A stub that floods console output split mid-packet is cut off after a bounded number of frames, holding
+    /// at most a partial frame and one read.
+    #[test]
+    fn console_floods_end_the_command_with_bounded_memory() {
+        let output = packet::encode(format!("O{}", packet::encode_hex(&[b'x'; 1000])).as_bytes());
+        let stream: Vec<u8> = output.iter().copied().cycle().take(output.len() * 1000).collect();
+        let mut chunks: Vec<&[u8]> = vec![b"+"];
+        chunks.extend(stream.chunks(output.len() / 2 + 3));
+        let mut client = Client::new(Pipe::with(&chunks));
+        let error = client.command("?", deadline()).unwrap_err();
+        assert!(matches!(error, DebugError::Protocol(ref message) if message.contains("console")), "{error:?}");
+        assert!(client.framer.buffered() < 3 * output.len());
+        assert!(!client.in_sync());
+        assert!(matches!(client.command("?", deadline()), Err(DebugError::Lost(_))));
+        let notification = b"%Stop:T05#00";
+        let flood: Vec<u8> = notification.iter().copied().cycle().take(notification.len() * 300).collect();
+        let mut client = Client::new(Pipe::with(&[b"+", &flood]));
+        assert!(matches!(client.command("?", deadline()), Err(DebugError::Protocol(_))));
+        assert!(client.console.text.len() <= MAX_CONSOLE_BYTES);
+    }
+
+    #[test]
+    fn console_output_is_bounded() {
+        let mut console = Console::default();
+        console.push(&vec![b'a'; MAX_CONSOLE_BYTES + 10]);
+        assert_eq!(console.text.len(), MAX_CONSOLE_BYTES);
+        assert_eq!(console.dropped_bytes, 10);
+    }
+}
