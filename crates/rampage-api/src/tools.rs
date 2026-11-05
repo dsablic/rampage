@@ -142,8 +142,8 @@ impl Group {
                 "Sessions with the operator-allowed GDB remote stubs: connect, status, registers, memory, modules and \
                  memory maps, snapshot to a file, binding to a project for static evidence; all-stop execution \
                  control (continue, wait, interrupt, step, breakpoints and watchpoints by runtime address, \
-                 epoch-checked); detach. Memory and register writes only with the operator's --debug-writes, kill \
-                 only with --debug-kill; no signal delivery."
+                 epoch-checked); detach. Memory and register writes and kill only when the operator's flags allow \
+                 them; no signal delivery."
             }
         }
     }
