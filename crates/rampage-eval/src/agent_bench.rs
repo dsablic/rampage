@@ -459,15 +459,18 @@ fn group_summary(rows: &[&RunRow]) -> Value {
         }
     }
     let cost: Option<f64> = rows.iter().map(|row| row.cost_usd).sum();
-    let partials: Option<Vec<f64>> = rows.iter().map(|row| row.partial).collect();
-    let partial = partials.filter(|values| !values.is_empty()).map(|values| {
-        let sum: f64 = values.iter().sum();
-        (sum / values.len() as f64 * 1000.0).round() / 1000.0
+    // Over the runs of tasks that define partial credit (set answers); `null` when there are none.
+    let partials: Vec<f64> = rows.iter().filter_map(|row| row.partial).collect();
+    let partial = (!partials.is_empty()).then(|| {
+        let sum: f64 = partials.iter().sum();
+        (sum / partials.len() as f64 * 1000.0).round() / 1000.0
     });
+    let partial_runs = partials.len();
     let limits_hit =
         rows.iter().filter(|row| matches!(row.runner_exit, RunnerExit::Timeout | RunnerExit::MaxTurns)).count();
     json!({
-        "correct": correct, "runs": rows.len(), "partial_credit_mean": partial, "limits_hit": limits_hit,
+        "correct": correct, "runs": rows.len(), "partial_credit_mean": partial,
+        "partial_credit_runs": partial_runs, "limits_hit": limits_hit,
         "tool_calls": spread(rows.iter().map(|row| row.tool_calls)),
         "tool_errors": spread(rows.iter().map(|row| row.tool_errors)),
         "turns": spread(rows.iter().map(|row| row.turns)),
@@ -666,9 +669,9 @@ pub fn markdown_tables(summary: &Value) -> String {
 ///
 /// `earlier` is the report the run wrote; `rescored` is the freshly scored one. The rescore changes only
 /// outcomes, failures and extraction kinds, so `versions`, `run_unix_ms` and `protocol` stay those of the
-/// measurement.
+/// measurement, as do the attachments, a cost-cap stop and any rerun record with its superseded runs.
 pub fn rescored_report(earlier: &Value, mut rescored: Value, commit: Option<String>, reason: &str) -> Value {
-    for key in ["versions", "run_unix_ms", "protocol"] {
+    for key in ["versions", "run_unix_ms", "protocol", "attachments", "stopped", "rerun", "superseded_runs"] {
         if let Some(value) = earlier.get(key) {
             rescored[key] = value.clone();
         }
