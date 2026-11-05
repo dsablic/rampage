@@ -14,6 +14,7 @@ mod compiled_arm64;
 mod correlation;
 mod debug_control;
 mod debug_cpp_layout_acceptance;
+mod debug_execution;
 mod debug_import;
 mod debug_layout_acceptance;
 mod debug_layout_import;

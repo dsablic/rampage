@@ -159,6 +159,21 @@ impl StopReply {
         }
     }
 
+    /// The reply with at most 32 expedited registers of at most 128 hex digits and at most 16 reasons, for results
+    /// whose size is budgeted. A stub may send 1,024 fields of 4 KiB each.
+    pub fn bounded(&self) -> Self {
+        match self {
+            StopReply::Signal { signal, thread, core, reasons, registers } => StopReply::Signal {
+                signal: *signal,
+                thread: *thread,
+                core: *core,
+                reasons: reasons.iter().take(16).cloned().collect(),
+                registers: registers.iter().filter(|register| register.bytes.len() <= 128).take(32).cloned().collect(),
+            },
+            other => other.clone(),
+        }
+    }
+
     /// Whether the process no longer exists.
     pub fn ended(&self) -> bool {
         matches!(self, StopReply::Exited { .. } | StopReply::Terminated { .. })

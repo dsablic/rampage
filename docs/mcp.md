@@ -38,7 +38,8 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 - `carve`: `carve`, `archive_inventory`.
 - `formats`: `build_info`, `pe_resources`, `pe_load_config`, `pyinstaller_archive`, `wasm_module`.
 - `debug`, only on a server started with a debug endpoint: `debug_connect`, `debug_status`, `debug_registers`,
-  `debug_read_memory`, `debug_modules`, `debug_snapshot`, `debug_disconnect`.
+  `debug_read_memory`, `debug_modules`, `debug_snapshot`, `debug_continue`, `debug_wait`, `debug_interrupt`,
+  `debug_step`, `debug_breakpoints`, `debug_disconnect`.
 
 Calling `enable_tools` without arguments lists each group's description, tool names/count and enabled state.
 `{"groups": ["detection"]}` enables that group; `{"groups": ["all"]}` enables every group. Enabling sends
@@ -181,13 +182,28 @@ and remain non-atomic. See [LLDB queries](lldb-query.md) for request operations,
 The `debug` tools talk to a GDB remote stub the operator started and allowed (gdbserver, QEMU, OpenOCD...).
 `debug_connect` takes only an allowed endpoint and returns a session ID; at most four sessions are open per MCP
 connection, and they detach when it ends. `debug_status`, `debug_registers`, `debug_read_memory` (at most the
-session's `max_read_length` bytes per call, short reads reported per chunk) and `debug_modules` read the stopped target and report the stop
-epoch they read at. `debug_snapshot` writes a new `rampage-snapshot-v1` file (a file write) and refuses targets
-whose data byte order is unknown. `debug_disconnect` detaches, which lets the target run; a refused detach keeps the session open.
-Nothing resumes, steps, sets breakpoints, writes or
-kills. Errors start with a code: `unknown_session`, `endpoint_not_allowed`, `session_limit`, `timeout`,
-`connection_lost`, `protocol_error`, `target_error`, `unsupported`, `session_not_stopped` or `invalid_argument`.
-See [debug control](debug-control.md).
+session's `max_read_length` bytes per call, short reads reported per chunk) and `debug_modules` read the stopped
+target and report the stop epoch they read at; pass `epoch` to have a read refused if the target has stopped again
+since. `debug_snapshot` writes a new `rampage-snapshot-v1` file (a file write) and refuses targets whose data byte
+order is unknown.
+
+Execution control is all-stop. `debug_breakpoints` sets (`software`, `hardware`, `write`, `read`, `access`), clears
+and lists breakpoints and watchpoints the stub inserts at runtime addresses. `debug_continue` resumes every thread
+without delivering a signal and waits up to `timeout_ms` for a typed stop event; `debug_wait` waits again,
+`debug_interrupt` stops a running target, and `debug_step` single-steps up to 1,000 instructions. Execution tools
+take the caller's `epoch`. While the target runs, only `debug_status`, `debug_wait`, `debug_interrupt` and
+`debug_disconnect` are served. `debug_disconnect` interrupts a running target, removes every breakpoint and
+detaches, which lets the target run; a refused detach keeps the session open. Nothing writes registers or memory,
+delivers a signal or kills.
+
+Debug tools carry MCP annotations: inspection tools and `debug_wait` are read-only; `debug_snapshot` only adds a
+file; execution tools and `debug_disconnect` are neither read-only nor idempotent and may be destructive. All are
+open-world. Cancelling a call (`notifications/cancelled`, or the connection closing) ends a wait early with
+`cancelled: true` and the target untouched, and stops a long read or snapshot between chunks.
+
+Errors start with a code: `unknown_session`, `endpoint_not_allowed`, `session_limit`, `timeout`,
+`connection_lost`, `protocol_error`, `target_error`, `unsupported`, `session_not_stopped`, `target_running`,
+`not_running`, `stale_epoch`, `cancelled` or `invalid_argument`. See [debug control](debug-control.md).
 
 ## Raw projects
 

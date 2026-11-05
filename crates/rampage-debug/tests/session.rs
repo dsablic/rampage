@@ -68,7 +68,7 @@ fn reads_a_halted_cortex_m_like_qemu() {
     assert_eq!((modules.regions[0].kind.as_str(), modules.regions[0].flash_block_size), ("flash", Some(0x400)));
     assert_eq!((modules.regions[1].start, modules.regions[1].length), (0x2000_0000, 0x10000));
 
-    assert_eq!(session.detach().unwrap(), State::Detached);
+    assert_eq!(session.detach().unwrap().state, State::Detached);
     assert!(matches!(session.status(), Err(DebugError::State(_))));
     drop(session);
     let report = stub.finish();
@@ -128,7 +128,7 @@ fn reads_aarch64_gdbserver_over_a_unix_socket() {
     assert_eq!(modules.exec_file.as_deref(), Some("/home/user/prog"));
     assert!(modules.regions.is_empty());
 
-    assert_eq!(session.detach().unwrap(), State::Detached);
+    assert_eq!(session.detach().unwrap().state, State::Detached);
     drop(session);
     let report = stub.finish();
     report.assert_clean();
@@ -179,7 +179,7 @@ fn an_exited_process_has_nothing_to_read_or_detach() {
     assert_eq!(session.status().unwrap().state, State::Exited);
     assert!(matches!(session.registers(None), Err(DebugError::State(_))));
     assert!(matches!(session.read_memory(0, 4, None), Err(DebugError::State(_))));
-    assert_eq!(session.detach().unwrap(), State::Exited);
+    assert_eq!(session.detach().unwrap().state, State::Exited);
     drop(session);
     let report = stub.finish();
     report.assert_clean();
@@ -284,7 +284,9 @@ fn dropping_a_session_detaches() {
 
 #[test]
 fn the_fake_stub_fails_any_execution_control_packet() {
-    for packet in ["c", "s", "vCont;c", "Z0,1000,4", "M1000,1:00", "G00", "P1=00", "k", "vKill;1", "qRcmd,6869"] {
+    for packet in
+        ["c", "s", "vCont?", "vCont;c", "Z0,1000,4", "M1000,1:00", "G00", "P1=00", "k", "vKill;1", "qRcmd,6869"]
+    {
         assert!(rampage_debug::fake::execution_control(packet), "{packet}");
         let stub = FakeStub::tcp(Script::new());
         let mut stream = std::net::TcpStream::connect(stub.endpoint()).unwrap();
@@ -295,7 +297,7 @@ fn the_fake_stub_fails_any_execution_control_packet() {
         assert_eq!(report.violations.len(), 1, "{packet}: {:?}", report.violations);
         assert!(report.violations[0].contains("forbidden"));
     }
-    for packet in ["?", "g", "m0,4", "D", "D;1", "vCont?", "qXfer:features:read:target.xml:0,10"] {
+    for packet in ["?", "g", "m0,4", "D", "D;1", "qXfer:features:read:target.xml:0,10"] {
         assert!(!rampage_debug::fake::execution_control(packet), "{packet}");
     }
 }
@@ -323,7 +325,7 @@ fn a_refused_detach_keeps_the_session_and_a_retry_detaches_only_the_rest() {
     let status = session.status().unwrap();
     assert_eq!(status.state, State::Stopped);
     assert_eq!(status.threads.iter().map(|thread| thread.id.to_string()).collect::<Vec<_>>(), ["p1.1", "p2.1"]);
-    assert_eq!(session.detach().unwrap(), State::Detached);
+    assert_eq!(session.detach().unwrap().state, State::Detached);
     drop(session);
     let report = stub.finish();
     report.assert_clean();

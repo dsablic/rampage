@@ -1,7 +1,8 @@
-//! Read-only debug sessions with operator-started GDB remote stubs (phase 9.1): the per-connection registry the
-//! `debug` tools use, and capture of a stopped target into a `rampage-snapshot-v1` file. Nothing here launches,
-//! attaches to, resumes, steps, sets breakpoints in, writes to or kills a target; `rampage-debug` refuses to send
-//! any packet that would.
+//! Debug sessions with operator-started GDB remote stubs (phases 9.1 and 9.2): the per-connection registry the
+//! `debug` tools use, inspection of a stopped target, execution control (continue, wait, interrupt, step,
+//! breakpoints and watchpoints, all-stop only, epoch-checked) and capture of a stopped target into a
+//! `rampage-snapshot-v1` file. Nothing here launches, attaches to, writes to or kills a target, or delivers a
+//! signal on resume; `rampage-debug` refuses to send any packet that would.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -9,7 +10,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rampage_arch::Arch;
-use rampage_debug::{ByteOrder, Config, Endpoint, Family, Session, ThreadId};
+use rampage_debug::{BreakKind, ByteOrder, Cancel, Config, Endpoint, Family, Session, ThreadId};
 use rampage_loaders::snapshot::{
     Snapshot, SnapshotModule, SnapshotPlatform, SnapshotRegion, SnapshotRegister, SnapshotTarget,
 };
@@ -40,6 +41,11 @@ const SNAPSHOT_METADATA_BYTES: usize =
 const MEMORY_CHUNK_JSON: usize = 220;
 /// JSON bytes of a memory result besides its chunks and hex.
 const MEMORY_RESULT_JSON: usize = 2000;
+/// Default and longest wait of a continue or wait, in milliseconds.
+pub const DEFAULT_RUN_WAIT_MS: u64 = 5000;
+pub const MAX_RUN_WAIT_MS: u64 = 60_000;
+/// Default breakpoints per page.
+const DEFAULT_BREAKPOINT_PAGE: usize = 64;
 
 /// The most bytes one `debug_read_memory` call may read so its whole result, every chunk's report included, fits
 /// the tool result budget, for a stub whose memory requests carry `chunk` bytes each.
@@ -76,7 +82,7 @@ fn failure(code: &str, message: impl std::fmt::Display) -> ApiError {
     let text = format!("{code}: {message}");
     match code {
         "unknown_session" => ApiError::NotFound(text),
-        "timeout" | "connection_lost" | "session_limit" | "connect_failed" => ApiError::Unavailable(text),
+        "timeout" | "connection_lost" | "session_limit" | "connect_failed" | "cancelled" => ApiError::Unavailable(text),
         _ => ApiError::Invalid(text),
     }
 }
@@ -199,7 +205,7 @@ impl DebugRegistry {
             no_ack_mode: info.no_ack_mode,
             state: status.state.clone(),
             epoch: status.epoch,
-            stop: status.stop.clone(),
+            stop: status.stop.as_ref().map(rampage_debug::StopReply::bounded),
             modules_available: info.modules_available,
             memory_map_available: info.memory_map_available,
             max_read_length: tool_read_limit(info.chunk_size()),
@@ -219,7 +225,14 @@ impl DebugRegistry {
             session: id.to_owned(),
             state: status.state,
             epoch: status.epoch,
-            stop: status.stop,
+            running_for_ms: status.running_for_ms,
+            stop: status.stop.as_ref().map(rampage_debug::StopReply::bounded),
+            // The session's console already holds this run's output; it is not repeated.
+            last_stop: status.last_stop.map(|mut event| {
+                event.console = rampage_debug::Console::default();
+                event
+            }),
+            waiting: status.waiting,
             console: status.console,
             threads: FittedPage::empty(),
         };
@@ -236,6 +249,19 @@ impl DebugRegistry {
         names: Option<&[String]>,
         offset: Option<usize>,
         limit: Option<usize>,
+    ) -> Result<DebugRegisters, ApiError> {
+        self.registers_at(id, thread, names, offset, limit, None)
+    }
+
+    /// [`DebugRegistry::registers`], refused with `stale_epoch` unless the session is at `epoch` (when given).
+    pub fn registers_at(
+        &self,
+        id: &str,
+        thread: Option<&str>,
+        names: Option<&[String]>,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        epoch: Option<u64>,
     ) -> Result<DebugRegisters, ApiError> {
         let session = self.session(id)?;
         let thread = thread.map(parse_thread).transpose()?;
@@ -255,7 +281,7 @@ impl DebugRegistry {
                 return Err(failure("invalid_argument", format!("unknown registers: {}", unknown.join(", "))));
             }
         }
-        let registers = session.registers(thread).map_err(debug_failure)?;
+        let registers = session.registers_at(thread, epoch).map_err(debug_failure)?;
         let selected: Vec<_> = registers
             .registers
             .into_iter()
@@ -288,9 +314,22 @@ impl DebugRegistry {
         length: usize,
         thread: Option<&str>,
     ) -> Result<DebugMemory, ApiError> {
+        self.read_memory_at(id, address, length, thread, None, &Cancel::default())
+    }
+
+    /// [`DebugRegistry::read_memory`] at `epoch` (when given); `cancel` stops it between chunks.
+    pub fn read_memory_at(
+        &self,
+        id: &str,
+        address: u64,
+        length: usize,
+        thread: Option<&str>,
+        epoch: Option<u64>,
+        cancel: &Cancel,
+    ) -> Result<DebugMemory, ApiError> {
         let session = self.session(id)?;
         let thread = thread.map(parse_thread).transpose()?;
-        let read = session.read_memory(address, length, thread).map_err(debug_failure)?;
+        let read = session.read_memory_at(address, length, thread, epoch, cancel).map_err(debug_failure)?;
         let complete = read.complete();
         let mut data: Vec<DebugBytes> = Vec::new();
         for chunk in &read.chunks {
@@ -331,8 +370,19 @@ impl DebugRegistry {
 
     /// Loaded modules and memory-map regions, as the stub reports them.
     pub fn modules(&self, id: &str, offset: Option<usize>, limit: Option<usize>) -> Result<DebugModules, ApiError> {
+        self.modules_at(id, offset, limit, None)
+    }
+
+    /// [`DebugRegistry::modules`] at `epoch` (when given).
+    pub fn modules_at(
+        &self,
+        id: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        epoch: Option<u64>,
+    ) -> Result<DebugModules, ApiError> {
         let session = self.session(id)?;
-        let modules = session.modules().map_err(debug_failure)?;
+        let modules = session.modules_at(epoch).map_err(debug_failure)?;
         let regions_total = modules.regions.len();
         let mut result = DebugModules {
             session: id.to_owned(),
@@ -360,27 +410,146 @@ impl DebugRegistry {
     pub fn disconnect(&self, id: &str) -> Result<DebugDisconnected, ApiError> {
         let session = self.session(id)?;
         let number = id.strip_prefix('s').and_then(|number| number.parse::<u32>().ok()).expect("a known session id");
-        let (state, error, closed) = match session.detach() {
-            Ok(state) => (state, None, true),
+        let (state, error, closed, removed, failures) = match session.detach() {
+            Ok(detached) => {
+                let error = match &detached.state {
+                    rampage_debug::State::Lost { reason } => Some(format!("connection_lost: {reason}")),
+                    _ => None,
+                };
+                (detached.state, error, true, detached.breakpoints_removed, detached.removal_failures)
+            }
             Err(error @ rampage_debug::DebugError::Target(_)) => {
-                (rampage_debug::State::Stopped, Some(format!("{}: {error}", error.code())), false)
+                (rampage_debug::State::Stopped, Some(format!("{}: {error}", error.code())), false, 0, Vec::new())
             }
             Err(error) => (
                 rampage_debug::State::Lost { reason: error.to_string() },
                 Some(format!("{}: {error}", error.code())),
                 true,
+                0,
+                Vec::new(),
             ),
         };
         if closed {
             self.sessions.lock().unwrap_or_else(PoisonError::into_inner).remove(&number);
         }
-        Ok(DebugDisconnected { session: id.to_owned(), state, detached: error.is_none(), closed, detach_error: error })
+        Ok(DebugDisconnected {
+            session: id.to_owned(),
+            state,
+            detached: error.is_none(),
+            closed,
+            detach_error: error,
+            breakpoints_removed: removed,
+            removal_failures: failures,
+        })
+    }
+
+    /// Resumes every thread without delivering a signal, at `epoch`, and waits up to `timeout_ms` (default 5000,
+    /// at most 60000) for the stop. The registry lock is not held while waiting; `cancel` ends the wait, not the run.
+    pub fn resume(&self, id: &str, epoch: u64, timeout_ms: Option<u64>, cancel: &Cancel) -> Result<DebugRun, ApiError> {
+        let session = self.session(id)?;
+        let run = session.resume(Some(epoch), run_wait(timeout_ms)?, cancel).map_err(debug_failure)?;
+        Ok(DebugRun { session: id.to_owned(), run })
+    }
+
+    /// Waits up to `timeout_ms` (default 5000, at most 60000) for a running target to stop; a target that is not
+    /// running answers at once with its last stop.
+    pub fn wait(&self, id: &str, timeout_ms: Option<u64>, cancel: &Cancel) -> Result<DebugRun, ApiError> {
+        let session = self.session(id)?;
+        let run = session.wait(run_wait(timeout_ms)?, cancel).map_err(debug_failure)?;
+        Ok(DebugRun { session: id.to_owned(), run })
+    }
+
+    /// Sends the interrupt byte to a running target and waits up to 3 s for its stop.
+    pub fn interrupt(&self, id: &str, cancel: &Cancel) -> Result<DebugRun, ApiError> {
+        let session = self.session(id)?;
+        let run = session.interrupt(rampage_debug::INTERRUPT_WAIT, cancel).map_err(debug_failure)?;
+        Ok(DebugRun { session: id.to_owned(), run })
+    }
+
+    /// Single-steps `thread` (the stop's thread when omitted) `count` (1..=1000, default 1) instructions at `epoch`.
+    pub fn step(
+        &self,
+        id: &str,
+        epoch: u64,
+        thread: Option<&str>,
+        count: Option<u32>,
+        cancel: &Cancel,
+    ) -> Result<DebugSteps, ApiError> {
+        let session = self.session(id)?;
+        let thread = thread.map(parse_thread).transpose()?;
+        let steps = session.step(Some(epoch), thread, count.unwrap_or(1), cancel).map_err(debug_failure)?;
+        Ok(DebugSteps { session: id.to_owned(), steps })
+    }
+
+    /// Inserts a breakpoint or watchpoint at a runtime `address`, at `epoch`. `size` is a breakpoint's instruction
+    /// size (default by architecture); `length` is a watchpoint's watched length (required).
+    pub fn set_breakpoint(
+        &self,
+        id: &str,
+        epoch: u64,
+        kind: DebugBreakKind,
+        address: u64,
+        size: Option<u64>,
+        length: Option<u64>,
+    ) -> Result<DebugBreakpoint, ApiError> {
+        let session = self.session(id)?;
+        let kind = kind.into();
+        let size = match (kind, size, length) {
+            (BreakKind::Software | BreakKind::Hardware, size, None) => size,
+            (BreakKind::Software | BreakKind::Hardware, _, Some(_)) => {
+                return Err(failure("invalid_argument", "breakpoints take size, not length"));
+            }
+            (_, None, length) => length,
+            (_, Some(_), _) => return Err(failure("invalid_argument", "watchpoints take length, not size")),
+        };
+        let breakpoint = session.set_breakpoint(Some(epoch), kind, address, size).map_err(debug_failure)?;
+        Ok(DebugBreakpoint { session: id.to_owned(), action: "set", breakpoint })
+    }
+
+    /// Removes breakpoint `breakpoint` from the stub and the table, at `epoch`.
+    pub fn clear_breakpoint(&self, id: &str, epoch: u64, breakpoint: u32) -> Result<DebugBreakpoint, ApiError> {
+        let session = self.session(id)?;
+        let breakpoint = session.clear_breakpoint(Some(epoch), breakpoint).map_err(debug_failure)?;
+        Ok(DebugBreakpoint { session: id.to_owned(), action: "clear", breakpoint })
+    }
+
+    /// The breakpoint table with hit counts, paged within the result budget.
+    pub fn breakpoints(
+        &self,
+        id: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+    ) -> Result<DebugBreakpoints, ApiError> {
+        let session = self.session(id)?;
+        let table = session.breakpoints().map_err(debug_failure)?;
+        let mut result = DebugBreakpoints {
+            session: id.to_owned(),
+            limit: rampage_debug::MAX_BREAKPOINTS,
+            breakpoints: FittedPage::empty(),
+        };
+        let budget = item_budget(&result)?;
+        let limit = limit.unwrap_or(DEFAULT_BREAKPOINT_PAGE).clamp(1, rampage_debug::MAX_BREAKPOINTS);
+        result.breakpoints = FittedPage::of(table, offset, Some(limit), budget)?;
+        Ok(result)
     }
 
     /// Captures `ranges` of the stopped target, every thread's registers and its modules into a new
     /// `rampage-snapshot-v1` file at `output`, which must not exist. Everything except memory is gathered and
     /// checked against the snapshot loader's limits before any memory is read.
     pub fn snapshot(&self, id: &str, output: &Path, ranges: &[DebugRange]) -> Result<DebugSnapshot, ApiError> {
+        self.snapshot_at(id, output, ranges, None, &Cancel::default())
+    }
+
+    /// [`DebugRegistry::snapshot`] at `epoch` (when given); `cancel` stops it between memory reads, before anything
+    /// is written.
+    pub fn snapshot_at(
+        &self,
+        id: &str,
+        output: &Path,
+        ranges: &[DebugRange],
+        epoch: Option<u64>,
+        cancel: &Cancel,
+    ) -> Result<DebugSnapshot, ApiError> {
         let session = self.session(id)?;
         let info = session.info();
         let arch = match info.family {
@@ -418,8 +587,20 @@ impl DebugRegistry {
         // Status re-reads the stop reply and threads, so comparing it before and after the capture detects a
         // target that stopped anew or changed threads in between.
         let status = session.status().map_err(debug_failure)?;
+        if status.state == rampage_debug::State::Running {
+            return Err(failure("target_running", "the target is running; wait for it to stop or interrupt it"));
+        }
         if status.state != rampage_debug::State::Stopped {
             return Err(failure("session_not_stopped", "the session is not stopped"));
+        }
+        if let Some(given) = epoch
+            && given != status.epoch
+        {
+            return Err(debug_failure(rampage_debug::DebugError::StaleEpoch {
+                given,
+                current: status.epoch,
+                state: "stopped".into(),
+            }));
         }
         if status.threads.len() > MAX_SNAPSHOT_THREADS {
             return Err(failure(
@@ -440,7 +621,7 @@ impl DebugRegistry {
         let mut registers = Vec::new();
         let mut skipped = 0;
         for thread in threads {
-            let values = session.registers(thread).map_err(debug_failure)?;
+            let values = session.registers_at(thread, Some(status.epoch)).map_err(debug_failure)?;
             let thread_id = snapshot_thread_id(values.thread.or(thread), pids.len() > 1)?;
             for register in values.registers {
                 let representable = register.name.len() <= 32
@@ -465,8 +646,11 @@ impl DebugRegistry {
                 ));
             }
         }
-        let modules =
-            if info.modules_available { session.modules().map_err(debug_failure)?.modules } else { Vec::new() };
+        let modules = if info.modules_available {
+            session.modules_at(Some(status.epoch)).map_err(debug_failure)?.modules
+        } else {
+            Vec::new()
+        };
         let snapshot_modules = snapshot_modules(&modules)?;
         let thumb_default = info.family == Family::Arm && rampage_debug::target::m_profile(info.layout.as_ref());
         let mut snapshot = Snapshot {
@@ -513,7 +697,7 @@ impl DebugRegistry {
             while done < range.length {
                 let at = range.address + done;
                 let size = (range.length - done).min(rampage_debug::MAX_MEMORY_READ as u64) as usize;
-                let read = session.read_memory(at, size, None).map_err(debug_failure)?;
+                let read = session.read_memory_at(at, size, None, Some(status.epoch), cancel).map_err(debug_failure)?;
                 if let Some(chunk) = read.chunks.iter().find(|chunk| chunk.error.is_some()) {
                     return Err(failure(
                         "target_error",
@@ -745,6 +929,7 @@ pub struct DebugConnection {
     #[serde(flatten)]
     pub state: rampage_debug::State,
     pub epoch: u64,
+    /// The stop reply, with at most 32 short expedited registers and 16 reasons.
     pub stop: Option<rampage_debug::StopReply>,
     pub modules_available: bool,
     pub memory_map_available: bool,
@@ -760,9 +945,82 @@ pub struct DebugStatus {
     #[serde(flatten)]
     pub state: rampage_debug::State,
     pub epoch: u64,
+    /// Milliseconds since the last resume, while running.
+    pub running_for_ms: Option<u64>,
+    /// The stop reply, with at most 32 short expedited registers and 16 reasons.
     pub stop: Option<rampage_debug::StopReply>,
+    /// The last stop rampage observed after a continue, step or interrupt.
+    pub last_stop: Option<rampage_debug::StopEvent>,
+    /// Calls in progress that wait for the target to stop.
+    pub waiting: usize,
     pub console: rampage_debug::Console,
     pub threads: FittedPage<rampage_debug::ThreadInfo>,
+}
+
+/// The outcome of `debug_continue`, `debug_wait` or `debug_interrupt`.
+#[derive(Debug, Serialize)]
+pub struct DebugRun {
+    pub session: String,
+    #[serde(flatten)]
+    pub run: rampage_debug::Run,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DebugSteps {
+    pub session: String,
+    #[serde(flatten)]
+    pub steps: rampage_debug::Steps,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DebugBreakpoint {
+    pub session: String,
+    pub action: &'static str,
+    pub breakpoint: rampage_debug::Breakpoint,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DebugBreakpoints {
+    pub session: String,
+    /// Most entries a session holds.
+    pub limit: usize,
+    pub breakpoints: FittedPage<rampage_debug::Breakpoint>,
+}
+
+/// What `debug_breakpoints` sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DebugBreakKind {
+    /// A software breakpoint the stub plants (Z0); refused as unsupported when the stub has none.
+    Software,
+    /// A hardware breakpoint (Z1).
+    Hardware,
+    /// A write watchpoint (Z2).
+    Write,
+    /// A read watchpoint (Z3).
+    Read,
+    /// An access watchpoint (Z4).
+    Access,
+}
+
+impl From<DebugBreakKind> for BreakKind {
+    fn from(kind: DebugBreakKind) -> Self {
+        match kind {
+            DebugBreakKind::Software => BreakKind::Software,
+            DebugBreakKind::Hardware => BreakKind::Hardware,
+            DebugBreakKind::Write => BreakKind::Write,
+            DebugBreakKind::Read => BreakKind::Read,
+            DebugBreakKind::Access => BreakKind::Access,
+        }
+    }
+}
+
+fn run_wait(timeout_ms: Option<u64>) -> Result<std::time::Duration, ApiError> {
+    let timeout = timeout_ms.unwrap_or(DEFAULT_RUN_WAIT_MS);
+    if timeout > MAX_RUN_WAIT_MS {
+        return Err(failure("invalid_argument", format!("timeout_ms must be at most {MAX_RUN_WAIT_MS}")));
+    }
+    Ok(std::time::Duration::from_millis(timeout))
 }
 
 #[derive(Debug, Serialize)]
@@ -825,6 +1083,10 @@ pub struct DebugDisconnected {
     /// Whether the session is gone; a refused detach keeps it open (still attached) for a retry.
     pub closed: bool,
     pub detach_error: Option<String>,
+    /// Breakpoints and watchpoints removed before detaching.
+    pub breakpoints_removed: usize,
+    /// Entries that could not be removed, each with the reason.
+    pub removal_failures: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]

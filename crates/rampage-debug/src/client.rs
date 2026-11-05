@@ -2,7 +2,7 @@
 //! deadlines and the read-only packet allowlist.
 
 use std::io::ErrorKind;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::packet::{self, Frame, Framer};
 use crate::transport::Transport;
@@ -15,10 +15,48 @@ const MAX_NOISE: usize = 4096;
 /// Console-output and notification frames tolerated per command, so a chatty stub cannot hold a command open.
 pub const MAX_ASYNC_FRAMES: usize = 256;
 
-/// Whether `payload` is a packet this client may send. Only queries, register and memory reads, thread selection
-/// for reads, no-ack negotiation and detach are allowed: nothing that resumes, steps, sets breakpoints, writes or
-/// kills can leave this client, whatever a caller asks for.
-pub fn allowed(payload: &str) -> bool {
+/// The classes of packet a session command may send. Each command declares the classes it needs, and
+/// [`Client::command`] refuses any packet outside them before it reaches the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PacketClass {
+    /// Queries, register and memory reads, thread selection for reads and no-ack negotiation.
+    Read,
+    /// `vCont?`, `vCont;c`, `vCont;s:<thread>`, `c`, `s`, `Hc<thread>` and `Z0`..`Z4`/`z0`..`z4`
+    /// `<address>,<kind>`. Never a signal-delivering resume, a write, a kill, a launch or an attach.
+    Execution,
+    /// `D` and `D;<pid>`.
+    Detach,
+}
+
+/// The set of [`PacketClass`]es a command may use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Permit {
+    pub read: bool,
+    pub execution: bool,
+    pub detach: bool,
+}
+
+impl Permit {
+    /// Reads only: what every 9.1 inspection command declares.
+    pub const READ: Permit = Permit { read: true, execution: false, detach: false };
+    /// Reads and execution control: resume, step, interrupt and breakpoints.
+    pub const EXECUTION: Permit = Permit { read: true, execution: true, detach: false };
+    /// Everything detaching needs: stopping a running target, removing breakpoints, then `D`.
+    pub const DETACH: Permit = Permit { read: true, execution: true, detach: true };
+
+    fn allows(self, class: PacketClass) -> bool {
+        match class {
+            PacketClass::Read => self.read,
+            PacketClass::Execution => self.execution,
+            PacketClass::Detach => self.detach,
+        }
+    }
+}
+
+/// The class of `payload`, or `None` when this client never sends it: writes (`M`, `X`, `P`, `G`), kill (`k`,
+/// `vKill`), launch and attach (`vRun`, `vAttach`, `R`, `!`), signal-delivering resumes (`C`, `S`, `vCont;C`/`S`),
+/// non-stop mode, monitor commands and anything else unlisted.
+pub fn classify(payload: &str) -> Option<PacketClass> {
     let hex = |text: &str| !text.is_empty() && text.len() <= 16 && text.bytes().all(|byte| byte.is_ascii_hexdigit());
     let range = |text: &str| text.split_once(',').is_some_and(|(address, length)| hex(address) && hex(length));
     let annex = |text: &str| {
@@ -27,32 +65,59 @@ pub fn allowed(payload: &str) -> bool {
             && annex.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/'))
             && range(offsets)
     };
+    let thread = |text: &str| crate::ThreadId::parse(text).is_some();
+    let read = |yes: bool| yes.then_some(PacketClass::Read);
     match payload {
-        "?" | "g" | "qfThreadInfo" | "qsThreadInfo" | "qOffsets" | "qAttached" | "QStartNoAckMode" | "D" => true,
-        _ if payload.starts_with("qSupported") => {
-            payload.len() <= 512 && payload.bytes().all(|byte| byte.is_ascii_graphic() && byte != b'#' && byte != b'$')
+        "?" | "g" | "qfThreadInfo" | "qsThreadInfo" | "qOffsets" | "qAttached" | "QStartNoAckMode" => {
+            Some(PacketClass::Read)
         }
+        "D" => Some(PacketClass::Detach),
+        "vCont?" | "vCont;c" | "c" | "s" => Some(PacketClass::Execution),
+        _ if payload.starts_with("qSupported") => read(
+            payload.len() <= 512 && payload.bytes().all(|byte| byte.is_ascii_graphic() && byte != b'#' && byte != b'$'),
+        ),
         _ => {
             if let Some(rest) = payload.strip_prefix("qXfer:") {
-                let Some((object, rest)) = rest.split_once(":read:") else { return false };
-                return matches!(object, "features" | "libraries-svr4" | "libraries" | "exec-file" | "memory-map")
-                    && annex(rest);
+                let (object, rest) = rest.split_once(":read:")?;
+                return read(
+                    matches!(object, "features" | "libraries-svr4" | "libraries" | "exec-file" | "memory-map")
+                        && annex(rest),
+                );
             }
-            if let Some(thread) = payload.strip_prefix("qThreadExtraInfo,").or_else(|| payload.strip_prefix("Hg")) {
-                return crate::ThreadId::parse(thread).is_some() || thread == "0";
+            if let Some(id) = payload.strip_prefix("qThreadExtraInfo,").or_else(|| payload.strip_prefix("Hg")) {
+                return read(thread(id) || id == "0");
+            }
+            if let Some(id) = payload.strip_prefix("vCont;s:").or_else(|| payload.strip_prefix("Hc")) {
+                // `Hc-1` (all threads) undoes an `Hc<thread>` before a plain `c`.
+                return (thread(id) || payload == "Hc-1").then_some(PacketClass::Execution);
+            }
+            if let Some(rest) = payload.strip_prefix('Z').or_else(|| payload.strip_prefix('z')) {
+                let (kind, rest) = rest.split_at_checked(1)?;
+                let insert = matches!(kind, "0" | "1" | "2" | "3" | "4");
+                return (insert && rest.strip_prefix(',').is_some_and(range)).then_some(PacketClass::Execution);
             }
             if let Some(pid) = payload.strip_prefix("D;") {
-                return hex(pid);
+                return hex(pid).then_some(PacketClass::Detach);
             }
             if let Some(register) = payload.strip_prefix('p') {
-                return hex(register);
+                return read(hex(register));
             }
             match payload.strip_prefix('m').or_else(|| payload.strip_prefix('x')) {
-                Some(rest) => range(rest),
-                None => false,
+                Some(rest) => read(range(rest)),
+                None => None,
             }
         }
     }
+}
+
+/// Whether `payload` is a packet this client may send under `permit`.
+pub fn allowed(payload: &str, permit: Permit) -> bool {
+    classify(payload).is_some_and(|class| permit.allows(class))
+}
+
+/// Whether `payload` resumes the target, so its reply is a stop reply that may come much later.
+pub fn resumes(payload: &str) -> bool {
+    matches!(payload, "c" | "s" | "vCont;c") || payload.starts_with("vCont;s:")
 }
 
 /// Console output (`O` packets) collected from the stub, bounded.
@@ -64,7 +129,7 @@ pub struct Console {
 }
 
 impl Console {
-    fn push(&mut self, bytes: &[u8]) {
+    pub(crate) fn push(&mut self, bytes: &[u8]) {
         let room = MAX_CONSOLE_BYTES.saturating_sub(self.text.len());
         let kept = &bytes[..bytes.len().min(room)];
         self.text.push_str(&String::from_utf8_lossy(kept));
@@ -78,6 +143,15 @@ pub struct Client<T: Transport> {
     ack_mode: bool,
     in_sync: bool,
     pub console: Console,
+    /// Console output received since the last resume.
+    pub run_console: Console,
+    permit: Permit,
+    /// The resume packet whose stop reply is outstanding; the target is running.
+    running: Option<Vec<u8>>,
+    /// Whether the outstanding resume packet is still waiting for its acknowledgement.
+    unacknowledged: bool,
+    run_naks: usize,
+    run_noise: usize,
 }
 
 impl<T: Transport> Client<T> {
@@ -88,7 +162,23 @@ impl<T: Transport> Client<T> {
             ack_mode: true,
             in_sync: true,
             console: Console::default(),
+            run_console: Console::default(),
+            permit: Permit::READ,
+            running: None,
+            unacknowledged: false,
+            run_naks: 0,
+            run_noise: 0,
         }
+    }
+
+    /// Sets the packet classes the following commands may send.
+    pub fn set_permit(&mut self, permit: Permit) {
+        self.permit = permit;
+    }
+
+    /// Whether a resume is outstanding: no stop reply has arrived since.
+    pub fn running(&self) -> bool {
+        self.running.is_some()
     }
 
     /// Whether every command so far got its reply, so the next reply belongs to the next request.
@@ -109,14 +199,18 @@ impl<T: Transport> Client<T> {
     pub fn shutdown(&mut self) {
         self.transport.shutdown();
         self.in_sync = false;
+        self.running = None;
         self.framer = Framer::new(0);
     }
 
     /// Sends `payload` and returns the stub's reply, collecting console output on the way. Any error other than a
     /// refused packet leaves the stream in an unknown state, so the caller must treat the connection as lost.
     pub fn command(&mut self, payload: &str, deadline: Instant) -> Result<Vec<u8>, DebugError> {
-        if !allowed(payload) {
+        if !allowed(payload, self.permit) || resumes(payload) {
             return Err(DebugError::Forbidden(payload.chars().take(64).collect()));
+        }
+        if self.running.is_some() {
+            return Err(DebugError::Running("no request can be sent while the target runs".into()));
         }
         if !self.in_sync {
             return Err(DebugError::Lost("the reply stream is out of step with requests".into()));
@@ -190,6 +284,135 @@ impl<T: Transport> Client<T> {
                     }
                     return Ok(reply);
                 }
+            }
+        }
+    }
+
+    /// Sends a resume packet (`c`, `s`, `vCont;c` or `vCont;s:<thread>`) without waiting for its stop reply, which
+    /// [`Client::poll`] collects. Requires the execution class.
+    pub fn resume(&mut self, payload: &str) -> Result<(), DebugError> {
+        if !resumes(payload) || !allowed(payload, self.permit) {
+            return Err(DebugError::Forbidden(payload.chars().take(64).collect()));
+        }
+        if self.running.is_some() {
+            return Err(DebugError::Running("the target is already running".into()));
+        }
+        if !self.in_sync {
+            return Err(DebugError::Lost("the reply stream is out of step with requests".into()));
+        }
+        let request = packet::encode(payload.as_bytes());
+        if let Err(error) = self.write(&request) {
+            self.in_sync = false;
+            return Err(error);
+        }
+        self.running = Some(request);
+        self.unacknowledged = self.ack_mode;
+        self.run_naks = 0;
+        self.run_noise = 0;
+        self.run_console = Console::default();
+        Ok(())
+    }
+
+    /// Sends the out-of-band interrupt byte (`0x03`), only while a resume is outstanding.
+    pub fn interrupt(&mut self) -> Result<(), DebugError> {
+        if !self.permit.execution {
+            return Err(DebugError::Forbidden("\\x03".into()));
+        }
+        if self.running.is_none() {
+            return Err(DebugError::NotRunning("the target is not running".into()));
+        }
+        self.write(&[0x03]).inspect_err(|_| self.in_sync = false)
+    }
+
+    /// Reads the stub for up to `wait` while the target runs: acknowledgements, console output (kept, bounded),
+    /// notifications (ignored) and finally the packet that ends the run, normally a stop reply. `None` when nothing
+    /// ended the run in time. Any error leaves the stream in an unknown state.
+    pub fn poll(&mut self, wait: Duration) -> Result<Option<Vec<u8>>, DebugError> {
+        if self.running.is_none() {
+            return Err(DebugError::NotRunning("the target is not running".into()));
+        }
+        let result = self.poll_frames(Instant::now() + wait);
+        match &result {
+            Ok(Some(_)) => self.running = None,
+            Ok(None) => {}
+            Err(_) => {
+                self.in_sync = false;
+                self.running = None;
+            }
+        }
+        result
+    }
+
+    fn poll_frames(&mut self, deadline: Instant) -> Result<Option<Vec<u8>>, DebugError> {
+        loop {
+            let frame = self.framer.next_frame().map_err(|error| DebugError::Protocol(error.to_string()))?;
+            let Some(frame) = frame else {
+                if !self.fill_until(deadline)? {
+                    return Ok(None);
+                }
+                continue;
+            };
+            match frame {
+                Frame::Ack => self.unacknowledged = false,
+                Frame::Nak if self.unacknowledged => {
+                    self.run_naks += 1;
+                    if self.run_naks > RETRANSMITS {
+                        return Err(DebugError::Protocol("the stub refused the resume packet repeatedly".into()));
+                    }
+                    let request = self.running.clone().unwrap_or_default();
+                    self.write(&request)?;
+                }
+                Frame::Nak | Frame::Notification => {}
+                Frame::Noise(_) => {
+                    self.run_noise += 1;
+                    if self.run_noise > MAX_NOISE {
+                        return Err(DebugError::Protocol("too many bytes outside packets".into()));
+                    }
+                }
+                Frame::Corrupt => {
+                    if !self.ack_mode {
+                        return Err(DebugError::Protocol("reply checksum mismatch".into()));
+                    }
+                    self.run_naks += 1;
+                    if self.run_naks > RETRANSMITS {
+                        return Err(DebugError::Protocol("reply checksum mismatch".into()));
+                    }
+                    self.write(b"-")?;
+                }
+                Frame::Packet(reply) => {
+                    self.unacknowledged = false;
+                    if self.ack_mode {
+                        self.write(b"+")?;
+                    }
+                    if let Some(output) = console_output(&reply) {
+                        self.console.push(&output);
+                        self.run_console.push(&output);
+                        continue;
+                    }
+                    return Ok(Some(reply));
+                }
+            }
+        }
+    }
+
+    /// Reads what arrives before `deadline`; false when nothing did.
+    fn fill_until(&mut self, deadline: Instant) -> Result<bool, DebugError> {
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()).filter(|remaining| !remaining.is_zero())
+        else {
+            return Ok(false);
+        };
+        self.transport.set_read_timeout(remaining).map_err(|error| DebugError::Lost(error.to_string()))?;
+        let mut buffer = [0; 16 * 1024];
+        loop {
+            match self.transport.read(&mut buffer) {
+                Ok(0) => return Err(DebugError::Lost("the stub closed the connection".into())),
+                Ok(count) => {
+                    self.framer.push(&buffer[..count]);
+                    return Ok(true);
+                }
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => return Ok(false),
+                Err(error) => return Err(DebugError::Lost(format!("read failed: {error}"))),
             }
         }
     }
@@ -298,7 +521,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn only_read_only_packets_leave_the_client() {
+    fn packets_are_classified_and_held_to_the_command_permit() {
         for packet in [
             "?",
             "g",
@@ -314,22 +537,52 @@ pub(crate) mod tests {
             "qXfer:exec-file:read:2a:0,fff",
             "qSupported:multiprocess+;swbreak+",
             "QStartNoAckMode",
-            "D",
-            "D;2a",
         ] {
-            assert!(allowed(packet), "{packet}");
+            assert_eq!(classify(packet), Some(PacketClass::Read), "{packet}");
+            assert!(allowed(packet, Permit::READ), "{packet}");
         }
         for packet in [
             "c",
-            "C05",
             "s",
-            "S05",
+            "vCont?",
             "vCont;c",
             "vCont;s:1",
-            "vCont?",
+            "vCont;s:p1.1",
+            "Hc1",
+            "Hcp2a.2b",
+            "Hc-1",
             "Z0,1000,4",
             "z0,1000,4",
-            "Z2,1000,4",
+            "Z1,8000000000000000,2",
+            "Z2,20000200,4",
+            "z4,0,1",
+        ] {
+            assert_eq!(classify(packet), Some(PacketClass::Execution), "{packet}");
+            assert!(!allowed(packet, Permit::READ), "{packet}");
+            assert!(allowed(packet, Permit::EXECUTION), "{packet}");
+        }
+        for packet in ["D", "D;2a"] {
+            assert_eq!(classify(packet), Some(PacketClass::Detach), "{packet}");
+            assert!(!allowed(packet, Permit::READ) && !allowed(packet, Permit::EXECUTION), "{packet}");
+            assert!(allowed(packet, Permit::DETACH), "{packet}");
+        }
+        for packet in [
+            "C05",
+            "S05",
+            "vCont;C05",
+            "vCont;S05:1",
+            "vCont;c:1",
+            "vCont;s",
+            "vCont;s:-1",
+            "vCont;s:1;c",
+            "vCont;t",
+            "vCont;r1000,2000",
+            "Hc0",
+            "vCont;s:-1",
+            "Z5,1000,4",
+            "Z0,1000",
+            "Z0,1000,4;X2,0a",
+            "Z0,zz,4",
             "M1000,1:00",
             "X1000,1:\0",
             "G00",
@@ -341,7 +594,7 @@ pub(crate) mod tests {
             "R00",
             "r",
             "!",
-            "Hc1",
+            "QNonStop:1",
             "qRcmd,7265736574",
             "qXfer:features:write:target.xml:0,1",
             "qXfer:siginfo:read::0,1",
@@ -349,10 +602,69 @@ pub(crate) mod tests {
             "m1000",
             "pzz",
             "D;zz",
+            "i",
             "",
         ] {
-            assert!(!allowed(packet), "{packet:?}");
+            assert_eq!(classify(packet), None, "{packet:?}");
+            assert!(!allowed(packet, Permit::DETACH), "{packet:?}");
         }
+    }
+
+    #[test]
+    fn random_packets_never_panic_when_classified() {
+        let mut rng = crate::packet::tests::Rng::new(13);
+        for _ in 0..20_000 {
+            let alphabet = b"vCont?;csSCZzHDp0123459a,:.-\xff";
+            let length = rng.below(20);
+            let packet: String = (0..length).map(|_| alphabet[rng.below(alphabet.len())] as char).collect();
+            if let Some(PacketClass::Execution) = classify(&packet) {
+                let known = resumes(&packet)
+                    || packet == "vCont?"
+                    || ["Hc", "Z", "z"].iter().any(|prefix| packet.starts_with(prefix));
+                assert!(known, "{packet}");
+                assert!(!packet.starts_with("vCont;C") && !packet.starts_with("vCont;S"), "{packet}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_resume_waits_for_its_stop_reply_across_pieces_and_console_output() {
+        let output = packet::encode(format!("O{}", packet::encode_hex(b"tick\n")).as_bytes());
+        let reply = packet::encode(b"T05thread:p1.1;hwbreak:;");
+        let (head, tail) = reply.split_at(7);
+        let pipe = Pipe::with(&[b"+", &output[..3], &output[3..], b"%Stop:T05#00", head, tail]);
+        let mut client = Client::new(pipe.clone());
+        assert!(matches!(client.resume("c"), Err(DebugError::Forbidden(_))));
+        client.set_permit(Permit::EXECUTION);
+        assert!(matches!(client.interrupt(), Err(DebugError::NotRunning(_))));
+        client.resume("vCont;c").unwrap();
+        assert!(client.running());
+        assert!(matches!(client.command("g", deadline()), Err(DebugError::Running(_))));
+        let mut stop = None;
+        for _ in 0..8 {
+            if let Some(reply) = client.poll(Duration::from_millis(10)).unwrap() {
+                stop = Some(reply);
+                break;
+            }
+        }
+        assert_eq!(stop.as_deref(), Some(&b"T05thread:p1.1;hwbreak:;"[..]));
+        assert!(!client.running());
+        assert_eq!(client.run_console.text, "tick\n");
+        assert_eq!(pipe.written(), "$vCont;c#a8++");
+        assert!(client.in_sync());
+    }
+
+    #[test]
+    fn an_interrupt_is_one_byte_sent_only_while_running() {
+        let pipe = Pipe::with(&[b"+"]);
+        let mut client = Client::new(pipe.clone());
+        client.set_permit(Permit::EXECUTION);
+        client.resume("c").unwrap();
+        assert_eq!(client.poll(Duration::from_millis(5)).unwrap(), None);
+        client.interrupt().unwrap();
+        assert!(pipe.written().ends_with('\u{3}'));
+        client.set_permit(Permit::READ);
+        assert!(matches!(client.interrupt(), Err(DebugError::Forbidden(_))));
     }
 
     #[test]

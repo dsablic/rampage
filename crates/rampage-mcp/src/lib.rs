@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rampage_api::tools::{self, DebugTool, FileTool, Group, Tool};
-use rampage_api::{DebugRegistry, FileOffset, Packs, Project, RawProjectRequest, Session};
+use rampage_api::{DebugCancel, DebugRegistry, FileOffset, Packs, Project, RawProjectRequest, Session};
 use rampage_arch::Arch;
 use rampage_loaders::ImageAt;
 use rmcp::model::{
@@ -124,11 +124,15 @@ decompresses nothing. Pass an executable candidate's offset as image_offset to a
 with annotations kept apart from the outer file's.";
 
 const INSTRUCTIONS_DEBUG: &str = "\
-Debug: the operator allowed GDB remote stubs at these endpoints: {endpoints}. debug_connect opens a read-only \
-session (the stub must already be running; rampage launches and attaches to nothing), then debug_status, \
-debug_registers, debug_read_memory and debug_modules inspect the stopped target, debug_snapshot writes a \
-rampage-snapshot-v1 file the other tools can open, and debug_disconnect detaches. Nothing resumes, steps, sets \
-breakpoints, writes or kills; runtime bytes stay local.";
+Debug: the operator allowed GDB remote stubs at these endpoints: {endpoints}. debug_connect opens a session (the \
+stub must already be running; rampage launches and attaches to nothing), then debug_status, debug_registers, \
+debug_read_memory and debug_modules inspect the stopped target and debug_snapshot writes a rampage-snapshot-v1 file \
+the other tools can open. Execution control is all-stop: debug_breakpoints sets hardware or software breakpoints and \
+watchpoints at runtime addresses, debug_continue resumes without delivering a signal and waits for the stop, \
+debug_wait waits again, debug_interrupt stops a running target, debug_step single-steps. Each stop is a new epoch; \
+pass the epoch you last saw to execution tools (stale_epoch otherwise) and optionally to reads. debug_disconnect \
+removes breakpoints and detaches, which lets the target run. Nothing writes registers or memory or kills; runtime \
+bytes stay local.";
 
 fn instructions(packs: &Packs, debug: Option<&DebugRegistry>) -> String {
     let groups: String = available_groups(debug.is_some())
@@ -460,13 +464,13 @@ impl RampageServer {
     }
 
     /// Runs a tool on the binary its arguments name. Failures are results the caller sees, not protocol errors.
-    fn run(&self, name: &str, mut arguments: Map<String, Value>) -> CallToolResult {
+    fn run(&self, name: &str, mut arguments: Map<String, Value>, cancel: &DebugCancel) -> CallToolResult {
         let raw = arguments.remove(RAW).filter(|raw| !raw.is_null());
         if let (Some(registry), Some(tool)) = (&self.debug, self.debug_tools.iter().find(|tool| tool.name == name)) {
             if raw.is_some() {
                 return CallToolResult::error(vec![ContentBlock::text(raw_refusal(name))]);
             }
-            return match tool.call(registry, Value::Object(arguments)) {
+            return match tool.call_cancellable(registry, Value::Object(arguments), cancel) {
                 Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
                 Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
             };
@@ -612,7 +616,7 @@ impl ServerHandler for RampageServer {
         let debug_enabled = self.debug.is_some() && enabled.contains(&Group::Debug);
         let debug_tools = self.debug_tools.iter().filter(|_| debug_enabled).map(|tool| {
             let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
-            rmcp::model::Tool::new(tool.name, tool.description, schema)
+            rmcp::model::Tool::new(tool.name, tool.description, schema).annotate(debug_annotations(tool.effect))
         });
         let all = std::iter::once(meta).chain(tools).chain(file_tools).chain(debug_tools);
         Ok(ListToolsResult::with_all_items(all.collect()))
@@ -651,11 +655,33 @@ impl ServerHandler for RampageServer {
             return Ok(CallToolResult::error(vec![ContentBlock::text(reason)]).into());
         }
         let server = self.clone();
+        // A cancelled request (notifications/cancelled, or the connection closing) sets the flag the debug tools
+        // check: waits return early with the target untouched, long reads stop between chunks.
+        let cancel = DebugCancel::new();
+        let watcher = {
+            let (cancel, token) = (cancel.clone(), context.ct.clone());
+            tokio::spawn(async move {
+                token.cancelled().await;
+                cancel.cancel();
+            })
+        };
         // Analysis is blocking work; keep it off the async runtime.
-        let result = tokio::task::spawn_blocking(move || server.run(&name, arguments))
-            .await
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let result = tokio::task::spawn_blocking(move || server.run(&name, arguments, &cancel)).await;
+        watcher.abort();
+        let result = result.map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
         Ok(result.into())
+    }
+}
+
+/// The MCP annotations of a debug tool: every one reaches a target outside rampage. Inspection is read-only; a
+/// snapshot only adds a new file; execution control changes the target's state and is neither idempotent nor
+/// merely additive.
+fn debug_annotations(effect: tools::Effect) -> rmcp::model::ToolAnnotations {
+    let annotations = rmcp::model::ToolAnnotations::new().open_world(true);
+    match effect {
+        tools::Effect::Execution => annotations.read_only(false).destructive(true).idempotent(false),
+        tools::Effect::FileWrite => annotations.read_only(false).destructive(false).idempotent(false),
+        _ => annotations.read_only(true),
     }
 }
 

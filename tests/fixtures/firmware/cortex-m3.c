@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Bare-metal Cortex-M3 firmware for live QEMU debugger acceptance tests (lm3s6965evb).
-// Reset writes the 16-byte PATTERN to 0x20000100, then increments the word at 0x20000200 forever.
+// Reset writes the 16-byte PATTERN to 0x20000100, then calls tick() forever; tick() increments `counter`, a RAM
+// word the linker script places at 0x20000200. Symbols are kept so tests can find tick and counter.
 #include <stdint.h>
 
 #define PATTERN_ADDR ((volatile uint8_t *)0x20000100u)
-#define COUNTER_ADDR ((volatile uint32_t *)0x20000200u)
+
+__attribute__((section(".ram"), used)) volatile uint32_t counter;
 
 extern uint32_t __stack_top;
 
@@ -15,13 +17,15 @@ __attribute__((noreturn)) void default_handler(void) {
   }
 }
 
+__attribute__((noinline)) void tick(void) { counter = counter + 1; }
+
 __attribute__((noreturn)) void reset_handler(void) {
   for (unsigned i = 0; i < sizeof PATTERN; i++) {
     PATTERN_ADDR[i] = (uint8_t)PATTERN[i];
   }
-  *COUNTER_ADDR = 0;
+  counter = 0;
   for (;;) {
-    *COUNTER_ADDR = *COUNTER_ADDR + 1;
+    tick();
   }
 }
 

@@ -520,7 +520,10 @@ impl Assistant {
                         match effect {
                             rampage_api::tools::Effect::Annotations => effects.annotations_changed = true,
                             rampage_api::tools::Effect::ShowAddress => effects.show = Some(argument.to_owned()),
-                            rampage_api::tools::Effect::None | rampage_api::tools::Effect::FileWrite => {}
+                            // The assistant is not offered debug tools; nothing else has an execution effect.
+                            rampage_api::tools::Effect::None
+                            | rampage_api::tools::Effect::FileWrite
+                            | rampage_api::tools::Effect::Execution => {}
                         }
                     }
                     self.transcript.push(Entry::Tool { summary: format!("{name} {argument}"), failed });

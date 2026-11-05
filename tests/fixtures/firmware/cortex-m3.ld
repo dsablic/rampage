@@ -19,6 +19,11 @@ SECTIONS
     *(.rodata .rodata.*)
   } > FLASH
 
+  .ram 0x20000200 (NOLOAD) :
+  {
+    *(.ram .ram.*)
+  } > SRAM
+
   /DISCARD/ :
   {
     *(.ARM.exidx*) *(.comment) *(.data*) *(.bss*)

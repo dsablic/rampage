@@ -33,11 +33,14 @@ format builds without verified function truth remain unscored rather than counti
 - Read-only stopped-session [LLDB queries](lldb-query.md) are available through an explicitly operator-started
   local Unix socket, CLI/MCP requests and a local desktop query window. They do not attach, control execution,
   evaluate expressions or write target memory; observations remain non-atomic and separate from snapshot identity.
-- Read-only [debug sessions](debug-control.md) with operator-started GDB remote stubs (gdbserver, QEMU, OpenOCD):
-  the MCP `debug` group, present only when the server is started with an allowed endpoint, reads registers from the
-  stub's target description, memory, threads, svr4 or Windows-style module lists and memory maps, and captures a
-  stopped target to a `rampage-snapshot-v1` file. Data byte order comes only from stop-bound evidence (x86, Cortex-M
-  AIRCR, ARM CPSR.E). It never launches, attaches, resumes, steps, sets breakpoints, writes or kills.
+- [Debug sessions](debug-control.md) with operator-started GDB remote stubs (gdbserver, QEMU, OpenOCD): the MCP
+  `debug` group, present only when the server is started with an allowed endpoint, reads registers from the stub's
+  target description, memory, threads, svr4 or Windows-style module lists and memory maps, and captures a stopped
+  target to a `rampage-snapshot-v1` file. Data byte order comes only from stop-bound evidence (x86, Cortex-M AIRCR,
+  ARM CPSR.E). All-stop execution control continues, waits, interrupts and single-steps, and sets hardware or
+  software breakpoints and watchpoints the stub inserts at runtime addresses, with typed stop events, hit counts and
+  stop epochs that refuse stale requests. It never launches, attaches, writes registers or memory, delivers signals
+  or kills.
 
 The previously reported decoder comparisons sampled words across every encoding: A32 matched `llvm-mc` on
 97.95%, 16-bit Thumb on 100%, and 32-bit Thumb on 97.49%. AArch64 matched every instruction sampled from

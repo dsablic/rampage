@@ -101,7 +101,7 @@ recorded in the project's findings ledger with the debug session as evidence.
 | Step | Scope | Risk |
 |---|---|---|
 | 9.1 | **Done 2026-10-29** (`55f9f22`; live QEMU Cortex-M3 acceptance passes). `rampage-debug` crate: framing, parser fuzzing, scripted fake stub for tests; read-only tools (`connect`, `status`, `registers`, `read_memory`, `modules`, `snapshot`, `disconnect` with detach). No execution. | Low: equivalent to today's read-only LLDB bridge over a different transport. |
-| 9.2 | Execution control: continue/wait/interrupt, step, breakpoints and watchpoints; stop epochs enforced. | Medium. |
+| 9.2 | **Done 2026-11-04** (`aea1240`; live QEMU Cortex-M3 acceptance passes). Execution control: continue/wait/interrupt, step, breakpoints and watchpoints; stop epochs enforced. | Medium. |
 | 9.3 | Static correlation: binding, slides, symbolic breakpoints, step-over via rampage decoders, stop-location enrichment. | Medium. |
 | 9.4 | Writes behind `--debug-writes`; kill behind `--debug-kill`. | Higher; reviewed separately. |
 | 9.5 | macOS `debugserver` acceptance (RSP plus LLDB extensions); evaluate driving LLDB's SB API through the existing bridge for crash/core files. | Platform-dependent. |
@@ -145,3 +145,19 @@ Each step follows the wave cadence: implementation, fresh-context review, fixes,
   have no cancellation path to plumb it to, so a `debug_snapshot` of up to 64 MiB runs until it completes, fails,
   or a request (10 s each, per 64 KiB read) times out. It is bounded but not cancellable. Revisit with 9.2's
   `debug_continue`/`debug_wait`, which need a cancellable wait anyway.
+- **9.2, cancellation (closes the 9.1 deviation):** rmcp 3.5's `RequestContext::ct` is cancelled on
+  `notifications/cancelled` for the request, and (through its parent token) when the service shuts down after the
+  connection closes. The MCP server turns it into a cancel flag that reaches the debug tools through
+  `spawn_blocking`. `debug_continue`, `debug_wait` and `debug_interrupt` then return at once with
+  `{ state: "running", cancelled: true }`; the session thread drops the waiter and keeps the target as it is.
+  `debug_step` stops between steps. `debug_read_memory` and `debug_snapshot` stop between chunks, and a cancelled
+  snapshot writes nothing. Waits stay bounded either way.
+- **9.2, breakpoint table:** entries the stub refuses are not added; the table's `inserted` flag records whether
+  the stub still holds an entry (false after the process exits). Breakpoint conditions and hit counts evaluated by
+  rampage beyond counting are left for 9.3.
+- **9.2, matching by pc:** QEMU reports breakpoint hits as a bare SIGTRAP without `swbreak`/`hwbreak`, so a SIGTRAP
+  after a continue matches breakpoints at the pc; after a step it does not, since the two look the same.
+- **9.2, stepping past breakpoints:** a stub stopped at an inserted breakpoint reports it again on every continue,
+  so `debug_continue` removes the breakpoints at the pc, single-steps the thread and re-inserts them first. Without
+  `vCont`, an `Hc<thread>` step is undone with `Hc-1` before a plain `c` (added to the execution class); a stub
+  refusing it is not continued.

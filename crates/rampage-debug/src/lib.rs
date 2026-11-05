@@ -1,14 +1,17 @@
-//! A read-only GDB Remote Serial Protocol client for operator-started stubs (gdbserver, QEMU, OpenOCD, probe-rs...).
+//! A GDB Remote Serial Protocol client for operator-started stubs (gdbserver, QEMU, OpenOCD, probe-rs...).
 //!
 //! The operator starts the stub and lists its endpoint; this crate connects, negotiates features, reads the target
-//! description, the stop state, threads, registers, memory, loaded modules and memory maps, and detaches. Nothing
-//! here launches, attaches to, resumes, steps, sets breakpoints in, writes to or kills a target: the client refuses
-//! to put any such packet on the wire ([`client::allowed`]). `D` (detach) is the one packet that lets a target run
-//! on, because detaching hands it back to the stub.
+//! description, the stop state, threads, registers, memory, loaded modules and memory maps, controls execution in
+//! all-stop mode (continue, wait, interrupt, single-step, breakpoints and watchpoints the stub inserts) and detaches.
+//! Nothing here launches, attaches to, writes to or kills a target, delivers a signal on resume, enters non-stop
+//! mode or plants a breakpoint by writing memory: the client refuses to put any such packet on the wire, and each
+//! session command may send only the packet classes it declares ([`client::classify`], [`client::Permit`]).
 //!
-//! A [`Session`] is a thread that owns the connection and serves typed requests one at a time.
+//! A [`Session`] is a thread that owns the connection and serves typed requests one at a time; while the target
+//! runs it keeps serving status, wait, interrupt and detach requests.
 
 pub mod client;
+pub mod exec;
 #[cfg(feature = "fake-stub")]
 pub mod fake;
 pub mod maps;
@@ -19,11 +22,14 @@ pub mod target;
 pub mod transport;
 mod xml;
 
-pub use client::Console;
+pub use client::{Console, PacketClass, Permit};
+pub use exec::{
+    BreakKind, Breakpoint, Cancel, MAX_BREAKPOINTS, MAX_STEPS, MAX_WATCH_LENGTH, StopCause, StopEvent, WatchHit,
+};
 pub use maps::{Module, Offsets, Region};
 pub use session::{
-    ByteOrder, CLOSE_DETACH, Config, Info, MemoryChunk, MemoryRead, Modules, RegisterValue, Registers, Session, State,
-    Status, ThreadInfo,
+    ByteOrder, CLOSE_DETACH, Config, Detached, INTERRUPT_WAIT, Info, MemoryChunk, MemoryRead, Modules, RegisterValue,
+    Registers, Run, Session, State, Status, Steps, ThreadInfo,
 };
 pub use stop::{StopReason, StopReply, ThreadId};
 pub use target::{Family, Layout, LayoutSource, Register};
@@ -54,9 +60,21 @@ pub enum DebugError {
     State(String),
     #[error("{0}")]
     Invalid(String),
-    /// A packet outside the read-only allowlist; never sent.
-    #[error("refused to send `{0}`: not a read-only packet")]
+    /// A packet outside the classes the command declared; never sent.
+    #[error("refused to send `{0}`: not a packet this command may send")]
     Forbidden(String),
+    /// The target is running; only status, wait, interrupt and disconnect are served.
+    #[error("the target is running: {0}")]
+    Running(String),
+    /// An interrupt or other running-only request reached a target that is not running.
+    #[error("{0}")]
+    NotRunning(String),
+    /// The caller's epoch is not the session's: the target stopped again (or ran) since the caller looked.
+    #[error("epoch {given} is stale: the session is at epoch {current} and {state}")]
+    StaleEpoch { given: u64, current: u64, state: String },
+    /// The caller cancelled the request; the target was not touched.
+    #[error("cancelled: {0}")]
+    Cancelled(String),
 }
 
 impl DebugError {
@@ -72,6 +90,10 @@ impl DebugError {
             DebugError::State(_) => "session_not_stopped",
             DebugError::Invalid(_) => "invalid_argument",
             DebugError::Forbidden(_) => "forbidden_packet",
+            DebugError::Running(_) => "target_running",
+            DebugError::NotRunning(_) => "not_running",
+            DebugError::StaleEpoch { .. } => "stale_epoch",
+            DebugError::Cancelled(_) => "cancelled",
         }
     }
 

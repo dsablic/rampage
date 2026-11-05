@@ -1,27 +1,32 @@
 #![cfg(unix)]
 
-//! The `debug` group through MCP, against the scripted fake stub, which fails a test on any execution-control
-//! packet.
+//! The `debug` group through MCP, against the scripted fake stub. Inspection scripts fail a test on any
+//! execution-control packet; the execution scripts accept only step 9.2's packets.
 
 use std::os::unix::fs::DirBuilderExt;
 
 use rampage_api::DebugRegistry;
 use rampage_api::tools::Group;
-use rampage_debug::fake::{FakeStub, Report, transcripts};
+use rampage_debug::fake::{Action, FakeStub, INTERRUPT, Report, le_hex, transcripts};
 use rampage_mcp::RampageServer;
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::{RoleClient, RunningService};
 use serde_json::{Value, json};
 
-const DEBUG_TOOLS: [&str; 7] = [
+const DEBUG_TOOLS: [&str; 12] = [
+    "debug_breakpoints",
     "debug_connect",
+    "debug_continue",
     "debug_disconnect",
+    "debug_interrupt",
     "debug_modules",
     "debug_read_memory",
     "debug_registers",
     "debug_snapshot",
     "debug_status",
+    "debug_step",
+    "debug_wait",
 ];
 
 async fn connect(server: RampageServer) -> RunningService<RoleClient, ()> {
@@ -89,7 +94,7 @@ async fn debug_tools_inspect_snapshot_and_detach_through_mcp() {
     let listing = json_of(&call(&client, "enable_tools", json!({})).await);
     let group = listing["groups"].as_array().unwrap().iter().find(|group| group["name"] == "debug").unwrap();
     assert_eq!(group["enabled"], false);
-    assert_eq!(group["tool_count"], 7);
+    assert_eq!(group["tool_count"], 12);
     assert!(!names(&client).await.iter().any(|name| name.starts_with("debug_")));
     let disabled = call(&client, "debug_connect", json!({})).await;
     assert!(text(&disabled).contains("not enabled"));
@@ -181,4 +186,76 @@ fn debug_endpoint_lists_tolerate_spacing_and_empty_entries() {
     for env in ["127.0.0.1", "host:0", "unix:relative", "127.0.0.1:2345 127.0.0.1:2346", "a b:1"] {
         assert!(endpoints(&[], Some(env)).is_err(), "{env}");
     }
+}
+
+#[tokio::test]
+async fn execution_tools_are_annotated_epoch_checked_and_survive_a_cancelled_wait() {
+    let stub = FakeStub::tcp(
+        transcripts::qemu_cortex_m3()
+            .execution()
+            .on("vCont?", "vCont;c;C;s;S")
+            .on("pf", &le_hex(0x48, 4))
+            .on_actions("vCont;c", vec![])
+            .on_interrupt(vec![Action::Reply("T02thread:p01.01;".into())]),
+    );
+    let registry = DebugRegistry::new(&[stub.endpoint().to_owned()]).unwrap();
+    let client = connect(RampageServer::with_groups([Group::Core, Group::Debug]).with_debug(registry)).await;
+    let tools = client.list_all_tools().await.unwrap();
+    let annotations = |name: &str| tools.iter().find(|tool| tool.name == name).unwrap().annotations.clone().unwrap();
+    for name in ["debug_continue", "debug_step", "debug_interrupt", "debug_breakpoints", "debug_disconnect"] {
+        let hints = annotations(name);
+        assert_eq!(
+            (hints.read_only_hint, hints.destructive_hint, hints.idempotent_hint, hints.open_world_hint),
+            (Some(false), Some(true), Some(false), Some(true)),
+            "{name}"
+        );
+    }
+    for name in ["debug_status", "debug_registers", "debug_wait"] {
+        assert_eq!((annotations(name).read_only_hint, annotations(name).open_world_hint), (Some(true), Some(true)));
+    }
+    assert_eq!(annotations("debug_snapshot").destructive_hint, Some(false));
+
+    json_of(&call(&client, "debug_connect", json!({})).await);
+    let running =
+        json_of(&call(&client, "debug_continue", json!({ "session": "s1", "epoch": 1, "timeout_ms": 0 })).await);
+    assert_eq!(running["state"], "running");
+    // notifications/cancelled ends the server's wait (the response goes nowhere); the target keeps running.
+    let arguments = json!({ "session": "s1", "timeout_ms": 60_000 }).as_object().unwrap().clone();
+    let request = client
+        .send_cancellable_request(
+            rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(
+                CallToolRequestParams::new("debug_wait").with_arguments(arguments),
+            )),
+            rmcp::service::PeerRequestOptions::no_options(),
+        )
+        .await
+        .unwrap();
+    // The server is waiting for the stop on the call's behalf...
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while json_of(&call(&client, "debug_status", json!({ "session": "s1" })).await)["waiting"] != 1 {
+        assert!(std::time::Instant::now() < deadline, "the wait never started");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    // ...and stops waiting promptly once the call is cancelled, not after its 60 s timeout.
+    let cancelled = std::time::Instant::now();
+    request.cancel(None).await.unwrap();
+    let status = loop {
+        let status = json_of(&call(&client, "debug_status", json!({ "session": "s1" })).await);
+        if status["waiting"] == 0 {
+            break status;
+        }
+        assert!(cancelled.elapsed() < std::time::Duration::from_secs(2), "the cancelled wait is still waiting");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(status["state"], "running");
+    let stopped = json_of(&call(&client, "debug_interrupt", json!({ "session": "s1" })).await);
+    assert_eq!((stopped["state"].as_str(), stopped["epoch"].as_u64()), (Some("stopped"), Some(2)));
+    let stale = call(&client, "debug_step", json!({ "session": "s1", "epoch": 1 })).await;
+    assert_eq!(stale.is_error, Some(true));
+    assert!(text(&stale).starts_with("stale_epoch"), "{}", text(&stale));
+    client.cancel().await.unwrap();
+    let report = finish(stub).await;
+    report.assert_clean();
+    assert!(report.received.iter().any(|packet| packet == INTERRUPT));
+    assert_eq!(report.received.last().map(String::as_str), Some("D;1"));
 }

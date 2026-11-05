@@ -8,14 +8,15 @@
 //! ```
 //!
 //! The harness plays the operator and starts `qemu-system-arm`; rampage itself only connects to the endpoint it is
-//! given. QEMU is killed whatever the outcome.
+//! given. QEMU is killed whatever the outcome. Symbol addresses come from the firmware's ELF symbol table.
 
 use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use rampage_api::{DebugRange, DebugRegistry};
+use rampage_api::tools::debug_tools;
+use rampage_api::{DebugCancel, DebugRange, DebugRegistry};
 use serde_json::{Value, json};
 
 struct Qemu(Child);
@@ -67,6 +68,13 @@ fn connect(registry: &DebugRegistry) -> Value {
     }
 }
 
+/// The address (Thumb bit clear) and size of `name` in the firmware's symbol table.
+fn symbol(name: &str) -> (u64, u64) {
+    let binary = rampage_loaders::Binary::open(firmware()).unwrap();
+    let symbol = binary.symbols.iter().find(|symbol| symbol.name == name).unwrap_or_else(|| panic!("no `{name}`"));
+    (symbol.address & !1, symbol.size)
+}
+
 fn register(registry: &DebugRegistry, name: &str) -> u64 {
     let registers = registry.registers("s1", None, Some(&[name.to_owned()]), None, None).unwrap();
     registers.registers.items[0].integer().unwrap()
@@ -85,11 +93,13 @@ fn reads_and_snapshots_a_halted_cortex_m3() {
     assert_eq!(connection["threads"]["total"], 1);
 
     // Reset state: pc is the reset handler (Thumb bit clear), sp the vector table's initial stack, xPSR.T set.
-    assert_eq!(register(&registry, "pc"), 0x48);
+    let (reset, _) = symbol("reset_handler");
+    assert_eq!(register(&registry, "pc"), reset);
     assert_eq!(register(&registry, "sp"), 0x2001_0000);
     assert_ne!(register(&registry, "xpsr") & 0x0100_0000, 0);
     let vectors = serde_json::to_value(registry.read_memory("s1", 0, 8, None).unwrap()).unwrap();
-    assert_eq!(vectors["data"][0]["hex"], "0000012049000000");
+    let vector = format!("00000120{}", rampage_arch::hex::bytes(&((reset | 1) as u32).to_le_bytes()));
+    assert_eq!(vectors["data"][0]["hex"], vector);
     // The firmware has not run, so its RAM pattern is not there yet.
     let pattern = serde_json::to_value(registry.read_memory("s1", 0x2000_0100, 16, None).unwrap()).unwrap();
     assert_eq!(pattern["data"][0]["hex"], "00".repeat(16));
@@ -109,7 +119,7 @@ fn reads_and_snapshots_a_halted_cortex_m3() {
     assert_eq!(binary.arch, rampage_arch::Arch::Arm);
     assert_eq!(binary.segments.len(), 2);
     let pc = binary.snapshot_registers.iter().find(|register| register.name == "pc").unwrap();
-    assert_eq!(pc.value, "0x48");
+    assert_eq!(pc.value, format!("{reset:#x}"));
 
     assert_eq!(serde_json::to_value(registry.disconnect("s1").unwrap()).unwrap()["state"], "detached");
     drop(qemu);
@@ -128,7 +138,133 @@ fn reads_ram_the_firmware_wrote_after_running_briefly() {
     let pattern = serde_json::to_value(registry.read_memory("s1", 0x2000_0100, 16, None).unwrap()).unwrap();
     assert_eq!(pattern["data"][0]["hex"], rampage_arch::hex::bytes(b"RAMPAGE-DEBUG-91"));
     let pc = register(&registry, "pc");
-    assert!((0xb4..=0xcc).contains(&pc), "pc {pc:#x} is in the counter loop");
+    let ((tick, tick_size), (reset, reset_size)) = (symbol("tick"), symbol("reset_handler"));
+    let within = |(start, size): (u64, u64)| (start..start + size).contains(&pc);
+    assert!(within((tick, tick_size)) || within((reset, reset_size)), "pc {pc:#x} is in the counter loop");
     assert_eq!(serde_json::to_value(registry.disconnect("s1").unwrap()).unwrap()["state"], "detached");
+    drop(qemu);
+}
+
+#[test]
+#[ignore = "needs qemu-system-arm; run with RAMPAGE_QEMU_LIVE=1"]
+fn breaks_steps_watches_and_interrupts_a_cortex_m3() {
+    let Some((qemu, endpoint)) = start(true) else { return };
+    let registry = DebugRegistry::new(&[endpoint]).unwrap();
+    let tools = debug_tools();
+    let call = |name: &str, input: Value| {
+        tools.iter().find(|tool| tool.name == name).unwrap().call_cancellable(&registry, input, &DebugCancel::new())
+    };
+    let connection = connect(&registry);
+    assert_eq!(connection["epoch"], 1);
+    let (tick, tick_size) = symbol("tick");
+    let (counter, _) = symbol("counter");
+    assert!(tick_size > 0);
+
+    // A hardware breakpoint on tick(): the first continue stops at its first instruction.
+    let set = call(
+        "debug_breakpoints",
+        json!({"session": "s1", "action": "set", "epoch": 1, "kind": "hardware", "address": tick}),
+    )
+    .unwrap();
+    let breakpoint = set["breakpoint"]["id"].as_u64().unwrap();
+    assert_eq!(set["breakpoint"]["size"], 2);
+    let hit = call("debug_continue", json!({"session": "s1", "epoch": 1})).unwrap();
+    assert_eq!(hit["state"], "stopped", "{hit}");
+    let epoch = hit["epoch"].as_u64().unwrap();
+    assert_eq!(epoch, 2);
+    assert_eq!(hit["event"]["reason"], "breakpoint", "{hit}");
+    assert_eq!(hit["event"]["pc"], format!("{tick:#x}"));
+    assert_eq!(hit["event"]["breakpoints"], json!([breakpoint]));
+    let registers = call("debug_registers", json!({"session": "s1", "names": ["pc", "lr"], "epoch": epoch})).unwrap();
+    let value = |name: &str| {
+        let items = registers["registers"]["items"].as_array().unwrap();
+        let value = items.iter().find(|item| item["name"] == name).unwrap()["value"].as_str().unwrap();
+        u64::from_str_radix(value.trim_start_matches("0x"), 16).unwrap()
+    };
+    assert_eq!(value("pc"), tick);
+    let (reset, reset_size) = symbol("reset_handler");
+    let lr = value("lr");
+    assert!((reset..reset + reset_size).contains(&(lr & !1)), "tick returns into the reset handler's loop");
+
+    // Continuing with the breakpoint still set steps past it, puts it back and stops at the next call: counter
+    // advances by one each time, and the breakpoint counts every hit.
+    let read_counter = || {
+        let read = registry.read_memory("s1", counter, 4, None).unwrap();
+        u32::from_le_bytes(read.chunks[0].bytes[..].try_into().unwrap())
+    };
+    let mut epoch = epoch;
+    let mut last = read_counter();
+    for hits in 2..=3 {
+        let again = call("debug_continue", json!({"session": "s1", "epoch": epoch})).unwrap();
+        assert_eq!(again["event"]["reason"], "breakpoint", "{again}");
+        assert_eq!(again["event"]["pc"], format!("{tick:#x}"));
+        assert_eq!(again["warnings"], json!([]));
+        epoch = again["epoch"].as_u64().unwrap();
+        let now = read_counter();
+        assert_eq!(now, last + 1, "counter advanced past the breakpoint");
+        last = now;
+        let listed = call("debug_breakpoints", json!({"session": "s1", "action": "list"})).unwrap();
+        assert_eq!(listed["breakpoints"]["items"][0]["hits"], hits);
+        assert_eq!(listed["breakpoints"]["items"][0]["inserted"], true);
+    }
+
+    // Three instructions, each a stop and an epoch.
+    let steps = call("debug_step", json!({"session": "s1", "epoch": epoch, "count": 3})).unwrap();
+    assert_eq!((steps["completed"].as_u64(), steps["epoch"].as_u64()), (Some(3), Some(epoch + 3)), "{steps}");
+    let pcs: Vec<u64> = steps["pcs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|pc| u64::from_str_radix(pc.as_str().unwrap().trim_start_matches("0x"), 16).unwrap())
+        .collect();
+    assert!(
+        pcs.windows(2).all(|pair| pair[0] < pair[1]) && pcs.iter().all(|pc| (tick..tick + tick_size).contains(pc)),
+        "{pcs:x?}"
+    );
+    let epoch = epoch + 3;
+
+    // Clear the breakpoint; a write watchpoint on counter stops at tick's store.
+    call("debug_breakpoints", json!({"session": "s1", "action": "clear", "epoch": epoch, "id": breakpoint})).unwrap();
+    let watch = call(
+        "debug_breakpoints",
+        json!({"session": "s1", "action": "set", "epoch": epoch, "kind": "write", "address": counter, "length": 4}),
+    )
+    .unwrap();
+    let watch = watch["breakpoint"]["id"].as_u64().unwrap();
+    let watched = call("debug_continue", json!({"session": "s1", "epoch": epoch})).unwrap();
+    assert_eq!(watched["event"]["reason"], "watchpoint", "{watched}");
+    assert_eq!(watched["event"]["watch"]["address"], format!("{counter:#x}"));
+    assert_eq!(watched["event"]["breakpoints"], json!([watch]));
+    let epoch = watched["epoch"].as_u64().unwrap();
+    call("debug_breakpoints", json!({"session": "s1", "action": "clear", "epoch": epoch, "id": watch})).unwrap();
+    let listed = call("debug_breakpoints", json!({"session": "s1", "action": "list"})).unwrap();
+    assert_eq!(listed["breakpoints"]["total"], 0);
+
+    // Nothing stops the loop now: a short continue reports running, and an interrupt stops it at a new epoch.
+    let running = call("debug_continue", json!({"session": "s1", "epoch": epoch, "timeout_ms": 300})).unwrap();
+    assert_eq!(running["state"], "running", "{running}");
+    let status = call("debug_status", json!({"session": "s1"})).unwrap();
+    assert_eq!(status["state"], "running");
+    assert!(call("debug_registers", json!({"session": "s1"})).unwrap_err().starts_with("target_running"));
+    let interrupted = call("debug_interrupt", json!({"session": "s1"})).unwrap();
+    assert_eq!(interrupted["state"], "stopped", "{interrupted}");
+    assert_eq!(interrupted["event"]["reason"], "interrupted");
+    let new_epoch = interrupted["epoch"].as_u64().unwrap();
+    assert_eq!(new_epoch, epoch + 1);
+    let stale = call("debug_continue", json!({"session": "s1", "epoch": epoch})).unwrap_err();
+    assert!(stale.starts_with("stale_epoch"), "{stale}");
+    let counted = registry.read_memory("s1", counter, 4, None).unwrap();
+    assert!(counted.chunks[0].bytes.iter().any(|byte| *byte != 0), "the loop ran");
+
+    // Disconnecting removes the remaining breakpoint and detaches.
+    call(
+        "debug_breakpoints",
+        json!({"session": "s1", "action": "set", "epoch": new_epoch, "kind": "hardware", "address": tick}),
+    )
+    .unwrap();
+    let disconnected = call("debug_disconnect", json!({"session": "s1"})).unwrap();
+    assert_eq!(disconnected["state"], "detached", "{disconnected}");
+    assert_eq!(disconnected["breakpoints_removed"], 1);
+    assert_eq!(disconnected["removal_failures"], json!([]));
     drop(qemu);
 }

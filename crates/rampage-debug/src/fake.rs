@@ -1,6 +1,9 @@
 //! A scripted gdbserver for tests: it accepts one connection over TCP or a Unix socket, answers packets from a
 //! script, and records every packet it receives. Any packet that could resume, step, set a breakpoint, write to
 //! or kill the target is a violation that fails [`Report::assert_clean`], and the stub closes the connection.
+//! A script marked [`Script::execution`] accepts the execution-control packets of step 9.2 (`vCont?`, `vCont;c`,
+//! `vCont;s:<thread>`, `c`, `s`, `Hc<thread>`, `Z0`..`Z4`/`z0`..`z4`) and the interrupt byte, which it records as
+//! [`INTERRUPT`]; writes, kill, launch, attach, signal-delivering resumes and non-stop mode stay violations.
 
 use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
@@ -49,7 +52,11 @@ pub struct Script {
     rules: Vec<Rule>,
     memory: Vec<(u64, Vec<u8>)>,
     lenient: bool,
+    execution: bool,
 }
+
+/// How the fake stub records the out-of-band interrupt byte (`0x03`) and how scripts match it.
+pub const INTERRUPT: &str = "\u{3}";
 
 impl Script {
     pub fn new() -> Self {
@@ -121,6 +128,17 @@ impl Script {
         script
     }
 
+    /// Accepts step 9.2's execution-control packets and the interrupt byte, instead of failing on them.
+    pub fn execution(mut self) -> Self {
+        self.execution = true;
+        self
+    }
+
+    /// Answers the interrupt byte with `actions` (none: the target never stops), every time.
+    pub fn on_interrupt(self, actions: Vec<Action>) -> Self {
+        self.rule(Matcher::Exact(INTERRUPT.into()), actions, 0, None)
+    }
+
     /// Answers unexpected packets with an empty (unsupported) reply instead of recording a violation.
     pub fn lenient(mut self) -> Self {
         self.lenient = true;
@@ -144,16 +162,46 @@ impl Script {
     }
 }
 
-/// Whether `packet` could change the target's execution or state. The fake stub never answers one.
+/// Whether `packet` could change the target's execution or state (`vCont?` included). A read-only script never
+/// answers one.
 pub fn execution_control(packet: &str) -> bool {
     let first = packet.as_bytes().first().copied().unwrap_or(0);
     matches!(first, b'c' | b'C' | b's' | b'S' | b'Z' | b'z' | b'M' | b'X' | b'G' | b'P' | b'k' | b'R' | b'r' | b'!')
-        || matches!(first, b'i' | b'I' | b'A' | b'b' | b'B' | b'W')
-        || (packet.starts_with("vCont") && packet != "vCont?")
+        || matches!(first, b'i' | b'I' | b'A' | b'b' | b'B' | b'W' | 0x03)
+        || packet.starts_with("vCont")
         || ["vKill", "vRun", "vAttach", "vFile", "vFlash", "vStopped", "Hc", "qRcmd", "QNonStop", "QAllow"]
             .iter()
             .any(|prefix| packet.starts_with(prefix))
         || packet.contains(":write:")
+}
+
+/// Whether `packet` is one of step 9.2's execution-control packets, which a [`Script::execution`] script accepts.
+/// Written independently of the client's allowlist, so the two check each other.
+pub fn step_9_2_execution(packet: &str) -> bool {
+    let thread = |text: &str| {
+        let ids: Vec<&str> = match text.strip_prefix('p') {
+            Some(rest) => rest.split('.').collect(),
+            None => vec![text],
+        };
+        (1..=2).contains(&ids.len())
+            && ids.iter().all(|id| !id.is_empty() && id.len() <= 16 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+            && ids.iter().all(|id| id.bytes().any(|b| b != b'0'))
+            && (ids.len() == 2) == text.starts_with('p')
+    };
+    let point = |rest: &str| {
+        let fields: Vec<&str> = rest.split(',').collect();
+        fields.len() == 3
+            && matches!(fields[0], "0" | "1" | "2" | "3" | "4")
+            && fields[1..].iter().all(|field| !field.is_empty() && field.bytes().all(|b| b.is_ascii_hexdigit()))
+    };
+    match packet {
+        INTERRUPT | "vCont?" | "vCont;c" | "c" | "s" | "Hc-1" => true,
+        _ => {
+            packet.strip_prefix("vCont;s:").is_some_and(thread)
+                || packet.strip_prefix("Hc").is_some_and(thread)
+                || packet.strip_prefix('Z').or_else(|| packet.strip_prefix('z')).is_some_and(point)
+        }
+    }
 }
 
 /// What the stub saw.
@@ -294,6 +342,7 @@ fn serve(mut stream: impl Stream, mut script: Script) -> Report {
                     continue;
                 }
                 Frame::Ack | Frame::Notification => continue,
+                Frame::Noise(0x03) => INTERRUPT.as_bytes().to_vec(),
                 Frame::Noise(byte) => {
                     report.violations.push(format!("client sent a stray byte {byte:#04x}"));
                     continue;
@@ -301,8 +350,9 @@ fn serve(mut stream: impl Stream, mut script: Script) -> Report {
             };
             let packet = String::from_utf8_lossy(&packet::unescape(&raw).unwrap_or(raw)).into_owned();
             report.received.push(packet.clone());
-            if execution_control(&packet) {
-                report.violations.push(format!("forbidden execution-control packet `{packet}`"));
+            if execution_control(&packet) && !(script.execution && step_9_2_execution(&packet)) {
+                let kind = if script.execution { "forbidden" } else { "forbidden (read-only script)" };
+                report.violations.push(format!("{kind} execution-control packet `{packet:?}`"));
                 break 'connection;
             }
             let matches = |rule: &Rule| {
@@ -343,7 +393,8 @@ fn serve(mut stream: impl Stream, mut script: Script) -> Report {
                     vec![Action::Reply(String::new())]
                 }
             };
-            if acks {
+            // The interrupt byte is not a packet and is never acknowledged.
+            if acks && packet != INTERRUPT {
                 let _ = stream.write_all(b"+");
             }
             for action in actions {

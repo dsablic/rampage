@@ -139,8 +139,10 @@ impl Group {
                 "Toolchain and container metadata: Go build info, Rust dependency audit data, PE resources and load config, PyInstaller archives and WebAssembly modules."
             }
             Group::Debug => {
-                "Read-only sessions with the operator-allowed GDB remote stubs: connect, status, registers, memory, \
-                 modules and memory maps, snapshot to a file, detach. No resume, step, breakpoints, writes or kill."
+                "Sessions with the operator-allowed GDB remote stubs: connect, status, registers, memory, modules and \
+                 memory maps, snapshot to a file; all-stop execution control (continue, wait, interrupt, step, \
+                 breakpoints and watchpoints by runtime address, epoch-checked); detach. No writes, signal delivery \
+                 or kill."
             }
         }
     }
@@ -195,6 +197,9 @@ pub enum Effect {
     Annotations,
     ShowAddress,
     FileWrite,
+    /// Changes a debug target's execution state: resumes, steps, interrupts, inserts or removes breakpoints, or
+    /// detaches. Not read-only, not idempotent, and reaches outside rampage.
+    Execution,
 }
 
 /// The JSON schema of a tool taking arguments `A`.

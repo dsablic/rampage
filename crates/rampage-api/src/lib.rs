@@ -95,8 +95,9 @@ pub use data::{
     MAX_DATA_RESULT_BYTES, inspect_native_data, resolve_data_address,
 };
 pub use debug_control::{
-    DebugBytes, DebugConnection, DebugDisconnected, DebugMemory, DebugModules, DebugRange, DebugRegisters,
-    DebugRegistry, DebugSnapshot, DebugStatus, MAX_DEBUG_SESSIONS, tool_read_limit,
+    DEFAULT_RUN_WAIT_MS, DebugBreakKind, DebugBreakpoint, DebugBreakpoints, DebugBytes, DebugConnection,
+    DebugDisconnected, DebugMemory, DebugModules, DebugRange, DebugRegisters, DebugRegistry, DebugRun, DebugSnapshot,
+    DebugStatus, DebugSteps, MAX_DEBUG_SESSIONS, MAX_RUN_WAIT_MS, tool_read_limit,
 };
 pub use debug_import::DebugImport;
 pub use debug_layout_import::{
@@ -196,6 +197,8 @@ pub use propagation::{
 pub use pyinstaller::{MAX_PYINSTALLER_PAGE, PyInstallerMiss, PyInstallerPage, PyInstallerResult, pyinstaller_archive};
 pub use rampage_analysis::triage::Triage;
 pub use rampage_capabilities::Capability;
+/// The flag that cancels a debug tool's wait or long read; see [`tools::DebugTool::call_cancellable`].
+pub use rampage_debug::Cancel as DebugCancel;
 pub use rampage_decompiler::VariableStorage;
 pub use rampage_decompiler::results::RecoveryStatus;
 pub use rampage_decompiler::worker::SupervisedMetrics;

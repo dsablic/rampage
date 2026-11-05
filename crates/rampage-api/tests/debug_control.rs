@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
-//! The debug registry and tools against the scripted fake stub. The stub fails any test that receives an
-//! execution-control packet (resume, step, breakpoint, write or kill).
+//! The debug registry and inspection tools against the scripted fake stub. These scripts are read-only: the stub
+//! fails any test that receives an execution-control packet (resume, step, breakpoint, write or kill).
 
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::PathBuf;
@@ -207,12 +207,11 @@ fn debug_tools_validate_arguments_and_bound_reads() {
     assert_eq!(status["threads"]["items"][0]["extra"], "CPU#0 [halted ]");
     let snapshot = tools.iter().find(|tool| tool.name == "debug_snapshot").unwrap();
     assert_eq!(snapshot.effect, rampage_api::tools::Effect::FileWrite);
-    assert!(
-        tools
-            .iter()
-            .filter(|tool| tool.name != "debug_snapshot")
-            .all(|tool| tool.effect == rampage_api::tools::Effect::None)
-    );
+    for tool in
+        tools.iter().filter(|tool| ["debug_status", "debug_registers", "debug_read_memory"].contains(&tool.name))
+    {
+        assert_eq!(tool.effect, rampage_api::tools::Effect::None, "{}", tool.name);
+    }
     assert_eq!(call("debug_disconnect", json!({"session": "s1"})).unwrap()["state"], "detached");
     drop(registry);
     stub.finish().assert_clean();
