@@ -241,12 +241,13 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
                 return Err(format!("--rerun {spec}: expected TASK:SERVER:REPETITION"));
             }
         }
+        // The first pass's rows stay in runs.before-rerun.jsonl; each pass starts from the current report.
         let kept = out_dir.join("runs.before-rerun.jsonl");
         if !kept.exists() {
             std::fs::copy(&rows_path, &kept).map_err(|error| format!("{}: {error}", rows_path.display()))?;
-            std::fs::copy(out_dir.join("report.json"), out_dir.join("report.before-rerun.json"))
-                .map_err(|error| format!("no measured report to rerun into: {error}"))?;
         }
+        std::fs::copy(out_dir.join("report.json"), out_dir.join("report.before-rerun.json"))
+            .map_err(|error| format!("no measured report to rerun into: {error}"))?;
         for line in read(&rows_path)?.lines().filter(|line| !line.trim().is_empty()) {
             recorded.push(serde_json::from_str(line).map_err(|error| format!("{}: {error}", rows_path.display()))?);
         }
@@ -296,7 +297,13 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
                     let Some(earlier) = earlier else { return Err(format!("--rerun {spec}: no recorded run")) };
                     let name = format!("{}-r{repetition}", task.id);
                     let from = out_dir.join("runs").join(server).join(&name);
-                    let to = out_dir.join("runs/superseded").join(server).join(&name);
+                    // A run superseded twice keeps both earlier directories: name, name.2, ...
+                    let mut to = out_dir.join("runs/superseded").join(server).join(&name);
+                    let mut copy = 1;
+                    while to.exists() {
+                        copy += 1;
+                        to = out_dir.join("runs/superseded").join(server).join(format!("{name}.{copy}"));
+                    }
                     std::fs::create_dir_all(to.parent().expect("has a parent")).map_err(|error| error.to_string())?;
                     std::fs::rename(&from, &to).map_err(|error| format!("{}: {error}", from.display()))?;
                     let mut value = json!(earlier);
@@ -385,18 +392,27 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
                 report[key] = value.clone();
             }
         }
-        report["superseded_runs"] = json!(superseded);
-        report["rerun"] = json!({"reason": args.rerun_reason, "runs": args.rerun,
+        let mut all_superseded = earlier["superseded_runs"].as_array().cloned().unwrap_or_default();
+        all_superseded.extend(superseded);
+        report["superseded_runs"] = json!(all_superseded);
+        let mut reruns = match &earlier["rerun"] {
+            Value::Array(passes) => passes.clone(),
+            Value::Null => Vec::new(),
+            pass => vec![pass.clone()],
+        };
+        reruns.push(json!({"reason": args.rerun_reason, "runs": args.rerun,
+            "neutral_suite_sha256": hex(&Sha256::digest(suite_text.as_bytes())),
+            "task_definition_sha256": task_hashes(&task_directory, &tasks)?,
             "commit": git(&root, &["rev-parse", "HEAD"]), "versions": versions,
             "run_unix_ms": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                .ok().map(|duration| duration.as_millis() as u64)});
+                .ok().map(|duration| duration.as_millis() as u64)}));
+        report["rerun"] = json!(reruns);
         report
     } else if args.rescore {
+        // Each rescore starts from the current report, whose versions, time and protocol are the measurement's.
         let earlier_path = out_dir.join("report.before-rescore.json");
-        if !earlier_path.is_file() {
-            std::fs::copy(&report_path, &earlier_path)
-                .map_err(|error| format!("{}: no measured report to rescore: {error}", report_path.display()))?;
-        }
+        std::fs::copy(&report_path, &earlier_path)
+            .map_err(|error| format!("{}: no measured report to rescore: {error}", report_path.display()))?;
         let earlier: Value = serde_json::from_str(&read(&earlier_path)?).map_err(|error| error.to_string())?;
         rescored_report(&earlier, report, git(&root, &["rev-parse", "HEAD"]), &args.rescore_reason)
     } else {

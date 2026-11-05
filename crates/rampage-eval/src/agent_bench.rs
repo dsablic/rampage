@@ -345,6 +345,10 @@ pub struct RunRow {
     /// Partial credit for set answers (Jaccard index, defined before any run); `None` for exact contracts. A run
     /// without a scorable answer gets 0.
     pub partial: Option<f64>,
+    /// Correct once an extra `"status": "ok"` field, a format slip, is dropped from the answer object; equals
+    /// the strict outcome otherwise. A reporting variant beside the strict score, never instead of it.
+    #[serde(default)]
+    pub lenient: bool,
     /// How the answer object was found; `None` when there was none.
     pub extraction: Option<Extraction>,
     /// Calls to the server's tools that the client ran (refused calls and ToolSearch excluded).
@@ -396,6 +400,13 @@ pub fn score(
         }
         other => task.check(other).outcome,
     };
+    let lenient = outcome == TaskOutcome::AnswerMatches
+        || matches!(&attempt, TaskAttempt::Answer(Value::Object(object))
+        if object.get("status").and_then(Value::as_str) == Some("ok") && {
+            let mut trimmed = object.clone();
+            trimmed.remove("status");
+            expected.matches(&Value::Object(trimmed))
+        });
     Ok(RunRow {
         task_id: task.id.clone(),
         kind: task.kind,
@@ -405,6 +416,7 @@ pub fn score(
         outcome,
         failure,
         partial,
+        lenient,
         extraction,
         tool_calls: server_calls.len() as u64,
         tool_errors: server_calls.iter().filter(|call| call.is_error).count() as u64,
@@ -446,6 +458,7 @@ pub fn spread(values: impl IntoIterator<Item = u64>) -> Value {
 
 fn group_summary(rows: &[&RunRow]) -> Value {
     let correct = rows.iter().filter(|row| row.outcome == TaskOutcome::AnswerMatches).count();
+    let correct_lenient = rows.iter().filter(|row| row.lenient).count();
     let mut failures: BTreeMap<FailureKind, usize> = BTreeMap::new();
     for row in rows {
         if let Some(kind) = row.failure {
@@ -469,7 +482,7 @@ fn group_summary(rows: &[&RunRow]) -> Value {
     let limits_hit =
         rows.iter().filter(|row| matches!(row.runner_exit, RunnerExit::Timeout | RunnerExit::MaxTurns)).count();
     json!({
-        "correct": correct, "runs": rows.len(), "partial_credit_mean": partial,
+        "correct": correct, "correct_lenient": correct_lenient, "runs": rows.len(), "partial_credit_mean": partial,
         "partial_credit_runs": partial_runs, "limits_hit": limits_hit,
         "tool_calls": spread(rows.iter().map(|row| row.tool_calls)),
         "tool_errors": spread(rows.iter().map(|row| row.tool_errors)),
@@ -612,13 +625,16 @@ pub fn markdown_tables(summary: &Value) -> String {
         .filter(|categories| categories.len() > 1 || categories.keys().any(|category| category != "uncategorized"))
     {
         output.push_str("\nPer category (analysis tasks):\n\n");
-        output.push_str("| Category | Server | Correct | Partial credit, mean | Tool calls | Wall s | Failures |\n");
-        output.push_str("| --- | --- | --: | --: | --: | --: | --- |\n");
+        output
+            .push_str("| Category | Server | Correct | Lenient format | Partial credit, mean | Tool calls | Wall s | ");
+        output.push_str("Failures |\n| --- | --- | --: | --: | --: | --: | --: | --- |\n");
         for (category, servers) in categories {
             for (server, group) in servers.as_object().into_iter().flatten() {
                 output.push_str(&format!(
-                    "| {category} | {server} | {}/{} | {} | {} | {} | {} |\n",
+                    "| {category} | {server} | {}/{} | {}/{} | {} | {} | {} | {} |\n",
                     group["correct"],
+                    group["runs"],
+                    group["correct_lenient"],
                     group["runs"],
                     group["partial_credit_mean"].as_f64().map_or("–".to_owned(), |value| format!("{value:.3}")),
                     cell(&group["tool_calls"]),

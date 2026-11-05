@@ -371,8 +371,27 @@ fn rows_carry_category_and_partial_credit_into_the_summary() {
     assert_eq!(summary["categories"]["cpp"]["rea"]["partial_credit_mean"], 0.5);
     assert_eq!(summary["limits_hit"][0]["server"], "rampage");
     let tables = markdown_tables(&summary);
-    assert!(tables.contains("| cpp | rea | 0/1 | 0.500 |"), "{tables}");
+    assert!(tables.contains("| cpp | rea | 0/1 | 0/1 | 0.500 |"), "{tables}");
     assert!(tables.contains("- cpp-hierarchy-x64-elf rampage r1: timeout"), "{tables}");
+}
+
+#[test]
+fn a_status_ok_extra_field_counts_only_in_the_lenient_variant() {
+    let suite = NeutralSuite::from_toml(NEUTRAL_V2).unwrap();
+    let tasks = suite_v2();
+    let task = tasks.iter().find(|task| task.id == "option-bit-x64-elf").unwrap();
+    let slip = score(task, &suite, "rea", 1, 0, &result(r#"{"status":"ok","option":"--snapshot"}"#, "ok")).unwrap();
+    assert_eq!(slip.outcome, TaskOutcome::AnswerMismatch);
+    assert!(slip.lenient);
+    let wrong = score(task, &suite, "rea", 2, 0, &result(r#"{"status":"ok","option":"--archive"}"#, "ok")).unwrap();
+    assert!(!wrong.lenient);
+    let other = score(task, &suite, "rea", 3, 0, &result(r#"{"note":"x","option":"--snapshot"}"#, "ok")).unwrap();
+    assert!(!other.lenient, "only the status field is forgiven");
+    let right = score(task, &suite, "rampage", 1, 0, &result(r#"{"option":"--snapshot"}"#, "ok")).unwrap();
+    assert!(right.lenient);
+    let summary = summarize(&[slip, wrong, other, right]);
+    assert_eq!(summary["servers"]["rea"]["analysis"]["correct"], 0);
+    assert_eq!(summary["servers"]["rea"]["analysis"]["correct_lenient"], 1);
 }
 
 #[test]
