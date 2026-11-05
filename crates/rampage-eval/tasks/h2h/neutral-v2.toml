@@ -143,10 +143,15 @@ exact: reset_handler without the Thumb bit, and the 5 peripheral stores as [addr
 
 [tasks.library-diff-x64-so]
 category = "diffing"
+change = """
+Reworded after the first full pass (fairness review): "changed in behaviour" also fits calc_scaled_sum, which
+only calls the changed calc_scale. The runs under the old wording are kept as superseded.
+"""
 question = """
 The first file is the old build of a shared library and the second file is a new build of the same library. Which
-exported functions changed in behaviour between the two builds? Ignore differences that come only from code or data
-having moved to other addresses. Return the exported function names in an array named changed.
+exported functions had their own code changed between the two builds? Ignore differences that come only from
+relocated addresses, such as changed call, jump or data displacements. Return the exported function names in an
+array named changed.
 """
 scoring = """
 string_set: exactly the 3 changed exported names. Partial credit is the Jaccard index of the answered and expected sets (0 for a malformed answer, one with duplicates, or no answer).

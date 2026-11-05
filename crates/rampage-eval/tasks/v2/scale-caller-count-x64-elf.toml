@@ -16,8 +16,8 @@ capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
 [fixture]
 id = "hugo-v0140-x64-elf"
 path = "target/bench/v2/scale/hugo-x64-stripped.elf"
-sha256 = "290b5a355e365a82a89ad3c9e88ff20d84163c25230b6f79fecaba8b860fe573"
-source = "github.com/gohugoio/hugo@v0.140.0 (Go module proxy)"
+sha256 = "20bb4db28668ff330655c1667972a15bdc08feb881c4550194cea8277a544aa9"
+source = "github.com/gohugoio/hugo@v0.140.0 (Go module proxy), built with go1.23.4"
 build = "tools/agent-bench/v2/build-scale.sh"
 
 [answer]

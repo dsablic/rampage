@@ -3,8 +3,9 @@ id = "library-diff-x64-so"
 kind = "analysis"
 question = """
 The first file is the old build of a shared library and the second file is a new build of the same library. Which
-exported functions changed in behaviour between the two builds? Ignore differences that come only from code or data
-having moved to other addresses. Return the exported function names in an array named changed.
+exported functions had their own code changed between the two builds? Ignore differences that come only from
+relocated addresses, such as changed call, jump or data displacements. Return the exported function names in an
+array named changed.
 """
 truth_reference = """
 src/libcalc.c: CALC_V2 changes calc_scale, calc_clamp and calc_checksum only; cross-checked by comparing the two twins' disassembly with addresses masked; derive-truth.py.
