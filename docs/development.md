@@ -36,7 +36,8 @@ optimized dependencies.
 
 The default nextest profile in `.config/nextest.toml` skips 23 of the heaviest tests (roster matrices, type
 propagation, Go decompilation), which take about a third of the suite's CPU time. Run everything with
-`cargo nextest run --profile full` before committing; `cargo test` and CI ignore the file.
+`cargo nextest run --profile full` before committing; `cargo test` ignores the file. CI's macOS job runs
+`cargo test`; its Linux workspace job runs the default nextest profile.
 
 ### One integration-test binary per crate
 
