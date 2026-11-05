@@ -387,11 +387,15 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
         let earlier: Value = serde_json::from_str(&read(&out_dir.join("report.before-rerun.json"))?)
             .map_err(|error| error.to_string())?;
         let mut report = report;
-        for key in ["versions", "run_unix_ms", "protocol", "attachments"] {
+        for key in ["versions", "run_unix_ms", "protocol"] {
             if let Some(value) = earlier.get(key) {
                 report[key] = value.clone();
             }
         }
+        // Earlier attachments stay; this pass's --attach entries add to them or replace one of the same name.
+        let mut attached = earlier["attachments"].as_object().cloned().unwrap_or_default();
+        attached.extend(report["attachments"].as_object().cloned().unwrap_or_default());
+        report["attachments"] = Value::Object(attached);
         let mut all_superseded = earlier["superseded_runs"].as_array().cloned().unwrap_or_default();
         all_superseded.extend(superseded);
         report["superseded_runs"] = json!(all_superseded);
