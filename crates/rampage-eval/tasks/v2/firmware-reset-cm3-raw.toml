@@ -1,0 +1,30 @@
+version = 1
+id = "firmware-reset-cm3-raw"
+kind = "analysis"
+question = """
+The file is a raw flash image for an ARM Cortex-M3 microcontroller (Thumb-2, little-endian), mapped at address 0x0
+with no file header; it begins with the interrupt vector table. Find the reset handler, and every 32-bit store it
+performs, directly or through the functions it calls, into the peripheral region 0x40000000-0x5FFFFFFF before it
+enters its endless loop. Return reset_handler as the handler's code address without the Thumb bit, and writes as an
+array of [address, value] pairs in program order.
+"""
+truth_reference = """
+src/blinky.c: reset_handler calls clock_enable (two stores), stores to SysTick (0xE000E010, outside the range), then gpio_setup (three stores); reset_handler = 0x94 from the ELF twin's symbols and vector entry 1 of the image (0x95); derive-truth.py.
+"""
+required_capabilities = ["raw_loading", "disassemble"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "blinky-cm3-raw"
+path = "tests/fixtures/bench-v2/bin/blinky-cm3.bin"
+sha256 = "6122a47ddbe3a05b91369c208671128fb1af6d1955538c57b0a9e3df381e65b9"
+source = "tests/fixtures/bench-v2/src/blinky.c"
+build = "tests/fixtures/bench-v2/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+reset_handler = 148
+writes = [[1074782472, 32], [1074782304, 126761681], [1073894400, 14], [1073894684, 31], [1073893432, 4]]

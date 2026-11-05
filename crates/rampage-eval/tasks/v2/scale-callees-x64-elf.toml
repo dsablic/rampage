@@ -1,0 +1,27 @@
+version = 1
+id = "scale-callees-x64-elf"
+kind = "analysis"
+question = """
+This is a large stripped Go executable for x86-64 Linux. List the distinct functions that
+github.com/gohugoio/hugo/resources/images.DecodeImageConfig calls directly, leaving out functions of the Go runtime
+package (names beginning with runtime.). Return their full Go symbol names, as the Go runtime records them, in an
+array named callees.
+"""
+truth_reference = """
+Direct CALL targets of github.com/gohugoio/hugo/resources/images.DecodeImageConfig in `go tool objdump` of the unstripped twin, without runtime.*; go_graph.py and derive-truth.py.
+"""
+required_capabilities = ["go_metadata", "xrefs", "scale"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "hugo-v0140-x64-elf"
+path = "target/bench/v2/scale/hugo-x64-stripped.elf"
+sha256 = "290b5a355e365a82a89ad3c9e88ff20d84163c25230b6f79fecaba8b860fe573"
+source = "github.com/gohugoio/hugo@v0.140.0 (Go module proxy)"
+build = "tools/agent-bench/v2/build-scale.sh"
+
+[answer]
+kind = "string_set"
+field = "callees"
+values = ["github.com/gohugoio/hugo/resources/images.hexStringToColorGo", "internal/stringslite.Index", "strconv.Atoi", "strings.ToLower", "strings.genSplit"]

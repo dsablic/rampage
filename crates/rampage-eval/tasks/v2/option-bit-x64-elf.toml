@@ -1,0 +1,25 @@
+version = 1
+id = "option-bit-x64-elf"
+kind = "analysis"
+question = """
+Which single command-line option, given alone, makes this program open the file named backup.tar? Return the option
+exactly as it is typed on the command line, as option.
+"""
+truth_reference = """
+src/backup.c: write_archive (fopen "backup.tar") runs when flag bit 0x08 is set, which the options table gives to --snapshot; a host build run with --snapshot alone creates backup.tar (harness run); derive-truth.py.
+"""
+required_capabilities = ["decompile", "typed_data"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "backup-x64-elf"
+path = "tests/fixtures/bench-v2/bin/backup-x64.elf"
+sha256 = "18ee955b29f566b500a9d0982828f66aa61821a82379c487e9b3e9a1c61fe625"
+source = "tests/fixtures/bench-v2/src/backup.c"
+build = "tests/fixtures/bench-v2/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+option = "--snapshot"

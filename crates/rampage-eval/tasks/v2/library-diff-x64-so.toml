@@ -1,0 +1,31 @@
+version = 1
+id = "library-diff-x64-so"
+kind = "analysis"
+question = """
+The first file is the old build of a shared library and the second file is a new build of the same library. Which
+exported functions changed in behaviour between the two builds? Ignore differences that come only from code or data
+having moved to other addresses. Return the exported function names in an array named changed.
+"""
+truth_reference = """
+src/libcalc.c: CALC_V2 changes calc_scale, calc_clamp and calc_checksum only; cross-checked by comparing the two twins' disassembly with addresses masked; derive-truth.py.
+"""
+required_capabilities = ["diff"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "libcalc-v1-x64-so"
+path = "tests/fixtures/bench-v2/bin/libcalc-v1-x64.so"
+sha256 = "8f5aaae3bf3422deb8b40224df700fab25e7a216292236dc1680683e456c8730"
+source = "tests/fixtures/bench-v2/src/libcalc.c"
+build = "tests/fixtures/bench-v2/build.sh"
+
+[[fixture.companions]]
+name = "new-build.so"
+path = "tests/fixtures/bench-v2/bin/libcalc-v2-x64.so"
+sha256 = "441257d6b94bd9611ee40039df012e5dc68b04d93b098e92fb6760fdb7b426c8"
+
+[answer]
+kind = "string_set"
+field = "changed"
+values = ["calc_checksum", "calc_clamp", "calc_scale"]
