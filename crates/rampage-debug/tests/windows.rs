@@ -237,7 +237,19 @@ fn an_interrupt_stops_in_a_new_thread_that_reads_and_steps_pass_over() {
                     5,
                     "",
                 ))],
-            ),
+            )
+            // The continue after it names every thread but the parked break-in thread.
+            .once(
+                &format!("vCont;c:{MAIN_THREAD:x};c:{SECOND_THREAD:x}"),
+                vec![Action::Reply(windows::gdbserver_stop(
+                    &process,
+                    &process.at(EXE_BASE + 0x1008),
+                    MAIN_THREAD,
+                    0x0b,
+                    "",
+                ))],
+            )
+            .once(windows::SIGINFO_REQUEST, vec![Action::Reply("E01".into())]),
     );
     let session = connect(&stub);
     let run = session.resume(Some(1), Duration::from_millis(50), &Cancel::new()).unwrap();
@@ -257,10 +269,93 @@ fn an_interrupt_stops_in_a_new_thread_that_reads_and_steps_pass_over() {
     let explicit = session.registers(Some(thread(SECOND_THREAD))).unwrap();
     assert_eq!(explicit.thread, Some(thread(SECOND_THREAD)));
 
+    // gdbserver would run the break-in thread into its int3 again; it stays suspended while the others run.
+    let run = session.resume(Some(steps.epoch), wait(), &Cancel::new()).unwrap();
+    let event = run.event.unwrap();
+    assert_eq!((event.reason, event.thread), (StopCause::Signal, Some(thread(MAIN_THREAD))));
+    assert_eq!(session.registers(None).unwrap().thread, Some(thread(MAIN_THREAD)));
+
     session.detach().unwrap();
     let report = stub.finish();
     report.assert_clean();
+    let interrupt = report.received.iter().position(|packet| packet == INTERRUPT).unwrap();
+    assert!(!report.received[interrupt..].iter().any(|packet| packet == "vCont;c"), "{:?}", report.received);
     assert!(report.received.iter().any(|packet| packet == INTERRUPT));
+}
+
+#[test]
+fn gdbserver_before_16_is_recognized_without_an_os_abi_and_the_peb_names_the_executable() {
+    let mut process = x64();
+    process.osabi = false;
+    // A loaded `.exe` in gdbserver's library list is not the program: the PEB says which image is.
+    process.images.push(WindowsImage {
+        path: "C:\\work\\plugin.exe".into(),
+        base: 0x7ff7_0000_0000,
+        mapped: windows::synthetic_image(true, false, 0x7ff7_0000_0000, 0x2000, None),
+    });
+    let stub = FakeStub::tcp(windows::gdbserver_windows(&process));
+    let session = connect(&stub);
+    let windows = session.info().windows.clone().unwrap();
+    assert_eq!(windows.stub, "gdbserver");
+    assert!(windows.evidence.contains("qGetTIBAddr"), "{}", windows.evidence);
+    let modules = session.modules().unwrap();
+    let main: Vec<&str> =
+        modules.modules.iter().filter(|module| module.main).map(|module| module.name.as_str()).collect();
+    assert_eq!(main, ["C:\\work\\pe-loop.exe"]);
+    assert_eq!(modules.modules[0].source, "peb");
+    session.detach().unwrap();
+    stub.finish().assert_clean();
+}
+
+#[test]
+fn a_dll_load_stop_racing_an_interrupt_leaves_the_interrupt_pending() {
+    let process = x64();
+    let stub = FakeStub::tcp(
+        executing(&process)
+            .once("vCont;c", vec![])
+            // The DLL load got ahead of the Ctrl-Break: signal 0 with `library`, in the main thread.
+            .on_interrupt(vec![Action::Reply(
+                windows::gdbserver_stop(&process, &process.registers, MAIN_THREAD, 0, "") + "library:;",
+            )])
+            // The interrupt's own stop, after the next continue: DBG_CONTROL_BREAK (SIGINT) in a new thread.
+            .once(
+                "vCont;c",
+                vec![Action::Reply(windows::gdbserver_stop(
+                    &process,
+                    &process.at(NTDLL_BASE + 0x1600),
+                    BREAKIN_THREAD,
+                    2,
+                    "",
+                ))],
+            )
+            .once(
+                windows::SIGINFO_REQUEST,
+                vec![windows::siginfo(&windows::exception_record(
+                    true,
+                    pe::DBG_CONTROL_BREAK,
+                    NTDLL_BASE + 0x1600,
+                    &[],
+                ))],
+            ),
+    );
+    let session = connect(&stub);
+    session.resume(Some(1), Duration::from_millis(50), &Cancel::new()).unwrap();
+    let run = session.interrupt(wait(), &Cancel::new()).unwrap();
+    let event = run.event.unwrap();
+    assert_eq!((event.reason, event.signal), (StopCause::Signal, Some(0)));
+    assert!(event.reasons.contains(&StopReason::Library));
+    assert_eq!(session.registers(None).unwrap().thread, Some(thread(MAIN_THREAD)));
+    let run = session.resume(Some(run.epoch), wait(), &Cancel::new()).unwrap();
+    let event = run.event.unwrap();
+    assert_eq!((event.reason, event.thread), (StopCause::Interrupted, Some(thread(BREAKIN_THREAD))));
+    assert_eq!(
+        event.exception.as_ref().and_then(Exception::windows).map(|exception| exception.name),
+        Some("DBG_CONTROL_BREAK")
+    );
+    // Ctrl-Break leaves the pc alone, so nothing is parked: the next continue is a plain one.
+    assert!(!event.warnings.iter().any(|warning| warning.contains("suspended")), "{:?}", event.warnings);
+    session.detach().unwrap();
+    stub.finish().assert_clean();
 }
 
 #[test]

@@ -26,6 +26,8 @@ const MAX_SECTIONS: usize = 96;
 const MAX_DEBUG_ENTRIES: usize = 16;
 /// Most relocation entries read from one image.
 pub const MAX_RELOCATIONS: usize = 1 << 20;
+/// Most relocation entries of a type the reader does not know (assumed to patch 8 bytes) in one image.
+pub const MAX_UNKNOWN_RELOCATIONS: usize = 256;
 /// gdbserver reports a DLL at its base plus this, "the offset from 0 of the first byte in an image - because of
 /// the file header and the section alignment" (`gdbserver/win32-low.cc`, `handle_load_dll` and
 /// `handle_unload_dll`: `load_addr += 0x1000`). It is a constant, not the image's first section RVA.
@@ -248,6 +250,7 @@ pub fn relocations(file: &[u8], header: &PeHeader) -> Result<Vec<(u32, u8)>, Str
         .get(at..at.saturating_add(size as usize))
         .ok_or("the base relocation directory runs past the end of the file")?;
     let mut spans = Vec::new();
+    let mut unknown = 0usize;
     let mut offset = 0usize;
     while offset + 8 <= table.len() {
         let page = u32_at(table, offset).expect("in bounds");
@@ -255,6 +258,9 @@ pub fn relocations(file: &[u8], header: &PeHeader) -> Result<Vec<(u32, u8)>, Str
         if block < 8 || offset + block > table.len() {
             return Err(format!("malformed base relocation block at directory offset {offset:#x}"));
         }
+        // Every entry patches at most 8 bytes, so the spans cover at most 8 * MAX_RELOCATIONS bytes; entries of a
+        // type this reader does not know are allowed only a few times, so a hostile table cannot have most of an
+        // image skipped by them.
         let mut parameter = false;
         for entry in (offset + 8..offset + block).step_by(2).filter_map(|at| u16_at(table, at)) {
             // HIGHADJ's second slot is its parameter, not an entry.
@@ -270,7 +276,17 @@ pub fn relocations(file: &[u8], header: &PeHeader) -> Result<Vec<(u32, u8)>, Str
                     parameter = true;
                     2
                 }
-                _ => 8,
+                10 => 8,
+                _ => {
+                    unknown += 1;
+                    if unknown > MAX_UNKNOWN_RELOCATIONS {
+                        return Err(format!(
+                            "the image has more than {MAX_UNKNOWN_RELOCATIONS} base relocations of types this reader \
+                             does not know (type {kind})"
+                        ));
+                    }
+                    8
+                }
             };
             if spans.len() == MAX_RELOCATIONS {
                 return Err(format!("the image has more than {MAX_RELOCATIONS} base relocations"));
@@ -599,6 +615,20 @@ mod tests {
         let mut broken = bytes.clone();
         broken[0x404..0x408].copy_from_slice(&0x1000u32.to_le_bytes());
         assert!(relocations(&broken, &header).is_err());
+        // Entries of an unknown type (assumed 8 bytes each) are allowed only a few times.
+        let mut hostile = bytes.clone();
+        hostile.resize(0x400 + 8 + 2 * (MAX_UNKNOWN_RELOCATIONS + 1), 0);
+        let block = (8 + 2 * (MAX_UNKNOWN_RELOCATIONS + 1)) as u32;
+        hostile[0x404..0x408].copy_from_slice(&block.to_le_bytes());
+        for index in 0..=MAX_UNKNOWN_RELOCATIONS {
+            let at = 0x408 + 2 * index;
+            hostile[at..at + 2].copy_from_slice(&(0xb000u16 | (index as u16 & 0xfff)).to_le_bytes());
+        }
+        let mut header = PeHeader::parse(&hostile).unwrap();
+        header.directories[DIRECTORY_BASERELOC].1 = block;
+        header.sections[1].raw_size = 0x400;
+        let error = relocations(&hostile, &header).unwrap_err();
+        assert!(error.contains("types this reader does not know"), "{error}");
         assert!(PeHeader::parse(&bytes[..0x100]).is_none());
         let mut rng = crate::packet::tests::Rng::new(17);
         for _ in 0..2000 {

@@ -174,7 +174,7 @@ fn binds_the_executable_by_codeview_at_an_aslr_slide_skipping_relocated_bytes() 
     assert_eq!(hex(&binding["slide"]), BASE - 0x1_4000_0000);
     assert_eq!(binding["verification"]["outcome"], "matched", "{bound}");
     let detail = binding["verification"]["detail"].as_str().unwrap();
-    assert!(detail.contains("base relocations patch were left out"), "{detail}");
+    assert!(detail.contains("bytes the loader rewrites") && !detail.contains(" 0 bytes the loader"), "{detail}");
 
     let modules = harness.call("debug_modules", json!({"session": "s1"})).unwrap();
     let main = &modules["modules"]["items"][0];
@@ -391,4 +391,141 @@ fn a_wow64_process_binds_the_x86_fixture_and_steps_out_by_esp() {
     assert_eq!(hex(&out["steps"][0]["return_address"]), back);
     assert_eq!(out["locations"]["pc"]["location"]["function"], "start", "{out}");
     finish(stub, harness);
+}
+
+#[test]
+fn an_aslr_image_at_its_preferred_base_binds_at_slide_zero_comparing_everything() {
+    let preferred = 0x1_4000_0000;
+    let mut process = x64_process(0, 0);
+    process.images[0].base = preferred;
+    process.images[0].mapped = windows::map_pe(&x64_file(), preferred);
+    let stub = FakeStub::tcp(windows::gdbserver_windows(&process));
+    let harness = Harness::new(&stub);
+    let bound = harness.call("debug_bind", json!({"session": "s1", "path": fixture("pe-loop-x64.exe")})).unwrap();
+    let binding = &bound["binding"];
+    assert_eq!((binding["evidence"]["kind"].as_str(), hex(&binding["slide"])), (Some("codeview"), 0), "{bound}");
+    assert_eq!(binding["verification"]["outcome"], "matched", "{bound}");
+    // Nothing moved, so no relocated byte is left out.
+    let detail = binding["verification"]["detail"].as_str().unwrap();
+    assert!(!detail.contains("rewrites"), "{detail}");
+    finish(stub, harness);
+}
+
+/// A PE32+ file whose only code section, `.text` (RVA 0x1000, 0x1000 bytes of a pattern), is covered entirely by
+/// DIR64 base relocations; `.rdata` (RVA 0x2000) holds the relocation table, the debug directory and an RSDS
+/// record.
+fn relocated_code_file() -> Vec<u8> {
+    let mut file = vec![0u8; 0x1e00];
+    file[..2].copy_from_slice(b"MZ");
+    file[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+    file[0x80..0x84].copy_from_slice(b"PE\0\0");
+    let put16 = |file: &mut Vec<u8>, at: usize, value: u16| file[at..at + 2].copy_from_slice(&value.to_le_bytes());
+    let put32 = |file: &mut Vec<u8>, at: usize, value: u32| file[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    let (coff, optional, table) = (0x84, 0x98, 0x98 + 240);
+    put16(&mut file, coff, 0x8664);
+    put16(&mut file, coff + 2, 2);
+    put16(&mut file, coff + 16, 240);
+    put16(&mut file, coff + 18, 0x22);
+    put16(&mut file, optional, 0x20b);
+    put32(&mut file, optional + 16, 0x1000);
+    file[optional + 24..optional + 32].copy_from_slice(&0x1_4000_0000u64.to_le_bytes());
+    put32(&mut file, optional + 32, 0x1000);
+    put32(&mut file, optional + 36, 0x200);
+    put32(&mut file, optional + 56, 0x3000);
+    put32(&mut file, optional + 60, 0x400);
+    put16(&mut file, optional + 68, 3);
+    put16(&mut file, optional + 70, 0x8160);
+    put32(&mut file, optional + 108, 16);
+    let relocations = 8 + 2 * 512;
+    put32(&mut file, optional + 112 + 8 * 5, 0x2000);
+    put32(&mut file, optional + 112 + 8 * 5 + 4, relocations as u32);
+    put32(&mut file, optional + 112 + 8 * 6, 0x2440);
+    put32(&mut file, optional + 112 + 8 * 6 + 4, 28);
+    for (index, (name, rva, raw, flags)) in
+        [(b".text\0\0\0", 0x1000u32, 0x400u32, 0x6000_0020u32), (b".rdata\0\0", 0x2000, 0x1400, 0x4000_0040)]
+            .into_iter()
+            .enumerate()
+    {
+        let at = table + 40 * index;
+        file[at..at + 8].copy_from_slice(name);
+        put32(&mut file, at + 8, 0x1000);
+        put32(&mut file, at + 12, rva);
+        put32(&mut file, at + 16, if index == 0 { 0x1000 } else { 0xa00 });
+        put32(&mut file, at + 20, raw);
+        put32(&mut file, at + 36, flags);
+    }
+    for (offset, byte) in file[0x400..0x1400].iter_mut().enumerate() {
+        *byte = (offset * 7 + 3) as u8;
+    }
+    put32(&mut file, 0x1400, 0x1000);
+    put32(&mut file, 0x1404, relocations as u32);
+    for index in 0..512usize {
+        put16(&mut file, 0x1408 + 2 * index, 0xa000 | (8 * index) as u16);
+    }
+    put32(&mut file, 0x1840 + 12, 2);
+    put32(&mut file, 0x1840 + 16, 32);
+    put32(&mut file, 0x1840 + 20, 0x2460);
+    put32(&mut file, 0x1840 + 24, 0x1860);
+    file[0x1860..0x1864].copy_from_slice(b"RSDS");
+    file[0x1864..0x1874].copy_from_slice(&[0x5c; 16]);
+    put32(&mut file, 0x1874, 1);
+    file[0x1878..0x1880].copy_from_slice(b"rel.pdb\0");
+    file
+}
+
+#[test]
+fn a_moved_image_whose_compared_code_is_all_relocated_is_unverified_not_matched() {
+    let directory =
+        std::env::temp_dir().canonicalize().unwrap().join(format!("rampage-relocated-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("relocated.exe");
+    let file = relocated_code_file();
+    std::fs::write(&path, &file).unwrap();
+    let mut process = x64_process(0, 0);
+    process.images[0] =
+        WindowsImage { path: "C:\\work\\relocated.exe".into(), base: BASE, mapped: windows::map_pe(&file, BASE) };
+    let stub = FakeStub::tcp(windows::gdbserver_windows(&process));
+    let harness = Harness::new(&stub);
+    let bound = harness.call("debug_bind", json!({"session": "s1", "path": path})).unwrap();
+    let binding = &bound["binding"];
+    assert_eq!(binding["evidence"]["kind"], "codeview", "{bound}");
+    let verification = &binding["verification"];
+    assert_eq!(verification["outcome"], "unverified", "{bound}");
+    assert!(verification["detail"].as_str().unwrap().contains("0 windows (0 bytes) compared"), "{bound}");
+    assert!(
+        binding["limitations"].as_array().unwrap().iter().any(|item| item.as_str().unwrap().contains("not verified")),
+        "{bound}"
+    );
+    finish(stub, harness);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn a_snapshot_records_a_bound_pe_module_at_its_preferred_base() {
+    use std::os::unix::fs::DirBuilderExt;
+    let process = x64_process(runtime(export("tick", "pe-loop-x64.exe")), 0);
+    let stub = FakeStub::tcp(windows::gdbserver_windows(&process));
+    let harness = Harness::new(&stub);
+    harness.call("debug_bind", json!({"session": "s1", "path": fixture("pe-loop-x64.exe")})).unwrap();
+    let directory =
+        std::env::temp_dir().canonicalize().unwrap().join(format!("rampage-pe-snapshot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
+    let output = directory.join("pe.json");
+    let ranges: Vec<rampage_api::DebugRange> = serde_json::from_value(
+        json!([{ "address": format!("{:#x}", BASE + 0x1000), "length": "0x80", "permissions": "r-x" }]),
+    )
+    .unwrap();
+    harness.registry.snapshot("s1", &output, &ranges).unwrap();
+    let snapshot: Value = serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+    let modules = snapshot["modules"].as_array().unwrap();
+    let main = modules.iter().find(|module| module["path"] == "C:\\work\\pe-loop-x64.exe").unwrap();
+    assert_eq!((hex(&main["image_base"]), hex(&main["runtime_base"])), (0x1_4000_0000, BASE), "{main}");
+    assert!(main["uuid"].as_str().unwrap().starts_with("pe-codeview:"));
+    // An unbound DLL keeps image_base 0: its addresses read as RVAs.
+    let ntdll = modules.iter().find(|module| module["path"].as_str().unwrap().ends_with("ntdll.dll")).unwrap();
+    assert_eq!(hex(&ntdll["image_base"]), 0);
+    finish(stub, harness);
+    std::fs::remove_dir_all(directory).unwrap();
 }

@@ -1071,6 +1071,11 @@ struct Worker {
     /// Windows: the thread the system created to answer rampage's interrupt (`DebugBreakProcess` or a console
     /// Ctrl-Break), which reads and steps without a thread pass over until the target runs again.
     breakin: Option<ThreadId>,
+    /// Windows under gdbserver: break-in threads left suspended at the int3 gdbserver moved their pc back onto;
+    /// continues resume every other thread (`vCont;c:<thread>...`).
+    parked: Vec<ThreadId>,
+    /// Windows: an interrupt whose stop has not come yet, because a DLL-load stop arrived first.
+    interrupt_pending: bool,
 }
 
 impl Worker {
@@ -1084,6 +1089,8 @@ impl Worker {
             dyld_info: None,
             register_cache: None,
             breakin: None,
+            parked: Vec::new(),
+            interrupt_pending: false,
             client: Client::new(transport),
             info: None,
             state: State::Stopped,
@@ -1237,6 +1244,12 @@ impl Worker {
         {
             info.pointer_size = Some(size);
         }
+        if info.windows.is_none() {
+            info.windows = self.probe_windows_gdbserver(&info, deadline)?;
+        }
+        if info.windows_gdbserver() {
+            self.client.allow_thread_continue();
+        }
         let (mut order, mut evidence) = self.byte_order(&info, deadline)?;
         // An LLDB stub that states the byte order (`endian:little`) of the stopped process is evidence for it.
         if order == ByteOrder::Unknown
@@ -1264,6 +1277,49 @@ impl Worker {
             info.address_mask = AddressMask::for_target(lldb.process.as_ref(), lldb.host.as_ref());
         }
         Ok(info)
+    }
+
+    /// gdbserver before 16 names no OS ABI in its description (`<osabi>` arrived with GDB 16's "gdbserver: pass
+    /// osabi to GDB in more target descriptions"). A GDB stub on x86 that lists `qXfer:libraries:read` but not the
+    /// svr4 list is taken for gdbserver on Windows when the stopped thread's TIB answers `qGetTIBAddr`, or else an
+    /// `MZ` header lies at its first library's segment address minus 0x1000.
+    fn probe_windows_gdbserver(&mut self, info: &Info, deadline: Instant) -> Result<Option<WindowsTarget>, DebugError> {
+        let candidate = info.lldb.is_none()
+            && info.feature("qXfer:libraries:read")
+            && !info.feature("qXfer:libraries-svr4:read")
+            && matches!(info.family, Family::X86 | Family::X86_64)
+            && self.state == State::Stopped;
+        let Some(thread) = self.stop_thread().or_else(|| self.threads.first().map(|thread| thread.id)) else {
+            return Ok(None);
+        };
+        if !candidate {
+            return Ok(None);
+        }
+        let reply = self.command(&format!("qGetTIBAddr:{thread}"), deadline)?;
+        let text = String::from_utf8_lossy(&reply);
+        if parse_hex_u64(text.strip_prefix("0x").unwrap_or(&text)).is_some_and(|tib| tib != 0) {
+            return Ok(Some(WindowsTarget {
+                stub: "gdbserver",
+                evidence: "a GDB stub without an OS ABI that lists Windows-style libraries and answers qGetTIBAddr \
+                           (gdbserver before 16)"
+                    .into(),
+            }));
+        }
+        let Some(bytes) = self.xfer("libraries", "", info.packet_size, MAX_XFER_BYTES, deadline)? else {
+            return Ok(None);
+        };
+        let first = maps::parse_libraries(&String::from_utf8_lossy(&bytes))
+            .ok()
+            .and_then(|modules| modules.into_iter().find_map(|module| module.segments.first().copied()));
+        let Some(segment) = first else { return Ok(None) };
+        let header =
+            self.read_small(segment.wrapping_sub(pe::GDBSERVER_SEGMENT_OFFSET), 2, info.packet_size, deadline)?;
+        Ok((header.as_deref() == Some(b"MZ")).then(|| WindowsTarget {
+            stub: "gdbserver",
+            evidence: "a GDB stub without an OS ABI whose first library has an MZ header 0x1000 below its segment \
+                       address (gdbserver before 16)"
+                .into(),
+        }))
     }
 
     /// `qHostInfo` and `qProcessInfo`, each when the stub answers it. A reply that does not parse is a limitation,
@@ -1755,8 +1811,33 @@ impl Worker {
         }
     }
 
-    /// Resumes every thread: `vCont;c`, else `c` once no `Hc<thread>` limits it.
+    /// Resumes every thread: `vCont;c`, else `c` once no `Hc<thread>` limits it. On Windows under gdbserver, with
+    /// break-in threads parked, every other thread by name (`vCont;c:<thread>;...`).
     fn resume_all(&mut self, deadline: Instant) -> Result<(), DebugError> {
+        if !self.parked.is_empty() {
+            self.threads = self.list_threads(deadline)?;
+            self.parked.retain(|parked| self.threads.iter().any(|known| known.id == *parked));
+        }
+        if !self.parked.is_empty() {
+            let packet_size = self.info.as_ref().map_or(DEFAULT_PACKET_SIZE, |info| info.packet_size);
+            let others: Vec<String> = self
+                .threads
+                .iter()
+                .filter(|thread| !self.parked.contains(&thread.id))
+                .map(|thread| format!("c:{}", thread.id))
+                .collect();
+            let packet = format!("vCont;{}", others.join(";"));
+            if others.is_empty() || packet.len() + 8 > packet_size || !self.vcont(deadline)?.continue_ {
+                return Err(DebugError::Unsupported(format!(
+                    "thread {} is parked at the int3 gdbserver moved its pc back onto, and the other threads cannot \
+                     be resumed without it ({}); disconnect to let it go, or move its pc past the int3 with \
+                     debug_write_register",
+                    self.parked[0],
+                    if others.is_empty() { "there are none" } else { "the vCont naming them does not fit a packet" }
+                )));
+            }
+            return self.resume(&packet, Origin::Continue);
+        }
         if self.vcont(deadline)?.continue_ {
             return self.resume("vCont;c", Origin::Continue);
         }
@@ -1802,7 +1883,7 @@ impl Worker {
     /// `DbgUiRemoteBreakin` or the console control handler and ends when resumed), so the first other listed
     /// thread is used instead.
     fn default_thread(&self) -> Option<ThreadId> {
-        let other = |id: &ThreadId| Some(*id) != self.breakin;
+        let other = |id: &ThreadId| Some(*id) != self.breakin && !self.parked.contains(id);
         self.stop_thread()
             .filter(other)
             .or_else(|| self.threads.iter().map(|thread| thread.id).find(other))
@@ -2068,7 +2149,8 @@ impl Worker {
     fn resume(&mut self, packet: &str, origin: Origin) -> Result<(), DebugError> {
         self.client.resume(packet)?;
         self.origin = origin;
-        self.interrupted = false;
+        // An interrupt a DLL-load stop got ahead of is still to be answered (Windows).
+        self.interrupted = std::mem::take(&mut self.interrupt_pending);
         self.breakin = None;
         self.state = State::Running;
         self.resumed_at = Some(Instant::now());
@@ -2165,6 +2247,15 @@ impl Worker {
             },
             _ => (None, Vec::new()),
         };
+        // gdbserver stops for DLL loads with signal 0 and `library` (`gdbserver/target.cc`, `mywait`); one that
+        // arrives after an interrupt is not its answer, which comes after the next resume.
+        let library = matches!(&stop, StopReply::Signal { reasons, .. } if reasons.contains(&StopReason::Library));
+        let interrupted = if info.is_windows() && interrupted && library {
+            self.interrupt_pending = true;
+            false
+        } else {
+            interrupted
+        };
         let (mut reason, breakpoints, watch) =
             exec::classify(&stop, self.origin, interrupted, &pcs, &mut self.breakpoints);
         // debugserver answers the interrupt byte by stopping the process with SIGSTOP (17), reported as such
@@ -2202,7 +2293,24 @@ impl Worker {
             && matches!(&stop, StopReply::Signal { reasons, .. } if reasons.contains(&StopReason::SwBreak));
         let ours =
             self.breakpoints.iter().any(|entry| entry.kind == BreakKind::Software && pcs.contains(&entry.address));
-        if info.windows_gdbserver() && rewound && !ours {
+        if info.windows_gdbserver()
+            && rewound
+            && !ours
+            && reason == StopCause::Interrupted
+            && let Some(thread) = thread
+            && new_thread
+        {
+            // gdbserver's resume continues only the threads a vCont names (`win32-low.cc`,
+            // `win32_process_target::resume`), so the break-in thread can stay suspended at its int3; it exists
+            // only to trap. Detaching lets it run, and `DbgUiRemoteBreakin`'s exception handler absorbs the int3.
+            if !self.parked.contains(&thread) {
+                self.parked.push(thread);
+            }
+            warnings.push(format!(
+                "gdbserver moved thread {thread}'s pc back onto DebugBreakProcess's int3; rampage leaves that thread \
+                 suspended, and continues resume every other thread by name until it is gone or rampage detaches"
+            ));
+        } else if info.windows_gdbserver() && rewound && !ours {
             warnings.push(
                 "gdbserver moved this thread's pc back onto an int3 that is not one of rampage's breakpoints \
                  (DebugBreakProcess's, or one compiled into the program); continuing executes it again and stops \
@@ -3574,7 +3682,11 @@ impl Worker {
                 unreadable[0]
             ));
         }
-        if let Some(main) = result.modules.iter_mut().find(|module| module.pe.as_ref().is_some_and(|pe| !pe.dll)) {
+        // lldb-server lists the executable: the image that is not a DLL. gdbserver never does (an `.exe` it lists
+        // was loaded as a library), so there the PEB says which image is the program.
+        if !info.windows_gdbserver()
+            && let Some(main) = result.modules.iter_mut().find(|module| module.pe.as_ref().is_some_and(|pe| !pe.dll))
+        {
             main.main = true;
             return Ok(());
         }

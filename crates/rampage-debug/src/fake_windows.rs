@@ -56,6 +56,9 @@ pub struct WindowsProcess {
     pub exec_file: String,
     /// Extra memory: `(address, bytes)`, such as the stack.
     pub memory: Vec<(u64, Vec<u8>)>,
+    /// Whether gdbserver names the `Windows` OS ABI in its description, as gdbserver 16 and later do; earlier ones
+    /// name none.
+    pub osabi: bool,
 }
 
 impl WindowsProcess {
@@ -66,7 +69,7 @@ impl WindowsProcess {
         registers[7] = sp;
         registers[16] = pc;
         let exec_file = images.first().map(|image| image.path.clone()).unwrap_or_default();
-        Self { images, registers, wow64: false, exec_file, memory: Vec::new() }
+        Self { images, registers, wow64: false, exec_file, memory: Vec::new(), osabi: true }
     }
 
     /// A WoW64 process with `images`, stopped at `pc` with the stack at `sp`.
@@ -76,7 +79,7 @@ impl WindowsProcess {
         registers[5] = sp + 0x40;
         registers[8] = pc;
         let exec_file = images.first().map(|image| image.path.clone()).unwrap_or_default();
-        Self { images, registers, wow64: true, exec_file, memory: Vec::new() }
+        Self { images, registers, wow64: true, exec_file, memory: Vec::new(), osabi: true }
     }
 
     fn width(&self) -> usize {
@@ -318,7 +321,7 @@ pub fn gdbserver_g(process: &WindowsProcess, registers: &[u64]) -> String {
 /// The target description gdbserver generates (`gdbserver/tdesc.cc`, `tdesc_get_features_xml`, printed by
 /// `gdbsupport/tdesc.cc`, `print_xml_feature`): one document, `i386:x86-64` (or `i386`) with the `Windows` OS ABI,
 /// and the core and SSE features inline.
-fn gdb_description(script: Script, wow64: bool) -> Script {
+fn gdb_description(script: Script, wow64: bool, osabi: bool) -> Script {
     let architecture = if wow64 { "i386" } else { "i386:x86-64" };
     let registers = gdb_registers(wow64);
     let split = registers.iter().position(|(name, _)| name == "xmm0").expect("SSE registers");
@@ -342,7 +345,8 @@ fn gdb_description(script: Script, wow64: bool) -> Script {
         "target.xml",
         &format!(
             "<?xml version=\"1.0\"?>\n<!DOCTYPE target SYSTEM \"gdb-target.dtd\">\n<target>\n  \
-             <architecture>{architecture}</architecture>\n  <osabi>Windows</osabi>\n{}{}</target>\n",
+             <architecture>{architecture}</architecture>\n{}{}{}</target>\n",
+            if osabi { "  <osabi>Windows</osabi>\n" } else { "" },
             feature("org.gnu.gdb.i386.core", &registers[..split], 0),
             feature("org.gnu.gdb.i386.sse", &registers[split..], split)
         ),
@@ -388,6 +392,7 @@ pub fn gdbserver_windows(process: &WindowsProcess) -> Script {
     second[sp] = process.registers[sp] + 0x10_0000;
     let tib = if process.wow64 { TIB32 } else { TIB };
     let script = Script::new()
+        .thread_continues()
         .on(
             "qSupported:multiprocess+;swbreak+;hwbreak+;xmlRegisters=i386,arm",
             "PacketSize=2001f;QPassSignals+;QProgramSignals+;QStartupWithShell+;QEnvironmentHexEncoded+;\
@@ -397,7 +402,7 @@ pub fn gdbserver_windows(process: &WindowsProcess) -> Script {
              QThreadEvents+;no-resumed+",
         )
         .on("QStartNoAckMode", "OK");
-    let script = gdb_description(script, process.wow64)
+    let script = gdb_description(script, process.wow64, process.osabi)
         .on("?", &gdbserver_stop(process, &process.registers, MAIN_THREAD, 5, ""))
         .on("qfThreadInfo", &format!("m{MAIN_THREAD:x},{SECOND_THREAD:x}"))
         .after_interrupt("qfThreadInfo", &format!("m{MAIN_THREAD:x},{SECOND_THREAD:x},{BREAKIN_THREAD:x}"))

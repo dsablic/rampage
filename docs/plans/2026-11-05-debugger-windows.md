@@ -89,6 +89,22 @@ was decided while building it, from the stubs' sources (GDB's `gdbserver/win32-l
   read as hex, as LLDB reads it.
 - **WoW64** under gdbserver is supported and tested with an x86 fixture; lldb-server's WoW64 is untested. **arm64
   Windows** was not built: both stubs have arm64 code, and rampage's AArch64 handling would apply.
+- **Review fixes.** A fresh-context review against the sources led to these changes:
+  - gdbserver names the `Windows` OS ABI only from GDB 16 on. Older ones are recognized as an x86 GDB stub listing
+    Windows-style libraries without svr4, confirmed by `qGetTIBAddr` or an `MZ` header 0x1000 below a library's
+    segment address.
+  - `DebugBreakProcess`'s break-in thread under gdbserver is parked. Continues name every other thread
+    (`vCont;c:<thread>;...`, an Execution-class form the client allows only on Windows gdbserver sessions), since
+    gdbserver resumes only the threads a `vCont` names and would otherwise run the break-in thread into its int3
+    again.
+  - Slide verification needs 8 compared bytes per window that had bytes left out, and 16 in all. Without them it
+    reports `unverified` with counts. The IAT and import directory are always left out. Relocation types the reader
+    does not know are capped at 256 entries.
+  - A DLL-load stop racing an interrupt leaves the interrupt pending.
+  - Under gdbserver the executable always comes from the PEB.
+  - Library names with a bare `&` are read leniently (gdbserver does not escape them).
+  - `i686` descriptions are x86.
+  - Snapshots record a bound PE module's preferred base.
 - **Conservative choices.** A failed siginfo read leaves the stop without an exception rather than failing it. A
   module whose PE headers cannot be read keeps its stub address and is verified under several base readings.
   Unknown relocation types are assumed to patch 8 bytes.

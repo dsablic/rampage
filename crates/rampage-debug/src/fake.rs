@@ -71,6 +71,9 @@ pub struct Script {
     refused: Vec<(u64, u64)>,
     /// Like QEMU, `?` removes every breakpoint and watchpoint the stub holds.
     question_clears_points: bool,
+    /// Like gdbserver on Windows, accepts `vCont;c:<thread>;...` (continue only the named threads) in an execution
+    /// script.
+    thread_continues: bool,
 }
 
 /// How the fake stub records the out-of-band interrupt byte (`0x03`) and how scripts match it.
@@ -169,6 +172,13 @@ impl Script {
             after: None,
         });
         script
+    }
+
+    /// Accepts `vCont;c:<thread>[;c:<thread>...]` in an execution script, as rampage sends it to gdbserver on
+    /// Windows only.
+    pub fn thread_continues(mut self) -> Self {
+        self.thread_continues = true;
+        self
     }
 
     /// Accepts step 9.2's execution-control packets and the interrupt byte, instead of failing on them.
@@ -352,6 +362,20 @@ pub fn step_9_2_execution(packet: &str) -> bool {
                 || packet.strip_prefix('Z').or_else(|| packet.strip_prefix('z')).is_some_and(point)
         }
     }
+}
+
+/// Whether `packet` is `vCont;c:<thread>[;c:<thread>...]`, each a specific thread. Written independently of the
+/// client's allowlist, so the two check each other.
+pub fn per_thread_continue(packet: &str) -> bool {
+    let Some(actions) = packet.strip_prefix("vCont;") else { return false };
+    actions.split(';').all(|action| {
+        action.strip_prefix("c:").is_some_and(|thread| {
+            !thread.is_empty()
+                && thread.len() <= 16
+                && thread.bytes().all(|b| b.is_ascii_hexdigit())
+                && thread.bytes().any(|b| b != b'0')
+        })
+    })
 }
 
 /// For LLDB's queries (`qHostInfo`, `qProcessInfo`, `qRegisterInfo<n>`, `qMemoryRegionInfo:<address>`,
@@ -542,6 +566,7 @@ fn serve(mut stream: impl Stream, mut script: Script) -> Report {
             sent.insert(packet.clone());
             let write = memory_write(&bytes);
             let permitted = (script.execution && step_9_2_execution(&packet))
+                || (script.execution && script.thread_continues && per_thread_continue(&packet))
                 || (script.writes && (write.is_some() || register_write(&packet)))
                 || (script.kill && kill_packet(&packet));
             if execution_control(&packet) && !permitted {

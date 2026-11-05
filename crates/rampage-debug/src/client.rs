@@ -109,6 +109,9 @@ fn classify_text(payload: &str) -> Option<PacketClass> {
         "D" => Some(PacketClass::Detach),
         "k" => Some(PacketClass::Kill),
         "vCont?" | "vCont;c" | "c" | "s" => Some(PacketClass::Execution),
+        // Windows under gdbserver only (the client refuses it elsewhere): continue the listed threads, leaving a
+        // break-in thread suspended.
+        _ if thread_continue(payload) => Some(PacketClass::Execution),
         // LLDB's queries (debugserver), each only in the exact form rampage sends.
         _ if crate::lldb::read_query(payload) => Some(PacketClass::Read),
         _ if payload.starts_with("qSupported") => read(
@@ -179,7 +182,19 @@ pub fn allowed(payload: &str, permit: Permit) -> bool {
 
 /// Whether `payload` resumes the target, so its reply is a stop reply that may come much later.
 pub fn resumes(payload: &str) -> bool {
-    matches!(payload, "c" | "s" | "vCont;c") || payload.starts_with("vCont;s:")
+    matches!(payload, "c" | "s" | "vCont;c") || payload.starts_with("vCont;s:") || thread_continue(payload)
+}
+
+/// Whether `payload` is `vCont;c:<thread>[;c:<thread>...]`: continue exactly these threads (at most 4096), each a
+/// specific thread. Rampage sends it only on Windows under gdbserver, which resumes only the threads a `vCont`
+/// names (`gdbserver/win32-low.cc`, `win32_process_target::resume`), so a thread can stay suspended.
+pub fn thread_continue(payload: &str) -> bool {
+    let Some(actions) = payload.strip_prefix("vCont;") else { return false };
+    let actions: Vec<&str> = actions.split(';').collect();
+    actions.len() <= 4096
+        && actions
+            .iter()
+            .all(|action| action.strip_prefix("c:").is_some_and(|thread| crate::ThreadId::parse(thread).is_some()))
 }
 
 /// Console output (`O` packets) collected from the stub, bounded.
@@ -208,6 +223,8 @@ pub struct Client<T: Transport> {
     /// Console output received since the last resume.
     pub run_console: Console,
     permit: Permit,
+    /// Whether per-thread continues ([`thread_continue`]) may be sent: a Windows session under gdbserver.
+    thread_continue: bool,
     /// The resume packet whose stop reply is outstanding; the target is running.
     running: Option<Vec<u8>>,
     /// Whether the outstanding resume packet is still waiting for its acknowledgement.
@@ -226,11 +243,17 @@ impl<T: Transport> Client<T> {
             console: Console::default(),
             run_console: Console::default(),
             permit: Permit::READ,
+            thread_continue: false,
             running: None,
             unacknowledged: false,
             run_naks: 0,
             run_noise: 0,
         }
+    }
+
+    /// Allows per-thread continues ([`thread_continue`]), which only a Windows session under gdbserver sends.
+    pub fn allow_thread_continue(&mut self) {
+        self.thread_continue = true;
     }
 
     /// Sets the packet classes the following commands may send.
@@ -360,7 +383,7 @@ impl<T: Transport> Client<T> {
     /// Sends a resume packet (`c`, `s`, `vCont;c` or `vCont;s:<thread>`) without waiting for its stop reply, which
     /// [`Client::poll`] collects. Requires the execution class.
     pub fn resume(&mut self, payload: &str) -> Result<(), DebugError> {
-        if !resumes(payload) || !allowed(payload, self.permit) {
+        if !resumes(payload) || !allowed(payload, self.permit) || (thread_continue(payload) && !self.thread_continue) {
             return Err(DebugError::Forbidden(payload.chars().take(64).collect()));
         }
         if self.running.is_some() {
@@ -643,6 +666,9 @@ pub(crate) mod tests {
             "Z1,8000000000000000,2",
             "Z2,20000200,4",
             "z4,0,1",
+            // Recognized everywhere, sent only on Windows under gdbserver: `Client::resume` refuses it elsewhere.
+            "vCont;c:1",
+            "vCont;c:1a2c;c:1b30",
         ] {
             assert_eq!(classify(packet), Some(PacketClass::Execution), "{packet}");
             assert!(!allowed(packet, Permit::READ), "{packet}");
@@ -679,7 +705,9 @@ pub(crate) mod tests {
             "S05",
             "vCont;C05",
             "vCont;S05:1",
-            "vCont;c:1",
+            "vCont;c:-1",
+            "vCont;c:1;s:2",
+            "vCont;c:0",
             "vCont;s",
             "vCont;s:-1",
             "vCont;s:1;c",

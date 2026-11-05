@@ -61,6 +61,8 @@ pub struct Binding {
     pub(crate) explicit_slide: bool,
     pub(crate) limitations: Vec<String>,
     mask: u64,
+    /// A PE project's preferred base (`OptionalHeader.ImageBase`), which snapshots record.
+    pub(crate) pe_image_base: Option<u64>,
 }
 
 impl Binding {
@@ -602,6 +604,9 @@ struct PeFile {
     /// `(static address, length)`, sorted.
     relocated: Vec<(u64, u64)>,
     relocation_error: Option<String>,
+    /// The import directory and import address table, `(static address, length)` sorted: the loader writes the
+    /// IAT whatever the base, and linkers can merge both into an executable section (`/MERGE:.rdata=.text`).
+    rewritten: Vec<(u64, u64)>,
 }
 
 fn pe_file(binary: &rampage_loaders::Binary) -> Option<PeFile> {
@@ -631,7 +636,13 @@ fn pe_file(binary: &rampage_loaders::Binary) -> Option<PeFile> {
         ),
         Err(error) => (Vec::new(), Some(error)),
     };
-    Some(PeFile { header, codeview, relocated, relocation_error })
+    let mut rewritten: Vec<(u64, u64)> = [1usize, 12]
+        .iter()
+        .filter_map(|index| header.directory(*index))
+        .map(|(rva, size)| (header.image_base.wrapping_add(u64::from(rva)), u64::from(size)))
+        .collect();
+    rewritten.sort_unstable();
+    Some(PeFile { header, codeview, relocated, relocation_error, rewritten })
 }
 
 /// The CodeView record of the PE image whose `MZ` header is at `base`, from target memory.
@@ -740,18 +751,37 @@ fn region_readable(regions: &[rampage_debug::Region], partial: bool, address: u6
     (readable || !partial).then_some(readable)
 }
 
+/// Byte spans of a PE image slide verification leaves out, as static `(address, length)` pairs, sorted.
+#[derive(Default)]
+struct Skipped<'a> {
+    /// What the file's base relocations patch: left out only when the image moved.
+    relocated: &'a [(u64, u64)],
+    /// What the loader writes whatever the base: the import address table and import directory.
+    rewritten: &'a [(u64, u64)],
+}
+
+fn in_spans(spans: &[(u64, u64)], at: u64) -> bool {
+    let index = spans.partition_point(|(start, _)| *start <= at);
+    index > 0 && at - spans[index - 1].0 < spans[index - 1].1
+}
+
+/// Bytes a window must still compare, when some of it is left out, to count as matched.
+const MIN_WINDOW_BYTES: usize = 8;
+
 /// Compares every [verification window](verification_windows) with target memory at `slide`: matched when at
 /// least one window could be read and none differs, mismatched when any differs. A window the stub's region list
-/// shows unreadable is counted unreadable without asking the target for it. Bytes in `relocated` (static spans a
-/// PE image's base relocations patch) are left out when the image moved (`slide` not 0), since the loader rewrote
-/// them; a window left with nothing to compare counts as skipped.
+/// shows unreadable is counted unreadable without asking the target for it.
+///
+/// For a PE image, bytes the loader rewrites are left out ([`Skipped`]). A window left with fewer than
+/// [`MIN_WINDOW_BYTES`] to compare counts as skipped, and when bytes were left out the matched windows must compare
+/// [`MIN_IMAGE_BYTES`] in all; otherwise the outcome is `unverified`, with the counts, rather than a vacuous match.
 fn verify_slide(
     session: &Session,
     binary: &rampage_loaders::Binary,
     slide: u64,
     mask: u64,
     modules: &rampage_debug::Modules,
-    relocated: &[(u64, u64)],
+    skip: &Skipped,
 ) -> Result<SlideCheck, ApiError> {
     let epoch = None;
     let windows = verification_windows(binary);
@@ -765,14 +795,9 @@ fn verify_slide(
         });
     }
     let (mut matched, mut compared, mut unreadable, mut skipped) = (0usize, 0usize, 0usize, 0usize);
-    let mut relocated_bytes = 0usize;
+    let mut left_out_bytes = 0usize;
     let moved = slide & mask != 0;
-    let patched = |at: u64| {
-        moved && {
-            let index = relocated.partition_point(|(start, _)| *start <= at);
-            index > 0 && at - relocated[index - 1].0 < relocated[index - 1].1
-        }
-    };
+    let patched = |at: u64| (moved && in_spans(skip.relocated, at)) || in_spans(skip.rewritten, at);
     let mut first = None;
     for (address, file, what) in &windows {
         let runtime = address.wrapping_add(slide) & mask;
@@ -783,13 +808,16 @@ fn verify_slide(
         let kept: Vec<bool> = (0..file.len() as u64).map(|offset| !patched(address.wrapping_add(offset))).collect();
         let left_out = kept.iter().filter(|kept| !**kept).count();
         match memory {
-            Some(_) if left_out == file.len() => skipped += 1,
+            Some(_) if left_out > 0 && file.len() - left_out < MIN_WINDOW_BYTES => {
+                skipped += 1;
+                left_out_bytes += left_out;
+            }
             Some(memory) => {
                 match memory.iter().zip(file.iter()).zip(&kept).position(|((a, b), kept)| *kept && a != b) {
                     None => {
                         matched += 1;
                         compared += file.len() - left_out;
-                        relocated_bytes += left_out;
+                        left_out_bytes += left_out;
                         first.get_or_insert((*address, runtime));
                     }
                     Some(offset) => {
@@ -799,8 +827,8 @@ fn verify_slide(
                             runtime_address: Some(runtime),
                             length: file.len(),
                             detail: format!(
-                                "{what} at {address:#x} differs from the file at byte {offset} (of {} windows, {matched} \
-                             compared before it matched)",
+                                "{what} at {address:#x} differs from the file at byte {offset} (of {} windows, \
+                                 {matched} compared before it matched)",
                                 windows.len()
                             ),
                         });
@@ -810,23 +838,40 @@ fn verify_slide(
             None => unreadable += 1,
         }
     }
+    let counts = format!(
+        "{matched} windows ({compared} bytes) compared, {skipped} skipped for holding fewer than {MIN_WINDOW_BYTES} \
+         bytes the loader leaves alone, {unreadable} unreadable; {left_out_bytes} bytes the loader rewrites (base \
+         relocations, the import address table) were left out"
+    );
     Ok(match first {
+        Some(_) if left_out_bytes > 0 && compared < MIN_IMAGE_BYTES => SlideCheck {
+            outcome: "unverified",
+            static_address: first.map(|(address, _)| address),
+            runtime_address: first.map(|(_, runtime)| runtime),
+            length: compared,
+            detail: format!("too few bytes the loader leaves alone could be compared: {counts}"),
+        },
         Some((address, runtime)) => SlideCheck {
             outcome: "matched",
             static_address: Some(address),
             runtime_address: Some(runtime),
             length: compared,
-            detail: format!(
-                "{matched} windows ({compared} bytes) at the entry point, code segments and function entries equal \
-                 the file{}{}{}",
-                if unreadable > 0 { format!("; {unreadable} could not be read") } else { String::new() },
-                if relocated_bytes > 0 {
-                    format!("; {relocated_bytes} bytes the image's base relocations patch were left out")
-                } else {
-                    String::new()
-                },
-                if skipped > 0 { format!("; {skipped} held only relocated bytes") } else { String::new() }
-            ),
+            detail: if left_out_bytes > 0 || skipped > 0 {
+                format!("the entry point, code segments and function entries equal the file: {counts}")
+            } else {
+                format!(
+                    "{matched} windows ({compared} bytes) at the entry point, code segments and function entries \
+                     equal the file{}",
+                    if unreadable > 0 { format!("; {unreadable} could not be read") } else { String::new() }
+                )
+            },
+        },
+        None if skipped > 0 => SlideCheck {
+            outcome: "unverified",
+            static_address: Some(windows[0].0),
+            runtime_address: Some(windows[0].0.wrapping_add(slide) & mask),
+            length: 0,
+            detail: format!("every readable window held only bytes the loader rewrites: {counts}"),
         },
         None => SlideCheck {
             outcome: "unreadable",
@@ -1284,7 +1329,8 @@ impl DebugRegistry {
         };
         // A shared-cache image has no file at its path: only an image extracted from the cache, matched by its UUID,
         // is known to be the code that runs. A name, header bytes or a caller's slide are not enough.
-        let relocated: &[(u64, u64)] = pe.as_ref().map_or(&[], |pe| &pe.relocated);
+        let skip =
+            pe.as_ref().map(|pe| Skipped { relocated: &pe.relocated, rewritten: &pe.rewritten }).unwrap_or_default();
         let cached = modules.modules.iter().find(|entry| {
             (entry.name == label || module.is_some_and(|wanted| named_as(entry, wanted)))
                 && entry.dyld.as_ref().is_some_and(|image| image.in_shared_cache)
@@ -1305,12 +1351,12 @@ impl DebugRegistry {
                         slides.iter().map(|slide| format!("{slide:#x}")).collect::<Vec<_>>().join(" or ")
                     ));
                 }
-                (given, verify_slide(&session, binary, given, mask, &modules, relocated)?)
+                (given, verify_slide(&session, binary, given, mask, &modules, &skip)?)
             }
             None => {
                 let mut checked = Vec::new();
                 for candidate in &slides {
-                    let check = verify_slide(&session, binary, *candidate, mask, &modules, relocated)?;
+                    let check = verify_slide(&session, binary, *candidate, mask, &modules, &skip)?;
                     let matched = check.outcome == "matched";
                     checked.push((*candidate, check));
                     if matched {
@@ -1384,6 +1430,7 @@ impl DebugRegistry {
             explicit_slide: explicit,
             limitations,
             mask,
+            pe_image_base: pe.as_ref().map(|pe| pe.header.image_base),
         });
         let mut all = self.bindings.lock().unwrap_or_else(PoisonError::into_inner);
         // A disconnect that finished while this bind ran must not leave a binding behind.

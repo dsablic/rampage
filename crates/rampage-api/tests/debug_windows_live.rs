@@ -64,6 +64,13 @@ impl Harness {
     }
 }
 
+/// The watchpoint length on `counter`: the pointer width. 32-bit x86 debug registers watch at most 4 bytes, and
+/// the x86 fixture writes the counter's low half in a 4-byte store.
+fn pointer_width() -> u64 {
+    let binary = rampage_loaders::Binary::open(fixture()).unwrap();
+    u64::from(binary.arch.default_pointer_size().unwrap())
+}
+
 fn hex(value: &Value) -> u64 {
     u64::from_str_radix(value.as_str().unwrap().trim_start_matches("0x"), 16).unwrap()
 }
@@ -123,7 +130,7 @@ fn breaks_steps_out_watches_interrupts_and_snapshots_on_windows() {
     // A write watchpoint on the counter stops in tick.
     let watch = harness.call(
         "debug_breakpoints",
-        json!({"session": session, "action": "set", "epoch": epoch, "kind": "write", "static_address": format!("{:#x}", counter()), "length": 8}),
+        json!({"session": session, "action": "set", "epoch": epoch, "kind": "write", "static_address": format!("{:#x}", counter()), "length": pointer_width()}),
     );
     let run = harness.call("debug_continue", json!({"session": session, "epoch": epoch, "timeout_ms": 10000}));
     assert_eq!(run["event"]["reason"], "watchpoint", "{run}");

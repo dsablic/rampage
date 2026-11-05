@@ -459,7 +459,10 @@ impl Family {
             |suffix: &str| layout.features.iter().any(|feature| feature == &format!("com.apple.debugserver.{suffix}"));
         if architecture.starts_with("i386:x86-64") || architecture == "x86-64" || apple("x86_64") || apple("x86_64h") {
             Family::X86_64
-        } else if architecture.starts_with("i386") || apple("i386") {
+        } else if architecture.starts_with("i386")
+            || matches!(architecture.as_str(), "i486" | "i586" | "i686")
+            || apple("i386")
+        {
             Family::X86
         } else if architecture.starts_with("aarch64")
             || has_feature("org.gnu.gdb.aarch64.")
