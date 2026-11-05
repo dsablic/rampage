@@ -24,9 +24,30 @@ during the benchmark.
   tools/list) instead of enabling `types` by default (20 tools, about 35 KB).
 - [x] Results over Claude Code's 50,000-character limit are spilled to an unreadable file. Done: every tool
   declares `anthropic/maxResultSizeChars` = `RESULT_LIMIT_CHARS` (61,024).
-- [ ] Add harder, less-saturated agent tasks: both servers score 49–51/51 on the current 17, so the set no longer
-  separates them on accuracy, only on calls, tokens and time.
+- [x] Add harder, less-saturated agent tasks. Done as [suite v2](docs/benchmarks/agent-h2h-v2-2026-11-05.md).
 - [ ] Repeat the head-to-head with a second model or client before drawing conclusions beyond this one.
+
+## Head-to-head suite v3: tasks where Ghidra is strong (not run yet)
+
+The suite-v2 fairness review found that its categories lean towards what rampage was built around (RTTI evidence,
+pclntab names, `diff_builds`). Suite v3 should balance that with tasks where Ghidra is known to be strong. Keep v2's
+rules: truth independent of both servers, tool-neutral prompts, owned or pinned fixtures, strict and partial
+scores defined before any run.
+
+- [ ] A symbol-rich C or C++ release binary (pinned sqlite or openssl from upstream sources, checksummed), with
+  questions answered from its own symbols and DWARF: callers of an internal function, a struct field's use.
+- [ ] Decompiler-heavy semantics: what a function computes for given inputs (loops, bit tricks, 64-bit
+  arithmetic on 32-bit targets), with truth from host runs of the owned source.
+- [ ] Type propagation: apply one struct type and answer a question that needs it carried through several
+  functions.
+- [ ] Switch tables: the case value that reaches a given block, for jump tables in PIC and non-PIC code.
+- [ ] MSVC-built PE C++: RTTI hierarchy, vtables and exception handlers (needs a pinned MSVC-built binary with
+  a PDB as truth).
+- [ ] 32-bit x86 (cdecl/stdcall/fastcall), including calling-convention questions.
+- [ ] Go inside Ghidra's supported range (Go 1.15–1.26 for Ghidra 12.2), stripped and at scale, so its Go
+  analyzers apply.
+- [ ] Rizin installed on the host, or REA's Rizin-backed tools declared out of scope in the prompt-independent
+  setup, so REA's advertised catalog matches what can run.
 
 ## Open acceptance gate: live Phase 1 completion
 

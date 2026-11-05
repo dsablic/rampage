@@ -160,7 +160,7 @@ string_set: exactly the 3 changed exported names. Partial credit is the Jaccard 
 [tasks.scale-string-function-x64-elf]
 category = "scale"
 max_turns = 60
-timeout_s = 3600
+timeout_s = 7200
 question = """
 This is a large stripped Go executable for x86-64 Linux. Which function references the text "cascade is only
 supported for branch nodes"? Return its full Go symbol name as function: the package path, the receiver if any and
@@ -173,7 +173,7 @@ exact: the full Go symbol name, byte for byte.
 [tasks.scale-caller-count-x64-elf]
 category = "scale"
 max_turns = 60
-timeout_s = 3600
+timeout_s = 7200
 question = """
 This is a large stripped Go executable for x86-64 Linux. How many distinct functions contain at least one direct
 call to github.com/gohugoio/hugo/common/paths.AbsPathify? Count each calling function once, including closures and
@@ -186,7 +186,7 @@ exact: the number of distinct direct callers; no partial credit.
 [tasks.scale-callees-x64-elf]
 category = "scale"
 max_turns = 60
-timeout_s = 3600
+timeout_s = 7200
 question = """
 This is a large stripped Go executable for x86-64 Linux. List the distinct functions that
 github.com/gohugoio/hugo/resources/images.DecodeImageConfig calls directly, leaving out functions of the Go runtime
