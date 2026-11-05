@@ -2,7 +2,9 @@
 
 The desktop **Read-only debugger** window inspects an existing authorized stopped LLDB session over an explicit
 local Unix socket. It offers structured inspection, guarded navigation into an already-open static image, and
-separate client-local Prepare, Compare, Save and Open actions. It never starts or controls the target.
+separate client-local Prepare, Compare, Save and Open actions. It never starts or controls the target. It is the
+LLDB query window, separate from the MCP-only [debug tools](debug-control.md) that control execution over GDB
+remote stubs.
 
 Use only programs and observations you own or have permission to inspect. Socket paths, requests, module paths,
 registers and memory bytes remain local to the debugger window; they are not sent to the Assistant or a provider.

@@ -2,7 +2,8 @@
 
 The bridge operates inside an already authorized, stopped LLDB process. It registers `rampage-query` and accepts
 bounded JSON requests; it does not attach, launch, resume, insert breakpoints, evaluate target expressions, write
-target memory, expose an IP/network listener or publish capture files.
+target memory, expose an IP/network listener or publish capture files. For execution control, breakpoints and
+writes, see the MCP [debug tools](debug-control.md), which talk to an operator-started GDB remote stub instead.
 
 ```text
 command script import /path/to/rampage/tools/lldb_bridge.py

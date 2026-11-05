@@ -67,7 +67,7 @@ opening that same view; see [annotation persistence](cli-reference.md#persistenc
 | `;` | Comment |
 | Ctrl/Cmd+Z | Undo |
 | Shift+Ctrl/Cmd+Z | Redo |
-| Ctrl/Cmd+D | Open the local read-only debugger window |
+| Ctrl/Cmd+D | Open the local read-only LLDB query window |
 
 An undo blocked by another client's edit shows the conflict and offers to discard that step from undo history
 without reverting its edits. It does not force an undo through the conflict. Data packs from `--pack` or
@@ -76,7 +76,9 @@ without reverting its edits. It does not force an undo through the conflict. Dat
 
 ## Local debugger observations
 
-The brand's context menu or Ctrl/Cmd+D opens **Read-only debugger**, even without a loaded binary. Opening the
+The brand's context menu or Ctrl/Cmd+D opens **Read-only debugger**, the LLDB query window, even without a loaded
+binary. It does not offer the MCP `debug_*` tools (execution control over GDB remote stubs, see
+[debug control](debug-control.md)), which are MCP-only. Opening the
 window does not connect. Enter an explicit absolute local Unix socket, then use **Connect stopped session** or
 **Refresh stopped session**. The LLDB operator starts the authorized stopped-session endpoint separately.
 Module/thread pages, row selection, raw registers, raw memory and UUID-qualified file-address resolution are

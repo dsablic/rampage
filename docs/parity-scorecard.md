@@ -76,7 +76,7 @@ exact extents for manual and call-only seeding, misses grouped by decode-gate re
 decompilation returns C or refuses. `rampage-eval processor-roster` prints the same section alone. Limits: the
 Ghidra oracle is seeded function creation (autonomous auto-analysis not run, so per-processor autonomous
 discovery recall stays in `unmeasured`), and fixtures are hand-assembled byte ledgers, not compiled code.
-The recorded result is in [benchmarks](benchmarks.md).
+The recorded result is in [benchmarks](benchmarks/phase4-1.md#phase-41-raw-project-processor-roster).
 
 Corpus recipes compile once, strip a copy, check observed headers and stripped symbol/debug metadata, and
 verify truth-function byte identity before scoring. Failed commands retain exit codes; missing prerequisites

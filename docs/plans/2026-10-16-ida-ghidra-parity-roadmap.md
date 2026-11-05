@@ -23,7 +23,28 @@ Consequences for every milestone below:
 - Tool outputs are read by models: prefer compact, addressed, evidence-linked results over exhaustive dumps;
   every result must say what was omitted and which call fetches more.
 
-## Where we are (assessment, 2026-10-16)
+## Where we are
+
+### Status (2026-11-05)
+
+Taken from `todo.md` and the plans; the 2026-10-16 assessment below is kept as written.
+
+- **Phases 0–3 and 4.1:** implemented. Open gates: the live Phase 1 reconstruction (call bound N), the Phase 2
+  library-recall target, and the Phase 3.3 live token/call improvement.
+- **Phase 4.2–4.4:** 4.2 has only the single-image Raw slice; 4.3 is open; 4.4 has a partial WebAssembly
+  module summary (`wasm_module`) and no DEX/JVM.
+- **Phases 5–8:** not started.
+- **Phase 9:** design approved 2026-10-29. 9.1–9.4 done; 9.5 (macOS `debugserver`) and 9.6a (Windows through RSP
+  stubs) implemented, live acceptance pending. See the
+  [design's phase table](2026-10-29-debugger-control.md#phased-delivery).
+- **Outside the phase order:** the REA gap-closing wave (2026-10-29) added the `formats` tool group and the
+  findings ledger.
+
+Gaps from the list below that are closed or narrowed: 1 (Phase 1 implemented; live sign-off open), 2 (Phase 2.1
+corpus databases; recall target unmet), 3 (Phases 3.1 and 3.2), 4 (sixteen Sleigh families open as Raw Projects
+in 4.1) and 7 (Phase 9). 5 is narrowed by the Raw slice and the `formats` tools.
+
+### Assessment (2026-10-16)
 
 Roughly 25-35% of the way to an IDA/Ghidra replacement, but already ahead on agent ergonomics.
 
@@ -118,6 +139,9 @@ JSON report; the scorecard table is filled with the baseline.
 
 **Prerequisite:** a local Ghidra (`brew install --cask ghidra`) for reference numbers; zig is already present.
 
+*Status (2026-11-05): complete.* Baseline accepted 2026-10-17 (collector `65a7e99`); see the scorecard in
+[benchmarks](../benchmarks.md).
+
 ---
 
 ## Phase 1: the interactive typing loop (largest gap, ~4-5 milestones)
@@ -167,6 +191,9 @@ when available; otherwise generate a minimal PDB in a test helper.
 agent can reconstruct one central struct end to end with ≤ N calls (record N); signature agreement vs DWARF
 improves from the Phase 0 baseline.
 
+*Status (2026-11-05):* 1.1–1.6 implemented. The live acceptance (a successful reconstruction with a recorded N)
+is open; see `todo.md`, "Open acceptance gate: live Phase 1 completion".
+
 ---
 
 ## Phase 2: library recognition at scale (~2 milestones)
@@ -187,6 +214,9 @@ constant/call features with a confidence score; results below the gate are repor
 **Acceptance:** library naming recall on stripped corpus binaries measured per library/arch in the scorecard;
 target ≥ 80% on matched-version builds, with near-miss candidates reported for others.
 
+*Status (2026-11-05):* bounded 2.1 corpus delivery and 2.2/2.3 implementation complete. The full recall target is
+unmet; fuzzy candidates gave no qualified naming gain.
+
 ---
 
 ## Phase 3: search, patching and agent ergonomics (~2 milestones)
@@ -206,6 +236,9 @@ as well as addresses, and add a `batch` tool for applying many annotations at on
 
 **Acceptance:** agent-task token/call counts drop measurably vs Phase 0; patch round-trip test (patch, export,
 re-open, decompile shows change).
+
+*Status (2026-11-05):* 3.1 and 3.2 complete, with the patch round trip passing. 3.3 is implemented, but its live
+improvement gate is open: no token or call reduction has been credited.
 
 ---
 
@@ -241,6 +274,9 @@ plus function/import/export structure first).
 **Acceptance:** each new processor has an owned fixture (compiled where a compiler exists, else hand-assembled
 bytes compared with Ghidra's disassembly); discovery recall vs Ghidra recorded in the scorecard.
 
+*Status (2026-11-05):* 4.3 is open. 4.4 is partial: `wasm_module` (summary, imports, exports, functions) shipped
+in the `formats` group; WebAssembly disassembly and DEX/JVM are open.
+
 ---
 
 ## Phase 5: analysis depth (~3-4 milestones)
@@ -264,6 +300,8 @@ Order by what the agent-task suite shows as failures; default order:
 **Acceptance:** per-item scorecard rows (e.g. vtable call resolution rate on the C++ corpus, ObjC selector
 resolution rate on Mach-O fixtures).
 
+*Status (2026-11-05): not started.*
+
 ---
 
 ## Phase 6: scale and persistence (~2 milestones)
@@ -282,6 +320,8 @@ runs incrementally after annotation edits instead of from scratch.
 **Acceptance:** scorecard rows for the large binaries; full-workspace test gate completes within its time
 budget (fix the currently recorded timeout).
 
+*Status (2026-11-05): not started.*
+
 ---
 
 ## Phase 7: build diffing and annotation transfer (~1-2 milestones)
@@ -294,6 +334,8 @@ changed functions. This replaces IDA's Lumina/BinDiff and Ghidra Version Trackin
 **Acceptance:** on two versions of an open-source library (e.g. zlib 1.2.13 vs 1.3), ≥ 90% of unchanged
 functions matched and their annotations transferred.
 
+*Status (2026-11-05): not started.*
+
 ---
 
 ## Phase 8: desktop UI catch-up (~2 milestones)
@@ -301,6 +343,8 @@ functions matched and their annotations transferred.
 The UI follows MCP; it exposes what Phases 1-7 built: rename/retype in the pseudocode view (keyboard
 `N`/`Y` like IDA), type library and struct editor, frame view, search panel, patch view, synchronized
 listing/pseudocode highlighting, bookmarks. Use `egui_kittest` snapshot tests as today.
+
+*Status (2026-11-05): not started.*
 
 ---
 
@@ -311,6 +355,12 @@ listing/pseudocode highlighting, bookmarks. Use `egui_kittest` snapshot tests as
 OpenOCD/embedded probes, many emulators) then LLDB, then Windows; breakpoints, step, register/memory read and
 write, module tracking; MCP tools with explicit operator consent per session. Do not start implementation until
 the user approves the design.
+
+*Status (2026-11-05):* design approved 2026-10-29 as
+[`2026-10-29-debugger-control.md`](2026-10-29-debugger-control.md). 9.1–9.4 done; 9.5 (macOS `debugserver`)
+implemented, live acceptance pending; 9.6a (Windows through RSP stubs, Option A of
+[`2026-11-05-debugger-windows.md`](2026-11-05-debugger-windows.md)) implemented, live acceptance pending. See the
+[phase table](2026-10-29-debugger-control.md#phased-delivery) and [debug control](../debug-control.md).
 
 ---
 
