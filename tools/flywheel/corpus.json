@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "family": "libid",
+  "name": "libid-small",
+  "description": "Small library-identification corpus for the flywheel fast loop: three permissive C libraries linked statically into owned driver programs, per architecture, compiler and optimisation level. Sources are downloaded and built locally and never committed.",
+  "libraries": [
+    {
+      "name": "zlib",
+      "version": "1.3.1",
+      "license": "Zlib",
+      "url": "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz",
+      "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23",
+      "root": "zlib-1.3.1",
+      "include": ["."],
+      "defines": ["HAVE_UNISTD_H", "HAVE_STDARG_H", "_LARGEFILE64_SOURCE=1"],
+      "sources": [
+        "adler32.c", "compress.c", "crc32.c", "deflate.c", "gzclose.c", "gzlib.c", "gzread.c", "gzwrite.c",
+        "infback.c", "inffast.c", "inflate.c", "inftrees.c", "trees.c", "uncompr.c", "zutil.c"
+      ],
+      "drivers": ["zlib/z1.c", "zlib/z2.c", "zlib/z3.c", "zlib/z4.c"]
+    },
+    {
+      "name": "lz4",
+      "version": "1.10.0",
+      "license": "BSD-2-Clause",
+      "url": "https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz",
+      "sha256": "537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b",
+      "root": "lz4-1.10.0",
+      "include": ["lib"],
+      "defines": [],
+      "sources": ["lib/lz4.c", "lib/lz4hc.c", "lib/lz4frame.c", "lib/xxhash.c"],
+      "drivers": ["lz4/l1.c", "lz4/l2.c", "lz4/l3.c", "lz4/l4.c"]
+    },
+    {
+      "name": "cjson",
+      "version": "1.7.18",
+      "license": "MIT",
+      "url": "https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.18.tar.gz",
+      "sha256": "3aa806844a03442c00769b83e99970be70fbef03735ff898f4811dd03b9f5ee5",
+      "root": "cJSON-1.7.18",
+      "include": ["."],
+      "defines": [],
+      "sources": ["cJSON.c"],
+      "drivers": ["cjson/j1.c", "cjson/j2.c", "cjson/j3.c", "cjson/j4.c"]
+    }
+  ],
+  "arches": [
+    {"name": "x86_64", "triple": "x86_64-linux-musl"},
+    {"name": "aarch64", "triple": "aarch64-linux-musl"}
+  ],
+  "compilers": [
+    {"name": "zig", "description": "zig cc (Zig's bundled clang/LLVM); compiles and links"},
+    {"name": "clang", "description": "Homebrew clang against Zig's musl headers; zig cc links"}
+  ],
+  "optimizations": ["O1", "O2", "Os"],
+  "link": "zig cc -static -g (zig strips symbols at -Os otherwise) against Zig's musl for the triple, same -O flag; no section garbage collection",
+  "strip": "rampage-eval strip (stripped) and rampage-eval strip --keep-symbols (twin) of the same linked image",
+  "split": {
+    "unit": "program (one driver source across every architecture, compiler and optimisation level)",
+    "heldout_fraction": 0.25,
+    "fast_programs_per_library": 1
+  }
+}
