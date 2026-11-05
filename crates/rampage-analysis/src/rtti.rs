@@ -83,12 +83,31 @@ pub struct Image<'a> {
     ranges: Vec<MappedRange<'a>>,
     pointer_size: u8,
     big_endian: bool,
+    /// Mach-O chained rebases as (location, loaded target), sorted by location: the stored bytes there are a
+    /// chain encoding, so a pointer read at a location returns its target instead.
+    rebases: &'a [(u64, u64)],
+    /// Locations a chained or classic bind fills with an Itanium typeinfo category vtable
+    /// (`__cxxabiv1::__class_type_info` and its `__si`/`__vmi` variants), sorted.
+    typeinfo_vtable_binds: Vec<u64>,
 }
 
 impl<'a> Image<'a> {
     pub fn new(mut ranges: Vec<MappedRange<'a>>, pointer_size: u8, big_endian: bool) -> Self {
         ranges.sort_by_key(|range| range.vaddr);
-        Image { ranges, pointer_size, big_endian }
+        Image { ranges, pointer_size, big_endian, rebases: &[], typeinfo_vtable_binds: Vec::new() }
+    }
+
+    /// This image with its loader-resolved pointer fixups: chained rebases (sorted by location) and the
+    /// locations bound to an Itanium typeinfo category vtable.
+    pub fn with_fixups(mut self, rebases: &'a [(u64, u64)], mut typeinfo_vtable_binds: Vec<u64>) -> Self {
+        typeinfo_vtable_binds.sort_unstable();
+        self.rebases = rebases;
+        self.typeinfo_vtable_binds = typeinfo_vtable_binds;
+        self
+    }
+
+    fn binds_typeinfo_vtable(&self, va: u64) -> bool {
+        self.typeinfo_vtable_binds.binary_search(&va).is_ok()
     }
 
     /// The range holding `va` and the offset into it. With overlapping ranges, the latest-starting one wins.
@@ -115,6 +134,9 @@ impl<'a> Image<'a> {
 
     fn read_pointer(&self, va: u64) -> Option<u64> {
         let bytes = self.read(va, usize::from(self.pointer_size))?;
+        if let Ok(index) = self.rebases.binary_search_by_key(&va, |&(location, _)| location) {
+            return Some(self.rebases[index].1);
+        }
         let fold = |value: u64, &byte: &u8| value << 8 | u64::from(byte);
         Some(if self.big_endian { bytes.iter().fold(0, fold) } else { bytes.iter().rev().fold(0, fold) })
     }
@@ -162,6 +184,8 @@ fn va_at(base: u64, delta: u64) -> Option<u64> {
 #[derive(Clone)]
 struct ItaniumCandidate {
     vtable: u64,
+    /// The vtable slot is bound to a typeinfo category vtable import, so its stored bytes are not an address.
+    bound_vtable: bool,
     mangled: String,
     name: String,
 }
@@ -207,7 +231,8 @@ fn itanium_candidates(image: &Image) -> BTreeMap<u64, ItaniumCandidate> {
                 .flatten()
         });
         if let Some((mangled, name)) = name {
-            candidates.insert(address, ItaniumCandidate { vtable, mangled, name });
+            let bound_vtable = image.binds_typeinfo_vtable(address);
+            candidates.insert(address, ItaniumCandidate { vtable, bound_vtable, mangled, name });
         }
     });
     candidates
@@ -231,6 +256,9 @@ fn accept_itanium(image: &Image, candidates: BTreeMap<u64, ItaniumCandidate>) ->
     candidates
         .into_iter()
         .filter(|(_, candidate)| {
+            if candidate.bound_vtable {
+                return true;
+            }
             let vtable = candidate.vtable;
             // A genuine typeinfo vtable pointer targets a vtable, never string data: a table of string pointers
             // (`{"des-ede3-cbc", "3des"}`) otherwise reads as `[vtable, name]` whenever the second name demangles.
@@ -424,8 +452,20 @@ fn build_image(binary: &Binary, pointer_size: u8) -> Image<'_> {
             ranges.push(MappedRange { vaddr: section.address, bytes });
         }
     }
+    // Typeinfo records start with a pointer to an ABI category vtable; in an image with chained fixups it is a
+    // bind to the C++ runtime, never a stored address.
+    let binds = binary
+        .import_slots
+        .iter()
+        .filter(|slot| {
+            let name = slot.name.strip_prefix('_').unwrap_or(&slot.name);
+            name.starts_with("_ZTVN10__cxxabiv1") && name.ends_with("class_type_infoE")
+        })
+        .map(|slot| slot.address)
+        .collect();
     // PE is always little-endian; Itanium images follow the loaded byte order.
     Image::new(ranges, pointer_size, binary.big_endian && binary.format != Format::Pe)
+        .with_fixups(binary.rebases(), binds)
 }
 
 fn checked_pointer_size(format: Format, pointer_size: Option<u8>, mips64_n32: bool) -> Result<u8, RttiLimitation> {

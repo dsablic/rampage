@@ -450,6 +450,7 @@
     }
   },
   "excluded": {
+    "../bin/classes-chained-arm64.macho": "classes-arm64.macho with the linker's default chained fixups, for RTTI recovery; its toolchain is scored through classes-arm64.macho",
     "../bin/auditable-arm64.macho": "a stripped carrier for a synthesized cargo-auditable .dep-v0 section; its C toolchain is scored through hello-*",
     "../bin/auditable-x64.elf": "a stripped carrier for a synthesized cargo-auditable .dep-v0 section; its C toolchain is scored through hello-*",
     "../bin/auditable-x64.exe": "a stripped carrier for a synthesized cargo-auditable .dep-v0 section; its C toolchain is scored through hello-*",

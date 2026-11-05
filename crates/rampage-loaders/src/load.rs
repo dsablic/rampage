@@ -1065,6 +1065,11 @@ impl Binary {
         Some(self.rebases[index].1)
     }
 
+    /// Every Mach-O chained rebase as (location, loaded target), sorted by location.
+    pub fn rebases(&self) -> &[(u64, u64)] {
+        &self.rebases
+    }
+
     /// Whether this image's pointers are encoded as chained fixups rather than stored as addresses.
     pub fn has_chained_fixups(&self) -> bool {
         !self.rebases.is_empty()
