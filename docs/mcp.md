@@ -183,12 +183,19 @@ queries. Stale tokens fail without automatic refresh. Responses retain the backe
 and remain non-atomic. See [LLDB queries](lldb-query.md) for request operations, endpoint policy and limits.
 
 The `debug` tools talk to a GDB remote stub the operator started and allowed (gdbserver, QEMU, OpenOCD, Apple's
-`debugserver`...). With debugserver they also use LLDB's extensions where it offers them: `qHostInfo` and
+`debugserver`, MinGW-w64 `gdbserver.exe` or `lldb-server` on Windows...). With debugserver they also use LLDB's
+extensions where it offers them: `qHostInfo` and
 `qProcessInfo` (CPU type, a stated byte order, pointer authentication address bits, shown as `lldb` and
 `address_mask` by `debug_connect`), `qRegisterInfo` without a target description, `jThreadsInfo` (thread names,
 dispatch queues), the dyld image list (`debug_modules` entries gain `dyld`: header address, UUID, segments and
 `in_shared_cache`) and `qMemoryRegionInfo` (regions with permissions). Stop events gain `exception` for Mach
-exceptions (`EXC_BAD_ACCESS` with `fault_address`, `EXC_BREAKPOINT`, `EXC_BAD_INSTRUCTION`...).
+exceptions (`EXC_BAD_ACCESS` with `fault_address`, `EXC_BREAKPOINT`, `EXC_BAD_INSTRUCTION`...). On a Windows
+target (`debug_connect` reports `windows`: the stub and what shows it) `debug_modules` entries gain `pe` (the
+image's runtime base, how it was derived, machine, whether it is a DLL, and its CodeView record), the main
+executable is listed even when gdbserver leaves it out (found through the process environment block), and stop
+events carry a Windows `exception` (`"system": "windows"`, the code and name, the address, and for access
+violations `access` and `fault_address`) from gdbserver's exception record or lldb-server's description. After an
+interrupt, which Windows delivers in a thread it creates, reads and steps without `thread` use another thread.
 `debug_connect` takes only an allowed endpoint and returns a session ID; at most four sessions are open per MCP
 connection, and they detach when it ends. `debug_status`, `debug_registers`, `debug_read_memory` (at most the
 session's `max_read_length` bytes per call, short reads reported per chunk) and `debug_modules` read the stopped
@@ -198,7 +205,9 @@ order is unknown.
 
 `debug_bind` (or `debug_connect` with `path`) binds a binary to one of the session's runtime modules. It opens the
 binary like the project tools do, in the same project cache, matches it by build ID or Mach-O UUID read from target
-memory, then by path or file name, then by mapped header bytes (or, with no module list, by the code mapped at the
+memory, a PE image by its CodeView record (PDB GUID and age) read from its mapped debug directory, then by path or
+file name (case-insensitively, and ignoring `\\?\` and slash direction, on Windows), then by mapped header bytes (or,
+with no module list, by the code mapped at the
 slide), verifies the slide against target memory and reports the evidence; without a match it needs an explicit
 `slide`. A session binds at most eight projects, and `debug_status` lists them. With a binding,
 `debug_breakpoints` takes `static_address` or `function` instead of `address`, stop events gain `locations`
@@ -206,7 +215,9 @@ slide), verifies the slide against target memory and reports the evidence; witho
 address), `debug_registers` with `annotate: true` says what values point at, and `debug_evidence` returns a bounded
 record of the stop with a ready `record_finding` evidence item. A Mach-O image dyld reports binds by its UUID at
 dyld's header address minus its `__TEXT` address; a library in the dyld shared cache binds only from an image
-extracted from the cache with the same UUID (`shared_cache_image` otherwise). On arm64, pointer authentication codes
+extracted from the cache with the same UUID (`shared_cache_image` otherwise). A PE image binds at its runtime base
+minus its preferred `ImageBase`, and slide verification leaves out the bytes its base relocations patch when the
+loader moved it. On arm64, pointer authentication codes
 are taken off return addresses before step out and annotation (`signed_value` keeps the signed one).
 
 Execution control is all-stop. `debug_breakpoints` sets (`software`, `hardware`, `write`, `read`, `access`), clears

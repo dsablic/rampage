@@ -34,16 +34,19 @@ format builds without verified function truth remain unscored rather than counti
   local Unix socket, CLI/MCP requests and a local desktop query window. They do not attach, control execution,
   evaluate expressions or write target memory; observations remain non-atomic and separate from snapshot identity.
 - [Debug sessions](debug-control.md) with operator-started GDB remote stubs (gdbserver, QEMU, OpenOCD, Apple's
-  `debugserver`): the MCP `debug` group, present only when the server is started with an allowed endpoint, reads
+  `debugserver`, and on Windows MinGW-w64 `gdbserver.exe` or `lldb-server`, not yet live-verified): the MCP `debug`
+  group, present only when the server is started with an allowed endpoint, reads
   registers from the stub's target description (or LLDB's `qRegisterInfo`), memory, threads (with names and
   dispatch queues from debugserver), svr4, Windows-style or dyld module lists and memory maps or regions, and
   captures a stopped target to a `rampage-snapshot-v1` file. Data byte order comes only from stop-bound evidence
-  (x86, Cortex-M AIRCR, ARM CPSR.E, or an LLDB stub stating it). Mach exceptions are typed in stop events, and
+  (x86, Cortex-M AIRCR, ARM CPSR.E, or an LLDB stub stating it). Mach and Windows exceptions are typed in stop
+  events (Windows ones from gdbserver's exception record or lldb-server's description), and
   arm64 return addresses lose their pointer authentication codes before step out and annotation. All-stop
   execution control continues, waits, interrupts and single-steps, and sets hardware or
   software breakpoints and watchpoints the stub inserts, with typed stop events, hit counts and stop epochs that
-  refuse stale requests. Binding a project to a runtime module (by build ID or UUID, path, or mapped bytes, with a
-  slide verified against target memory; a dyld shared-cache library only from its extracted image) adds breakpoints by static address or function name, stop locations with
+  refuse stale requests. Binding a project to a runtime module (by build ID, UUID or a PE image's CodeView record,
+  path, or mapped bytes, with a slide verified against target memory, leaving out what a moved PE image's base
+  relocations patch; a dyld shared-cache library only from its extracted image) adds breakpoints by static address or function name, stop locations with
   function, offset and `show_address` arguments, register values annotated with what they point at, stepping over
   calls with rampage's decoder and out of functions from their entry through temporary breakpoints, and evidence
   items for the findings ledger. With the operator's `--debug-writes`, memory and register writes read the old bytes
