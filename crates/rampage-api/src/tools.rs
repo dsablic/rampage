@@ -1,7 +1,7 @@
 //! The analysis tools AI models call, shared by the MCP server and the UI's assistant: each has a name, a
 //! description, a JSON schema for its input, and a handler that runs it against a project.
 
-use crate::tool_views::{ToolView, ToolViewKind, project_tool_view};
+use crate::tool_views::{SummaryPages, ToolView, ToolViewKind, project_function_summary, project_tool_view};
 use crate::workflows::{WORKFLOWS, Workflow};
 use crate::{ApiError, FunctionsQuery, ListQuery, Packs, Project, StringsQuery, WorkflowReport, XrefQuery};
 use schemars::JsonSchema;
@@ -822,6 +822,23 @@ struct ViewedAt {
     at: String,
     #[serde(default)]
     view: ToolView,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct FunctionSummaryArgs {
+    /// Numeric address string or existing symbol, import, export, analyst or sub_<hex> name.
+    at: String,
+    #[serde(default)]
+    view: ToolView,
+    /// summary/code views: first graph block of a fitted page (the previous page's graph.blocks_next_offset).
+    #[serde(default)]
+    block_offset: usize,
+    /// summary/code views: first reference row of a fitted page (references.items_next_offset).
+    #[serde(default)]
+    reference_offset: usize,
+    /// summary/code views: first callee of a fitted page (callees_next_offset).
+    #[serde(default)]
+    callee_offset: usize,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -2174,14 +2191,22 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "function_summary",
-            "Structural function summary, not native recovered C. view=full (default) preserves original JSON; \
-             summary omits instruction/IR rendering with exact counts and omission receipts; code retains native \
-             instructions and labels partial structural pseudocode explicitly. Source/control/diagnostic/type \
-             evidence stays retained. Oversized results refuse; choose a compact view rather than truncated output.",
-            |project, arguments: ViewedAt| {
+            "Structural function summary, not native recovered C. view=full (default) preserves original JSON and \
+             refuses when oversized; summary omits instruction/IR rendering with exact counts and omission receipts; \
+             code retains native instructions and labels partial structural pseudocode explicitly. summary and code \
+             add `callees` (distinct call targets with names and call counts) and never refuse for size: a large \
+             function's graph blocks, references and callees are paged as whole rows (block_offset, \
+             reference_offset, callee_offset; *_next_offset says where the next page starts), and a `fitted` \
+             receipt names any optional analysis omitted to fit 60000 bytes.",
+            |project, arguments: FunctionSummaryArgs| {
                 let value = serde_json::to_value(project.function_summary(project.resolve(&arguments.at)?)?)
                     .map_err(|error| ApiError::Invalid(error.to_string()))?;
-                project_tool_view(value, ToolViewKind::FunctionSummary, arguments.view)
+                let pages = SummaryPages {
+                    block_offset: arguments.block_offset,
+                    reference_offset: arguments.reference_offset,
+                    callee_offset: arguments.callee_offset,
+                };
+                project_function_summary(value, arguments.view, pages)
             },
         ),
         tool(

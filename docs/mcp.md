@@ -125,6 +125,14 @@ Binary tools take `path`, optional `arch`, and optional `image_offset`/`image_le
 symbols, exports, import-stub names and `sub_<hex>`. Runtime comparison slots/ranges and branch windows require
 explicit hexadecimal addresses. See [CLI global options](cli-reference.md#global-options-and-addresses).
 
+`function_summary` with `view=summary` or `view=code` adds `callees` (distinct call targets with names and call
+counts) and does not refuse for size. When a large function does not fit 60,000 bytes, its graph blocks,
+references and callees are returned as whole-row pages: `graph.blocks_offset`/`blocks_next_offset`,
+`references.items_offset`/`items_next_offset` and `callees_offset`/`callees_next_offset`, continued with the
+`block_offset`, `reference_offset` and `callee_offset` arguments, and a `fitted` receipt lists any optional
+analysis omitted to fit. Graph edges keep indexing blocks by their position in the whole function. `view=full`
+still refuses when oversized.
+
 A byte or text `search` charges one unit of match work per candidate start for exact text, so the default
 budget covers a 50 MB image; byte patterns with wildcards still charge their length per start. When a budget or
 cancellation stops a byte/text scan, the report gives `resume_at` (search again with `range.start` there) and
