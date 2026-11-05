@@ -80,6 +80,28 @@ pub struct RawCodeReport {
     pub limitations: Vec<&'static str>,
 }
 
+/// ARM text with its decimal `#` immediates also in hex, after a `;` as GNU objdump prints them
+/// (`movt r1, #1934 ; 0x78e`), so a `movw`/`movt` pair or an offset reads without converting by hand. Immediates
+/// below 10 read the same in both bases and get none.
+pub(crate) fn with_hex_immediates(text: String) -> String {
+    let mut values = Vec::new();
+    for (index, _) in text.match_indices('#') {
+        let rest = &text[index + 1..];
+        let negative = rest.starts_with('-');
+        let digits: String = rest[usize::from(negative)..].chars().take_while(char::is_ascii_digit).collect();
+        let next = rest[usize::from(negative) + digits.len()..].chars().next();
+        // Hex (`#0x10`) and floating-point (`#1.5`) immediates are left alone.
+        if digits.is_empty() || matches!(next, Some('x' | 'X' | '.' | 'e' | 'E')) {
+            continue;
+        }
+        let Ok(value) = digits.parse::<u64>() else { continue };
+        if value >= 10 {
+            values.push(if negative { format!("-{value:#x}") } else { format!("{value:#x}") });
+        }
+    }
+    if values.is_empty() { text } else { format!("{text} ; {}", values.join(", ")) }
+}
+
 fn invalid(message: &str) -> ApiError {
     ApiError::Invalid(message.to_owned())
 }
@@ -225,7 +247,10 @@ pub fn inspect_raw_code(bytes: &[u8], request: &RawCodeRequest) -> Result<RawCod
         }
         let transfer = observation.flow != Flow::Next;
         let conditional_fallthrough = observation.flow == Flow::Next && observation.conditional;
-        let text = decoder.format(instruction_bytes, address);
+        let mut text = decoder.format(instruction_bytes, address);
+        if request.arch == Arch::Arm {
+            text = with_hex_immediates(text);
+        }
         rows.push(RawCodeRow {
             window_byte_offset: consumed,
             bytes: rampage_arch::hex::bytes(instruction_bytes),

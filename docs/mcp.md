@@ -117,6 +117,9 @@ oversized results do not persist. See [local variables](local-variables.md) for 
 `inspect_raw_code` reads an explicitly mapped regular-file window with required architecture, mode, instruction
 and data byte orders, and base VA; it returns range hashes, source offsets and bounded linear observations.
 Limits: 4096 bytes, 256 instructions, little endian only; no target following or validated code identity.
+ARM and Thumb rows print decimal `#` immediates of 10 or more in hex too, as GNU objdump does
+(`movt r1, #1934 ; 0x78e`). A native binary tool on a file with no recognised header says how to read it as
+headerless code: `inspect_raw_code` for ARM/Thumb, AArch64 and x86, or the `raw` selector for the Raw profiles.
 See [raw-code windows](raw-code.md). `decode_file_range` and `inspect_data` have separate source/coordinate
 contracts; see [decoding](decoding.md) and [data inspection](data-inspection.md).
 
@@ -248,7 +251,9 @@ Raw-capable tools (`binary_info`, `list_functions`, `disassemble`, `function_gra
 }
 ```
 
-`profile` is a closed Raw language ID, listed in the server instructions; `offset`/`length` select original-file bytes (1..=131072); `base_address`,
+`profile` is a closed Raw language ID, listed in the server instructions, in any letter case, or a processor
+alias such as `msp430`, `avr`, `8051` or `z80`. An unknown name gets the closest profiles; an ARM, Thumb,
+Cortex-M, AArch64 or x86 name is pointed to `inspect_raw_code` with an example, since those have no Raw profile; `offset`/`length` select original-file bytes (1..=131072); `base_address`,
 `entry` and `seeds` (at most 8192) are internal code-space byte offsets, also for word-addressed processors, and
 tool addresses use the same coordinates. The mapping is an analyst assertion, not header admission. `raw` cannot
 be combined with `arch`, `image_offset` or `image_length`, and other tools refuse it with "tool X does not accept

@@ -659,13 +659,15 @@ impl RampageServer {
             };
             let mut project = if tool.reads_annotations {
                 let project =
-                    self.session.open_at(&PathBuf::from(path), arch, image).map_err(|error| error_text(&error))?;
+                    self.session.open_at(&PathBuf::from(path), arch, image).map_err(|error| open_error(&error))?;
                 // Other clients (the UI, the CLI) may have saved names since the last call.
                 project.refresh_annotations().map_err(|error| error_text(&error))?;
                 project
             } else {
                 let binary = rampage_loaders::Binary::open_image(path, image, arch);
-                let project = Project::new(binary.map_err(|error| error_text(&error))?);
+                let project = Project::new(binary.map_err(|source| {
+                    open_error(&rampage_api::ApiError::Load { path: PathBuf::from(path), source })
+                })?);
                 project.set_packs(self.packs());
                 Arc::new(project)
             };
@@ -710,6 +712,14 @@ impl RampageServer {
         // Raw annotations are memory-only and shared through the session, so there is no log to refresh.
         self.session.open_raw(path, &request).map_err(|error| format!("`raw`: {}", error_text(&error)))
     }
+}
+
+/// Why a native open failed; for a file without a recognised header, also how to read it as headerless code.
+fn open_error(error: &rampage_api::ApiError) -> String {
+    let text = error_text(error);
+    let headerless = matches!(error, rampage_api::ApiError::Load { source: rampage_loaders::LoadError::Parse(_), .. })
+        && text.contains("Unknown file magic");
+    if headerless { format!("{text}. {}", rampage_api::headerless_guidance()) } else { text }
 }
 
 /// An `image_offset` or `image_length` argument (see [`FileOffset`]); `null` means none.

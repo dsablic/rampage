@@ -1,5 +1,22 @@
 use super::*;
 
+/// Benchmark v2 validation: an agent misread `movt r1, #1934` from the blinky Cortex-M3 image, computing
+/// 0x038e3ad1 instead of 0x078e3ad1. The same movw/movt pair and store, with the immediates also in hex.
+#[test]
+fn thumb_immediates_also_print_in_hex() {
+    // movw r1, #15057; movt r1, #1934; str.w r1, [r0, #168]; movs r0, #1
+    let bytes = [0x43, 0xf6, 0xd1, 0x21, 0xc0, 0xf2, 0x8e, 0x71, 0xc0, 0xf8, 0xa8, 0x10, 0x01, 0x20];
+    let report = inspect_raw_code(&bytes, &request(Arch::Arm, RawCodeMode::Thumb)).unwrap();
+    let texts: Vec<&str> = report.rows.iter().map(|row| row.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        ["movw r1, #15057 ; 0x3ad1", "movt r1, #1934 ; 0x78e", "str.w r1, [r0, #168] ; 0xa8", "movs r0, #1"]
+    );
+    assert_eq!(with_hex_immediates("ldr r0, [r1, #-12]".into()), "ldr r0, [r1, #-12] ; -0xc");
+    assert_eq!(with_hex_immediates("vmov.f64 d0, #1.5".into()), "vmov.f64 d0, #1.5");
+    assert_eq!(with_hex_immediates("isb #0xf".into()), "isb #0xf");
+}
+
 fn request(arch: Arch, mode: RawCodeMode) -> RawCodeRequest {
     RawCodeRequest {
         arch,
