@@ -1,0 +1,23 @@
+name: Feature request
+description: A tool, format, architecture or analysis rampage should support.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The reverse-engineering question or workflow, and where rampage falls short today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed MCP tool or change
+      description: |
+        Features land as MCP tools with bounded output. Sketch the tool name, its arguments and what the result
+        should contain, or the change to an existing tool.
+  - type: textarea
+    id: reference
+    attributes:
+      label: Comparable behaviour elsewhere
+      description: How IDA, Ghidra, Binary Ninja or another tool handles this, if relevant.

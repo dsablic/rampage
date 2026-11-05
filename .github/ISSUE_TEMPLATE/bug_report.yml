@@ -1,0 +1,54 @@
+name: Bug report
+description: Something rampage did wrong, crashed on, or refused unexpectedly.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a security problem (a crash or hang on crafted input, escaping MCP output bounds, bypassing debugger
+        consent flags), do not file a public issue; see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: rampage version or commit
+      description: The output of `rampage --version`, or `git rev-parse --short HEAD`.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Host OS and architecture
+      placeholder: macOS 15.4 on ARM64, Ubuntu 24.04 on x86-64, ...
+    validations:
+      required: true
+  - type: textarea
+    id: call
+    attributes:
+      label: Command or MCP call
+      description: The exact CLI command, or the MCP tool name and its JSON arguments.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened and what you expected
+      description: Include the relevant output or error text.
+    validations:
+      required: true
+  - type: dropdown
+    id: shareable
+    attributes:
+      label: Can the binary be shared?
+      options:
+        - "Yes, attached or linked below"
+        - "Yes, it is built from source (steps below)"
+        - "No, but I can describe it (format, architecture, toolchain)"
+        - "No"
+    validations:
+      required: true
+  - type: textarea
+    id: binary
+    attributes:
+      label: Binary details
+      description: A link, build steps, or a description. Only share binaries you are allowed to redistribute.
