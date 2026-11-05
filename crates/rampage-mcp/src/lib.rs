@@ -21,6 +21,10 @@ use serde_json::{Map, Value, json};
 /// The meta-tool that lists the tool groups and enables them.
 pub const ENABLE_TOOLS: &str = "enable_tools";
 
+/// The tool `_meta` key with which Claude Code lets a tool's results grow past its 50,000-character default before
+/// it replaces them with a preview.
+pub const MAX_RESULT_SIZE_META: &str = "anthropic/maxResultSizeChars";
+
 /// The environment variable choosing the groups served from the start: `all`, or a comma-separated list.
 pub const TOOLS_ENV: &str = "RAMPAGE_MCP_TOOLS";
 
@@ -66,17 +70,18 @@ not verdicts. For a single question use triage or binary_info, then list_functio
 with offset/limit), then decompile a function to C to understand it (the best starting point; falls back to \
 function_summary, a structural CFG/reference summary, where no decompiler specification is available), or disassemble \
 or function_graph it, and follow references with xrefs. list_imports and list_strings are good starting points for \
-finding behavior. Record findings with rename and set_comment, or many at once with annotate_batch (all or nothing; \
-check_names pre-flights candidate names): they persist beside the binary and every client of the same binary, \
-including the rampage UI, picks them up. record_finding keeps a ledger there of what you established, still don't \
-know or want answered, with supporting tool calls and a status, so a later session or another agent can resume \
-from list_findings. undo and redo revert or reapply one step, which may be a whole batch; when \
-another client's edit blocks undoing a step, discard_undo drops it from the undo history (its edits stay) so earlier \
-steps can be undone; it refuses a step undo could still revert unless force is true, since the user's UI may share \
-that history. Memory snapshots and bundle directories use the same tools. inspect_raw_code provides bounded \
-linear decoding of original-file windows with an explicitly asserted architecture/mode/orders/base, without \
-native-image admission or target following. inspect_data provides bounded native \
-bytes/word candidates without discovery or sidecars; names resolve only through retained metadata. \
+finding behavior; language_metadata (Objective-C classes and superclasses, demangled names) and class_evidence (C++ \
+vtables/RTTI) answer class questions. Record findings with rename and set_comment, or many at once with \
+annotate_batch (all or nothing; check_names pre-flights candidate names): they persist beside the binary and every \
+client of the same binary, including the rampage UI, picks them up. record_finding keeps a ledger there of what \
+you established, still don't know or want answered, with supporting tool calls and a status, so a later session \
+or another agent can resume from list_findings. undo and redo revert or reapply one step, which may be a whole \
+batch; when another client's edit blocks undoing a step, discard_undo drops it from the undo history (its edits \
+stay) so earlier steps can be undone; it refuses a step undo could still revert unless force is true, since the \
+user's UI may share that history. Memory snapshots and bundle directories use the same tools. inspect_raw_code \
+provides bounded linear decoding of original-file windows with an explicitly asserted \
+architecture/mode/orders/base, without native-image admission or target following. inspect_data provides bounded \
+native bytes/word candidates without discovery or sidecars; names resolve only through retained metadata. \
 decode_file_range instead accepts an explicit regular-file range and codec without an executable header. \
 Its transient decoded preview uses decoded offsets, not source offsets or load addresses; supplied sizes and \
 successful decoding do not authenticate content or prove stream boundaries. Tools whose schema has a `raw` \
@@ -111,8 +116,7 @@ No filesystem includes or host preprocessor. edit_variable renames/retypes a cur
 by display name or complete returned native storage, persists storage-keyed annotations, and returns refreshed \
 C and descriptors in the same call. Single whole register/stack mappings and same-size types only; selectors \
 include inclusive definition/use points, not live ranges. Undo/redo/replay preserve edits. \
-set_signature, set_types and set_global persist C declarations; \
-language_metadata exposes demangled names and bounded metadata. import_pdb_names requires an explicit pdb path \
+set_signature, set_types and set_global persist C declarations. import_pdb_names requires an explicit pdb path \
 matching the PE image's RSDS GUID/age; preview is the default, apply=true imports names only as one undo batch. \
 Its detail pages never restrict the whole import; whole_apply_succeeded and exact totals survive byte caps. \
 import_debug_layouts previews checked DWARF layouts/signatures; only apply=true with the exact review_sha256 from a \
@@ -685,7 +689,7 @@ impl ServerHandler for RampageServer {
             rmcp::model::Tool::new(tool.name, tool.description, schema).annotate(debug_annotations(tool.effect))
         });
         let all = std::iter::once(meta).chain(tools).chain(file_tools).chain(debug_tools);
-        Ok(ListToolsResult::with_all_items(all.collect()))
+        Ok(ListToolsResult::with_all_items(all.map(|tool| tool.with_meta(result_size_meta())).collect()))
     }
 
     async fn call_tool(
@@ -737,6 +741,13 @@ impl ServerHandler for RampageServer {
         let result = result.map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
         Ok(result.into())
     }
+}
+
+/// Every tool's `_meta`: results fit [`tools::RESULT_LIMIT_CHARS`], so a client must not cut them shorter.
+fn result_size_meta() -> rmcp::model::MetaObject {
+    let mut meta = rmcp::model::MetaObject::new();
+    meta.insert(MAX_RESULT_SIZE_META.to_owned(), json!(tools::RESULT_LIMIT_CHARS));
+    meta
 }
 
 /// The MCP annotations of a debug tool: every one reaches a target outside rampage. Inspection is read-only; a

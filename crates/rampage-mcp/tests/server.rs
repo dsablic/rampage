@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rampage_api::tools::Group;
+use rampage_api::tools::{Group, RESULT_LIMIT_CHARS};
 use rampage_mcp::RampageServer;
 use rmcp::model::{CallToolRequestParams, CallToolResult, ClientConfig};
 use rmcp::service::{NotificationContext, RoleClient, RunningService};
@@ -196,6 +196,8 @@ async fn lists_core_tools_and_enable_tools_by_default() {
         "list_annotations",
         "record_finding",
         "list_findings",
+        "language_metadata",
+        "class_evidence",
     ] {
         assert!(names.iter().any(|name| name == tool), "{tool}");
     }
@@ -213,6 +215,39 @@ async fn lists_core_tools_and_enable_tools_by_default() {
     for group in Group::ALL {
         assert!(instructions.contains(&format!("- {}: ", group.name())), "{group:?}");
     }
+    // Claude Code shows a model only the first 4,096 characters of the instructions; class questions must find
+    // their tools there.
+    let shown: String = instructions.chars().take(4096).collect();
+    for text in ["- types: ", "language_metadata", "Objective-C", "class_evidence"] {
+        assert!(shown.contains(text), "{text}");
+    }
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn every_tool_declares_its_result_size_for_claude_code() {
+    for server in [RampageServer::default(), RampageServer::with_groups(Group::ALL)] {
+        let client = connect_to(server).await;
+        for tool in client.list_all_tools().await.unwrap() {
+            let meta = serde_json::to_value(&tool).unwrap()["_meta"].clone();
+            assert_eq!(meta, json!({ "anthropic/maxResultSizeChars": RESULT_LIMIT_CHARS }), "{}", tool.name);
+        }
+        client.cancel().await.unwrap();
+    }
+    // Claude Code keeps 50,000 characters by default and honours at most 500,000.
+    assert!((50_001..=500_000).contains(&RESULT_LIMIT_CHARS));
+}
+
+#[tokio::test]
+async fn a_cut_full_page_fits_the_declared_result_size() {
+    let client = connect_to(RampageServer::default()).await;
+    let path = fixture("hello-go-x64.elf");
+    let result = call(&client, "list_functions", json!({ "path": path, "limit": 1000 })).await;
+    let text = text(&result);
+    assert!(text.ends_with("(truncated: ask for a narrower range, a smaller count, or a page)"), "{}", text.len());
+    // Over Claude Code's default, so it would be replaced by a preview without the declaration, and within it.
+    assert!(text.chars().count() > 50_000);
+    assert!(text.chars().count() <= RESULT_LIMIT_CHARS);
     client.cancel().await.unwrap();
 }
 

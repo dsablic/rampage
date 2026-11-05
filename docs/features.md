@@ -95,7 +95,9 @@ Address-bound signatures, calling conventions, type declarations and typed globa
 and dependency-checked undo/redo. Embedded DWARF scalar/pointer signatures can be previewed and imported
 without replacing analyst signatures. Named Itanium and MSVC vtables provide bounded class evidence, including
 the C++ class name, not inferred object layouts. For stripped binaries, Itanium and MSVC RTTI scanning recovers
-class names and base-class edges. See [debug signature import](debug-signatures.md).
+class names and base-class edges. See [debug signature import](debug-signatures.md). MCP serves this evidence as
+`class_evidence`, and demangled names with Objective-C classes, superclasses, methods and properties as
+`language_metadata`; both are core tools, listed without enabling a group.
 
 Types-group [`edit_variable`](local-variables.md) persists local/parameter names and types by native storage
 identity and returns refreshed C in one call, with undo/replay. Limits: single whole register/stack mappings

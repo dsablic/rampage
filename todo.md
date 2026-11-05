@@ -19,11 +19,11 @@ during the benchmark.
 - [ ] The model sometimes calls a bare tool name (`enable_tools`, `list_strings`) and the client refuses it: 4
   of 6 C++ runs in the first run, 2 in the second. Check whether tool descriptions or `enable_tools` output name
   tools in a way that invites unprefixed calls.
-- [ ] The second run's one rampage miss (`objc-superclasses`) never enabled the `types` group for
-  `language_metadata`. Consider whether `types` belongs in the default groups, now that Claude Code defers MCP
-  schemas through ToolSearch and a larger default set costs little up front.
-- [ ] Results over Claude Code's 50,000-character limit are spilled to an unreadable file. rampage had none in
-  the benchmark; consider declaring `anthropic/maxResultSizeChars` on tools that can legitimately return more.
+- [x] The second run's one rampage miss (`objc-superclasses`) never enabled the `types` group for
+  `language_metadata`. Done: `language_metadata` and `class_evidence` moved to `core` (2 tools, about 2.3 KB of
+  tools/list) instead of enabling `types` by default (20 tools, about 35 KB).
+- [x] Results over Claude Code's 50,000-character limit are spilled to an unreadable file. Done: every tool
+  declares `anthropic/maxResultSizeChars` = `RESULT_LIMIT_CHARS` (61,024).
 - [ ] Add harder, less-saturated agent tasks: both servers score 49–51/51 on the current 17, so the set no longer
   separates them on accuracy, only on calls, tokens and time.
 - [ ] Repeat the head-to-head with a second model or client before drawing conclusions beyond this one.

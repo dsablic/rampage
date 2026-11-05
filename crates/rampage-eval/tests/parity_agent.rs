@@ -201,7 +201,7 @@ async fn scripted_group_enable_refreshes_real_catalog_before_next_model_turn() {
         let path = fixture();
         let (script, requests) = Script::new(vec![
             tool("enable_tools", json!({ "groups": ["types"] })),
-            tool("language_metadata", json!({ "path": path })),
+            tool("list_types", json!({ "path": path })),
             final_answer(json!({ "status": "unknown", "reason": "scripted inventory only" })),
         ]);
         let mut bounds = config();
@@ -220,8 +220,8 @@ async fn scripted_group_enable_refreshes_real_catalog_before_next_model_turn() {
         assert_eq!(run.catalog_tool_names, vec![initial_names, refreshed_names]);
         {
             let requests = requests.lock().unwrap();
-            assert!(!offered(&requests[0], "language_metadata"));
-            assert!(offered(&requests[1], "language_metadata"));
+            assert!(!offered(&requests[0], "list_types"));
+            assert!(offered(&requests[1], "list_types"));
             assert!(!offered(&requests[0], "edit_variable"));
             assert!(!offered(&requests[0], "set_types"));
             assert_eq!(offered(&requests[1], "edit_variable"), allow_variable_edits);
