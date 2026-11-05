@@ -6,6 +6,28 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
+## Phase 9 debugger acceptance (2026-10-29 to 2026-11-05)
+
+Phase 9 has no scorecard row: the agent-level debugger task was not added (see the design's deviations). Its
+acceptance is the [acceptance record](plans/2026-10-29-debugger-control.md#acceptance-record) in the debugger
+design.
+
+| Step | Fake-stub tests | Live run |
+| --- | --- | --- |
+| 9.1–9.4 (GDB stubs, execution, correlation, writes and kill) | QEMU Cortex-M3 and gdbserver AArch64 transcripts | Passes on QEMU with the owned firmware |
+| 9.5 (macOS `debugserver`) | A transcript built from debugserver's source, not recorded | Not run: needs DevToolsSecurity enabled |
+| 9.6a (Windows through `gdbserver.exe` and `lldb-server`) | Transcripts built from the stubs' sources, not recorded | Not run: needs a Windows host |
+
+There is no live Linux gdbserver run. The commands for each live run are in the acceptance record.
+
+## REA formats and ledger wave (2026-10-29)
+
+The `formats` tools (`build_info`, `pe_resources`, `pe_load_config`, `pyinstaller_archive`, `wasm_module`) and the
+findings ledger have no scorecard measurement. Their acceptance is API, CLI and MCP tests on owned fixtures
+(`tests/fixtures/build-buildinfo.sh`, `build-formats.sh`, `build-pe-metadata.sh`): the `build_info`,
+`pe_metadata`, `wasm_pyinstaller` and `findings` integration-test modules of `rampage-api` and `rampage-mcp`, plus CLI tests. See
+[toolchain build info](features.md#toolchain-build-info) and the [investigation ledger](features.md#investigation-ledger).
+
 ## Phase 4.1 Raw Project processor roster
 
 The [roster measurement](benchmarks/phase4-1-roster-2026-10-21.json) opens every one of the sixteen Sleigh

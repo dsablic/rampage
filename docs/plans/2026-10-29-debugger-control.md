@@ -155,6 +155,154 @@ evaluation only; nothing is implemented.
 - **Agent-level:** a parity-scorecard task where an agent, through MCP only, breaks on a named function in an owned
   fixture, reads its arguments, steps out and records the observed return value as a finding.
 
+## Acceptance record
+
+Moved from [debug control](../debug-control.md). What each step's tests and live runs cover.
+
+The protocol and the tools are tested against a scripted fake stub, over TCP and Unix sockets. It replays
+transcripts of QEMU's Cortex-M3 stub and of gdbserver on AArch64 Linux, and also sends slow, malformed, oversized
+and NAKed replies, stop replies in pieces and between console output, ignores interrupts, refuses `Z0`, and drops
+the connection mid-command. Read-only scripts fail a test on any execution-control packet; execution scripts accept
+only the packets listed above and fail on writes, kill, launch, attach, signal delivery and non-stop mode. Scripts
+accept well-formed writes only when marked for writes (applying memory writes to their memory, with ranges that
+drop or refuse writes), and `k`/`vKill` only when marked for kill; the fake stub checks this with its own parser,
+written apart from the client's.
+
+Each session request declares the packet classes it may send: `Read` (queries, register and memory reads, thread
+selection for reads), `Execution` (`vCont?`, `vCont;c`, `vCont;s:<thread>`, `c`, `s`, `Hc<thread>`,
+`Z0`..`Z4`/`z0`..`z4`), `Detach` (`D`, `D;<pid>`), `Write` (`M`, `X`, `P`, `G`, well-formed: data exactly as long as
+the length says) and `Kill` (`k`, `vKill;<pid>`). Inspection requests may send only `Read` packets; the write
+requests `Read` and `Write`; a kill `Read`, `Execution` (to stop the target and remove breakpoints) and `Kill`, never
+`Detach`; detaching never `Write` or `Kill`. The client refuses anything outside the request's classes before it
+reaches the wire, and refuses every other packet always.
+
+The write tests cover: the tools absent without the flag and `kill: true` refused without it; the session's own
+refusal; stale epochs and a running target; an `expect` mismatch leaving memory untouched; `X` with a fall back to
+`M`; a refused chunk ending the write with exactly the written chunks reported; a dropped flash write giving
+`verified: false`; `P` with a fall back to `g`/`G`; refusal under a software breakpoint, temporary ones included;
+kill's refusal, confirmation and unconfirmed (closed connection) outcomes; and the read and execution tools sending
+no write or kill packet with both flags on.
+
+The live acceptance runs QEMU on an owned firmware (`tests/fixtures/firmware`, rebuilt with
+`build-firmware.sh`). The firmware calls a named function, `tick`, in a loop, and `tick` increments a RAM word,
+`counter`; the tests find both in the ELF's symbol table. Through the API, the tests read and snapshot the halted
+target, then break on `tick` with a hardware breakpoint, continue twice with it still set (stepping past it, so
+`counter` advances by one per hit), step three instructions, catch the write to `counter`
+with a watchpoint, see a short continue report `running`, interrupt it, have a stale epoch refused, and disconnect,
+which removes the breakpoint and detaches.
+
+The static correlation tests bind an owned x86-64 PIE with a GNU build ID (`tests/fixtures/debug-correlation`,
+rebuilt with its `build.sh`), mapped into the fake target at a load bias: binding by build ID, by path and by file
+name, refusal without a match and binding with an explicit slide, a slide that does not verify, breakpoints by
+function name and static address, an ambiguous name, stop locations, register annotations, stepping over a call
+and a non-call, the temporary breakpoint's removal after a timeout, a cancel and another stop, user breakpoints at
+the pc and at the return address, stepping out, and evidence accepted by the findings ledger. Live, `debug_connect`
+with the firmware's path binds it at slide 0 verified by its mapped code; a breakpoint by `function: "tick"` stops
+in `tick`, annotated registers point into `tick` and `reset_handler`, step out lands after the `bl tick`, and step
+over runs that call site without stopping inside `tick` (`counter` advances by one).
+
+QEMU removes every breakpoint and watchpoint when asked `?`. The fake stub's QEMU transcript does the same and
+fails a test on any `?` asked over an inserted one, and a live test sets a software breakpoint and then a write
+watchpoint, calls `debug_status` and `debug_snapshot` before each continue, and still stops at `tick` and at the
+store to `counter`.
+
+With both flags on, the live write test stops at `tick`, writes `counter` with `expect` set to what it holds, and
+continues: `tick` reads the written value and adds one. It writes `r12` as an integer and reads it back, writes
+four bytes of flash past the image and checks the reported `verified` against an independent read, continues once
+more to show the breakpoint survived, then disconnects with `kill: true` and waits for QEMU to exit. With QEMU 11
+on `lm3s6965evb`, `X` is unsupported (rampage falls back to `M`), `P` is supported, the flash write is applied
+(`verified: true`: QEMU's debug path writes ROM), and `vKill;1` is answered `OK` before QEMU exits with status 0.
+
+```sh
+RAMPAGE_QEMU_LIVE=1 cargo nextest run -p rampage-api --run-ignored only -E 'test(debug_qemu::)'
+```
+
+The test harness plays the operator and starts QEMU. Rampage itself only connects.
+
+### debugserver
+
+The fake stub's debugserver transcript (`transcripts::debugserver_arm64`) is built from debugserver's source
+(`lldb/tools/debugserver/source/RNBRemote.cpp`) and LLDB's `lldbgdbremote.md`, not recorded: the machine it was
+written on could not run debugserver. It covers `qHostInfo` and `qProcessInfo`, a target description with gapless
+offsets and views, `qRegisterInfo`-only discovery, `g` answered as unsupported (registers come from `p` and the stop
+reply), `jThreadsInfo`, the image list (addresses, then a batch) with the main executable, dyld and a shared-cache
+library, `qMemoryRegionInfo` with a busy region whose dirty-page list runs past 4 KiB, and stop replies with Mach
+exceptions and a watchpoint stop without one. The fake stub checks every LLDB query against its own parser and
+fails a test on any other form or any other `j` packet. The tests check the handshake (the architecture from the
+CPU type, the stated byte order, the address mask), both register discovery paths, that no `g` or `G` is sent and
+registers are read once per stop, that GDB stubs are asked none of the queries, breakpoints of kind 4, `vCont`
+steps, a watchpoint hit as `reason:watchpoint` (its accessed address too) and a continue that steps past it with
+the watchpoint taken out and put back, an interrupt answered with SIGSTOP, and `EXC_BAD_ACCESS` with its fault
+address. Through the tools, they bind the owned arm64 fixture (`tests/fixtures/debug-macho`, rebuilt with its
+`build.sh`: a C program calling `tick` in a loop, `tick` adding to the global `counter`, ad-hoc signed with
+`get-task-allow`) by UUID at a slide, refuse a shared-cache library by path, by name with a slide and by a file of
+another UUID, bind an extracted image of the cached UUID, step out with a signed x30 and annotate it (defensively:
+debugserver strips those itself) while leaving an integer register with the same bits unannotated, and report a
+Mach exception in a stop event.
+
+The live acceptance needs debugserver and `sudo DevToolsSecurity -enable` (or developer mode). The harness plays the
+operator: it starts the fixture, then `debugserver 127.0.0.1:<port> --attach=<pid>`. It connects with the fixture's
+path (binding by UUID), breaks on `_tick` by name, continues to it, steps out to `_main`, catches the write to
+`counter` with a watchpoint on two continues in a row with the watchpoint still set, interrupts a running continue,
+snapshots the program's `__TEXT` and detaches, then kills debugserver and the program whatever the outcome. Without `RAMPAGE_DEBUGSERVER_LIVE=1` it skips with a message; `RAMPAGE_DEBUGSERVER` names a
+debugserver binary other than the Command Line Tools' or Xcode's. It has not yet run against a real debugserver.
+
+```sh
+RAMPAGE_DEBUGSERVER_LIVE=1 cargo nextest run -p rampage-api --run-ignored only -E 'test(debug_debugserver_live::)'
+```
+
+### Windows stubs
+
+The fake stub's Windows transcripts (`rampage_debug::fake::windows`) follow gdbserver's and lldb-server's sources;
+they were not recorded (see [what is not live-verified](../debug-control.md#what-is-not-live-verified)). gdbserver x64 serves its
+generated description with the `Windows` OS ABI, DLLs at their base plus 0x1000 without the executable, the exec
+file, `qGetTIBAddr` with the TIB and PEB in memory, `EXCEPTION_RECORD`s through `qXfer:siginfo:read`, refuses `Z3`,
+and grows a thread when interrupted; its WoW64 variant serves the `i386` description, 32-bit DLLs, a 32-bit TIB and
+`EXCEPTION_RECORD32`. lldb-server x64 serves LLDB's features with a decimal `PacketSize`, `qHostInfo` and
+`qProcessInfo` with a Windows triple, an unnamed feature with offsets and a view, every image at its base,
+`qMemoryRegionInfo`, stop replies with `reason` and a hex `description`, and refuses `Z1`. The fake maps PE images
+the way the loader does (`map_pe`: sections at their RVAs, base relocations applied, the runtime base written into
+`ImageBase`).
+
+The tests check, in `rampage-debug`: Windows detection; both module forms with the PE headers and CodeView records
+read at the right base; the executable from the PEB (gdbserver) or the list (lldb-server); breakpoints, single steps
+and access violations with their exception records; that a step's SIGTRAP asks for no record; `Z3` and `Z1`
+refusals; lldb-server's watchpoint description and exception descriptions (a compiled-in int3 as a breakpoint);
+interrupts in a new thread under both stubs, with reads and steps passing over it and gdbserver's break-in thread
+parked (the next continue names every other thread); a DLL-load stop racing an interrupt; gdbserver before 16,
+recognized without an OS ABI, with a loaded `.exe` in its list not taken for the program; library names with a bare
+`&`; and a WoW64 process. Through the tools, with the owned fixtures in `tests/fixtures/debug-windows` (rebuilt
+with its `build.sh`: a C program without a C runtime, `start` calling the exported `tick` in a loop, `tick` adding to
+`counter` through a `movabs` pointer that a base relocation patches; zig's MinGW target links it with LLD, which
+writes the RSDS record; x64 and x86 builds of 4-5 KiB): binding by CodeView at an ASLR slide with the relocated bytes
+left out (the mapped bytes differ from the file at the relocation), refusing an image whose unrelocated code differs,
+case-insensitive `\\?\` paths, a breakpoint by function name with its stop located in `tick`, step out to `start`
+by `[rsp]`, a Windows exception and an interrupt through `debug_continue` and `debug_interrupt` with registers and
+evidence read from the main thread (and the x64 argument registers), a WoW64 process binding the x86 fixture and
+stepping out by `[esp]`, an ASLR image at its preferred base binding at slide 0 with nothing left out, an image whose
+code is all relocated reported `unverified` rather than matched, and a snapshot recording a bound module's
+preferred base.
+
+The live acceptance needs a Windows host the machine running the tests can reach. On the Windows host, copy
+`tests/fixtures/debug-windows/pe-loop-x64.exe` (or `pe-loop-x86.exe`) over and start one of:
+
+```text
+gdbserver.exe --once 0.0.0.0:2345 pe-loop-x64.exe
+lldb-server.exe gdbserver 0.0.0.0:2345 -- pe-loop-x64.exe
+```
+
+Then, on the machine running the tests:
+
+```sh
+RAMPAGE_WINDOWS_LIVE=1 RAMPAGE_WINDOWS_ENDPOINT=winhost:2345 \
+    cargo nextest run -p rampage-api --run-ignored only -E 'test(debug_windows_live::)'
+```
+
+`RAMPAGE_WINDOWS_FIXTURE=pe-loop-x86.exe` runs it against the 32-bit fixture. The test launches nothing: it connects
+with the endpoint allowed, binds the fixture by its CodeView record, breaks on `tick` by name, steps out to `start`,
+catches the write to `counter` with a watchpoint, interrupts a running continue, snapshots `.text` and detaches.
+Without both variables it skips with a message. It has not yet run against a real stub.
+
 ## What this deliberately does not do
 
 - No process launch or attach by rampage; no plugin or host launch.
