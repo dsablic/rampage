@@ -1,6 +1,6 @@
 # Flywheel phase 2: a fast loop where AI both uses and improves rampage
 
-**Date:** 2026-11-05. **Status:** proposal for review. It builds on
+**Date:** 2026-11-05. **Status:** approved 2026-11-05 as proposed (all five decisions; a $5 per family per run budget); iterate if it proves problematic. It builds on
 [the flywheel strategy](2026-10-12-heuristic-self-improvement-flywheel.md), whose loop, ground-truth sources and
 guardrails still apply. Its Phase 1 (the evaluation substrate) is implemented. This document covers Phases 2–3:
 the proposer and automation. It is written around two requirements:
