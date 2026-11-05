@@ -63,6 +63,9 @@ pub struct Layout {
     pub registers: Vec<Register>,
     /// The bytes all registers take in a `g` reply.
     pub g_size: usize,
+    /// The `<osabi>` the description names (`GNU/Linux`, `Windows`...).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub osabi: Option<String>,
 }
 
 impl Layout {
@@ -141,7 +144,7 @@ impl Layout {
         if g_size > crate::packet::MAX_PACKET_BYTES / 2 {
             return Err("register file exceeds the packet limit".into());
         }
-        Ok(Self { architecture, source, features, registers, g_size })
+        Ok(Self { architecture, source, features, registers, g_size, osabi: None })
     }
 }
 
@@ -150,7 +153,8 @@ impl Layout {
 pub fn parse_description(root: &str, fetch: &mut dyn FnMut(&str) -> Result<String, String>) -> Result<Layout, String> {
     let mut state = Description::default();
     state.document(root, 0, fetch)?;
-    match state.offsets {
+    let osabi = state.osabi.take();
+    let layout = match state.offsets {
         // LLDB's descriptions (debugserver) state every register's offset and declare views of other registers.
         Some(true) => Layout::with_offsets(
             state.architecture,
@@ -160,12 +164,14 @@ pub fn parse_description(root: &str, fetch: &mut dyn FnMut(&str) -> Result<Strin
             state.extent,
         ),
         _ => Layout::new(state.architecture, LayoutSource::TargetDescription, state.features, state.registers),
-    }
+    };
+    layout.map(|layout| Layout { osabi, ..layout })
 }
 
 #[derive(Default)]
 struct Description {
     architecture: Option<String>,
+    osabi: Option<String>,
     features: Vec<String>,
     registers: Vec<Register>,
     next_regnum: u32,
@@ -199,6 +205,12 @@ impl Description {
                             }
                             self.architecture = Some(name.to_owned());
                         }
+                        "osabi" => {
+                            let name = child.text.trim();
+                            if !name.is_empty() && name.len() <= 64 {
+                                self.osabi = Some(name.to_owned());
+                            }
+                        }
                         "feature" => self.feature(child)?,
                         "xi:include" => self.include(child, depth, fetch)?,
                         _ => {}
@@ -229,8 +241,11 @@ impl Description {
     }
 
     fn feature(&mut self, feature: &Element) -> Result<(), String> {
-        let name = feature.attribute("name").ok_or("<feature> without name")?;
-        self.features.push(name.chars().take(128).collect());
+        // lldb-server writes its one feature without a name (`GDBRemoteCommunicationServerLLGS.cpp`, `BuildTargetXml`).
+        let name = feature.attribute("name").unwrap_or("");
+        if !name.is_empty() {
+            self.features.push(name.chars().take(128).collect());
+        }
         for register in feature.children_named("reg") {
             if self.registers.len() >= MAX_REGISTERS {
                 return Err("target description declares too many registers".into());
@@ -283,7 +298,7 @@ impl Description {
                 bitsize,
                 kind: text("type"),
                 group: text("group"),
-                feature: Some(name.chars().take(128).collect()),
+                feature: Some(name.chars().take(128).collect()).filter(|name: &String| !name.is_empty()),
                 offset: offset.unwrap_or(0),
                 alt_name: text("altname"),
                 generic: text("generic"),

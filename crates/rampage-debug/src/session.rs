@@ -17,7 +17,8 @@ use crate::exec::{
 use crate::lldb::{self, AddressMask, HostInfo, ThreadDetail};
 use crate::maps::{self, Module, Offsets, Region};
 use crate::packet::{self, decode_hex, encode_hex, parse_hex_u64};
-use crate::stop::{StopReply, ThreadId, hex_address};
+use crate::pe;
+use crate::stop::{StopReason, StopReply, ThreadId, hex_address};
 use crate::target::{self, Family, Layout};
 use crate::transport::{Endpoint, Transport};
 use crate::{DebugError, MAX_MEMORY_READ};
@@ -34,6 +35,8 @@ const MAX_DESCRIPTION_BYTES: usize = 1024 * 1024;
 const DEFAULT_PACKET_SIZE: usize = 2048;
 /// Modules whose build ID is looked for in target memory.
 const MAX_BUILD_ID_MODULES: usize = 64;
+/// Most modules whose PE headers a Windows module listing reads.
+const MAX_PE_MODULES: usize = 64;
 /// Most `qRegisterInfo<n>` queries in one handshake.
 const MAX_REGISTER_INFO: usize = 1024;
 /// Most threads whose `jThreadsInfo` is asked for: above it the reply (registers and stack memory of every thread)
@@ -162,6 +165,18 @@ pub struct Info {
     /// How pointer authentication codes are taken off code addresses (arm64 return addresses); `None` when the
     /// address width is unknown and values are used as read.
     pub address_mask: Option<AddressMask>,
+    /// A Windows target, and what shows it: gdbserver's target description names the `Windows` OS ABI,
+    /// lldb-server's `qHostInfo`/`qProcessInfo` a Windows OS or triple.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows: Option<WindowsTarget>,
+}
+
+/// What a Windows stub is, as far as its replies show.
+#[derive(Debug, Clone, Serialize)]
+pub struct WindowsTarget {
+    /// `gdbserver` (a GDB stub: `gdbserver.exe` from MinGW-w64 or MSYS2) or `lldb-server` (an LLDB stub).
+    pub stub: &'static str,
+    pub evidence: String,
 }
 
 /// What an LLDB-style stub (debugserver) said about its host and process.
@@ -194,6 +209,16 @@ impl Info {
     /// Whether the stub is Apple's debugserver (or another Apple LLDB stub).
     pub fn apple(&self) -> bool {
         self.lldb.as_ref().is_some_and(|lldb| lldb.apple)
+    }
+
+    /// Whether the target is a Windows process (gdbserver or lldb-server on Windows).
+    pub fn is_windows(&self) -> bool {
+        self.windows.is_some()
+    }
+
+    /// Whether the target is a Windows process under gdbserver (a GDB stub rather than lldb-server).
+    pub fn windows_gdbserver(&self) -> bool {
+        self.windows.as_ref().is_some_and(|windows| windows.stub == "gdbserver")
     }
 }
 
@@ -1043,6 +1068,9 @@ struct Worker {
     dyld_info: Option<bool>,
     /// debugserver registers read one by one, kept for (epoch, selected thread) until a register write.
     register_cache: Option<(u64, Option<ThreadId>, Vec<Option<String>>)>,
+    /// Windows: the thread the system created to answer rampage's interrupt (`DebugBreakProcess` or a console
+    /// Ctrl-Break), which reads and steps without a thread pass over until the target runs again.
+    breakin: Option<ThreadId>,
 }
 
 impl Worker {
@@ -1055,6 +1083,7 @@ impl Worker {
             threads_info: None,
             dyld_info: None,
             register_cache: None,
+            breakin: None,
             client: Client::new(transport),
             info: None,
             state: State::Stopped,
@@ -1129,6 +1158,7 @@ impl Worker {
             limitations,
             lldb,
             address_mask: None,
+            windows: None,
         };
         if info.feature("qXfer:features:read") {
             let mut total = 0;
@@ -1196,6 +1226,7 @@ impl Worker {
                 });
             }
         }
+        info.windows = windows_target(&info);
         info.family = Family::of(info.layout.as_ref());
         info.architecture = info.layout.as_ref().and_then(|layout| layout.architecture.clone());
         info.pointer_size = info.family.pointer_size(info.layout.as_ref());
@@ -1745,7 +1776,7 @@ impl Worker {
         self.resume("c", Origin::Continue)
     }
 
-    /// The thread a step uses: `thread` if the session lists it, else the stop's thread, else the first listed.
+    /// The thread a step uses: `thread` if the session lists it, else [the default](Self::default_thread).
     fn step_thread(&self, thread: Option<ThreadId>) -> Result<Option<ThreadId>, DebugError> {
         if let Some(thread) = thread {
             if !self.threads.iter().any(|known| known.id == thread) {
@@ -1753,13 +1784,29 @@ impl Worker {
             }
             return Ok(Some(thread));
         }
-        let stop_thread = match &self.stop {
-            Some(StopReply::Signal { thread: Some(thread), .. }) => Some(*thread),
+        Ok(self.default_thread())
+    }
+
+    /// The stop reply's thread, when the session lists it.
+    fn stop_thread(&self) -> Option<ThreadId> {
+        match &self.stop {
+            Some(StopReply::Signal { thread: Some(thread), .. }) => {
+                Some(*thread).filter(|stop| self.threads.iter().any(|known| known.id == *stop))
+            }
             _ => None,
-        };
-        Ok(stop_thread
-            .filter(|stop| self.threads.iter().any(|known| known.id == *stop))
-            .or_else(|| self.threads.first().map(|thread| thread.id)))
+        }
+    }
+
+    /// The thread reads and steps use when the caller names none: the stop's thread, else the first listed. On
+    /// Windows, after an interrupt, the stop's thread is the one the system created for it (it runs
+    /// `DbgUiRemoteBreakin` or the console control handler and ends when resumed), so the first other listed
+    /// thread is used instead.
+    fn default_thread(&self) -> Option<ThreadId> {
+        let other = |id: &ThreadId| Some(*id) != self.breakin;
+        self.stop_thread()
+            .filter(other)
+            .or_else(|| self.threads.iter().map(|thread| thread.id).find(other))
+            .or_else(|| self.stop_thread())
     }
 
     fn step_packet(&mut self, thread: Option<ThreadId>, deadline: Instant) -> Result<String, DebugError> {
@@ -2022,6 +2069,7 @@ impl Worker {
         self.client.resume(packet)?;
         self.origin = origin;
         self.interrupted = false;
+        self.breakin = None;
         self.state = State::Running;
         self.resumed_at = Some(Instant::now());
         Ok(())
@@ -2071,7 +2119,7 @@ impl Worker {
                 DebugError::Target(format!("the stub refused to resume: {}", reply_text(&reply)))
             });
         }
-        let stop = StopReply::parse(&reply).map_err(DebugError::Protocol)?;
+        let mut stop = StopReply::parse(&reply).map_err(DebugError::Protocol)?;
         self.epoch += 1;
         // Stubs select the stopped thread themselves; nothing an earlier request selected can be relied on.
         self.selected = None;
@@ -2092,6 +2140,22 @@ impl Worker {
         if self.state == State::Stopped && (list_threads || stale) {
             self.threads = self.list_threads(deadline)?;
         }
+        let info = Arc::clone(self.info.as_ref().expect("the handshake sets the session info"));
+        // gdbserver on Windows reports exceptions as signals (`gdb/nat/windows-nat.c`, `handle_exception`); the
+        // exception record itself comes from `qXfer:siginfo:read` (`windows_thread_info::xfer_siginfo`). A SIGTRAP
+        // after a single step is not asked about, so stepping costs no extra round trips.
+        let stepped = matches!(self.origin, Origin::Step(_)) && signal == Some(5);
+        if info.windows_gdbserver()
+            && info.feature("qXfer:siginfo:read")
+            && signal.is_some_and(|signal| signal != 0)
+            && !stepped
+            && let Some(thread) = thread
+            && let Some(exception) = self.siginfo(thread, deadline)?
+            && let StopReply::Signal { reasons, .. } = &mut stop
+        {
+            reasons.insert(0, StopReason::WindowsException(exception));
+            self.stop = Some(stop.clone());
+        }
         // The stop happened whether or not its pc can be read; only a broken stream fails it.
         let (pc_bytes, pcs) = match self.state {
             State::Stopped => match self.stop_pc(&stop, deadline) {
@@ -2104,17 +2168,50 @@ impl Worker {
         let (mut reason, breakpoints, watch) =
             exec::classify(&stop, self.origin, interrupted, &pcs, &mut self.breakpoints);
         // debugserver answers the interrupt byte by stopping the process with SIGSTOP (17), reported as such
-        // (`native-signals`), not as SIGINT.
+        // (`native-signals`), not as SIGINT; so does lldb-server on Windows, whose own `DebugBreakProcess`
+        // injection is "treated as Halt SIGSTOP" (`NativeProcessWindows.cpp`, `HandleBreakpointException`).
         if reason == StopCause::Signal
             && interrupted
             && signal == Some(17)
-            && self.info.as_ref().is_some_and(|info| info.apple())
+            && (info.apple() || (info.is_windows() && info.lldb.is_some()))
         {
             reason = StopCause::Interrupted;
         }
+        let mut warnings = Vec::new();
+        // gdbserver on Windows interrupts with a console Ctrl-Break (DBG_CONTROL_BREAK, SIGINT) or, when that
+        // fails, `DebugBreakProcess`, whose int3 in a new thread arrives as a SIGTRAP with `swbreak`
+        // (`gdbserver/win32-low.cc`, `request_interrupt`). Either way the stop is in a thread the system created.
+        let new_thread = stale && thread.is_some();
+        if info.is_windows() && interrupted && new_thread && breakpoints.is_empty() && signal == Some(5) {
+            reason = StopCause::Interrupted;
+        }
+        if info.is_windows() && reason == StopCause::Interrupted && new_thread {
+            self.breakin = thread;
+            let others = self.default_thread().map(|other| format!("; reads and steps without a thread use {other}"));
+            warnings.push(format!(
+                "the interrupt stopped in thread {}, which Windows created to deliver it and which ends when \
+                 resumed{}",
+                thread.map(|thread| thread.to_string()).unwrap_or_default(),
+                others.unwrap_or_default()
+            ));
+        }
+        // gdbserver rewinds the pc of every thread stopped by an int3 onto it (`win32-low.cc`, `maybe_adjust_pc`),
+        // its own breakpoints' or not, so a continue executes that int3 again.
+        let rewound = reason != StopCause::Watchpoint
+            && signal == Some(5)
+            && matches!(&stop, StopReply::Signal { reasons, .. } if reasons.contains(&StopReason::SwBreak));
+        let ours =
+            self.breakpoints.iter().any(|entry| entry.kind == BreakKind::Software && pcs.contains(&entry.address));
+        if info.windows_gdbserver() && rewound && !ours {
+            warnings.push(
+                "gdbserver moved this thread's pc back onto an int3 that is not one of rampage's breakpoints \
+                 (DebugBreakProcess's, or one compiled into the program); continuing executes it again and stops \
+                 here, unless the pc is moved past it (debug_write_register, with --debug-writes)"
+                    .into(),
+            );
+        }
         let exception = exec::exception(&stop);
         // Breakpoints stepped past go back now, whatever stopped the step.
-        let mut warnings = Vec::new();
         for id in std::mem::take(&mut self.reinsert) {
             let Some(index) = self.breakpoints.iter().position(|entry| entry.id == id) else { continue };
             let packet = self.breakpoints[index].insert_packet();
@@ -2239,7 +2336,14 @@ impl Worker {
         let bytes = match expedited {
             Some(bytes) => Some(bytes),
             None => {
-                self.use_thread(None, deadline)?;
+                let thread = match stop {
+                    StopReply::Signal { thread, .. } => *thread,
+                    _ => None,
+                };
+                self.use_thread(
+                    thread.filter(|thread| self.threads.iter().any(|known| known.id == *thread)),
+                    deadline,
+                )?;
                 let reply = self.command(&format!("p{:x}", pc.regnum), deadline)?;
                 if reply.len() == pc.bytes() * 2 && reply.iter().all(|byte| is_register_digit(*byte)) {
                     Some(String::from_utf8_lossy(&reply).to_ascii_lowercase())
@@ -3139,14 +3243,7 @@ impl Worker {
     /// Selects `thread`, or the stop's thread (else the first listed) when `None`, so no read depends on a
     /// selection an earlier request left behind. `None` when the stub lists no threads.
     fn use_thread(&mut self, thread: Option<ThreadId>, deadline: Instant) -> Result<Option<ThreadId>, DebugError> {
-        let stop_thread = match &self.stop {
-            Some(StopReply::Signal { thread: Some(thread), .. }) => Some(*thread),
-            _ => None,
-        };
-        let default = stop_thread
-            .filter(|stop| self.threads.iter().any(|known| known.id == *stop))
-            .or_else(|| self.threads.first().map(|thread| thread.id));
-        let Some(thread) = thread.or(default) else { return Ok(None) };
+        let Some(thread) = thread.or_else(|| self.default_thread()) else { return Ok(None) };
         self.select(thread, deadline)?;
         Ok(Some(thread))
     }
@@ -3400,6 +3497,9 @@ impl Worker {
                 result.exec_file = Some(String::from_utf8_lossy(&bytes).into_owned());
             }
         }
+        if info.is_windows() {
+            self.windows_images(info, &mut result, deadline)?;
+        }
         let offsets = self.command("qOffsets", deadline)?;
         if !offsets.is_empty() && !is_error(&offsets) {
             let reply = String::from_utf8_lossy(&offsets).into_owned();
@@ -3422,6 +3522,168 @@ impl Worker {
             );
         }
         Ok(result)
+    }
+
+    /// Windows: reads each listed module's PE headers at the base its address gives, and adds the main executable
+    /// when the list leaves it out.
+    ///
+    /// - gdbserver lists every module but the executable (`gdb/nat/windows-nat.c`, `add_dll`, enumerates from
+    ///   index 1) as `<segment address>`, the base plus 0x1000 (`gdbserver/win32-low.cc`, `handle_load_dll`).
+    /// - lldb-server lists every module, the executable included, as `<section address>`, the base itself
+    ///   (`GDBRemoteCommunicationServerLLGS.cpp`, `libraries`; `NativeProcessWindows.cpp`,
+    ///   `GetLoadedLibraries`).
+    ///
+    /// Each address's own reading is tried first, then the other, and a base counts only where an `MZ` and `PE`
+    /// header parse. The image that is not a DLL is the main executable. When none is listed, its base is found as
+    /// GDB finds it (`gdb/windows-tdep.c`, `create_inferior_hook`): `qGetTIBAddr` gives a thread's TIB, whose
+    /// process environment block pointer (at 0x60, or 0x30 in a 32-bit process) leads to `ImageBaseAddress` (at
+    /// 0x10, or 0x8).
+    fn windows_images(&mut self, info: &Info, result: &mut Modules, deadline: Instant) -> Result<(), DebugError> {
+        let size = info.packet_size;
+        let mut unreadable = Vec::new();
+        for (index, module) in result.modules.iter_mut().filter(|module| module.source == "libraries").enumerate() {
+            if index == MAX_PE_MODULES {
+                result.limitations.push(format!("PE headers were read for the first {MAX_PE_MODULES} modules only"));
+                break;
+            }
+            let candidates = match (module.segments.first(), module.sections.first()) {
+                (Some(segment), _) => [
+                    (segment.wrapping_sub(pe::GDBSERVER_SEGMENT_OFFSET), "segment_minus_0x1000"),
+                    (*segment, "segment"),
+                ],
+                (None, Some(section)) => [
+                    (*section, "section"),
+                    (section.wrapping_sub(pe::GDBSERVER_SEGMENT_OFFSET), "section_minus_0x1000"),
+                ],
+                (None, None) => continue,
+            };
+            for (base, from) in candidates {
+                if let Some(image) = self.pe_image(base, from, size, deadline)? {
+                    module.pe = Some(image);
+                    break;
+                }
+            }
+            if module.pe.is_none() {
+                unreadable.push(module.name.clone());
+            }
+        }
+        if !unreadable.is_empty() {
+            result.limitations.push(format!(
+                "no PE header could be read at the address the stub gives for {} module(s), such as {}",
+                unreadable.len(),
+                unreadable[0]
+            ));
+        }
+        if let Some(main) = result.modules.iter_mut().find(|module| module.pe.as_ref().is_some_and(|pe| !pe.dll)) {
+            main.main = true;
+            return Ok(());
+        }
+        match self.peb_image(info, deadline)? {
+            Some(image) => result.modules.insert(
+                0,
+                Module {
+                    name: result.exec_file.clone().unwrap_or_default(),
+                    source: "peb",
+                    l_addr: None,
+                    l_ld: None,
+                    lm: None,
+                    segments: Vec::new(),
+                    sections: Vec::new(),
+                    build_id: None,
+                    main: true,
+                    dyld: None,
+                    pe: Some(image),
+                },
+            ),
+            None => result.limitations.push(
+                "the main executable is not in the module list and its base could not be found (qGetTIBAddr and the \
+                 process environment block); bind it with an explicit slide"
+                    .into(),
+            ),
+        }
+        Ok(())
+    }
+
+    /// The PE image whose `MZ` header is at `base`: its headers and the CodeView record of its mapped debug
+    /// directory. `None` when no PE header parses there.
+    fn pe_image(
+        &mut self,
+        base: u64,
+        from: &'static str,
+        packet_size: usize,
+        deadline: Instant,
+    ) -> Result<Option<pe::PeImage>, DebugError> {
+        let mut header = None;
+        for length in [pe::HEADER_READ, 4096] {
+            let Some(bytes) = self.read_small(base, length, packet_size, deadline)? else { break };
+            header = pe::PeHeader::parse(&bytes);
+            // A section table past the first read needs the whole header page.
+            if header.is_some() || !bytes.starts_with(b"MZ") {
+                break;
+            }
+        }
+        let Some(header) = header else { return Ok(None) };
+        let mut codeview = None;
+        if let Some((rva, length)) = header.directory(pe::DIRECTORY_DEBUG)
+            && let Some(directory) = self.read_small(
+                base.wrapping_add(u64::from(rva)),
+                (length as usize).min(28 * 16),
+                packet_size,
+                deadline,
+            )?
+            && let Some((rva, _, length)) = pe::codeview_entry(&directory)
+            && let Some(record) =
+                self.read_small(base.wrapping_add(u64::from(rva)), (length as usize).min(1048), packet_size, deadline)?
+        {
+            codeview = pe::parse_rsds(&record);
+        }
+        Ok(Some(pe::PeImage {
+            base,
+            base_from: from,
+            machine: header.machine_name(),
+            dll: header.dll(),
+            size_of_image: header.size_of_image,
+            timestamp: header.timestamp,
+            aslr: header.dll_characteristics & pe::DYNAMIC_BASE != 0,
+            codeview,
+        }))
+    }
+
+    /// The main executable's image, from the process environment block (`gdb/windows-tdep.c`,
+    /// `create_inferior_hook`), when the stub answers `qGetTIBAddr`.
+    fn peb_image(&mut self, info: &Info, deadline: Instant) -> Result<Option<pe::PeImage>, DebugError> {
+        let Some(thread) = self.stop_thread().or_else(|| self.threads.first().map(|thread| thread.id)) else {
+            return Ok(None);
+        };
+        let reply = self.command(&format!("qGetTIBAddr:{thread}"), deadline)?;
+        let text = String::from_utf8_lossy(&reply);
+        let Some(tib) = parse_hex_u64(text.strip_prefix("0x").unwrap_or(&text)) else { return Ok(None) };
+        let (width, peb_offset, base_offset) = match info.pointer_size {
+            Some(4) => (4usize, 0x30u64, 0x8u64),
+            _ => (8, 0x60, 0x10),
+        };
+        let pointer = |bytes: Option<Vec<u8>>| bytes.map(|bytes| maps::read_uint(&bytes, true));
+        let size = info.packet_size;
+        let Some(peb) = pointer(self.read_small(tib.wrapping_add(peb_offset), width, size, deadline)?) else {
+            return Ok(None);
+        };
+        let Some(base) = pointer(self.read_small(peb.wrapping_add(base_offset), width, size, deadline)?) else {
+            return Ok(None);
+        };
+        self.pe_image(base, "peb", size, deadline)
+    }
+
+    /// The Windows exception record of `thread`'s stop, from gdbserver's `qXfer:siginfo:read`. `None` when the stub
+    /// has none (the stop was not an exception) or it does not parse.
+    fn siginfo(&mut self, thread: ThreadId, deadline: Instant) -> Result<Option<pe::WindowsException>, DebugError> {
+        let packet_size = self.info.as_ref().map_or(DEFAULT_PACKET_SIZE, |info| info.packet_size);
+        // Only a broken connection fails the stop; a stub that refuses either packet leaves it without a record.
+        let read = self.select(thread, deadline).and_then(|()| self.xfer("siginfo", "", packet_size, 4096, deadline));
+        match read {
+            Ok(bytes) => Ok(bytes.and_then(|bytes| pe::parse_exception_record(&bytes))),
+            Err(error @ (DebugError::Timeout(_) | DebugError::Lost(_))) => Err(error),
+            Err(_) => Ok(None),
+        }
     }
 
     /// The loaded Mach-O images from LLDB's `jGetLoadedDynamicLibrariesInfos`, when the stub answers it. `None`
@@ -3598,6 +3860,29 @@ enum WindDown {
     Ended(Detached),
     /// Stopped, with every breakpoint the stub would remove removed.
     Cleared { removed: usize, failures: Vec<String> },
+}
+
+/// Whether `info` describes a Windows target, and what shows it: the `Windows` (or `Cygwin`) OS ABI in a GDB
+/// stub's target description (gdbserver sets it, `gdbserver/win32-i386-low.cc`, `i386_arch_setup`), or a Windows
+/// OS or triple in an LLDB stub's `qProcessInfo` or `qHostInfo` (lldb-server).
+fn windows_target(info: &Info) -> Option<WindowsTarget> {
+    let lldb = info.lldb.is_some();
+    let stub = if lldb { "lldb-server" } else { "gdbserver" };
+    if let Some(osabi) = info.layout.as_ref().and_then(|layout| layout.osabi.as_deref())
+        && (osabi.starts_with("Windows") || osabi == "Cygwin")
+    {
+        return Some(WindowsTarget { stub, evidence: format!("the target description names the OS ABI `{osabi}`") });
+    }
+    let lldb = info.lldb.as_ref()?;
+    [("qProcessInfo", &lldb.process), ("qHostInfo", &lldb.host)].into_iter().find_map(|(packet, host)| {
+        let host = host.as_ref().filter(|host| host.windows())?;
+        let what = match (&host.ostype, &host.triple) {
+            (Some(os), _) if os == "windows" => "ostype:windows".to_owned(),
+            (_, Some(triple)) => format!("the triple `{triple}`"),
+            _ => "a Windows target".to_owned(),
+        };
+        Some(WindowsTarget { stub, evidence: format!("{packet} states {what}") })
+    })
 }
 
 /// Whether a kill that failed with `error` left the session open and attached.

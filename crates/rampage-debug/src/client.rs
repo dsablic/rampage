@@ -118,9 +118,15 @@ fn classify_text(payload: &str) -> Option<PacketClass> {
             if let Some(rest) = payload.strip_prefix("qXfer:") {
                 let (object, rest) = rest.split_once(":read:")?;
                 return read(
-                    matches!(object, "features" | "libraries-svr4" | "libraries" | "exec-file" | "memory-map")
-                        && annex(rest),
+                    matches!(
+                        object,
+                        "features" | "libraries-svr4" | "libraries" | "exec-file" | "memory-map" | "siginfo"
+                    ) && annex(rest),
                 );
+            }
+            // gdbserver on Windows: a thread's TIB address, which leads to the process environment block.
+            if let Some(id) = payload.strip_prefix("qGetTIBAddr:") {
+                return read(thread(id));
             }
             if let Some(id) = payload.strip_prefix("qThreadExtraInfo,").or_else(|| payload.strip_prefix("Hg")) {
                 return read(thread(id) || id == "0");
@@ -606,6 +612,9 @@ pub(crate) mod tests {
             "qXfer:features:read:target.xml:0,ffb",
             "qXfer:libraries-svr4:read::0,fff",
             "qXfer:exec-file:read:2a:0,fff",
+            "qXfer:libraries:read::0,fff",
+            "qXfer:siginfo:read::0,fff",
+            "qGetTIBAddr:1a2c",
             "qSupported:multiprocess+;swbreak+",
             "QStartNoAckMode",
             "qHostInfo",
@@ -678,6 +687,9 @@ pub(crate) mod tests {
             "vCont;r1000,2000",
             "Hc0",
             "vCont;s:-1",
+            "qGetTIBAddr:",
+            "qGetTIBAddr:-1",
+            "qXfer:siginfo:write::0:00",
             "Z5,1000,4",
             "Z0,1000",
             "Z0,1000,4;X2,0a",
@@ -709,7 +721,7 @@ pub(crate) mod tests {
             "QNonStop:1",
             "qRcmd,7265736574",
             "qXfer:features:write:target.xml:0,1",
-            "qXfer:siginfo:read::0,1",
+            "qXfer:threads:read::0,1",
             "qXfer:features:read:a:b:0,1",
             "m1000",
             "pzz",

@@ -49,6 +49,10 @@ pub struct Module {
     /// lives in the dyld shared cache.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dyld: Option<crate::lldb::DyldImage>,
+    /// Windows stubs: the PE image read from target memory at the base the stub's address gives (gdbserver's
+    /// `<segment>` minus 0x1000, lldb-server's `<section>` as is), with its CodeView record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pe: Option<crate::pe::PeImage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -103,6 +107,7 @@ pub fn parse_svr4(text: &str) -> Result<Vec<Module>, String> {
             build_id: None,
             main: main == Some(lm),
             dyld: None,
+            pe: None,
         });
     }
     Ok(modules)
@@ -139,6 +144,7 @@ pub fn parse_libraries(text: &str) -> Result<Vec<Module>, String> {
             build_id: None,
             main: false,
             dyld: None,
+            pe: None,
         });
     }
     Ok(modules)

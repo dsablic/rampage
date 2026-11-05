@@ -60,12 +60,24 @@ pub struct HostInfo {
     /// must step past it; `after` otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub watchpoint_exceptions_received: Option<String>,
+    /// lldb-server's target triple (`x86_64-pc-windows-msvc`), sent hex-encoded in place of a Mach-O CPU type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub triple: Option<String>,
 }
 
 impl HostInfo {
-    /// The architecture's GDB name, from the Mach-O CPU type.
+    /// The architecture's GDB name, from the Mach-O CPU type, else from the triple's architecture.
     pub fn architecture(&self) -> Option<&'static str> {
-        cpu_architecture(self.cputype?)
+        match self.cputype {
+            Some(cputype) => cpu_architecture(cputype),
+            None => triple_architecture(self.triple.as_deref()?),
+        }
+    }
+
+    /// Whether the target is Windows: `ostype:windows` or a `*-windows-*` triple (lldb-server).
+    pub fn windows(&self) -> bool {
+        self.ostype.as_deref() == Some("windows")
+            || self.triple.as_deref().is_some_and(|triple| triple.split('-').any(|part| part.starts_with("windows")))
     }
 
     /// Whether the CPU subtype is arm64e, whose code signs return addresses.
@@ -92,6 +104,17 @@ pub fn cpu_architecture(cputype: u64) -> Option<&'static str> {
         0x0100_0007 => Some("i386:x86-64"),
         12 => Some("arm"),
         CPU_TYPE_ARM64 => Some("aarch64"),
+        _ => None,
+    }
+}
+
+/// The GDB architecture name of a target triple's architecture: x86, x86-64, ARM and AArch64.
+pub fn triple_architecture(triple: &str) -> Option<&'static str> {
+    match triple.split('-').next()? {
+        "i386" | "i486" | "i586" | "i686" => Some("i386"),
+        "x86_64" | "amd64" => Some("i386:x86-64"),
+        "aarch64" | "arm64" => Some("aarch64"),
+        "arm" | "armv7" | "thumbv7" | "thumb" => Some("arm"),
         _ => None,
     }
 }
@@ -131,6 +154,10 @@ pub fn parse_host_info(reply: &[u8], hex_numbers: bool) -> Result<HostInfo, Stri
             "low_mem_addressing_bits" => info.low_mem_addressing_bits = Some(bits(value)?),
             "high_mem_addressing_bits" => info.high_mem_addressing_bits = Some(bits(value)?),
             "watchpoint_exceptions_received" => info.watchpoint_exceptions_received = Some(text(value)?),
+            "triple" => {
+                let decoded = decode_hex(value.as_bytes()).ok_or("the triple is not hex")?;
+                info.triple = Some(text(&String::from_utf8_lossy(&decoded))?);
+            }
             _ => {}
         }
     }
@@ -453,6 +480,7 @@ pub fn parse_dyld_images(reply: &[u8]) -> Result<Vec<Module>, String> {
                 text_vmaddr,
                 segments,
             }),
+            pe: None,
         });
     }
     Ok(modules)

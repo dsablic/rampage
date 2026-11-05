@@ -80,6 +80,8 @@ pub enum StopReason {
     },
     /// debugserver's Mach exception (`metype`, `mecount`, `medata`).
     Exception(MachException),
+    /// A Windows exception: gdbserver's exception record (`qXfer:siginfo:read`), or lldb-server's description.
+    WindowsException(crate::pe::WindowsException),
     /// debugserver's `description` field, decoded from hex.
     Description {
         text: String,
@@ -112,6 +114,31 @@ pub struct MachException {
     /// `EXC_SOFTWARE` with `EXC_SOFT_SIGNAL`: the Unix signal.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal: Option<u64>,
+}
+
+/// The exception a stop carries: debugserver's Mach exception or a Windows stub's exception record. Serialized as
+/// the record itself; a Windows one says `"system": "windows"`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum Exception {
+    Mach(MachException),
+    Windows(crate::pe::WindowsException),
+}
+
+impl Exception {
+    pub fn mach(&self) -> Option<&MachException> {
+        match self {
+            Exception::Mach(exception) => Some(exception),
+            Exception::Windows(_) => None,
+        }
+    }
+
+    pub fn windows(&self) -> Option<&crate::pe::WindowsException> {
+        match self {
+            Exception::Windows(exception) => Some(exception),
+            Exception::Mach(_) => None,
+        }
+    }
 }
 
 /// arm64's `EXC_ARM_DA_DEBUG`: an `EXC_BREAKPOINT` code older debugservers report watchpoint hits with, the
@@ -217,6 +244,7 @@ impl StopReply {
                 let mut codes = Vec::new();
                 let mut watchpoint_reason = false;
                 let mut watch_address = None;
+                let mut watch_description = None;
                 for (index, field) in fields.split(';').filter(|field| !field.is_empty()).enumerate() {
                     if index >= MAX_STOP_FIELDS {
                         return Err("stop reply has too many fields".into());
@@ -250,9 +278,14 @@ impl StopReply {
                             }
                         }
                         "description" => {
-                            let text = decode_hex(value.as_bytes())
+                            let text: String = decode_hex(value.as_bytes())
                                 .map(|bytes| String::from_utf8_lossy(&bytes).chars().take(256).collect())
                                 .unwrap_or_else(|| value.chars().take(256).collect());
+                            // lldb-server on Windows describes exceptions and watchpoint hits in this field.
+                            if let Some(exception) = crate::pe::parse_exception_description(&text) {
+                                reasons.push(StopReason::WindowsException(exception));
+                            }
+                            watch_description = watch_description.or(crate::pe::parse_watch_description(&text));
                             reasons.push(StopReason::Description { text });
                         }
                         "reason" => {
@@ -301,7 +334,20 @@ impl StopReply {
                     reasons.insert(0, StopReason::Exception(MachException::new(exc_type, &codes)));
                 }
                 // debugserver reports `reason:watchpoint` with `watch_addr`, the address accessed, and does not say
-                // whether it was a read or a write, so the hit is an access.
+                // whether it was a read or a write, so the hit is an access. lldb-server (Windows) sends no
+                // `watch_addr`, only the description `<watchpoint address> <index> <address hit>`.
+                if watch_address.is_none()
+                    && watchpoint_reason
+                    && let Some((address, hit)) = watch_description
+                {
+                    watch_address = Some(address);
+                    if !reasons
+                        .iter()
+                        .any(|reason| matches!(reason, StopReason::Other { name, .. } if name == "me_watch_addr"))
+                    {
+                        reasons.push(StopReason::Other { name: "me_watch_addr".into(), value: format!("{hit:x}") });
+                    }
+                }
                 if !watched
                     && watchpoint_reason
                     && let Some(address) = watch_address

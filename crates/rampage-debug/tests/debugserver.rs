@@ -7,8 +7,8 @@ use std::time::Duration;
 use rampage_debug::fake::transcripts::{self, DebugserverTarget};
 use rampage_debug::fake::{Action, FakeStub, INTERRUPT, Script};
 use rampage_debug::{
-    BreakKind, ByteOrder, Cancel, Config, Endpoint, Family, LayoutSource, Session, State, StopCause, StopReason,
-    ThreadId,
+    BreakKind, ByteOrder, Cancel, Config, Endpoint, Exception, Family, LayoutSource, Session, State, StopCause,
+    StopReason, ThreadId,
 };
 
 fn connect(stub: &FakeStub) -> Session {
@@ -202,7 +202,10 @@ fn maps_mach_exceptions_into_stop_events_and_steps_with_vcont() {
         (event.reason, event.pc, event.breakpoints.clone()),
         (StopCause::Breakpoint, Some(0x1_0000_3f60), vec![1])
     );
-    assert_eq!(event.exception.as_ref().map(|exception| exception.name), Some("EXC_BREAKPOINT"));
+    assert_eq!(
+        event.exception.as_ref().and_then(Exception::mach).map(|exception| exception.name),
+        Some("EXC_BREAKPOINT")
+    );
 
     // A step from the breakpoint: vCont;s on the main thread, a SIGTRAP with EXC_BREAKPOINT and no reason.
     let steps = session.step_with(Some(run.epoch), None, 1, true, &Cancel::new()).unwrap();
@@ -225,13 +228,16 @@ fn maps_mach_exceptions_into_stop_events_and_steps_with_vcont() {
     let run = session.interrupt(wait(), &Cancel::new()).unwrap();
     let event = run.event.unwrap();
     assert_eq!(event.reason, StopCause::Interrupted);
-    assert_eq!(event.exception.as_ref().and_then(|exception| exception.code_name), Some("EXC_SOFT_SIGNAL"));
+    assert_eq!(
+        event.exception.as_ref().and_then(Exception::mach).and_then(|exception| exception.code_name),
+        Some("EXC_SOFT_SIGNAL")
+    );
 
     // A fault: EXC_BAD_ACCESS (KERN_INVALID_ADDRESS) at 0x10, a signal stop carrying the fault address.
     let run = session.resume(Some(run.epoch), wait(), &Cancel::new()).unwrap();
     let event = run.event.unwrap();
     assert_eq!((event.reason, event.signal), (StopCause::Signal, Some(0x91)));
-    let exception = event.exception.as_ref().unwrap();
+    let exception = event.exception.as_ref().and_then(Exception::mach).unwrap();
     assert_eq!((exception.name, exception.fault_address), ("EXC_BAD_ACCESS", Some(0x10)));
     assert_eq!(exception.code_name, Some("KERN_INVALID_ADDRESS"));
     let json = serde_json::to_value(&event).unwrap();
