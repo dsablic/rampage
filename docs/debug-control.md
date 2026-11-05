@@ -1,14 +1,15 @@
 # Debug sessions with GDB remote stubs
 
 Rampage's MCP server can connect to a GDB Remote Serial Protocol stub that an operator has already started:
-`gdbserver` on Linux or Android, QEMU's `-s`/`-gdb` stub, OpenOCD, probe-rs and similar. An agent can then read
+`gdbserver` on Linux or Android, QEMU's `-s`/`-gdb` stub, OpenOCD, probe-rs, Apple's `debugserver` on macOS (see
+[macOS and debugserver](#macos-and-debugserver)) and similar. An agent can then read
 the stopped target's registers, memory, threads, loaded modules and memory map, capture it to a snapshot file
 that every runtime and analysis tool opens, and control its execution: continue, wait, interrupt, single-step, and
 set breakpoints and watchpoints. With a project bound to the target, it can also place breakpoints by function name
 or static address, see stops and register values in the project's terms, and step over calls or out of functions.
 
-These are steps 9.1 (inspection), 9.2 (execution control), 9.3 (static correlation) and 9.4 (target writes and
-kill) of the [debugger design](plans/2026-10-29-debugger-control.md). Rampage never launches or attaches to a
+These are steps 9.1 (inspection), 9.2 (execution control), 9.3 (static correlation), 9.4 (target writes and
+kill) and 9.5 (debugserver) of the [debugger design](plans/2026-10-29-debugger-control.md). Rampage never launches or attaches to a
 process, delivers a signal or enters non-stop mode, and the protocol client keeps every such packet off the wire.
 It writes registers or memory, or kills a target, only when a tool asks for it and the operator started it with
 `--debug-writes` or `--debug-kill`; see [Writes and kill](#writes-and-kill).
@@ -32,6 +33,14 @@ rampage mcp --debug-endpoint 127.0.0.1:1234
 ```
 
 QEMU's `-s` listens on TCP port 1234.
+
+A macOS program under Apple's debugserver (launched, or attached by pid):
+
+```sh
+debugserver 127.0.0.1:2345 ./prog
+debugserver 127.0.0.1:2345 --attach=<pid>
+rampage mcp --debug-endpoint 127.0.0.1:2345
+```
 
 An endpoint is either `host:port` or `unix:` followed by an absolute socket path. Repeat `--debug-endpoint` to
 allow several endpoints, or set `RAMPAGE_DEBUG_ENDPOINTS` to a comma-separated list. Endpoints from the flag and
@@ -162,8 +171,8 @@ Rampage drives the stub in all-stop mode: every thread resumes together and stop
 - `debug_interrupt` first takes a stop reply already on its way (a few milliseconds), so a target that has just
   stopped is not interrupted again. Otherwise it sends the out-of-band `0x03` byte, on every call, and waits up to
   3 s. A stub that does not stop leaves the session `running`. On a stopped target it fails with `not_running`.
-  Only a SIGINT (or signal 0) stop after an interrupt is reported as `interrupted`; a fault that arrives instead
-  stays a `signal`.
+  Only a SIGINT (or signal 0) stop after an interrupt is reported as `interrupted` (on debugserver, which stops the
+  process with SIGSTOP, a SIGSTOP); a fault that arrives instead stays a `signal`.
 - `debug_status` reports `waiting`: how many continue, wait or interrupt calls are waiting for the stop.
 - Each stop rampage observes (after a continue, each step and an interrupt) increments the epoch. Execution tools
   take the caller's `epoch` and fail with `stale_epoch`, which names the current epoch and state, when they differ.
@@ -249,6 +258,8 @@ A stop event reports:
   bytes as sent.
 - `breakpoints`: the IDs of the table entries the stop matched. Each match increments the entry's hit count.
 - `watch`: the access and address of a watchpoint hit.
+- `exception`: debugserver's Mach exception, when the stop reply carries one; see
+  [Mach exceptions](#mach-exceptions).
 - `reasons`: at most 16 of the stop reply's reasons. Its expedited registers are not repeated (a stub may send
   1,024 fields of 4 KiB); read them with `debug_registers`.
 - `epoch`: the epoch this stop started, `console`: output received while the target ran, and `warnings`.
@@ -298,10 +309,15 @@ the `g` reply are read one at a time with `p`.
   VECTKEYSTAT 0xFA05 in its upper bytes and its ENDIANNESS bit (15) gives the data order. A read that does not show
   0xFA05 leaves the order unknown.
 - On ARM A and R profiles, CPSR.E and the mode bits are consistent with only one byte order.
+- An LLDB stub (debugserver) that states a byte order, `endian:little` or `endian:big` in its `qProcessInfo`
+  (else `qHostInfo`) reply, is taken at its word. debugserver states the byte order it was built for, which is the
+  one of the processes it can debug on that machine (arm64 and x86-64 Macs are little-endian only); it does not
+  read it from the process. This applies only when the architecture leaves the order unknown, and the evidence
+  names the reply.
 
-AArch64 and RISC-V report `unknown`, because their registers do not expose the data endianness, as described in
-[runtime data order](runtime-data-order.md). Their `value` is null and `bytes` are exactly as the stub sent them.
-Architecture defaults are never used in place of evidence.
+Otherwise AArch64 and RISC-V report `unknown`, because their registers do not expose the data endianness, as
+described in [runtime data order](runtime-data-order.md). Their `value` is null and `bytes` are exactly as the stub
+sent them. Architecture defaults are never used in place of evidence.
 
 ### Memory
 
@@ -324,6 +340,8 @@ Each list is read only when the stub advertises it:
 - `qXfer:libraries:read`: Windows-style entries with segment or section addresses.
 - `qXfer:exec-file:read` and `qXfer:memory-map:read`: the program path, and ram, rom and flash regions with
   flash block sizes.
+- From an LLDB stub (debugserver), which advertises neither: `jGetLoadedDynamicLibrariesInfos` for the dyld image
+  list, and `qMemoryRegionInfo` for regions; see [macOS and debugserver](#macos-and-debugserver).
 
 `qOffsets` is always asked for, and an empty reply is accepted. A module's GNU build ID is reported when its ELF
 header is mapped at its load bias, which holds for shared objects and PIE executables. `debug_modules` does not
@@ -369,7 +387,7 @@ Modules from `debug_modules` are matched in order of evidence, and the evidence 
 | Evidence | How |
 |---|---|
 | `build_id` | The ELF file's GNU build ID equals the module's, as the stub's module list reports it or as rampage reads it from the ELF headers and notes mapped at the module's load bias |
-| `uuid` | The Mach-O file's `LC_UUID` equals the one read from the module's mapped header |
+| `uuid` | The Mach-O file's `LC_UUID` equals the one dyld reports for the module (debugserver), or the one read from the module's mapped header |
 | `path`, `basename` | The module's reported path (or, for the main program with no name, the exec file) equals the project's path, or only their file names are equal |
 | `header_bytes` | The module's mapped header bytes (up to 256) equal the file's first bytes |
 | `mapped_bytes` | The stub lists no modules (bare-metal firmware): every verification window (below) is readable and equal at the slide (`qOffsets` `Text`, else 0, or the caller's), at least 16 bytes in all |
@@ -383,7 +401,9 @@ Without a match the bind is refused (`no_module_match`) unless the caller gives 
 silently on a weak match.
 
 **Slide.** `runtime = static + slide`, wrapping at the pointer width. For svr4 modules (Linux, Android) the slide is
-the link map's `l_addr`. For library lists that give segment or section addresses (Windows-style, Mach-O), it is that
+the link map's `l_addr`. For dyld images (debugserver) it is the header's runtime address minus the `__TEXT`
+address; a dyld shared-cache library binds only from its extracted image (see
+[macOS and debugserver](#modules-the-shared-cache-and-regions)). For library lists that give segment or section addresses (Windows-style, Mach-O), it is that
 address minus the file's header address, or minus its first section's address: every stage (identity, name,
 header bytes) verifies each candidate and keeps the first that matches. A caller's `slide` overrides the computed
 one, and the difference is reported.
@@ -602,6 +622,150 @@ QEMU in system mode exits the emulator when killed through its stub (it answers 
 - No automatic writes: no breakpoint planted by writing memory, no retries, no restoring of bytes.
 - No writes while the target runs, and no atomicity across the read, the write and the read-back.
 
+## macOS and debugserver
+
+Step 9.5. Apple's `debugserver` speaks the GDB remote protocol with LLDB's extensions. Rampage still launches and
+attaches nothing: the operator starts debugserver on a program or a pid (see [Setup](#setup)) and lists its endpoint.
+
+### Prerequisites
+
+- debugserver ships with the Command Line Tools
+  (`/Library/Developer/CommandLineTools/Library/PrivateFrameworks/LLDB.framework/Versions/A/Resources/debugserver`)
+  and Xcode (`Xcode.app/Contents/SharedFrameworks/LLDB.framework/Versions/A/Resources/debugserver`).
+- macOS lets a debugger control a process only when the Mac allows developer tools: run
+  `sudo DevToolsSecurity -enable` once (or enable developer mode). Otherwise debugserver waits for an authorization
+  prompt in the GUI instead of listening, and rampage's connect times out.
+- The program must allow it: a binary signed with the hardened runtime needs the
+  `com.apple.security.get-task-allow` entitlement (an ad-hoc signature with it is enough for your own builds; see
+  `tests/fixtures/debug-macho/build.sh`), and system binaries protected by System Integrity Protection cannot be
+  debugged.
+- A program debugserver launches stops at its first instruction, before dyld has run: dyld may list no images or
+  only some, so a bind there can fail with `no_module_match`. Bind again after the first continue, or attach
+  (`--attach=<pid>`) to a program that is already running.
+
+### What rampage asks an LLDB stub
+
+A stub whose `qSupported` reply advertises `qEcho+` or `native-signals+` speaks LLDB's dialect, and only such a
+stub is asked the queries below; gdbserver, QEMU and OpenOCD never see them. Each is a `Read`-class packet, refused
+by the client in any other form, and each only adds information: a stub that answers one with an empty reply or an
+error is used without it.
+
+| Packet | Use |
+|---|---|
+| `qHostInfo`, `qProcessInfo` | CPU type (the architecture: debugserver's target description names none), pid, `ostype`/`vendor`, a stated byte order (see [Endianness](#endianness)), address bits for pointer authentication, whether watchpoints stop before the access. Shown by `debug_connect` as `lldb` and `address_mask` |
+| `qRegisterInfo<n>` | Registers, from 0 up to the first error, when the stub serves no target description (older debugserver) |
+| `jThreadsInfo` | Thread names, dispatch queues and per-thread stop reasons and exceptions, in each thread's `name`, `queue`, `reason` and `exception` |
+| `jGetLoadedDynamicLibrariesInfos:{"fetch_all_solibs":true,"report_load_commands":false}` | The header address of every loaded image |
+| `jGetLoadedDynamicLibrariesInfos:{"solib_addresses":[...]}` | Full information (path, UUID, header, segments) for those images, 64 at a time, so no reply outgrows a packet however many images a program loads; LLDB lists images the same way |
+| `qMemoryRegionInfo:<address>` | Mapped regions with permissions, walking the address space from 0 |
+
+The connection keeps acknowledgements. debugserver advertises no `QStartNoAckMode`, and although it accepts it, in
+no-ack mode it ends every packet with the checksum `#00`, which rampage's framer would take for a damaged packet.
+
+### Reading debugserver's registers
+
+Rampage never sends debugserver `g` or `G`. debugserver since LLVM 21 has neither; older ones send their raw
+register context, which has padding (4 bytes after `cpsr` on arm64) that the register offsets they state leave
+out, so a `g` reply would be read 4 bytes off from the vector registers on. Registers are read with `p`, and the
+stop reply's expedited registers (debugserver sends the general registers with every stop) stand in for the stopped
+thread's; the values read are kept until the target runs again or a register is written, so reading the registers
+twice at one stop costs one round of `p`. `debug_write_register` uses `P` only; a debugserver that refuses `P` is
+not written with `G`.
+
+debugserver's `target.xml` (and `qRegisterInfo`) states each register's `offset`, with no gaps, and declares views
+of other registers (`w0` of `x0`, `s0` of `v0`) with `value_regnums` (`container-regs`). Rampage leaves views out
+(read their container). A register wider than 4096 bits (an SME `ZA` array) is left out without moving the others.
+Registers keep debugserver's names, so arm64 x29 and x30 are `fp` and `lr`; the alternative name (`alt_name`) and
+the role (`generic`: `pc`, `sp`, `fp`, `ra`, `flags`) are in the layout, and step out and `debug_evidence` look for
+`lr` where there is no `x30`.
+
+### Modules, the shared cache and regions
+
+Each image dyld describes is a module with `source: "dyld"` and a `dyld` object: `load_address` (the Mach-O
+header's runtime address), `uuid` (`LC_UUID`, upper case with dashes), `filetype` (2 for the executable, which is
+`main`), `text_vmaddr`, `segments` (link-time addresses) and `in_shared_cache`. An image whose header debugserver
+cannot read is left out, and `limitations` counts it.
+
+- **Binding.** A Mach-O image binds by its UUID as dyld reports it; the slide is `load_address` minus the file's
+  `__TEXT` address (equally, minus dyld's `text_vmaddr`), verified against target memory as usual.
+- **The dyld shared cache.** On macOS 11 and later, system libraries live in the dyld shared cache, and no file
+  exists at their paths. dyld marks them with `MH_DYLIB_IN_CACHE` in the header flags, and rampage reports them as
+  modules with `in_shared_cache: true`. Binding to one is refused (`shared_cache_image`) unless the caller gives
+  the image extracted from the cache (`dyld_shared_cache_util -extract`, `ipsw dyld extract` and similar) and its
+  UUID matches: a path, a file name, header bytes or a caller's `slide` are not enough, because nothing on disk is
+  known to be the code that runs. An extracted image keeps its cache addresses, so it binds at the cache's slide.
+- **Regions.** Without a memory map, `debug_modules` lists the mapped regions `qMemoryRegionInfo` reports, with
+  `type: "mapped"`, `permissions` and `name` when the stub gives one; unmapped gaps are left out. debugserver lists
+  every dirty page of a region, so a busy region's reply may be as long as a packet; the pages are skipped. When the
+  walk stops before the end of the address space (a failed query, or 512 queries), `regions_partial` is true.
+  Binding's slide verification counts a window outside every readable region as unreadable without reading it,
+  unless the list is partial, when such a window is read.
+- **Snapshots** record a dyld module with its UUID as identity, `image_base` its `__TEXT` address and
+  `runtime_base` its header address.
+
+### Pointer authentication
+
+arm64e processes sign return addresses and frame pointers: the bits above the virtual address width hold a pointer
+authentication code. debugserver itself takes the code off `lr`, `fp`, `sp` and `pc` when it reads them (with `p`
+and in stop replies), so rampage sees unsigned values from it; the stripping below is a defence against stubs that
+do not. On arm64 targets, rampage keeps the address bits the stub states (`qProcessInfo` before `qHostInfo`,
+`low_mem_addressing_bits` before `addressing_bits`), else 47 bits on an Apple target (macOS and iOS user addresses
+fit in 47 bits; debugserver on Apple silicon Macs reports `addressing_bits:47`); elsewhere without stated bits
+nothing is stripped, since the width is unknown. `debug_connect` reports the mask and its source as
+`address_mask`.
+
+- Step out places its temporary breakpoint at x30 without the code, and says so in `warnings`.
+- Register annotation locates a value of `lr`, `x30`, `fp`, `x29` or `pc` that lies in no bound module as it is,
+  but does once the code is taken off; `points_to` then gives `signed_value`, the value as read. Other registers
+  are never stripped, so a plain integer is not taken for a code pointer.
+- A low address (bit 55 clear) has the bits above the width cleared; a high one has them set.
+
+### Mach exceptions
+
+debugserver reports stops as Mach exceptions: `metype` (the exception type), `mecount` and `medata` (its code
+words), all hex, with the signal debugserver maps it to (`T91` for `EXC_BAD_ACCESS`, `T05` for `EXC_BREAKPOINT`).
+Rampage types them in the stop reply's reasons and in the stop event's `exception`:
+
+| Type | `name` | Typed fields |
+|---|---|---|
+| 1 | `EXC_BAD_ACCESS` | `fault_address` (the second code word), `code_name`: `KERN_INVALID_ADDRESS`, `KERN_PROTECTION_FAILURE` or `EXC_ARM_DA_ALIGN` |
+| 2 | `EXC_BAD_INSTRUCTION` | the codes |
+| 5 | `EXC_SOFTWARE` | `code_name: "EXC_SOFT_SIGNAL"` and `signal` when it carries a Unix signal |
+| 6 | `EXC_BREAKPOINT` | the codes |
+
+Other types (3 `EXC_ARITHMETIC` to 13 `EXC_CORPSE_NOTIFY`) are named, with their codes. The stop's `reason` follows
+the usual rules: a breakpoint hit is a SIGTRAP whose pc is a breakpoint's, a step a SIGTRAP after a step, and a
+fault a `signal`.
+
+- **Watchpoints.** debugserver reports a hit as `reason:watchpoint` with no exception and signal 0. `watch_addr` is
+  the start of the watchpoint nearest the access, which the stop event's `watch.address` gives and which matches the
+  table; `me_watch_addr` is the address accessed, given as `watch.accessed`. Older versions report a hit as
+  `EXC_BREAKPOINT` with code `EXC_ARM_DA_DEBUG` (0x102) and the accessed address as the second code word. Neither
+  says whether it was a read or a write, so the hit is an `access`, which matches watchpoints of any kind there.
+- **Watchpoints stop before the access.** On ARM, debugserver says `watchpoint_exceptions_received:before`: the
+  thread stops at the accessing instruction, which has not run. The next continue (or step over) therefore takes
+  the watchpoints that stop hit out, single-steps the thread and puts them back, as it does for a breakpoint at the
+  pc, so the same access does not stop the target again. A stub that says `before` gets the same; without the key,
+  an Apple ARM stub is taken to.
+- **Interrupts.** debugserver answers the interrupt byte by stopping the process with SIGSTOP, so on an Apple stub
+  a SIGSTOP (17) stop after rampage's interrupt is reported as `interrupted`.
+- `description` (hex text) is decoded into the reasons. Long informational fields (`jstopinfo`,
+  `detailed-binaries-info`) are listed by name only.
+
+### Execution
+
+debugserver supports `vCont` (`vCont;c;C;s;S`), so continues and steps use `vCont;c` and `vCont;s:<thread>`.
+
+- Software breakpoints on arm64 must take kind 4: debugserver writes as many bytes of its `brk #0` as the kind says,
+  so another kind would plant a broken instruction. Rampage's AArch64 default and only accepted size is 4.
+- debugserver's hardware breakpoints take kind 2 or 4.
+- Watchpoints: debugserver widens what it is asked to watch to what the hardware can (DNBArchImplARM64): a range of
+  up to 8 bytes within one aligned doubleword, else a power-of-two-sized aligned range as a mask, or the request
+  split across two watchpoint registers. A hit can therefore come from an access next to the requested range; the
+  stop's `watch.accessed` says where. Ranges it cannot cover are refused (`E09`, reported as `target_error`).
+  Prefer 1, 2, 4 or 8 bytes, aligned.
+- These follow debugserver's source; the live acceptance below checks them on a real target.
+
 ## Limits
 
 | Limit | Value |
@@ -629,8 +793,14 @@ QEMU in system mode exits the emulator when killed through its stub (it answers 
 | Steps per request | 1,000, and 60 s in all |
 | One memory write | 4096 bytes |
 | Waiting for the reply to a kill | 3 s |
+| `qHostInfo` and `qProcessInfo` replies | 4 KiB, 64 fields |
+| `qMemoryRegionInfo` replies | the decoded reply size (dirty-page lists are skipped), 64 fields |
+| `qRegisterInfo` queries | 1,024 registers |
+| `jThreadsInfo` | asked only with at most 64 threads; names and queues of 128 characters |
+| `jGetLoadedDynamicLibrariesInfos` | 4,096 images; full information 64 images per request, 32 segments each |
+| `qMemoryRegionInfo` queries per module listing | 512 |
 
-## What 9.1 to 9.4 do not do
+## What 9.1 to 9.5 do not do
 
 - No launch or attach. Register and memory writes and kill only with the operator's flags and a tool call.
 - No signal delivery on resume: never `C`, `S` or `vCont;C`/`vCont;S`. A pending signal is discarded.
@@ -639,7 +809,8 @@ QEMU in system mode exits the emulator when killed through its stub (it answers 
 - No conditions or ignore counts on breakpoints.
 - No source-level stepping and no frame unwinding: step out works only from a function's first instruction.
 - No relocation of runtime bytes to file bytes beyond the slide, and no binding of snapshots.
-- No LLDB `debugserver` extensions (9.5) and no Windows debugging (9.6).
+- No Windows debugging (9.6). LLDB's extensions are used only to add information (see
+  [macOS and debugserver](#macos-and-debugserver)); nothing requires them.
 - No expression evaluation and no monitor commands (`qRcmd`).
 - Runtime bytes stay local. They are never published anywhere except the snapshot file you name.
 
@@ -704,3 +875,35 @@ RAMPAGE_QEMU_LIVE=1 cargo nextest run -p rampage-api --run-ignored only -E 'test
 ```
 
 The test harness plays the operator and starts QEMU. Rampage itself only connects.
+
+### debugserver
+
+The fake stub's debugserver transcript (`transcripts::debugserver_arm64`) is built from debugserver's source
+(`lldb/tools/debugserver/source/RNBRemote.cpp`) and LLDB's `lldbgdbremote.md`, not recorded: the machine it was
+written on could not run debugserver. It covers `qHostInfo` and `qProcessInfo`, a target description with gapless
+offsets and views, `qRegisterInfo`-only discovery, `g` answered as unsupported (registers come from `p` and the stop
+reply), `jThreadsInfo`, the image list (addresses, then a batch) with the main executable, dyld and a shared-cache
+library, `qMemoryRegionInfo` with a busy region whose dirty-page list runs past 4 KiB, and stop replies with Mach
+exceptions and a watchpoint stop without one. The fake stub checks every LLDB query against its own parser and
+fails a test on any other form or any other `j` packet. The tests check the handshake (the architecture from the
+CPU type, the stated byte order, the address mask), both register discovery paths, that no `g` or `G` is sent and
+registers are read once per stop, that GDB stubs are asked none of the queries, breakpoints of kind 4, `vCont`
+steps, a watchpoint hit as `reason:watchpoint` (its accessed address too) and a continue that steps past it with
+the watchpoint taken out and put back, an interrupt answered with SIGSTOP, and `EXC_BAD_ACCESS` with its fault
+address. Through the tools, they bind the owned arm64 fixture (`tests/fixtures/debug-macho`, rebuilt with its
+`build.sh`: a C program calling `tick` in a loop, `tick` adding to the global `counter`, ad-hoc signed with
+`get-task-allow`) by UUID at a slide, refuse a shared-cache library by path, by name with a slide and by a file of
+another UUID, bind an extracted image of the cached UUID, step out with a signed x30 and annotate it (defensively:
+debugserver strips those itself) while leaving an integer register with the same bits unannotated, and report a
+Mach exception in a stop event.
+
+The live acceptance needs debugserver and `sudo DevToolsSecurity -enable` (or developer mode). The harness plays the
+operator: it starts the fixture, then `debugserver 127.0.0.1:<port> --attach=<pid>`. It connects with the fixture's
+path (binding by UUID), breaks on `_tick` by name, continues to it, steps out to `_main`, catches the write to
+`counter` with a watchpoint on two continues in a row with the watchpoint still set, interrupts a running continue,
+snapshots the program's `__TEXT` and detaches, then kills debugserver and the program whatever the outcome. Without `RAMPAGE_DEBUGSERVER_LIVE=1` it skips with a message; `RAMPAGE_DEBUGSERVER` names a
+debugserver binary other than the Command Line Tools' or Xcode's. It has not yet run against a real debugserver.
+
+```sh
+RAMPAGE_DEBUGSERVER_LIVE=1 cargo nextest run -p rampage-api --run-ignored only -E 'test(debug_debugserver_live::)'
+```

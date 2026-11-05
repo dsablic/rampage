@@ -4638,6 +4638,7 @@ dependencies = [
  "quick-xml 0.42.0",
  "rampage-debug",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

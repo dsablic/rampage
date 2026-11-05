@@ -33,14 +33,17 @@ format builds without verified function truth remain unscored rather than counti
 - Read-only stopped-session [LLDB queries](lldb-query.md) are available through an explicitly operator-started
   local Unix socket, CLI/MCP requests and a local desktop query window. They do not attach, control execution,
   evaluate expressions or write target memory; observations remain non-atomic and separate from snapshot identity.
-- [Debug sessions](debug-control.md) with operator-started GDB remote stubs (gdbserver, QEMU, OpenOCD): the MCP
-  `debug` group, present only when the server is started with an allowed endpoint, reads registers from the stub's
-  target description, memory, threads, svr4 or Windows-style module lists and memory maps, and captures a stopped
-  target to a `rampage-snapshot-v1` file. Data byte order comes only from stop-bound evidence (x86, Cortex-M AIRCR,
-  ARM CPSR.E). All-stop execution control continues, waits, interrupts and single-steps, and sets hardware or
+- [Debug sessions](debug-control.md) with operator-started GDB remote stubs (gdbserver, QEMU, OpenOCD, Apple's
+  `debugserver`): the MCP `debug` group, present only when the server is started with an allowed endpoint, reads
+  registers from the stub's target description (or LLDB's `qRegisterInfo`), memory, threads (with names and
+  dispatch queues from debugserver), svr4, Windows-style or dyld module lists and memory maps or regions, and
+  captures a stopped target to a `rampage-snapshot-v1` file. Data byte order comes only from stop-bound evidence
+  (x86, Cortex-M AIRCR, ARM CPSR.E, or an LLDB stub stating it). Mach exceptions are typed in stop events, and
+  arm64 return addresses lose their pointer authentication codes before step out and annotation. All-stop
+  execution control continues, waits, interrupts and single-steps, and sets hardware or
   software breakpoints and watchpoints the stub inserts, with typed stop events, hit counts and stop epochs that
   refuse stale requests. Binding a project to a runtime module (by build ID or UUID, path, or mapped bytes, with a
-  slide verified against target memory) adds breakpoints by static address or function name, stop locations with
+  slide verified against target memory; a dyld shared-cache library only from its extracted image) adds breakpoints by static address or function name, stop locations with
   function, offset and `show_address` arguments, register values annotated with what they point at, stepping over
   calls with rampage's decoder and out of functions from their entry through temporary breakpoints, and evidence
   items for the findings ledger. With the operator's `--debug-writes`, memory and register writes read the old bytes

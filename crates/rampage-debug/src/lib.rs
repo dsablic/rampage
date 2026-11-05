@@ -16,6 +16,7 @@ pub mod client;
 pub mod exec;
 #[cfg(feature = "fake-stub")]
 pub mod fake;
+pub mod lldb;
 pub mod maps;
 pub mod packet;
 mod session;
@@ -29,13 +30,14 @@ pub use exec::{
     BreakKind, Breakpoint, Cancel, MAX_BREAKPOINTS, MAX_STEPS, MAX_WATCH_LENGTH, Placement, StopCause, StopEvent,
     TemporaryOutcome, WatchHit,
 };
+pub use lldb::{AddressMask, DyldImage, HostInfo, ThreadDetail};
 pub use maps::{Module, Offsets, Region};
 pub use session::{
-    ByteOrder, CLOSE_DETACH, Config, Consent, Detached, INTERRUPT_WAIT, Info, Killed, MAX_TEMPORARY, MAX_WRITE,
-    MemoryChunk, MemoryRead, MemoryWrite, Modules, RegisterValue, RegisterWrite, Registers, Run, Session, State,
-    Status, Steps, TemporaryPlacement, ThreadInfo, WriteChunk, encode_register_value,
+    ByteOrder, CLOSE_DETACH, Config, Consent, Detached, INTERRUPT_WAIT, Info, Killed, LldbInfo, MAX_TEMPORARY,
+    MAX_WRITE, MemoryChunk, MemoryRead, MemoryWrite, Modules, RegisterValue, RegisterWrite, Registers, Run, Session,
+    State, Status, Steps, TemporaryPlacement, ThreadInfo, WriteChunk, encode_register_value,
 };
-pub use stop::{StopReason, StopReply, ThreadId};
+pub use stop::{MachException, StopReason, StopReply, ThreadId};
 pub use target::{Family, Layout, LayoutSource, Register};
 pub use transport::{Endpoint, Transport};
 

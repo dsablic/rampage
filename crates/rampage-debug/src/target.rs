@@ -27,6 +27,12 @@ pub struct Register {
     pub feature: Option<String>,
     /// Where the register's bytes start in a `g` reply.
     pub offset: usize,
+    /// LLDB's alternative name (`x30` for debugserver's `lr`, `x29` for `fp`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alt_name: Option<String>,
+    /// LLDB's generic role: `pc`, `sp`, `fp`, `ra`, `flags`, `arg1`...
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generic: Option<String>,
 }
 
 impl Register {
@@ -43,6 +49,8 @@ pub enum LayoutSource {
     /// A built-in GDB layout, chosen because the stub has no target description and its `g` reply has exactly
     /// this layout's size.
     Fallback,
+    /// Built from LLDB's `qRegisterInfo<n>` replies (debugserver without a target description).
+    RegisterInfo,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -62,11 +70,47 @@ impl Layout {
         self.registers.iter().find(|register| register.name == name)
     }
 
+    /// The register named `name`, or whose LLDB alternative name is `name` (`x30` finds debugserver's `lr`).
+    pub fn register_or_alias(&self, name: &str) -> Option<&Register> {
+        self.register(name)
+            .or_else(|| self.registers.iter().find(|register| register.alt_name.as_deref() == Some(name)))
+    }
+
+    /// The register whose LLDB generic role is `role` (`pc`, `sp`, `ra`...).
+    pub fn generic(&self, role: &str) -> Option<&Register> {
+        self.registers.iter().find(|register| register.generic.as_deref() == Some(role))
+    }
+
+    /// A layout whose registers follow each other in register-number order in a `g` reply.
     fn new(
         architecture: Option<String>,
         source: LayoutSource,
         features: Vec<String>,
+        registers: Vec<Register>,
+    ) -> Result<Self, String> {
+        Self::build(architecture, source, features, registers, None)
+    }
+
+    /// A layout with offsets as the stub states them (LLDB's `offset`): `extent` is the end of the `g` reply,
+    /// counting registers rampage leaves out (views of other registers, or wider than it reads). The offsets must
+    /// rise with the register numbers and must not overlap, so a `g` reply cut short still holds whole registers
+    /// up to where it ends.
+    fn with_offsets(
+        architecture: Option<String>,
+        source: LayoutSource,
+        features: Vec<String>,
+        registers: Vec<Register>,
+        extent: usize,
+    ) -> Result<Self, String> {
+        Self::build(architecture, source, features, registers, Some(extent))
+    }
+
+    fn build(
+        architecture: Option<String>,
+        source: LayoutSource,
+        features: Vec<String>,
         mut registers: Vec<Register>,
+        extent: Option<usize>,
     ) -> Result<Self, String> {
         if registers.is_empty() {
             return Err("target description declares no registers".into());
@@ -81,13 +125,23 @@ impl Layout {
             if !names.insert(registers[index].name.clone()) {
                 return Err(format!("register `{}` is declared twice", registers[index].name));
             }
-            registers[index].offset = offset;
-            offset += registers[index].bytes();
+            match extent {
+                None => registers[index].offset = offset,
+                Some(_) if registers[index].offset < offset => {
+                    return Err(format!(
+                        "register `{}` at offset {} overlaps the register before it",
+                        registers[index].name, registers[index].offset
+                    ));
+                }
+                Some(_) => offset = registers[index].offset,
+            }
+            offset = offset.checked_add(registers[index].bytes()).ok_or("register offsets overflow")?;
         }
-        if offset > crate::packet::MAX_PACKET_BYTES / 2 {
+        let g_size = offset.max(extent.unwrap_or(0));
+        if g_size > crate::packet::MAX_PACKET_BYTES / 2 {
             return Err("register file exceeds the packet limit".into());
         }
-        Ok(Self { architecture, source, features, registers, g_size: offset })
+        Ok(Self { architecture, source, features, registers, g_size })
     }
 }
 
@@ -96,7 +150,17 @@ impl Layout {
 pub fn parse_description(root: &str, fetch: &mut dyn FnMut(&str) -> Result<String, String>) -> Result<Layout, String> {
     let mut state = Description::default();
     state.document(root, 0, fetch)?;
-    Layout::new(state.architecture, LayoutSource::TargetDescription, state.features, state.registers)
+    match state.offsets {
+        // LLDB's descriptions (debugserver) state every register's offset and declare views of other registers.
+        Some(true) => Layout::with_offsets(
+            state.architecture,
+            LayoutSource::TargetDescription,
+            state.features,
+            state.registers,
+            state.extent,
+        ),
+        _ => Layout::new(state.architecture, LayoutSource::TargetDescription, state.features, state.registers),
+    }
 }
 
 #[derive(Default)]
@@ -106,6 +170,10 @@ struct Description {
     registers: Vec<Register>,
     next_regnum: u32,
     documents: usize,
+    /// Whether the registers state their `g` offsets (all of them or none).
+    offsets: Option<bool>,
+    /// The end of the `g` reply by the stated offsets, counting registers left out.
+    extent: usize,
 }
 
 impl Description {
@@ -173,26 +241,97 @@ impl Description {
             }
             let bitsize: u32 =
                 register.attribute("bitsize").and_then(|bits| bits.parse().ok()).ok_or("<reg> without bitsize")?;
-            if bitsize == 0 || !bitsize.is_multiple_of(8) || bitsize > MAX_REGISTER_BITS {
-                return Err(format!("register `{reg_name}` has unsupported bitsize {bitsize}"));
-            }
             let regnum = match register.attribute("regnum") {
                 Some(number) => number.parse().map_err(|_| format!("register `{reg_name}` has invalid regnum"))?,
                 None => self.next_regnum,
             };
             self.next_regnum = regnum.checked_add(1).ok_or("register number overflows")?;
+            // LLDB's `offset` places the register in the `g` reply; GDB's descriptions have none.
+            let offset = register
+                .attribute("offset")
+                .map(|offset| offset.parse::<usize>().map_err(|_| format!("register `{reg_name}` has invalid offset")))
+                .transpose()?;
+            if self.offsets.is_some_and(|stated| stated != offset.is_some()) {
+                return Err("some registers state their offset and others do not".into());
+            }
+            self.offsets = Some(offset.is_some());
+            // A view of other registers (LLDB's `value_regnums`: w0 of x0, s0 of v0) has no bytes of its own in
+            // a `g` reply.
+            if register.attribute("value_regnums").is_some() {
+                continue;
+            }
+            let usable = bitsize > 0 && bitsize.is_multiple_of(8) && bitsize <= MAX_REGISTER_BITS;
+            if let Some(offset) = offset {
+                let end = offset
+                    .checked_add(bitsize.div_ceil(8) as usize)
+                    .filter(|end| *end <= crate::packet::MAX_PACKET_BYTES / 2)
+                    .ok_or_else(|| format!("register `{reg_name}` lies beyond the packet limit"))?;
+                self.extent = self.extent.max(end);
+                // A register wider than rampage reads (an SME ZA array) is left out; its stated offset keeps the
+                // others in place.
+                if !usable && bitsize.is_multiple_of(8) && bitsize > 0 {
+                    continue;
+                }
+            }
+            if !usable {
+                return Err(format!("register `{reg_name}` has unsupported bitsize {bitsize}"));
+            }
+            let text = |attribute: &str| register.attribute(attribute).map(|value| value.chars().take(64).collect());
             self.registers.push(Register {
                 name: reg_name.to_owned(),
                 regnum,
                 bitsize,
-                kind: register.attribute("type").map(|kind| kind.chars().take(64).collect()),
-                group: register.attribute("group").map(|group| group.chars().take(64).collect()),
+                kind: text("type"),
+                group: text("group"),
                 feature: Some(name.chars().take(128).collect()),
-                offset: 0,
+                offset: offset.unwrap_or(0),
+                alt_name: text("altname"),
+                generic: text("generic"),
             });
         }
         Ok(())
     }
+}
+
+/// Builds a layout from LLDB's `qRegisterInfo<n>` replies, in register-number order. Registers that are views of
+/// others (`container-regs`) are left out, as from a `g` reply; so are registers wider than rampage reads, whose
+/// stated offsets keep the others in place.
+pub fn from_register_info(architecture: Option<String>, infos: &[crate::lldb::RegisterInfo]) -> Result<Layout, String> {
+    let mut registers = Vec::new();
+    let mut sets = Vec::new();
+    let mut extent = 0usize;
+    for (regnum, info) in infos.iter().enumerate() {
+        if !info.container.is_empty() {
+            continue;
+        }
+        let end = info
+            .offset
+            .checked_add(info.bitsize.div_ceil(8) as usize)
+            .filter(|end| *end <= crate::packet::MAX_PACKET_BYTES / 2)
+            .ok_or_else(|| format!("register `{}` lies beyond the packet limit", info.name))?;
+        extent = extent.max(end);
+        if info.bitsize > MAX_REGISTER_BITS {
+            continue;
+        }
+        if let Some(set) = &info.set
+            && !sets.contains(set)
+            && sets.len() < 64
+        {
+            sets.push(set.clone());
+        }
+        registers.push(Register {
+            name: info.name.clone(),
+            regnum: regnum as u32,
+            bitsize: info.bitsize,
+            kind: info.encoding.clone(),
+            group: info.set.clone(),
+            feature: None,
+            offset: info.offset,
+            alt_name: info.alt_name.clone(),
+            generic: info.generic.clone(),
+        });
+    }
+    Layout::with_offsets(architecture, LayoutSource::RegisterInfo, sets, registers, extent)
 }
 
 fn fallback(architecture: &str, registers: &[(&str, u32)], feature: &str) -> Layout {
@@ -207,6 +346,8 @@ fn fallback(architecture: &str, registers: &[(&str, u32)], feature: &str) -> Lay
             group: None,
             feature: Some(feature.to_owned()),
             offset: 0,
+            alt_name: None,
+            generic: None,
         })
         .collect();
     Layout::new(Some(architecture.to_owned()), LayoutSource::Fallback, vec![feature.to_owned()], registers)
@@ -298,11 +439,18 @@ impl Family {
         let Some(layout) = layout else { return Family::Other };
         let architecture = layout.architecture.as_deref().unwrap_or("").to_ascii_lowercase();
         let has_feature = |prefix: &str| layout.features.iter().any(|feature| feature.starts_with(prefix));
-        if architecture.starts_with("i386:x86-64") || architecture == "x86-64" {
+        // debugserver's descriptions name no architecture; their feature (`com.apple.debugserver.arm64`) does.
+        let apple =
+            |suffix: &str| layout.features.iter().any(|feature| feature == &format!("com.apple.debugserver.{suffix}"));
+        if architecture.starts_with("i386:x86-64") || architecture == "x86-64" || apple("x86_64") || apple("x86_64h") {
             Family::X86_64
-        } else if architecture.starts_with("i386") {
+        } else if architecture.starts_with("i386") || apple("i386") {
             Family::X86
-        } else if architecture.starts_with("aarch64") || has_feature("org.gnu.gdb.aarch64.") {
+        } else if architecture.starts_with("aarch64")
+            || has_feature("org.gnu.gdb.aarch64.")
+            || apple("arm64")
+            || apple("arm64e")
+        {
             Family::Aarch64
         } else if architecture.starts_with("arm") || has_feature("org.gnu.gdb.arm.") {
             Family::Arm

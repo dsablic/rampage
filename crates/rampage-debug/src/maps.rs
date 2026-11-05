@@ -43,8 +43,12 @@ pub struct Module {
     pub sections: Vec<u64>,
     /// The GNU build ID, read from the module's ELF note in target memory when its header is mapped at `l_addr`.
     pub build_id: Option<String>,
-    /// Whether this is the main program's entry (`main-lm`).
+    /// Whether this is the main program's entry (`main-lm`), or for dyld images the `MH_EXECUTE` image.
     pub main: bool,
+    /// dyld (`jGetLoadedDynamicLibrariesInfos`): the Mach-O image's header address, UUID, segments and whether it
+    /// lives in the dyld shared cache.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dyld: Option<crate::lldb::DyldImage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -52,11 +56,17 @@ pub struct Region {
     #[serde(serialize_with = "hex_address")]
     pub start: u64,
     pub length: u64,
-    /// `ram`, `rom` or `flash`.
+    /// `ram`, `rom` or `flash` from a memory map; `mapped` from LLDB's `qMemoryRegionInfo`.
     #[serde(rename = "type")]
     pub kind: String,
     /// Flash erase block size, from the region's `blocksize` property.
     pub flash_block_size: Option<u64>,
+    /// `qMemoryRegionInfo`: the region's permissions (`r`, `w`, `x`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<String>,
+    /// `qMemoryRegionInfo`: the region's name, when the stub gives one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 fn address(text: Option<&str>, what: &str) -> Result<u64, String> {
@@ -92,6 +102,7 @@ pub fn parse_svr4(text: &str) -> Result<Vec<Module>, String> {
             sections: Vec::new(),
             build_id: None,
             main: main == Some(lm),
+            dyld: None,
         });
     }
     Ok(modules)
@@ -127,6 +138,7 @@ pub fn parse_libraries(text: &str) -> Result<Vec<Module>, String> {
             sections,
             build_id: None,
             main: false,
+            dyld: None,
         });
     }
     Ok(modules)
@@ -154,7 +166,7 @@ pub fn parse_memory_map(text: &str) -> Result<Vec<Region>, String> {
             .find(|property| property.attribute("name") == Some("blocksize"))
             .map(|property| address(Some(property.text.trim()), "flash blocksize"))
             .transpose()?;
-        regions.push(Region { start, length, kind: kind.to_owned(), flash_block_size });
+        regions.push(Region { start, length, kind: kind.to_owned(), flash_block_size, permissions: None, name: None });
     }
     regions.sort_by_key(|region| region.start);
     if regions.windows(2).any(|pair| pair[0].start + (pair[0].length - 1) >= pair[1].start) {

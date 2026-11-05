@@ -1345,7 +1345,10 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   (read-only GDB remote protocol tools, `docs/debug-control.md`) and 9.2 (all-stop execution control: continue/wait/interrupt, step,
   breakpoints and watchpoints, stop epochs, cancellation) and 9.3 (static correlation: project binding, symbolic breakpoints,
   step-over/out, stop locations) and 9.4 (writes behind `--debug-writes`, kill behind `--debug-kill`) are done;
-  9.5 (macOS debugserver) is next. Launch, attach, resume, step, breakpoints, expressions and
+  9.5 (macOS debugserver) is implemented against LLVM-sourced transcripts, but its live acceptance
+  (`RAMPAGE_DEBUGSERVER_LIVE=1`, `test(debug_debugserver_live::)`) has not run: it needs
+  `sudo DevToolsSecurity -enable` on the test machine. 9.6 (Windows) awaits review of
+  `docs/plans/2026-11-05-debugger-windows.md`. Launch, attach, resume, step, breakpoints, expressions and
   target writes are not part of the read-only workspace milestone.
 
 ### Deferred exact-entry UI and reviewed static workspaces

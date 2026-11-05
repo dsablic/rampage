@@ -6,6 +6,26 @@ use crate::packet::{decode_hex, parse_hex_u64};
 
 /// Most `n:r` pairs read from one stop reply.
 const MAX_STOP_FIELDS: usize = 1024;
+/// Stop-reply fields this client interprets, which must arrive whole.
+const KNOWN_FIELDS: &[&str] = &[
+    "thread",
+    "core",
+    "watch",
+    "rwatch",
+    "awatch",
+    "swbreak",
+    "hwbreak",
+    "library",
+    "replaylog",
+    "metype",
+    "mecount",
+    "medata",
+    "description",
+    "reason",
+    "watch_addr",
+];
+/// Most `medata` codes kept from one exception.
+const MAX_EXCEPTION_CODES: usize = 16;
 
 /// A thread as the protocol names it: a thread ID, with a process ID in multiprocess mode (`p<pid>.<tid>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -58,10 +78,97 @@ pub enum StopReason {
     ReplayLog {
         position: String,
     },
+    /// debugserver's Mach exception (`metype`, `mecount`, `medata`).
+    Exception(MachException),
+    /// debugserver's `description` field, decoded from hex.
+    Description {
+        text: String,
+    },
     Other {
         name: String,
         value: String,
     },
+}
+
+/// A Mach exception as debugserver reports it in a stop reply (`metype`, `medata`, hex) or in `jThreadsInfo`
+/// (decimal JSON). The codes are the exception's raw `code` and `subcode` words; their meaning depends on the
+/// exception type and the architecture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MachException {
+    /// The `exception_type_t`: 1 `EXC_BAD_ACCESS`, 2 `EXC_BAD_INSTRUCTION`, 6 `EXC_BREAKPOINT`...
+    #[serde(rename = "type")]
+    pub exc_type: u32,
+    /// The type's name, `EXC_UNKNOWN` for a type this client does not know.
+    pub name: &'static str,
+    #[serde(serialize_with = "hex_list")]
+    pub codes: Vec<u64>,
+    /// `EXC_BAD_ACCESS`: the faulting data address (the subcode).
+    #[serde(serialize_with = "optional_hex", skip_serializing_if = "Option::is_none")]
+    pub fault_address: Option<u64>,
+    /// `EXC_BAD_ACCESS`: what the code word says (`KERN_INVALID_ADDRESS`, `KERN_PROTECTION_FAILURE`, or arm64's
+    /// `EXC_ARM_DA_ALIGN`); `EXC_SOFTWARE`: `EXC_SOFT_SIGNAL` when it carries a Unix signal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_name: Option<&'static str>,
+    /// `EXC_SOFTWARE` with `EXC_SOFT_SIGNAL`: the Unix signal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal: Option<u64>,
+}
+
+/// arm64's `EXC_ARM_DA_DEBUG`: an `EXC_BREAKPOINT` code older debugservers report watchpoint hits with, the
+/// subcode being the address accessed.
+pub const EXC_ARM_DA_DEBUG: u64 = 0x102;
+/// `EXC_SOFT_SIGNAL`: an `EXC_SOFTWARE` code carrying a Unix signal in the subcode.
+pub const EXC_SOFT_SIGNAL: u64 = 0x10003;
+
+impl MachException {
+    pub fn new(exc_type: u32, codes: &[u64]) -> Self {
+        let name = match exc_type {
+            1 => "EXC_BAD_ACCESS",
+            2 => "EXC_BAD_INSTRUCTION",
+            3 => "EXC_ARITHMETIC",
+            4 => "EXC_EMULATION",
+            5 => "EXC_SOFTWARE",
+            6 => "EXC_BREAKPOINT",
+            7 => "EXC_SYSCALL",
+            8 => "EXC_MACH_SYSCALL",
+            9 => "EXC_RPC_ALERT",
+            10 => "EXC_CRASH",
+            11 => "EXC_RESOURCE",
+            12 => "EXC_GUARD",
+            13 => "EXC_CORPSE_NOTIFY",
+            _ => "EXC_UNKNOWN",
+        };
+        let codes: Vec<u64> = codes.iter().take(MAX_EXCEPTION_CODES).copied().collect();
+        let (mut fault_address, mut code_name, mut signal) = (None, None, None);
+        match (exc_type, codes.first()) {
+            (1, Some(code)) => {
+                fault_address = codes.get(1).copied();
+                code_name = match code {
+                    1 => Some("KERN_INVALID_ADDRESS"),
+                    2 => Some("KERN_PROTECTION_FAILURE"),
+                    0x101 => Some("EXC_ARM_DA_ALIGN"),
+                    _ => None,
+                };
+            }
+            (5, Some(&EXC_SOFT_SIGNAL)) => {
+                code_name = Some("EXC_SOFT_SIGNAL");
+                signal = codes.get(1).copied();
+            }
+            _ => {}
+        }
+        Self { exc_type, name, codes, fault_address, code_name, signal }
+    }
+}
+
+fn hex_list<S: serde::Serializer>(values: &[u64], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(values.iter().map(|value| format!("{value:#x}")))
+}
+
+fn optional_hex<S: serde::Serializer>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(value) => serializer.collect_str(&format_args!("{value:#x}")),
+        None => serializer.serialize_none(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -105,16 +212,57 @@ impl StopReply {
                 let mut core = None;
                 let mut reasons = Vec::new();
                 let mut registers = Vec::new();
+                // debugserver's Mach exception and watchpoint fields, typed once every field is read.
+                let mut exception: Option<u32> = None;
+                let mut codes = Vec::new();
+                let mut watchpoint_reason = false;
+                let mut watch_address = None;
                 for (index, field) in fields.split(';').filter(|field| !field.is_empty()).enumerate() {
                     if index >= MAX_STOP_FIELDS {
                         return Err("stop reply has too many fields".into());
                     }
                     let (name, value) = field.split_once(':').ok_or_else(malformed)?;
+                    let register = !name.is_empty() && name.len() <= 8 && name.bytes().all(|b| b.is_ascii_hexdigit());
                     if value.len() > 4096 {
-                        return Err("stop reply field exceeds 4096 bytes".into());
+                        // A register or a field rampage reads must be whole; debugserver's informational fields
+                        // (`jstopinfo`, `detailed-binaries-info`) may be long and are only listed by name.
+                        if register || KNOWN_FIELDS.contains(&name) {
+                            return Err("stop reply field exceeds 4096 bytes".into());
+                        }
+                        reasons.push(StopReason::Other {
+                            name: name.chars().take(64).collect(),
+                            value: format!("<{} bytes omitted>", value.len()),
+                        });
+                        continue;
                     }
                     let address = || parse_hex_u64(value).ok_or_else(malformed);
+                    let other =
+                        || StopReason::Other { name: name.to_owned(), value: value.chars().take(256).collect() };
                     match name {
+                        "metype" => exception = Some(u32::try_from(address()?).map_err(|_| malformed())?),
+                        "mecount" => {
+                            address()?;
+                        }
+                        "medata" => {
+                            let code = address()?;
+                            if codes.len() < MAX_EXCEPTION_CODES {
+                                codes.push(code);
+                            }
+                        }
+                        "description" => {
+                            let text = decode_hex(value.as_bytes())
+                                .map(|bytes| String::from_utf8_lossy(&bytes).chars().take(256).collect())
+                                .unwrap_or_else(|| value.chars().take(256).collect());
+                            reasons.push(StopReason::Description { text });
+                        }
+                        "reason" => {
+                            watchpoint_reason |= value == "watchpoint";
+                            reasons.push(other());
+                        }
+                        "watch_addr" => {
+                            watch_address = Some(address()?);
+                            reasons.push(other());
+                        }
                         "thread" => thread = Some(ThreadId::parse(value).ok_or_else(malformed)?),
                         "core" => core = Some(address()?),
                         "watch" => reasons.push(StopReason::Watch { access: "write", address: address()? }),
@@ -124,7 +272,7 @@ impl StopReply {
                         "hwbreak" => reasons.push(StopReason::HwBreak),
                         "library" => reasons.push(StopReason::Library),
                         "replaylog" => reasons.push(StopReason::ReplayLog { position: value.to_owned() }),
-                        _ if !name.is_empty() && name.len() <= 8 && name.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                        _ if register => {
                             let regnum = u32::from_str_radix(name, 16).map_err(|_| malformed())?;
                             let digits = value.replace(['x', 'X'], "0");
                             if decode_hex(digits.as_bytes()).is_none() {
@@ -137,6 +285,28 @@ impl StopReply {
                             value: value.chars().take(256).collect(),
                         }),
                     }
+                }
+                let watched = reasons.iter().any(|reason| matches!(reason, StopReason::Watch { .. }));
+                if let Some(exc_type) = exception {
+                    // Older debugservers report a watchpoint hit as EXC_BREAKPOINT with code EXC_ARM_DA_DEBUG and
+                    // the address accessed as the subcode.
+                    if exc_type == 6
+                        && watch_address.is_none()
+                        && codes.first() == Some(&EXC_ARM_DA_DEBUG)
+                        && let Some(&address) = codes.get(1)
+                    {
+                        watch_address = Some(address);
+                        watchpoint_reason = true;
+                    }
+                    reasons.insert(0, StopReason::Exception(MachException::new(exc_type, &codes)));
+                }
+                // debugserver reports `reason:watchpoint` with `watch_addr`, the address accessed, and does not say
+                // whether it was a read or a write, so the hit is an access.
+                if !watched
+                    && watchpoint_reason
+                    && let Some(address) = watch_address
+                {
+                    reasons.insert(0, StopReason::Watch { access: "access", address });
                 }
                 Ok(StopReply::Signal { signal, thread, core, reasons, registers })
             }
@@ -220,6 +390,53 @@ mod tests {
         assert_eq!(StopReply::parse(b"W00;process:2a").unwrap(), StopReply::Exited { status: 0, pid: Some(0x2a) });
         assert_eq!(StopReply::parse(b"X09").unwrap(), StopReply::Terminated { signal: 9, pid: None });
         assert!(StopReply::parse(b"X09").unwrap().ended());
+    }
+
+    #[test]
+    fn types_debugserver_exceptions_and_watchpoints() {
+        // EXC_BAD_ACCESS (KERN_INVALID_ADDRESS at 0x10), as debugserver sends it: TARGET_EXC_BAD_ACCESS, hex codes.
+        let reply = StopReply::parse(
+            b"T91thread:1d2e3;name:prog;00:1000000000000000;metype:1;mecount:2;medata:1;medata:10;\
+              memory:0x16fdff3a0=b0f3df6f01000000;",
+        )
+        .unwrap();
+        let StopReply::Signal { signal, reasons, registers, .. } = reply else { panic!() };
+        assert_eq!((signal, registers.len()), (0x91, 1));
+        let StopReason::Exception(exception) = &reasons[0] else { panic!("{reasons:?}") };
+        assert_eq!(
+            (exception.name, exception.fault_address, exception.code_name),
+            ("EXC_BAD_ACCESS", Some(0x10), Some("KERN_INVALID_ADDRESS"))
+        );
+        // A newer debugserver's watchpoint stop, and an older one's EXC_ARM_DA_DEBUG.
+        let reply = StopReply::parse(
+            b"T05thread:1d2e3;metype:6;mecount:2;medata:102;medata:100004000;reason:watchpoint;\
+              description:34323934393833323936203020343239343938333239363b;watch_addr:100004000;",
+        )
+        .unwrap();
+        let StopReply::Signal { reasons, .. } = reply else { panic!() };
+        assert_eq!(reasons[0], StopReason::Watch { access: "access", address: 0x1_0000_4000 });
+        assert!(
+            reasons
+                .iter()
+                .any(|reason| matches!(reason, StopReason::Description { text } if text.starts_with("4294983296")))
+        );
+        let reply = StopReply::parse(b"T05thread:1d2e3;metype:6;mecount:2;medata:102;medata:100004004;").unwrap();
+        let StopReply::Signal { reasons, .. } = reply else { panic!() };
+        assert_eq!(reasons[0], StopReason::Watch { access: "access", address: 0x1_0000_4004 });
+        // An interrupt: EXC_SOFTWARE carrying SIGSTOP.
+        let reply = StopReply::parse(b"T11thread:1d2e3;metype:5;mecount:2;medata:10003;medata:11;").unwrap();
+        let StopReply::Signal { reasons, .. } = reply else { panic!() };
+        let StopReason::Exception(exception) = &reasons[0] else { panic!() };
+        assert_eq!((exception.code_name, exception.signal), (Some("EXC_SOFT_SIGNAL"), Some(0x11)));
+        // Long informational fields are listed, not refused; long fields rampage reads still are.
+        let long = format!("T05thread:1;jstopinfo:{};", "5b".repeat(4000));
+        let StopReply::Signal { reasons, .. } = StopReply::parse(long.as_bytes()).unwrap() else { panic!() };
+        assert!(
+            matches!(&reasons[0], StopReason::Other { name, value } if name == "jstopinfo" && value.contains("omitted"))
+        );
+        assert!(StopReply::parse(format!("T05medata:{};", "1".repeat(5000)).as_bytes()).is_err());
+        assert!(StopReply::parse(b"T05metype:zz;").is_err());
+        assert!(StopReply::parse(b"T05metype:100000000;").is_err());
     }
 
     #[test]

@@ -235,6 +235,8 @@ impl DebugRegistry {
             memory_map_available: info.memory_map_available,
             max_read_length: tool_read_limit(info.chunk_size()),
             limitations: info.limitations.clone(),
+            lldb: info.lldb.clone(),
+            address_mask: info.address_mask.clone(),
             threads: FittedPage::empty(),
         };
         let budget = item_budget(&connection)?;
@@ -798,7 +800,7 @@ impl DebugRegistry {
             provenance: format!(
                 "rampage debug_snapshot of GDB remote endpoint {} (session {id}, stop epoch {}); data byte order: {}; \
                  {NOT_ATOMIC}; module image_base 0 with runtime_base = svr4 l_addr records the load bias, not \
-                 header addresses",
+                 header addresses; dyld modules record their __TEXT address and runtime header address",
                 info.endpoint, status.epoch, info.byte_order_evidence
             ),
             regions: ranges
@@ -958,6 +960,23 @@ fn snapshot_thread_id(thread: Option<ThreadId>, several_processes: bool) -> Resu
 fn snapshot_modules(modules: &[rampage_debug::Module]) -> Result<Vec<SnapshotModule>, ApiError> {
     let mut seen = std::collections::BTreeSet::new();
     let mut entries = Vec::new();
+    // dyld images (debugserver): the UUID identifies the image, and the header's link-time and runtime addresses
+    // record the slide.
+    for module in modules {
+        let Some(image) = &module.dyld else { continue };
+        let (Some(uuid), Some(text)) = (&image.uuid, image.text_vmaddr) else { continue };
+        if !seen.insert(rampage_loaders::snapshot::canonical_module_identity(uuid)) {
+            continue;
+        }
+        let path = truncate_bytes(&module.name, 4096);
+        entries.push(SnapshotModule {
+            name: path.rsplit('/').next().unwrap_or("").to_owned(),
+            path,
+            uuid: uuid.clone(),
+            image_base: format!("{text:#x}"),
+            runtime_base: format!("{:#x}", image.load_address),
+        });
+    }
     for module in modules.iter().filter(|module| module.l_addr.is_some()) {
         let link_map = format!("gdb-link-map:{:#x}", module.lm.unwrap_or(0));
         let build_id = module.build_id.as_ref().map(|id| {
@@ -1091,6 +1110,12 @@ pub struct DebugConnection {
     /// The most bytes one `debug_read_memory` call may read on this session.
     pub max_read_length: usize,
     pub limitations: Vec<String>,
+    /// LLDB's extensions (debugserver): what `qHostInfo` and `qProcessInfo` said.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lldb: Option<rampage_debug::LldbInfo>,
+    /// arm64: how pointer authentication codes are taken off return addresses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address_mask: Option<rampage_debug::AddressMask>,
     pub threads: FittedPage<rampage_debug::ThreadInfo>,
 }
 

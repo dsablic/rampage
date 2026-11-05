@@ -322,6 +322,41 @@ pub fn step_9_2_execution(packet: &str) -> bool {
     }
 }
 
+/// For LLDB's queries (`qHostInfo`, `qProcessInfo`, `qRegisterInfo<n>`, `qMemoryRegionInfo:<address>`,
+/// `jThreadsInfo` and every `j` packet): whether `packet` has exactly the form rampage may send. `None` for other
+/// packets. Written independently of the client's allowlist, so the two check each other.
+pub fn lldb_query(packet: &str) -> Option<bool> {
+    let hex_number =
+        |text: &str, most: usize| (1..=most).contains(&text.len()) && text.chars().all(|c| c.is_ascii_hexdigit());
+    if packet == "qHostInfo" || packet == "qProcessInfo" || packet == "jThreadsInfo" {
+        return Some(true);
+    }
+    for family in ["qHostInfo", "qProcessInfo", "jThreadsInfo"] {
+        if packet.starts_with(family) {
+            return Some(false);
+        }
+    }
+    if let Some(number) = packet.strip_prefix("qRegisterInfo") {
+        return Some(hex_number(number, 8));
+    }
+    if let Some(rest) = packet.strip_prefix("qMemoryRegionInfo") {
+        return Some(rest.strip_prefix(':').is_some_and(|address| hex_number(address, 16)));
+    }
+    if packet.starts_with('j') {
+        let Some(argument) = packet.strip_prefix("jGetLoadedDynamicLibrariesInfos:") else { return Some(false) };
+        if argument == r#"{"fetch_all_solibs":true,"report_load_commands":false}"# {
+            return Some(true);
+        }
+        let list = argument.strip_prefix(r#"{"solib_addresses":["#).and_then(|rest| rest.strip_suffix("]}"));
+        return Some(list.is_some_and(|list| {
+            let items: Vec<&str> = list.split(',').collect();
+            items.len() <= 512
+                && items.iter().all(|item| !item.is_empty() && item.parse::<u64>().is_ok() && !item.starts_with('+'))
+        }));
+    }
+    None
+}
+
 /// What the stub saw.
 #[derive(Debug, Default)]
 pub struct Report {
@@ -482,6 +517,10 @@ fn serve(mut stream: impl Stream, mut script: Script) -> Report {
                     "forbidden (read-only script)"
                 };
                 report.violations.push(format!("{kind} execution-control packet `{packet:?}`"));
+                break 'connection;
+            }
+            if lldb_query(&packet) == Some(false) {
+                report.violations.push(format!("malformed or unexpected LLDB query `{packet}`"));
                 break 'connection;
             }
             if packet == "?" && script.question_clears_points {
@@ -806,4 +845,353 @@ pub mod transcripts {
     pub fn aarch64_second_thread_pc() -> u64 {
         0x7fff_f7e8_1234
     }
+
+    /// A Mach-O image the debugserver transcript lists in its `jGetLoadedDynamicLibrariesInfos` reply.
+    #[derive(Debug, Clone)]
+    pub struct DebugserverImage {
+        pub path: String,
+        /// Upper case with dashes, as debugserver formats it.
+        pub uuid: String,
+        /// The runtime address of the Mach-O header.
+        pub load_address: u64,
+        /// `__TEXT`'s link-time address and size.
+        pub text_vmaddr: u64,
+        pub text_size: u64,
+        /// 2 `MH_EXECUTE`, 6 `MH_DYLIB`, 7 `MH_DYLINKER`.
+        pub filetype: u32,
+        /// Sets `MH_DYLIB_IN_CACHE` in the header flags.
+        pub in_shared_cache: bool,
+    }
+
+    /// The process the debugserver transcript serves.
+    #[derive(Debug, Clone)]
+    pub struct DebugserverTarget {
+        pub images: Vec<DebugserverImage>,
+        /// x0..x28, fp, lr, sp, pc, cpsr of the main thread.
+        pub registers: [u64; 34],
+        /// Serve `target.xml` (debugserver since about 2020); otherwise only `qRegisterInfo<n>`, as older ones.
+        pub target_xml: bool,
+        /// The stop reply's Mach exception: `metype` and `medata`, and the signal.
+        pub signal: u8,
+        pub exception: (u32, Vec<u64>),
+    }
+
+    /// debugserver's main thread and second thread.
+    pub const DEBUGSERVER_THREAD: u64 = 0x2f3a1;
+    pub const DEBUGSERVER_SECOND_THREAD: u64 = 0x2f3b0;
+    /// The pid the transcript reports.
+    pub const DEBUGSERVER_PID: u64 = 0x1a2b;
+    /// Register numbers in debugserver's arm64 numbering: x0..x28 are 0..28.
+    pub const DEBUGSERVER_LR: u32 = 30;
+    pub const DEBUGSERVER_SP: u32 = 31;
+    pub const DEBUGSERVER_PC: u32 = 32;
+    pub const DEBUGSERVER_CPSR: u32 = 33;
+
+    impl Default for DebugserverTarget {
+        fn default() -> Self {
+            let mut registers = [0u64; 34];
+            for (index, register) in registers.iter_mut().enumerate().take(29) {
+                *register = 0x100 + index as u64;
+            }
+            registers[29] = 0x16fd_ff3b0;
+            registers[30] = 0x1_8c4a_6e8c; // lr: in dyld (start)
+            registers[31] = 0x16fd_ff3a0;
+            registers[32] = 0x1_0000_3f50;
+            registers[33] = 0x6000_0000;
+            Self {
+                images: vec![
+                    DebugserverImage {
+                        path: "/Users/op/debug-macho/macho-loop".into(),
+                        uuid: "4C4C44A5-5555-3144-A1C2-3B6E5D7E8F90".into(),
+                        load_address: 0x1_0000_0000,
+                        text_vmaddr: 0x1_0000_0000,
+                        text_size: 0x4000,
+                        filetype: 2,
+                        in_shared_cache: false,
+                    },
+                    DebugserverImage {
+                        path: "/usr/lib/dyld".into(),
+                        uuid: "B5C3F2A1-1D2E-3F40-8A9B-0C1D2E3F4A5B".into(),
+                        load_address: 0x1_8c4a_0000,
+                        text_vmaddr: 0x1_8c4a_0000,
+                        text_size: 0x6_4000,
+                        filetype: 7,
+                        in_shared_cache: false,
+                    },
+                    DebugserverImage {
+                        path: "/usr/lib/system/libsystem_c.dylib".into(),
+                        uuid: "A1B2C3D4-E5F6-3708-9A1B-2C3D4E5F6A7B".into(),
+                        load_address: 0x1_8c56_8000,
+                        text_vmaddr: 0x1_8051_8000,
+                        text_size: 0x8_4000,
+                        filetype: 6,
+                        in_shared_cache: true,
+                    },
+                ],
+                registers,
+                target_xml: true,
+                signal: 0x11,
+                exception: (5, vec![0x10003, 0x11]),
+            }
+        }
+    }
+
+    /// A debugserver register: name, alternative name, generic role, bitsize and offset, and for views (`w0`) the
+    /// register they view.
+    type DebugserverRegister = (String, Option<String>, Option<&'static str>, u32, usize, Option<u32>);
+
+    /// debugserver's arm64 registers. Its stated offsets follow each other with no gaps ("no gaps between
+    /// registers", `RNBRemote.cpp`), whatever its register context's own layout; a view takes the running offset
+    /// and adds no bytes.
+    fn debugserver_registers() -> Vec<DebugserverRegister> {
+        let mut registers: Vec<DebugserverRegister> = Vec::new();
+        let mut offset = 0usize;
+        let mut push =
+            |name: String, alt: Option<&str>, generic: Option<&'static str>, bits: u32, view: Option<u32>| {
+                registers.push((name, alt.map(str::to_owned), generic, bits, offset, view));
+                if view.is_none() {
+                    offset += bits as usize / 8;
+                }
+            };
+        for index in 0..29u32 {
+            let generic = match index {
+                0..=7 => Some(["arg1", "arg2", "arg3", "arg4", "arg5", "arg6", "arg7", "arg8"][index as usize]),
+                _ => None,
+            };
+            push(format!("x{index}"), None, generic, 64, None);
+        }
+        push("fp".into(), Some("x29"), Some("fp"), 64, None);
+        push("lr".into(), Some("x30"), Some("ra"), 64, None);
+        push("sp".into(), Some("xsp"), Some("sp"), 64, None);
+        push("pc".into(), None, Some("pc"), 64, None);
+        push("cpsr".into(), Some("flags"), Some("flags"), 32, None);
+        for index in 0..29u32 {
+            push(format!("w{index}"), None, None, 32, Some(index));
+        }
+        for index in 0..32 {
+            push(format!("v{index}"), None, None, 128, None);
+        }
+        push("fpsr".into(), None, None, 32, None);
+        push("fpcr".into(), None, None, 32, None);
+        push("far".into(), None, None, 64, None);
+        push("esr".into(), None, None, 32, None);
+        push("exception".into(), None, None, 32, None);
+        registers
+    }
+
+    /// A debugserver stop reply for the main thread: the signal, its name, the general registers expedited by
+    /// debugserver register number, the Mach exception and a stack memory chunk, in debugserver's field order.
+    pub fn debugserver_stop(target: &DebugserverTarget, thread: u64, extra: &str) -> String {
+        let mut reply = format!("T{:02x}thread:{thread:x};name:macho-loop;", target.signal);
+        for (regnum, value) in target.registers.iter().enumerate() {
+            let width = if regnum == 33 { 4 } else { 8 };
+            reply += &format!("{regnum:02x}:{};", le_hex(*value, width));
+        }
+        // A watchpoint stop (exception type 0 here) carries `reason:watchpoint` in `extra` and no exception.
+        let (kind, codes) = &target.exception;
+        if *kind != 0 {
+            reply += &format!("metype:{kind:x};mecount:{:x};", codes.len());
+            for code in codes {
+                reply += &format!("medata:{code:x};");
+            }
+        }
+        reply += extra;
+        reply += &format!("memory:0x{:x}=b0f3df6f01000000{};", target.registers[29], le_hex(target.registers[30], 8));
+        reply
+    }
+
+    /// The reply to the address-only `jGetLoadedDynamicLibrariesInfos` request for `images`.
+    pub fn debugserver_image_addresses(images: &[DebugserverImage]) -> String {
+        let entries: Vec<String> =
+            images.iter().map(|image| format!(r#"{{"load_address":{}}}"#, image.load_address)).collect();
+        format!(r#"{{"images":[{}]}}"#, entries.join(","))
+    }
+
+    /// The `jGetLoadedDynamicLibrariesInfos` reply with full information for `images`.
+    pub fn debugserver_images(images: &[DebugserverImage]) -> String {
+        let entries: Vec<String> = images
+            .iter()
+            .map(|image| {
+                let flags: u64 = 0x0020_0085 | if image.in_shared_cache { 0x8000_0000 } else { 0 };
+                let mut segments = Vec::new();
+                if image.filetype == 2 {
+                    segments.push(format!(
+                        r#"{{"name":"__PAGEZERO","vmaddr":0,"vmsize":{},"fileoff":0,"filesize":0,"maxprot":0}}"#,
+                        image.text_vmaddr
+                    ));
+                }
+                segments.push(format!(
+                    r#"{{"name":"__TEXT","vmaddr":{},"vmsize":{},"fileoff":0,"filesize":{},"maxprot":5}}"#,
+                    image.text_vmaddr, image.text_size, image.text_size
+                ));
+                segments.push(format!(
+                    r#"{{"name":"__LINKEDIT","vmaddr":{},"vmsize":16384,"fileoff":{},"filesize":800,"maxprot":1}}"#,
+                    image.text_vmaddr + image.text_size,
+                    image.text_size
+                ));
+                format!(
+                    r#"{{"load_address":{},"mod_date":0,"pathname":"{}","uuid":"{}","min_version_os_name":"macosx","min_version_os_sdk":"15.0","mach_header":{{"magic":4277009103,"cputype":16777228,"cpusubtype":0,"filetype":{},"flags":{flags},"sizeof_mh_and_loadcmds":1496}},"segments":[{}]}}"#,
+                    image.load_address,
+                    image.path,
+                    image.uuid,
+                    image.filetype,
+                    segments.join(",")
+                )
+            })
+            .collect();
+        format!(r#"{{"images":[{}]}}"#, entries.join(","))
+    }
+
+    /// Apple's `debugserver` on an arm64 Mac, attached to a stopped process, modeled on debugserver's source
+    /// (`lldb/tools/debugserver/source/RNBRemote.cpp`) and LLDB's `lldbgdbremote.md` rather than recorded: the
+    /// machine the tests were written on could not run debugserver (developer mode was off). Its features advertise
+    /// `qEcho+` and `native-signals+` but not `QStartNoAckMode`, multiprocess or any `qXfer` object but
+    /// `features`; its target description names no architecture, states gapless register offsets and declares
+    /// views (`w0`); like debugserver since LLVM 21 it answers `g` as unsupported, so registers are read with `p`;
+    /// its stop replies carry Mach exceptions; it answers `qHostInfo`, `qProcessInfo`, `qRegisterInfo<n>`,
+    /// `jThreadsInfo`, `jGetLoadedDynamicLibrariesInfos` (addresses first, then one batch) and `qMemoryRegionInfo`
+    /// (with a busy stack whose dirty-page list runs past 4 KiB), and leaves `qOffsets` unsupported. Thread `2f3b0`
+    /// is a second, unnamed thread.
+    pub fn debugserver_arm64(target: &DebugserverTarget) -> Script {
+        let registers = debugserver_registers();
+        let mut features = String::from("PacketSize=20000;qEcho+;native-signals+;");
+        if target.target_xml {
+            features = String::from("qXfer:features:read+;") + &features;
+        }
+        features += "SupportedWatchpointTypes=aarch64-mask,aarch64-bas;MultiMemRead+;jMultiBreakpoint+;";
+        let mut script = Script::new()
+            .on("qSupported:multiprocess+;swbreak+;hwbreak+;xmlRegisters=i386,arm", &features)
+            .on(
+                "qHostInfo",
+                "cputype:16777228;cpusubtype:2;addressing_bits:47;ostype:macosx;\
+                 watchpoint_exceptions_received:before;vendor:apple;os_version:15.1.0;endian:little;ptrsize:8;\
+                 vm-page-size:16384;",
+            )
+            .on(
+                "qProcessInfo",
+                &format!(
+                    "pid:{DEBUGSERVER_PID:x};parent-pid:1a20;real-uid:1f5;real-gid:14;effective-uid:1f5;\
+                     effective-gid:14;cputype:100000c;cpusubtype:0;ptrsize:8;ostype:macosx;vendor:apple;\
+                     endian:little;"
+                ),
+            );
+        if target.target_xml {
+            let mut xml = String::from(
+                "<?xml version=\"1.0\"?>\n<target version=\"1.0\">\n<feature name=\"com.apple.debugserver.arm64\">\n",
+            );
+            for (regnum, (name, alt, generic, bits, offset, view)) in registers.iter().enumerate() {
+                xml += &format!("<reg name=\"{name}\" regnum=\"{regnum}\" offset=\"{offset}\" bitsize=\"{bits}\"");
+                if let Some(alt) = alt {
+                    xml += &format!(" altname=\"{alt}\"");
+                }
+                let group = if *bits == 128 { "float" } else { "general" };
+                xml += &format!(" group=\"{group}\" type=\"{}\"", if *bits == 128 { "vec128" } else { "int" });
+                if let Some(generic) = generic {
+                    xml += &format!(" generic=\"{generic}\"");
+                }
+                if let Some(view) = view {
+                    xml += &format!(" value_regnums=\"{view}\"");
+                }
+                xml += "/>\n";
+            }
+            xml += "</feature>\n</target>\n";
+            script = script.xfer("features", "target.xml", &xml);
+        } else {
+            for (regnum, (name, alt, generic, bits, offset, view)) in registers.iter().enumerate() {
+                let set = if *bits == 128 { "Floating Point Registers" } else { "General Purpose Registers" };
+                let mut reply = format!("name:{name};");
+                if let Some(alt) = alt {
+                    reply += &format!("alt-name:{alt};");
+                }
+                reply += &format!("bitsize:{bits};offset:{offset};encoding:uint;format:hex;set:{set};");
+                if let Some(generic) = generic {
+                    reply += &format!("generic:{generic};");
+                }
+                if let Some(view) = view {
+                    reply += &format!("container-regs:{view:x};invalidate-regs:{view:x};");
+                }
+                script = script.on(&format!("qRegisterInfo{regnum:x}"), &reply);
+            }
+            script = script.on(&format!("qRegisterInfo{:x}", registers.len()), "E45");
+        }
+        let thread = DEBUGSERVER_THREAD;
+        let second = DEBUGSERVER_SECOND_THREAD;
+        let mut second_registers = target.registers;
+        second_registers[31] = 0x16fe_8b000;
+        second_registers[32] = 0x1_8c5a_1234;
+        let threads_info = format!(
+            r#"[{{"tid":{thread},"metype":{},"medata":[{}],"reason":"exception","qaddr":8445239080,"name":"macho-loop","qname":"com.apple.main-thread","qkind":"serial","qserialnum":1,"registers":{{"32":"{}"}},"memory":[{{"address":{},"bytes":"b0f3df6f01000000"}}]}},{{"tid":{second},"reason":"none","registers":{{"32":"{}"}}}}]"#,
+            target.exception.0,
+            target.exception.1.iter().map(u64::to_string).collect::<Vec<_>>().join(","),
+            le_hex(target.registers[32], 8),
+            target.registers[29],
+            le_hex(second_registers[32], 8)
+        );
+        // Memory regions from 0: the page-zero gap, then each image's __TEXT (r-x) and __LINKEDIT (r--), the
+        // stack, and the gaps between them.
+        let mut mapped: Vec<(u64, u64, &str)> = Vec::new();
+        for image in &target.images {
+            mapped.push((image.load_address, image.text_size, "rx"));
+            mapped.push((image.load_address + image.text_size, 0x4000, "r"));
+        }
+        mapped.push((STACK_REGION, 0x80_0000, "rw"));
+        mapped.sort();
+        let mut at = 0u64;
+        for (start, size, permissions) in mapped {
+            if start > at {
+                script =
+                    script.on(&format!("qMemoryRegionInfo:{at:x}"), &format!("start:{at:x};size:{:x};", start - at));
+            }
+            // debugserver lists every dirty page of a region; a busy stack has hundreds.
+            let dirty: Vec<String> = if start == STACK_REGION {
+                (0..600u64).map(|page| format!("{:x}", start + (page * 0x4000) % size)).collect()
+            } else {
+                Vec::new()
+            };
+            script = script.on(
+                &format!("qMemoryRegionInfo:{start:x}"),
+                &format!(
+                    "start:{start:x};size:{size:x};permissions:{permissions};dirty-pages:{};type:;",
+                    dirty.join(",")
+                ),
+            );
+            at = start + size;
+        }
+        script = script.on(&format!("qMemoryRegionInfo:{at:x}"), &format!("start:{at:x};"));
+        // Registers with `p`: the second thread's while it is selected, else the main thread's.
+        let value = |values: &[u64; 34], regnum: usize, bits: u32| match regnum {
+            0..=32 => le_hex(values[regnum], 8),
+            33 => le_hex(values[33], 4),
+            _ => "00".repeat(bits as usize / 8),
+        };
+        for (regnum, (_, _, _, bits, _, view)) in registers.iter().enumerate() {
+            if view.is_none() {
+                let second_value = value(&second_registers, regnum, *bits);
+                script = script.on_thread(&format!("{second:x}"), &format!("p{regnum:x}"), &second_value);
+            }
+        }
+        for (regnum, (_, _, _, bits, _, view)) in registers.iter().enumerate() {
+            if view.is_none() {
+                script = script.on(&format!("p{regnum:x}"), &value(&target.registers, regnum, *bits));
+            }
+        }
+        let addresses: Vec<u64> = target.images.iter().map(|image| image.load_address).collect();
+        script
+            .on("?", &debugserver_stop(target, thread, ""))
+            .on("qfThreadInfo", &format!("m{thread:x},{second:x}"))
+            .on("qsThreadInfo", "l")
+            .on(&format!("qThreadExtraInfo,{thread:x}"), "")
+            .on("jThreadsInfo", &threads_info)
+            .on(&format!("Hg{thread:x}"), "OK")
+            .on(&format!("Hg{second:x}"), "OK")
+            .on("g", "")
+            .on(crate::lldb::FETCH_ALL_SOLIBS, &debugserver_image_addresses(&target.images))
+            .on(&crate::lldb::solib_request(&addresses), &debugserver_images(&target.images))
+            .on("qOffsets", "")
+            .on("D", "OK")
+            .memory(target.registers[31], &[0x5a; 0x100])
+    }
+
+    /// The stack region of the debugserver transcript.
+    const STACK_REGION: u64 = 0x16f6_00000;
 }

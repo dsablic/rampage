@@ -265,6 +265,10 @@ pub struct Pointee {
     pub symbol: Option<String>,
     /// The NUL-terminated ASCII string there, at most 80 characters, from the file.
     pub string: Option<String>,
+    /// The register's value with its pointer authentication code, when the location is that of the value without
+    /// it (arm64; see the session's `address_mask`).
+    #[serde(serialize_with = "rampage_arch::hex::optional_address", skip_serializing_if = "Option::is_none")]
+    pub signed_value: Option<u64>,
 }
 
 /// One step of an over-step request.
@@ -639,15 +643,33 @@ fn verification_windows(binary: &rampage_loaders::Binary) -> Vec<(u64, &[u8], &'
         .collect()
 }
 
+/// Whether `length` bytes at `address` lie in readable memory by the stub's region list: `None` when the regions
+/// state no permissions (only LLDB's `qMemoryRegionInfo` does), or when the list stopped short (`partial`) and the
+/// range is in no listed readable region, so only a read can tell.
+fn region_readable(regions: &[rampage_debug::Region], partial: bool, address: u64, length: u64) -> Option<bool> {
+    if !regions.iter().any(|region| region.permissions.is_some()) {
+        return None;
+    }
+    let last = address.checked_add(length.max(1) - 1)?;
+    let readable = regions.iter().any(|region| {
+        region.permissions.as_deref().is_some_and(|permissions| permissions.contains('r'))
+            && address >= region.start
+            && last - region.start < region.length
+    });
+    (readable || !partial).then_some(readable)
+}
+
 /// Compares every [verification window](verification_windows) with target memory at `slide`: matched when at
-/// least one window could be read and none differs, mismatched when any differs.
+/// least one window could be read and none differs, mismatched when any differs. A window the stub's region list
+/// shows unreadable is counted unreadable without asking the target for it.
 fn verify_slide(
     session: &Session,
     binary: &rampage_loaders::Binary,
     slide: u64,
     mask: u64,
-    epoch: Option<u64>,
+    modules: &rampage_debug::Modules,
 ) -> Result<SlideCheck, ApiError> {
+    let epoch = None;
     let windows = verification_windows(binary);
     if windows.is_empty() {
         return Ok(SlideCheck {
@@ -662,7 +684,11 @@ fn verify_slide(
     let mut first = None;
     for (address, file, what) in &windows {
         let runtime = address.wrapping_add(slide) & mask;
-        match read_exact(session, runtime, file.len() as u64, epoch)? {
+        let memory = match region_readable(&modules.regions, modules.regions_partial, runtime, file.len() as u64) {
+            Some(false) => None,
+            _ => read_exact(session, runtime, file.len() as u64, epoch)?,
+        };
+        match memory {
             Some(memory) => match memory.iter().zip(file.iter()).position(|(a, b)| a != b) {
                 None => {
                     matched += 1;
@@ -734,6 +760,26 @@ fn mapped_image_matches(
 
 fn basename(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+/// arm64 registers that hold return addresses, the pc or frame pointers, which pointer authentication may sign.
+const CODE_POINTER_REGISTERS: &[&str] = &["lr", "x30", "pc", "fp", "x29"];
+
+/// Whether `entry` has the path or file name `wanted`.
+fn named_as(entry: &rampage_debug::Module, wanted: &str) -> bool {
+    entry.name == wanted || basename(&entry.name) == wanted
+}
+
+/// Why a module in the dyld shared cache does not bind without its extracted image.
+fn shared_cache_refusal(name: &str) -> ApiError {
+    failure(
+        "shared_cache_image",
+        format!(
+            "`{name}` lives in the dyld shared cache, not in a file at its path, so nothing on disk is known to be \
+             the code that runs; extract it from the cache (for example `dyld_shared_cache_util -extract` or `ipsw \
+             dyld extract`) and bind the extracted image, which binds when its UUID matches; nothing was bound"
+        ),
+    )
 }
 
 /// A function's address by name in `project`: the user's name first, then symbols. Several symbols of that name
@@ -832,6 +878,16 @@ impl DebugRegistry {
             Ok(project) => project,
             Err(error) => match arch.map(|_| projects.open(path, None)) {
                 Some(Ok(project)) => project,
+                // A system library's path names an image in the dyld shared cache, with no file there.
+                _ if !path.exists() && info.apple() => {
+                    let display = path.display().to_string();
+                    let cached = session.modules().ok().is_some_and(|modules| {
+                        modules.modules.iter().any(|entry| {
+                            entry.name == display && entry.dyld.as_ref().is_some_and(|image| image.in_shared_cache)
+                        })
+                    });
+                    return Err(if cached { shared_cache_refusal(&display) } else { error });
+                }
                 _ => return Err(error),
             },
         };
@@ -891,6 +947,18 @@ impl DebugRegistry {
             }
             if let Some(bias) = entry.l_addr {
                 candidates.push((name, vec![bias], header));
+            } else if let Some(image) = &entry.dyld {
+                // dyld gives the Mach-O header's runtime address: the slide is that minus the file's `__TEXT`
+                // address (the segment mapping file offset 0), or minus the `__TEXT` address dyld reports.
+                let mut slides = Vec::new();
+                if let Some(header) = header {
+                    slides.push(image.load_address.wrapping_sub(header) & mask);
+                }
+                if let Some(text) = image.text_vmaddr {
+                    slides.push(image.load_address.wrapping_sub(text) & mask);
+                }
+                slides.dedup();
+                candidates.push((name, slides, header));
             } else if let Some(first) = entry.segments.first().or(entry.sections.first()) {
                 let mut slides = Vec::new();
                 if let Some(header) = header {
@@ -919,13 +987,15 @@ impl DebugRegistry {
         }
         if let Some((macho, wanted)) = &identity {
             for (name, slides, header) in &candidates {
-                let reported = modules
-                    .modules
-                    .iter()
-                    .find(|entry| label(entry) == *name)
-                    .and_then(|entry| entry.build_id.clone())
-                    .map(|id| id.to_ascii_lowercase());
-                let mut found = if *macho { None } else { reported };
+                let entry = modules.modules.iter().find(|entry| label(entry) == *name);
+                // The stub's own reading of the identity: an ELF build ID, or the UUID dyld reports.
+                let mut found = if *macho {
+                    entry
+                        .and_then(|entry| entry.dyld.as_ref()?.uuid.as_deref())
+                        .map(|uuid| uuid.replace('-', "").to_ascii_lowercase())
+                } else {
+                    entry.and_then(|entry| entry.build_id.clone()).map(|id| id.to_ascii_lowercase())
+                };
                 // The identity is read at the header under each candidate slide until one carries it.
                 for slide in slides {
                     if found.is_some() {
@@ -1040,6 +1110,17 @@ impl DebugRegistry {
                 ));
             }
         };
+        // A shared-cache image has no file at its path: only an image extracted from the cache, matched by its UUID,
+        // is known to be the code that runs. A name, header bytes or a caller's slide are not enough.
+        let cached = modules.modules.iter().find(|entry| {
+            (entry.name == label || module.is_some_and(|wanted| named_as(entry, wanted)))
+                && entry.dyld.as_ref().is_some_and(|image| image.in_shared_cache)
+        });
+        if let Some(entry) = cached
+            && !matches!(evidence, BindEvidence::Uuid { .. })
+        {
+            return Err(shared_cache_refusal(&entry.name));
+        }
         let explicit = slide.is_some();
         // Every candidate slide is verified and the first that matches is kept; a caller's slide is the only one.
         let (slide, verification) = match slide {
@@ -1051,12 +1132,12 @@ impl DebugRegistry {
                         slides.iter().map(|slide| format!("{slide:#x}")).collect::<Vec<_>>().join(" or ")
                     ));
                 }
-                (given, verify_slide(&session, binary, given, mask, None)?)
+                (given, verify_slide(&session, binary, given, mask, &modules)?)
             }
             None => {
                 let mut checked = Vec::new();
                 for candidate in &slides {
-                    let check = verify_slide(&session, binary, *candidate, mask, None)?;
+                    let check = verify_slide(&session, binary, *candidate, mask, &modules)?;
                     let matched = check.outcome == "matched";
                     checked.push((*candidate, check));
                     if matched {
@@ -1230,8 +1311,18 @@ impl DebugRegistry {
                 if value == 0 || register.bitsize > 64 {
                     return None;
                 }
-                let (binding, address) = locate(&bindings, value)?;
-                Some(pointee(&binding, value, address))
+                if let Some((binding, address)) = locate(&bindings, value) {
+                    return Some(pointee(&binding, value, address));
+                }
+                // A signed return address or frame pointer (arm64e) locates once its PAC is taken off. Only registers
+                // that hold code or frame pointers are stripped, so a plain integer is never read as a code pointer.
+                // debugserver already strips these when it reads them; this guards stubs that do not.
+                if !CODE_POINTER_REGISTERS.contains(&register.name.as_str()) {
+                    return None;
+                }
+                let stripped = session.info().strip_code_address(value);
+                let (binding, address) = locate(&bindings, stripped).filter(|_| stripped != value)?;
+                Some(Pointee { signed_value: Some(value), ..pointee(&binding, stripped, address) })
             })
             .collect();
         (annotations, notes)
@@ -1488,6 +1579,7 @@ impl DebugRegistry {
             _ => &["sp"],
         };
         let sp = register_in_order(&registers.registers, sp_name, &bindings);
+        let mut pac_note = None;
         let (back, thumb) = match info.family {
             Family::Arm => {
                 let lr = register_value(&registers.registers, &["lr", "r14"], &bindings)
@@ -1500,11 +1592,19 @@ impl DebugRegistry {
                 }
                 (lr & !1, lr & 1 == 1)
             }
-            Family::Aarch64 => (
-                register_value(&registers.registers, &["x30", "lr"], &bindings)
-                    .ok_or_else(|| refuse("x30 could not be read".into()))?,
-                false,
-            ),
+            Family::Aarch64 => {
+                let signed = register_value(&registers.registers, &["x30", "lr"], &bindings)
+                    .ok_or_else(|| refuse("x30 could not be read".into()))?;
+                // arm64e signs return addresses; the breakpoint goes at the address without the PAC.
+                let back = info.strip_code_address(signed);
+                if back != signed {
+                    pac_note = Some(format!(
+                        "x30 {signed:#x} carries a pointer authentication code; the return address is {back:#x} ({})",
+                        info.address_mask.as_ref().map(|mask| mask.source.as_str()).unwrap_or_default()
+                    ));
+                }
+                (back, false)
+            }
             Family::Riscv32 | Family::Riscv64 => (
                 register_value(&registers.registers, &["ra", "x1"], &bindings)
                     .ok_or_else(|| refuse("ra could not be read".into()))?,
@@ -1525,6 +1625,7 @@ impl DebugRegistry {
         }
         let mut result = stepped(id, "out", epoch, 1);
         result.rule = Some(STEP_OUT_RULE);
+        result.warnings.extend(pac_note);
         let mut step = OverStep {
             pc,
             length: 0,
@@ -1781,7 +1882,8 @@ impl DebugRegistry {
         );
         let default_names: &[&str] = match info.family {
             Family::Arm => &["pc", "sp", "lr", "r0", "r1", "r2", "r3"],
-            Family::Aarch64 => &["pc", "sp", "x30", "x0", "x1", "x2", "x3"],
+            // debugserver names x30 `lr`.
+            Family::Aarch64 => &["pc", "sp", "x30", "lr", "x0", "x1", "x2", "x3"],
             Family::Riscv32 | Family::Riscv64 => &["pc", "sp", "ra", "a0", "a1", "a2", "a3"],
             Family::X86_64 => &["rip", "rsp", "rax", "rdi", "rsi", "rdx", "rcx"],
             Family::X86 => &["eip", "esp", "eax", "ecx", "edx"],
@@ -2002,5 +2104,5 @@ fn pointee(binding: &Binding, runtime: u64, address: u64) -> Pointee {
     } else {
         "data"
     };
-    Pointee { location, kind, symbol, string }
+    Pointee { location, kind, symbol, string, signed_value: None }
 }

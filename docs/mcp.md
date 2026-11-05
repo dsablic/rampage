@@ -182,7 +182,13 @@ evaluate expressions or write target memory. Initial session queries return a to
 queries. Stale tokens fail without automatic refresh. Responses retain the backend's error/observation envelope
 and remain non-atomic. See [LLDB queries](lldb-query.md) for request operations, endpoint policy and limits.
 
-The `debug` tools talk to a GDB remote stub the operator started and allowed (gdbserver, QEMU, OpenOCD...).
+The `debug` tools talk to a GDB remote stub the operator started and allowed (gdbserver, QEMU, OpenOCD, Apple's
+`debugserver`...). With debugserver they also use LLDB's extensions where it offers them: `qHostInfo` and
+`qProcessInfo` (CPU type, a stated byte order, pointer authentication address bits, shown as `lldb` and
+`address_mask` by `debug_connect`), `qRegisterInfo` without a target description, `jThreadsInfo` (thread names,
+dispatch queues), the dyld image list (`debug_modules` entries gain `dyld`: header address, UUID, segments and
+`in_shared_cache`) and `qMemoryRegionInfo` (regions with permissions). Stop events gain `exception` for Mach
+exceptions (`EXC_BAD_ACCESS` with `fault_address`, `EXC_BREAKPOINT`, `EXC_BAD_INSTRUCTION`...).
 `debug_connect` takes only an allowed endpoint and returns a session ID; at most four sessions are open per MCP
 connection, and they detach when it ends. `debug_status`, `debug_registers`, `debug_read_memory` (at most the
 session's `max_read_length` bytes per call, short reads reported per chunk) and `debug_modules` read the stopped
@@ -198,7 +204,10 @@ slide), verifies the slide against target memory and reports the evidence; witho
 `debug_breakpoints` takes `static_address` or `function` instead of `address`, stop events gain `locations`
 (static address, function, offset and `show_address` arguments for the pc, matched breakpoints and the watch
 address), `debug_registers` with `annotate: true` says what values point at, and `debug_evidence` returns a bounded
-record of the stop with a ready `record_finding` evidence item.
+record of the stop with a ready `record_finding` evidence item. A Mach-O image dyld reports binds by its UUID at
+dyld's header address minus its `__TEXT` address; a library in the dyld shared cache binds only from an image
+extracted from the cache with the same UUID (`shared_cache_image` otherwise). On arm64, pointer authentication codes
+are taken off return addresses before step out and annotation (`signed_value` keeps the signed one).
 
 Execution control is all-stop. `debug_breakpoints` sets (`software`, `hardware`, `write`, `read`, `access`), clears
 and lists breakpoints and watchpoints the stub inserts at runtime addresses. `debug_continue` resumes every thread
@@ -231,7 +240,8 @@ Errors start with a code: `unknown_session`, `endpoint_not_allowed`, `session_li
 `connection_lost`, `protocol_error`, `target_error`, `unsupported`, `session_not_stopped`, `target_running`,
 `not_running`, `stale_epoch`, `cancelled`, `not_allowed`, `expect_mismatch` or `invalid_argument`; binding and placement add `no_module_match`,
 `slide_mismatch`, `slide_unverified`, `ambiguous_module`, `arch_mismatch`, `binding_limit`, `not_bound`,
-`ambiguous_name`, `not_code`, `step_out_refused` and `undecodable`. See [debug control](debug-control.md).
+`ambiguous_name`, `not_code`, `step_out_refused`, `undecodable` and `shared_cache_image`. See
+[debug control](debug-control.md).
 
 ## Raw projects
 

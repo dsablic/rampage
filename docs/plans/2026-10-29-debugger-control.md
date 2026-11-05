@@ -104,10 +104,40 @@ recorded in the project's findings ledger with the debug session as evidence.
 | 9.2 | **Done 2026-11-04** (`aea1240`; live QEMU Cortex-M3 acceptance passes). Execution control: continue/wait/interrupt, step, breakpoints and watchpoints; stop epochs enforced. | Medium. |
 | 9.3 | **Done 2026-11-05** (`5dd53a7`; live QEMU Cortex-M3 acceptance passes). Static correlation: binding, slides, symbolic breakpoints, step-over via rampage decoders, stop-location enrichment. | Medium. |
 | 9.4 | **Done 2026-11-05** (`8e01031`; live QEMU RAM, register and flash writes and kill pass). Writes behind `--debug-writes`; kill behind `--debug-kill`. | Higher; reviewed separately. |
-| 9.5 | macOS `debugserver` acceptance (RSP plus LLDB extensions); evaluate driving LLDB's SB API through the existing bridge for crash/core files. | Platform-dependent. |
+| 9.5 | **Implemented 2026-11-05** (`51f6ddf`); live debugserver acceptance pending (needs DevToolsSecurity enabled). macOS `debugserver` acceptance (RSP plus LLDB extensions); evaluate driving LLDB's SB API through the existing bridge for crash/core files. | Platform-dependent. |
 | 9.6 | Windows: separate short design (dbgeng vs. a GDB stub such as a Windows gdbserver). Proposal for review: `docs/plans/2026-11-05-debugger-windows.md`. | — |
 
 Each step follows the wave cadence: implementation, fresh-context review, fixes, full suite, then MCP-level acceptance.
+
+## LLDB's SB API for crash and core files (9.5 evaluation)
+
+The design asks whether to drive LLDB's SB API through the existing bridge for crash and core files. Written
+evaluation only; nothing is implemented.
+
+- **What `query_debugger` does today.** `tools/lldb_bridge.py` runs inside an operator's LLDB session that is
+  already stopped. It answers six enumerated read-only operations (`describe_session`, `list_modules`,
+  `list_threads`, `read_registers`, `read_memory`, `resolve_module_address`) with stop tokens and byte budgets,
+  in session or over an operator-served private Unix socket. It never creates targets, attaches, resumes or
+  evaluates expressions. Because it reads whatever `SBProcess` the session has, it already works on a core file the
+  operator loaded with `target create --core`: LLDB's ELF, Mach-O and minidump core plug-ins present a stopped
+  process. What is missing is only a way to turn such a session into a `rampage-snapshot-v1` file, which the
+  snapshot guide's LLDB export workflow does by hand for x86-64 and ARM32.
+- **Reading cores through rampage-debug's snapshot path instead.** `debug_snapshot` captures from a live stub, so
+  it would need a core-file "stub": parsers for ELF cores (`PT_LOAD` segments, `NT_PRSTATUS` per thread,
+  `NT_FILE` for mapped files, `NT_GNU_BUILD_ID` through the mapped images), Mach-O cores (`LC_SEGMENT_64`,
+  `LC_THREAD` flavors per architecture, the `main bin spec` and `load binary` notes that newer LLDB writes) and
+  minidumps; a register mapping per architecture into the snapshot's register list; and module identity from the
+  notes. That is a new loader-sized component (rampage-loaders already parses ELF and Mach-O files, not their core
+  variants), with every core flavor a format to keep up with, but no LLDB in the loop and no Python.
+- **Through LLDB.** A new bridge operation such as `export_snapshot` would use `SBProcess.GetMemoryRegions`,
+  `ReadMemory`, `SBFrame` registers and `SBModule` UUIDs to write the snapshot. It inherits LLDB's core support for
+  free (including Mach-O cores with the shared cache), but keeps rampage dependent on the operator's LLDB and its
+  Python, and runs inside LLDB's process with the bridge's existing limits on interrupting SDK calls.
+- **Recommendation.** Do neither for 9.5. First, document the existing path: load the core in LLDB, serve the
+  bridge, and use `query_debugger` plus the snapshot guide's export. Next, when a core-file need is concrete, add
+  an enumerated read-only `export_snapshot` bridge operation (bounded regions, the token checks, a new snapshot file
+  only), because it reuses LLDB's core plug-ins rather than reimplementing them. Native core parsing in
+  rampage-loaders is worth it only for ELF cores, if headless batch triage without LLDB becomes a requirement.
 
 ## Acceptance
 
@@ -184,3 +214,30 @@ Each step follows the wave cadence: implementation, fresh-context review, fixes,
   layer instead (break on a named function, read registers, step out, record a finding with `debug_evidence`).
 - **9.3, stop locations:** `debug_status`'s `last_stop` is not located; the results of continue, wait, interrupt
   and step are.
+- **9.5, transcripts:** debugserver could not run on the machine 9.5 was written on (developer tools security
+  off; sudo not used), so the fake stub's debugserver transcript is built from debugserver's source and LLDB's
+  protocol documentation, not recorded, and the live acceptance (`RAMPAGE_DEBUGSERVER_LIVE=1`) is written but has
+  not run. Field formats that the sources leave open were taken conservatively: `qProcessInfo` numbers are hex and
+  `qHostInfo` numbers decimal, addressing bits decimal in both; `j` replies are parsed binary-unescaped, falling
+  back to the reply as sent.
+- **9.5, which stubs are asked LLDB queries:** only stubs advertising `qEcho+` or `native-signals+`, so gdbserver,
+  QEMU and OpenOCD see no new packets. Acknowledgements stay on: debugserver advertises no `QStartNoAckMode`, and
+  in no-ack mode it sends the checksum `#00`, which rampage's framer rejects.
+- **9.5, `jThreadExtendedInfo`:** not used. `jThreadsInfo` gives names, queues and stop reasons; it is asked only
+  with at most 64 threads, since its reply carries every thread's registers and stack memory.
+- **9.5, shared cache:** a module flagged `MH_DYLIB_IN_CACHE` binds only by UUID (an extracted image); a name,
+  header bytes or an explicit slide are refused with `shared_cache_image`.
+- **9.5, PAC:** stripped only on arm64 sessions whose stub states addressing bits or is an Apple one (47-bit
+  default); Linux AArch64 pointer authentication (`pauth_cmask` registers) is not read.
+- **9.5, interrupts:** debugserver stops an interrupted process with SIGSTOP, which counts as `interrupted` on an
+  Apple stub only.
+- **9.5, review against LLVM main:** a fresh-context review of the protocol assumptions against debugserver's
+  source led to these changes. `g` and `G` are never sent to an Apple stub (newer debugserver dropped them; older
+  ones send a padded register context their gapless offsets do not describe); registers come from `p` and the stop
+  reply's expedited registers, cached per stop, and register writes use `P` only. The image list is fetched as LLDB
+  does, addresses first and then 64 images per request, so no reply outgrows a packet. Region replies may be as long
+  as a packet (dirty-page lists), and a region walk that stops short marks the list partial. Watchpoint hits on a
+  stub that reports them before the access (`watchpoint_exceptions_received:before`) are stepped past on the next
+  continue. The stop event's watch hit gives debugserver's accessed address (`me_watch_addr`) beside the
+  watchpoint's start. PAC stripping in annotations is limited to lr, fp and pc. The live test attaches to a
+  program it started rather than having debugserver launch it.

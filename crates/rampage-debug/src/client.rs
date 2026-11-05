@@ -109,6 +109,8 @@ fn classify_text(payload: &str) -> Option<PacketClass> {
         "D" => Some(PacketClass::Detach),
         "k" => Some(PacketClass::Kill),
         "vCont?" | "vCont;c" | "c" | "s" => Some(PacketClass::Execution),
+        // LLDB's queries (debugserver), each only in the exact form rampage sends.
+        _ if crate::lldb::read_query(payload) => Some(PacketClass::Read),
         _ if payload.starts_with("qSupported") => read(
             payload.len() <= 512 && payload.bytes().all(|byte| byte.is_ascii_graphic() && byte != b'#' && byte != b'$'),
         ),
@@ -606,6 +608,13 @@ pub(crate) mod tests {
             "qXfer:exec-file:read:2a:0,fff",
             "qSupported:multiprocess+;swbreak+",
             "QStartNoAckMode",
+            "qHostInfo",
+            "qProcessInfo",
+            "qRegisterInfo1f",
+            "jThreadsInfo",
+            "qMemoryRegionInfo:16fdff000",
+            "jGetLoadedDynamicLibrariesInfos:{\"fetch_all_solibs\":true,\"report_load_commands\":false}",
+            "jGetLoadedDynamicLibrariesInfos:{\"solib_addresses\":[4294967296]}",
         ] {
             assert_eq!(classify(packet), Some(PacketClass::Read), "{packet}");
             assert!(allowed(packet, Permit::READ), "{packet}");
@@ -707,6 +716,16 @@ pub(crate) mod tests {
             "D;zz",
             "i",
             "",
+            "jGetLoadedDynamicLibrariesInfos:{\"fetch_all_solibs\":true}",
+            "jGetLoadedDynamicLibrariesInfos:{\"image_count\":1,\"image_list_address\":140734800075128}",
+            "jThreadExtendedInfo:{\"thread\":1}",
+            "qRegisterInfo",
+            "qMemoryRegionInfo:zz",
+            "QListThreadsInStopReply",
+            "QSetDisableASLR:1",
+            "qLaunchSuccess",
+            "vAttachWait;70726f67",
+            "_M1000,rwx",
         ] {
             assert_eq!(classify(packet), None, "{packet:?}");
             let every = Permit { read: true, execution: true, detach: true, write: true, kill: true };

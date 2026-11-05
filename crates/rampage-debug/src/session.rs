@@ -14,6 +14,7 @@ use crate::exec::{
     self, BreakKind, Breakpoint, Cancel, MAX_BREAKPOINTS, MAX_STEPS, MAX_WATCH_LENGTH, Origin, Placement, StopCause,
     StopEvent, TemporaryOutcome, VCont, stop_reasons,
 };
+use crate::lldb::{self, AddressMask, HostInfo, ThreadDetail};
 use crate::maps::{self, Module, Offsets, Region};
 use crate::packet::{self, decode_hex, encode_hex, parse_hex_u64};
 use crate::stop::{StopReply, ThreadId, hex_address};
@@ -33,6 +34,13 @@ const MAX_DESCRIPTION_BYTES: usize = 1024 * 1024;
 const DEFAULT_PACKET_SIZE: usize = 2048;
 /// Modules whose build ID is looked for in target memory.
 const MAX_BUILD_ID_MODULES: usize = 64;
+/// Most `qRegisterInfo<n>` queries in one handshake.
+const MAX_REGISTER_INFO: usize = 1024;
+/// Most threads whose `jThreadsInfo` is asked for: above it the reply (registers and stack memory of every thread)
+/// could outgrow a packet.
+const MAX_THREADS_INFO: usize = 64;
+/// Most `qMemoryRegionInfo` queries one module listing makes.
+const MAX_REGION_QUERIES: usize = 512;
 /// Cortex-M Application Interrupt and Reset Control Register, whose ENDIANNESS bit and VECTKEYSTAT readback
 /// (0xFA05) establish the data byte order.
 const AIRCR: u64 = 0xe000_ed0c;
@@ -149,6 +157,22 @@ pub struct Info {
     pub modules_available: bool,
     pub memory_map_available: bool,
     pub limitations: Vec<String>,
+    /// LLDB's extensions, when the stub offers them (debugserver): what `qHostInfo` and `qProcessInfo` said.
+    pub lldb: Option<LldbInfo>,
+    /// How pointer authentication codes are taken off code addresses (arm64 return addresses); `None` when the
+    /// address width is unknown and values are used as read.
+    pub address_mask: Option<AddressMask>,
+}
+
+/// What an LLDB-style stub (debugserver) said about its host and process.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct LldbInfo {
+    pub host: Option<HostInfo>,
+    pub process: Option<HostInfo>,
+    /// Whether the stub is an Apple one (`vendor:apple` or an Apple `ostype`).
+    pub apple: bool,
+    /// Whether the process is arm64e, whose return addresses carry pointer authentication codes.
+    pub arm64e: bool,
 }
 
 impl Info {
@@ -160,6 +184,17 @@ impl Info {
     fn feature(&self, name: &str) -> bool {
         self.features.get(name).is_some_and(|value| value == "+")
     }
+
+    /// `value` as a code address: without its pointer authentication code when the session knows the address
+    /// width, else unchanged.
+    pub fn strip_code_address(&self, value: u64) -> u64 {
+        self.address_mask.as_ref().map_or(value, |mask| mask.strip(value))
+    }
+
+    /// Whether the stub is Apple's debugserver (or another Apple LLDB stub).
+    pub fn apple(&self) -> bool {
+        self.lldb.as_ref().is_some_and(|lldb| lldb.apple)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -167,6 +202,9 @@ pub struct ThreadInfo {
     pub id: ThreadId,
     /// The stub's `qThreadExtraInfo` description, when it gives one.
     pub extra: Option<String>,
+    /// LLDB's `jThreadsInfo` for this thread: its name, dispatch queue and stop reason.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<ThreadDetail>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -409,6 +447,10 @@ impl MemoryRead {
 pub struct Modules {
     pub modules: Vec<Module>,
     pub regions: Vec<Region>,
+    /// Whether `qMemoryRegionInfo` stopped before the end of the address space, so an address in no listed region
+    /// may still be mapped.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub regions_partial: bool,
     pub exec_file: Option<String>,
     pub offsets: Option<Offsets>,
     pub limitations: Vec<String>,
@@ -994,6 +1036,13 @@ struct Worker {
     x_write: Option<bool>,
     /// Whether the stub takes `P` writes, once a write found out.
     p_write: Option<bool>,
+    /// Whether LLDB's extensions are worth asking for (the stub advertises `qEcho` or `native-signals`).
+    lldb: bool,
+    /// Whether the stub answers `jThreadsInfo` and `jGetLoadedDynamicLibrariesInfos`, once asked.
+    threads_info: Option<bool>,
+    dyld_info: Option<bool>,
+    /// debugserver registers read one by one, kept for (epoch, selected thread) until a register write.
+    register_cache: Option<(u64, Option<ThreadId>, Vec<Option<String>>)>,
 }
 
 impl Worker {
@@ -1002,6 +1051,10 @@ impl Worker {
             consent,
             x_write: None,
             p_write: None,
+            lldb: false,
+            threads_info: None,
+            dyld_info: None,
+            register_cache: None,
             client: Client::new(transport),
             info: None,
             state: State::Stopped,
@@ -1052,6 +1105,10 @@ impl Worker {
         if plus("QStartNoAckMode") && self.command("QStartNoAckMode", deadline)? == b"OK" {
             self.client.disable_acks();
         }
+        // LLDB's extensions are asked for only from stubs whose features show they speak LLDB's dialect
+        // (debugserver advertises `qEcho+` and `native-signals+`), so GDB stubs see no new packets.
+        self.lldb = plus("qEcho") || plus("native-signals");
+        let lldb = if self.lldb { Some(self.host_info(&mut limitations, deadline)?) } else { None };
         let mut info = Info {
             endpoint,
             local,
@@ -1061,13 +1118,17 @@ impl Worker {
             byte_order_evidence: String::new(),
             pointer_size: None,
             multiprocess: plus("multiprocess"),
-            modules_available: plus("qXfer:libraries-svr4:read") || plus("qXfer:libraries:read"),
-            memory_map_available: plus("qXfer:memory-map:read"),
+            // An LLDB stub may answer jGetLoadedDynamicLibrariesInfos and qMemoryRegionInfo, which it does not
+            // advertise; listing modules asks.
+            modules_available: plus("qXfer:libraries-svr4:read") || plus("qXfer:libraries:read") || self.lldb,
+            memory_map_available: plus("qXfer:memory-map:read") || self.lldb,
             features,
             packet_size,
             no_ack_mode: !self.client.ack_mode(),
             layout: None,
             limitations,
+            lldb,
+            address_mask: None,
         };
         if info.feature("qXfer:features:read") {
             let mut total = 0;
@@ -1089,6 +1150,20 @@ impl Worker {
                 Err(error) => return Err(DebugError::Lost(error)),
             }
         }
+        // debugserver names no architecture; its CPU type does.
+        let cpu_architecture = info.lldb.as_ref().and_then(|lldb| {
+            let stated = |info: &Option<HostInfo>| info.as_ref().and_then(HostInfo::architecture);
+            stated(&lldb.process).or_else(|| stated(&lldb.host))
+        });
+        if info.layout.is_none() && self.lldb {
+            info.layout = self.register_info(cpu_architecture, &mut info.limitations, deadline)?;
+        }
+        if let Some(layout) = &mut info.layout
+            && layout.architecture.is_none()
+            && let Some(architecture) = cpu_architecture
+        {
+            layout.architecture = Some(architecture.to_owned());
+        }
         let stop = StopReply::parse(&self.command("?", deadline)?).map_err(DebugError::Protocol)?;
         self.epoch = 1;
         if stop.ended() {
@@ -1097,7 +1172,13 @@ impl Worker {
         self.stop = Some(stop);
         if self.state == State::Stopped {
             self.threads = self.list_threads(deadline)?;
-            if info.layout.is_none() {
+            if info.layout.is_none() && info.apple() {
+                info.limitations.push(
+                    "debugserver gave neither a target description nor qRegisterInfo, and its `g` cannot be matched \
+                     to a layout; registers are unavailable"
+                        .into(),
+                );
+            } else if info.layout.is_none() {
                 let reply = self.command("g", deadline)?;
                 info.layout = (reply.len() % 2 == 0 && !reply.starts_with(b"E"))
                     .then(|| target::fallback_for(reply.len() / 2))
@@ -1118,10 +1199,110 @@ impl Worker {
         info.family = Family::of(info.layout.as_ref());
         info.architecture = info.layout.as_ref().and_then(|layout| layout.architecture.clone());
         info.pointer_size = info.family.pointer_size(info.layout.as_ref());
-        let (order, evidence) = self.byte_order(&info, deadline)?;
+        if info.family == Family::Other
+            && let Some(size) = info.lldb.as_ref().and_then(|lldb| {
+                lldb.process.as_ref().and_then(|process| process.ptrsize).or(lldb.host.as_ref()?.ptrsize)
+            })
+        {
+            info.pointer_size = Some(size);
+        }
+        let (mut order, mut evidence) = self.byte_order(&info, deadline)?;
+        // An LLDB stub that states the byte order (`endian:little`) of the stopped process is evidence for it.
+        if order == ByteOrder::Unknown
+            && self.state == State::Stopped
+            && let Some(lldb) = &info.lldb
+        {
+            let stated =
+                [("qProcessInfo", &lldb.process), ("qHostInfo", &lldb.host)].into_iter().find_map(|(name, info)| {
+                    let endian = info.as_ref()?.endian.as_deref()?;
+                    match endian {
+                        "little" => Some((ByteOrder::Little, format!("{name} states endian:little"))),
+                        "big" => Some((ByteOrder::Big, format!("{name} states endian:big"))),
+                        _ => None,
+                    }
+                });
+            if let Some((stated, why)) = stated {
+                (order, evidence) = (stated, why);
+            }
+        }
         info.byte_order = order;
         info.byte_order_evidence = evidence;
+        if info.family == Family::Aarch64
+            && let Some(lldb) = &info.lldb
+        {
+            info.address_mask = AddressMask::for_target(lldb.process.as_ref(), lldb.host.as_ref());
+        }
         Ok(info)
+    }
+
+    /// `qHostInfo` and `qProcessInfo`, each when the stub answers it. A reply that does not parse is a limitation,
+    /// not a failure: these only add information.
+    fn host_info(&mut self, limitations: &mut Vec<String>, deadline: Instant) -> Result<LldbInfo, DebugError> {
+        let mut lldb = LldbInfo::default();
+        for (packet, hex) in [("qHostInfo", false), ("qProcessInfo", true)] {
+            let reply = self.command(packet, deadline)?;
+            if reply.is_empty() || is_error(&reply) {
+                continue;
+            }
+            match lldb::parse_host_info(&reply, hex) {
+                Ok(parsed) if packet == "qHostInfo" => lldb.host = Some(parsed),
+                Ok(parsed) => lldb.process = Some(parsed),
+                Err(error) => limitations.push(format!("the `{packet}` reply is unusable: {error}")),
+            }
+        }
+        let any = |test: fn(&HostInfo) -> bool| {
+            lldb.process.as_ref().is_some_and(test) || lldb.host.as_ref().is_some_and(test)
+        };
+        lldb.apple = any(HostInfo::apple);
+        // The host's subtype says what the CPU supports; the process's what it runs.
+        lldb.arm64e = match &lldb.process {
+            Some(process) if process.cpusubtype.is_some() => process.arm64e(),
+            _ => any(HostInfo::arm64e),
+        };
+        Ok(lldb)
+    }
+
+    /// The register layout from LLDB's `qRegisterInfo<n>`, asked for register 0, 1, ... until the stub answers
+    /// with an error, at most [`MAX_REGISTER_INFO`] of them. `None` when the stub does not answer it.
+    fn register_info(
+        &mut self,
+        architecture: Option<&str>,
+        limitations: &mut Vec<String>,
+        deadline: Instant,
+    ) -> Result<Option<Layout>, DebugError> {
+        let mut infos = Vec::new();
+        for number in 0..MAX_REGISTER_INFO {
+            let reply = self.command(&format!("qRegisterInfo{number:x}"), deadline)?;
+            if reply.is_empty() || is_error(&reply) {
+                break;
+            }
+            match lldb::parse_register_info(&reply) {
+                Ok(info) => infos.push(info),
+                Err(error) => {
+                    limitations.push(format!("qRegisterInfo{number:x} is unusable ({error}); registers come from `g`"));
+                    return Ok(None);
+                }
+            }
+            if number + 1 == MAX_REGISTER_INFO {
+                limitations.push(format!("only the first {MAX_REGISTER_INFO} registers are described"));
+            }
+        }
+        if infos.is_empty() {
+            return Ok(None);
+        }
+        match target::from_register_info(architecture.map(str::to_owned), &infos) {
+            Ok(layout) => {
+                limitations.push(format!(
+                    "the stub has no target description; {} registers come from qRegisterInfo",
+                    layout.registers.len()
+                ));
+                Ok(Some(layout))
+            }
+            Err(error) => {
+                limitations.push(format!("the qRegisterInfo layout is unusable: {error}"));
+                Ok(None)
+            }
+        }
     }
 
     /// The data byte order, only from evidence that fixes it: the architecture where it has a single order, or a
@@ -1453,10 +1634,12 @@ impl Worker {
         Ok(true)
     }
 
-    /// Indices of the inserted breakpoints (not watchpoints) at the stopped thread's pc.
+    /// Indices of the inserted breakpoints at the stopped thread's pc, and of the watchpoints the current stop hit
+    /// when the stub stops before the access executes: either would stop the thread again at once.
     fn breakpoints_at_pc(&mut self, deadline: Instant) -> Result<Vec<usize>, DebugError> {
+        let mut entries = self.watchpoints_hit();
         if !self.breakpoints.iter().any(|entry| entry.inserted && !entry.kind.is_watchpoint()) {
-            return Ok(Vec::new());
+            return Ok(entries);
         }
         let pcs = match self.stop.clone() {
             Some(stop) => match self.stop_pc(&stop, deadline) {
@@ -1466,12 +1649,39 @@ impl Worker {
             },
             None => Vec::new(),
         };
-        Ok((0..self.breakpoints.len())
+        entries.extend((0..self.breakpoints.len()).filter(|index| {
+            let entry = &self.breakpoints[*index];
+            entry.inserted && !entry.kind.is_watchpoint() && pcs.contains(&entry.address)
+        }));
+        Ok(entries)
+    }
+
+    /// Indices of the inserted watchpoints the current stop hit, when the stub reports watchpoint hits before the
+    /// access executes (`watchpoint_exceptions_received:before`, as debugserver on ARM does): the thread is still at
+    /// the accessing instruction, and resuming would hit them again at once.
+    fn watchpoints_hit(&self) -> Vec<usize> {
+        let before = self.info.as_ref().is_some_and(|info| {
+            let stated = info.lldb.as_ref().and_then(|lldb| {
+                [&lldb.process, &lldb.host]
+                    .into_iter()
+                    .find_map(|info| info.as_ref()?.watchpoint_exceptions_received.clone())
+            });
+            match stated.as_deref() {
+                Some(stated) => stated == "before",
+                None => info.apple() && matches!(info.family, Family::Aarch64 | Family::Arm),
+            }
+        });
+        let Some(event) = self.last_stop.as_ref().filter(|event| {
+            before && event.epoch == self.epoch && event.reason == StopCause::Watchpoint && self.state == State::Stopped
+        }) else {
+            return Vec::new();
+        };
+        (0..self.breakpoints.len())
             .filter(|index| {
                 let entry = &self.breakpoints[*index];
-                entry.inserted && !entry.kind.is_watchpoint() && pcs.contains(&entry.address)
+                entry.inserted && entry.kind.is_watchpoint() && event.breakpoints.contains(&entry.id)
             })
-            .collect())
+            .collect()
     }
 
     /// Takes the breakpoints at `at_pc` out of the stub, to be put back at the next stop. If the stub refuses one,
@@ -1891,7 +2101,18 @@ impl Worker {
             },
             _ => (None, Vec::new()),
         };
-        let (reason, breakpoints, watch) = exec::classify(&stop, self.origin, interrupted, &pcs, &mut self.breakpoints);
+        let (mut reason, breakpoints, watch) =
+            exec::classify(&stop, self.origin, interrupted, &pcs, &mut self.breakpoints);
+        // debugserver answers the interrupt byte by stopping the process with SIGSTOP (17), reported as such
+        // (`native-signals`), not as SIGINT.
+        if reason == StopCause::Signal
+            && interrupted
+            && signal == Some(17)
+            && self.info.as_ref().is_some_and(|info| info.apple())
+        {
+            reason = StopCause::Interrupted;
+        }
+        let exception = exec::exception(&stop);
         // Breakpoints stepped past go back now, whatever stopped the step.
         let mut warnings = Vec::new();
         for id in std::mem::take(&mut self.reinsert) {
@@ -1919,6 +2140,7 @@ impl Worker {
             pc_bytes,
             breakpoints,
             watch,
+            exception,
             reasons: stop_reasons(&stop),
             stop,
             console: self.client.run_console.clone(),
@@ -2678,7 +2900,10 @@ impl Worker {
         let mut packet = None;
         if self.p_write != Some(false) {
             let request = format!("P{:x}={hex}", register.regnum);
-            let reply = self.command(&request, deadline)?;
+            let reply = self.command(&request, deadline);
+            // Whatever the stub answered, registers read before the write are no longer known to be current.
+            self.register_cache = None;
+            let reply = reply?;
             if reply == b"OK" {
                 self.p_write = Some(true);
                 packet = Some("P");
@@ -2687,6 +2912,15 @@ impl Worker {
             } else {
                 return Err(DebugError::Target(format!("the stub refused `{request}`: {}", reply_text(&reply))));
             }
+        }
+        if packet.is_none() && info.apple() {
+            // debugserver's `g` is its raw register context (or gone, in newer ones), which its stated offsets do
+            // not describe, so writing it back with `G` could corrupt other registers.
+            return Err(DebugError::Unsupported(
+                "this debugserver does not take `P`, and its `g`/`G` cannot be used to write one register; nothing \
+                 was written"
+                    .into(),
+            ));
         }
         if packet.is_none() {
             let reply = self.command("g", deadline)?;
@@ -2860,9 +3094,32 @@ impl Worker {
             } else {
                 None
             };
-            threads.push(ThreadInfo { id, extra });
+            threads.push(ThreadInfo { id, extra, detail: None });
         }
+        self.thread_details(&mut threads, deadline)?;
         Ok(threads)
+    }
+
+    /// Adds LLDB's `jThreadsInfo` (names, dispatch queues, stop reasons) to `threads`, when the stub offers it and
+    /// lists at most [`MAX_THREADS_INFO`] threads. A reply that does not parse leaves the threads as they are.
+    fn thread_details(&mut self, threads: &mut [ThreadInfo], deadline: Instant) -> Result<(), DebugError> {
+        if !self.lldb || self.threads_info == Some(false) || threads.is_empty() || threads.len() > MAX_THREADS_INFO {
+            return Ok(());
+        }
+        let reply = self.command("jThreadsInfo", deadline)?;
+        if reply.is_empty() {
+            self.threads_info = Some(false);
+            return Ok(());
+        }
+        self.threads_info = Some(true);
+        if is_error(&reply) {
+            return Ok(());
+        }
+        let Ok(details) = lldb::parse_threads_info(&reply) else { return Ok(()) };
+        for thread in threads {
+            thread.detail = details.iter().find(|detail| detail.tid == thread.id.tid).cloned();
+        }
+        Ok(())
     }
 
     /// Re-reads the threads of a stopped target, which also shows the connection is alive. The stop itself is the
@@ -2914,6 +3171,84 @@ impl Worker {
         let layout = info.layout.as_ref().ok_or_else(|| {
             DebugError::Unsupported("no register layout: no target description and no matching built-in one".into())
         })?;
+        let raw = if info.apple() {
+            self.read_registers_one_by_one(layout, deadline)?
+        } else {
+            self.read_g(layout, deadline)?
+        };
+        Ok(layout
+            .registers
+            .iter()
+            .zip(raw)
+            .map(|(register, bytes)| {
+                let bytes = bytes.filter(|bytes| !bytes.contains('x'));
+                let value = bytes.as_deref().and_then(|bytes| decode_value(bytes, info.byte_order));
+                RegisterValue {
+                    name: register.name.clone(),
+                    regnum: register.regnum,
+                    bitsize: register.bitsize,
+                    kind: register.kind.clone(),
+                    group: register.group.clone(),
+                    bytes,
+                    value,
+                }
+            })
+            .collect())
+    }
+
+    /// The selected thread's registers from debugserver, which serves no usable `g` (newer ones dropped `g` and
+    /// `G`; older ones send their raw register context, whose padding the offsets they state leave out, and without
+    /// clearing pointer authentication codes). The stop reply's expedited registers stand in for the stopped
+    /// thread's general registers; the rest are read with `p`, and kept for the stop epoch and thread, since only a
+    /// register write changes them before the target runs again.
+    fn read_registers_one_by_one(
+        &mut self,
+        layout: &Layout,
+        deadline: Instant,
+    ) -> Result<Vec<Option<String>>, DebugError> {
+        if let Some((epoch, thread, raw)) = &self.register_cache
+            && *epoch == self.epoch
+            && *thread == self.selected
+            && raw.len() == layout.registers.len()
+        {
+            return Ok(raw.clone());
+        }
+        let expedited = match &self.stop {
+            Some(StopReply::Signal { thread, registers, .. }) if *thread == self.selected || thread.is_none() => {
+                registers.clone()
+            }
+            _ => Vec::new(),
+        };
+        let mut raw = Vec::with_capacity(layout.registers.len());
+        for register in &layout.registers {
+            let sent = expedited
+                .iter()
+                .find(|sent| sent.regnum == register.regnum && sent.bytes.len() == register.bytes() * 2)
+                .map(|sent| sent.bytes.clone());
+            if sent.is_some() {
+                raw.push(sent);
+                continue;
+            }
+            raw.push(self.read_one(register, deadline)?);
+        }
+        self.register_cache = Some((self.epoch, self.selected, raw.clone()));
+        Ok(raw)
+    }
+
+    /// One register with `p`: `None` when the stub cannot read it.
+    fn read_one(&mut self, register: &target::Register, deadline: Instant) -> Result<Option<String>, DebugError> {
+        let reply = self.command(&format!("p{:x}", register.regnum), deadline)?;
+        if reply.is_empty() || is_error(&reply) {
+            return Ok(None);
+        }
+        if reply.len() != register.bytes() * 2 || !reply.iter().all(|b| is_register_digit(*b)) {
+            return Err(protocol(&format!("`p` reply for `{}` has the wrong size", register.name)));
+        }
+        Ok(Some(String::from_utf8_lossy(&reply).to_ascii_lowercase()))
+    }
+
+    /// The selected thread's registers from a `g` reply, and with `p` those it leaves out.
+    fn read_g(&mut self, layout: &Layout, deadline: Instant) -> Result<Vec<Option<String>>, DebugError> {
         let reply = self.command("g", deadline)?;
         let mut raw: Vec<Option<String>> = vec![None; layout.registers.len()];
         let mut fetched = 0;
@@ -2940,33 +3275,9 @@ impl Worker {
         }
         // Registers the `g` reply leaves out (or all of them, when `g` is unsupported) are read one at a time.
         for (slot, register) in raw.iter_mut().zip(&layout.registers).skip(fetched) {
-            let reply = self.command(&format!("p{:x}", register.regnum), deadline)?;
-            if reply.is_empty() || is_error(&reply) {
-                continue;
-            }
-            if reply.len() != register.bytes() * 2 || !reply.iter().all(|b| is_register_digit(*b)) {
-                return Err(protocol(&format!("`p` reply for `{}` has the wrong size", register.name)));
-            }
-            *slot = Some(String::from_utf8_lossy(&reply).to_ascii_lowercase());
+            *slot = self.read_one(register, deadline)?;
         }
-        Ok(layout
-            .registers
-            .iter()
-            .zip(raw)
-            .map(|(register, bytes)| {
-                let bytes = bytes.filter(|bytes| !bytes.contains('x'));
-                let value = bytes.as_deref().and_then(|bytes| decode_value(bytes, info.byte_order));
-                RegisterValue {
-                    name: register.name.clone(),
-                    regnum: register.regnum,
-                    bitsize: register.bitsize,
-                    kind: register.kind.clone(),
-                    group: register.group.clone(),
-                    bytes,
-                    value,
-                }
-            })
-            .collect())
+        Ok(raw)
     }
 
     /// Reads one chunk that fits a packet. Stub errors and short reads are reported in the chunk.
@@ -3051,7 +3362,10 @@ impl Worker {
         let mut result = Modules::default();
         let size = info.packet_size;
         let text = |bytes: Vec<u8>| String::from_utf8(bytes).map_err(|_| protocol("XML is not UTF-8"));
-        if info.feature("qXfer:libraries-svr4:read")
+        let dyld = self.dyld_images(&mut result.limitations, deadline)?;
+        if let Some(images) = dyld {
+            result.modules = images;
+        } else if info.feature("qXfer:libraries-svr4:read")
             && let Some(bytes) = self.xfer("libraries-svr4", "", size, MAX_XFER_BYTES, deadline)?
         {
             result.modules = maps::parse_svr4(&text(bytes)?).map_err(DebugError::Protocol)?;
@@ -3066,8 +3380,18 @@ impl Worker {
             && let Some(bytes) = self.xfer("memory-map", "", size, MAX_XFER_BYTES, deadline)?
         {
             result.regions = maps::parse_memory_map(&text(bytes)?).map_err(DebugError::Protocol)?;
+        } else if let Some((regions, complete)) = self.memory_regions(&mut result.limitations, deadline)? {
+            result.regions = regions;
+            result.regions_partial = !complete;
         } else {
             result.limitations.push("the stub reports no memory map".into());
+        }
+        if result.modules.iter().any(|module| module.dyld.as_ref().is_some_and(|image| image.in_shared_cache)) {
+            result.limitations.push(
+                "modules marked in_shared_cache live in the dyld shared cache, not in a file at their path; bind one \
+                 only with an image extracted from the cache (its UUID must match)"
+                    .into(),
+            );
         }
         if info.feature("qXfer:exec-file:read") {
             let pid = self.threads.iter().find_map(|thread| thread.id.pid);
@@ -3098,6 +3422,125 @@ impl Worker {
             );
         }
         Ok(result)
+    }
+
+    /// The loaded Mach-O images from LLDB's `jGetLoadedDynamicLibrariesInfos`, when the stub answers it. `None`
+    /// sends the caller on to the `qXfer` lists.
+    fn dyld_images(
+        &mut self,
+        limitations: &mut Vec<String>,
+        deadline: Instant,
+    ) -> Result<Option<Vec<Module>>, DebugError> {
+        if !self.lldb || self.dyld_info == Some(false) {
+            return Ok(None);
+        }
+        // As LLDB does: the header addresses of every image first (a small reply however many images are loaded),
+        // then full information in batches, so no reply outgrows a packet.
+        let reply = self.command(lldb::FETCH_ALL_SOLIBS, deadline)?;
+        if reply.is_empty() {
+            self.dyld_info = Some(false);
+            return Ok(None);
+        }
+        self.dyld_info = Some(true);
+        // debugserver answers `OK` when it has no list to give (dyld has not started yet).
+        if reply == b"OK" {
+            limitations.push(
+                "dyld reported no images yet (a process stopped at launch, before dyld ran); list modules again \
+                 after the first continue"
+                    .into(),
+            );
+            return Ok(None);
+        }
+        if is_error(&reply) {
+            limitations.push(format!("jGetLoadedDynamicLibrariesInfos failed: {}", reply_text(&reply)));
+            return Ok(None);
+        }
+        let addresses = match lldb::parse_image_addresses(&reply) {
+            Ok(addresses) => addresses,
+            Err(error) => {
+                limitations.push(format!("the dyld image list is unusable: {error}"));
+                return Ok(None);
+            }
+        };
+        let mut modules = Vec::with_capacity(addresses.len());
+        for batch in addresses.chunks(lldb::SOLIB_BATCH) {
+            let reply = self.command(&lldb::solib_request(batch), deadline)?;
+            match lldb::parse_dyld_images(&reply) {
+                Ok(images) => modules.extend(images),
+                Err(error) => {
+                    limitations.push(format!(
+                        "dyld's information for {} images is unusable ({}): {error}",
+                        batch.len(),
+                        reply_text(&reply)
+                    ));
+                }
+            }
+        }
+        if modules.len() < addresses.len() {
+            limitations.push(format!(
+                "dyld lists {} images and described {}; images whose Mach-O header is unreadable are left out",
+                addresses.len(),
+                modules.len()
+            ));
+        }
+        Ok(Some(modules))
+    }
+
+    /// Mapped regions from LLDB's `qMemoryRegionInfo`, walking the address space from 0, at most
+    /// [`MAX_REGION_QUERIES`] queries. Unmapped gaps are left out. `None` when the stub does not answer it.
+    fn memory_regions(
+        &mut self,
+        limitations: &mut Vec<String>,
+        deadline: Instant,
+    ) -> Result<Option<(Vec<Region>, bool)>, DebugError> {
+        if !self.lldb {
+            return Ok(None);
+        }
+        let mut regions = Vec::new();
+        let mut address = 0u64;
+        // Whether the walk reached the end of the address space, so an address in no listed region is unmapped.
+        let mut complete = false;
+        for query in 0..MAX_REGION_QUERIES {
+            let reply = self.command(&format!("qMemoryRegionInfo:{address:x}"), deadline)?;
+            if reply.is_empty() && query == 0 {
+                return Ok(None);
+            }
+            if reply.is_empty() || is_error(&reply) {
+                limitations.push(format!("qMemoryRegionInfo at {address:#x} failed; the regions above it are unknown"));
+                break;
+            }
+            let region = match lldb::parse_region_info(&reply) {
+                Ok(region) => region,
+                Err(error) => {
+                    limitations.push(format!("qMemoryRegionInfo at {address:#x} is unusable: {error}"));
+                    break;
+                }
+            };
+            // An unmapped address with no size: nothing is mapped from there to the end.
+            let Some(size) = region.size.filter(|size| *size > 0) else {
+                complete = region.start <= address;
+                break;
+            };
+            let Some(end) = region.start.checked_add(size) else {
+                regions.extend(region.mapped());
+                complete = region.start <= address;
+                break;
+            };
+            // The reply's region must hold the address asked for, or the walk could go backwards or stall.
+            if region.start > address || end <= address {
+                limitations.push(format!("qMemoryRegionInfo at {address:#x} answered a region that does not hold it"));
+                break;
+            }
+            regions.extend(region.mapped());
+            address = end;
+            if query + 1 == MAX_REGION_QUERIES {
+                limitations.push(format!(
+                    "memory regions were listed with {MAX_REGION_QUERIES} queries, up to {address:#x}; the rest is \
+                     not listed"
+                ));
+            }
+        }
+        Ok(Some((regions, complete)))
     }
 
     /// The GNU build ID of the ELF image whose header is at `base`, read from target memory; `None` when the bytes

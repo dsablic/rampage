@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::Serialize;
 
 use crate::client::Console;
-use crate::stop::{StopReason, StopReply, ThreadId, hex_address};
+use crate::stop::{MachException, StopReason, StopReply, ThreadId, hex_address};
 use crate::target::Family;
 
 /// Most breakpoints and watchpoints one session holds.
@@ -233,8 +233,14 @@ pub enum StopCause {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WatchHit {
     pub access: &'static str,
+    /// The address the stub reports: GDB stubs the address accessed; debugserver the start of the watchpoint
+    /// nearest to it (`watch_addr`).
     #[serde(serialize_with = "hex_address")]
     pub address: u64,
+    /// debugserver: the address the access touched (`me_watch_addr`), which may lie next to the watched range,
+    /// since debugserver widens watchpoints to what the hardware can watch.
+    #[serde(serialize_with = "optional_hex_address", skip_serializing_if = "Option::is_none")]
+    pub accessed: Option<u64>,
 }
 
 /// A stop rampage observed after resuming, stepping or interrupting.
@@ -255,6 +261,10 @@ pub struct StopEvent {
     /// IDs of the table entries this stop matched; their hit counts were incremented.
     pub breakpoints: Vec<u32>,
     pub watch: Option<WatchHit>,
+    /// debugserver's Mach exception: `EXC_BREAKPOINT`, `EXC_BAD_ACCESS` with the faulting address,
+    /// `EXC_BAD_INSTRUCTION`...
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exception: Option<MachException>,
     /// The stop reply's reasons (at most 16), such as `swbreak`, `library` or a stub's own; its expedited
     /// registers are not repeated here.
     pub reasons: Vec<StopReason>,
@@ -268,6 +278,17 @@ pub struct StopEvent {
     /// Temporary breakpoints this stop removed (or failed to), and whether it was their hit.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub temporary: Vec<TemporaryOutcome>,
+}
+
+/// The Mach exception a debugserver stop reply carries.
+pub fn exception(stop: &StopReply) -> Option<MachException> {
+    match stop {
+        StopReply::Signal { reasons, .. } => reasons.iter().find_map(|reason| match reason {
+            StopReason::Exception(exception) => Some(exception.clone()),
+            _ => None,
+        }),
+        _ => None,
+    }
 }
 
 /// At most [`MAX_EVENT_REASONS`] of `stop`'s reasons.
@@ -321,8 +342,12 @@ pub fn classify(
         StopReply::Terminated { .. } => return (StopCause::Terminated, Vec::new(), None),
     };
     let mut matched = Vec::new();
+    let accessed = reasons.iter().find_map(|reason| match reason {
+        StopReason::Other { name, value } if name == "me_watch_addr" => crate::packet::parse_hex_u64(value),
+        _ => None,
+    });
     let watch = reasons.iter().find_map(|reason| match reason {
-        StopReason::Watch { access, address } => Some(WatchHit { access, address: *address }),
+        StopReason::Watch { access, address } => Some(WatchHit { access, address: *address, accessed }),
         _ => None,
     });
     if let Some(hit) = &watch {
@@ -434,7 +459,7 @@ mod tests {
         let (cause, ids, watch) =
             classify(&signal("T05thread:p1.1;watch:20000202;"), Origin::Continue, false, &[0x80], &mut table);
         assert_eq!((cause, ids), (StopCause::Watchpoint, vec![3]));
-        assert_eq!(watch, Some(WatchHit { access: "write", address: 0x2000_0202 }));
+        assert_eq!(watch, Some(WatchHit { access: "write", address: 0x2000_0202, accessed: None }));
         assert_eq!(table.iter().map(|entry| entry.hits).collect::<Vec<_>>(), [2, 1, 1, 0]);
         // A step landing on a breakpoint address is a completed step, not a hit.
         let thread = ThreadId::parse("p1.1");
