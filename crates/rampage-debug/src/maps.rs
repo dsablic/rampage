@@ -49,6 +49,10 @@ pub struct Module {
     /// lives in the dyld shared cache.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dyld: Option<crate::lldb::DyldImage>,
+    /// Windows stubs: the PE image read from target memory at the base the stub's address gives (gdbserver's
+    /// `<segment>` minus 0x1000, lldb-server's `<section>` as is), with its CodeView record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pe: Option<crate::pe::PeImage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -103,14 +107,42 @@ pub fn parse_svr4(text: &str) -> Result<Vec<Module>, String> {
             build_id: None,
             main: main == Some(lm),
             dyld: None,
+            pe: None,
         });
     }
     Ok(modules)
 }
 
-/// Parses a `<library-list>` document (Windows-style and other stubs).
+/// `text` with every `&` that does not start an XML entity written as `&amp;`. gdbserver prints library names into
+/// its `<library-list>` without escaping them (`gdbserver/server.cc`, `handle_qxfer_libraries`), and a Windows path
+/// may contain `&`.
+fn escape_bare_ampersands(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains('&') {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let entity = |rest: &str| {
+        let Some(end) = rest.find(';').filter(|end| *end <= 12) else { return false };
+        let name = &rest[1..end];
+        matches!(name, "amp" | "lt" | "gt" | "quot" | "apos")
+            || name.strip_prefix("#x").is_some_and(|hex| !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+            || name
+                .strip_prefix('#')
+                .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let mut escaped = String::with_capacity(text.len() + 16);
+    for (at, character) in text.char_indices() {
+        if character == '&' && !entity(&text[at..]) {
+            escaped.push_str("&amp;");
+        } else {
+            escaped.push(character);
+        }
+    }
+    std::borrow::Cow::Owned(escaped)
+}
+
+/// Parses a `<library-list>` document (Windows-style and other stubs). A bare `&` in a name is read as itself.
 pub fn parse_libraries(text: &str) -> Result<Vec<Module>, String> {
-    let root = xml::parse(text)?;
+    let root = xml::parse(&escape_bare_ampersands(text))?;
     if root.name != "library-list" {
         return Err(format!("unexpected <{}> in place of <library-list>", root.name));
     }
@@ -139,6 +171,7 @@ pub fn parse_libraries(text: &str) -> Result<Vec<Module>, String> {
             build_id: None,
             main: false,
             dyld: None,
+            pe: None,
         });
     }
     Ok(modules)
@@ -317,6 +350,13 @@ mod tests {
         .unwrap();
         assert_eq!(modules[0].segments, vec![0x10000000]);
         assert_eq!(modules[1].sections, vec![0x2000, 0x3000]);
+        // gdbserver does not escape names: a bare `&` is a character, an entity stays an entity.
+        let modules = parse_libraries(
+            "<library-list><library name=\"C:\\R&D\\a&amp;b.dll\"><segment address=\"0x10001000\"/></library>\
+             </library-list>",
+        )
+        .unwrap();
+        assert_eq!(modules[0].name, "C:\\R&D\\a&b.dll");
         assert!(
             parse_libraries("<library-list><library name=\"x\"><segment address=\"1\"/><section address=\"2\"/></library></library-list>")
                 .is_err()

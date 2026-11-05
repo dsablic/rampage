@@ -19,6 +19,7 @@ pub mod fake;
 pub mod lldb;
 pub mod maps;
 pub mod packet;
+pub mod pe;
 mod session;
 pub mod stop;
 pub mod target;
@@ -32,12 +33,13 @@ pub use exec::{
 };
 pub use lldb::{AddressMask, DyldImage, HostInfo, ThreadDetail};
 pub use maps::{Module, Offsets, Region};
+pub use pe::{CodeView, PeImage, WindowsException};
 pub use session::{
     ByteOrder, CLOSE_DETACH, Config, Consent, Detached, INTERRUPT_WAIT, Info, Killed, LldbInfo, MAX_TEMPORARY,
     MAX_WRITE, MemoryChunk, MemoryRead, MemoryWrite, Modules, RegisterValue, RegisterWrite, Registers, Run, Session,
-    State, Status, Steps, TemporaryPlacement, ThreadInfo, WriteChunk, encode_register_value,
+    State, Status, Steps, TemporaryPlacement, ThreadInfo, WindowsTarget, WriteChunk, encode_register_value,
 };
-pub use stop::{MachException, StopReason, StopReply, ThreadId};
+pub use stop::{Exception, MachException, StopReason, StopReply, ThreadId};
 pub use target::{Family, Layout, LayoutSource, Register};
 pub use transport::{Endpoint, Transport};
 

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::Serialize;
 
 use crate::client::Console;
-use crate::stop::{MachException, StopReason, StopReply, ThreadId, hex_address};
+use crate::stop::{Exception, StopReason, StopReply, ThreadId, hex_address};
 use crate::target::Family;
 
 /// Most breakpoints and watchpoints one session holds.
@@ -261,10 +261,11 @@ pub struct StopEvent {
     /// IDs of the table entries this stop matched; their hit counts were incremented.
     pub breakpoints: Vec<u32>,
     pub watch: Option<WatchHit>,
-    /// debugserver's Mach exception: `EXC_BREAKPOINT`, `EXC_BAD_ACCESS` with the faulting address,
-    /// `EXC_BAD_INSTRUCTION`...
+    /// debugserver's Mach exception (`EXC_BREAKPOINT`, `EXC_BAD_ACCESS` with the faulting address,
+    /// `EXC_BAD_INSTRUCTION`...), or a Windows stub's exception (`EXCEPTION_ACCESS_VIOLATION` with the access and
+    /// address, `EXCEPTION_BREAKPOINT`...).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub exception: Option<MachException>,
+    pub exception: Option<Exception>,
     /// The stop reply's reasons (at most 16), such as `swbreak`, `library` or a stub's own; its expedited
     /// registers are not repeated here.
     pub reasons: Vec<StopReason>,
@@ -280,11 +281,12 @@ pub struct StopEvent {
     pub temporary: Vec<TemporaryOutcome>,
 }
 
-/// The Mach exception a debugserver stop reply carries.
-pub fn exception(stop: &StopReply) -> Option<MachException> {
+/// The exception a stop reply carries: debugserver's Mach exception, or a Windows stub's.
+pub fn exception(stop: &StopReply) -> Option<Exception> {
     match stop {
         StopReply::Signal { reasons, .. } => reasons.iter().find_map(|reason| match reason {
-            StopReason::Exception(exception) => Some(exception.clone()),
+            StopReason::Exception(exception) => Some(Exception::Mach(exception.clone())),
+            StopReason::WindowsException(exception) => Some(Exception::Windows(exception.clone())),
             _ => None,
         }),
         _ => None,
@@ -359,7 +361,13 @@ pub fn classify(
         }
         return (StopCause::Watchpoint, matched, watch);
     }
-    let software = reasons.contains(&StopReason::SwBreak);
+    // A Windows breakpoint trap (`EXCEPTION_BREAKPOINT`, the WoW64 one too) is a breakpoint, whether or not the
+    // stub says `swbreak`: lldb-server reports an int3 that is not its own as `reason:exception`.
+    let windows_breakpoint = reasons.iter().any(|reason| {
+        matches!(reason, StopReason::WindowsException(exception)
+            if matches!(exception.code, crate::pe::EXCEPTION_BREAKPOINT | crate::pe::STATUS_WX86_BREAKPOINT))
+    });
+    let software = reasons.contains(&StopReason::SwBreak) || windows_breakpoint;
     let hardware = reasons.contains(&StopReason::HwBreak);
     let by_pc = !software && !hardware && signal == 5 && origin == Origin::Continue;
     if software || hardware || by_pc {

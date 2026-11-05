@@ -61,6 +61,8 @@ pub struct Binding {
     pub(crate) explicit_slide: bool,
     pub(crate) limitations: Vec<String>,
     mask: u64,
+    /// A PE project's preferred base (`OptionalHeader.ImageBase`), which snapshots record.
+    pub(crate) pe_image_base: Option<u64>,
 }
 
 impl Binding {
@@ -132,6 +134,8 @@ pub enum BindEvidence {
     MappedBytes { compared: usize, windows: usize },
     /// No module matched; the caller gave the slide.
     ExplicitSlide,
+    /// The PE file's CodeView record (PDB GUID and age) equals the one in the module's mapped debug directory.
+    Codeview { guid: String, age: u32 },
 }
 
 impl BindEvidence {
@@ -592,6 +596,94 @@ fn runtime_uuid(session: &Session, header: u64, epoch: Option<u64>) -> Result<Op
     Ok(None)
 }
 
+/// A PE file's facts for binding (step 9.6a): its headers (the preferred base, the first section), its CodeView
+/// record, and the static spans its base relocations patch when the loader moves it.
+struct PeFile {
+    header: rampage_debug::pe::PeHeader,
+    codeview: Option<rampage_debug::CodeView>,
+    /// `(static address, length)`, sorted.
+    relocated: Vec<(u64, u64)>,
+    relocation_error: Option<String>,
+    /// The import directory and import address table, `(static address, length)` sorted: the loader writes the
+    /// IAT whatever the base, and linkers can merge both into an executable section (`/MERGE:.rdata=.text`).
+    rewritten: Vec<(u64, u64)>,
+}
+
+fn pe_file(binary: &rampage_loaders::Binary) -> Option<PeFile> {
+    use rampage_debug::pe;
+    if binary.format != Format::Pe {
+        return None;
+    }
+    let bytes = binary.image_bytes();
+    let header = pe::PeHeader::parse(bytes)?;
+    // The loader's record when it has one; the same RSDS bytes either way.
+    let codeview = match &binary.details {
+        Details::Pe(details) => details.codeview.as_ref().map(|codeview| rampage_debug::CodeView {
+            guid: codeview.guid,
+            age: codeview.age,
+            path: codeview.path.clone(),
+        }),
+        _ => None,
+    }
+    .or_else(|| pe::file_codeview(bytes, &header));
+    let (relocated, relocation_error) = match pe::relocations(bytes, &header) {
+        Ok(spans) => (
+            spans
+                .into_iter()
+                .map(|(rva, length)| (header.image_base.wrapping_add(u64::from(rva)), u64::from(length)))
+                .collect(),
+            None,
+        ),
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    let mut rewritten: Vec<(u64, u64)> = [1usize, 12]
+        .iter()
+        .filter_map(|index| header.directory(*index))
+        .map(|(rva, size)| (header.image_base.wrapping_add(u64::from(rva)), u64::from(size)))
+        .collect();
+    rewritten.sort_unstable();
+    Some(PeFile { header, codeview, relocated, relocation_error, rewritten })
+}
+
+/// The CodeView record of the PE image whose `MZ` header is at `base`, from target memory.
+fn runtime_codeview(
+    session: &Session,
+    base: u64,
+    epoch: Option<u64>,
+) -> Result<Option<rampage_debug::CodeView>, ApiError> {
+    use rampage_debug::pe;
+    let Some(bytes) = read_exact(session, base, pe::HEADER_READ as u64, epoch)? else { return Ok(None) };
+    let Some(header) = pe::PeHeader::parse(&bytes) else { return Ok(None) };
+    let Some((rva, length)) = header.directory(pe::DIRECTORY_DEBUG) else { return Ok(None) };
+    let at = base.wrapping_add(u64::from(rva));
+    let Some(directory) = read_exact(session, at, u64::from(length.min(28 * 16)), epoch)? else { return Ok(None) };
+    let Some((rva, _, length)) = pe::codeview_entry(&directory) else { return Ok(None) };
+    let at = base.wrapping_add(u64::from(rva));
+    Ok(read_exact(session, at, u64::from(length.min(1048)), epoch)?.and_then(|record| pe::parse_rsds(&record)))
+}
+
+/// Whether the PE headers mapped at `base` equal the file's first bytes (up to [`HEADER_BYTES`]), leaving out
+/// `OptionalHeader.ImageBase`, which the loader rewrites with the runtime base when it moves the image.
+fn pe_header_matches(session: &Session, file: &PeFile, bytes: &[u8], base: u64) -> Result<Option<usize>, ApiError> {
+    let length = bytes.len().min(HEADER_BYTES as usize).min(file.header.size_of_headers as usize);
+    if length < 64 {
+        return Ok(None);
+    }
+    let Some(memory) = read_exact(session, base, length as u64, None)? else { return Ok(None) };
+    let (field, width) = file.header.image_base_field;
+    let equal = memory
+        .iter()
+        .zip(&bytes[..length])
+        .enumerate()
+        .all(|(at, (a, b))| (at >= field && at < field + width) || a == b);
+    Ok(equal.then_some(length))
+}
+
+/// Windows paths compared as Windows compares them: case-insensitively, `/` as `\`, without `\\?\`.
+fn same_windows_path(a: &str, b: &str) -> bool {
+    rampage_debug::pe::normalize_path(a) == rampage_debug::pe::normalize_path(b)
+}
+
 /// The windows of the file a slide is checked with: the entry point, the start, middle and end of every executable
 /// segment's file bytes (at most 8 segments), and function entries spread over the image (at most 16), each up to
 /// 32 bytes. Comparing many places catches a rebuilt image that shares its first bytes (a vector table, a header)
@@ -659,15 +751,37 @@ fn region_readable(regions: &[rampage_debug::Region], partial: bool, address: u6
     (readable || !partial).then_some(readable)
 }
 
+/// Byte spans of a PE image slide verification leaves out, as static `(address, length)` pairs, sorted.
+#[derive(Default)]
+struct Skipped<'a> {
+    /// What the file's base relocations patch: left out only when the image moved.
+    relocated: &'a [(u64, u64)],
+    /// What the loader writes whatever the base: the import address table and import directory.
+    rewritten: &'a [(u64, u64)],
+}
+
+fn in_spans(spans: &[(u64, u64)], at: u64) -> bool {
+    let index = spans.partition_point(|(start, _)| *start <= at);
+    index > 0 && at - spans[index - 1].0 < spans[index - 1].1
+}
+
+/// Bytes a window must still compare, when some of it is left out, to count as matched.
+const MIN_WINDOW_BYTES: usize = 8;
+
 /// Compares every [verification window](verification_windows) with target memory at `slide`: matched when at
 /// least one window could be read and none differs, mismatched when any differs. A window the stub's region list
 /// shows unreadable is counted unreadable without asking the target for it.
+///
+/// For a PE image, bytes the loader rewrites are left out ([`Skipped`]). A window left with fewer than
+/// [`MIN_WINDOW_BYTES`] to compare counts as skipped, and when bytes were left out the matched windows must compare
+/// [`MIN_IMAGE_BYTES`] in all; otherwise the outcome is `unverified`, with the counts, rather than a vacuous match.
 fn verify_slide(
     session: &Session,
     binary: &rampage_loaders::Binary,
     slide: u64,
     mask: u64,
     modules: &rampage_debug::Modules,
+    skip: &Skipped,
 ) -> Result<SlideCheck, ApiError> {
     let epoch = None;
     let windows = verification_windows(binary);
@@ -680,7 +794,10 @@ fn verify_slide(
             detail: "the image has no file-backed code to compare".into(),
         });
     }
-    let (mut matched, mut compared, mut unreadable) = (0usize, 0usize, 0usize);
+    let (mut matched, mut compared, mut unreadable, mut skipped) = (0usize, 0usize, 0usize, 0usize);
+    let mut left_out_bytes = 0usize;
+    let moved = slide & mask != 0;
+    let patched = |at: u64| (moved && in_spans(skip.relocated, at)) || in_spans(skip.rewritten, at);
     let mut first = None;
     for (address, file, what) in &windows {
         let runtime = address.wrapping_add(slide) & mask;
@@ -688,41 +805,73 @@ fn verify_slide(
             Some(false) => None,
             _ => read_exact(session, runtime, file.len() as u64, epoch)?,
         };
+        let kept: Vec<bool> = (0..file.len() as u64).map(|offset| !patched(address.wrapping_add(offset))).collect();
+        let left_out = kept.iter().filter(|kept| !**kept).count();
         match memory {
-            Some(memory) => match memory.iter().zip(file.iter()).position(|(a, b)| a != b) {
-                None => {
-                    matched += 1;
-                    compared += file.len();
-                    first.get_or_insert((*address, runtime));
+            Some(_) if left_out > 0 && file.len() - left_out < MIN_WINDOW_BYTES => {
+                skipped += 1;
+                left_out_bytes += left_out;
+            }
+            Some(memory) => {
+                match memory.iter().zip(file.iter()).zip(&kept).position(|((a, b), kept)| *kept && a != b) {
+                    None => {
+                        matched += 1;
+                        compared += file.len() - left_out;
+                        left_out_bytes += left_out;
+                        first.get_or_insert((*address, runtime));
+                    }
+                    Some(offset) => {
+                        return Ok(SlideCheck {
+                            outcome: "mismatched",
+                            static_address: Some(*address),
+                            runtime_address: Some(runtime),
+                            length: file.len(),
+                            detail: format!(
+                                "{what} at {address:#x} differs from the file at byte {offset} (of {} windows, \
+                                 {matched} compared before it matched)",
+                                windows.len()
+                            ),
+                        });
+                    }
                 }
-                Some(offset) => {
-                    return Ok(SlideCheck {
-                        outcome: "mismatched",
-                        static_address: Some(*address),
-                        runtime_address: Some(runtime),
-                        length: file.len(),
-                        detail: format!(
-                            "{what} at {address:#x} differs from the file at byte {offset} (of {} windows, {matched} \
-                             compared before it matched)",
-                            windows.len()
-                        ),
-                    });
-                }
-            },
+            }
             None => unreadable += 1,
         }
     }
+    let counts = format!(
+        "{matched} windows ({compared} bytes) compared, {skipped} skipped for holding fewer than {MIN_WINDOW_BYTES} \
+         bytes the loader leaves alone, {unreadable} unreadable; {left_out_bytes} bytes the loader rewrites (base \
+         relocations, the import address table) were left out"
+    );
     Ok(match first {
+        Some(_) if left_out_bytes > 0 && compared < MIN_IMAGE_BYTES => SlideCheck {
+            outcome: "unverified",
+            static_address: first.map(|(address, _)| address),
+            runtime_address: first.map(|(_, runtime)| runtime),
+            length: compared,
+            detail: format!("too few bytes the loader leaves alone could be compared: {counts}"),
+        },
         Some((address, runtime)) => SlideCheck {
             outcome: "matched",
             static_address: Some(address),
             runtime_address: Some(runtime),
             length: compared,
-            detail: format!(
-                "{matched} windows ({compared} bytes) at the entry point, code segments and function entries equal \
-                 the file{}",
-                if unreadable > 0 { format!("; {unreadable} could not be read") } else { String::new() }
-            ),
+            detail: if left_out_bytes > 0 || skipped > 0 {
+                format!("the entry point, code segments and function entries equal the file: {counts}")
+            } else {
+                format!(
+                    "{matched} windows ({compared} bytes) at the entry point, code segments and function entries \
+                     equal the file{}",
+                    if unreadable > 0 { format!("; {unreadable} could not be read") } else { String::new() }
+                )
+            },
+        },
+        None if skipped > 0 => SlideCheck {
+            outcome: "unverified",
+            static_address: Some(windows[0].0),
+            runtime_address: Some(windows[0].0.wrapping_add(slide) & mask),
+            length: 0,
+            detail: format!("every readable window held only bytes the loader rewrites: {counts}"),
         },
         None => SlideCheck {
             outcome: "unreadable",
@@ -922,14 +1071,24 @@ impl DebugRegistry {
         let display = path.display().to_string();
         let canonical = path.canonicalize().ok().map(|path| path.display().to_string());
         let modules = session.modules().map_err(debug_failure)?;
-        let header = header_address(binary);
+        let pe = pe_file(binary);
+        // A PE file's headers are no segment's bytes: the image base is where its `MZ` header maps.
+        let header = header_address(binary).or(pe.as_ref().map(|pe| pe.header.image_base));
         let identity = image_identity(binary);
+        let windows = info.is_windows() || pe.is_some();
         let mut limitations = Vec::new();
 
         // The match: (module label, its candidate slides, evidence).
         let mut matched: Option<(String, Vec<u64>, BindEvidence)> = None;
         let mut ambiguous = Vec::new();
-        let named = |name: &str| module.is_none_or(|wanted| name == wanted || basename(name) == wanted);
+        // Windows file names are case-insensitive and may be spelled with `\\?\` or `/`.
+        let named = |name: &str| {
+            module.is_none_or(|wanted| {
+                name == wanted
+                    || basename(name) == wanted
+                    || (windows && (same_windows_path(name, wanted) || basename(name).eq_ignore_ascii_case(wanted)))
+            })
+        };
         let label = |entry: &rampage_debug::Module| {
             if entry.name.is_empty() {
                 modules.exec_file.clone().unwrap_or_else(|| "<main>".into())
@@ -959,10 +1118,19 @@ impl DebugRegistry {
                 }
                 slides.dedup();
                 candidates.push((name, slides, header));
+            } else if let (Some(pe), Some(image)) = (&pe, &entry.pe) {
+                // A Windows stub's module whose PE header rampage found: the slide is its runtime base minus the
+                // file's preferred base (`OptionalHeader.ImageBase`).
+                candidates.push((name, vec![image.base.wrapping_sub(pe.header.image_base) & mask], header));
             } else if let Some(first) = entry.segments.first().or(entry.sections.first()) {
                 let mut slides = Vec::new();
                 if let Some(header) = header {
                     slides.push(first.wrapping_sub(header) & mask);
+                }
+                // gdbserver's `<segment>` is the base plus 0x1000 (`gdbserver/win32-low.cc`, `handle_load_dll`).
+                if let Some(pe) = &pe {
+                    let base = first.wrapping_sub(rampage_debug::pe::GDBSERVER_SEGMENT_OFFSET);
+                    slides.insert(0, base.wrapping_sub(pe.header.image_base) & mask);
                 }
                 if let Some(section) =
                     binary.sections.iter().filter(|section| section.size > 0).map(|section| section.address).min()
@@ -971,6 +1139,33 @@ impl DebugRegistry {
                 }
                 slides.dedup();
                 candidates.push((name, slides, header));
+            }
+        }
+        if let Some(pe) = &pe
+            && let Some(wanted) = &pe.codeview
+        {
+            // The PDB GUID and age tie a PE image to its build like a build ID: read from the mapped debug
+            // directory (by the module listing, else here at each candidate base).
+            for (name, slides, _) in &candidates {
+                let entry = modules.modules.iter().find(|entry| label(entry) == *name);
+                let mut found = entry.and_then(|entry| entry.pe.as_ref()?.codeview.clone());
+                for slide in slides {
+                    if found.is_some() {
+                        break;
+                    }
+                    found = runtime_codeview(&session, pe.header.image_base.wrapping_add(*slide) & mask, None)?;
+                }
+                if found.is_some_and(|found| found.guid == wanted.guid && found.age == wanted.age) {
+                    if matched.is_some() {
+                        ambiguous.push(name.clone());
+                    } else {
+                        matched = Some((
+                            name.clone(),
+                            slides.clone(),
+                            BindEvidence::Codeview { guid: rampage_arch::hex::bytes(&wanted.guid), age: wanted.age },
+                        ));
+                    }
+                }
             }
         }
         if let Some(wanted) = module
@@ -1025,8 +1220,11 @@ impl DebugRegistry {
         }
         if matched.is_none() {
             for (name, slides, _) in &candidates {
-                let exact = Some(name.as_str()) == canonical.as_deref() || *name == display;
-                let same_file = basename(name) == basename(&display);
+                let exact = Some(name.as_str()) == canonical.as_deref()
+                    || *name == display
+                    || (windows && same_windows_path(name, &display));
+                let same_file = basename(name) == basename(&display)
+                    || (windows && basename(name).eq_ignore_ascii_case(basename(&display)));
                 if exact || same_file {
                     let evidence = if exact {
                         BindEvidence::Path { name: name.clone() }
@@ -1045,6 +1243,25 @@ impl DebugRegistry {
             }
         }
         if matched.is_none()
+            && let Some(pe) = &pe
+        {
+            // PE headers: the file's first bytes, the `ImageBase` field left out.
+            for (name, slides, _) in &candidates {
+                for slide in slides {
+                    let at = pe.header.image_base.wrapping_add(*slide) & mask;
+                    if let Some(length) = pe_header_matches(&session, pe, binary.image_bytes(), at)? {
+                        if matched.is_some() {
+                            ambiguous.push(name.clone());
+                        } else {
+                            matched =
+                                Some((name.clone(), vec![*slide], BindEvidence::HeaderBytes { address: at, length }));
+                        }
+                    }
+                }
+            }
+        }
+        if matched.is_none()
+            && pe.is_none()
             && let Some(header_static) = header
             && let Some(file) = binary.read(header_static, HEADER_BYTES).or_else(|| binary.read(header_static, 64))
         {
@@ -1112,6 +1329,8 @@ impl DebugRegistry {
         };
         // A shared-cache image has no file at its path: only an image extracted from the cache, matched by its UUID,
         // is known to be the code that runs. A name, header bytes or a caller's slide are not enough.
+        let skip =
+            pe.as_ref().map(|pe| Skipped { relocated: &pe.relocated, rewritten: &pe.rewritten }).unwrap_or_default();
         let cached = modules.modules.iter().find(|entry| {
             (entry.name == label || module.is_some_and(|wanted| named_as(entry, wanted)))
                 && entry.dyld.as_ref().is_some_and(|image| image.in_shared_cache)
@@ -1132,12 +1351,12 @@ impl DebugRegistry {
                         slides.iter().map(|slide| format!("{slide:#x}")).collect::<Vec<_>>().join(" or ")
                     ));
                 }
-                (given, verify_slide(&session, binary, given, mask, &modules)?)
+                (given, verify_slide(&session, binary, given, mask, &modules, &skip)?)
             }
             None => {
                 let mut checked = Vec::new();
                 for candidate in &slides {
-                    let check = verify_slide(&session, binary, *candidate, mask, &modules)?;
+                    let check = verify_slide(&session, binary, *candidate, mask, &modules, &skip)?;
                     let matched = check.outcome == "matched";
                     checked.push((*candidate, check));
                     if matched {
@@ -1182,6 +1401,21 @@ impl DebugRegistry {
         {
             limitations.push("the ELF file has no GNU build ID, so it cannot be matched by identity".into());
         }
+        if let Some(pe) = &pe {
+            if pe.codeview.is_none() {
+                limitations.push(
+                    "the PE file has no CodeView (RSDS) debug record, so it cannot be matched by identity".into(),
+                );
+            }
+            if let Some(error) = &pe.relocation_error
+                && slide & mask != 0
+            {
+                limitations.push(format!(
+                    "the image moved but its base relocations could not be read ({error}); bytes the loader patched \
+                     may fail verification"
+                ));
+            }
+        }
         // Whole-program analysis runs now, so the stops that follow name functions without waiting for it.
         if let Err(error) = project.analysis() {
             limitations.push(format!("the project's analysis failed ({error}); stops will not name functions"));
@@ -1196,6 +1430,7 @@ impl DebugRegistry {
             explicit_slide: explicit,
             limitations,
             mask,
+            pe_image_base: pe.as_ref().map(|pe| pe.header.image_base),
         });
         let mut all = self.bindings.lock().unwrap_or_else(PoisonError::into_inner);
         // A disconnect that finished while this bind ran must not leave a binding behind.
@@ -1885,6 +2120,8 @@ impl DebugRegistry {
             // debugserver names x30 `lr`.
             Family::Aarch64 => &["pc", "sp", "x30", "lr", "x0", "x1", "x2", "x3"],
             Family::Riscv32 | Family::Riscv64 => &["pc", "sp", "ra", "a0", "a1", "a2", "a3"],
+            // The Microsoft x64 calling convention passes the first arguments in rcx, rdx, r8 and r9.
+            Family::X86_64 if info.is_windows() => &["rip", "rsp", "rax", "rcx", "rdx", "r8", "r9"],
             Family::X86_64 => &["rip", "rsp", "rax", "rdi", "rsi", "rdx", "rcx"],
             Family::X86 => &["eip", "esp", "eax", "ecx", "edx"],
             Family::Other => &["pc", "sp"],

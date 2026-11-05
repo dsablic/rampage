@@ -2,14 +2,16 @@
 
 Rampage's MCP server can connect to a GDB Remote Serial Protocol stub that an operator has already started:
 `gdbserver` on Linux or Android, QEMU's `-s`/`-gdb` stub, OpenOCD, probe-rs, Apple's `debugserver` on macOS (see
-[macOS and debugserver](#macos-and-debugserver)) and similar. An agent can then read
+[macOS and debugserver](#macos-and-debugserver)), MinGW-w64 `gdbserver.exe` or `lldb-server` on Windows (see
+[Windows](#windows-gdbserver-and-lldb-server)) and similar. An agent can then read
 the stopped target's registers, memory, threads, loaded modules and memory map, capture it to a snapshot file
 that every runtime and analysis tool opens, and control its execution: continue, wait, interrupt, single-step, and
 set breakpoints and watchpoints. With a project bound to the target, it can also place breakpoints by function name
 or static address, see stops and register values in the project's terms, and step over calls or out of functions.
 
 These are steps 9.1 (inspection), 9.2 (execution control), 9.3 (static correlation), 9.4 (target writes and
-kill) and 9.5 (debugserver) of the [debugger design](plans/2026-10-29-debugger-control.md). Rampage never launches or attaches to a
+kill), 9.5 (debugserver) and 9.6a (Windows through RSP stubs, [not yet live-verified](#what-is-not-live-verified))
+of the [debugger design](plans/2026-10-29-debugger-control.md). Rampage never launches or attaches to a
 process, delivers a signal or enters non-stop mode, and the protocol client keeps every such packet off the wire.
 It writes registers or memory, or kills a target, only when a tool asks for it and the operator started it with
 `--debug-writes` or `--debug-kill`; see [Writes and kill](#writes-and-kill).
@@ -40,6 +42,14 @@ A macOS program under Apple's debugserver (launched, or attached by pid):
 debugserver 127.0.0.1:2345 ./prog
 debugserver 127.0.0.1:2345 --attach=<pid>
 rampage mcp --debug-endpoint 127.0.0.1:2345
+```
+
+A Windows program under gdbserver or lldb-server, on a Windows host (see [Windows](#windows-gdbserver-and-lldb-server)):
+
+```text
+gdbserver.exe 0.0.0.0:2345 prog.exe
+lldb-server.exe gdbserver 0.0.0.0:2345 -- prog.exe
+rampage mcp --debug-endpoint winhost:2345
 ```
 
 An endpoint is either `host:port` or `unix:` followed by an absolute socket path. Repeat `--debug-endpoint` to
@@ -111,7 +121,8 @@ request at a time.
 - Each stop gets a stop epoch; see [Running, stopped and epochs](#running-stopped-and-epochs). Every read reports
   the epoch it read at.
 - A read without `thread` selects the stop reply's thread (else the first listed thread), never whatever an
-  earlier request selected, and reports the thread it used.
+  earlier request selected, and reports the thread it used. After an interrupt on Windows, whose stop is in a thread
+  the system created, it selects the first other listed thread (see [Execution on Windows](#execution-on-windows)).
 
 Reads are separate requests, so a set of them is not atomic. Anything else that can change the target, such as
 another debugger on the stub, DMA or other cores, can change memory between reads.
@@ -258,8 +269,8 @@ A stop event reports:
   bytes as sent.
 - `breakpoints`: the IDs of the table entries the stop matched. Each match increments the entry's hit count.
 - `watch`: the access and address of a watchpoint hit.
-- `exception`: debugserver's Mach exception, when the stop reply carries one; see
-  [Mach exceptions](#mach-exceptions).
+- `exception`: debugserver's Mach exception, when the stop reply carries one (see
+  [Mach exceptions](#mach-exceptions)), or a Windows exception (see [Windows exceptions](#exceptions)).
 - `reasons`: at most 16 of the stop reply's reasons. Its expedited registers are not repeated (a stub may send
   1,024 fields of 4 KiB); read them with `debug_registers`.
 - `epoch`: the epoch this stop started, `console`: output received while the target ran, and `warnings`.
@@ -337,7 +348,9 @@ advertises `binary-upload+`, and hex `m` reads otherwise.
 Each list is read only when the stub advertises it:
 
 - `qXfer:libraries-svr4:read`: link-map entries with name, `l_addr` load bias, `l_ld` and `lm`.
-- `qXfer:libraries:read`: Windows-style entries with segment or section addresses.
+- `qXfer:libraries:read`: Windows-style entries with segment or section addresses. On a Windows target each
+  entry's PE headers are read and the main executable is added when the list leaves it out; see
+  [Windows modules](#modules-and-the-main-executable).
 - `qXfer:exec-file:read` and `qXfer:memory-map:read`: the program path, and ram, rom and flash regions with
   flash block sizes.
 - From an LLDB stub (debugserver), which advertises neither: `jGetLoadedDynamicLibrariesInfos` for the dyld image
@@ -388,8 +401,9 @@ Modules from `debug_modules` are matched in order of evidence, and the evidence 
 |---|---|
 | `build_id` | The ELF file's GNU build ID equals the module's, as the stub's module list reports it or as rampage reads it from the ELF headers and notes mapped at the module's load bias |
 | `uuid` | The Mach-O file's `LC_UUID` equals the one dyld reports for the module (debugserver), or the one read from the module's mapped header |
-| `path`, `basename` | The module's reported path (or, for the main program with no name, the exec file) equals the project's path, or only their file names are equal |
-| `header_bytes` | The module's mapped header bytes (up to 256) equal the file's first bytes |
+| `codeview` | The PE file's CodeView record (PDB GUID and age) equals the one in the module's mapped debug directory (Windows) |
+| `path`, `basename` | The module's reported path (or, for the main program with no name, the exec file) equals the project's path, or only their file names are equal; on Windows, case-insensitively and ignoring `\\?\` and the slash direction |
+| `header_bytes` | The module's mapped header bytes (up to 256) equal the file's first bytes; a PE image's `OptionalHeader.ImageBase` is left out, since the loader writes the runtime base there |
 | `mapped_bytes` | The stub lists no modules (bare-metal firmware): every verification window (below) is readable and equal at the slide (`qOffsets` `Text`, else 0, or the caller's), at least 16 bytes in all |
 | `explicit_slide` | Nothing matched and the caller gave `slide` |
 
@@ -411,8 +425,10 @@ one, and the difference is reported.
 **Verification.** Rampage compares windows of up to 32 bytes of the file with target memory at the slide: the entry
 point, the start, middle and end of every executable segment's file bytes (at most 8 segments) and up to 16
 function entries spread over the image. It reports `matched` (at least one window read and none differs; unreadable
-windows are counted in `detail`), `mismatched` (any window differs), `unreadable` (none could be read) or
-`no_file_bytes`. Comparing many places catches a rebuilt image that shares its first bytes (a vector table, a
+windows are counted in `detail`), `mismatched` (any window differs), `unreadable` (none could be read),
+`unverified` (a PE image whose compared windows held too few bytes the loader leaves alone; see
+[Binding a PE image](#binding-a-pe-image)) or `no_file_bytes`. Comparing many places catches a rebuilt image that
+shares its first bytes (a vector table, a
 header) with the one running, though an edit outside every window still goes unnoticed:
 
 - `mismatched` refuses the bind (`slide_mismatch`) unless `slide` was given; then it binds with the failure in
@@ -766,6 +782,263 @@ debugserver supports `vCont` (`vCont;c;C;s;S`), so continues and steps use `vCon
   Prefer 1, 2, 4 or 8 bytes, aligned.
 - These follow debugserver's source; the live acceptance below checks them on a real target.
 
+## Windows (gdbserver and lldb-server)
+
+Step 9.6a, the RSP-stub route of the [Windows design](plans/2026-11-05-debugger-windows.md). Two stubs serve
+Windows user-mode processes over the same protocol: GDB's `gdbserver` built for Windows (MinGW-w64, as MSYS2 and
+other MinGW distributions build it) and LLVM's `lldb-server`. Rampage still launches and attaches nothing: the
+operator starts the stub on the Windows host and lists its endpoint. Everything below follows the stubs' sources
+(GDB's `gdbserver/win32-low.cc`, `gdbserver/win32-i386-low.cc`, `gdbserver/server.cc`, `gdb/nat/windows-nat.c`;
+LLVM's `NativeProcessWindows.cpp`, `NativeThreadWindows.cpp`, `GDBRemoteCommunicationServerLLGS.cpp`), read at
+their main branches in November 2026; no Windows host was available, so none of it has run against a real stub yet.
+
+### Setup on the Windows host
+
+Copy the program over and start one of these, on a port the machine running rampage can reach:
+
+```text
+gdbserver.exe 0.0.0.0:2345 prog.exe              launch, stopped at the loader breakpoint
+gdbserver.exe --attach 0.0.0.0:2345 <pid>        attach to a running process
+lldb-server.exe gdbserver 0.0.0.0:2345 -- prog.exe
+lldb-server.exe gdbserver 0.0.0.0:2345 --attach <pid>
+```
+
+Then `rampage mcp --debug-endpoint winhost:2345`. The endpoint is not on loopback, so only the operator's listing
+allows it (see [Consent](#consent)); the stub accepts anyone who reaches the port, so keep it on a trusted network
+or tunnel it (`ssh -L 2345:localhost:2345 winhost` and `--debug-endpoint 127.0.0.1:2345`). gdbserver's
+`--once` ends it after one connection. A process gdbserver launched runs in a new process group, which matters for
+interrupts (below).
+
+### What rampage recognizes
+
+`debug_connect` reports `windows` with the stub and what showed it:
+
+- gdbserver's target description names the OS ABI `Windows` (`win32-i386-low.cc`, `i386_arch_setup`, through
+  `gdbsupport/tdesc.cc`'s `<osabi>`): `i386:x86-64` for a 64-bit process, `i386` for a 32-bit (WoW64) one, with
+  the core and SSE registers (no AVX). gdbserver names the OS ABI from GDB 16 on ("gdbserver: pass osabi to GDB in
+  more target descriptions"). For an older gdbserver (the MinGW builds of GDB 12 to 15 are common), a GDB stub on x86
+  that lists `qXfer:libraries:read` but not the svr4 list is taken for gdbserver on Windows when the stopped thread's
+  TIB answers `qGetTIBAddr`, or else an `MZ` header lies 0x1000 below its first library's segment address. Any
+  gdbserver on Windows that has `qGetTIBAddr` (GDB 7.1 and later) is recognized this way; the evidence says which
+  test matched.
+- lldb-server answers `qHostInfo` and `qProcessInfo` (it advertises `qEcho+` and `native-signals+`, so it is asked
+  LLDB's queries) with a Windows triple (`x86_64-pc-windows-msvc`, hex-encoded) and `ostype:windows`. Its target
+  description has a single unnamed `<feature>` with LLDB register names (`rflags`) and stated offsets.
+- lldb-server sends `PacketSize` in decimal (`PacketSize=131072`); RSP clients, LLDB's too, read it as hex, so
+  rampage does as well and caps it at 1 MiB as usual. A 32-bit process's description names the architecture
+  `i686` (lldb-server passes the triple's architecture through), which rampage reads as x86.
+- Thread IDs are Windows thread IDs in hex (`1a2c`): neither stub enables multiprocess mode on Windows.
+
+### Modules and the main executable
+
+| | gdbserver | lldb-server |
+|---|---|---|
+| Entries | `<library name="C:\..."><segment address="..."/>` | `<library name="C:\..."><section address="..."/>` |
+| The address | the image base plus 0x1000, a constant (`win32-low.cc`, `handle_load_dll`: "The symbols in a dll are offset by 0x1000"), not the first section's RVA | the image base (`NativeProcessWindows.cpp`, `GetLoadedLibraries`) |
+| The executable | left out: modules are enumerated from index 1, and index 0 is the executable (`windows-nat.c`, `add_dll`) | listed first |
+| Exec file | `qXfer:exec-file:read` (the Windows path) | not offered |
+| Paths | as `GetModuleFileNameEx` spells them; `ntdll.dll` completed with the system directory; 32-bit DLLs of a WoW64 process under `SysWOW64` | the loader's spelling, `\\?\` taken off, with the on-disk case when only case differs |
+
+gdbserver prints library names into the list without XML-escaping them (`server.cc`, `handle_qxfer_libraries`), so a
+path with `&` would break the document; rampage reads a `&` that does not start an entity as the character.
+
+For each listed module rampage reads the PE headers at the base the address gives (the stub's own reading first:
+the segment minus 0x1000, or the section as is; then the other) and keeps the base where an `MZ` and `PE` header
+parse. `debug_modules` entries gain `pe`: the runtime `base`, `base_from` (`segment_minus_0x1000`, `section`,
+`peb`, ...), `machine`, `dll`, `aslr`, `size_of_image`, `timestamp` and the `codeview` record (GUID, age and PDB path)
+read from the mapped debug directory. At most 64 modules are read.
+
+Under lldb-server, the listed image that is not a DLL is the main executable (`main: true`). Under gdbserver, which
+never lists the executable (an `.exe` it lists was loaded as a library, and is not the program), rampage finds it
+as GDB does (`gdb/windows-tdep.c`, `create_inferior_hook`): `qGetTIBAddr:<thread>` gives a thread's TIB, whose
+process environment block pointer (TEB+0x60, or +0x30 in a 32-bit process) leads to `ImageBaseAddress` (PEB+0x10,
+or +0x8). The entry is listed first with `source: "peb"` and the exec file's path. A stub that answers neither
+leaves a limitation, and the executable then binds only with an explicit `slide`.
+
+### Binding a PE image
+
+Evidence comes in this order, as for other formats: the CodeView record, then the path or file name, then the
+header bytes.
+
+- **CodeView.** The RSDS record's PDB GUID and age identify a build, like a build ID: the file's (from its debug
+  directory) must equal the module's (read from its mapped debug directory). Linkers that write a PDB write one
+  (MSVC's `/DEBUG`, LLD with `-g`); MinGW's GNU ld only with `--build-id` or a PDB-writing option. A file without
+  one gets a limitation and binds by name or header bytes.
+- **Names.** Windows compares file names case-insensitively, and stubs report `C:\...` paths, so a module's path
+  equals the project's after both are lowercased, `/` read as `\` and `\\?\` (or `\??\`, `\\?\UNC\`) taken off; the
+  file name alone matches the same way. `module` is compared the same way. Case folding covers ASCII letters only
+  (Windows folds Unicode too), and Cygwin's `/cygdrive/c/...` spellings are not translated; such names fall back to
+  the CodeView record or header bytes.
+- **Header bytes.** The first 256 bytes of the file against the mapped headers, `OptionalHeader.ImageBase` left out:
+  the loader writes the runtime base there when it moves the image.
+
+**Slide.** `runtime = static + slide`, where the slide is the module's runtime base minus the file's
+`OptionalHeader.ImageBase`. An ASLR image (`DYNAMIC_BASE`) usually moves, and its slide is not 0; an image without
+ASLR normally loads at its preferred base, slide 0. The runtime base is the one rampage read the headers at; for a
+module whose headers it could not read, the candidates are the address minus 0x1000 (gdbserver), the address minus
+the file's first section RVA, and the address read as the header, and each is verified.
+
+**Relocations.** When the loader moves an image it applies the base relocations of its `.reloc` section: every
+absolute address in the image (vtables, jump tables, `movabs` immediates, initialized pointers) is rewritten.
+Mapped bytes then differ from the file at exactly those spans, so a byte-for-byte comparison of a moved image would
+fail. Slide verification reads the file's base relocation blocks (`IMAGE_REL_BASED_DIR64` 8 bytes, `HIGHLOW` 4,
+`HIGH`/`LOW`/`HIGHADJ` 2, and 8 for types it does not know) and leaves those bytes out of every window when the slide
+is not 0. The import address table and the import directory (data directories 12 and 1) are left out at every
+slide, since the loader writes the IAT even at the preferred base, and linkers can merge them into an executable
+section (`/MERGE:.rdata=.text`, Delphi). So that leaving bytes out cannot make the check vacuous:
+
+- a window with fewer than 8 bytes left to compare is skipped rather than matched;
+- when any byte was left out, the matched windows must compare at least 16 bytes in all;
+- otherwise the outcome is `unverified`, with the counts in `detail` (windows compared, skipped and unreadable, and
+  bytes left out). Like `unreadable`, it binds with a limitation when the evidence identifies the image and is
+  refused (`slide_unverified`) when only a name matched.
+
+The relocation reader is bounded: at most 1,048,576 entries, and at most 256 of types it does not know (each
+assumed to patch 8 bytes); a table past either, or one that cannot be read, leaves a limitation instead.
+
+`function:` breakpoints, stop locations and register annotations then work as for ELF and Mach-O images; names come
+from the image's exports and symbols (a PE file rarely has a COFF symbol table), or from a PDB imported into the
+project (`import_pdb_names`). Step over decodes x86-64 calls with rampage's decoder, which Windows code does not
+change. Step out's x86-64 rule holds for the Microsoft x64 calling convention too: at a function's first
+instruction the return address is at `[rsp]` whatever the convention (the 32-byte home space the caller reserves
+lies above it). `debug_evidence` reads `rcx`, `rdx`, `r8` and `r9` (the convention's first arguments) by default
+on Windows x64.
+
+### Exceptions
+
+Windows reports faults and traps as exceptions; the stubs pass them on in two forms, and rampage types both in the
+stop event's `exception` (and the stop reply's reasons) with `"system": "windows"`, `code` (the `NTSTATUS`),
+`name`, `address` (where it happened), `source` (`siginfo` or `description`), and for access violations `access`
+(`read`, `write`, or `execute` for a DEP violation) and `fault_address`.
+
+**gdbserver** reports a signal (`gdb/nat/windows-nat.c`, `handle_exception`):
+
+| Exception | Signal |
+|---|---|
+| `EXCEPTION_ACCESS_VIOLATION`, `STATUS_STACK_OVERFLOW` | SIGSEGV (11) |
+| `EXCEPTION_FLT_*`, `EXCEPTION_INT_DIVIDE_BY_ZERO`, `EXCEPTION_INT_OVERFLOW`, `EXCEPTION_ARRAY_BOUNDS_EXCEEDED` | SIGFPE (8) |
+| `EXCEPTION_ILLEGAL_INSTRUCTION`, `EXCEPTION_PRIV_INSTRUCTION`, `EXCEPTION_NONCONTINUABLE_EXCEPTION` | SIGILL (4) |
+| `EXCEPTION_BREAKPOINT`, `STATUS_WX86_BREAKPOINT`, `EXCEPTION_SINGLE_STEP`, `STATUS_WX86_SINGLE_STEP` | SIGTRAP (5) |
+| `DBG_CONTROL_C`, `DBG_CONTROL_BREAK` | SIGINT (2) |
+| any other, at its second chance | 143 (GDB's unknown signal); at its first chance it is passed to the program without a stop |
+
+It reports the exception itself only as `qXfer:siginfo:read`: the thread's `EXCEPTION_RECORD` (152 bytes, or the
+80-byte `EXCEPTION_RECORD32` of a 32-bit process; `windows_thread_info::xfer_siginfo`). Rampage reads it after every
+stop with a signal, except the SIGTRAP of a single step, selecting the stopped thread first; a refusal leaves the
+stop without an `exception`.
+
+**lldb-server** stops for exceptions other than breakpoints and single steps only at their second chance, when the
+program did not handle them (`HandleGenericException`: first-chance exceptions go to the program), with signal 5
+(SIGTRAP), `reason:exception` and a `description` like `Exception 0xc0000005 encountered at address 0x7ff6...:
+Access violation writing location 0x00000010` (`ExceptionRecord.cpp`, `Dump`), which rampage parses.
+
+Classification:
+
+- **Breakpoints.** A table breakpoint is a `breakpoint` stop: gdbserver says `swbreak` (it advertises it), and
+  lldb-server says `reason:breakpoint`, which matches by pc. An int3 that is not rampage's (a compiled-in
+  `__debugbreak`) is a `breakpoint` stop with no table entry, not a `signal`: gdbserver says `swbreak`, and
+  lldb-server's `EXCEPTION_BREAKPOINT` description is read as a breakpoint.
+- **The pc after an int3.** The CPU leaves the pc after the int3. gdbserver moves it back onto the int3 for every
+  int3 stop, its own breakpoints or not (`win32-low.cc`, `maybe_adjust_pc`), and the reported pc is the int3's.
+  lldb-server moves it back only for its own breakpoints; for any other int3 the pc is after it. So under gdbserver
+  a continue from a foreign int3 executes it again and stops at once; the stop event's `warnings` say so. Writing
+  the pc past it (`debug_write_register`, with `--debug-writes`) is the way out.
+- **Steps.** A single step (`EXCEPTION_SINGLE_STEP`; lldb-server's `reason:trace`) is a `step`. A hardware
+  breakpoint hit is also `EXCEPTION_SINGLE_STEP` and matches its table entry by pc after a continue.
+- **Faults** are `signal` stops carrying the exception. Rampage resumes without a signal, so gdbserver continues the
+  exception as handled: a faulting instruction runs again and faults again, and the program's own exception handlers
+  do not see it.
+- **DLL loads.** After startup gdbserver stops for each DLL load or unload with signal 0 and `library`
+  (`target.cc`, `mywait`), which is a `signal` stop with signal 0; continue again. A DLL-load stop that arrives
+  after rampage's interrupt is not the interrupt's answer: it is reported as a `signal` stop, and the interrupt stays
+  pending, so the stop after the next continue in a new thread is `interrupted`. lldb-server stops for DLL loads
+  only for clients that advertise `qXfer:libraries:read+` in `qSupported`, which rampage does not.
+
+### Execution on Windows
+
+- **`vCont`.** gdbserver answers `vCont?` with `vCont;c;C;t;s;S` (`server.cc`; single steps through the trap flag),
+  lldb-server with `vCont;c;C;s;S;t`. Rampage uses `vCont;c` and `vCont;s:<thread>`.
+- **Breakpoints.** Software breakpoints are kind 1 (`int3`) on x86 and x86-64. gdbserver inserts `Z0` by writing the
+  int3 itself, `Z1` hardware breakpoints and `Z2` (write) and `Z4` (access) watchpoints in the debug registers
+  (`win32-i386-low.cc`, `i386_supports_z_point_type`); it has no read watchpoints, so `Z3` is answered as
+  unsupported. lldb-server takes `Z0`, `Z2`, `Z3` and `Z4`, turning a read watchpoint into a read/write one
+  (`NativeRegisterContextWindows_x86_64.cpp`, `SetHardwareWatchpoint`), but refuses hardware breakpoints
+  (`NativeThreadWindows.cpp`, "unimplemented."), so step over and out fall back to a temporary software breakpoint
+  there.
+- **Watchpoints.** x86 has four debug registers, each watching 1, 2, 4 or 8 aligned bytes; gdbserver splits a
+  longer or unaligned range over several (`gdb/nat/x86-dregs.c`) and refuses one that does not fit. Hits stop after
+  the access. gdbserver reports every hit as `watch:<address>`, whatever the kind; lldb-server as
+  `reason:watchpoint` with the description `<watchpoint address> <index> <address hit>`, which rampage reads as the
+  watchpoint and `watch.accessed`.
+- **Interrupts.** gdbserver first sends a console Ctrl-Break to the process group (`win32-low.cc`,
+  `request_interrupt`), which works for a process it launched (it starts them in a new group); Windows delivers it as
+  `DBG_CONTROL_BREAK` (SIGINT) in a thread it creates for the console handler. Otherwise (an attached process in
+  another console) it calls `DebugBreakProcess`, which creates a thread that executes an int3 in
+  `DbgBreakPoint`: a SIGTRAP with `swbreak`, its pc moved back onto that int3, so continuing stops there again (see
+  above). lldb-server always uses `DebugBreakProcess` and reports its own injection as SIGSTOP (17, the signal
+  numbering LLDB's host uses on Windows) with the description `interrupt`, its pc after the int3.
+  - Ctrl-Break reaches console programs only. For a GUI program gdbserver launched, `GenerateConsoleCtrlEvent` can
+    succeed with nobody to receive it, and gdbserver then does not fall back to `DebugBreakProcess`, so the
+    interrupt may never arrive: `debug_interrupt` waits 3 s and the target keeps running. For GUI programs, start
+    gdbserver with `--attach` (the Ctrl-Break to a process that is not a group leader fails, and the fallback runs)
+    or use lldb-server.
+  - Rampage reports such a stop as `interrupted` when it arrives after its interrupt in a thread it had not listed:
+    SIGINT, lldb-server's SIGSTOP, or an unmatched SIGTRAP. The event's `thread` is that new thread, and `warnings`
+    say so.
+  - Until the target runs again, reads and steps without `thread` (`debug_registers`, `debug_read_memory`,
+    `debug_step`, `debug_evidence`, step over and out) use the first other listed thread, usually the main thread,
+    since the break-in thread only runs the debugger's break-in and ends when resumed.
+  - Under gdbserver, `DebugBreakProcess`'s break-in thread would hit its int3 again on every continue (gdbserver
+    moved its pc back onto it). gdbserver resumes only the threads a `vCont` names (`win32-low.cc`,
+    `win32_process_target::resume`), so rampage parks that thread: continues send `vCont;c:<thread>;...` naming
+    every other listed thread, and the break-in thread stays suspended. It exists only to trap, so the program does
+    not miss it. Steps name their own thread as always. A disconnect detaches with it still suspended; the system
+    then resumes it, and `DbgUiRemoteBreakin`'s exception handler absorbs the int3. Rampage sends that per-thread
+    form only to gdbserver on Windows; the client refuses it on any other session. If the other threads cannot be
+    named in one packet, or there are none, the continue is refused and says so; writing the break-in thread's pc
+    past the int3 (`--debug-writes`) or disconnecting are then the ways out.
+- **`?`.** Rampage sends `?` only while connecting. gdbserver answers with the last event and makes its thread the
+  current one, with no other effect (`server.cc`, `handle_status`); a launched process reports its loader breakpoint
+  (SIGTRAP, pc after it, not moved back: `maybe_adjust_pc` waits for the initial stop to pass).
+
+### WoW64, 32-bit x86 and arm64
+
+- **WoW64 under 64-bit gdbserver** is supported: gdbserver describes the process as `i386` (32-bit registers),
+  lists the 32-bit DLLs from `SysWOW64`, reports a 32-bit TIB (the 64-bit one plus 0x2000, `child_add_thread`) and an
+  `EXCEPTION_RECORD32`. Rampage binds 32-bit PE images (`PE32`, `HIGHLOW` relocations), finds the executable through
+  the 32-bit PEB (TEB+0x30, PEB+0x8), and steps out by `[esp]`. A 32-bit gdbserver on a 32-bit process looks the
+  same. gdbserver skips the 64-bit loader breakpoint of a WoW64 process and reports an int3 in 64-bit code, such as
+  `DebugBreakProcess`'s break-in, as SIGINT with the record's code changed to `DBG_CONTROL_C` (`handle_exception`):
+  after rampage's interrupt that is `interrupted`, otherwise a `signal` stop.
+- **WoW64 under lldb-server** (`NativeRegisterContextWindows_WoW64.cpp`) should bind the same way but is not
+  covered by the fake stub's transcripts.
+- **arm64 Windows.** Both stubs have arm64 code: gdbserver's `win32-aarch64-low.cc` (new in GDB, `brk #0xf000`,
+  `Z1`, `Z2`, `Z4`) and lldb-server's `NativeRegisterContextWindows_arm64.cpp`. Rampage's AArch64 support applies
+  (kind 4 breakpoints; the byte order only when lldb-server states `endian:little`), but nothing arm64-Windows-specific
+  was built or tested.
+
+### Snapshots of Windows targets
+
+A module with `pe` is recorded with the identity `pe-codeview:<GUID><age>` (else `pe-image:<base>`) and
+`runtime_base` its runtime base. A bound module's `image_base` is its file's preferred base, so `runtime_base -
+image_base` is the slide, as for dyld images; an unbound one's is 0, so its addresses read as RVAs (the mapped
+header's `ImageBase` holds the runtime base once the loader moved the image, so target memory does not give the
+preferred one).
+
+### What is not live-verified
+
+No Windows host was available for 9.6a. The fake stub's transcripts (`rampage_debug::fake::windows`) were built from
+the sources named above, not recorded, and these were taken from the sources without being observed:
+
+- gdbserver's `<osabi>Windows</osabi>` and the `i386:x86-64` description; lldb-server's triple and `ostype`;
+- the module list forms and addresses, the executable's absence under gdbserver, and the TIB and PEB offsets;
+- the `EXCEPTION_RECORD` layout behind `qXfer:siginfo:read`, and lldb-server's description text;
+- the int3 pc adjustment, the interrupt's new thread and its signal under each stub, the `Z` support;
+- that the loader writes the runtime base into a moved image's `ImageBase` (rampage leaves the field out either
+  way).
+
+The [live acceptance](#windows-stubs) checks these against a real stub on a Windows host.
+
 ## Limits
 
 | Limit | Value |
@@ -799,8 +1072,9 @@ debugserver supports `vCont` (`vCont;c;C;s;S`), so continues and steps use `vCon
 | `jThreadsInfo` | asked only with at most 64 threads; names and queues of 128 characters |
 | `jGetLoadedDynamicLibrariesInfos` | 4,096 images; full information 64 images per request, 32 segments each |
 | `qMemoryRegionInfo` queries per module listing | 512 |
+| Windows modules whose PE headers are read | 64 |
 
-## What 9.1 to 9.5 do not do
+## What 9.1 to 9.6a do not do
 
 - No launch or attach. Register and memory writes and kill only with the operator's flags and a tool call.
 - No signal delivery on resume: never `C`, `S` or `vCont;C`/`vCont;S`. A pending signal is discarded.
@@ -809,7 +1083,8 @@ debugserver supports `vCont` (`vCont;c;C;s;S`), so continues and steps use `vCon
 - No conditions or ignore counts on breakpoints.
 - No source-level stepping and no frame unwinding: step out works only from a function's first instruction.
 - No relocation of runtime bytes to file bytes beyond the slide, and no binding of snapshots.
-- No Windows debugging (9.6). LLDB's extensions are used only to add information (see
+- No Windows debugging through DbgEng, no kernel targets and no minidumps; Windows user-mode processes only through
+  an RSP stub (9.6a), not yet live-verified. LLDB's extensions are used only to add information (see
   [macOS and debugserver](#macos-and-debugserver)); nothing requires them.
 - No expression evaluation and no monitor commands (`qRcmd`).
 - Runtime bytes stay local. They are never published anywhere except the snapshot file you name.
@@ -907,3 +1182,55 @@ debugserver binary other than the Command Line Tools' or Xcode's. It has not yet
 ```sh
 RAMPAGE_DEBUGSERVER_LIVE=1 cargo nextest run -p rampage-api --run-ignored only -E 'test(debug_debugserver_live::)'
 ```
+
+### Windows stubs
+
+The fake stub's Windows transcripts (`rampage_debug::fake::windows`) follow gdbserver's and lldb-server's sources;
+they were not recorded (see [what is not live-verified](#what-is-not-live-verified)). gdbserver x64 serves its
+generated description with the `Windows` OS ABI, DLLs at their base plus 0x1000 without the executable, the exec
+file, `qGetTIBAddr` with the TIB and PEB in memory, `EXCEPTION_RECORD`s through `qXfer:siginfo:read`, refuses `Z3`,
+and grows a thread when interrupted; its WoW64 variant serves the `i386` description, 32-bit DLLs, a 32-bit TIB and
+`EXCEPTION_RECORD32`. lldb-server x64 serves LLDB's features with a decimal `PacketSize`, `qHostInfo` and
+`qProcessInfo` with a Windows triple, an unnamed feature with offsets and a view, every image at its base,
+`qMemoryRegionInfo`, stop replies with `reason` and a hex `description`, and refuses `Z1`. The fake maps PE images
+the way the loader does (`map_pe`: sections at their RVAs, base relocations applied, the runtime base written into
+`ImageBase`).
+
+The tests check, in `rampage-debug`: Windows detection; both module forms with the PE headers and CodeView records
+read at the right base; the executable from the PEB (gdbserver) or the list (lldb-server); breakpoints, single steps
+and access violations with their exception records; that a step's SIGTRAP asks for no record; `Z3` and `Z1`
+refusals; lldb-server's watchpoint description and exception descriptions (a compiled-in int3 as a breakpoint);
+interrupts in a new thread under both stubs, with reads and steps passing over it and gdbserver's break-in thread
+parked (the next continue names every other thread); a DLL-load stop racing an interrupt; gdbserver before 16,
+recognized without an OS ABI, with a loaded `.exe` in its list not taken for the program; library names with a bare
+`&`; and a WoW64 process. Through the tools, with the owned fixtures in `tests/fixtures/debug-windows` (rebuilt
+with its `build.sh`: a C program without a C runtime, `start` calling the exported `tick` in a loop, `tick` adding to
+`counter` through a `movabs` pointer that a base relocation patches; zig's MinGW target links it with LLD, which
+writes the RSDS record; x64 and x86 builds of 4-5 KiB): binding by CodeView at an ASLR slide with the relocated bytes
+left out (the mapped bytes differ from the file at the relocation), refusing an image whose unrelocated code differs,
+case-insensitive `\\?\` paths, a breakpoint by function name with its stop located in `tick`, step out to `start`
+by `[rsp]`, a Windows exception and an interrupt through `debug_continue` and `debug_interrupt` with registers and
+evidence read from the main thread (and the x64 argument registers), a WoW64 process binding the x86 fixture and
+stepping out by `[esp]`, an ASLR image at its preferred base binding at slide 0 with nothing left out, an image whose
+code is all relocated reported `unverified` rather than matched, and a snapshot recording a bound module's
+preferred base.
+
+The live acceptance needs a Windows host the machine running the tests can reach. On the Windows host, copy
+`tests/fixtures/debug-windows/pe-loop-x64.exe` (or `pe-loop-x86.exe`) over and start one of:
+
+```text
+gdbserver.exe --once 0.0.0.0:2345 pe-loop-x64.exe
+lldb-server.exe gdbserver 0.0.0.0:2345 -- pe-loop-x64.exe
+```
+
+Then, on the machine running the tests:
+
+```sh
+RAMPAGE_WINDOWS_LIVE=1 RAMPAGE_WINDOWS_ENDPOINT=winhost:2345 \
+    cargo nextest run -p rampage-api --run-ignored only -E 'test(debug_windows_live::)'
+```
+
+`RAMPAGE_WINDOWS_FIXTURE=pe-loop-x86.exe` runs it against the 32-bit fixture. The test launches nothing: it connects
+with the endpoint allowed, binds the fixture by its CodeView record, breaks on `tick` by name, steps out to `start`,
+catches the write to `counter` with a watchpoint, interrupts a running continue, snapshots `.text` and detaches.
+Without both variables it skips with a message. It has not yet run against a real stub.

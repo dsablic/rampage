@@ -15,6 +15,10 @@ use std::time::{Duration, Instant};
 
 use crate::packet::{self, Frame, Framer, decode_hex, encode_hex, parse_hex_u64};
 
+/// Windows stubs (gdbserver and lldb-server), built from their sources.
+#[path = "fake_windows.rs"]
+pub mod windows;
+
 /// What the stub does in answer to a packet.
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -46,6 +50,9 @@ struct Rule {
     thread: Option<String>,
     /// Matches left; `None` is unlimited.
     remaining: Option<usize>,
+    /// Only once the client has sent this packet (the interrupt byte, a resume); such rules answer before the
+    /// others.
+    after: Option<String>,
 }
 
 /// The stub's behavior: rules tried in order (the first match with uses left answers, rules limited with
@@ -64,6 +71,9 @@ pub struct Script {
     refused: Vec<(u64, u64)>,
     /// Like QEMU, `?` removes every breakpoint and watchpoint the stub holds.
     question_clears_points: bool,
+    /// Like gdbserver on Windows, accepts `vCont;c:<thread>;...` (continue only the named threads) in an execution
+    /// script.
+    thread_continues: bool,
 }
 
 /// How the fake stub records the out-of-band interrupt byte (`0x03`) and how scripts match it.
@@ -108,12 +118,36 @@ impl Script {
             naks: 0,
             thread: Some(thread.into()),
             remaining: None,
+            after: None,
         });
         self
     }
 
+    /// Answers `packet` with `reply` once the client has sent the interrupt byte, before any other rule: a
+    /// thread list that grows when an interrupt creates a thread, as on Windows.
+    pub fn after_interrupt(self, packet: &str, reply: &str) -> Self {
+        self.after(INTERRUPT, packet, reply)
+    }
+
+    /// Answers `packet` with `reply` once the client has sent `trigger`, before any other rule (the latest such
+    /// rule first): registers that change when the target runs.
+    pub fn after(mut self, trigger: &str, packet: &str, reply: &str) -> Self {
+        self.rules.insert(
+            0,
+            Rule {
+                matcher: Matcher::Exact(packet.into()),
+                actions: vec![Action::Reply(reply.into())],
+                naks: 0,
+                thread: None,
+                remaining: None,
+                after: Some(trigger.into()),
+            },
+        );
+        self
+    }
+
     fn rule(mut self, matcher: Matcher, actions: Vec<Action>, naks: usize, remaining: Option<usize>) -> Self {
-        self.rules.push(Rule { matcher, actions, naks, thread: None, remaining });
+        self.rules.push(Rule { matcher, actions, naks, thread: None, remaining, after: None });
         self
     }
 
@@ -135,8 +169,16 @@ impl Script {
             naks: 0,
             thread: None,
             remaining: None,
+            after: None,
         });
         script
+    }
+
+    /// Accepts `vCont;c:<thread>[;c:<thread>...]` in an execution script, as rampage sends it to gdbserver on
+    /// Windows only.
+    pub fn thread_continues(mut self) -> Self {
+        self.thread_continues = true;
+        self
     }
 
     /// Accepts step 9.2's execution-control packets and the interrupt byte, instead of failing on them.
@@ -322,6 +364,20 @@ pub fn step_9_2_execution(packet: &str) -> bool {
     }
 }
 
+/// Whether `packet` is `vCont;c:<thread>[;c:<thread>...]`, each a specific thread. Written independently of the
+/// client's allowlist, so the two check each other.
+pub fn per_thread_continue(packet: &str) -> bool {
+    let Some(actions) = packet.strip_prefix("vCont;") else { return false };
+    actions.split(';').all(|action| {
+        action.strip_prefix("c:").is_some_and(|thread| {
+            !thread.is_empty()
+                && thread.len() <= 16
+                && thread.bytes().all(|b| b.is_ascii_hexdigit())
+                && thread.bytes().any(|b| b != b'0')
+        })
+    })
+}
+
 /// For LLDB's queries (`qHostInfo`, `qProcessInfo`, `qRegisterInfo<n>`, `qMemoryRegionInfo:<address>`,
 /// `jThreadsInfo` and every `j` packet): whether `packet` has exactly the form rampage may send. `None` for other
 /// packets. Written independently of the client's allowlist, so the two check each other.
@@ -465,6 +521,7 @@ fn serve(mut stream: impl Stream, mut script: Script) -> Report {
     let mut last: Vec<u8> = Vec::new();
     let mut naks_sent: usize = 0;
     let mut selected: Option<String> = None;
+    let mut sent = std::collections::BTreeSet::<String>::new();
     // Breakpoints and watchpoints inserted and not removed, as `<type>,<address>,<kind>`.
     let mut points = std::collections::BTreeSet::<String>::new();
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -506,8 +563,10 @@ fn serve(mut stream: impl Stream, mut script: Script) -> Report {
             let bytes = packet::unescape(&raw).unwrap_or(raw);
             let packet = String::from_utf8_lossy(&bytes).into_owned();
             report.received.push(packet.clone());
+            sent.insert(packet.clone());
             let write = memory_write(&bytes);
             let permitted = (script.execution && step_9_2_execution(&packet))
+                || (script.execution && script.thread_continues && per_thread_continue(&packet))
                 || (script.writes && (write.is_some() || register_write(&packet)))
                 || (script.kill && kill_packet(&packet));
             if execution_control(&packet) && !permitted {
@@ -531,6 +590,7 @@ fn serve(mut stream: impl Stream, mut script: Script) -> Report {
             }
             let matches = |rule: &Rule| {
                 rule.remaining != Some(0)
+                    && rule.after.as_ref().is_none_or(|trigger| sent.contains(trigger))
                     && rule.thread.as_ref().is_none_or(|thread| selected.as_ref() == Some(thread))
                     && match &rule.matcher {
                         Matcher::Exact(exact) => *exact == packet,
@@ -542,7 +602,8 @@ fn serve(mut stream: impl Stream, mut script: Script) -> Report {
             let rule = script
                 .rules
                 .iter()
-                .position(|rule| rule.remaining.is_some() && matches(rule))
+                .position(|rule| rule.after.is_some() && matches(rule))
+                .or_else(|| script.rules.iter().position(|rule| rule.remaining.is_some() && matches(rule)))
                 .or_else(|| script.rules.iter().position(matches));
             let actions = match rule {
                 Some(index) => {

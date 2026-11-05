@@ -101,11 +101,11 @@ recorded in the project's findings ledger with the debug session as evidence.
 | Step | Scope | Risk |
 |---|---|---|
 | 9.1 | **Done 2026-10-29** (`55f9f22`; live QEMU Cortex-M3 acceptance passes). `rampage-debug` crate: framing, parser fuzzing, scripted fake stub for tests; read-only tools (`connect`, `status`, `registers`, `read_memory`, `modules`, `snapshot`, `disconnect` with detach). No execution. | Low: equivalent to today's read-only LLDB bridge over a different transport. |
-| 9.2 | **Done 2026-11-04** (`aea1240`; live QEMU Cortex-M3 acceptance passes). Execution control: continue/wait/interrupt, step, breakpoints and watchpoints; stop epochs enforced. | Medium. |
-| 9.3 | **Done 2026-11-05** (`5dd53a7`; live QEMU Cortex-M3 acceptance passes). Static correlation: binding, slides, symbolic breakpoints, step-over via rampage decoders, stop-location enrichment. | Medium. |
-| 9.4 | **Done 2026-11-05** (`8e01031`; live QEMU RAM, register and flash writes and kill pass). Writes behind `--debug-writes`; kill behind `--debug-kill`. | Higher; reviewed separately. |
-| 9.5 | **Implemented 2026-11-05** (`51f6ddf`); live debugserver acceptance pending (needs DevToolsSecurity enabled). macOS `debugserver` acceptance (RSP plus LLDB extensions); evaluate driving LLDB's SB API through the existing bridge for crash/core files. | Platform-dependent. |
-| 9.6 | Windows: separate short design (dbgeng vs. a GDB stub such as a Windows gdbserver). Proposal for review: `docs/plans/2026-11-05-debugger-windows.md`. | — |
+| 9.2 | **Done 2026-11-04** (`019c5b3`; live QEMU Cortex-M3 acceptance passes). Execution control: continue/wait/interrupt, step, breakpoints and watchpoints; stop epochs enforced. | Medium. |
+| 9.3 | **Done 2026-11-05** (`b111cea`; live QEMU Cortex-M3 acceptance passes). Static correlation: binding, slides, symbolic breakpoints, step-over via rampage decoders, stop-location enrichment. | Medium. |
+| 9.4 | **Done 2026-11-05** (`4b2190d`; live QEMU RAM, register and flash writes and kill pass). Writes behind `--debug-writes`; kill behind `--debug-kill`. | Higher; reviewed separately. |
+| 9.5 | **Implemented 2026-11-05** (`6a184b3`); live debugserver acceptance pending (needs DevToolsSecurity enabled). macOS `debugserver` acceptance (RSP plus LLDB extensions); evaluate driving LLDB's SB API through the existing bridge for crash/core files. | Platform-dependent. |
+| 9.6 | Windows: separate short design (dbgeng vs. a GDB stub such as a Windows gdbserver). Option A (RSP stub) approved 2026-11-05: `docs/plans/2026-11-05-debugger-windows.md`. | — |
 
 Each step follows the wave cadence: implementation, fresh-context review, fixes, full suite, then MCP-level acceptance.
 

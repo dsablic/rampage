@@ -25,6 +25,8 @@ mod debug_layout_review;
 mod debug_layout_tools;
 mod debug_qemu;
 mod debug_type_import;
+mod debug_windows;
+mod debug_windows_live;
 mod debug_writes;
 mod debugger;
 mod debugger_capture;

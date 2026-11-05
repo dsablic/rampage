@@ -237,6 +237,7 @@ impl DebugRegistry {
             limitations: info.limitations.clone(),
             lldb: info.lldb.clone(),
             address_mask: info.address_mask.clone(),
+            windows: info.windows.clone(),
             threads: FittedPage::empty(),
         };
         let budget = item_budget(&connection)?;
@@ -790,7 +791,13 @@ impl DebugRegistry {
         } else {
             Vec::new()
         };
-        let snapshot_modules = snapshot_modules(&modules)?;
+        // A bound PE module records its file's preferred base, so the snapshot keeps the slide.
+        let preferred: Vec<(String, u64)> = self
+            .bindings_of(id)
+            .iter()
+            .filter_map(|binding| Some((binding.module.clone(), binding.pe_image_base?)))
+            .collect();
+        let snapshot_modules = snapshot_modules(&modules, &preferred)?;
         let thumb_default = info.family == Family::Arm && rampage_debug::target::m_profile(info.layout.as_ref());
         let mut snapshot = Snapshot {
             format: "rampage-snapshot-v1".into(),
@@ -957,7 +964,10 @@ fn snapshot_thread_id(thread: Option<ThreadId>, several_processes: bool) -> Resu
 
 /// The snapshot entries for svr4 modules, within the loader's limits: unique identities of at most 128 bytes,
 /// names and paths of at most 4096 bytes, at most 4096 modules.
-fn snapshot_modules(modules: &[rampage_debug::Module]) -> Result<Vec<SnapshotModule>, ApiError> {
+fn snapshot_modules(
+    modules: &[rampage_debug::Module],
+    preferred: &[(String, u64)],
+) -> Result<Vec<SnapshotModule>, ApiError> {
     let mut seen = std::collections::BTreeSet::new();
     let mut entries = Vec::new();
     // dyld images (debugserver): the UUID identifies the image, and the header's link-time and runtime addresses
@@ -975,6 +985,31 @@ fn snapshot_modules(modules: &[rampage_debug::Module]) -> Result<Vec<SnapshotMod
             uuid: uuid.clone(),
             image_base: format!("{text:#x}"),
             runtime_base: format!("{:#x}", image.load_address),
+        });
+    }
+    // PE images (Windows stubs): the CodeView record identifies the image, else its runtime base. A bound image
+    // records its file's preferred base as `image_base`, so `runtime_base - image_base` is the slide, as for dyld
+    // images; an unbound one records 0, so its addresses read as RVAs (the mapped header's `ImageBase` is the
+    // runtime base once the loader moved it, so memory does not tell the preferred one).
+    for module in modules {
+        let Some(image) = &module.pe else { continue };
+        let uuid = match &image.codeview {
+            Some(codeview) => format!("pe-codeview:{}{:08x}", rampage_arch::hex::bytes(&codeview.guid), codeview.age),
+            None => format!("pe-image:{:#x}", image.base),
+        };
+        if !seen.insert(rampage_loaders::snapshot::canonical_module_identity(&uuid)) {
+            continue;
+        }
+        let path = truncate_bytes(&module.name, 4096);
+        entries.push(SnapshotModule {
+            name: path.rsplit(['/', '\\']).next().unwrap_or("").to_owned(),
+            path,
+            uuid,
+            image_base: format!(
+                "{:#x}",
+                preferred.iter().find(|(name, _)| *name == module.name).map_or(0, |(_, base)| *base)
+            ),
+            runtime_base: format!("{:#x}", image.base),
         });
     }
     for module in modules.iter().filter(|module| module.l_addr.is_some()) {
@@ -1116,6 +1151,9 @@ pub struct DebugConnection {
     /// arm64: how pointer authentication codes are taken off return addresses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address_mask: Option<rampage_debug::AddressMask>,
+    /// A Windows target: which stub (gdbserver or lldb-server) and what shows it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows: Option<rampage_debug::WindowsTarget>,
     pub threads: FittedPage<rampage_debug::ThreadInfo>,
 }
 
