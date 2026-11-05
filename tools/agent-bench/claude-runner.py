@@ -336,7 +336,11 @@ def parse_stream(lines: list[tuple[float, str]], server: str) -> dict[str, Any]:
             exit_kind = "error"
             error = f"result {subtype or 'unknown'}: {str(result.get('result') or '')[:MAX_ERROR_TEXT]}"
     prefix = f"mcp__{server}__"
-    stray = sorted({call["name"] for call in calls if not call["name"].startswith(prefix)})
+    # A call to a tool outside the server that Claude Code rejected (no such tool, or denied) ran nothing: it
+    # is a model error inside the run. One that returned a result means something else was reachable.
+    outside = [call for call in calls if not call["name"].startswith(prefix)]
+    stray = sorted({call["name"] for call in outside if not call["is_error"]})
+    rejected = sorted({call["name"] for call in outside if call["is_error"]})
     return {
         "init": init,
         "answer": answer,
@@ -350,6 +354,7 @@ def parse_stream(lines: list[tuple[float, str]], server: str) -> dict[str, Any]:
         "models": sorted(models),
         "hook_events": hook_events,
         "stray_tools": stray,
+        "rejected_outside_calls": rejected,
         "malformed_lines": malformed,
     }
 
@@ -402,6 +407,7 @@ def normalize(
             "isolation": isolation,
         },
         "isolation_evidence": init_evidence(init) if parsed["init"] is not None else None,
+        "rejected_outside_calls": parsed["rejected_outside_calls"],
         "server": server,
     }
 
@@ -501,6 +507,40 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def renormalize(arguments: argparse.Namespace) -> dict[str, Any]:
+    """Recompute a result from its recorded transcript and earlier result, without starting `claude`.
+
+    Arrival times are not in the transcript, so wall time, per-call durations and the timeout verdict come
+    from the earlier result.
+    """
+    previous = json.loads(arguments.out.read_text(encoding="utf-8"))
+    lines = [(0.0, line) for line in arguments.transcript.read_text(encoding="utf-8").splitlines()]
+    parsed = parse_stream(lines, arguments.server_name)
+    old_calls = previous.get("tool_calls") or []
+    for index, call in enumerate(parsed["tool_calls"]):
+        call.pop("duration_ms", None)
+        if index < len(old_calls) and old_calls[index].get("name") == call["name"]:
+            if "duration_ms" in old_calls[index]:
+                call["duration_ms"] = old_calls[index]["duration_ms"]
+    leak = check_init(parsed["init"], arguments.server_name) if parsed["init"] else []
+    process_error = None
+    old_error = str(previous.get("error") or "")
+    if "claude exited" in old_error:
+        process_error = old_error[old_error.index("claude exited") :]
+    result = normalize(
+        parsed,
+        server=arguments.server_name,
+        requested_model=arguments.model,
+        isolation=(previous.get("runner") or {}).get("isolation") or isolation_mode(dict(os.environ)),
+        duration_ms=int(previous.get("duration_ms") or 0),
+        timed_out=previous.get("exit") == "timeout",
+        leak=leak,
+        process_error=process_error,
+    )
+    result["renormalized"] = True
+    return result
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     result.add_argument("--mcp-config", type=Path, required=True, help="JSON file holding exactly one server")
@@ -514,13 +554,18 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--out", type=Path, required=True, help="normalized result JSON")
     result.add_argument("--transcript", type=Path, required=True, help="raw stream, written 0600")
     result.add_argument("--claude-bin", default=os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude")
+    result.add_argument(
+        "--renormalize",
+        action="store_true",
+        help="recompute --out from --transcript and the existing --out instead of running claude",
+    )
     return result
 
 
 def main() -> int:
     arguments = parser().parse_args()
     try:
-        result = run(arguments)
+        result = renormalize(arguments) if arguments.renormalize else run(arguments)
     except (OSError, ValueError) as error:
         result = {
             "answer": "",

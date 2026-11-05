@@ -68,6 +68,10 @@ pub struct AgentBenchArgs {
     report_json: Option<PathBuf>,
     #[arg(long, requires = "report_json")]
     report_md: Option<PathBuf>,
+    /// Spend no model usage: have the runner recompute each result in --out-dir from its recorded transcript
+    /// (`--renormalize`), then score and report again. The earlier rows are kept as runs.before-rescore.jsonl.
+    #[arg(long)]
+    rescore: bool,
 }
 
 pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
@@ -158,6 +162,12 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
         }
     }
     let rows_path = out_dir.join("runs.jsonl");
+    let kept = out_dir.join("runs.before-rescore.jsonl");
+    if args.rescore && rows_path.is_file() && !kept.exists() {
+        std::fs::rename(&rows_path, &kept).map_err(|error| format!("{}: {error}", rows_path.display()))?;
+    } else if args.rescore {
+        let _ = std::fs::remove_file(&rows_path);
+    }
     let mut rows_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -254,6 +264,9 @@ struct RunSetup<'a> {
 }
 
 fn run_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
+    if setup.args.rescore {
+        return rescore_one(setup);
+    }
     let workdir = Workdir::new()?;
     let target = workdir.path.join("fixture.bin");
     std::fs::copy(setup.fixture, &target).map_err(|error| format!("{}: {error}", setup.fixture.display()))?;
@@ -281,6 +294,35 @@ fn run_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
         .args(["--timeout-s", &setup.args.timeout_s.to_string()])
         .arg("--workdir")
         .arg(&workdir.path)
+        .arg("--out")
+        .arg(&result_path)
+        .arg("--transcript")
+        .arg(run_dir.join("transcript.jsonl"))
+        .status()
+        .map_err(|error| format!("runner {}: {error}", setup.runner[0].display()))?;
+    let text = read(&result_path).map_err(|error| format!("runner exited {status} without a result: {error}"))?;
+    let result: RunnerResult =
+        serde_json::from_str(&text).map_err(|error| format!("{}: {error}", result_path.display()))?;
+    score(setup.task, setup.suite, setup.server, setup.repetition, &result)
+}
+
+fn rescore_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
+    let run_dir =
+        setup.out_dir.join("runs").join(setup.server).join(format!("{}-r{}", setup.task.id, setup.repetition));
+    let result_path = run_dir.join("result.json");
+    let status = Command::new(&setup.runner[0])
+        .args(&setup.runner[1..])
+        .arg("--renormalize")
+        .arg("--mcp-config")
+        .arg(setup.config)
+        .args(["--server-name", setup.server])
+        .arg("--prompt-file")
+        .arg(run_dir.join("prompt.txt"))
+        .args(["--model", &setup.args.model])
+        .args(["--max-turns", &setup.args.max_turns.to_string()])
+        .args(["--timeout-s", &setup.args.timeout_s.to_string()])
+        .arg("--workdir")
+        .arg(&run_dir)
         .arg("--out")
         .arg(&result_path)
         .arg("--transcript")

@@ -165,6 +165,52 @@ class IsolationTest(unittest.TestCase):
         self.assertTrue(leaked["error"].startswith("isolation: tools outside"))
 
 
+def with_rejected_outside_call(lines: list[tuple[float, str]]) -> list[tuple[float, str]]:
+    """Add a model call to a tool that does not exist, which Claude Code answers with an error."""
+    call = {"type": "assistant", "message": {"model": MODEL, "id": "msg_rejected", "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_rejected", "name": "enable_tools", "input": {}}]}}
+    answer = {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_rejected", "is_error": True,
+         "content": "<tool_use_error>Error: No such tool available: enable_tools</tool_use_error>"}]}}
+    return [lines[0], (0.1, json.dumps(call)), (0.2, json.dumps(answer)), *lines[1:]]
+
+
+class RejectedCallTest(unittest.TestCase):
+    def test_a_rejected_call_to_a_missing_tool_is_a_model_error_not_a_leak(self) -> None:
+        parsed = runner.parse_stream(with_rejected_outside_call(sample_lines()), "rampage")
+        result = normalized(parsed)
+        self.assertEqual(result["exit"], "ok")
+        self.assertEqual(result["rejected_outside_calls"], ["enable_tools"])
+        self.assertEqual(len(result["tool_calls"]), 5)
+        self.assertTrue(result["tool_calls"][0]["is_error"])
+
+    def test_renormalize_recomputes_from_the_transcript_and_keeps_timings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transcript = root / "transcript.jsonl"
+            lines = with_rejected_outside_call(sample_lines())
+            transcript.write_text("\n".join(line for _, line in lines) + "\n")
+            previous = normalized(runner.parse_stream(lines, "rampage"), duration_ms=4321)
+            previous["exit"], previous["error"] = "error", "isolation: calls to tools outside the server"
+            out = root / "result.json"
+            out.write_text(json.dumps(previous))
+            arguments = runner.parser().parse_args(
+                [
+                    "--mcp-config", str(root / "mcp.json"), "--server-name", "rampage", "--prompt-file", "p",
+                    "--model", MODEL, "--max-turns", "7", "--timeout-s", "60", "--workdir", directory,
+                    "--out", str(out), "--transcript", str(transcript), "--renormalize",
+                ]
+            )
+            result = runner.renormalize(arguments)
+            self.assertEqual(result["exit"], "ok")
+            self.assertEqual(result["duration_ms"], 4321)
+            self.assertTrue(result["renormalized"])
+            self.assertEqual(
+                [call.get("duration_ms") for call in result["tool_calls"]],
+                [call.get("duration_ms") for call in previous["tool_calls"]],
+            )
+
+
 class CommandTest(unittest.TestCase):
     def arguments(self, directory: Path) -> argparse.Namespace:
         return runner.parser().parse_args(
