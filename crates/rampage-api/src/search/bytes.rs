@@ -333,7 +333,7 @@ impl Scan<'_> {
             self.report.budget.match_work += chunk as u64;
             let window = view.window(next, chunk + length - 1, &mut scratch);
             let mut from = 0;
-            let mut stopped = false;
+            let mut stopped_at = None;
             while let Some(found) = finder.find(&window[from..]) {
                 let offset = next + from + found;
                 from += found + 1;
@@ -341,14 +341,16 @@ impl Scan<'_> {
                     continue;
                 }
                 if !self.hit(view, offset, length) {
-                    stopped = true;
+                    stopped_at = Some(offset);
                     break;
                 }
             }
-            next += chunk;
-            if stopped {
-                break;
+            if let Some(offset) = stopped_at {
+                // A result-cap stop examined the bytes through the capped match, not the whole chunk.
+                self.report.scanned_bytes += (offset + length) as u64;
+                return;
             }
+            next += chunk;
         }
         self.report.scanned_bytes += if next == starts { size } else { next + length - 1 } as u64;
         if matches!(self.report.stop_reason, SearchStopReason::MatchWorkBudget | SearchStopReason::Cancelled)
@@ -586,6 +588,8 @@ pub(super) fn search(
             utf16_trailing_bytes: 0,
             resume_at: None,
             unscanned_ranges: Vec::new(),
+            unscanned_range_count: 0,
+            unscanned_bytes: 0,
             limitations: [
                 "Byte/text results are content matches, not evidence of execution or references.",
                 "Only stored mapped bytes are searched; overlay, virtual gaps and zero-fill are excluded.",
@@ -650,7 +654,10 @@ pub(super) fn search(
             // A domain stopped before it started (regex or no byte budget left) resumes at its start.
             let end = view.address() + view.size();
             let started = scan.resume_at.is_some_and(|at| at >= view.address() && at < end);
-            if !started && scan.report.stop_reason != SearchStopReason::ResultCap {
+            // A result cap is not resumable by range, and a text-run stop would meet the same run again.
+            let resumable =
+                !matches!(scan.report.stop_reason, SearchStopReason::ResultCap | SearchStopReason::TextRunBudget);
+            if !started && resumable {
                 scan.resume_at.get_or_insert(view.address());
             }
             unscanned_from = Some(index);
@@ -662,7 +669,11 @@ pub(super) fn search(
             let last = pieces.last().expect("domain has a piece");
             let (start, end) = (pieces[0].address.max(resume), last.address + last.size);
             if start < end {
-                scan.report.unscanned_ranges.push(UnscannedRange { start, end });
+                scan.report.unscanned_range_count += 1;
+                scan.report.unscanned_bytes += end - start;
+                if scan.report.unscanned_ranges.len() < MAX_UNSCANNED_RANGES {
+                    scan.report.unscanned_ranges.push(UnscannedRange { start, end });
+                }
             }
         }
         scan.report.resume_at = Some(resume);

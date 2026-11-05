@@ -80,7 +80,7 @@ pub struct RawCodeReport {
     pub limitations: Vec<&'static str>,
 }
 
-/// ARM text with its decimal `#` immediates also in hex, after a `;` as GNU objdump prints them
+/// ARM or AArch64 text with its decimal `#` immediates also in hex, after a `;` as GNU objdump prints them
 /// (`movt r1, #1934 ; 0x78e`), so a `movw`/`movt` pair or an offset reads without converting by hand. Immediates
 /// below 10 read the same in both bases and get none.
 pub(crate) fn with_hex_immediates(text: String) -> String {
@@ -248,7 +248,7 @@ pub fn inspect_raw_code(bytes: &[u8], request: &RawCodeRequest) -> Result<RawCod
         let transfer = observation.flow != Flow::Next;
         let conditional_fallthrough = observation.flow == Flow::Next && observation.conditional;
         let mut text = decoder.format(instruction_bytes, address);
-        if request.arch == Arch::Arm {
+        if matches!(request.arch, Arch::Arm | Arch::Aarch64) {
             text = with_hex_immediates(text);
         }
         rows.push(RawCodeRow {

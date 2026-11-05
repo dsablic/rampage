@@ -117,7 +117,7 @@ oversized results do not persist. See [local variables](local-variables.md) for 
 `inspect_raw_code` reads an explicitly mapped regular-file window with required architecture, mode, instruction
 and data byte orders, and base VA; it returns range hashes, source offsets and bounded linear observations.
 Limits: 4096 bytes, 256 instructions, little endian only; no target following or validated code identity.
-ARM and Thumb rows print decimal `#` immediates of 10 or more in hex too, as GNU objdump does
+ARM, Thumb and AArch64 rows print decimal `#` immediates of 10 or more in hex too, as GNU objdump does
 (`movt r1, #1934 ; 0x78e`). A native binary tool on a file with no recognised header says how to read it as
 headerless code: `inspect_raw_code` for ARM/Thumb, AArch64 and x86, or the `raw` selector for the Raw profiles.
 See [raw-code windows](raw-code.md). `decode_file_range` and `inspect_data` have separate source/coordinate
@@ -128,28 +128,35 @@ Binary tools take `path`, optional `arch`, and optional `image_offset`/`image_le
 symbols, exports, import-stub names and `sub_<hex>`. Runtime comparison slots/ranges and branch windows require
 explicit hexadecimal addresses. See [CLI global options](cli-reference.md#global-options-and-addresses).
 
-Every tool refuses an argument its schema does not list, and a missing required one, before running anything.
-The one-line error names the tool's arguments, marks the required ones, and suggests the likely intended name
-for a habitual one (`address` for `at`, `length` for `count` or `size`, `query` for `mode` or `contains`), so
-a client calling before it has loaded a schema can correct the call at once.
+Project and file tools refuse an argument their schema does not list, and a missing required one, before
+running anything, over MCP and in the agent and desktop assistant alike. The one-line error names the tool's
+arguments, marks the required ones, and suggests the likely intended name for a habitual one (`address` for
+`at`, `length` for `count` or `size`, `query` for `mode` or `contains`), so a client calling before it has
+loaded a schema can correct the call at once; at most 8 unknown names are listed, the rest counted. Debug tools
+refuse unknown arguments through their own parsing, without the argument list. The CLI builds its own inputs.
 
 With `contains`, `list_strings` rows carry `match_address`, where the text matches inside the string. Go string
-data is not NUL-terminated, so in a Go image a run of joined literals carries a `note`, and a match its
-`go_literal` bounds: the last address code references at or before the match, the first one after it (or the
-run's end), and how many references the start has. Do not count offsets into such a run by hand.
+data is not NUL-terminated, so in a Go image a run that code references at more than one address carries a
+`note`, and a match its `go_literal` bounds: the last address code references at or before the match (with
+`start_is_match` saying whether that is the match itself, since otherwise it may begin an earlier literal), the
+first one after it (or the run's end), and how many references the start has. Do not count offsets into such a
+run by hand. Listing strings in a Go image runs the cached whole-program analysis.
 
 `function_summary` with `view=summary` or `view=code` adds `callees` (distinct call targets with names and call
-counts) and does not refuse for size. When a large function does not fit 60,000 bytes, its graph blocks,
+counts, taken from all of the function's references, not only the 1,000 the native summary keeps) and refuses for
+size only when a single graph block exceeds 60,000 bytes. When a large function does not fit, its graph blocks,
 references and callees are returned as whole-row pages: `graph.blocks_offset`/`blocks_next_offset`,
-`references.items_offset`/`items_next_offset` and `callees_offset`/`callees_next_offset`, continued with the
+`references.items_offset`/`items_next_offset` (in these views `items_offset` replaces the native page
+`offset`) and `callees_offset`/`callees_next_offset`, continued with the
 `block_offset`, `reference_offset` and `callee_offset` arguments, and a `fitted` receipt lists any optional
 analysis omitted to fit. Graph edges keep indexing blocks by their position in the whole function. `view=full`
 still refuses when oversized.
 
 A byte or text `search` charges one unit of match work per candidate start for exact text, so the default
 budget covers a 50 MB image; byte patterns with wildcards still charge their length per start. When a budget or
-cancellation stops a byte/text scan, the report gives `resume_at` (search again with `range.start` there) and
-`unscanned_ranges`, and the page a `scan_resume` hint.
+cancellation stops a byte/text scan, the report gives `resume_at` (search again with `range.start` there),
+the first 32 `unscanned_ranges` with `unscanned_range_count` and `unscanned_bytes`, and the page a `scan_resume`
+hint. A regex stopped by its text-run limit gives no `resume_at`, since resuming would meet the same run.
 
 List queries use `offset`/`limit`, generally defaulting to 100 entries and capped at 1000. `list_functions`
 filters with `name_contains`; strings/imports/exports filter with `contains`. Disassembly counts are capped at

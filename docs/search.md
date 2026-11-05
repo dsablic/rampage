@@ -128,9 +128,11 @@ reference and matching-work counters rather than presenting them as physical I/O
 Exact text (ASCII or UTF-16) is matched with a linear substring search and charged one matching-work unit per
 candidate start, so the default budget covers about 64 MB of mapped bytes; byte patterns with wildcards are
 charged their length per candidate start. When a budget or cancellation stops a byte/text scan, the report
-gives `resume_at`, the first address whose matches were not searched, and `unscanned_ranges`; searching again
-with `range.start` at `resume_at` continues the scan. A regex scan resumes at the start of the domain it stopped
-in, which may repeat that domain's earlier hits.
+gives `resume_at`, the first address whose matches were not searched, and the first 32 `unscanned_ranges` with
+`unscanned_range_count` and `unscanned_bytes`; searching again with `range.start` at `resume_at` continues the
+scan. A regex scan resumes at the start of the domain it stopped in, which may repeat that domain's earlier hits.
+A result-cap or text-run-limit stop gives no `resume_at`: a range cannot skip retained hits, and the same run
+would stop the scan again.
 
 Decoder windows and required semantic lookahead are charged before use. Pointer/literal probes consume
 the same inspection budget; duplicate probes within one instruction can reuse checked bytes. Unaccepted

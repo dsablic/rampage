@@ -365,6 +365,7 @@ fn byte_and_work_budgets_report_lower_bounds_not_complete_totals() {
     // Byte patterns resume at the first start they could not afford to compare.
     assert_eq!(report.resume_at, Some(0x1002));
     assert_eq!(report.unscanned_ranges, [UnscannedRange { start: 0x1002, end: 0x1005 }]);
+    assert_eq!((report.unscanned_range_count, report.unscanned_bytes), (1, 3));
 }
 
 /// Benchmark v2: a 42-character text search over the 50 MB Hugo image stopped on match_work after 1.6 MB, with
@@ -403,6 +404,19 @@ fn exact_text_work_is_linear_in_the_haystack_and_a_stopped_scan_can_resume() {
 }
 
 #[test]
+fn unscanned_ranges_are_bounded_and_counted() {
+    let regions: Vec<(u64, &[u8])> = (0..40u64).map(|index| (0x1000 + index * 0x1000, b"abcd".as_slice())).collect();
+    let project = Project::new(snapshot(&regions));
+    let mut query = text("cd", SearchTextEncoding::Ascii, false);
+    query.budget.match_work = 2;
+    let report = project.search(&query).unwrap();
+    assert_eq!(report.stop_reason, SearchStopReason::MatchWorkBudget);
+    assert_eq!(report.unscanned_ranges.len(), MAX_UNSCANNED_RANGES);
+    assert_eq!(report.unscanned_ranges[0], UnscannedRange { start: 0x1002, end: 0x1004 });
+    assert_eq!((report.unscanned_range_count, report.unscanned_bytes), (40, 2 + 39 * 4));
+}
+
+#[test]
 fn result_cap_observes_one_additional_unique_hit_and_reports_a_lower_bound() {
     let project = Project::new(snapshot(&[(0x1000, b"aaaaa")]));
     let mut query = bytes("61");
@@ -413,6 +427,11 @@ fn result_cap_observes_one_additional_unique_hit_and_reports_a_lower_bound() {
     assert_eq!(report.stop_reason, SearchStopReason::ResultCap);
     assert!(!report.total_is_exact);
     assert!(report.truncated);
+    // Exact text stops at the capped match too, counting only the bytes it examined, with no resume address.
+    let mut query = text("a", SearchTextEncoding::Ascii, false);
+    query.budget.results = 2;
+    let report = project.search(&query).unwrap();
+    assert_eq!((report.total, report.scanned_bytes, report.resume_at), (3, 3, None));
 }
 
 #[test]

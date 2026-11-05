@@ -826,6 +826,7 @@ async fn go_string_runs_give_the_exact_match_address_and_referenced_literal_boun
     // The literal is referenced by code: its start is the match, and it ends where the next literal starts.
     let literal = &row["go_literal"];
     assert_eq!(literal["start"], row["match_address"], "{row}");
+    assert_eq!(literal["start_is_match"], true, "{row}");
     assert!(literal["start_references"].as_u64().unwrap() >= 1, "{row}");
     let end = u64::from_str_radix(literal["end"].as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
     assert_eq!(end, start + offset + needle.len() as u64, "{row}");
@@ -855,6 +856,14 @@ async fn unknown_or_missing_arguments_are_refused_naming_the_tool_arguments() {
     // Union-shaped schemas still admit their members' fields, and file tools are checked too.
     let search = call(&client, "search", json!({ "path": path, "query": "x" })).await;
     assert!(text(&search).contains("`query` (did you mean `mode`?)"), "{}", text(&search));
+    // However many unknown names a call carries, the error stays one bounded line.
+    let mut flood = json!({ "path": path, "at": "main" });
+    for index in 0..5000 {
+        flood[format!("{}{index}", "x".repeat(100))] = json!(index);
+    }
+    let flooded = call(&client, "disassemble", flood).await;
+    let message = text(&flooded);
+    assert!(message.contains("and 4992 more") && message.len() < 2000, "{} bytes", message.len());
     let carve = call(&client, "carve", json!({ "path": path, "bogus": 1 })).await;
     assert!(text(&carve).contains("unknown field `bogus`"), "{}", text(&carve));
     // The Raw selector keeps its own refusal on tools that cannot serve it.

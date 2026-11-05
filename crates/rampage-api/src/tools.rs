@@ -24,6 +24,7 @@ const DEFAULT_PAGE: usize = 100;
 const MAX_PDB_DETAIL_BYTES: usize = 4096;
 const MAX_PDB_ERROR_BYTES: usize = 1024;
 
+mod arguments;
 mod debug_tools;
 #[cfg(test)]
 mod patch_dispatch_tests;
@@ -2194,13 +2195,22 @@ pub fn tools() -> Vec<Tool> {
             "Structural function summary, not native recovered C. view=full (default) preserves original JSON and \
              refuses when oversized; summary omits instruction/IR rendering with exact counts and omission receipts; \
              code retains native instructions and labels partial structural pseudocode explicitly. summary and code \
-             add `callees` (distinct call targets with names and call counts) and never refuse for size: a large \
-             function's graph blocks, references and callees are paged as whole rows (block_offset, \
+             add `callees` (distinct call targets with names and call counts, from all references) and refuse \
+             for size only when one graph block alone exceeds the budget: a large function's graph blocks, \
+             references and callees are paged as whole rows (block_offset, \
              reference_offset, callee_offset; *_next_offset says where the next page starts), and a `fitted` \
              receipt names any optional analysis omitted to fit 60000 bytes.",
             |project, arguments: FunctionSummaryArgs| {
-                let value = serde_json::to_value(project.function_summary(project.resolve(&arguments.at)?)?)
-                    .map_err(|error| ApiError::Invalid(error.to_string()))?;
+                let summary = project.function_summary(project.resolve(&arguments.at)?)?;
+                let entry = summary.graph.address;
+                let mut value = serde_json::to_value(summary).map_err(|error| ApiError::Invalid(error.to_string()))?;
+                if arguments.view != ToolView::Full && value["references"]["total"].as_u64() > Some(1000) {
+                    // The native summary keeps the first 1000 references; the compact views page and derive
+                    // callees from all of them.
+                    let all = project.xrefs(XrefQuery::From(entry), None, None)?;
+                    value["references"] =
+                        serde_json::to_value(all).map_err(|error| ApiError::Invalid(error.to_string()))?;
+                }
                 let pages = SummaryPages {
                     block_offset: arguments.block_offset,
                     reference_offset: arguments.reference_offset,
@@ -2660,8 +2670,9 @@ pub fn tools() -> Vec<Tool> {
             "list_strings",
             "Printable strings with their addresses. Filter with `contains`; paginated. With `contains`, \
              match_address is where the text matches inside each string. Go string data is not NUL-terminated, so \
-             in a Go image a long run of joined literals carries a note, and a match its go_literal bounds (from \
-             the addresses code references); never count offsets into a run by hand.",
+             in a Go image a run that code references at several addresses carries a note, and a match its \
+             go_literal bounds from those references; never count offsets into a run by hand. In a Go image the \
+             listing runs the (cached) whole-program analysis.",
             |project, mut query: StringsQuery| {
                 query.limit = page_limit(query.limit);
                 Ok(project.string_rows(&query))
@@ -3328,6 +3339,8 @@ fn fit_committed_result(value: Value) -> Value {
         "entry_evidence_omitted": original.as_array().map(|items| items.len().saturating_sub(8)),
     })
 }
+
+pub use arguments::{admitted_arguments, check_arguments, check_tool_arguments};
 
 fn dispatch(
     tools: &[Tool],
