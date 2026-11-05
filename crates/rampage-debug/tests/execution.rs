@@ -8,7 +8,11 @@ use rampage_debug::packet::{encode, encode_hex};
 use rampage_debug::{BreakKind, Cancel, Config, DebugError, Endpoint, Session, State, StopCause};
 
 fn connect(stub: &FakeStub) -> Session {
-    let config = Config { connect_timeout: Duration::from_secs(5), command_timeout: Duration::from_secs(5) };
+    let config = Config {
+        connect_timeout: Duration::from_secs(5),
+        command_timeout: Duration::from_secs(5),
+        ..Config::default()
+    };
     Session::connect(&stub.endpoint().parse::<Endpoint>().unwrap(), config).unwrap()
 }
 

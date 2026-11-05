@@ -58,17 +58,47 @@ pub enum TemporaryPlacement {
     Existing { breakpoint: Breakpoint },
 }
 
+/// Most bytes one memory write request writes.
+pub const MAX_WRITE: usize = 4096;
+/// Time a memory write's deadline allows for each packet beyond the command timeout.
+const WRITE_ROUND_TRIP: Duration = Duration::from_millis(250);
+/// How long a kill waits for the stub's reply to `k` or `vKill`.
+const KILL_WAIT: Duration = Duration::from_secs(3);
+
+/// What the operator allowed beyond inspection and execution control. Both are off by default; a session refuses
+/// write and kill requests it was not configured for, whatever its caller does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct Consent {
+    /// Memory and register writes (`--debug-writes`).
+    pub writes: bool,
+    /// Killing the target on disconnect (`--debug-kill`).
+    pub kill: bool,
+}
+
+/// Why a session refuses writes it was not configured for.
+const WRITES_NOT_ALLOWED: &str = "writes are not allowed: the operator did not start rampage with --debug-writes \
+                                  (or RAMPAGE_DEBUG_WRITES=1); nothing was sent";
+/// Why a session refuses a kill it was not configured for.
+const KILL_NOT_ALLOWED: &str = "killing is not allowed: the operator did not start rampage with --debug-kill (or \
+                                RAMPAGE_DEBUG_KILL=1); nothing was sent";
+
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
     /// Bounds opening the connection.
     pub connect_timeout: Duration,
     /// Bounds each request, including every packet it sends, and the whole connection handshake.
     pub command_timeout: Duration,
+    /// Whether write and kill requests are served.
+    pub consent: Consent,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { connect_timeout: Duration::from_secs(5), command_timeout: Duration::from_secs(10) }
+        Self {
+            connect_timeout: Duration::from_secs(5),
+            command_timeout: Duration::from_secs(10),
+            consent: Consent::default(),
+        }
     }
 }
 
@@ -89,6 +119,8 @@ pub enum State {
     Running,
     /// The process exited or was terminated; there is nothing left to read.
     Exited,
+    /// rampage killed the target (`k` or `vKill`) and the stub confirmed it.
+    Killed,
     Detached,
     Lost {
         reason: String,
@@ -198,6 +230,119 @@ pub struct Detached {
     pub breakpoints_removed: usize,
     /// Entries the stub would not remove, or that could not be removed, each with the reason.
     pub removal_failures: Vec<String>,
+    /// Why the stub refused `D` (`E nn`): the session stays open and attached, but the breakpoints counted above
+    /// are already gone.
+    pub refused: Option<String>,
+}
+
+/// The outcome of a kill.
+#[derive(Debug, Clone, Serialize)]
+pub struct Killed {
+    /// `killed` when the stub confirmed it, `exited` when it reports the process exited, `lost` when the connection
+    /// ended without a confirmation (stubs may close it in answer to `k`), or the state the target was already in.
+    #[serde(flatten)]
+    pub state: State,
+    /// Breakpoints and watchpoints removed before killing.
+    pub breakpoints_removed: usize,
+    pub removal_failures: Vec<String>,
+    /// The kill packets sent (`k`, or `vKill;<pid>` per process in multiprocess mode); empty when the target had
+    /// already ended.
+    pub packets: Vec<String>,
+    /// The packets the stub confirmed with `OK`, `X` or `W`.
+    pub confirmed: Vec<String>,
+    /// The stub's reply to the last kill packet, when it sent one.
+    pub reply: Option<String>,
+    /// Why the stub refused (`E nn`) or does not support the kill: the session stays open and attached, but the
+    /// breakpoints counted above are already gone, and the processes in `confirmed` are killed.
+    pub refused: Option<String>,
+    /// The target had ended before the kill, so nothing was sent.
+    pub already_ended: bool,
+}
+
+/// One packet of a memory write.
+#[derive(Debug, Clone, Serialize)]
+pub struct WriteChunk {
+    #[serde(serialize_with = "hex_address")]
+    pub address: u64,
+    pub length: usize,
+    /// `X` (binary) or `M` (hex).
+    pub packet: &'static str,
+    /// Whether the stub answered `OK`.
+    pub written: bool,
+    pub error: Option<String>,
+}
+
+/// The outcome of a memory write: the bytes before, each packet's outcome, and the bytes read back.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemoryWrite {
+    #[serde(serialize_with = "hex_address")]
+    pub address: u64,
+    pub length: usize,
+    /// The epoch the write happened at; a write does not change it.
+    pub epoch: u64,
+    pub thread: Option<ThreadId>,
+    #[serde(skip)]
+    pub before: Vec<u8>,
+    /// The bytes read back after writing; shorter than `length` when the read-back failed part-way.
+    #[serde(skip)]
+    pub after: Vec<u8>,
+    /// Why the read-back is short, if it is.
+    pub after_error: Option<String>,
+    /// Packets sent, in order; writing stops at the first one the stub does not accept.
+    pub chunks: Vec<WriteChunk>,
+    /// Whether every packet was accepted.
+    pub complete: bool,
+    /// Whether the read-back equals the bytes written. A stub may accept a write it silently drops (flash, ROM).
+    pub verified: bool,
+}
+
+/// The outcome of a register write.
+#[derive(Debug, Clone, Serialize)]
+pub struct RegisterWrite {
+    pub thread: Option<ThreadId>,
+    pub epoch: u64,
+    pub name: String,
+    pub regnum: u32,
+    pub bitsize: u32,
+    /// `P`, or `G` after reading every register with `g` when the stub has no `P`.
+    pub packet: &'static str,
+    /// The register's bytes, as the stub sent them, before and after; `None` when unavailable.
+    pub before: Option<String>,
+    pub after: Option<String>,
+    /// The values decoded in the session's byte order; `None` when it is unknown.
+    pub before_value: Option<String>,
+    pub after_value: Option<String>,
+    /// Whether the read-back equals the bytes written.
+    pub verified: bool,
+}
+
+/// `value` as the `bitsize`-bit register bytes a stub transfers in `order`, refused when the byte order is unknown
+/// or the value does not fit. Registers wider than 64 bits are zero-extended.
+pub fn encode_register_value(value: u64, bitsize: u32, order: ByteOrder) -> Result<Vec<u8>, String> {
+    if bitsize == 0 || !bitsize.is_multiple_of(8) {
+        return Err(format!("a {bitsize}-bit register cannot be written as whole bytes"));
+    }
+    if bitsize < 64 && value >> bitsize != 0 {
+        return Err(format!("{value:#x} does not fit a {bitsize}-bit register"));
+    }
+    let size = bitsize as usize / 8;
+    let mut bytes = vec![0; size];
+    let little = value.to_le_bytes();
+    let used = size.min(8);
+    match order {
+        ByteOrder::Little => bytes[..used].copy_from_slice(&little[..used]),
+        ByteOrder::Big => {
+            for (index, byte) in little[..used].iter().enumerate() {
+                bytes[size - 1 - index] = *byte;
+            }
+        }
+        ByteOrder::Unknown => {
+            return Err("the target's byte order is unknown, so an integer cannot be encoded; give the value as \
+                        target-endian hex bytes"
+                .into());
+        }
+    }
+    Ok(bytes)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -319,12 +464,27 @@ enum Request {
     },
     Breakpoints,
     Detach,
+    WriteMemory {
+        epoch: Option<u64>,
+        address: u64,
+        bytes: Vec<u8>,
+        expect: Option<Vec<u8>>,
+    },
+    WriteRegister {
+        epoch: Option<u64>,
+        thread: Option<ThreadId>,
+        name: String,
+        value: Vec<u8>,
+    },
+    Kill,
 }
 
 impl Request {
     /// The packet classes the request may send.
     fn permit(&self) -> Permit {
         match self {
+            Request::WriteMemory { .. } | Request::WriteRegister { .. } => Permit::WRITE,
+            Request::Kill => Permit::KILL,
             Request::Status
             | Request::Registers { .. }
             | Request::Memory { .. }
@@ -352,6 +512,9 @@ enum Response {
     Temporary(TemporaryPlacement),
     Breakpoints(Vec<Breakpoint>),
     Detached(Detached),
+    MemoryWrite(MemoryWrite),
+    RegisterWrite(RegisterWrite),
+    Killed(Killed),
 }
 
 struct Job {
@@ -407,7 +570,7 @@ impl Session {
         let thread = std::thread::Builder::new()
             .name("rampage-debug-session".into())
             .spawn(move || {
-                let mut worker = Worker::new(transport, config.command_timeout);
+                let mut worker = Worker::new(transport, config.command_timeout, config.consent);
                 match worker.handshake(endpoint, local, deadline) {
                     Ok(info) => {
                         let info = Arc::new(info);
@@ -655,7 +818,73 @@ impl Session {
             Ok(_) => unreachable!("detach request"),
             Err(error) => Err(error),
         };
-        if !matches!(result, Err(DebugError::Target(_))) {
+        if !matches!(result, Err(DebugError::Target(_)))
+            && !matches!(result, Ok(ref detached) if detached.refused.is_some())
+        {
+            self.close();
+            self.wait_closed(Instant::now() + Duration::from_secs(1));
+        }
+        result
+    }
+
+    /// Writes `bytes` (1..=[`MAX_WRITE`]) at `address` of a stopped target at `epoch` (when given), only in a session
+    /// whose [`Consent`] allows writes. Reads the bytes there first and refuses, writing nothing, when `expect` is
+    /// given and differs, or when a software breakpoint (`Z0`, temporary ones included) overlaps the range. Writes
+    /// with `X` when the stub takes it, else `M`, one packet per chunk, stopping at the first refusal, then reads
+    /// the range back. The epoch does not change.
+    pub fn write_memory(
+        &self,
+        epoch: Option<u64>,
+        address: u64,
+        bytes: &[u8],
+        expect: Option<&[u8]>,
+    ) -> Result<MemoryWrite, DebugError> {
+        let request =
+            Request::WriteMemory { epoch, address, bytes: bytes.to_vec(), expect: expect.map(<[u8]>::to_vec) };
+        // Each chunk is read, written and read back; a small packet size means many round trips. Each packet still
+        // gets the command timeout of its own (a hung stub fails as fast as for any request), while the request as a
+        // whole gets time for every round trip, so a slow but healthy stub does not lose the session.
+        let chunks = bytes.len().div_ceil(self.info.chunk_size().min(MAX_WRITE)).max(1) as u32;
+        let timeout = self.config.command_timeout + WRITE_ROUND_TRIP * 3 * chunks;
+        match self.call(request, timeout)? {
+            Response::MemoryWrite(write) => Ok(write),
+            _ => unreachable!("memory write request"),
+        }
+    }
+
+    /// Writes register `name` of `thread` (the stop's thread when `None`) of a stopped target at `epoch` (when given)
+    /// with `value`, its bytes in the order the stub transfers them, only in a session whose [`Consent`] allows
+    /// writes. Uses `P`, else `g` and `G` with only that register changed, then reads the registers back. Writing the
+    /// pc does not resume; the epoch does not change.
+    pub fn write_register(
+        &self,
+        epoch: Option<u64>,
+        thread: Option<ThreadId>,
+        name: &str,
+        value: &[u8],
+    ) -> Result<RegisterWrite, DebugError> {
+        let request = Request::WriteRegister { epoch, thread, name: name.to_owned(), value: value.to_vec() };
+        match self.call(request, self.config.command_timeout)? {
+            Response::RegisterWrite(write) => Ok(write),
+            _ => unreachable!("register write request"),
+        }
+    }
+
+    /// Kills the target and ends the session, only when its [`Consent`] allows it: a running target is interrupted
+    /// first (as for [`Session::detach`]), every breakpoint is removed, then `vKill;<pid>` per process in
+    /// multiprocess mode, else `k`, is sent. When the stub refuses (`E nn`) or does not support it, the session
+    /// stays open and attached.
+    pub fn kill(&self) -> Result<Killed, DebugError> {
+        let result = match self.call(Request::Kill, self.config.command_timeout + INTERRUPT_WAIT + KILL_WAIT) {
+            Ok(Response::Killed(killed)) => Ok(killed),
+            Ok(_) => unreachable!("kill request"),
+            Err(error) => Err(error),
+        };
+        let keeps = match &result {
+            Ok(killed) => killed.refused.is_some(),
+            Err(error) => kill_keeps_session(error),
+        };
+        if !keeps {
             self.close();
             self.wait_closed(Instant::now() + Duration::from_secs(1));
         }
@@ -740,8 +969,6 @@ struct Worker {
     state: State,
     epoch: u64,
     stop: Option<StopReply>,
-    /// The last `?` reply while stopped; a different one later is a stop rampage did not cause.
-    question: Option<StopReply>,
     threads: Vec<ThreadInfo>,
     selected: Option<ThreadId>,
     extra_info: bool,
@@ -761,17 +988,25 @@ struct Worker {
     reinsert: Vec<u32>,
     /// Whether an `Hc<thread>` rampage sent is in effect, so a plain `c` might resume only that thread.
     hc_thread: bool,
+    /// What the operator allowed; write and kill requests are refused without it.
+    consent: Consent,
+    /// Whether the stub takes `X` writes, once a write found out.
+    x_write: Option<bool>,
+    /// Whether the stub takes `P` writes, once a write found out.
+    p_write: Option<bool>,
 }
 
 impl Worker {
-    fn new(transport: Box<dyn Transport>, command_timeout: Duration) -> Self {
+    fn new(transport: Box<dyn Transport>, command_timeout: Duration, consent: Consent) -> Self {
         Self {
+            consent,
+            x_write: None,
+            p_write: None,
             client: Client::new(transport),
             info: None,
             state: State::Stopped,
             epoch: 0,
             stop: None,
-            question: None,
             threads: Vec::new(),
             selected: None,
             extra_info: true,
@@ -859,7 +1094,6 @@ impl Worker {
         if stop.ended() {
             self.state = State::Exited;
         }
-        self.question = Some(stop.clone());
         self.stop = Some(stop);
         if self.state == State::Stopped {
             self.threads = self.list_threads(deadline)?;
@@ -1001,8 +1235,30 @@ impl Worker {
     /// Serves one request; true when the session is finished.
     fn handle(&mut self, job: Job) -> bool {
         let Job { request, deadline, reply } = job;
+        // The session's own check, independent of the tools that list (or do not list) write and kill: a request
+        // the operator did not allow is refused before its packet class is even permitted.
+        let refusal = match &request {
+            Request::WriteMemory { .. } | Request::WriteRegister { .. } if !self.consent.writes => {
+                Some(WRITES_NOT_ALLOWED)
+            }
+            Request::Kill if !self.consent.kill => Some(KILL_NOT_ALLOWED),
+            _ => None,
+        };
+        if let Some(refusal) = refusal {
+            let _ = reply.send(Err(DebugError::NotAllowed(refusal.into())));
+            return false;
+        }
+        // A request that waited in the queue past its deadline (behind a long step, say) sends nothing: its caller
+        // may already have given up and reported the session lost. The connection is still in step, so it is kept.
+        if Instant::now() >= deadline {
+            let _ = reply.send(Err(DebugError::Timeout(
+                "the request waited past its deadline before it was served; nothing was sent".into(),
+            )));
+            return false;
+        }
         self.client.set_permit(request.permit());
         let detach = matches!(request, Request::Detach);
+        let kill = matches!(request, Request::Kill);
         let result = match request {
             // A call cancelled before it was served resumes nothing.
             Request::Continue { cancel, .. } if cancel.is_cancelled() && self.state != State::Running => {
@@ -1058,14 +1314,21 @@ impl Worker {
                 "the target is not running ({}); there is nothing to interrupt",
                 describe(&self.state)
             ))),
-            Request::Status | Request::Detach => self.run(request, deadline),
+            Request::Status | Request::Detach | Request::Kill => self.run(request, deadline),
             _ if self.state == State::Running => Err(DebugError::Running(
                 "only debug_status, debug_wait, debug_interrupt and debug_disconnect are served until it stops".into(),
             )),
             request => self.run(request, deadline),
         };
-        // A refused detach leaves the session attached and serving.
-        let finished = detach && !matches!(result, Err(DebugError::Target(_)));
+        // A refused detach or kill leaves the session attached and serving.
+        let refused = match &result {
+            Ok(Response::Detached(detached)) => detached.refused.is_some(),
+            Ok(Response::Killed(killed)) => killed.refused.is_some(),
+            _ => false,
+        };
+        let finished = !refused
+            && ((detach && !matches!(result, Err(DebugError::Target(_))))
+                || (kill && !matches!(result, Err(ref error) if kill_keeps_session(error))));
         if let Err(error) = &result
             && error.fatal()
         {
@@ -1600,7 +1863,6 @@ impl Worker {
         }
         let stop = StopReply::parse(&reply).map_err(DebugError::Protocol)?;
         self.epoch += 1;
-        self.question = None;
         // Stubs select the stopped thread themselves; nothing an earlier request selected can be relied on.
         self.selected = None;
         self.state = if stop.ended() { State::Exited } else { State::Stopped };
@@ -1970,6 +2232,7 @@ impl Worker {
             State::Stopped => Ok(()),
             State::Running => Err(DebugError::Running("wait for it to stop or interrupt it".into())),
             State::Exited => Err(DebugError::State("the process has exited".into())),
+            State::Killed => Err(DebugError::State("the target was killed".into())),
             State::Detached => Err(DebugError::State("the session is detached".into())),
             State::Lost { reason } => Err(DebugError::State(format!("the connection was lost: {reason}"))),
         }
@@ -2055,6 +2318,13 @@ impl Worker {
             }
             Request::Breakpoints => Ok(Response::Breakpoints(self.breakpoints.clone())),
             Request::Detach => self.detach(deadline).map(Response::Detached),
+            Request::Kill => self.kill(deadline).map(Response::Killed),
+            Request::WriteMemory { epoch, address, bytes, expect } => {
+                self.write_memory(&info, epoch, address, &bytes, expect.as_deref(), deadline).map(Response::MemoryWrite)
+            }
+            Request::WriteRegister { epoch, thread, name, value } => {
+                self.write_register(&info, epoch, thread, &name, &value, deadline).map(Response::RegisterWrite)
+            }
             Request::Continue { .. } | Request::Wait { .. } | Request::Interrupt { .. } | Request::Step { .. } => {
                 unreachable!("served by handle")
             }
@@ -2064,7 +2334,418 @@ impl Worker {
     /// Stops a running target (interrupt, then a bounded wait), removes every inserted breakpoint and watchpoint,
     /// and detaches. A target that does not stop is abandoned: the connection is closed and the session is lost.
     fn detach(&mut self, deadline: Instant) -> Result<Detached, DebugError> {
-        self.abandon_stepping("the session is detaching");
+        let (removed, failures) = match self.wind_down("detaching", deadline)? {
+            WindDown::Ended(detached) => return Ok(detached),
+            WindDown::Cleared { removed, failures } => (removed, failures),
+        };
+        let pids = self.pids();
+        let packets: Vec<String> =
+            if pids.is_empty() { vec!["D".to_owned()] } else { pids.iter().map(|pid| format!("D;{pid:x}")).collect() };
+        for (index, packet) in packets.iter().enumerate() {
+            let reply = self.command(packet, deadline)?;
+            if reply != b"OK" {
+                // The breakpoints are already out of the stub, and earlier processes may already be detached.
+                return Ok(Detached {
+                    state: self.state.clone(),
+                    breakpoints_removed: removed,
+                    removal_failures: failures,
+                    refused: Some(format!(
+                        "`{packet}` was refused: {}; the session stays open and attached, without its breakpoints \
+                         ({removed} removed before detaching){}",
+                        reply_text(&reply),
+                        if index == 0 {
+                            String::new()
+                        } else {
+                            format!(", and {} already detached", packets[..index].join(", "))
+                        }
+                    )),
+                });
+            }
+            // A process detached from is gone from this session; a retry detaches only the others.
+            if let Some(pid) = pids.get(index) {
+                self.forget_process(*pid);
+            }
+        }
+        self.state = State::Detached;
+        Ok(Detached { state: State::Detached, breakpoints_removed: removed, removal_failures: failures, refused: None })
+    }
+
+    /// The processes to detach from or kill one by one: in multiprocess mode, every pid the thread list names.
+    fn pids(&self) -> Vec<u64> {
+        if !self.multiprocess {
+            return Vec::new();
+        }
+        let mut pids: Vec<u64> = self.threads.iter().filter_map(|thread| thread.id.pid).collect();
+        pids.sort_unstable();
+        pids.dedup();
+        pids
+    }
+
+    fn forget_process(&mut self, pid: u64) {
+        self.threads.retain(|thread| thread.id.pid != Some(pid));
+        if self.selected.is_some_and(|selected| selected.pid == Some(pid)) {
+            self.selected = None;
+        }
+    }
+
+    /// Stops a running target, removes every breakpoint and kills the target: `vKill;<pid>` per process in
+    /// multiprocess mode, else `k`. `OK` or an `X` reply is a kill and a `W` reply an exit. A connection the stub
+    /// closes, or a reply that does not come within [`KILL_WAIT`], is reported as lost: GDB takes either as success,
+    /// but rampage did not see the target end. An `E` reply or an empty one (unsupported) leaves the session attached.
+    fn kill(&mut self, deadline: Instant) -> Result<Killed, DebugError> {
+        let (removed, failures) = match self.wind_down("killing", deadline)? {
+            WindDown::Ended(ended) => {
+                return Ok(Killed {
+                    // Exited (or otherwise ended) before anything was sent; a lost session ended nothing.
+                    already_ended: !matches!(ended.state, State::Lost { .. }),
+                    state: ended.state,
+                    breakpoints_removed: 0,
+                    removal_failures: ended.removal_failures,
+                    packets: Vec::new(),
+                    confirmed: Vec::new(),
+                    reply: None,
+                    refused: None,
+                });
+            }
+            WindDown::Cleared { removed, failures } => (removed, failures),
+        };
+        let pids = self.pids();
+        let packets: Vec<String> = if pids.is_empty() {
+            vec!["k".to_owned()]
+        } else {
+            pids.iter().map(|pid| format!("vKill;{pid:x}")).collect()
+        };
+        let mut killed = Killed {
+            state: State::Killed,
+            breakpoints_removed: removed,
+            removal_failures: failures,
+            packets: Vec::new(),
+            confirmed: Vec::new(),
+            reply: None,
+            refused: None,
+            already_ended: false,
+        };
+        for (index, packet) in packets.iter().enumerate() {
+            killed.packets.push(packet.clone());
+            let reply = match self.command(packet, deadline.min(Instant::now() + KILL_WAIT)) {
+                Ok(reply) => reply,
+                Err(error) if error.fatal() => {
+                    self.lose(DebugError::Lost(format!(
+                        "no reply to `{packet}` ({error}); GDB takes a stub closing the connection as a successful \
+                         kill, but rampage did not see the target end"
+                    )));
+                    for entry in &mut self.breakpoints {
+                        entry.inserted = false;
+                    }
+                    killed.state = self.state.clone();
+                    return Ok(killed);
+                }
+                Err(error) => return Err(error),
+            };
+            killed.reply = Some(reply_text(&reply));
+            let refusal = match reply.first() {
+                _ if reply == b"OK" => None,
+                Some(b'X') => None,
+                Some(b'W') => {
+                    killed.state = State::Exited;
+                    None
+                }
+                None => Some(format!("unsupported: the stub does not support `{packet}`")),
+                _ if is_error(&reply) => Some(format!("target_error: `{packet}` was refused: {}", reply_text(&reply))),
+                _ => return Err(protocol(&format!("unexpected reply to `{packet}`: {}", reply_text(&reply)))),
+            };
+            if let Some(refusal) = refusal {
+                // The breakpoints are already out of the stub, and earlier processes may already be killed.
+                killed.state = self.state.clone();
+                killed.refused = Some(format!(
+                    "{refusal}; the session stays open and attached, without its breakpoints ({removed} removed before \
+                     killing){}",
+                    if killed.confirmed.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", and {} was already confirmed", killed.confirmed.join(", "))
+                    }
+                ));
+                return Ok(killed);
+            }
+            killed.confirmed.push(packet.clone());
+            if let Some(pid) = pids.get(index) {
+                self.forget_process(*pid);
+            }
+        }
+        for entry in &mut self.breakpoints {
+            entry.inserted = false;
+        }
+        self.state = killed.state.clone();
+        Ok(killed)
+    }
+
+    /// Writes `bytes` at `address`, between a read of the bytes there and a read-back; see [`Session::write_memory`].
+    fn write_memory(
+        &mut self,
+        info: &Info,
+        epoch: Option<u64>,
+        address: u64,
+        bytes: &[u8],
+        expect: Option<&[u8]>,
+        deadline: Instant,
+    ) -> Result<MemoryWrite, DebugError> {
+        self.check_epoch(epoch)?;
+        self.require_stopped()?;
+        let length = bytes.len();
+        if !(1..=MAX_WRITE).contains(&length) || address.checked_add(length as u64 - 1).is_none() {
+            return Err(DebugError::Invalid(format!(
+                "a write takes 1..={MAX_WRITE} bytes and must not overflow the address space"
+            )));
+        }
+        if expect.is_some_and(|expect| expect.len() != length) {
+            return Err(DebugError::Invalid("expect must be as long as the bytes written".into()));
+        }
+        let last = address + (length as u64 - 1);
+        // The stub keeps the bytes a software breakpoint replaced and puts them back when it is removed, so a write
+        // under one would be undone, or would corrupt what it saved.
+        if let Some(entry) = self.breakpoints.iter().find(|entry| {
+            entry.kind == BreakKind::Software
+                && entry.address <= last
+                && entry.address.saturating_add(exec::replaced_bytes(info.family, entry.size) - 1) >= address
+        }) {
+            return Err(DebugError::Invalid(format!(
+                "{}software breakpoint {} at {:#x} ({} bytes) overlaps the write: the stub keeps the original bytes \
+                 there and restores them when it removes the breakpoint, so writing under it would be undone or \
+                 corrupt them; {}. Nothing was written",
+                if entry.temporary { "the temporary " } else { "" },
+                entry.id,
+                entry.address,
+                exec::replaced_bytes(info.family, entry.size),
+                if entry.temporary {
+                    "it is taken out at the next stop"
+                } else {
+                    "clear it first (debug_breakpoints action clear) and set it again after writing"
+                }
+            )));
+        }
+        let thread = self.use_thread(None, deadline)?;
+        let binary = info.feature("binary-upload");
+        let chunk = chunk_size(info.packet_size).min(MAX_WRITE);
+        let before = match self.read_range(address, length, binary, info.packet_size, deadline)? {
+            (bytes, None) => bytes,
+            (_, Some(error)) => {
+                return Err(DebugError::Target(format!(
+                    "the bytes at {address:#x} could not be read before writing ({error}); nothing was written"
+                )));
+            }
+        };
+        if let Some(expect) = expect
+            && expect != before
+        {
+            return Err(DebugError::ExpectMismatch(format!(
+                "the target holds {} at {address:#x}, not the expected bytes; nothing was written",
+                encode_hex(&before)
+            )));
+        }
+        let mut chunks: Vec<WriteChunk> = Vec::new();
+        let mut offset = 0;
+        while offset < length {
+            let size = (length - offset).min(chunk);
+            let at = address + offset as u64;
+            let data = &bytes[offset..offset + size];
+            let packet_deadline = deadline.min(Instant::now() + self.command_timeout);
+            // Chunks are written in order and the first refusal stops the write, so what was written is one run.
+            let (packet, reply) = self.write_chunk(at, data, packet_deadline).map_err(|error| {
+                let context = if offset == 0 {
+                    format!("while writing {size} bytes at {at:#x}; nothing was written before it")
+                } else {
+                    format!(
+                        "while writing {size} bytes at {at:#x}; the {} chunks before it ({offset} bytes from \
+                         {address:#x}) were written",
+                        chunks.len()
+                    )
+                };
+                with_context(error, &context)
+            })?;
+            let written = reply == b"OK";
+            let error = (!written).then(|| {
+                if reply.is_empty() {
+                    format!("the stub does not support `{packet}`")
+                } else {
+                    format!("the stub answered {}", reply_text(&reply))
+                }
+            });
+            chunks.push(WriteChunk { address: at, length: size, packet, written, error });
+            if !written {
+                break;
+            }
+            offset += size;
+        }
+        let complete = offset == length;
+        let (after, after_error) = self.read_range(address, length, binary, info.packet_size, deadline)?;
+        Ok(MemoryWrite {
+            address,
+            length,
+            epoch: self.epoch,
+            thread,
+            verified: complete && after == bytes,
+            before,
+            after,
+            after_error,
+            chunks,
+            complete,
+        })
+    }
+
+    /// Writes one chunk with `X` while the stub may take it (an empty reply means it does not, and nothing was
+    /// written), else with `M`.
+    fn write_chunk(
+        &mut self,
+        address: u64,
+        data: &[u8],
+        deadline: Instant,
+    ) -> Result<(&'static str, Vec<u8>), DebugError> {
+        if self.x_write != Some(false) {
+            let mut packet = format!("X{address:x},{:x}:", data.len()).into_bytes();
+            packet.extend_from_slice(data);
+            if Instant::now() >= deadline {
+                return Err(DebugError::Timeout(format!("deadline passed before writing at {address:#x}")));
+            }
+            let reply = self.client.command_bytes(&packet, deadline)?;
+            if !reply.is_empty() {
+                self.x_write = Some(true);
+                return Ok(("X", reply));
+            }
+            self.x_write = Some(false);
+        }
+        let reply = self.command(&format!("M{address:x},{:x}:{}", data.len(), encode_hex(data)), deadline)?;
+        Ok(("M", reply))
+    }
+
+    /// `length` bytes at `address`, read chunk by chunk, with why they stop short if they do.
+    fn read_range(
+        &mut self,
+        address: u64,
+        length: usize,
+        binary: bool,
+        packet_size: usize,
+        deadline: Instant,
+    ) -> Result<(Vec<u8>, Option<String>), DebugError> {
+        let mut bytes = Vec::with_capacity(length);
+        while bytes.len() < length {
+            let at = address + bytes.len() as u64;
+            let chunk = self.read_chunk(
+                at,
+                (length - bytes.len()).min(chunk_size(packet_size)),
+                binary,
+                packet_size,
+                deadline.min(Instant::now() + self.command_timeout),
+            )?;
+            bytes.extend_from_slice(&chunk.bytes);
+            if let Some(error) = chunk.error {
+                return Ok((bytes, Some(format!("at {at:#x}: {error}"))));
+            }
+        }
+        Ok((bytes, None))
+    }
+
+    /// Writes register `name`; see [`Session::write_register`].
+    fn write_register(
+        &mut self,
+        info: &Info,
+        epoch: Option<u64>,
+        thread: Option<ThreadId>,
+        name: &str,
+        value: &[u8],
+        deadline: Instant,
+    ) -> Result<RegisterWrite, DebugError> {
+        self.check_epoch(epoch)?;
+        self.require_stopped()?;
+        let layout = info.layout.as_ref().ok_or_else(|| {
+            DebugError::Unsupported("no register layout: no target description and no matching built-in one".into())
+        })?;
+        let register = layout
+            .register(name)
+            .cloned()
+            .ok_or_else(|| DebugError::Invalid(format!("`{name}` is not a register of the target description")))?;
+        if register.bitsize == 0 || !register.bitsize.is_multiple_of(8) || value.len() != register.bytes() {
+            return Err(DebugError::Invalid(format!(
+                "`{name}` is {} bits: the value must be exactly {} bytes",
+                register.bitsize,
+                register.bytes()
+            )));
+        }
+        let thread = self.use_thread(thread, deadline)?;
+        let find = |registers: &[RegisterValue]| registers.iter().find(|entry| entry.name == register.name).cloned();
+        let before = find(&self.read_registers(info, deadline)?);
+        let hex = encode_hex(value);
+        let mut packet = None;
+        if self.p_write != Some(false) {
+            let request = format!("P{:x}={hex}", register.regnum);
+            let reply = self.command(&request, deadline)?;
+            if reply == b"OK" {
+                self.p_write = Some(true);
+                packet = Some("P");
+            } else if reply.is_empty() {
+                self.p_write = Some(false);
+            } else {
+                return Err(DebugError::Target(format!("the stub refused `{request}`: {}", reply_text(&reply))));
+            }
+        }
+        if packet.is_none() {
+            let reply = self.command("g", deadline)?;
+            if is_error(&reply) {
+                return Err(DebugError::Target(format!("`g` failed: {}; nothing was written", reply_text(&reply))));
+            }
+            if reply.len() % 2 != 0 || reply.len() / 2 > layout.g_size || !reply.iter().all(|b| b.is_ascii_hexdigit()) {
+                return Err(DebugError::Unsupported(
+                    "the stub has no `P`, and its `g` reply marks registers unavailable or does not fit the layout, \
+                     so writing it back with `G` could write values nobody read; nothing was written"
+                        .into(),
+                ));
+            }
+            let (start, end) = (register.offset * 2, (register.offset + register.bytes()) * 2);
+            if end > reply.len() {
+                return Err(DebugError::Unsupported(format!(
+                    "the stub has no `P`, and `{name}` is not in its `g` reply, so `G` cannot write it; nothing was \
+                     written"
+                )));
+            }
+            let mut registers = String::from_utf8_lossy(&reply).to_ascii_lowercase();
+            registers.replace_range(start..end, &hex);
+            let reply = self.command(&format!("G{registers}"), deadline)?;
+            if reply != b"OK" {
+                return Err(if reply.is_empty() {
+                    DebugError::Unsupported("the stub supports neither `P` nor `G`; nothing was written".into())
+                } else {
+                    DebugError::Target(format!("the stub refused `G`: {}", reply_text(&reply)))
+                });
+            }
+            packet = Some("G");
+        }
+        // The stop reply's expedited registers (gdbserver sends the pc) describe the target before this write; drop
+        // them so whatever needs the pc next (a continue stepping past a breakpoint) reads it again with `p`.
+        if let Some(StopReply::Signal { registers, .. }) = &mut self.stop {
+            registers.clear();
+        }
+        let after = find(&self.read_registers(info, deadline)?);
+        let bytes = |entry: &Option<RegisterValue>| entry.as_ref().and_then(|entry| entry.bytes.clone());
+        let value_of = |entry: &Option<RegisterValue>| entry.as_ref().and_then(|entry| entry.value.clone());
+        Ok(RegisterWrite {
+            thread,
+            epoch: self.epoch,
+            name: register.name.clone(),
+            regnum: register.regnum,
+            bitsize: register.bitsize,
+            packet: packet.unwrap_or("P"),
+            verified: bytes(&after).as_deref() == Some(hex.as_str()),
+            before: bytes(&before),
+            after: bytes(&after),
+            before_value: value_of(&before),
+            after_value: value_of(&after),
+        })
+    }
+
+    /// Stops a running target and removes every breakpoint and watchpoint, before detaching or killing. `Ended`
+    /// when nothing is attached any more: the target ended, or never stopped and the connection was closed.
+    fn wind_down(&mut self, purpose: &str, deadline: Instant) -> Result<WindDown, DebugError> {
+        self.abandon_stepping(&format!("the session is {purpose}"));
         // Breakpoints stepped past are not in the stub; there is nothing to put back before detaching.
         for id in std::mem::take(&mut self.reinsert) {
             self.breakpoints.retain(|entry| entry.id != id);
@@ -2087,7 +2768,7 @@ impl Worker {
                 if Instant::now() >= until {
                     let reason = format!(
                         "the target did not stop within {} ms of an interrupt; the connection was closed without \
-                         removing breakpoints or detaching",
+                         removing breakpoints or {purpose}",
                         wait.as_millis()
                     );
                     self.lose(DebugError::Lost(reason));
@@ -2097,11 +2778,12 @@ impl Worker {
                         .filter(|entry| entry.inserted)
                         .map(|entry| format!("breakpoint {}: not removed, the target never stopped", entry.id))
                         .collect();
-                    return Ok(Detached {
+                    return Ok(WindDown::Ended(Detached {
                         state: self.state.clone(),
                         breakpoints_removed: 0,
                         removal_failures: failures,
-                    });
+                        refused: None,
+                    }));
                 }
             }
         }
@@ -2109,11 +2791,12 @@ impl Worker {
             State::Stopped => {}
             // Nothing is attached any more; just close.
             _ => {
-                return Ok(Detached {
+                return Ok(WindDown::Ended(Detached {
                     state: self.state.clone(),
                     breakpoints_removed: 0,
                     removal_failures: Vec::new(),
-                });
+                    refused: None,
+                }));
             }
         }
         let mut removed = 0;
@@ -2135,31 +2818,7 @@ impl Worker {
             }
         }
         self.breakpoints.retain(|entry| entry.inserted);
-        let pids: Vec<u64> = if self.multiprocess {
-            let mut pids: Vec<u64> = self.threads.iter().filter_map(|thread| thread.id.pid).collect();
-            pids.sort_unstable();
-            pids.dedup();
-            pids
-        } else {
-            Vec::new()
-        };
-        let packets: Vec<String> =
-            if pids.is_empty() { vec!["D".to_owned()] } else { pids.iter().map(|pid| format!("D;{pid:x}")).collect() };
-        for (index, packet) in packets.iter().enumerate() {
-            let reply = self.command(packet, deadline)?;
-            if reply != b"OK" {
-                return Err(DebugError::Target(format!("`{packet}` was refused: {}", reply_text(&reply))));
-            }
-            // A process detached from is gone from this session; a retry detaches only the others.
-            if let Some(pid) = pids.get(index) {
-                self.threads.retain(|thread| thread.id.pid != Some(*pid));
-                if self.selected.is_some_and(|selected| selected.pid == Some(*pid)) {
-                    self.selected = None;
-                }
-            }
-        }
-        self.state = State::Detached;
-        Ok(Detached { state: State::Detached, breakpoints_removed: removed, removal_failures: failures })
+        Ok(WindDown::Cleared { removed, failures })
     }
 
     fn list_threads(&mut self, deadline: Instant) -> Result<Vec<ThreadInfo>, DebugError> {
@@ -2206,26 +2865,11 @@ impl Worker {
         Ok(threads)
     }
 
-    /// Re-reads the stop (`?`) and threads. A `?` reply that differs from the previous one is a stop rampage did not
-    /// cause, and a new epoch. The first `?` after a stop rampage observed only sets the baseline: stubs answer `?`
-    /// in their own words (QEMU always says SIGTRAP), not with the stop reply they sent.
+    /// Re-reads the threads of a stopped target, which also shows the connection is alive. The stop itself is the
+    /// session's own record: `?` is sent only in the handshake, because QEMU removes every breakpoint and watchpoint
+    /// when it is asked (it takes `?` for a new debugger connecting), and in all-stop mode a stopped target cannot
+    /// stop again without being resumed.
     fn refresh(&mut self, deadline: Instant) -> Result<(), DebugError> {
-        let stop = StopReply::parse(&self.command("?", deadline)?).map_err(DebugError::Protocol)?;
-        let changed = match &self.question {
-            Some(previous) => *previous != stop,
-            None => stop.ended(),
-        };
-        self.question = Some(stop.clone());
-        if changed {
-            self.epoch += 1;
-            if stop.ended() {
-                self.state = State::Exited;
-                for entry in &mut self.breakpoints {
-                    entry.inserted = false;
-                }
-            }
-            self.stop = Some(stop);
-        }
         if self.state == State::Stopped {
             self.threads = self.list_threads(deadline)?;
             if self.selected.is_some_and(|selected| !self.threads.iter().any(|thread| thread.id == selected)) {
@@ -2505,12 +3149,37 @@ impl Worker {
     }
 }
 
+/// Where stopping and clearing a target for a detach or kill left it.
+enum WindDown {
+    /// Nothing is attached any more; this is the final state.
+    Ended(Detached),
+    /// Stopped, with every breakpoint the stub would remove removed.
+    Cleared { removed: usize, failures: Vec<String> },
+}
+
+/// Whether a kill that failed with `error` left the session open and attached.
+fn kill_keeps_session(error: &DebugError) -> bool {
+    matches!(error, DebugError::Target(_) | DebugError::Unsupported(_) | DebugError::NotAllowed(_))
+}
+
+/// `error` with `context` appended, keeping its kind.
+fn with_context(error: DebugError, context: &str) -> DebugError {
+    match error {
+        DebugError::Timeout(message) => DebugError::Timeout(format!("{message} ({context})")),
+        DebugError::Lost(message) => DebugError::Lost(format!("{message} ({context})")),
+        DebugError::Protocol(message) => DebugError::Protocol(format!("{message} ({context})")),
+        DebugError::Target(message) => DebugError::Target(format!("{message} ({context})")),
+        other => other,
+    }
+}
+
 /// A state as words, for errors.
 fn describe(state: &State) -> String {
     match state {
         State::Stopped => "stopped".into(),
         State::Running => "running".into(),
         State::Exited => "exited".into(),
+        State::Killed => "killed".into(),
         State::Detached => "detached".into(),
         State::Lost { reason } => format!("lost ({reason})"),
     }
@@ -2601,6 +3270,36 @@ mod tests {
         assert_eq!(decode_value("48000000", ByteOrder::Little).as_deref(), Some("0x00000048"));
         assert_eq!(decode_value("00000048", ByteOrder::Big).as_deref(), Some("0x00000048"));
         assert_eq!(decode_value("48000000", ByteOrder::Unknown), None);
+    }
+
+    /// Any value that fits a register encodes to its size and decodes back to itself in the same order; one that
+    /// does not fit, an unknown order and a partial-byte register are refused.
+    #[test]
+    fn register_values_encode_to_their_bitsize_in_the_session_order() {
+        let mut rng = crate::packet::tests::Rng::new(29);
+        for _ in 0..20_000 {
+            let bitsize = [8, 16, 32, 64, 128][rng.below(5)];
+            let raw = rng.next() >> rng.below(64);
+            let value = if bitsize < 64 { raw & ((1 << bitsize) - 1) } else { raw };
+            for order in [ByteOrder::Little, ByteOrder::Big] {
+                let bytes = encode_register_value(value, bitsize, order).unwrap();
+                assert_eq!(bytes.len(), bitsize as usize / 8);
+                let decoded = decode_value(&encode_hex(&bytes), order).unwrap();
+                assert_eq!(parse_hex_u64(&decoded[decoded.len().saturating_sub(16)..]), Some(value), "{decoded}");
+                assert!(decoded[2..decoded.len().saturating_sub(16).max(2)].bytes().all(|digit| digit == b'0'));
+            }
+            assert!(encode_register_value(value, bitsize, ByteOrder::Unknown).is_err());
+            if bitsize < 64 {
+                let wide = value | 1 << (bitsize + rng.below(64 - bitsize as usize) as u32);
+                assert!(encode_register_value(wide, bitsize, ByteOrder::Little).is_err(), "{wide:#x} in {bitsize}");
+            }
+        }
+        assert_eq!(encode_register_value(0x1234, 16, ByteOrder::Little).unwrap(), [0x34, 0x12]);
+        assert_eq!(encode_register_value(0x1234, 32, ByteOrder::Big).unwrap(), [0, 0, 0x12, 0x34]);
+        assert_eq!(encode_register_value(1, 128, ByteOrder::Big).unwrap()[15], 1);
+        for bitsize in [0, 1, 12] {
+            assert!(encode_register_value(0, bitsize, ByteOrder::Little).is_err());
+        }
     }
 
     #[test]

@@ -1422,6 +1422,33 @@ fn server_and_legacy_mcp_keep_accepted_global_flags_and_stdio_output() {
 }
 
 #[test]
+fn debug_write_and_kill_flags_need_an_endpoint_and_a_clear_value() {
+    let serve = |args: &[&str], env: &[(&str, &str)]| {
+        let mut command = Command::cargo_bin("rampage").unwrap();
+        for name in ["RAMPAGE_DEBUG_ENDPOINTS", "RAMPAGE_DEBUG_WRITES", "RAMPAGE_DEBUG_KILL", "RAMPAGE_MCP_TOOLS"] {
+            command.env_remove(name);
+        }
+        command.envs(env.iter().copied()).args(args).write_stdin("").timeout(std::time::Duration::from_secs(10));
+        command.output().unwrap()
+    };
+    for (args, env) in [
+        (&["mcp", "--debug-writes"][..], &[][..]),
+        (&["mcp", "--debug-kill"][..], &[][..]),
+        (&["mcp"][..], &[("RAMPAGE_DEBUG_WRITES", "1")][..]),
+        (&["mcp", "--debug-endpoint", "127.0.0.1:1"][..], &[("RAMPAGE_DEBUG_KILL", "yes")][..]),
+    ] {
+        let output = serve(args, env);
+        assert!(!output.status.success(), "{args:?} {env:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("RAMPAGE_DEBUG_") || stderr.contains("--debug-"), "{stderr}");
+    }
+    // With an endpoint the flags are accepted: the server starts and ends only because stdin is empty.
+    let output = serve(&["mcp", "--debug-endpoint", "127.0.0.1:1", "--debug-writes", "--debug-kill"], &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("initialize") && !stderr.contains("debug"), "{stderr}");
+}
+
+#[test]
 fn primary_help_lists_only_nouns_and_all_legacy_forms_remain_accepted() {
     let output = run(&["--help"]);
     assert!(output.status.success());

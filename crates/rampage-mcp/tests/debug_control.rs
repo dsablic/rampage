@@ -177,6 +177,83 @@ async fn disconnect_detaches_and_forgets_the_session() {
     assert_eq!(report.received.iter().filter(|packet| packet.starts_with('D')).count(), 1);
 }
 
+#[tokio::test]
+async fn write_tools_and_the_kill_option_are_listed_only_with_the_operators_flags() {
+    // Nothing connects: listing and refusing need no stub.
+    let endpoint = "127.0.0.1:1".to_owned();
+    for (writes, kill) in [(false, false), (true, false), (false, true), (true, true)] {
+        let consent = rampage_mcp::debug_consent(writes, false, None, kill.then_some("1")).unwrap();
+        let registry =
+            rampage_mcp::debug_registry_with(std::slice::from_ref(&endpoint), None, consent).unwrap().unwrap();
+        let client = connect(RampageServer::with_groups([Group::Core, Group::Debug]).with_debug(registry)).await;
+        let tools = client.list_all_tools().await.unwrap();
+        let mut listed: Vec<&str> =
+            tools.iter().map(|tool| tool.name.as_ref()).filter(|name| name.starts_with("debug_")).collect();
+        listed.sort();
+        let mut expected: Vec<&str> = DEBUG_TOOLS.to_vec();
+        if writes {
+            expected.extend(["debug_write_memory", "debug_write_register"]);
+            expected.sort();
+        }
+        assert_eq!(listed, expected, "writes {writes}, kill {kill}");
+        let listing = json_of(&call(&client, "enable_tools", json!({})).await);
+        let group = listing["groups"].as_array().unwrap().iter().find(|group| group["name"] == "debug").unwrap();
+        assert_eq!(group["tool_count"], expected.len());
+        let disconnect = tools.iter().find(|tool| tool.name == "debug_disconnect").unwrap();
+        assert_eq!(disconnect.input_schema["properties"].as_object().unwrap().contains_key("kill"), kill);
+        if writes {
+            for name in ["debug_write_memory", "debug_write_register"] {
+                let hints = tools.iter().find(|tool| tool.name == name).unwrap().annotations.clone().unwrap();
+                assert_eq!(
+                    (hints.read_only_hint, hints.destructive_hint, hints.idempotent_hint, hints.open_world_hint),
+                    (Some(false), Some(true), Some(false), Some(true)),
+                    "{name}"
+                );
+            }
+        } else {
+            let refused = call(&client, "debug_write_memory", json!({ "session": "s1" })).await;
+            assert!(text(&refused).contains("unknown tool debug_write_memory"), "{}", text(&refused));
+        }
+        let instructions = client.peer_info().unwrap().instructions.clone().unwrap();
+        assert_eq!(instructions.contains("--debug-writes"), writes);
+        assert_eq!(instructions.contains("--debug-kill"), kill);
+        assert_eq!(instructions.contains("Nothing writes registers or memory or kills"), !writes && !kill);
+        if !kill {
+            // Without the flag, kill: true is refused by name before any session is looked up.
+            let refused = call(&client, "debug_disconnect", json!({ "session": "s1", "kill": true })).await;
+            assert!(text(&refused).starts_with("not_allowed") && text(&refused).contains("--debug-kill"));
+        }
+        client.cancel().await.unwrap();
+    }
+}
+
+#[test]
+fn write_and_kill_consent_needs_an_endpoint_and_a_clear_value() {
+    let consent = |writes, kill, writes_env: Option<&str>, kill_env: Option<&str>| {
+        rampage_mcp::debug_consent(writes, kill, writes_env, kill_env).map(|consent| (consent.writes, consent.kill))
+    };
+    assert_eq!(consent(false, false, None, None), Ok((false, false)));
+    assert_eq!(consent(true, false, None, Some("0")), Ok((true, false)));
+    assert_eq!(consent(false, false, Some("1"), Some(" 1 ")), Ok((true, true)));
+    assert_eq!(consent(false, true, Some(""), None), Ok((false, true)));
+    for value in ["yes", "true", "2", "on"] {
+        let error = consent(false, false, Some(value), None).unwrap_err();
+        assert!(error.contains("RAMPAGE_DEBUG_WRITES"), "{error}");
+        assert!(consent(false, false, None, Some(value)).unwrap_err().contains("RAMPAGE_DEBUG_KILL"));
+    }
+    let allowed = rampage_api::DebugConsent { writes: true, kill: false };
+    let error = rampage_mcp::debug_registry_with(&[], Some(" , "), allowed).unwrap_err();
+    assert!(error.contains("--debug-writes") && error.contains("endpoint"), "{error}");
+    let kill = rampage_api::DebugConsent { writes: false, kill: true };
+    assert!(rampage_mcp::debug_registry_with(&[], None, kill).is_err());
+    let registry = rampage_mcp::debug_registry_with(&["127.0.0.1:2345".into()], None, kill).unwrap().unwrap();
+    assert_eq!(registry.consent(), kill);
+    assert_eq!(
+        rampage_mcp::debug_registry(&["127.0.0.1:2345".into()], None).unwrap().unwrap().consent(),
+        Default::default()
+    );
+}
+
 #[test]
 fn debug_endpoint_lists_tolerate_spacing_and_empty_entries() {
     let endpoints = |flags: &[&str], env: Option<&str>| {

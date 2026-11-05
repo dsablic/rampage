@@ -26,6 +26,12 @@ pub enum PacketClass {
     Execution,
     /// `D` and `D;<pid>`.
     Detach,
+    /// Memory and register writes: `M<address>,<length>:<hex>`, `X<address>,<length>:<binary>`,
+    /// `P<regnum>=<hex>` and `G<hex>`. Only a write tool's request sends them, and only in a session whose operator
+    /// allowed writes.
+    Write,
+    /// `k` and `vKill;<pid>`. Only a kill request sends them, and only in a session whose operator allowed it.
+    Kill,
 }
 
 /// The set of [`PacketClass`]es a command may use.
@@ -34,29 +40,58 @@ pub struct Permit {
     pub read: bool,
     pub execution: bool,
     pub detach: bool,
+    pub write: bool,
+    pub kill: bool,
 }
 
 impl Permit {
     /// Reads only: what every 9.1 inspection command declares.
-    pub const READ: Permit = Permit { read: true, execution: false, detach: false };
+    pub const READ: Permit = Permit { read: true, execution: false, detach: false, write: false, kill: false };
     /// Reads and execution control: resume, step, interrupt and breakpoints.
-    pub const EXECUTION: Permit = Permit { read: true, execution: true, detach: false };
+    pub const EXECUTION: Permit = Permit { read: true, execution: true, detach: false, write: false, kill: false };
     /// Everything detaching needs: stopping a running target, removing breakpoints, then `D`.
-    pub const DETACH: Permit = Permit { read: true, execution: true, detach: true };
+    pub const DETACH: Permit = Permit { read: true, execution: true, detach: true, write: false, kill: false };
+    /// A write request: reads around one memory or register write. No execution control.
+    pub const WRITE: Permit = Permit { read: true, execution: false, detach: false, write: true, kill: false };
+    /// Everything killing needs: stopping a running target, removing breakpoints, then `k` or `vKill`. Never `D`.
+    pub const KILL: Permit = Permit { read: true, execution: true, detach: false, write: false, kill: true };
 
     fn allows(self, class: PacketClass) -> bool {
         match class {
             PacketClass::Read => self.read,
             PacketClass::Execution => self.execution,
             PacketClass::Detach => self.detach,
+            PacketClass::Write => self.write,
+            PacketClass::Kill => self.kill,
         }
     }
 }
 
-/// The class of `payload`, or `None` when this client never sends it: writes (`M`, `X`, `P`, `G`), kill (`k`,
-/// `vKill`), launch and attach (`vRun`, `vAttach`, `R`, `!`), signal-delivering resumes (`C`, `S`, `vCont;C`/`S`),
-/// non-stop mode, monitor commands and anything else unlisted.
+/// The class of `payload`, or `None` when this client never sends it: launch and attach (`vRun`, `vAttach`, `R`,
+/// `!`), signal-delivering resumes (`C`, `S`, `vCont;C`/`S`), non-stop mode, monitor commands, malformed writes and
+/// anything else unlisted. An `X` write carries binary data; see [`classify_bytes`].
 pub fn classify(payload: &str) -> Option<PacketClass> {
+    classify_bytes(payload.as_bytes())
+}
+
+/// [`classify`] for a payload as bytes: an `X` write's data may be any bytes (exactly its length of them); every
+/// other packet must be ASCII text.
+pub fn classify_bytes(payload: &[u8]) -> Option<PacketClass> {
+    if let Some(rest) = payload.strip_prefix(b"X") {
+        let at = rest.iter().position(|byte| *byte == b':')?;
+        let (header, data) = (std::str::from_utf8(&rest[..at]).ok()?, &rest[at + 1..]);
+        let (address, length) = header.split_once(',')?;
+        let hex = |text: &str| !text.is_empty() && text.len() <= 16 && text.bytes().all(|b| b.is_ascii_hexdigit());
+        if !hex(address) || !hex(length) {
+            return None;
+        }
+        let length = u64::from_str_radix(length, 16).ok()?;
+        return (length > 0 && length == data.len() as u64).then_some(PacketClass::Write);
+    }
+    std::str::from_utf8(payload).ok().filter(|text| text.is_ascii()).and_then(classify_text)
+}
+
+fn classify_text(payload: &str) -> Option<PacketClass> {
     let hex = |text: &str| !text.is_empty() && text.len() <= 16 && text.bytes().all(|byte| byte.is_ascii_hexdigit());
     let range = |text: &str| text.split_once(',').is_some_and(|(address, length)| hex(address) && hex(length));
     let annex = |text: &str| {
@@ -72,6 +107,7 @@ pub fn classify(payload: &str) -> Option<PacketClass> {
             Some(PacketClass::Read)
         }
         "D" => Some(PacketClass::Detach),
+        "k" => Some(PacketClass::Kill),
         "vCont?" | "vCont;c" | "c" | "s" => Some(PacketClass::Execution),
         _ if payload.starts_with("qSupported") => read(
             payload.len() <= 512 && payload.bytes().all(|byte| byte.is_ascii_graphic() && byte != b'#' && byte != b'$'),
@@ -98,6 +134,24 @@ pub fn classify(payload: &str) -> Option<PacketClass> {
             }
             if let Some(pid) = payload.strip_prefix("D;") {
                 return hex(pid).then_some(PacketClass::Detach);
+            }
+            if let Some(pid) = payload.strip_prefix("vKill;") {
+                return hex(pid).then_some(PacketClass::Kill);
+            }
+            let digits = |text: &str| {
+                !text.is_empty() && text.len().is_multiple_of(2) && text.bytes().all(|b| b.is_ascii_hexdigit())
+            };
+            if let Some(rest) = payload.strip_prefix('M') {
+                let (target, data) = rest.split_once(':')?;
+                let length = target.split_once(',').filter(|_| range(target))?.1;
+                let length = u64::from_str_radix(length, 16).ok()?;
+                return (length > 0 && digits(data) && data.len() as u64 == 2 * length).then_some(PacketClass::Write);
+            }
+            if let Some((register, value)) = payload.strip_prefix('P').and_then(|rest| rest.split_once('=')) {
+                return (hex(register) && digits(value)).then_some(PacketClass::Write);
+            }
+            if let Some(registers) = payload.strip_prefix('G') {
+                return digits(registers).then_some(PacketClass::Write);
             }
             if let Some(register) = payload.strip_prefix('p') {
                 return read(hex(register));
@@ -206,8 +260,14 @@ impl<T: Transport> Client<T> {
     /// Sends `payload` and returns the stub's reply, collecting console output on the way. Any error other than a
     /// refused packet leaves the stream in an unknown state, so the caller must treat the connection as lost.
     pub fn command(&mut self, payload: &str, deadline: Instant) -> Result<Vec<u8>, DebugError> {
-        if !allowed(payload, self.permit) || resumes(payload) {
-            return Err(DebugError::Forbidden(payload.chars().take(64).collect()));
+        self.command_bytes(payload.as_bytes(), deadline)
+    }
+
+    /// [`Client::command`] for a payload as bytes, as an `X` write's binary data needs.
+    pub fn command_bytes(&mut self, payload: &[u8], deadline: Instant) -> Result<Vec<u8>, DebugError> {
+        let permitted = classify_bytes(payload).is_some_and(|class| self.permit.allows(class));
+        if !permitted || std::str::from_utf8(payload).is_ok_and(resumes) {
+            return Err(DebugError::Forbidden(printable(payload)));
         }
         if self.running.is_some() {
             return Err(DebugError::Running("no request can be sent while the target runs".into()));
@@ -222,8 +282,8 @@ impl<T: Transport> Client<T> {
         result
     }
 
-    fn exchange(&mut self, payload: &str, deadline: Instant) -> Result<Vec<u8>, DebugError> {
-        let request = packet::encode(payload.as_bytes());
+    fn exchange(&mut self, payload: &[u8], deadline: Instant) -> Result<Vec<u8>, DebugError> {
+        let request = packet::encode(payload);
         self.write(&request)?;
         let mut naks = 0;
         let mut corrupt = 0;
@@ -244,7 +304,8 @@ impl<T: Transport> Client<T> {
                 Frame::Nak if !acknowledged => {
                     naks += 1;
                     if naks > RETRANSMITS {
-                        return Err(DebugError::Protocol(format!("stub refused `{payload}` {naks} times")));
+                        let shown = printable(payload);
+                        return Err(DebugError::Protocol(format!("stub refused `{shown}` {naks} times")));
                     }
                     self.write(&request)?;
                 }
@@ -448,6 +509,14 @@ impl<T: Transport> Client<T> {
     }
 }
 
+/// At most 64 bytes of a payload as printable ASCII, for errors.
+fn printable(payload: &[u8]) -> String {
+    payload[..payload.len().min(64)]
+        .iter()
+        .map(|&byte| if byte.is_ascii_graphic() || byte == b' ' { byte as char } else { '?' })
+        .collect()
+}
+
 /// The text of an `O` console-output packet: `O` then a nonempty even run of hex digits. `OK` is not one.
 fn console_output(reply: &[u8]) -> Option<Vec<u8>> {
     let hex = reply.strip_prefix(b"O")?;
@@ -565,7 +634,28 @@ pub(crate) mod tests {
             assert_eq!(classify(packet), Some(PacketClass::Detach), "{packet}");
             assert!(!allowed(packet, Permit::READ) && !allowed(packet, Permit::EXECUTION), "{packet}");
             assert!(allowed(packet, Permit::DETACH), "{packet}");
+            assert!(!allowed(packet, Permit::WRITE) && !allowed(packet, Permit::KILL), "{packet}");
         }
+        for packet in ["M1000,1:00", "M20000000,4:deadBEEF", "X1000,1:\0", "P1=00", "Pf=78563412", "G0011"] {
+            assert_eq!(classify(packet), Some(PacketClass::Write), "{packet:?}");
+            for permit in [Permit::READ, Permit::EXECUTION, Permit::DETACH, Permit::KILL] {
+                assert!(!allowed(packet, permit), "{packet:?}");
+            }
+            assert!(allowed(packet, Permit::WRITE), "{packet:?}");
+        }
+        // Binary data: the length counts bytes, whatever they are.
+        assert_eq!(classify_bytes(b"X10,3:\xff$#"), Some(PacketClass::Write));
+        assert_eq!(classify_bytes(b"X10,3:\xff$"), None);
+        assert_eq!(classify_bytes(b"M10,1:\xff\xff"), None);
+        for packet in ["k", "vKill;1", "vKill;2a"] {
+            assert_eq!(classify(packet), Some(PacketClass::Kill), "{packet}");
+            for permit in [Permit::READ, Permit::EXECUTION, Permit::DETACH, Permit::WRITE] {
+                assert!(!allowed(packet, permit), "{packet}");
+            }
+            assert!(allowed(packet, Permit::KILL), "{packet}");
+        }
+        // Execution-only packets stay out of a write request, and detach out of a kill.
+        assert!(!allowed("c", Permit::WRITE) && !allowed("Z0,1000,2", Permit::WRITE) && !allowed("D", Permit::KILL));
         for packet in [
             "C05",
             "S05",
@@ -583,12 +673,25 @@ pub(crate) mod tests {
             "Z0,1000",
             "Z0,1000,4;X2,0a",
             "Z0,zz,4",
-            "M1000,1:00",
-            "X1000,1:\0",
-            "G00",
-            "P1=00",
-            "k",
-            "vKill;1",
+            "M1000,2:00",
+            "M1000,0:",
+            "M1000,1:0g",
+            "M1000,1",
+            "Mzz,1:00",
+            "X1000,2:\0",
+            "X1000,0:",
+            "Xzz,1:\0",
+            "G0",
+            "G",
+            "Gzz",
+            "P1=0",
+            "P=00",
+            "Pzz=00",
+            "P1",
+            "k1",
+            "vKill",
+            "vKill;",
+            "vKill;zz",
             "vRun;",
             "vAttach;1",
             "R00",
@@ -606,7 +709,8 @@ pub(crate) mod tests {
             "",
         ] {
             assert_eq!(classify(packet), None, "{packet:?}");
-            assert!(!allowed(packet, Permit::DETACH), "{packet:?}");
+            let every = Permit { read: true, execution: true, detach: true, write: true, kill: true };
+            assert!(!allowed(packet, every), "{packet:?}");
         }
     }
 

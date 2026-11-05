@@ -1,8 +1,9 @@
 //! Debug sessions with operator-started GDB remote stubs (phases 9.1 and 9.2): the per-connection registry the
 //! `debug` tools use, inspection of a stopped target, execution control (continue, wait, interrupt, step,
 //! breakpoints and watchpoints, all-stop only, epoch-checked) and capture of a stopped target into a
-//! `rampage-snapshot-v1` file. Nothing here launches, attaches to, writes to or kills a target, or delivers a
-//! signal on resume; `rampage-debug` refuses to send any packet that would.
+//! `rampage-snapshot-v1` file. Nothing here launches or attaches to a target or delivers a signal on resume, and
+//! `rampage-debug` refuses to send any packet that would. Killing on disconnect (here) and memory and register
+//! writes (`debug_writes`) happen only when a tool asks for them and the operator's consent allows them.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -10,7 +11,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rampage_arch::Arch;
-use rampage_debug::{BreakKind, ByteOrder, Cancel, Config, Endpoint, Family, Session, ThreadId};
+use rampage_debug::{BreakKind, ByteOrder, Cancel, Config, Consent, Endpoint, Family, Session, ThreadId};
 use rampage_loaders::snapshot::{
     Snapshot, SnapshotModule, SnapshotPlatform, SnapshotRegion, SnapshotRegister, SnapshotTarget,
 };
@@ -116,10 +117,23 @@ impl DebugRegistry {
         })
     }
 
-    /// The same registry with other connection and per-request timeouts.
+    /// The same registry with other connection and per-request timeouts; its consent stays as it was.
     pub fn with_config(mut self, config: Config) -> Self {
-        self.config = config;
+        self.config = Config { consent: self.config.consent, ..config };
         self
+    }
+
+    /// The same registry allowing what `consent` allows beyond inspection and execution control: memory and
+    /// register writes (`--debug-writes`) and killing on disconnect (`--debug-kill`). Every session it opens enforces
+    /// it too, independently of the tools.
+    pub fn with_consent(mut self, consent: Consent) -> Self {
+        self.config.consent = consent;
+        self
+    }
+
+    /// What the operator allowed beyond inspection and execution control.
+    pub fn consent(&self) -> Consent {
+        self.config.consent
     }
 
     /// The most bytes one `debug_read_memory` call on session `id` may read; see [`tool_read_limit`].
@@ -450,15 +464,34 @@ impl DebugRegistry {
     /// Detaches and closes the session, returning its final state. A stub that refuses to detach (`E nn`) leaves
     /// the session open and attached: the result says so, and disconnecting can be retried.
     pub fn disconnect(&self, id: &str) -> Result<DebugDisconnected, ApiError> {
+        self.disconnect_with(id, false)
+    }
+
+    /// [`DebugRegistry::disconnect`]; with `kill`, kills the target instead of detaching, which only a registry
+    /// whose consent allows killing does (`not_allowed` otherwise, with nothing sent). A stub that refuses or does
+    /// not support the kill leaves the session open and attached.
+    pub fn disconnect_with(&self, id: &str, kill: bool) -> Result<DebugDisconnected, ApiError> {
+        if kill && !self.consent().kill {
+            return Err(failure(
+                "not_allowed",
+                "kill: true needs the operator to start rampage with --debug-kill (or RAMPAGE_DEBUG_KILL=1); nothing \
+                 was sent and the session is unchanged",
+            ));
+        }
         let session = self.session(id)?;
         let number = session_number(id).expect("a known session id");
+        if kill {
+            return Ok(self.kill(id, number, &session));
+        }
         let (state, error, closed, removed, failures) = match session.detach() {
             Ok(detached) => {
-                let error = match &detached.state {
-                    rampage_debug::State::Lost { reason } => Some(format!("connection_lost: {reason}")),
+                let error = match (&detached.refused, &detached.state) {
+                    (Some(refused), _) => Some(format!("target_error: {refused}")),
+                    (None, rampage_debug::State::Lost { reason }) => Some(format!("connection_lost: {reason}")),
                     _ => None,
                 };
-                (detached.state, error, true, detached.breakpoints_removed, detached.removal_failures)
+                let closed = detached.refused.is_none();
+                (detached.state, error, closed, detached.breakpoints_removed, detached.removal_failures)
             }
             Err(error @ rampage_debug::DebugError::Target(_)) => {
                 (rampage_debug::State::Stopped, Some(format!("{}: {error}", error.code())), false, 0, Vec::new())
@@ -483,7 +516,63 @@ impl DebugRegistry {
             detach_error: error,
             breakpoints_removed: removed,
             removal_failures: failures,
+            kill: None,
         })
+    }
+
+    /// Kills session `number`'s target; see [`DebugRegistry::disconnect_with`].
+    fn kill(&self, id: &str, number: u32, session: &Session) -> DebugDisconnected {
+        let (state, closed, removed, failures, kill) = match session.kill() {
+            Ok(killed) => {
+                let error = match (&killed.refused, &killed.state) {
+                    (Some(refused), _) => Some(refused.clone()),
+                    (None, rampage_debug::State::Lost { reason }) => Some(format!("connection_lost: {reason}")),
+                    _ => None,
+                };
+                let kill = DebugKill {
+                    // Only a kill the stub confirmed counts; a target that had already ended was not killed.
+                    killed: error.is_none() && !killed.already_ended && !killed.confirmed.is_empty(),
+                    already_ended: killed.already_ended,
+                    packets: killed.packets,
+                    confirmed: killed.confirmed,
+                    reply: killed.reply,
+                    error,
+                };
+                (killed.state, killed.refused.is_none(), killed.breakpoints_removed, killed.removal_failures, kill)
+            }
+            Err(error) => {
+                let keeps =
+                    matches!(error, rampage_debug::DebugError::Target(_) | rampage_debug::DebugError::Unsupported(_));
+                let state = if keeps {
+                    rampage_debug::State::Stopped
+                } else {
+                    rampage_debug::State::Lost { reason: error.to_string() }
+                };
+                let kill = DebugKill {
+                    killed: false,
+                    already_ended: false,
+                    packets: Vec::new(),
+                    confirmed: Vec::new(),
+                    reply: None,
+                    error: Some(format!("{}: {error}", error.code())),
+                };
+                (state, !keeps, 0, Vec::new(), kill)
+            }
+        };
+        if closed {
+            self.sessions.lock().unwrap_or_else(PoisonError::into_inner).remove(&number);
+            self.bindings.lock().unwrap_or_else(PoisonError::into_inner).remove(&number);
+        }
+        DebugDisconnected {
+            session: id.to_owned(),
+            state,
+            detached: false,
+            closed,
+            detach_error: None,
+            breakpoints_removed: removed,
+            removal_failures: failures,
+            kill: Some(kill),
+        }
     }
 
     /// Resumes every thread without delivering a signal, at `epoch`, and waits up to `timeout_ms` (default 5000,
@@ -1161,6 +1250,27 @@ pub struct DebugDisconnected {
     pub breakpoints_removed: usize,
     /// Entries that could not be removed, each with the reason.
     pub removal_failures: Vec<String>,
+    /// With kill: true, what killing did instead of detaching.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kill: Option<DebugKill>,
+}
+
+/// What `debug_disconnect` with kill: true did.
+#[derive(Debug, Serialize)]
+pub struct DebugKill {
+    /// Whether the stub confirmed every kill packet with `OK`, `X` or `W`. False when nothing was sent.
+    pub killed: bool,
+    /// The target had already ended (exited, or the session was detached), so nothing was sent.
+    pub already_ended: bool,
+    /// The kill packets sent: `k`, or `vKill;<pid>` per process in multiprocess mode.
+    pub packets: Vec<String>,
+    /// The packets the stub confirmed; after a refusal in multiprocess mode, the processes already killed.
+    pub confirmed: Vec<String>,
+    /// The stub's reply to the last one, when it sent one.
+    pub reply: Option<String>,
+    /// Why the kill is not confirmed: refused or unsupported (the session stays open and attached, but its
+    /// breakpoints, counted in `breakpoints_removed`, are already gone), or the connection ended without a reply.
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

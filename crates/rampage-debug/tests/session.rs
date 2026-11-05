@@ -5,7 +5,7 @@ use rampage_debug::fake::{Action, FakeStub, Script, le_hex, le_value, transcript
 use rampage_debug::{ByteOrder, Config, DebugError, Endpoint, Family, Session, State, StopReply, ThreadId};
 
 fn config() -> Config {
-    Config { connect_timeout: Duration::from_secs(5), command_timeout: Duration::from_secs(5) }
+    Config { connect_timeout: Duration::from_secs(5), command_timeout: Duration::from_secs(5), ..Config::default() }
 }
 
 fn connect(stub: &FakeStub) -> Result<Session, DebugError> {
@@ -209,7 +209,7 @@ fn slow_replies_time_out_and_lose_the_session() {
             .once("g", vec![Action::Reply("00".repeat(68))])
             .on_actions("g", vec![Action::Sleep(Duration::from_millis(1500)), Action::Reply("00".repeat(68))]),
     );
-    let short = Config { connect_timeout: Duration::from_secs(5), command_timeout: Duration::from_millis(500) };
+    let short = Config { command_timeout: Duration::from_millis(500), ..config() };
     let session = Session::connect(&stub.endpoint().parse().unwrap(), short).unwrap();
     assert!(matches!(session.registers(None), Err(DebugError::Timeout(_))));
     let status = session.status().unwrap();
@@ -319,8 +319,10 @@ fn a_refused_detach_keeps_the_session_and_a_retry_detaches_only_the_rest() {
     let stub =
         FakeStub::tcp(multiprocess().on("D;1", "OK").once("D;2", vec![Action::Reply("E01".into())]).on("D;2", "OK"));
     let session = connect(&stub).unwrap();
-    let error = session.detach().unwrap_err();
-    assert!(matches!(error, DebugError::Target(ref message) if message.contains("D;2")), "{error:?}");
+    let refused = session.detach().unwrap();
+    assert_eq!(refused.state, State::Stopped);
+    let reason = refused.refused.unwrap();
+    assert!(reason.contains("D;2") && reason.contains("D;1 already detached"), "{reason}");
     // Still attached to process 2, and still serving.
     let status = session.status().unwrap();
     assert_eq!(status.state, State::Stopped);
@@ -332,6 +334,47 @@ fn a_refused_detach_keeps_the_session_and_a_retry_detaches_only_the_rest() {
     let detaches: Vec<&str> =
         report.received.iter().filter(|packet| packet.starts_with('D')).map(String::as_str).collect();
     assert_eq!(detaches, ["D;1", "D;2", "D;1", "D;2"]);
+}
+
+fn killing(stub: &FakeStub) -> Session {
+    let consent = rampage_debug::Consent { writes: false, kill: true };
+    Session::connect(&stub.endpoint().parse::<Endpoint>().unwrap(), Config { consent, ..config() }).unwrap()
+}
+
+#[test]
+fn a_refused_second_vkill_reports_the_process_already_killed() {
+    let stub = FakeStub::tcp(
+        multiprocess().kill().on("vKill;1", "OK").once("vKill;2", vec![Action::Reply("E01".into())]).on("D;2", "OK"),
+    );
+    let session = killing(&stub);
+    let refused = session.kill().unwrap();
+    assert_eq!(refused.state, State::Stopped);
+    assert_eq!(
+        (refused.packets.clone(), refused.confirmed.clone()),
+        (vec!["vKill;1".into(), "vKill;2".into()], vec!["vKill;1".to_owned()])
+    );
+    let reason = refused.refused.unwrap();
+    assert!(reason.contains("vKill;2") && reason.contains("vKill;1 was already confirmed"), "{reason}");
+    assert!(!refused.already_ended);
+    // Still open and attached to process 2 only: a detach then ends it.
+    assert_eq!(session.detach().unwrap().state, State::Detached);
+    drop(session);
+    let report = stub.finish();
+    report.assert_clean();
+    assert_eq!(report.received.iter().filter(|packet| packet.starts_with("D")).collect::<Vec<_>>(), ["D;2"]);
+}
+
+#[test]
+fn killing_a_target_that_already_exited_sends_nothing() {
+    let stub = FakeStub::tcp(bare("W00;process:2a").kill());
+    let session = killing(&stub);
+    let killed = session.kill().unwrap();
+    assert_eq!(killed.state, State::Exited);
+    assert!(killed.already_ended && killed.packets.is_empty() && killed.confirmed.is_empty());
+    drop(session);
+    let report = stub.finish();
+    report.assert_clean();
+    assert!(!report.received.iter().any(|packet| packet == "k" || packet.starts_with("vKill")));
 }
 
 #[test]
@@ -368,11 +411,11 @@ fn reads_without_a_thread_use_the_stop_thread_not_the_last_selection() {
 }
 
 #[test]
-fn a_new_stop_reply_is_a_new_epoch() {
+fn status_keeps_the_sessions_stop_and_asks_only_for_threads() {
+    // `?` is asked once, in the handshake: QEMU removes every breakpoint and watchpoint when asked it again.
     let stub = FakeStub::tcp(
         Script::new()
             .on("qSupported:multiprocess+;swbreak+;hwbreak+;xmlRegisters=i386,arm", "PacketSize=1000")
-            .once("?", vec![Action::Reply("S05".into())])
             .once("?", vec![Action::Reply("S05".into())])
             .on("?", "S0b")
             .on("qfThreadInfo", "")
@@ -380,13 +423,32 @@ fn a_new_stop_reply_is_a_new_epoch() {
             .on("D", "OK"),
     );
     let session = connect(&stub).unwrap();
-    assert_eq!(session.status().unwrap().epoch, 1);
-    let status = session.status().unwrap();
-    assert_eq!(status.epoch, 2);
-    assert!(matches!(status.stop, Some(StopReply::Signal { signal: 11, .. })));
-    assert_eq!(session.status().unwrap().epoch, 2);
+    for _ in 0..3 {
+        let status = session.status().unwrap();
+        assert_eq!(status.epoch, 1);
+        assert!(matches!(status.stop, Some(StopReply::Signal { signal: 5, .. })));
+    }
     drop(session);
-    stub.finish().assert_clean();
+    let report = stub.finish();
+    report.assert_clean();
+    assert_eq!(report.received.iter().filter(|packet| *packet == "?").count(), 1);
+    assert!(report.received.iter().filter(|packet| *packet == "qfThreadInfo").count() >= 4);
+}
+
+#[test]
+fn the_qemu_transcript_fails_a_question_asked_over_inserted_breakpoints() {
+    // The client never does this, so a raw connection plays the misbehaving debugger.
+    let stub = FakeStub::tcp(transcripts::qemu_cortex_m3().execution().on("Z1,80,2", "OK"));
+    let mut stream = std::net::TcpStream::connect(stub.endpoint()).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut buffer = [0; 256];
+    for packet in ["Z1,80,2", "?"] {
+        stream.write_all(&rampage_debug::packet::encode(packet.as_bytes())).unwrap();
+        let _ = stream.read(&mut buffer);
+    }
+    drop(stream);
+    let report = stub.finish();
+    assert!(report.violations.iter().any(|violation| violation.contains("`?` removed")), "{:?}", report.violations);
 }
 
 #[test]

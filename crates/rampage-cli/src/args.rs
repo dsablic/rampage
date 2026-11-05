@@ -579,10 +579,18 @@ pub(crate) struct McpArgs {
     #[arg(long)]
     pub(crate) all_tools: bool,
     /// Allow the debug tools to connect to an operator-started GDB remote stub at HOST:PORT or unix:/PATH, inspect
-    /// it and control its execution (continue, step, interrupt, breakpoints; never writes or kill). Repeatable;
-    /// RAMPAGE_DEBUG_ENDPOINTS adds a comma-separated list. Without one there is no debug group
+    /// it and control its execution (continue, step, interrupt, breakpoints; writes and kill only with the flags
+    /// below). Repeatable; RAMPAGE_DEBUG_ENDPOINTS adds a comma-separated list. Without one there is no debug group
     #[arg(long = "debug-endpoint", value_name = "ENDPOINT")]
     pub(crate) debug_endpoints: Vec<String>,
+    /// Also serve debug_write_memory and debug_write_register, which write a stopped target's memory and registers
+    /// when called (never on their own). Needs a debug endpoint; RAMPAGE_DEBUG_WRITES=1 does the same
+    #[arg(long)]
+    pub(crate) debug_writes: bool,
+    /// Also let debug_disconnect kill the target (kill: true) instead of detaching. Needs a debug endpoint;
+    /// RAMPAGE_DEBUG_KILL=1 does the same
+    #[arg(long)]
+    pub(crate) debug_kill: bool,
 }
 
 #[derive(Args)]

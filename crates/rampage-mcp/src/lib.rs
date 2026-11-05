@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rampage_api::tools::{self, DebugTool, FileTool, Group, Tool};
-use rampage_api::{DebugCancel, DebugRegistry, FileOffset, Packs, Project, RawProjectRequest, Session};
+use rampage_api::{DebugCancel, DebugConsent, DebugRegistry, FileOffset, Packs, Project, RawProjectRequest, Session};
 use rampage_arch::Arch;
 use rampage_loaders::ImageAt;
 use rmcp::model::{
@@ -27,6 +27,12 @@ pub const TOOLS_ENV: &str = "RAMPAGE_MCP_TOOLS";
 /// The environment variable listing debug endpoints (`host:port` or `unix:/path`, comma-separated) the operator
 /// allows, in addition to `--debug-endpoint`. Without any, the server has no `debug` group.
 pub const DEBUG_ENDPOINTS_ENV: &str = "RAMPAGE_DEBUG_ENDPOINTS";
+
+/// The environment variable that, set to `1`, allows the debug write tools, as `--debug-writes` does.
+pub const DEBUG_WRITES_ENV: &str = "RAMPAGE_DEBUG_WRITES";
+
+/// The environment variable that, set to `1`, allows `debug_disconnect` to kill, as `--debug-kill` does.
+pub const DEBUG_KILL_ENV: &str = "RAMPAGE_DEBUG_KILL";
 
 const ENABLE_TOOLS_DESCRIPTION: &str = "\
 List rampage's tool groups (name, one-line description, tool count and names, whether enabled), or enable groups \
@@ -135,8 +141,17 @@ watchpoints, debug_continue resumes without delivering a signal and waits for th
 debug_interrupt stops a running target, debug_step single-steps, steps over calls (over) or out of a function from \
 its entry (out). Each stop is a new epoch; \
 pass the epoch you last saw to execution tools (stale_epoch otherwise) and optionally to reads. debug_disconnect \
-removes breakpoints and detaches, which lets the target run. Nothing writes registers or memory or kills; runtime \
-bytes stay local.";
+removes breakpoints and detaches, which lets the target run. {consent} Runtime bytes stay local.";
+
+const DEBUG_READ_ONLY: &str = "Nothing writes registers or memory or kills: the operator did not allow it.";
+
+const DEBUG_WRITES: &str = "The operator allowed writes (--debug-writes): debug_write_memory and \
+debug_write_register write a stopped target at your epoch, reading the old bytes first (pass expect to refuse a \
+stale view) and reading back (verified: false when the target dropped the write, as flash often does). Write only \
+when the task needs it; rampage never writes on its own.";
+
+const DEBUG_KILL: &str = "The operator allowed killing (--debug-kill): debug_disconnect with kill: true removes \
+breakpoints and kills the target instead of detaching.";
 
 fn instructions(packs: &Packs, debug: Option<&DebugRegistry>) -> String {
     let groups: String = available_groups(debug.is_some())
@@ -146,7 +161,16 @@ fn instructions(packs: &Packs, debug: Option<&DebugRegistry>) -> String {
     let mut text = format!("{INSTRUCTIONS_INTRO}{groups}\n\n{INSTRUCTIONS_USAGE}");
     if let Some(registry) = debug {
         text.push_str("\n\n");
-        text.push_str(&INSTRUCTIONS_DEBUG.replace("{endpoints}", &registry.endpoints().join(", ")));
+        let consent = registry.consent();
+        let allowed: Vec<&str> = [(consent.writes, DEBUG_WRITES), (consent.kill, DEBUG_KILL)]
+            .iter()
+            .filter(|(on, _)| *on)
+            .map(|(_, text)| *text)
+            .collect();
+        let consent = if allowed.is_empty() { DEBUG_READ_ONLY.to_owned() } else { allowed.join(" ") };
+        text.push_str(
+            &INSTRUCTIONS_DEBUG.replace("{endpoints}", &registry.endpoints().join(", ")).replace("{consent}", &consent),
+        );
     }
     let profiles: Vec<_> = rampage_loaders::RawProfile::ALL.iter().map(|profile| profile.language_id()).collect();
     text.push_str(&format!("\n\nRaw profiles: {}.", profiles.join(", ")));
@@ -201,6 +225,16 @@ fn parse_group(name: &str, debug: bool) -> Result<Group, String> {
 /// Parses the operator's debug endpoints: each `--debug-endpoint` value, then the comma-separated `env` list.
 /// `None` when there are none, so the server has no `debug` group.
 pub fn debug_registry(flags: &[String], env: Option<&str>) -> Result<Option<DebugRegistry>, String> {
+    debug_registry_with(flags, env, DebugConsent::default())
+}
+
+/// [`debug_registry`] allowing what `consent` allows. Consent without any endpoint is an error: it would allow
+/// nothing, and an operator who passed it expected otherwise.
+pub fn debug_registry_with(
+    flags: &[String],
+    env: Option<&str>,
+    consent: DebugConsent,
+) -> Result<Option<DebugRegistry>, String> {
     let endpoints: Vec<String> = flags
         .iter()
         .map(|flag| flag.trim().to_owned())
@@ -208,9 +242,34 @@ pub fn debug_registry(flags: &[String], env: Option<&str>) -> Result<Option<Debu
         .filter(|endpoint| !endpoint.is_empty())
         .collect();
     if endpoints.is_empty() {
+        if consent.writes || consent.kill {
+            return Err(format!(
+                "--debug-writes and --debug-kill ({DEBUG_WRITES_ENV}, {DEBUG_KILL_ENV}) need at least one debug \
+                 endpoint (--debug-endpoint or {DEBUG_ENDPOINTS_ENV})"
+            ));
+        }
         return Ok(None);
     }
-    DebugRegistry::new(&endpoints).map(Some)
+    DebugRegistry::new(&endpoints).map(|registry| Some(registry.with_consent(consent)))
+}
+
+/// The operator's write and kill consent: each flag, or its environment variable set to `1`. Any other value of a
+/// variable that is set (except empty or `0`) is an error rather than a guess.
+pub fn debug_consent(
+    writes_flag: bool,
+    kill_flag: bool,
+    writes_env: Option<&str>,
+    kill_env: Option<&str>,
+) -> Result<DebugConsent, String> {
+    let parse = |name: &str, value: Option<&str>| match value.map(str::trim) {
+        None | Some("" | "0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(other) => Err(format!("{name} must be 1 (or 0 or empty for off), not `{other}`")),
+    };
+    Ok(DebugConsent {
+        writes: writes_flag || parse(DEBUG_WRITES_ENV, writes_env)?,
+        kill: kill_flag || parse(DEBUG_KILL_ENV, kill_env)?,
+    })
 }
 
 /// A tool's schema with the arguments every tool takes besides its own: which binary, which slice of a universal
@@ -377,7 +436,9 @@ impl RampageServer {
     /// This server with the `debug` group, connecting only to the endpoints `registry` allows. Its sessions belong
     /// to this server's connection.
     pub fn with_debug(self, registry: DebugRegistry) -> Self {
-        Self { debug: Some(Arc::new(registry)), ..self }
+        // The write tools and the kill option are listed only with the operator's consent.
+        let debug_tools = Arc::new(tools::debug_tools_with(registry.consent()));
+        Self { debug: Some(Arc::new(registry)), debug_tools, ..self }
     }
 
     fn groups(&self) -> Vec<Group> {
@@ -684,7 +745,9 @@ impl ServerHandler for RampageServer {
 fn debug_annotations(effect: tools::Effect) -> rmcp::model::ToolAnnotations {
     let annotations = rmcp::model::ToolAnnotations::new().open_world(true);
     match effect {
-        tools::Effect::Execution => annotations.read_only(false).destructive(true).idempotent(false),
+        tools::Effect::Execution | tools::Effect::TargetWrite => {
+            annotations.read_only(false).destructive(true).idempotent(false)
+        }
         tools::Effect::FileWrite => annotations.read_only(false).destructive(false).idempotent(false),
         _ => annotations.read_only(true),
     }
@@ -762,7 +825,10 @@ mod tests {
                 documented.get_mut(group).unwrap().extend(names);
             }
         }
-        let registry = DebugRegistry::new(&["127.0.0.1:2345".to_owned()]).unwrap();
+        // The documented list includes the write tools, served with --debug-writes.
+        let registry = DebugRegistry::new(&["127.0.0.1:2345".to_owned()])
+            .unwrap()
+            .with_consent(DebugConsent { writes: true, kill: true });
         let server = RampageServer::default().with_debug(registry);
         let mut served = BTreeMap::<String, Vec<String>>::new();
         for (group, name) in server.catalog() {

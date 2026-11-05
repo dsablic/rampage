@@ -523,7 +523,8 @@ impl Assistant {
                             // The assistant is not offered debug tools; nothing else has an execution effect.
                             rampage_api::tools::Effect::None
                             | rampage_api::tools::Effect::FileWrite
-                            | rampage_api::tools::Effect::Execution => {}
+                            | rampage_api::tools::Effect::Execution
+                            | rampage_api::tools::Effect::TargetWrite => {}
                         }
                     }
                     self.transcript.push(Entry::Tool { summary: format!("{name} {argument}"), failed });

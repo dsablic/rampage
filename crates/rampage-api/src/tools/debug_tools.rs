@@ -248,8 +248,155 @@ struct SessionArgs {
     session: String,
 }
 
-/// Every debug tool.
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DisconnectArgs {
+    session: String,
+    /// Kill the target instead of detaching: remove breakpoints, then vKill;pid per process in multiprocess mode,
+    /// else k. Only when the operator started rampage with --debug-kill.
+    kill: Option<bool>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WriteMemoryArgs {
+    session: String,
+    /// The stop epoch the caller last saw; refused with stale_epoch otherwise.
+    epoch: u64,
+    /// Runtime address (hex string or integer).
+    address: FileOffset,
+    /// The bytes to write, 1..=4096, as hex digits without 0x ("deadbeef").
+    bytes: String,
+    /// The bytes the caller expects there now, as hex of the same length; when the target holds anything else the
+    /// write is refused (expect_mismatch) and nothing is written.
+    expect: Option<String>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WriteRegisterArgs {
+    session: String,
+    /// The stop epoch the caller last saw; refused with stale_epoch otherwise.
+    epoch: u64,
+    /// A thread ID as debug_status lists it; the stop's thread (else the first listed) when omitted.
+    thread: Option<String>,
+    /// The register's name in the target description, as debug_registers lists it.
+    name: String,
+    /// A hex string is the register's bytes as the stub transfers them (target-endian, exactly its size, no 0x),
+    /// the form debug_registers reports as bytes; an integer is the value, accepted only when the session's
+    /// endianness is known.
+    value: crate::DebugRegisterValue,
+}
+
+const DISCONNECT_DESCRIPTION: &str = "Detach from the target and close the session, returning its final state. A \
+    running target is interrupted first and waited for up to 3 s; then every inserted breakpoint and watchpoint is \
+    removed (best effort: breakpoints_removed and removal_failures report it) and D (or D;pid per process in \
+    multiprocess mode) is sent. A target that never stops is abandoned: the connection is closed without detaching \
+    and the state is lost. Detaching lets the target run: a stopped or QEMU -S guest resumes. It never kills it. If \
+    the stub refuses D (E nn), the session stays open and attached (detached: false, closed: false), without its \
+    breakpoints (already removed and counted), and disconnecting can be retried.";
+
+const DISCONNECT_KILL_DESCRIPTION: &str = "Detach from the target and close the session, returning its final \
+    state; with kill: true (the operator allowed it with --debug-kill), kill the target instead. A running target is \
+    interrupted first and waited for up to 3 s; then every inserted breakpoint and watchpoint is removed (best effort: \
+    breakpoints_removed and removal_failures report it). Detaching then sends D (or D;pid per process in multiprocess \
+    mode) and lets the target run: a stopped or QEMU -S guest resumes. Killing sends vKill;pid per process in \
+    multiprocess mode, else k, and reports kill {killed, already_ended, packets, confirmed, reply, error} with the \
+    final state: killed (the stub answered OK or X), exited (W), or lost when the stub closed the connection or did not answer within 3 s (GDB \
+    takes that as a kill, rampage reports only what it saw; QEMU in system mode exits the emulator). A target that \
+    never stops is abandoned: the connection is closed without detaching or killing and the state is lost. If the \
+    stub refuses D or the kill (E nn), or does not support the kill, the session stays open and attached (closed: \
+    false), without its breakpoints (already removed and counted), and disconnecting can be retried. Nothing is \
+    killed unless kill: true is passed.";
+
+/// Every debug tool a server without write or kill consent serves.
 pub fn debug_tools() -> Vec<DebugTool> {
+    debug_tools_with(crate::DebugConsent::default())
+}
+
+/// Every debug tool a server with `consent` serves: the write tools only with writes, and debug_disconnect's kill
+/// option only with kill. The registry and its sessions check the same consent again whatever the list says.
+pub fn debug_tools_with(consent: crate::DebugConsent) -> Vec<DebugTool> {
+    let mut tools = read_and_execution_tools();
+    if let Some(disconnect) = tools.iter_mut().find(|tool| tool.name == "debug_disconnect") {
+        if consent.kill {
+            disconnect.description = DISCONNECT_KILL_DESCRIPTION;
+        } else if let Some(properties) = disconnect.input_schema["properties"].as_object_mut() {
+            properties.remove("kill");
+        }
+    }
+    if consent.writes {
+        tools.extend(write_tools());
+    }
+    tools
+}
+
+/// The write tools, served only with the operator's --debug-writes.
+fn write_tools() -> Vec<DebugTool> {
+    vec![
+        DebugTool {
+            name: "debug_write_memory",
+            description: "Write 1..=4096 bytes (hex) at a runtime address of a stopped target, at the caller's epoch \
+                (stale_epoch otherwise; target_running while it runs). Only served because the operator started \
+                rampage with --debug-writes. Reads the bytes there first: with expect (hex, same length) a target \
+                holding anything else is refused with expect_mismatch and nothing is written. Refused, writing \
+                nothing, when a software breakpoint (Z0, including a step's temporary one) overlaps the range, since \
+                the stub keeps and restores the bytes under it. Writes with X when the stub takes it, else M, one \
+                packet per chunk of the stub's packet size, stopping at the first refusal (never retried), then reads \
+                the range back. Returns {before, after, chunks (each packet's address, length, packet, written, \
+                error), complete, verified}: verified is false when the read-back differs, as when flash or ROM \
+                accepts and drops a write. The epoch does not change; a later debug_snapshot records the written \
+                bytes. Destructive and not idempotent. No flash programming. No automatic writes: rampage writes \
+                only when this tool is called.",
+            input_schema: schema::<WriteMemoryArgs>(),
+            effect: Effect::TargetWrite,
+            handler: |registry, _projects, input, _cancel| {
+                let args: WriteMemoryArgs = arguments(input)?;
+                let bytes = crate::debug_writes::parse_hex_bytes("bytes", &args.bytes).map_err(|e| error_chain(&e))?;
+                if !(1..=rampage_debug::MAX_WRITE).contains(&bytes.len()) {
+                    return Err(format!("invalid_argument: bytes must be 1..={} bytes", rampage_debug::MAX_WRITE));
+                }
+                let expect = args
+                    .expect
+                    .map(|expect| crate::debug_writes::parse_hex_bytes("expect", &expect))
+                    .transpose()
+                    .map_err(|error| error_chain(&error))?;
+                if expect.as_ref().is_some_and(|expect| expect.len() != bytes.len()) {
+                    return Err("invalid_argument: expect must be as long as bytes".into());
+                }
+                output(registry.write_memory(&args.session, args.epoch, args.address.0, &bytes, expect.as_deref()))
+            },
+        },
+        DebugTool {
+            name: "debug_write_register",
+            description: "Write one register of a stopped thread (the stop's thread by default), at the caller's \
+                epoch (stale_epoch otherwise; target_running while it runs). Only served because the operator \
+                started rampage with --debug-writes. value is either hex bytes in the order the stub transfers them \
+                (target-endian, exactly the register's size, as debug_registers reports bytes) or an integer, which \
+                is accepted only when the session's endianness is known and must fit the register's bitsize. Uses P \
+                when the stub supports it, else reads every register with g and writes them back with G with only \
+                this one changed (refused when g marks registers unavailable or leaves this one out). Returns \
+                {before, after, before_value, after_value, packet, verified}; verified is false when the register \
+                reads back differently. Writing pc does not resume, and the epoch does not change. Destructive and \
+                not idempotent. No automatic writes: rampage writes only when this tool is called.",
+            input_schema: schema::<WriteRegisterArgs>(),
+            effect: Effect::TargetWrite,
+            handler: |registry, _projects, input, _cancel| {
+                let args: WriteRegisterArgs = arguments(input)?;
+                output(registry.write_register(
+                    &args.session,
+                    args.epoch,
+                    args.thread.as_deref(),
+                    &args.name,
+                    &args.value,
+                ))
+            },
+        },
+    ]
+}
+
+/// The tools every debug server serves.
+fn read_and_execution_tools() -> Vec<DebugTool> {
     vec![
         DebugTool {
             name: "debug_connect",
@@ -346,8 +493,9 @@ pub fn debug_tools() -> Vec<DebugTool> {
             description: "A debug session's state (stopped, running, exited, detached or lost with its reason), stop \
                 epoch, typed stop reply, the last stop event rampage observed (reason, pc, matched breakpoint IDs, \
                 watch address), milliseconds since the last resume while running, bounded console output and a page \
-                of threads (offset/limit, byte-fitted). While stopped it re-asks the stub for the stop reply (?) and \
-                threads; a different reply than the previous ? is a stop rampage did not cause and a new epoch. While \
+                of threads (offset/limit, byte-fitted). While stopped it re-reads the threads (which also \
+                shows the connection is alive) and reports the session's own stop: the stub's stop reply (?) is \
+                asked only when connecting, because QEMU removes every breakpoint and watchpoint when asked it. While \
                 running it reports without touching the stub. Does not resume, wait or interrupt.",
             input_schema: schema::<StatusArgs>(),
             effect: Effect::None,
@@ -440,7 +588,7 @@ pub fn debug_tools() -> Vec<DebugTool> {
                 targets whose data byte order is unknown (such as AArch64 and RISC-V) or whose architecture rampage \
                 cannot represent, any range that is not fully readable, and captures whose registers, modules or \
                 paths exceed the snapshot format's limits (checked before memory is read). Reads are not atomic; \
-                the stop reply and threads are re-read and compared before writing. Optional epoch is checked \
+                the epoch and threads are checked again before writing. Optional epoch is checked \
                 (stale_epoch); refused with target_running while the target runs; cancelling stops between memory \
                 reads and writes nothing.",
             input_schema: schema::<SnapshotArgs>(),
@@ -452,18 +600,12 @@ pub fn debug_tools() -> Vec<DebugTool> {
         },
         DebugTool {
             name: "debug_disconnect",
-            description: "Detach from the target and close the session, returning its final state. A running target \
-                is interrupted first and waited for up to 3 s; then every inserted breakpoint and watchpoint is \
-                removed (best effort: breakpoints_removed and removal_failures report it) and D (or D;pid per \
-                process in multiprocess mode) is sent. A target that never stops is abandoned: the connection is \
-                closed without detaching and the state is lost. Detaching lets the target run: a stopped or QEMU -S \
-                guest resumes. It never kills it. If the stub refuses D (E nn), the session stays open and attached \
-                (detached: false, closed: false) and disconnecting can be retried.",
-            input_schema: schema::<SessionArgs>(),
+            description: DISCONNECT_DESCRIPTION,
+            input_schema: schema::<DisconnectArgs>(),
             effect: Effect::Execution,
             handler: |registry, _projects, input, _cancel| {
-                let args: SessionArgs = arguments(input)?;
-                output(registry.disconnect(&args.session))
+                let args: DisconnectArgs = arguments(input)?;
+                output(registry.disconnect_with(&args.session, args.kill.unwrap_or(false)))
             },
         },
         DebugTool {

@@ -43,7 +43,10 @@ format builds without verified function truth remain unscored rather than counti
   slide verified against target memory) adds breakpoints by static address or function name, stop locations with
   function, offset and `show_address` arguments, register values annotated with what they point at, stepping over
   calls with rampage's decoder and out of functions from their entry through temporary breakpoints, and evidence
-  items for the findings ledger. It never launches, attaches, writes registers or memory, delivers signals or kills.
+  items for the findings ledger. With the operator's `--debug-writes`, memory and register writes read the old bytes
+  first (with an optional compare-and-set `expect`), refuse ranges under software breakpoints and read back with a
+  `verified` flag; with `--debug-kill`, disconnecting can kill the target. It never launches, attaches or delivers
+  signals, and writes or kills only when a tool is called for it.
 
 The previously reported decoder comparisons sampled words across every encoding: A32 matched `llvm-mc` on
 97.95%, 16-bit Thumb on 100%, and 32-bit Thumb on 97.49%. AArch64 matched every instruction sampled from

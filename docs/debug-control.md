@@ -7,10 +7,11 @@ that every runtime and analysis tool opens, and control its execution: continue,
 set breakpoints and watchpoints. With a project bound to the target, it can also place breakpoints by function name
 or static address, see stops and register values in the project's terms, and step over calls or out of functions.
 
-These are steps 9.1 (inspection), 9.2 (execution control) and 9.3 (static correlation) of the
-[debugger design](plans/2026-10-29-debugger-control.md). Rampage never launches or attaches to a process, and it
-never writes registers or memory, delivers a signal, enters non-stop mode or kills a target. The protocol client
-keeps every such packet off the wire.
+These are steps 9.1 (inspection), 9.2 (execution control), 9.3 (static correlation) and 9.4 (target writes and
+kill) of the [debugger design](plans/2026-10-29-debugger-control.md). Rampage never launches or attaches to a
+process, delivers a signal or enters non-stop mode, and the protocol client keeps every such packet off the wire.
+It writes registers or memory, or kills a target, only when a tool asks for it and the operator started it with
+`--debug-writes` or `--debug-kill`; see [Writes and kill](#writes-and-kill).
 
 ## Setup
 
@@ -38,10 +39,20 @@ from the variable are combined.
 
 ## Consent
 
-Listing an endpoint is the operator's consent for agents to inspect that stub and to control its execution
-(continue, step, interrupt, breakpoints); there is no separate flag for execution control. The MCP client's own
-per-tool prompts still apply on top, and the tools' MCP annotations mark execution control as changing the
-target. The rules:
+Three operator settings decide what agents may do. All are off by default.
+
+| Flag | Variable | Allows |
+|---|---|---|
+| `--debug-endpoint ENDPOINT` (repeatable) | `RAMPAGE_DEBUG_ENDPOINTS` (comma-separated) | Connecting to that stub, inspecting it and controlling its execution (continue, step, interrupt, breakpoints) |
+| `--debug-writes` | `RAMPAGE_DEBUG_WRITES=1` | The write tools, `debug_write_memory` and `debug_write_register` |
+| `--debug-kill` | `RAMPAGE_DEBUG_KILL=1` | `debug_disconnect` with `kill: true` |
+
+`--debug-writes` and `--debug-kill` (or their variables) without any endpoint stop the server at startup with an
+error, since they would allow nothing. A variable set to anything but `1`, `0` or empty is also a startup error.
+
+Listing an endpoint is the operator's consent for agents to inspect that stub and to control its execution; there
+is no separate flag for execution control. The MCP client's own per-tool prompts still apply on top, and the tools'
+MCP annotations mark execution control and writes as changing the target. The rules:
 
 - Without an allowed endpoint the server has no `debug` group. `enable_tools` does not list it, its tools are
   absent from `tools/list`, and calls to them fail as unknown tools.
@@ -49,7 +60,15 @@ target. The rules:
   as text: `localhost:2345` does not match `127.0.0.1:2345`. The argument may be omitted when exactly one endpoint
   is allowed. Agents cannot supply an address of their own.
 - A non-loopback address works only because the operator listed it. `debug_connect` reports `local_endpoint`.
-- There are no `--debug-writes` or `--debug-kill` flags yet; writes and kill arrive in step 9.4.
+- Without `--debug-writes` the write tools do not exist: they are not in `tools/list` or in `enable_tools`, and
+  calls to them fail as unknown tools. Without `--debug-kill`, `debug_disconnect`'s schema has no `kill` argument,
+  and `kill: true` is refused with `not_allowed`, naming the flag, before anything is sent.
+- Each layer checks on its own. The tool list follows the flags; the registry refuses a write or kill its consent
+  does not allow (`not_allowed`); every session is configured with the same consent and refuses such requests
+  itself; and the protocol client sends write packets (`M`, `X`, `P`, `G`) only for a write request and kill
+  packets (`k`, `vKill`) only for a kill request.
+- Even with the flags, rampage writes only when a write tool is called and kills only on `kill: true`. Nothing
+  writes on its own: breakpoints are the stub's (`Z0`..`Z4`), never planted by writing memory.
 - A Unix socket in a shared directory such as `/tmp` can be removed and replaced by another local user, who then
   receives the connection. Put stub sockets in a private directory (mode `0700`).
 - The desktop assistant and `rampage-agent` are not offered the debug tools.
@@ -68,14 +87,16 @@ request at a time.
   effort; failures are reported) and sends `D` (detach). A running target is interrupted first and waited for up
   to 3 s (1 s when the connection ends); if it never stops, rampage closes the socket without detaching and the
   session is `lost`. **Detaching lets the target run**: a program under gdbserver continues, and a QEMU guest
-  started frozen with `-S` starts executing. Rampage never kills a target. When the connection ends, every session
-  starts detaching at once and the server waits at most 2.5 s in all.
+  started frozen with `-S` starts executing. Rampage kills a target only on `debug_disconnect` with `kill: true`
+  (see [Kill](#kill)). When the connection ends, every session starts detaching at once and the server waits at
+  most 2.5 s in all.
 - If the stub refuses `D` (`E nn`), `debug_disconnect` reports `detached: false` and `closed: false`; the session
-  stays open and attached, and disconnecting can be retried. In multiprocess mode a retry detaches only the
-  processes still attached.
+  stays open and attached, and disconnecting can be retried. Its breakpoints and watchpoints are already removed
+  by then (`breakpoints_removed` counts them). In multiprocess mode `detach_error` names the processes already
+  detached, and a retry detaches only the processes still attached.
 - A handshake that fails while the stream is still in step (a malformed stop reply, say) sends `D` before
   closing, because some stubs (`gdbserver --once`) kill their program when a debugger simply disconnects.
-- A session is `stopped`, `running`, `exited`, `detached` or `lost`. A lost session carries the reason, such as a
+- A session is `stopped`, `running`, `exited`, `killed`, `detached` or `lost`. A lost session carries the reason, such as a
   timeout, a dropped connection or a malformed reply. A timed-out request loses the session, because the reply
   stream can no longer be trusted to match requests.
 - Each stop gets a stop epoch; see [Running, stopped and epochs](#running-stopped-and-epochs). Every read reports
@@ -103,7 +124,9 @@ another debugger on the stub, DMA or other cores, can change memory between read
 | `debug_step` | `session`, `epoch`, `thread?`, `count?` (1..=1000, default 1), `over?`, `out?`, `timeout_ms?` | Requested and completed steps, the pc after each completed step (over and out: each step's outcome), the final stop event, its locations and epoch |
 | `debug_breakpoints` | `session`, `action` (`set`, `clear`, `list`), and per action: `epoch`, `kind`, one of `address`, `static_address` or `function` (with `path?`), `size` or `length`, `id`, `offset`, `limit` | The entry set or cleared, or a byte-fitted page of the table |
 | `debug_evidence` | `session`, `epoch?`, `names?`, `memory?` | Endpoint, epoch, thread, the pc and its location, up to 8 registers and 4 memory ranges, and a `ledger_evidence` item for `record_finding` |
-| `debug_disconnect` | `session` | The final state, `detached`, `closed`, any detach error, `breakpoints_removed` and `removal_failures` |
+| `debug_disconnect` | `session`, `kill?` (only with `--debug-kill`) | The final state, `detached`, `closed`, any detach error, `breakpoints_removed` and `removal_failures`; with `kill: true`, `kill` instead of detaching |
+| `debug_write_memory` (only with `--debug-writes`) | `session`, `epoch`, `address`, `bytes` (hex, 1..=4096 bytes), `expect?` (hex, same length) | `before`, `after`, every packet's outcome in `chunks`, `complete`, `verified`, the unchanged epoch |
+| `debug_write_register` (only with `--debug-writes`) | `session`, `epoch`, `thread?`, `name`, `value` (hex bytes, target-endian, or an integer) | `before`, `after` (bytes), `before_value`, `after_value`, `packet` (`P` or `G`), `verified` |
 
 `debug_registers`, `debug_read_memory`, `debug_modules` and `debug_snapshot` also take an optional `epoch`, refused
 with `stale_epoch` when the session is at another one.
@@ -146,10 +169,11 @@ Rampage drives the stub in all-stop mode: every thread resumes together and stop
   take the caller's `epoch` and fail with `stale_epoch`, which names the current epoch and state, when they differ.
   Reads take it optionally. An agent therefore never steps or sets breakpoints on a picture of the target that is
   out of date.
-- While stopped, `debug_status` re-asks the stub for its stop reply (`?`). A reply that differs from the previous
-  `?` reply is a stop rampage did not cause (another debugger, say) and a new epoch. The first `?` after a stop
-  rampage observed only sets the baseline, because stubs answer `?` in their own words: QEMU always says SIGTRAP,
-  even after a watchpoint or an interrupt.
+- Rampage asks the stub for its stop reply (`?`) only once, when connecting. QEMU takes `?` for a new debugger
+  connecting and removes every breakpoint and watchpoint it holds, so asking again would silently drop the
+  session's. While stopped, `debug_status` reports the session's own record of the stop and re-reads only the
+  threads, which also shows the connection is alive. In all-stop mode a stopped target does not stop again until
+  rampage resumes it; a stop caused by something else on the stub (another debugger) is not detected.
 - A resume the stub refuses (an `E nn` or empty reply instead of a stop) leaves the target stopped at the same
   epoch and fails with `target_error` or `unsupported`.
 - An exit (`W`) or termination (`X`) ends the process: the session is `exited`, and its breakpoints are marked
@@ -496,6 +520,88 @@ ledger stores only
 that item; the structured record is in the tool result, not in the ledger, because ledger evidence is a reference to
 a tool call and its outcome rather than a data store.
 
+## Writes and kill
+
+Step 9.4. Everything here needs the operator's flag (see [Consent](#consent)), and nothing here happens unless a
+tool is called for it. Writes and kill are destructive and not idempotent; their MCP annotations say so.
+
+### Memory
+
+`debug_write_memory` writes 1 to 4096 bytes at a runtime address of a stopped target:
+
+1. The epoch is checked (`stale_epoch`), and a running target is refused (`target_running`).
+2. If a software breakpoint (`Z0`) covers any byte of the range, the write is refused and nothing is sent. The stub
+   keeps the bytes it replaced and puts them back when the breakpoint is removed, so writing under it would be
+   undone or would corrupt what it saved. Temporary breakpoints of a step over or out count too. Hardware
+   breakpoints and watchpoints keep no bytes and do not stand in the way.
+3. The bytes there are read first. If they cannot all be read, nothing is written. If `expect` is given and the
+   target holds anything else, the write is refused with `expect_mismatch` (the message gives what is there), and
+   nothing is written. This is a compare-and-set guard against acting on a stale view; it is not atomic with the
+   write.
+4. The bytes are written one packet per chunk of the stub's packet size: `X` (binary) while the stub takes it,
+   else `M` (hex). A stub that answers `X` with an empty reply does not support it and wrote nothing; the session
+   then uses `M` for that chunk and every later write. Writing stops at the first chunk the stub does not accept,
+   and nothing is retried. `chunks` lists every packet sent with its address, length, packet and outcome, so a
+   partial write says exactly which chunks were written. A connection lost mid-write ends the session, and the
+   error names the chunks written before it.
+5. The range is read back. `verified` is true only when every chunk was accepted and the read-back equals the
+   bytes written. Stubs often accept a write to flash or ROM and drop it, and a device register may read back
+   differently; `verified: false` is how that shows.
+
+A write does not change the epoch: the target has not stopped again. The session caches no memory, so later
+reads, step over's instruction decoding and `debug_snapshot` see the written bytes; a snapshot taken after a write
+records them. The only registers it keeps are those the stub sent with the stop reply (gdbserver sends the pc);
+see [Registers](#registers) for how a register write drops them. Bound projects are not re-verified: when a write falls in a bound module, the result
+says that the project's file no longer matches the target there.
+
+### Registers
+
+`debug_write_register` writes one register of a stopped thread (the stop's thread by default). `value` is either
+a hex string of the register's bytes in the order the stub transfers them, exactly its size and without `0x` (the
+form `debug_registers` reports as `bytes`), or an integer. An integer is accepted only when the session's
+endianness is known, as for `value` in reads, and must fit the register's bitsize; otherwise it is refused and
+the hex form is needed.
+
+The session uses `P` when the stub supports it. Otherwise it reads every register with `g`, changes only this
+one, and writes them all back with `G`; that is refused when the `g` reply marks registers unavailable (`xx`) or
+does not include this one, because `G` would write values nobody read. The registers are then read back:
+`verified` is false when the register reads back differently, as when hardware ignores or masks the write.
+
+Writing the pc does not resume. The epoch does not change. A successful register write drops the registers the
+stub sent with the stop reply (`debug_status` then shows the stop without them), so whatever needs the pc next,
+such as a continue stepping past a breakpoint at the pc, reads it again with `p` and sees the written value. The
+last stop event keeps the pc it was observed with, as a record of that stop; read registers with
+`debug_registers`.
+
+### Kill
+
+`debug_disconnect` with `kill: true` kills the target instead of detaching. A running target is interrupted and
+waited for as for a detach, and every breakpoint and watchpoint is removed. Then `vKill;<pid>` is sent per
+process in multiprocess mode, else `k`. The result's `kill` object gives `killed` (every packet confirmed), the
+`packets` sent, the ones the stub `confirmed`, its last `reply`, `already_ended` and any `error`, and the final
+state:
+
+- `killed` when the stub answers `OK` or `X nn`, `exited` when it answers `W nn`;
+- `lost` when the stub closes the connection or does not answer within 3 s. GDB takes either as a successful
+  kill, but rampage did not see the target end, so it does not claim it;
+- the session stays open and attached (`closed: false`) when the stub refuses (`E nn`) or does not support the
+  kill; disconnecting can be retried, with or without `kill`. The breakpoints are already gone by then
+  (`breakpoints_removed` counts them, and the error says so), and in multiprocess mode the processes in
+  `confirmed` are already killed;
+- a target that had already exited is reported with `already_ended: true`, `killed: false` and no packets sent.
+
+A refused detach (`D` answered `E nn`) is reported the same way: the session stays open and attached,
+`breakpoints_removed` counts the breakpoints already removed, and `detach_error` names any processes already
+detached.
+
+QEMU in system mode exits the emulator when killed through its stub (it answers `vKill;1` with `OK`, then exits).
+
+### What writes do not do
+
+- No flash programming (`vFlash*`) and no monitor commands; a stub that drops flash writes gives `verified: false`.
+- No automatic writes: no breakpoint planted by writing memory, no retries, no restoring of bytes.
+- No writes while the target runs, and no atomicity across the read, the write and the read-back.
+
 ## Limits
 
 | Limit | Value |
@@ -521,10 +627,12 @@ a tool call and its outcome rather than a data store.
 | `debug_evidence` | 8 registers, 4 memory ranges of at most 64 bytes, 300-byte ledger detail |
 | Watchpoint length | 4096 bytes |
 | Steps per request | 1,000, and 60 s in all |
+| One memory write | 4096 bytes |
+| Waiting for the reply to a kill | 3 s |
 
-## What 9.1 to 9.3 do not do
+## What 9.1 to 9.4 do not do
 
-- No launch or attach, no register or memory writes, no kill (writes and kill are step 9.4).
+- No launch or attach. Register and memory writes and kill only with the operator's flags and a tool call.
 - No signal delivery on resume: never `C`, `S` or `vCont;C`/`vCont;S`. A pending signal is discarded.
 - No non-stop mode and no per-thread resume: every thread runs and stops together.
 - No software-breakpoint emulation by writing memory; a stub without `Z0` reports it unsupported.
@@ -541,12 +649,25 @@ The protocol and the tools are tested against a scripted fake stub, over TCP and
 transcripts of QEMU's Cortex-M3 stub and of gdbserver on AArch64 Linux, and also sends slow, malformed, oversized
 and NAKed replies, stop replies in pieces and between console output, ignores interrupts, refuses `Z0`, and drops
 the connection mid-command. Read-only scripts fail a test on any execution-control packet; execution scripts accept
-only the packets listed above and fail on writes, kill, launch, attach, signal delivery and non-stop mode.
+only the packets listed above and fail on writes, kill, launch, attach, signal delivery and non-stop mode. Scripts
+accept well-formed writes only when marked for writes (applying memory writes to their memory, with ranges that
+drop or refuse writes), and `k`/`vKill` only when marked for kill; the fake stub checks this with its own parser,
+written apart from the client's.
 
 Each session request declares the packet classes it may send: `Read` (queries, register and memory reads, thread
 selection for reads), `Execution` (`vCont?`, `vCont;c`, `vCont;s:<thread>`, `c`, `s`, `Hc<thread>`,
-`Z0`..`Z4`/`z0`..`z4`) and `Detach` (`D`, `D;<pid>`). Inspection requests may send only `Read` packets. The client
-refuses anything outside the request's classes before it reaches the wire, and refuses every other packet always.
+`Z0`..`Z4`/`z0`..`z4`), `Detach` (`D`, `D;<pid>`), `Write` (`M`, `X`, `P`, `G`, well-formed: data exactly as long as
+the length says) and `Kill` (`k`, `vKill;<pid>`). Inspection requests may send only `Read` packets; the write
+requests `Read` and `Write`; a kill `Read`, `Execution` (to stop the target and remove breakpoints) and `Kill`, never
+`Detach`; detaching never `Write` or `Kill`. The client refuses anything outside the request's classes before it
+reaches the wire, and refuses every other packet always.
+
+The write tests cover: the tools absent without the flag and `kill: true` refused without it; the session's own
+refusal; stale epochs and a running target; an `expect` mismatch leaving memory untouched; `X` with a fall back to
+`M`; a refused chunk ending the write with exactly the written chunks reported; a dropped flash write giving
+`verified: false`; `P` with a fall back to `g`/`G`; refusal under a software breakpoint, temporary ones included;
+kill's refusal, confirmation and unconfirmed (closed connection) outcomes; and the read and execution tools sending
+no write or kill packet with both flags on.
 
 The live acceptance runs QEMU on an owned firmware (`tests/fixtures/firmware`, rebuilt with
 `build-firmware.sh`). The firmware calls a named function, `tick`, in a loop, and `tick` increments a RAM word,
@@ -565,6 +686,18 @@ the pc and at the return address, stepping out, and evidence accepted by the fin
 with the firmware's path binds it at slide 0 verified by its mapped code; a breakpoint by `function: "tick"` stops
 in `tick`, annotated registers point into `tick` and `reset_handler`, step out lands after the `bl tick`, and step
 over runs that call site without stopping inside `tick` (`counter` advances by one).
+
+QEMU removes every breakpoint and watchpoint when asked `?`. The fake stub's QEMU transcript does the same and
+fails a test on any `?` asked over an inserted one, and a live test sets a software breakpoint and then a write
+watchpoint, calls `debug_status` and `debug_snapshot` before each continue, and still stops at `tick` and at the
+store to `counter`.
+
+With both flags on, the live write test stops at `tick`, writes `counter` with `expect` set to what it holds, and
+continues: `tick` reads the written value and adds one. It writes `r12` as an integer and reads it back, writes
+four bytes of flash past the image and checks the reported `verified` against an independent read, continues once
+more to show the breakpoint survived, then disconnects with `kill: true` and waits for QEMU to exit. With QEMU 11
+on `lm3s6965evb`, `X` is unsupported (rampage falls back to `M`), `P` is supported, the flash write is applied
+(`verified: true`: QEMU's debug path writes ROM), and `vKill;1` is answered `OK` before QEMU exits with status 0.
 
 ```sh
 RAMPAGE_QEMU_LIVE=1 cargo nextest run -p rampage-api --run-ignored only -E 'test(debug_qemu::)'

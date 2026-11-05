@@ -337,8 +337,8 @@ fn main() -> ExitCode {
     // Loaded on first use, so that commands which consult no heuristic database do not read any pack.
     let packs = Arc::new(Packs::lazy_with_env(&cli.packs));
     let warn = !matches!(command, Command::Packs { .. });
-    if let Command::Mcp(McpArgs { all_tools, debug_endpoints }) = command {
-        return serve_mcp(all_tools, &debug_endpoints, packs);
+    if let Command::Mcp(McpArgs { all_tools, debug_endpoints, debug_writes, debug_kill }) = command {
+        return serve_mcp(all_tools, &debug_endpoints, (debug_writes, debug_kill), packs);
     }
     let image = cli.image_offset.map(|offset| rampage_loaders::ImageAt::new(offset, cli.image_length));
     let options = Options { json: cli.json, arch: cli.arch, image, raw, packs: Arc::clone(&packs) };
@@ -675,9 +675,13 @@ fn debugger_query(out: &mut impl Write, args: QueryDebuggerArgs) -> anyhow::Resu
     Ok(())
 }
 
-fn serve_mcp(all_tools: bool, debug_endpoints: &[String], packs: Arc<Packs>) -> ExitCode {
+fn serve_mcp(all_tools: bool, debug_endpoints: &[String], consent: (bool, bool), packs: Arc<Packs>) -> ExitCode {
     let debug_env = std::env::var(rampage_mcp::DEBUG_ENDPOINTS_ENV).ok();
-    let debug = match rampage_mcp::debug_registry(debug_endpoints, debug_env.as_deref()) {
+    let writes_env = std::env::var(rampage_mcp::DEBUG_WRITES_ENV).ok();
+    let kill_env = std::env::var(rampage_mcp::DEBUG_KILL_ENV).ok();
+    let consent = rampage_mcp::debug_consent(consent.0, consent.1, writes_env.as_deref(), kill_env.as_deref())
+        .and_then(|consent| rampage_mcp::debug_registry_with(debug_endpoints, debug_env.as_deref(), consent));
+    let debug = match consent {
         Ok(debug) => debug,
         Err(error) => {
             eprintln!("rampage: {error}");

@@ -21,7 +21,7 @@ const MAX_PDB_ERROR_BYTES: usize = 1024;
 mod debug_tools;
 #[cfg(test)]
 mod patch_dispatch_tests;
-pub use debug_tools::{DebugTool, debug_tools};
+pub use debug_tools::{DebugTool, debug_tools, debug_tools_with};
 mod patch_page;
 pub(crate) mod search_page;
 mod signature_page;
@@ -197,9 +197,11 @@ pub enum Effect {
     Annotations,
     ShowAddress,
     FileWrite,
-    /// Changes a debug target's execution state: resumes, steps, interrupts, inserts or removes breakpoints, or
-    /// detaches. Not read-only, not idempotent, and reaches outside rampage.
+    /// Changes a debug target's execution state: resumes, steps, interrupts, inserts or removes breakpoints,
+    /// detaches or (with the operator's consent) kills. Not read-only, not idempotent, and reaches outside rampage.
     Execution,
+    /// Writes a debug target's memory or registers. Destructive, not idempotent, and reaches outside rampage.
+    TargetWrite,
 }
 
 /// The JSON schema of a tool taking arguments `A`.

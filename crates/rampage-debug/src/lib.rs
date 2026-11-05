@@ -3,9 +3,11 @@
 //! The operator starts the stub and lists its endpoint; this crate connects, negotiates features, reads the target
 //! description, the stop state, threads, registers, memory, loaded modules and memory maps, controls execution in
 //! all-stop mode (continue, wait, interrupt, single-step, breakpoints and watchpoints the stub inserts) and detaches.
-//! Nothing here launches, attaches to, writes to or kills a target, delivers a signal on resume, enters non-stop
-//! mode or plants a breakpoint by writing memory: the client refuses to put any such packet on the wire, and each
-//! session command may send only the packet classes it declares ([`client::classify`], [`client::Permit`]).
+//! Nothing here launches or attaches to a target, delivers a signal on resume, enters non-stop mode or plants a
+//! breakpoint by writing memory: the client refuses to put any such packet on the wire, and each session command
+//! may send only the packet classes it declares ([`client::classify`], [`client::Permit`]). Memory and register
+//! writes and kill exist only as their own requests, and a session refuses them unless its [`Consent`] (the
+//! operator's `--debug-writes` and `--debug-kill`) allows them; nothing is ever written or killed on the side.
 //!
 //! A [`Session`] is a thread that owns the connection and serves typed requests one at a time; while the target
 //! runs it keeps serving status, wait, interrupt and detach requests.
@@ -29,8 +31,9 @@ pub use exec::{
 };
 pub use maps::{Module, Offsets, Region};
 pub use session::{
-    ByteOrder, CLOSE_DETACH, Config, Detached, INTERRUPT_WAIT, Info, MAX_TEMPORARY, MemoryChunk, MemoryRead, Modules,
-    RegisterValue, Registers, Run, Session, State, Status, Steps, TemporaryPlacement, ThreadInfo,
+    ByteOrder, CLOSE_DETACH, Config, Consent, Detached, INTERRUPT_WAIT, Info, Killed, MAX_TEMPORARY, MAX_WRITE,
+    MemoryChunk, MemoryRead, MemoryWrite, Modules, RegisterValue, RegisterWrite, Registers, Run, Session, State,
+    Status, Steps, TemporaryPlacement, ThreadInfo, WriteChunk, encode_register_value,
 };
 pub use stop::{StopReason, StopReply, ThreadId};
 pub use target::{Family, Layout, LayoutSource, Register};
@@ -76,6 +79,12 @@ pub enum DebugError {
     /// The caller cancelled the request; the target was not touched.
     #[error("cancelled: {0}")]
     Cancelled(String),
+    /// A write or kill the operator did not allow for this session; nothing was sent.
+    #[error("{0}")]
+    NotAllowed(String),
+    /// A write's `expect` bytes differ from what the target holds; nothing was written.
+    #[error("{0}")]
+    ExpectMismatch(String),
 }
 
 impl DebugError {
@@ -95,6 +104,8 @@ impl DebugError {
             DebugError::NotRunning(_) => "not_running",
             DebugError::StaleEpoch { .. } => "stale_epoch",
             DebugError::Cancelled(_) => "cancelled",
+            DebugError::NotAllowed(_) => "not_allowed",
+            DebugError::ExpectMismatch(_) => "expect_mismatch",
         }
     }
 

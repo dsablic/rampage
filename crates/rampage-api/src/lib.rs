@@ -16,6 +16,7 @@ mod debug_correlation;
 mod debug_import;
 mod debug_layout_import;
 pub(crate) mod debug_type_import;
+mod debug_writes;
 mod debugger;
 mod debugger_capture;
 mod decode_content;
@@ -97,8 +98,8 @@ pub use data::{
 };
 pub use debug_control::{
     DEFAULT_RUN_WAIT_MS, DebugBreakKind, DebugBreakpoint, DebugBreakpoints, DebugBytes, DebugConnection,
-    DebugDisconnected, DebugMemory, DebugModules, DebugRange, DebugRegisters, DebugRegistry, DebugRun, DebugSnapshot,
-    DebugStatus, DebugSteps, MAX_DEBUG_SESSIONS, MAX_RUN_WAIT_MS, tool_read_limit,
+    DebugDisconnected, DebugKill, DebugMemory, DebugModules, DebugRange, DebugRegisters, DebugRegistry, DebugRun,
+    DebugSnapshot, DebugStatus, DebugSteps, MAX_DEBUG_SESSIONS, MAX_RUN_WAIT_MS, tool_read_limit,
 };
 pub use debug_correlation::{
     AnnotatedRegister, BindEvidence, BindingView, BreakTarget, BreakpointLocated, DebugBinding, DebugEvidence,
@@ -114,6 +115,7 @@ pub use debug_layout_import::{
 pub use debug_type_import::{
     DebugTypesDetail, DebugTypesImport, DebugTypesManifest, DebugTypesRequest, DebugTypesSignature,
 };
+pub use debug_writes::{DebugMemoryWrite, DebugRegisterValue, DebugRegisterWrite};
 pub use debugger::{
     DebuggerAddress, DebuggerBackend, DebuggerError, DebuggerObservation, DebuggerPermissions, DebuggerRequest,
     DebuggerResponse, DebuggerToken, MAX_DEBUGGER_REQUEST_BYTES, MAX_DEBUGGER_RESPONSE_BYTES, query_debugger,
@@ -205,6 +207,7 @@ pub use rampage_analysis::triage::Triage;
 pub use rampage_capabilities::Capability;
 /// The flag that cancels a debug tool's wait or long read; see [`tools::DebugTool::call_cancellable`].
 pub use rampage_debug::Cancel as DebugCancel;
+pub use rampage_debug::Consent as DebugConsent;
 pub use rampage_decompiler::VariableStorage;
 pub use rampage_decompiler::results::RecoveryStatus;
 pub use rampage_decompiler::worker::SupervisedMetrics;

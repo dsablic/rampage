@@ -198,6 +198,16 @@ pub fn breakpoint_size(family: Family, m_profile: bool, thumb: Option<bool>, siz
     }
 }
 
+/// How many bytes a software breakpoint of `Z` kind `size` may replace in memory: ARM's kind 3 (32-bit Thumb-2) is 4
+/// bytes, and for an architecture rampage does not know at least 4, so a write is never let under one.
+pub fn replaced_bytes(family: Family, size: u64) -> u64 {
+    match family {
+        Family::Arm if size == 3 => 4,
+        Family::Other => size.max(4),
+        _ => size.max(1),
+    }
+}
+
 /// Why the target stopped, as rampage classifies it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

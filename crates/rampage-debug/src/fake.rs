@@ -4,6 +4,9 @@
 //! A script marked [`Script::execution`] accepts the execution-control packets of step 9.2 (`vCont?`, `vCont;c`,
 //! `vCont;s:<thread>`, `c`, `s`, `Hc<thread>`, `Z0`..`Z4`/`z0`..`z4`) and the interrupt byte, which it records as
 //! [`INTERRUPT`]; writes, kill, launch, attach, signal-delivering resumes and non-stop mode stay violations.
+//! A script marked [`Script::writes`] also accepts well-formed memory and register writes (`M`, `X`, `P`, `G`),
+//! applying memory writes to its memory, and one marked [`Script::kill`] accepts `k` and `vKill;<pid>`; launch,
+//! attach, signal-delivering resumes and non-stop mode are violations in every script.
 
 use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
@@ -53,6 +56,14 @@ pub struct Script {
     memory: Vec<(u64, Vec<u8>)>,
     lenient: bool,
     execution: bool,
+    writes: bool,
+    kill: bool,
+    /// Ranges whose writes are answered `OK` and dropped, as flash or ROM may be.
+    ignored: Vec<(u64, u64)>,
+    /// Ranges whose writes are answered `E0e`.
+    refused: Vec<(u64, u64)>,
+    /// Like QEMU, `?` removes every breakpoint and watchpoint the stub holds.
+    question_clears_points: bool,
 }
 
 /// How the fake stub records the out-of-band interrupt byte (`0x03`) and how scripts match it.
@@ -134,6 +145,40 @@ impl Script {
         self
     }
 
+    /// Accepts well-formed memory and register writes (`M`, `X`, `P`, `G`) instead of failing on them. Memory
+    /// writes no rule answers change the script's memory and are answered `OK`; a write that is not all inside it
+    /// gets `E14`.
+    pub fn writes(mut self) -> Self {
+        self.writes = true;
+        self
+    }
+
+    /// Accepts `k` and `vKill;<pid>` instead of failing on them; rules give the replies.
+    pub fn kill(mut self) -> Self {
+        self.kill = true;
+        self
+    }
+
+    /// Answers writes touching `length` bytes at `base` with `OK` and drops them, as a stub may for flash.
+    pub fn ignore_writes(mut self, base: u64, length: u64) -> Self {
+        self.ignored.push((base, length));
+        self
+    }
+
+    /// Behaves like QEMU, whose `?` removes every inserted breakpoint and watchpoint: a `?` while the stub holds one
+    /// (inserted with `Z` answered `OK` and not removed) is a violation, since the client would go on believing it
+    /// is there.
+    pub fn question_clears_points(mut self) -> Self {
+        self.question_clears_points = true;
+        self
+    }
+
+    /// Answers writes touching `length` bytes at `base` with `E0e`, writing nothing.
+    pub fn refuse_writes(mut self, base: u64, length: u64) -> Self {
+        self.refused.push((base, length));
+        self
+    }
+
     /// Answers the interrupt byte with `actions` (none: the target never stops), every time.
     pub fn on_interrupt(self, actions: Vec<Action>) -> Self {
         self.rule(Matcher::Exact(INTERRUPT.into()), actions, 0, None)
@@ -160,6 +205,79 @@ impl Script {
         }
         (!out.is_empty()).then_some(out)
     }
+
+    /// Applies a memory write and gives the reply: `E14` unless every byte is in the script's memory, `E0e` or a
+    /// dropped `OK` in refused and ignored ranges.
+    fn write_memory(&mut self, address: u64, data: &[u8]) -> &'static str {
+        let end = address.saturating_add(data.len() as u64);
+        let touches = |ranges: &[(u64, u64)]| {
+            ranges.iter().any(|(base, length)| address < base.saturating_add(*length) && *base < end)
+        };
+        let mapped = (0..data.len() as u64).all(|offset| {
+            let Some(at) = address.checked_add(offset) else { return false };
+            self.memory.iter().any(|(base, bytes)| at >= *base && at - base < bytes.len() as u64)
+        });
+        if !mapped {
+            return "E14";
+        }
+        if touches(&self.refused) {
+            return "E0e";
+        }
+        if touches(&self.ignored) {
+            return "OK";
+        }
+        for (offset, byte) in data.iter().enumerate() {
+            let at = address.wrapping_add(offset as u64);
+            if let Some((base, bytes)) =
+                self.memory.iter_mut().rev().find(|(base, bytes)| at >= *base && at - *base < bytes.len() as u64)
+            {
+                bytes[(at - *base) as usize] = *byte;
+            }
+        }
+        "OK"
+    }
+}
+
+/// The address and data of a well-formed memory write (`M<address>,<length>:<hex>` or
+/// `X<address>,<length>:<binary>`). Written independently of the client's allowlist, so the two check each other.
+pub fn memory_write(packet: &[u8]) -> Option<(u64, Vec<u8>)> {
+    let kind = *packet.first()?;
+    if kind != b'M' && kind != b'X' {
+        return None;
+    }
+    let colon = packet.iter().position(|byte| *byte == b':')?;
+    let header = std::str::from_utf8(&packet[1..colon]).ok()?;
+    let mut fields = header.split(',');
+    let (address, length) = (fields.next()?, fields.next()?);
+    let digits = |text: &str| !text.is_empty() && text.len() <= 16 && text.bytes().all(|b| b.is_ascii_hexdigit());
+    if fields.next().is_some() || !digits(address) || !digits(length) {
+        return None;
+    }
+    let (address, length) = (parse_hex_u64(address)?, parse_hex_u64(length)? as usize);
+    let data = &packet[colon + 1..];
+    let bytes = if kind == b'M' { decode_hex(data)? } else { data.to_vec() };
+    (length > 0 && bytes.len() == length).then_some((address, bytes))
+}
+
+/// Whether `packet` is a well-formed register write: `P<regnum>=<hex>` or `G<hex>`.
+pub fn register_write(packet: &str) -> bool {
+    let even_hex =
+        |text: &str| !text.is_empty() && text.len().is_multiple_of(2) && text.bytes().all(|b| b.is_ascii_hexdigit());
+    match (packet.strip_prefix('P'), packet.strip_prefix('G')) {
+        (Some(rest), _) => rest.split_once('=').is_some_and(|(regnum, value)| {
+            !regnum.is_empty() && regnum.len() <= 8 && regnum.bytes().all(|b| b.is_ascii_hexdigit()) && even_hex(value)
+        }),
+        (_, Some(registers)) => even_hex(registers),
+        _ => false,
+    }
+}
+
+/// Whether `packet` is `k` or `vKill;<pid>`.
+pub fn kill_packet(packet: &str) -> bool {
+    packet == "k"
+        || packet
+            .strip_prefix("vKill;")
+            .is_some_and(|pid| !pid.is_empty() && pid.len() <= 16 && pid.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// Whether `packet` could change the target's execution or state (`vCont?` included). A read-only script never
@@ -312,6 +430,8 @@ fn serve(mut stream: impl Stream, mut script: Script) -> Report {
     let mut last: Vec<u8> = Vec::new();
     let mut naks_sent: usize = 0;
     let mut selected: Option<String> = None;
+    // Breakpoints and watchpoints inserted and not removed, as `<type>,<address>,<kind>`.
+    let mut points = std::collections::BTreeSet::<String>::new();
     let deadline = Instant::now() + Duration::from_secs(60);
     stream.set_timeout(Duration::from_millis(200));
     let mut buffer = [0; 64 * 1024];
@@ -348,12 +468,27 @@ fn serve(mut stream: impl Stream, mut script: Script) -> Report {
                     continue;
                 }
             };
-            let packet = String::from_utf8_lossy(&packet::unescape(&raw).unwrap_or(raw)).into_owned();
+            let bytes = packet::unescape(&raw).unwrap_or(raw);
+            let packet = String::from_utf8_lossy(&bytes).into_owned();
             report.received.push(packet.clone());
-            if execution_control(&packet) && !(script.execution && step_9_2_execution(&packet)) {
-                let kind = if script.execution { "forbidden" } else { "forbidden (read-only script)" };
+            let write = memory_write(&bytes);
+            let permitted = (script.execution && step_9_2_execution(&packet))
+                || (script.writes && (write.is_some() || register_write(&packet)))
+                || (script.kill && kill_packet(&packet));
+            if execution_control(&packet) && !permitted {
+                let kind = if script.execution || script.writes || script.kill {
+                    "forbidden"
+                } else {
+                    "forbidden (read-only script)"
+                };
                 report.violations.push(format!("{kind} execution-control packet `{packet:?}`"));
                 break 'connection;
+            }
+            if packet == "?" && script.question_clears_points {
+                if !points.is_empty() {
+                    report.violations.push(format!("`?` removed inserted points the client still holds: {points:?}"));
+                }
+                points.clear();
             }
             let matches = |rule: &Rule| {
                 rule.remaining != Some(0)
@@ -386,6 +521,10 @@ fn serve(mut stream: impl Stream, mut script: Script) -> Report {
                     rule.actions.clone()
                 }
                 None if packet.starts_with('m') || packet.starts_with('x') => vec![memory_reply(&script, &packet)],
+                None if write.is_some() => {
+                    let (address, data) = write.expect("a memory write");
+                    vec![Action::Reply(script.write_memory(address, &data).into())]
+                }
                 None => {
                     if !script.lenient {
                         report.violations.push(format!("unexpected packet `{packet}`"));
@@ -410,6 +549,16 @@ fn serve(mut stream: impl Stream, mut script: Script) -> Report {
                             && reply == "OK"
                         {
                             selected = Some(thread.to_owned());
+                        }
+                        if let Some(point) = packet.strip_prefix('Z')
+                            && reply == "OK"
+                        {
+                            points.insert(point.to_owned());
+                        }
+                        if let Some(point) = packet.strip_prefix('z')
+                            && reply == "OK"
+                        {
+                            points.remove(point);
                         }
                     }
                     Action::Raw(bytes) => {
@@ -485,7 +634,7 @@ pub mod transcripts {
 
     /// QEMU 11 `lm3s6965evb` (Cortex-M3) halted at reset, as recorded with `qemu-system-arm -S -gdb`, plus an
     /// OpenOCD-style memory map (QEMU itself serves none). Multiprocess is on, so QEMU refuses a bare `D` and
-    /// accepts `D;1`.
+    /// accepts `D;1`. Like QEMU, its `?` removes every breakpoint and watchpoint ([`Script::question_clears_points`]).
     pub fn qemu_cortex_m3() -> Script {
         let mut profile = String::from(
             "<?xml version=\"1.0\"?><!DOCTYPE feature SYSTEM \"gdb-target.dtd\"><feature name=\"org.gnu.gdb.arm.m-profile\">",
@@ -508,6 +657,7 @@ pub mod transcripts {
         let mut g = "00000000".repeat(13);
         g.push_str("00000120ffffffff4800000000000041");
         let mut script = Script::new()
+            .question_clears_points()
             .on(
                 "qSupported:multiprocess+;swbreak+;hwbreak+;xmlRegisters=i386,arm",
                 "PacketSize=20020;qXfer:features:read+;vContSupported+;multiprocess+;qXfer:memory-map:read+",

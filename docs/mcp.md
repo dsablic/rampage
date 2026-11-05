@@ -39,7 +39,8 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 - `formats`: `build_info`, `pe_resources`, `pe_load_config`, `pyinstaller_archive`, `wasm_module`.
 - `debug`, only on a server started with a debug endpoint: `debug_connect`, `debug_bind`, `debug_status`,
   `debug_registers`, `debug_read_memory`, `debug_modules`, `debug_snapshot`, `debug_continue`, `debug_wait`,
-  `debug_interrupt`, `debug_step`, `debug_breakpoints`, `debug_evidence`, `debug_disconnect`.
+  `debug_interrupt`, `debug_step`, `debug_breakpoints`, `debug_evidence`, `debug_disconnect`; with the
+  --debug-writes flag, also `debug_write_memory` and `debug_write_register`.
 
 Calling `enable_tools` without arguments lists each group's description, tool names/count and enabled state.
 `{"groups": ["detection"]}` enables that group; `{"groups": ["all"]}` enables every group. Enabling sends
@@ -47,7 +48,9 @@ Calling `enable_tools` without arguments lists each group's description, tool na
 nothing. `--all-tools` lists all groups at startup; `RAMPAGE_MCP_TOOLS=all` or a comma-separated list such as
 `detection,types` also selects startup groups. `core` is always served. The `debug` group exists only when the
 server is started with `--debug-endpoint HOST:PORT|unix:/PATH` (repeatable) or `RAMPAGE_DEBUG_ENDPOINTS`; without
-one, `enable_tools` does not list it and its tools cannot be called.
+one, `enable_tools` does not list it and its tools cannot be called. `--debug-writes` (or `RAMPAGE_DEBUG_WRITES=1`)
+adds the two write tools, and `--debug-kill` (or `RAMPAGE_DEBUG_KILL=1`) adds a `kill` argument to
+`debug_disconnect`; both are off by default and refused at startup without an endpoint.
 
 Workflow reports name the `group` of suggested next tools. The desktop assistant offers every binary tool
 without group gating, plus the interactive `show_address`; it does not offer file tools
@@ -205,17 +208,28 @@ without delivering a signal and waits up to `timeout_ms` for a typed stop event;
 in a bound project (`out`); both run to a temporary breakpoint that is removed at the next stop, whatever it is.
 Execution tools take the caller's `epoch`. While the target runs, only `debug_status`, `debug_wait`, `debug_interrupt` and
 `debug_disconnect` are served. `debug_disconnect` interrupts a running target, removes every breakpoint and
-detaches, which lets the target run; a refused detach keeps the session open. Nothing writes registers or memory,
-delivers a signal or kills.
+detaches, which lets the target run; a refused detach keeps the session open. Nothing delivers a signal.
+
+Writes and kill exist only with the operator's flags, and happen only when called. `debug_write_memory` writes 1 to
+4096 bytes of a stopped target at the caller's epoch: it reads the bytes there first and refuses (writing nothing)
+when `expect` differs or a software breakpoint covers the range, writes with `X` or else `M` chunk by chunk,
+stopping at the first refusal, and reads back, returning `before`, `after`, each chunk's outcome and `verified`
+(false when the target dropped the write, as flash or ROM may). `debug_write_register` writes one register with `P`,
+or else `g` then `G` with only that register changed, from hex bytes in the stub's order or an integer when the
+endianness is known, and reads it back. Neither changes the epoch, and writing the pc does not resume.
+`debug_disconnect` with `kill: true` removes breakpoints and sends `vKill;<pid>` (multiprocess) or `k`, reporting
+`killed`, `exited`, or `lost` when the stub closed the connection without confirming; a refused or unsupported kill
+keeps the session open. Without the flag, `kill: true` is refused with `not_allowed`. No flash programming and no
+automatic writes.
 
 Debug tools carry MCP annotations: inspection tools and `debug_wait` are read-only; `debug_snapshot` only adds a
-file; execution tools and `debug_disconnect` are neither read-only nor idempotent and may be destructive. All are
-open-world. Cancelling a call (`notifications/cancelled`, or the connection closing) ends a wait early with
+file; execution tools, `debug_disconnect` and the write tools are neither read-only nor idempotent and may be
+destructive. All are open-world. Cancelling a call (`notifications/cancelled`, or the connection closing) ends a wait early with
 `cancelled: true` and the target untouched, and stops a long read or snapshot between chunks.
 
 Errors start with a code: `unknown_session`, `endpoint_not_allowed`, `session_limit`, `timeout`,
 `connection_lost`, `protocol_error`, `target_error`, `unsupported`, `session_not_stopped`, `target_running`,
-`not_running`, `stale_epoch`, `cancelled` or `invalid_argument`; binding and placement add `no_module_match`,
+`not_running`, `stale_epoch`, `cancelled`, `not_allowed`, `expect_mismatch` or `invalid_argument`; binding and placement add `no_module_match`,
 `slide_mismatch`, `slide_unverified`, `ambiguous_module`, `arch_mismatch`, `binding_limit`, `not_bound`,
 `ambiguous_name`, `not_code`, `step_out_refused` and `undecodable`. See [debug control](debug-control.md).
 
