@@ -163,6 +163,8 @@ struct Fingerprint {
     last: Option<(u64, usize, bool)>,
     /// Targets of the direct branches and calls, in instruction order (x86 and AArch64 only).
     branch_targets: Vec<u64>,
+    /// The masked encodings fed so far, concatenated: [`masked_body_in`] compares them with the raw bytes.
+    stream: Vec<u8>,
 }
 
 /// What the confidence gate measures of a masked instruction stream.
@@ -211,6 +213,7 @@ impl Fingerprint {
             core: Measure::default(),
             last: None,
             branch_targets: Vec::new(),
+            stream: Vec::new(),
         }
     }
 
@@ -262,6 +265,7 @@ impl Fingerprint {
             self.last = Some((fold, content, branch.is_some()));
         }
         self.branch_targets.extend(branch);
+        self.stream.extend_from_slice(masked);
     }
 
     /// Whether the instruction cap has been reached, so a caller can stop feeding.
@@ -679,6 +683,27 @@ pub fn function_hash(target: &Target, bytes: &[u8], address: u64) -> Option<Func
 /// not masked yet.
 pub fn function_hash_in(target: &Target, image: &MaskContext, bytes: &[u8], address: u64) -> Option<FunctionHash> {
     hash(target, bytes, address, Some(image))
+}
+
+/// The bytes of the function at `address` as scheme 2 ([`function_hash_in`]) sees them, with `None` for every
+/// byte its masking changed: the position-dependent fields a byte pattern for this body must leave as wildcards
+/// to match a copy linked elsewhere. Bytes after the last decoded instruction are kept as they are. A field whose
+/// value happens to equal its masked form here (a zero displacement) reads as fixed, so a pattern built from one
+/// copy can be narrower than the hash. `None` for an unsupported architecture, a big-endian target (whose masked
+/// words are hashed in another byte order than they are stored), or a body that fails the confidence gate.
+pub fn masked_body_in(target: &Target, image: &MaskContext, bytes: &[u8], address: u64) -> Option<Vec<Option<u8>>> {
+    if target.big_endian {
+        return None;
+    }
+    let print = fingerprint(target, bytes, address, Some(image))?;
+    if !print.measure.discriminating() || print.stream.len() > bytes.len() {
+        return None;
+    }
+    let decoded = print.stream.len();
+    let mut body: Vec<Option<u8>> =
+        bytes.iter().zip(&print.stream).map(|(&raw, &masked)| (raw == masked).then_some(raw)).collect();
+    body.extend(bytes[decoded..].iter().map(|&raw| Some(raw)));
+    Some(body)
 }
 
 /// The hash of a function under `scheme` (see [`LEGACY_SCHEME`] and [`CURRENT_SCHEME`]), or `None` for an unknown
@@ -1508,6 +1533,19 @@ mod tests {
     /// Packs 16-bit Thumb halfwords into bytes in the given order.
     fn halfwords_to_bytes(halfwords: &[u16], big_endian: bool) -> Vec<u8> {
         halfwords.iter().flat_map(|hw| if big_endian { hw.to_be_bytes() } else { hw.to_le_bytes() }).collect()
+    }
+
+    #[test]
+    fn the_masked_body_wildcards_exactly_the_bytes_the_hash_masks() {
+        let mut bytes = sample();
+        bytes[1..5].copy_from_slice(&0x1111_2222u32.to_le_bytes());
+        bytes[8..12].copy_from_slice(&0x3333_4444u32.to_le_bytes());
+        let image = MaskContext::default();
+        let masked = masked_body_in(&target(Arch::X86_64, false), &image, &bytes, 0x1000).unwrap();
+        let wildcards: Vec<usize> = (0..masked.len()).filter(|&index| masked[index].is_none()).collect();
+        assert_eq!(wildcards, [1, 2, 3, 4, 8, 9, 10, 11], "the call target and the RIP displacement");
+        assert_eq!(masked[12..], bytes[12..].iter().map(|&byte| Some(byte)).collect::<Vec<_>>());
+        assert!(masked_body_in(&target(Arch::X86_64, false), &image, &[0xc3], 0x1000).is_none(), "below the gate");
     }
 
     #[test]
