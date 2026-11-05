@@ -512,6 +512,44 @@ def terminate(process: subprocess.Popen[bytes]) -> None:
             continue
 
 
+def descendants(root: int) -> set[int]:
+    """Every live process below `root`, from one `ps` snapshot."""
+    try:
+        listing = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, check=False)
+    except OSError:
+        return set()
+    children: dict[int, list[int]] = {}
+    for line in listing.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            children.setdefault(int(parts[1]), []).append(int(parts[0]))
+    found: set[int] = set()
+    pending = [root]
+    while pending:
+        for child in children.get(pending.pop(), []):
+            if child not in found:
+                found.add(child)
+                pending.append(child)
+    return found
+
+
+def reap(pids: set[int]) -> None:
+    """Stop processes the run started that outlived it: an MCP server's children can leave `claude`'s process
+    group (REA's headless Ghidra starts its own) and are reparented when `claude` exits."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        alive = set()
+        for pid in pids:
+            try:
+                os.kill(pid, sig)
+                alive.add(pid)
+            except (ProcessLookupError, PermissionError):
+                continue
+        if not alive:
+            return
+        pids = alive
+        time.sleep(2)
+
+
 def run(arguments: argparse.Namespace) -> dict[str, Any]:
     read_mcp_config(arguments.mcp_config, arguments.server_name)
     if not arguments.workdir.is_dir():
@@ -546,6 +584,15 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
 
         deadline = threading.Timer(arguments.timeout_s, expire)
         deadline.start()
+        started_below: set[int] = set()
+        finished = threading.Event()
+
+        def watch() -> None:
+            while not finished.wait(2):
+                started_below.update(descendants(process.pid))
+
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
         try:
             for raw in process.stdout:
                 arrival = time.monotonic() - started
@@ -565,7 +612,11 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             process.wait()
         finally:
             deadline.cancel()
+            started_below.update(descendants(process.pid))
             terminate(process)
+            finished.set()
+            watcher.join()
+            reap(started_below)
     timed_out = expired.is_set()
     duration_ms = round((time.monotonic() - started) * 1000)
     process_error = None

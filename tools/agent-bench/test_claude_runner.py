@@ -6,7 +6,11 @@ import argparse
 import copy
 import importlib.util
 import json
+import os
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -316,6 +320,24 @@ class CommandTest(unittest.TestCase):
             path.write_text(json.dumps({"mcpServers": {"rea": {}, "other": {}}}))
             with self.assertRaises(ValueError):
                 runner.read_mcp_config(path, "rea")
+
+
+class ReapTest(unittest.TestCase):
+    def test_a_grandchild_in_its_own_session_is_found_and_stopped_after_its_parent_exits(self) -> None:
+        script = (
+            "import subprocess, sys, time\n"
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], start_new_session=True)\n"
+            "time.sleep(1)\n"
+        )
+        parent = subprocess.Popen([sys.executable, "-c", script])
+        time.sleep(0.5)
+        found = runner.descendants(parent.pid)
+        parent.wait()
+        self.assertTrue(found)
+        runner.reap(found)
+        for pid in found:
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
 
 
 if __name__ == "__main__":
