@@ -33,6 +33,33 @@ Because analysis and improvement share one MCP server, the same agent can notice
 example, `decompile` fails because a function start was missed), call `report_observation`, and in an improve
 session turn the corpus's matching failures into a candidate.
 
+### Exporting and integrating improvements
+Promotions are only useful if they can leave the machine where they were found. The format is the same at every
+step, so moving them is a copy and a check, not a conversion.
+
+- **Promoted packs are portable files.** `rampage packs export <pack> -o file.rpack` writes one archive. It
+  holds:
+  - the rows or rules, in the existing pack formats;
+  - a manifest: format version, rampage version range, families, a content hash, and per-entry provenance
+    (driving cases, metric deltas, corpus version and split, gate result, revert id).
+
+  `rampage packs import file.rpack` validates the schema, hashes and version range before it adds anything, and
+  `rampage packs diff` shows exactly what an import would change. Packs load through the existing `--packs`
+  layering, so a user can install a pack without rebuilding.
+- **Integrating into the bundled databases is one command:**
+  `rampage-eval bundle --from <pack> [--entries <ids>]`.
+  It merges the selected promoted entries into the repo's bundled-database sources: the same inputs the bundled
+  signature and rule assets are built from today. It then regenerates the assets and reruns the held-out gate
+  against the bundled baseline, because a candidate gated against an older baseline must pass again. If the gate
+  passes, it writes a commit-ready change with a generated summary (entries, metric deltas, provenance links). The
+  change lands through normal review like any other commit; nothing is merged into the bundled databases
+  automatically.
+- **Removal stays easy.** Every bundled entry keeps its provenance id, so
+  `rampage-eval bundle --remove <id>` reverts it the same way.
+- **Imports from other people pass the same gate.** A pack from someone else is data, never code. Before
+  bundling, `bundle` reruns the gate on our corpus, so an imported pack is held to the same standard as a local
+  promotion.
+
 ### Speed
 
 - **Prebuilt, content-addressed corpus.** Binaries are built once from pinned sources: packages × compilers ×
@@ -81,11 +108,14 @@ labels from controlled builds, but the rules need moving into data first), then 
 
 **Acceptance:** an unattended `flywheel` run on the library-ID family promotes at least one candidate. That
 candidate must give a measured held-out improvement with no slice regression. Provenance must make the promotion
-reproducible, and the revert id must undo it cleanly.
+reproducible, and the revert id must undo it cleanly. The promoted pack must then go through `packs export`, then
+`packs import` on a clean checkout, then `rampage-eval bundle`. The result must be a commit-ready change to the
+bundled databases that passes the gate against the bundled baseline.
 
 ## Decisions requested
 1. Approve the `improve` group as an opt-in MCP group behind `--corpus`, with improvement going through the same
    MCP surface as analysis.
 2. Approve library-ID signatures as the first family.
 3. Approve the corpus build: pinned open-source packages, downloaded and compiled locally, and never committed.
-4. Per-round model budget for unattended runs (suggested default: $5 per family per run).
+4. Approve the `.rpack` export/import format and the `bundle` integration command.
+5. Per-round model budget for unattended runs (suggested default: $5 per family per run).
