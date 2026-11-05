@@ -340,6 +340,7 @@ The local server does not itself upload binaries to a model service. An AI clien
 results, strings, disassembly, decompiled code and annotations to its configured provider. Confirm authorization
 to disclose that material before connecting a remote model; local analysis permission is not necessarily upload
 permission. The [desktop assistant](desktop-ui.md#assistant-and-data-disclosure) specifically uses Anthropic's API.
-These tools analyze data and explicit annotations, not arbitrary shell commands or execution of the target.
-Debugger queries can expose process bytes, registers and module paths to the MCP client. Authorization to inspect
+The analysis tools read data and explicit annotations; none runs shell commands or executes the target. The opt-in
+`debug` tools are the exception: they control an operator-started stub's execution, and with the operator's flags
+can write target memory or kill it (see [debug control](debug-control.md#consent)). Debugger queries can expose process bytes, registers and module paths to the MCP client. Authorization to inspect
 that process is not authorization to upload its contents to a model provider.

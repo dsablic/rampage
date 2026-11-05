@@ -184,7 +184,8 @@ directory by default. Legacy unscoped snapshot logs are not automatically loaded
 
 Live read-only debugger queries use `runtime debugger query --socket PATH --request JSON` without an image
 operand. They require an operator-started local endpoint in an authorized stopped LLDB session, not attachment
-or execution control. See the [LLDB protocol and local transport](lldb-query.md).
+or execution control. See the [LLDB protocol and local transport](lldb-query.md). Execution control is in the
+MCP-only [debug tools](debug-control.md).
 
 | Primary route and operands | Compatibility spelling |
 | --- | --- |

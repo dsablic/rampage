@@ -1,6 +1,8 @@
 # Debugger execution control (Phase 9) — design for review
 
-Status: **approved 2026-10-29** with the decisions under "Approval decisions" below. Nothing here is implemented yet. The parity roadmap requires an approved design
+Status: **approved 2026-10-29** with the decisions under "Approval decisions" below. 9.1–9.4 are done; 9.5
+(macOS `debugserver`) and 9.6a (Windows through RSP stubs) are implemented, with live acceptance pending. See
+[Phased delivery](#phased-delivery) and the user-facing [debug control guide](../debug-control.md). The parity roadmap requires an approved design
 before any launch, attach, resume, step, breakpoint or target-write code lands (`docs/plans/2026-10-16-ida-ghidra-
 parity-roadmap.md`, Phase 9; `todo.md` "execution-control debugger integration requires separate design/review").
 
@@ -77,13 +79,15 @@ the target description) before it reaches a typed result.
 | Tool | Purpose |
 |---|---|
 | `debug_connect` | Connect to an allowed endpoint; optionally bind a project path. Returns session id, architecture, features, threads, stop reason, modules, epoch. |
+| `debug_bind` | Bind a project to one of the session's runtime modules after connecting (added in 9.3). |
 | `debug_status` | Current state, epoch, stop reason, threads. |
 | `debug_registers` | Typed registers for a thread (all or named), with the target description's names and sizes. |
 | `debug_read_memory` | Bounded memory read; hex plus optional decode through `inspect_data`-style typing. |
-| `debug_continue` / `debug_wait` / `debug_interrupt` | Resume (all or one thread) with a bounded wait; wait again; interrupt. |
+| `debug_continue` / `debug_wait` / `debug_interrupt` | Resume every thread (all-stop; per-thread resume was not implemented) with a bounded wait; wait again; interrupt. |
 | `debug_step` | Single-step instructions (count ≤ 1000), or `over: true` to step over a call using rampage's own decoder to place a temporary breakpoint after the call. |
-| `debug_breakpoints` | Set/clear/list software and hardware breakpoints and watchpoints, by runtime address, static address or function name in the bound project. Conditions and hit counts are evaluated by rampage, not by the stub. |
+| `debug_breakpoints` | Set/clear/list software and hardware breakpoints and watchpoints, by runtime address, static address or function name in the bound project. Rampage counts hits; conditions and ignore counts are not implemented (see the deviations). |
 | `debug_modules` | Loaded modules, each matched (by path, build id/UUID, or hash of mapped bytes) to the bound project with its slide. |
+| `debug_evidence` | A bounded record of the stop with a ready `record_finding` evidence item (added in 9.3). |
 | `debug_snapshot` | Capture the stopped state to a `rampage-snapshot-v1` file (regions, registers, modules) so every existing runtime tool works on it. |
 | `debug_write_memory` / `debug_write_register` | Only with `--debug-writes`; epoch-checked; returns before/after bytes. |
 | `debug_disconnect` | Detach (default) or kill (only with `--debug-kill`). |
@@ -100,12 +104,12 @@ recorded in the project's findings ledger with the debug session as evidence.
 
 | Step | Scope | Risk |
 |---|---|---|
-| 9.1 | **Done 2026-10-29** (`55f9f22`; live QEMU Cortex-M3 acceptance passes). `rampage-debug` crate: framing, parser fuzzing, scripted fake stub for tests; read-only tools (`connect`, `status`, `registers`, `read_memory`, `modules`, `snapshot`, `disconnect` with detach). No execution. | Low: equivalent to today's read-only LLDB bridge over a different transport. |
+| 9.1 | **Done 2026-10-29** (`bbc68e9`; live QEMU Cortex-M3 acceptance passes). `rampage-debug` crate: framing, parser fuzzing, scripted fake stub for tests; read-only tools (`connect`, `status`, `registers`, `read_memory`, `modules`, `snapshot`, `disconnect` with detach). No execution. | Low: equivalent to today's read-only LLDB bridge over a different transport. |
 | 9.2 | **Done 2026-11-04** (`019c5b3`; live QEMU Cortex-M3 acceptance passes). Execution control: continue/wait/interrupt, step, breakpoints and watchpoints; stop epochs enforced. | Medium. |
 | 9.3 | **Done 2026-11-05** (`b111cea`; live QEMU Cortex-M3 acceptance passes). Static correlation: binding, slides, symbolic breakpoints, step-over via rampage decoders, stop-location enrichment. | Medium. |
 | 9.4 | **Done 2026-11-05** (`4b2190d`; live QEMU RAM, register and flash writes and kill pass). Writes behind `--debug-writes`; kill behind `--debug-kill`. | Higher; reviewed separately. |
 | 9.5 | **Implemented 2026-11-05** (`6a184b3`); live debugserver acceptance pending (needs DevToolsSecurity enabled). macOS `debugserver` acceptance (RSP plus LLDB extensions); evaluate driving LLDB's SB API through the existing bridge for crash/core files. | Platform-dependent. |
-| 9.6 | Windows: separate short design (dbgeng vs. a GDB stub such as a Windows gdbserver). Option A (RSP stub) approved 2026-11-05: `docs/plans/2026-11-05-debugger-windows.md`. | — |
+| 9.6 | **9.6a implemented 2026-11-05** (`ad68ed5`..`25bfed6`); live acceptance pending (no Windows host). Windows: separate short design (dbgeng vs. a GDB stub such as a Windows gdbserver); Option A (RSP stub) approved 2026-11-05: [`2026-11-05-debugger-windows.md`](2026-11-05-debugger-windows.md). 9.6a covers user-mode processes through `gdbserver.exe` and `lldb-server`; Option B (DbgEng) is deferred. | Platform-dependent. |
 
 Each step follows the wave cadence: implementation, fresh-context review, fixes, full suite, then MCP-level acceptance.
 
@@ -154,7 +158,8 @@ evaluation only; nothing is implemented.
 ## What this deliberately does not do
 
 - No process launch or attach by rampage; no plugin or host launch.
-- No expression evaluation in the stub; conditions are rampage-side and typed.
+- No expression evaluation in the stub. Breakpoint conditions were planned rampage-side and typed, and are not
+  implemented (see the deviations).
 - No remote endpoints unless the operator lists them; no publishing of runtime bytes (they stay local, as today).
 - No automatic writes, ever; no kill without both the flag and an explicit argument.
 - Debug tools are not offered to the in-app UI assistant until the UI has its own consent flow.
@@ -212,6 +217,9 @@ evaluation only; nothing is implemented.
   a QEMU-owning task kind, an execution-effect permission class for the debug tools and `record_finding`, and a
   firmware function with arguments and a return value. The live acceptance runs the same sequence through the tool
   layer instead (break on a named function, read registers, step out, record a finding with `debug_evidence`).
+- **9.3, breakpoint conditions:** not added. The 9.2 deviation left conditions and hit counts beyond counting to
+  9.3, and 9.3 did not implement them. Breakpoints have hit counts but no conditions or ignore counts; agents check
+  values themselves after a stop.
 - **9.3, stop locations:** `debug_status`'s `last_stop` is not located; the results of continue, wait, interrupt
   and step are.
 - **9.5, transcripts:** debugserver could not run on the machine 9.5 was written on (developer tools security

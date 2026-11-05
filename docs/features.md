@@ -1,6 +1,7 @@
 # Feature reference
 
-rampage provides static binary analysis through a CLI, MCP server and desktop UI. Findings are evidence for an
+rampage provides static binary analysis through a CLI, MCP server and desktop UI, and opt-in live debugging of
+operator-started stubs through MCP. Findings are evidence for an
 investigation, not proof of behavior, recovered original source or parity with another reverse engineering tool.
 See the [CLI reference](cli-reference.md) for commands and [MCP reference](mcp.md) for tool names.
 
@@ -423,6 +424,7 @@ took milliseconds. Timings depend on the binary, machine, build and query, and a
 | `rampage-arch` | Instruction decoding with control-flow classification |
 | `rampage-analysis` | Strings, recursive-descent discovery and cross-references |
 | `rampage-api` | Session/query layer shared by clients |
+| `rampage-debug` | GDB remote protocol client, target descriptions and session thread for the `debug` tools |
 | `rampage-mcp`, `rampage-cli`, `rampage-ui` | MCP server, CLI and desktop clients |
 | `rampage-decompiler`, `rampage-worker` | Embedded native engine/specifications and supervised worker |
 | `rampage-decode` | Bounded decoder providers for explicitly requested file ranges |

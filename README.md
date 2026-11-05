@@ -17,10 +17,13 @@ confidence and limitations; producing C is not proof of correct recovery.
   PyInstaller archives and WebAssembly modules.
 - Managed code: .NET metadata, method/property signatures, attributes and paged CIL disassembly;
   CIL remains separate from native analysis.
+- Debugging (opt-in, MCP only): GDB remote stubs, macOS `debugserver` and Windows RSP stubs (the last two not
+  yet live-verified); all-stop control, breakpoints, project correlation, and writes or kill behind operator flags.
 
-Use rampage for files and captures you own or have permission to inspect. Analysis does not execute the target,
-launch/attach/resume a target process or bypass protections. Snapshot capture and the LLDB query bridge operate only
-inside an existing authorized stopped debugger session. Native decompiler supervision is not an OS sandbox.
+Use rampage for files, captures and processes you own or have permission to inspect. Static analysis never
+executes the target or bypasses protections. The opt-in `debug` tools control a GDB remote stub or `debugserver`
+that the operator started and allowed; rampage never launches or attaches to a process. The LLDB query bridge
+reads an existing authorized stopped LLDB session. Native decompiler supervision is not an OS sandbox.
 See the [feature reference](docs/features.md) for architecture coverage and limits, and
 [the parity roadmap](docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md) for planned work.
 
@@ -96,6 +99,8 @@ Local analysis and MCP serving do not require an API key. See the client referen
 
 Additional focused guides:
 
+- [Debug sessions](docs/debug-control.md): operator-allowed GDB remote stubs, `debugserver` and Windows stubs;
+  execution control, project correlation, and writes or kill behind operator flags.
 - [Runtime snapshots](docs/runtime-snapshots.md) and the [read-only LLDB query bridge](docs/lldb-query.md).
 - [Exact-entry analysis](docs/entry-analysis.md): opt-in decompilation, independent entry diagnostics and limits.
 - [Desktop exact-entry](docs/exact-entry-ui.md): deferred opening, validation, explicit Run and cooperative Cancel.

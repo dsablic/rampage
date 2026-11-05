@@ -3,6 +3,9 @@
 Use snapshots for programs you own or have permission to inspect. Rampage does not launch processes,
 attach debuggers, bypass protections or modify the captured application.
 
+Snapshots come from the LLDB exporter below or from the MCP `debug_snapshot` tool, which captures a stopped target
+under an operator-allowed GDB remote stub; see [debug control](debug-control.md#snapshots).
+
 ## Export from LLDB
 
 With an authorized process already stopped in LLDB:

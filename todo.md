@@ -1,6 +1,14 @@
 # To do
 
-## Parity roadmap: Phases 0–3 and 4.1 implementation completed; live Phase 1 sign-off open
+## Status (2026-11-05)
+
+- Parity roadmap: Phases 0–3 and 4.1 implemented; live Phase 1 sign-off, the Phase 2 recall target and the
+  Phase 3.3 live improvement gate are open. Phase 4.2 is next in roadmap order.
+- Debugger (Phase 9): 9.1–9.4 done; 9.5 (macOS `debugserver`) and 9.6a (Windows through RSP stubs) implemented,
+  live acceptance pending. See `docs/plans/2026-10-29-debugger-control.md`.
+- REA gap-closing wave 1 (2026-10-29): `formats` tools and the findings ledger done; log compaction open.
+
+## Parity roadmap Phase 0: parity scorecard completed
 
 Execution ordering follows `docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md`. One milestone at a time;
 parallel slices share central builds and undergo fresh-context review before publication.
@@ -1340,16 +1348,18 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   context or cropped-image behavior.
 - [x] First bounded static multi-module workspace slice is implemented below; broader type/ABI recovery and
   runtime cross-module resolution still require independent acceptance.
-- [ ] Future: read-only GDB and Windows debugger inspection backends, each with separate platform acceptance.
+- [ ] Windows debugging (9.6a): implemented through RSP stubs; live acceptance on a Windows host is open. The GDB
+  remote backend is done (9.1).
 - [x] Execution-control design approved 2026-10-29 (`docs/plans/2026-10-29-debugger-control.md`); Phase 9.1
   (read-only GDB remote protocol tools, `docs/debug-control.md`) and 9.2 (all-stop execution control: continue/wait/interrupt, step,
   breakpoints and watchpoints, stop epochs, cancellation) and 9.3 (static correlation: project binding, symbolic breakpoints,
   step-over/out, stop locations) and 9.4 (writes behind `--debug-writes`, kill behind `--debug-kill`) are done;
   9.5 (macOS debugserver) is implemented against LLVM-sourced transcripts, but its live acceptance
   (`RAMPAGE_DEBUGSERVER_LIVE=1`, `test(debug_debugserver_live::)`) has not run: it needs
-  `sudo DevToolsSecurity -enable` on the test machine. 9.6 (Windows) awaits review of
-  `docs/plans/2026-11-05-debugger-windows.md`. Launch, attach, resume, step, breakpoints, expressions and
-  target writes are not part of the read-only workspace milestone.
+  `sudo DevToolsSecurity -enable` on the test machine. 9.6 (Windows): Option A of
+  `docs/plans/2026-11-05-debugger-windows.md` was approved in `0f1eacf`, and 9.6a (RSP stubs) is implemented
+  (`25bfed6`); its live acceptance (`RAMPAGE_WINDOWS_LIVE=1`) needs a Windows host. The LLDB workspace window itself
+  stays read-only: launch, attach, resume, step, breakpoints, expressions and target writes are not part of it.
 
 ### Deferred exact-entry UI and reviewed static workspaces
 
@@ -1388,8 +1398,9 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [x] Protected 940-file candidate-source audit and scanner bypass regressions passed. Committed-tree/full-history
   audit is required before private push; no release tag or Actions dispatch is part of this milestone.
 - [ ] Broader derived analysis caches and runtime cross-module resolution; the historical inventory and static PE
-  declaration slices below do not complete these. Broader ABI/type recovery, GDB/Windows backends and affirmative
-  ARM64 runtime DATA-order evidence remain open. Execution controls require separate reviewed scope.
+  declaration slices below do not complete these. Broader ABI/type recovery and affirmative
+  ARM64 runtime DATA-order evidence remain open. The GDB backend and execution control landed in Phase 9.1–9.4 and
+  Windows (live acceptance pending) in 9.6a; see `docs/plans/2026-10-29-debugger-control.md`.
 
 ### Static references, responsive file operations and historical inventory
 
@@ -1682,6 +1693,8 @@ arbitrary debugger control and multi-module runtime resolution must not be infer
 8. **Debugger integration:** plan an LLDB-first read-only bridge after static acceptance, with explicit session/
    stop identities, module/thread navigation, quiescent capture manifests and agent/UI queries. Attach, resume,
    breakpoint insertion and target writes require separately reviewed controls; no automatic host or plugin launch.
+   Superseded for execution control by Phase 9 (`docs/plans/2026-10-29-debugger-control.md`): resume, step,
+   breakpoints and writes now go through the reviewed `debug` tools; rampage still never attaches or launches.
    - [x] In-session `rampage-query` foundation for session/module/thread, fresh-register and raw-memory queries,
      with bounded JSON, stale stop tokens, exact known permissions and honest endian/stop evidence. Controlled
      owned-fixture acceptance covers Apple LLDB; no command passthrough, attach/resume/evaluation/writes/listener.
