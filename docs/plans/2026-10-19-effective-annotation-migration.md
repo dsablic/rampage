@@ -58,4 +58,4 @@ Pilot exact-entry read snapshots plus representative type/operand presentation r
 independently and exercise old/new held snapshots before applying the same classification elsewhere.
 Maintain an explicit inventory of direct/indirect reads and tokens, identifying each authoritative use.
 Completion requires no unclassified reads/tokens, no new compiler errors and passing focused lifecycle and
-read-only tests. Global cross-platform/CI acceptance remains separate; CI dispatch is not authorized.
+read-only tests. Global cross-platform/CI acceptance remains separate; CI dispatch is out of scope.

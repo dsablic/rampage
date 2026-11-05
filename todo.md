@@ -33,7 +33,7 @@ during the benchmark.
 - [ ] Genuine live checked import → central C++ struct retype → owner-linked field verification and fresh replay.
 - [ ] Record successful reconstruction call bound N and independent DWARF agreement; execution caps are not N.
 - [ ] Diagnose the model-side failure only with new evidence; keep first attempts and prior publications frozen.
-- [ ] Do not claim full Phase 1 acceptance from controlled test success alone. The user explicitly authorized
+- [ ] Do not claim full Phase 1 acceptance from controlled test success alone. The maintainer approved
   proceeding through Phases 2–6 while this live acceptance gate remains open; frozen results are unchanged.
 - [ ] Carry forward the native C++ class-evidence limit: stripped exceptions workload currently yields no class
   rows; symbolized vtables are skipped as not mapped read-only. Do not relax evidence rules to inflate scores.
@@ -455,7 +455,7 @@ Successful loading, discovery and C emission do not establish usable recovery. H
 unresolved wrapper jumps, missing debug types and absent named vtables need explicit diagnostics. These are
 evidence and limitations, not proof of encryption or verified function counts.
 
-Work in this order, with synthetic regressions and fresh-context review for each increment:
+Work in this order, with synthetic regressions and independent review for each increment:
 
 1. [x] Structured recovery diagnostics: export engine warnings, bad-data/unimplemented flags and unresolved
    calls/jump tables. Surface warnings in CLI/API/MCP/UI and separate successful output from usable recovery in
@@ -498,7 +498,7 @@ Work in this order, with synthetic regressions and fresh-context review for each
      raw observations; unsupported/control-flow/authenticated/incomplete cases remain explicit.
    - [x] Explicit API/CLI/MCP paired-slot comparisons across captures with raw equal/changed/unavailable outcomes,
      independent mapping/target assessments and capture identities; no inferred chronology or module ownership.
-7. [ ] Authorized runtime acceptance: user supplies an already-loaded/stopped instance in a legitimate host;
+7. [ ] Authorized runtime acceptance: an analyst supplies an already-loaded/stopped instance in a legitimate host;
    capture selected code and referenced data, correlate the original UUID, rerun diagnostics/decompilation and
    report before/after warning/coverage metrics. This is blocked on an authorized host capture, not static parsing.
 
@@ -576,5 +576,5 @@ read-only triage inputs, never patch fixtures. Runtime tests use programs we bui
 
 Committed-foundation validation includes full debug/release suites, warnings-denied Clippy, UI snapshots,
 CLI/API/MCP regressions, malformed-input bounds, native/compiled fixtures, exporter tests, the opt-in live
-capture test, debugger-cleanup regressions, Ruff/ty and fresh-context reviews. The earlier full-debug timeout
+capture test, debugger-cleanup regressions, Ruff/ty and independent reviews. The earlier full-debug timeout
 was the one-time vendored C++ build; subsequent debug/release workspace suites passed.

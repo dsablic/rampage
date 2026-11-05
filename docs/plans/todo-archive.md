@@ -7,7 +7,7 @@ is where they are tracked; an unchecked box here is a frozen copy.
 ## Parity roadmap Phase 0: parity scorecard completed
 
 Execution ordering follows `docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md`. One milestone at a time;
-parallel slices share central builds and undergo fresh-context review before publication.
+parallel slices share central builds and undergo independent review before publication.
 
 - [x] Required source-built corpus: genuine GCC `-O0/-O2`, Clang, x64/AArch64 ELF, AArch64 Mach-O, x64 PE,
   Thumb and MIPS32 BE, plus C++/exceptions, Go, Rust and pinned MIT Lua. Twelve verified profiles plus Lua.
@@ -201,7 +201,7 @@ the final reviewed report omits its matrix. Actual paired MCP metadata receipts 
 binary revision or prove complete boundaries. This is a bounded publication, not full matrix acceptance,
 default promotion, fresh validation, a live model result, or authorization to skip the remaining 2.1 gate.
 
-The latest requested order is to finish all of Phase 2, then top-level Phases 3–6. Bounded 2.1 delivery and
+The planned order is to finish all of Phase 2, then top-level Phases 3–6. Bounded 2.1 delivery and
 the supported 2.2/2.3 implementation are complete. Source-corpus infrastructure is not full acceptance of the library-recognition phase;
 the independent live Phase 1 gate remains open.
 
@@ -1330,7 +1330,7 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   explicit original Mach-O correlation verified with ASLR enabled. Capture artifacts were removed.
   This is a historical byte/identity result: the later DATA-order review supersedes its ARM64 export-provenance
   claim, and current export refuses ARM64 rather than inferring DATA order from target architecture.
-- [x] Previous committed milestones passed full debug/release suites and fresh-context review.
+- [x] Previous committed milestones passed full debug/release suites and independent review.
 - [x] Ghidra comparisons for rampage's own analysis: `tools/cfg-benchmark.py` (+ `tools/ghidra_cfg_export.java`,
   hidden `rampage export-cfg`) compares blocks, CFG edges and call edges on 18 fixtures (docs/benchmarks.md), Ghidra
   as reference, not ground truth. IDA is still absent.

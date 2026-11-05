@@ -76,7 +76,7 @@ Main gaps, by impact on an agent's ability to finish real tasks:
 
 1. **One active milestone at a time.** Finish, review and commit a milestone before starting the next. The
    only allowed parallelism is independent slices *inside* the current milestone, run as a wave, each wave
-   followed by a fresh-context review whose findings are fixed before commit.
+   followed by an independent review whose findings are fixed before commit.
 2. **Measure first.** Every milestone starts by adding or extending a scorecard measurement (Phase 0) that
    fails or is low, and ends with that measurement improved and recorded in `docs/benchmarks.md`. No
    measurement, no "done".
@@ -99,8 +99,8 @@ Main gaps, by impact on an agent's ability to finish real tasks:
 8. **Relationship to the investigation workloads in `todo.md`.** Close its "Current baseline" batch first
    (it is mid-flight). After that, this roadmap is the active priority, and the investigations (explain a
    third-party audio plugin or firmware image you are authorized to analyse) become *acceptance workloads*: at
-   the end of each phase, re-run one real investigation through MCP and note which blockers the phase removed. (The user should confirm this ordering;
-   if they prefer to finish Batches 2-3 first, start Phase 0 after Batch 3.)
+   the end of each phase, re-run one real investigation through MCP and note which blockers the phase removed.
+   (If Batches 2-3 are finished first instead, Phase 0 starts after Batch 3.)
 
 ---
 
@@ -354,7 +354,7 @@ listing/pseudocode highlighting, bookmarks. Use `egui_kittest` snapshot tests as
 `docs/plans/<date>-debugger-control.md` covering: GDB remote serial protocol first (covers gdbserver, QEMU,
 OpenOCD/embedded probes, many emulators) then LLDB, then Windows; breakpoints, step, register/memory read and
 write, module tracking; MCP tools with explicit operator consent per session. Do not start implementation until
-the user approves the design.
+the design is approved.
 
 *Status (2026-11-05):* design approved 2026-10-29 as
 [`2026-10-29-debugger-control.md`](2026-10-29-debugger-control.md). 9.1–9.4 done; 9.5 (macOS `debugserver`)
@@ -380,5 +380,5 @@ implemented, live acceptance pending; 9.6a (Windows through RSP stubs, Option A 
 | 9 | Debugger control | Needs separate approved design |
 
 At the end of each phase: update the scorecard, re-run one real investigation (audio plugin or firmware)
-through MCP, record removed and remaining blockers in `todo.md`, and get a fresh-context review of the phase as
+through MCP, record removed and remaining blockers in `todo.md`, and get an independent review of the phase as
 a whole before starting the next.

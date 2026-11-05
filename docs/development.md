@@ -1,7 +1,7 @@
 # Build and validate without accumulating large caches
 
 Use one toolchain, consistent compiler flags and one shared workspace `target` directory for routine development.
-Parallel code review does not require per-agent builds or separate target directories. Coordinate build/test runs
+Parallel code review does not require separate builds or target directories. Coordinate build/test runs
 instead of starting competing variants of the whole dependency graph.
 
 ## Build and check

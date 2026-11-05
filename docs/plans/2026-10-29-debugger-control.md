@@ -112,7 +112,7 @@ recorded in the project's findings ledger with the debug session as evidence.
 | 9.5 | **Implemented 2026-11-05** (`6a184b3`); live debugserver acceptance pending (needs DevToolsSecurity enabled). macOS `debugserver` acceptance (RSP plus LLDB extensions); evaluate driving LLDB's SB API through the existing bridge for crash/core files. | Platform-dependent. |
 | 9.6 | **9.6a implemented 2026-11-05** (`c3f9669`); live acceptance pending (no Windows host). Windows: separate short design (dbgeng vs. a GDB stub such as a Windows gdbserver); Option A (RSP stub) approved 2026-11-05: [`2026-11-05-debugger-windows.md`](2026-11-05-debugger-windows.md). 9.6a covers user-mode processes through `gdbserver.exe` and `lldb-server`; Option B (DbgEng) is deferred. | Platform-dependent. |
 
-Each step follows the wave cadence: implementation, fresh-context review, fixes, full suite, then MCP-level acceptance.
+Each step follows the same cadence: implementation, independent review, fixes, full suite, then MCP-level acceptance.
 
 ## LLDB's SB API for crash and core files (9.5 evaluation)
 
@@ -388,7 +388,7 @@ Without both variables it skips with a message. It has not yet run against a rea
   default); Linux AArch64 pointer authentication (`pauth_cmask` registers) is not read.
 - **9.5, interrupts:** debugserver stops an interrupted process with SIGSTOP, which counts as `interrupted` on an
   Apple stub only.
-- **9.5, review against LLVM main:** a fresh-context review of the protocol assumptions against debugserver's
+- **9.5, review against LLVM main:** an independent review of the protocol assumptions against debugserver's
   source led to these changes. `g` and `G` are never sent to an Apple stub (newer debugserver dropped them; older
   ones send a padded register context their gapless offsets do not describe); registers come from `p` and the stop
   reply's expedited registers, cached per stop, and register writes use `P` only. The image list is fetched as LLDB

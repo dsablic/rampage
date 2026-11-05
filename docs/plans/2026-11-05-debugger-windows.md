@@ -25,7 +25,7 @@ done, and 9.5 (macOS `debugserver`) is implemented (`6a184b3`) with live accepta
 | Consent model | Unchanged | Mostly unchanged. The operator's debugger owns the attach; rampage connects as a client. Its command channel must be restricted to a typed allowlist, like the RSP packet classes, never free-form debugger commands |
 | Risk | Low. Stub maturity on Windows is the unknown (see below) | Medium to high: COM bindings, Windows-only CI, and a command surface that is harder to allowlist |
 
-### Facts to verify before choosing (I couldn't verify these from here)
+### Facts to verify before choosing (not verifiable without a Windows host)
 
 - **lldb-server on Windows.** Its Windows support landed upstream through LLVM review D56233, "Make lldb-server
   work on Windows". Its maturity in current LLVM releases (x64 and arm64), especially exceptions and watchpoints,
@@ -90,7 +90,7 @@ was decided while building it, from the stubs' sources (GDB's `gdbserver/win32-l
   read as hex, as LLDB reads it.
 - **WoW64** under gdbserver is supported and tested with an x86 fixture; lldb-server's WoW64 is untested. **arm64
   Windows** was not built: both stubs have arm64 code, and rampage's AArch64 handling would apply.
-- **Review fixes.** A fresh-context review against the sources led to these changes:
+- **Review fixes.** An independent review against the sources led to these changes:
   - gdbserver names the `Windows` OS ABI only from GDB 16 on. Older ones are recognized as an x86 GDB stub listing
     Windows-style libraries without svr4, confirmed by `qGetTIBAddr` or an `MZ` header 0x1000 below a library's
     segment address.
