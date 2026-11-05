@@ -45,17 +45,20 @@ def main() -> None:
     parser.add_argument("out", type=Path)
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--rea-timeout-ms", type=int, default=3_600_000)
+    parser.add_argument("--rea-maxmem", default="16G")
     arguments = parser.parse_args()
     base = {name: os.environ[name] for name in ("HOME", "PATH", "TMPDIR", "USER") if name in os.environ}
     rampage = ROOT / "target/release/rampage"
     rea = ROOT / "target/bench/rea/src/scripts/rea.mjs"
     rea_environment = {**base, "GHIDRA_INSTALL_DIR": GHIDRA, "JAVA_HOME": JAVA, "REA_ANALYSIS_PROVIDER": "ghidra",
-                       "REA_GHIDRA_STARTUP_TIMEOUT_MS": str(arguments.rea_timeout_ms)}
+                       "REA_GHIDRA_STARTUP_TIMEOUT_MS": str(arguments.rea_timeout_ms),
+                       "GHIDRA_HEADLESS_MAXMEM": arguments.rea_maxmem}
     results: dict = {"file_sha256": hashlib.sha256(arguments.file.read_bytes()).hexdigest(),
                      "file_bytes": arguments.file.stat().st_size, "rampage": [], "rea": [],
                      "rampage_command": "rampage --json function list FILE",
                      "rea_command": f"rea decompile FILE --procedure {arguments.procedure} --provider ghidra",
-                     "rea_ghidra_startup_timeout_ms": arguments.rea_timeout_ms}
+                     "rea_ghidra_startup_timeout_ms": arguments.rea_timeout_ms,
+                     "rea_ghidra_headless_maxmem": arguments.rea_maxmem}
     for _ in range(arguments.repeat):
         results["rampage"].append(timed([str(rampage), "--json", "function", "list", str(arguments.file)], base))
         rea_command = ["node", str(rea), "decompile", "--procedure", arguments.procedure, "--provider", "ghidra",

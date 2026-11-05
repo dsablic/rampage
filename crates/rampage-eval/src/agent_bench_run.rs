@@ -69,6 +69,10 @@ pub struct AgentBenchArgs {
     /// failing (REA's own default, 330000, applies when unset).
     #[arg(long)]
     rea_ghidra_startup_timeout_ms: Option<u64>,
+    /// GHIDRA_HEADLESS_MAXMEM for the REA server: the Java heap REA gives headless Ghidra (REA's own default,
+    /// 2G, applies when unset), such as `16G`.
+    #[arg(long)]
+    rea_ghidra_maxmem: Option<String>,
     /// Measurements made outside the agent runs (NAME=PATH to a JSON file), embedded in the report under
     /// `attachments.NAME`.
     #[arg(long = "attach", value_parser = parse_attachment)]
@@ -179,6 +183,9 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
                 if let Some(timeout) = args.rea_ghidra_startup_timeout_ms {
                     env["REA_GHIDRA_STARTUP_TIMEOUT_MS"] = json!(timeout.to_string());
                 }
+                if let Some(maxmem) = &args.rea_ghidra_maxmem {
+                    env["GHIDRA_HEADLESS_MAXMEM"] = json!(maxmem);
+                }
                 let config = json!({"mcpServers": {"rea": {"type": "stdio",
                     "command": node, "args": [entry, "mcp"], "env": env}}});
                 let record = absolute(args.rea_install_record.as_ref(), "target/bench/rea/install.json")?;
@@ -196,7 +203,8 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
                     "provider": "ghidra",
                     "tool_families": args.rea_tool_families.as_deref().unwrap_or("default (complete catalog)"),
                     "ghidra_startup_timeout_ms": args.rea_ghidra_startup_timeout_ms
-                        .map_or_else(|| json!("default (330000)"), |timeout| json!(timeout))}),
+                        .map_or_else(|| json!("default (330000)"), |timeout| json!(timeout)),
+                    "ghidra_headless_maxmem": args.rea_ghidra_maxmem.as_deref().unwrap_or("default (2G)")}),
                 )
             }
         };
