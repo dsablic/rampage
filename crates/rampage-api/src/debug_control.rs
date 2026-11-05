@@ -237,6 +237,7 @@ impl DebugRegistry {
             limitations: info.limitations.clone(),
             lldb: info.lldb.clone(),
             address_mask: info.address_mask.clone(),
+            windows: info.windows.clone(),
             threads: FittedPage::empty(),
         };
         let budget = item_budget(&connection)?;
@@ -977,6 +978,26 @@ fn snapshot_modules(modules: &[rampage_debug::Module]) -> Result<Vec<SnapshotMod
             runtime_base: format!("{:#x}", image.load_address),
         });
     }
+    // PE images (Windows stubs): the CodeView record identifies the image, else its runtime base; addresses are
+    // relative to the image base (`image_base` 0, `runtime_base` the base), as RVAs.
+    for module in modules {
+        let Some(image) = &module.pe else { continue };
+        let uuid = match &image.codeview {
+            Some(codeview) => format!("pe-codeview:{}{:08x}", rampage_arch::hex::bytes(&codeview.guid), codeview.age),
+            None => format!("pe-image:{:#x}", image.base),
+        };
+        if !seen.insert(rampage_loaders::snapshot::canonical_module_identity(&uuid)) {
+            continue;
+        }
+        let path = truncate_bytes(&module.name, 4096);
+        entries.push(SnapshotModule {
+            name: path.rsplit(['/', '\\']).next().unwrap_or("").to_owned(),
+            path,
+            uuid,
+            image_base: "0x0".into(),
+            runtime_base: format!("{:#x}", image.base),
+        });
+    }
     for module in modules.iter().filter(|module| module.l_addr.is_some()) {
         let link_map = format!("gdb-link-map:{:#x}", module.lm.unwrap_or(0));
         let build_id = module.build_id.as_ref().map(|id| {
@@ -1116,6 +1137,9 @@ pub struct DebugConnection {
     /// arm64: how pointer authentication codes are taken off return addresses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address_mask: Option<rampage_debug::AddressMask>,
+    /// A Windows target: which stub (gdbserver or lldb-server) and what shows it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows: Option<rampage_debug::WindowsTarget>,
     pub threads: FittedPage<rampage_debug::ThreadInfo>,
 }
 
