@@ -187,7 +187,7 @@ pub use plugin_triage::{
 };
 pub use pointer_compare::{PointerChange, PointerComparison};
 pub use pointer_observation::{PointerAssessment, PointerObservation};
-pub use project::{AnalysisCacheStatus, PdbImport, PdbPreview, Project};
+pub use project::{AnalysisCacheStatus, GoLiteral, PdbImport, PdbPreview, Project, StringRow};
 pub use project_workspace::{
     LoadedProjectModule, LoadedProjectWorkspace, ProjectWorkspaceCaptureIdentity, ProjectWorkspaceIdentity,
     ProjectWorkspaceImage, ProjectWorkspaceManifest, ProjectWorkspaceModule, ProjectWorkspaceModuleInput,

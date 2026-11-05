@@ -125,6 +125,11 @@ Binary tools take `path`, optional `arch`, and optional `image_offset`/`image_le
 symbols, exports, import-stub names and `sub_<hex>`. Runtime comparison slots/ranges and branch windows require
 explicit hexadecimal addresses. See [CLI global options](cli-reference.md#global-options-and-addresses).
 
+With `contains`, `list_strings` rows carry `match_address`, where the text matches inside the string. Go string
+data is not NUL-terminated, so in a Go image a run of joined literals carries a `note`, and a match its
+`go_literal` bounds: the last address code references at or before the match, the first one after it (or the
+run's end), and how many references the start has. Do not count offsets into such a run by hand.
+
 `function_summary` with `view=summary` or `view=code` adds `callees` (distinct call targets with names and call
 counts) and does not refuse for size. When a large function does not fit 60,000 bytes, its graph blocks,
 references and callees are returned as whole-row pages: `graph.blocks_offset`/`blocks_next_offset`,

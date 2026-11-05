@@ -809,6 +809,29 @@ async fn failures_are_tool_errors_the_caller_can_read() {
     client.cancel().await.unwrap();
 }
 
+/// Benchmark v2: in the stripped Hugo binary, list_strings returned the searched string inside one run of joined
+/// Go literals, and an agent computed its address by hand, 0x2a bytes off, and followed the wrong references.
+#[tokio::test]
+async fn go_string_runs_give_the_exact_match_address_and_referenced_literal_bounds() {
+    let client = connect().await;
+    let path = fixture("hello-go-x64.elf");
+    let needle = "invalid memory address or nil pointer dereference";
+    let page = json_of(&call(&client, "list_strings", json!({ "path": path, "contains": needle })).await);
+    let row = &page["items"][0];
+    assert!(row["text"].as_str().unwrap().len() > needle.len() + 20, "a joined run: {row}");
+    assert!(row["note"].as_str().unwrap().contains("not NUL-terminated"), "{row}");
+    let start = u64::from_str_radix(row["address"].as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+    let offset = row["text"].as_str().unwrap().find(needle).unwrap() as u64;
+    assert_eq!(row["match_address"], json!(format!("{:#x}", start + offset)));
+    // The literal is referenced by code: its start is the match, and it ends where the next literal starts.
+    let literal = &row["go_literal"];
+    assert_eq!(literal["start"], row["match_address"], "{row}");
+    assert!(literal["start_references"].as_u64().unwrap() >= 1, "{row}");
+    let end = u64::from_str_radix(literal["end"].as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+    assert_eq!(end, start + offset + needle.len() as u64, "{row}");
+    client.cancel().await.unwrap();
+}
+
 #[tokio::test]
 async fn pointer_observations_preserve_writable_slot_values_without_annotations() {
     let client = connect().await;

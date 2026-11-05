@@ -2658,10 +2658,13 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "list_strings",
-            "Printable strings with their addresses. Filter with `contains`; paginated.",
+            "Printable strings with their addresses. Filter with `contains`; paginated. With `contains`, \
+             match_address is where the text matches inside each string. Go string data is not NUL-terminated, so \
+             in a Go image a long run of joined literals carries a note, and a match its go_literal bounds (from \
+             the addresses code references); never count offsets into a run by hand.",
             |project, mut query: StringsQuery| {
                 query.limit = page_limit(query.limit);
-                Ok(project.strings(&query))
+                Ok(project.string_rows(&query))
             },
         ),
         tool(
