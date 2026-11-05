@@ -33,7 +33,11 @@ VENDORED = [
         "Ghidra decompiler",
         "Apache-2.0",
         "https://github.com/NationalSecurityAgency/ghidra",
-        "Vendored and adapted C++ decompiler compiled into crates/rampage-decompiler.",
+        "Vendored and adapted C++ decompiler compiled into crates/rampage-decompiler.\n"
+        "The Ghidra 12.1.4 parser adaptations in context.cc bound instruction byte/bit\n"
+        "extraction and zero-extend partial pattern-word lookahead. context.hh exposes\n"
+        "pending context-commit evidence for conservative standalone decoding. Upstream\n"
+        "Apache-2.0 headers and the complete license below are retained.",
         ["crates/rampage-decompiler/vendor/ghidra/LICENSE"],
     ),
     (

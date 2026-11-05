@@ -34,7 +34,7 @@ fn string_anywhere_matches_and_reports_offset() {
 fn metadata_and_tags_round_trip() {
     let source = "rule tagged : alpha beta {\n\
         meta:\n\
-            author = \"denis\"\n\
+            author = \"analyst\"\n\
             severity = 7\n\
             enabled = true\n\
         strings:\n\
@@ -48,7 +48,7 @@ fn metadata_and_tags_round_trip() {
 
     let m = &hits[0];
     assert_eq!(m.tags, vec!["alpha".to_string(), "beta".to_string()]);
-    assert_eq!(m.metadata.get("author").map(String::as_str), Some("denis"));
+    assert_eq!(m.metadata.get("author").map(String::as_str), Some("analyst"));
     assert_eq!(m.metadata.get("severity").map(String::as_str), Some("7"));
     assert_eq!(m.metadata.get("enabled").map(String::as_str), Some("true"));
 }
