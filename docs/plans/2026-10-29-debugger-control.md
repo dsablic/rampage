@@ -105,7 +105,7 @@ recorded in the project's findings ledger with the debug session as evidence.
 | 9.3 | **Done 2026-11-05** (`5dd53a7`; live QEMU Cortex-M3 acceptance passes). Static correlation: binding, slides, symbolic breakpoints, step-over via rampage decoders, stop-location enrichment. | Medium. |
 | 9.4 | **Done 2026-11-05** (`8e01031`; live QEMU RAM, register and flash writes and kill pass). Writes behind `--debug-writes`; kill behind `--debug-kill`. | Higher; reviewed separately. |
 | 9.5 | macOS `debugserver` acceptance (RSP plus LLDB extensions); evaluate driving LLDB's SB API through the existing bridge for crash/core files. | Platform-dependent. |
-| 9.6 | Windows: separate short design (dbgeng vs. a GDB stub such as a Windows gdbserver). Not started before 9.1–9.4 land. | — |
+| 9.6 | Windows: separate short design (dbgeng vs. a GDB stub such as a Windows gdbserver). Proposal for review: `docs/plans/2026-11-05-debugger-windows.md`. | — |
 
 Each step follows the wave cadence: implementation, fresh-context review, fixes, full suite, then MCP-level acceptance.
 
