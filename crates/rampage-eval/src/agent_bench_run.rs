@@ -373,12 +373,12 @@ fn rescore_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
 }
 
 /// A fresh private directory outside the repository, so no project file or other run's output is visible.
-struct Workdir {
-    path: PathBuf,
+pub(crate) struct Workdir {
+    pub(crate) path: PathBuf,
 }
 
 impl Workdir {
-    fn new() -> Result<Self, String> {
+    pub(crate) fn new() -> Result<Self, String> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
             "agent-bench-{}-{}",

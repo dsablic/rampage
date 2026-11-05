@@ -15,7 +15,7 @@ use rampage_api::flywheel::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::agent_bench_run::DEFAULT_RUNNER;
+use super::agent_bench_run::{DEFAULT_RUNNER, Workdir};
 use super::read;
 
 /// The fixed system prompt of every flywheel round.
@@ -444,8 +444,8 @@ pub fn run(args: FlywheelArgs) -> Result<ExitCode, String> {
         );
         let prompt_path = round_dir.join("prompt.txt");
         std::fs::write(&prompt_path, &prompt).map_err(|error| error.to_string())?;
-        let workdir = round_dir.join("workdir");
-        std::fs::create_dir_all(&workdir).map_err(|error| error.to_string())?;
+        // A private directory outside the repository, so the session sees no project file or memory.
+        let workdir = Workdir::new()?;
         let result_path = round_dir.join("result.json");
         let round_started = Instant::now();
         let status = Command::new(&runner[0])
@@ -462,7 +462,7 @@ pub fn run(args: FlywheelArgs) -> Result<ExitCode, String> {
             .args(["--timeout-s", &args.timeout_s.to_string()])
             .args(["--max-budget-usd", &format!("{left:.4}")])
             .arg("--workdir")
-            .arg(&workdir)
+            .arg(&workdir.path)
             .arg("--out")
             .arg(&result_path)
             .arg("--transcript")
