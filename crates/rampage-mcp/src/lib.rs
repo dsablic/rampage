@@ -396,6 +396,118 @@ fn with_binary_arguments(name: &str, schema: &Value) -> Map<String, Value> {
 /// The optional selector that opens a Raw Project in place of a native binary on raw-capable tools.
 const RAW: &str = "raw";
 
+/// The top-level argument names `schema` admits, or `None` when it admits arbitrary names (an open object, or a
+/// union member without listed properties).
+fn admitted_arguments(schema: &Value) -> Option<BTreeSet<String>> {
+    fn collect(schema: &Value, root: &Value, names: &mut BTreeSet<String>, depth: usize) -> Option<()> {
+        let object = schema.as_object()?;
+        if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+            let target = reference.strip_prefix("#/")?.split('/').try_fold(root, |at, key| at.get(key))?;
+            return collect(target, root, names, depth.checked_sub(1)?);
+        }
+        if object.get("additionalProperties").is_some_and(|value| *value != Value::Bool(false))
+            || object.contains_key("patternProperties")
+        {
+            return None;
+        }
+        let properties = object.get("properties").and_then(Value::as_object);
+        names.extend(properties.into_iter().flat_map(|properties| properties.keys().cloned()));
+        let mut unions = false;
+        for key in ["oneOf", "anyOf", "allOf"] {
+            for member in object.get(key).and_then(Value::as_array).into_iter().flatten() {
+                unions = true;
+                // A `null` or plain-typed member adds no names.
+                if member.get("type").and_then(Value::as_str).is_some_and(|kind| kind != "object") {
+                    continue;
+                }
+                collect(member, root, names, depth.checked_sub(1)?)?;
+            }
+        }
+        (properties.is_some() || unions).then_some(())
+    }
+    let mut names = BTreeSet::new();
+    collect(schema, schema, &mut names, 8)?;
+    Some(names)
+}
+
+/// The admitted argument an unknown `name` most likely meant, from the names agents reach for out of habit.
+fn likely_argument(name: &str, admitted: &BTreeSet<String>) -> Option<&'static str> {
+    let candidates: &[&'static str] = match name.to_ascii_lowercase().as_str() {
+        "address" | "addr" | "ea" | "va" | "location" | "function" | "func" | "start" | "name" | "target" => {
+            &["at", "address", "target"]
+        }
+        "length" | "len" | "count" | "size" | "bytes" | "n" | "num" | "number" | "max" => {
+            &["size", "count", "length", "limit"]
+        }
+        "query" | "pattern" | "text" | "string" | "needle" | "search" | "filter" | "contains" => {
+            &["contains", "name_contains", "mode", "pattern", "query"]
+        }
+        "file" | "binary" | "filename" | "file_path" => &["path"],
+        "skip" | "page" | "start_index" => &["offset"],
+        "language" | "language_id" | "processor" | "profile" | "arch" => &["profile", "arch"],
+        _ => &[],
+    };
+    candidates.iter().copied().find(|candidate| *candidate != name && admitted.contains(*candidate))
+}
+
+/// Refuses arguments `schema` does not admit and missing required ones, naming the tool's arguments in one line so
+/// a caller without the schema can correct the call. A `raw` selector the tool does not list is left to its own
+/// refusal.
+fn check_arguments(name: &str, schema: &Value, arguments: &Map<String, Value>) -> Result<(), String> {
+    let listed = |key: &str| schema.get("properties").and_then(|properties| properties.get(key)).is_some();
+    if arguments.get(RAW).is_some_and(|raw| !raw.is_null()) && !listed(RAW) {
+        return Ok(());
+    }
+    let required: Vec<&str> =
+        schema.get("required").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+    let admitted = admitted_arguments(schema);
+    let listing = || {
+        let Some(admitted) = &admitted else { return String::new() };
+        let names: Vec<String> = admitted
+            .iter()
+            .map(|argument| {
+                if required.contains(&argument.as_str()) {
+                    format!("`{argument}` (required)")
+                } else {
+                    format!("`{argument}`")
+                }
+            })
+            .collect();
+        format!(" Arguments of {name}: {}.", names.join(", "))
+    };
+    if let Some(admitted) = &admitted {
+        let unknown: Vec<&String> =
+            arguments.keys().filter(|key| key.as_str() != RAW && !admitted.contains(key.as_str())).collect();
+        if !unknown.is_empty() {
+            let described: Vec<String> = unknown
+                .iter()
+                .map(|key| match likely_argument(key, admitted) {
+                    Some(meant) => format!("`{key}` (did you mean `{meant}`?)"),
+                    None => format!("`{key}`"),
+                })
+                .collect();
+            return Err(format!(
+                "invalid arguments: unknown field{} {}; nothing was run.{}",
+                if unknown.len() == 1 { "" } else { "s" },
+                described.join(", "),
+                listing()
+            ));
+        }
+    }
+    let missing: Vec<&str> =
+        required.iter().copied().filter(|key| arguments.get(*key).is_none_or(Value::is_null)).collect();
+    if !missing.is_empty() {
+        let missing: Vec<String> = missing.iter().map(|key| format!("`{key}`")).collect();
+        return Err(format!(
+            "invalid arguments: missing field{} {}; nothing was run.{}",
+            if missing.len() == 1 { "" } else { "s" },
+            missing.join(", "),
+            listing()
+        ));
+    }
+    Ok(())
+}
+
 /// The `raw` selector as repeated on every raw-capable tool: its shape without per-field prose or the profile
 /// enum, which the server instructions state once. The server still parses it as a closed `RawProjectRequest`.
 fn compact_raw_selector() -> Value {
@@ -589,6 +701,18 @@ impl RampageServer {
             .collect();
         let newly_enabled: Vec<&str> = newly.iter().map(|group| group.name()).collect();
         Ok((json!({ "newly_enabled": newly_enabled, "groups": groups }), !newly.is_empty()))
+    }
+
+    /// The input schema `list_tools` gives `name`, when this server serves it.
+    fn advertised_schema(&self, name: &str) -> Option<Value> {
+        if let Some(tool) = self.tools.iter().find(|tool| tool.name == name) {
+            return Some(Value::Object(with_binary_arguments(name, &tool.input_schema)));
+        }
+        if let Some(tool) = self.file_tools.iter().find(|tool| tool.name == name) {
+            return Some(tool.input_schema.clone());
+        }
+        // Debug tools check their own arguments, refusing options the operator has not allowed by name.
+        None
     }
 
     /// Why `name` cannot be called now, when it belongs to a group that is not enabled.
@@ -805,6 +929,18 @@ impl ServerHandler for RampageServer {
                 reason
             };
             return Ok(CallToolResult::error(vec![ContentBlock::text(reason)]).into());
+        }
+        if let Some(schema) = self.advertised_schema(&name)
+            && let Err(message) = check_arguments(&name, &schema, &arguments)
+        {
+            // The import tools answer every failure with their own JSON receipt.
+            let apply_requested = arguments.get("apply").map_or(Some(false), Value::as_bool);
+            let message = match name.as_str() {
+                "import_pdb_names" => tools::pdb_import_error(&message, apply_requested),
+                "import_debug_layouts" => tools::debug_layout_import_error(&message, apply_requested),
+                _ => message,
+            };
+            return Ok(CallToolResult::error(vec![ContentBlock::text(message)]).into());
         }
         let server = self.clone();
         // A cancelled request (notifications/cancelled, or the connection closing) sets the flag the debug tools

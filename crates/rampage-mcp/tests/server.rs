@@ -832,6 +832,37 @@ async fn go_string_runs_give_the_exact_match_address_and_referenced_literal_boun
     client.cancel().await.unwrap();
 }
 
+/// Benchmark v2: agents calling before loading a schema passed `address`/`length` to disassemble, which ignored
+/// them and listed the entry point, and `address` to decompile, whose error named only the missing `at`.
+#[tokio::test]
+async fn unknown_or_missing_arguments_are_refused_naming_the_tool_arguments() {
+    let client = connect().await;
+    let path = fixture("hello-x64.elf");
+    let guessed = call(&client, "disassemble", json!({ "path": path, "address": "0x401000", "length": "64" })).await;
+    assert_eq!(guessed.is_error, Some(true));
+    let message = text(&guessed);
+    assert!(
+        message.contains("unknown fields `address` (did you mean `at`?), `length` (did you mean `count`?)"),
+        "{message}"
+    );
+    assert!(message.contains("Arguments of disassemble:") && message.contains("`path` (required)"), "{message}");
+    assert!(!message.contains('\n'), "one line: {message}");
+
+    let missing = call(&client, "decompile", json!({ "path": path })).await;
+    let message = text(&missing);
+    assert!(message.contains("missing field `at`") && message.contains("`exact_entry`"), "{message}");
+
+    // Union-shaped schemas still admit their members' fields, and file tools are checked too.
+    let search = call(&client, "search", json!({ "path": path, "query": "x" })).await;
+    assert!(text(&search).contains("`query` (did you mean `mode`?)"), "{}", text(&search));
+    let carve = call(&client, "carve", json!({ "path": path, "bogus": 1 })).await;
+    assert!(text(&carve).contains("unknown field `bogus`"), "{}", text(&carve));
+    // The Raw selector keeps its own refusal on tools that cannot serve it.
+    let raw = call(&client, "inspect_data", json!({ "path": path, "at": "0x0", "raw": {} })).await;
+    assert!(text(&raw).contains("does not accept Raw projects"), "{}", text(&raw));
+    client.cancel().await.unwrap();
+}
+
 #[tokio::test]
 async fn pointer_observations_preserve_writable_slot_values_without_annotations() {
     let client = connect().await;

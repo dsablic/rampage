@@ -128,6 +128,11 @@ Binary tools take `path`, optional `arch`, and optional `image_offset`/`image_le
 symbols, exports, import-stub names and `sub_<hex>`. Runtime comparison slots/ranges and branch windows require
 explicit hexadecimal addresses. See [CLI global options](cli-reference.md#global-options-and-addresses).
 
+Every tool refuses an argument its schema does not list, and a missing required one, before running anything.
+The one-line error names the tool's arguments, marks the required ones, and suggests the likely intended name
+for a habitual one (`address` for `at`, `length` for `count` or `size`, `query` for `mode` or `contains`), so
+a client calling before it has loaded a schema can correct the call at once.
+
 With `contains`, `list_strings` rows carry `match_address`, where the text matches inside the string. Go string
 data is not NUL-terminated, so in a Go image a run of joined literals carries a `note`, and a match its
 `go_literal` bounds: the last address code references at or before the match, the first one after it (or the
