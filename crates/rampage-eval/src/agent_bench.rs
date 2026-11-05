@@ -186,25 +186,53 @@ pub enum FailureKind {
     WrongAnswer,
 }
 
-/// Parse the final answer: one JSON object, alone or as the only content of a single code fence.
-pub fn extract_answer(text: &str) -> Result<Value, String> {
-    let trimmed = text.trim();
-    let body = trimmed
-        .strip_prefix("```")
-        .and_then(|rest| rest.strip_suffix("```"))
-        .map(|inner| inner.strip_prefix("json").unwrap_or(inner))
-        .filter(|inner| !inner.contains("```"))
-        .unwrap_or(trimmed);
-    let value: Value = serde_json::from_str(body.trim()).map_err(|error| format!("not one JSON object: {error}"))?;
-    if !value.is_object() {
-        return Err("final answer is not a JSON object".into());
+/// How the final answer's JSON object was found. Only `Exact` follows the prompt to the letter; every kind is
+/// scored the same, and the report counts the others.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Extraction {
+    /// The whole reply is one JSON object.
+    Exact,
+    /// The whole reply is one code fence holding one JSON object.
+    Fenced,
+    /// Prose, then one JSON object (alone or fenced) that ends the reply.
+    Trailing,
+}
+
+fn object_or_fence(text: &str) -> Option<(Value, Extraction)> {
+    let text = text.trim();
+    if let Ok(value @ Value::Object(_)) = serde_json::from_str(text) {
+        return Some((value, Extraction::Exact));
     }
-    Ok(value)
+    let inner = text.strip_prefix("```")?.strip_suffix("```")?;
+    if inner.contains("```") {
+        return None;
+    }
+    let inner = inner.strip_prefix("json").unwrap_or(inner);
+    match serde_json::from_str(inner.trim()) {
+        Ok(value @ Value::Object(_)) => Some((value, Extraction::Fenced)),
+        _ => None,
+    }
+}
+
+/// Parse the final answer: one JSON object, alone, as a single code fence, or ending the reply after prose.
+/// A trailing object must start a line and nothing but whitespace may follow it.
+pub fn extract_answer(text: &str) -> Result<(Value, Extraction), String> {
+    if let Some(found) = object_or_fence(text) {
+        return Ok(found);
+    }
+    let trimmed = text.trim_end();
+    for (start, _) in trimmed.match_indices('\n').collect::<Vec<_>>().into_iter().rev() {
+        if let Some((value, _)) = object_or_fence(&trimmed[start + 1..]) {
+            return Ok((value, Extraction::Trailing));
+        }
+    }
+    Err("the reply does not end with one JSON object".into())
 }
 
 /// Turn a runner result into the attempt the manifest contract checks.
-pub fn attempt(result: &RunnerResult) -> (TaskAttempt, Option<FailureKind>) {
-    let failed = |kind, reason: String| (TaskAttempt::Failed { reason }, Some(kind));
+pub fn attempt(result: &RunnerResult) -> (TaskAttempt, Option<FailureKind>, Option<Extraction>) {
+    let failed = |kind, reason: String| (TaskAttempt::Failed { reason }, Some(kind), None);
     match result.exit {
         RunnerExit::Timeout => return failed(FailureKind::Timeout, "runner timeout".into()),
         RunnerExit::MaxTurns => return failed(FailureKind::MaxTurns, "turn limit reached".into()),
@@ -213,19 +241,19 @@ pub fn attempt(result: &RunnerResult) -> (TaskAttempt, Option<FailureKind>) {
         }
         RunnerExit::Ok => {}
     }
-    let answer = match extract_answer(&result.answer) {
-        Ok(answer) => answer,
+    let (answer, extraction) = match extract_answer(&result.answer) {
+        Ok(found) => found,
         Err(reason) => return failed(FailureKind::AnswerFormat, reason),
     };
     if let Some(status @ ("unknown" | "unsupported")) = answer.get("status").and_then(Value::as_str) {
         let reason = answer.get("reason").and_then(Value::as_str).unwrap_or("").to_owned();
         return if status == "unknown" {
-            (TaskAttempt::Unknown { reason }, Some(FailureKind::Unknown))
+            (TaskAttempt::Unknown { reason }, Some(FailureKind::Unknown), Some(extraction))
         } else {
-            (TaskAttempt::Unsupported { reason }, Some(FailureKind::Unsupported))
+            (TaskAttempt::Unsupported { reason }, Some(FailureKind::Unsupported), Some(extraction))
         };
     }
-    (TaskAttempt::Answer(answer), None)
+    (TaskAttempt::Answer(answer), None, Some(extraction))
 }
 
 /// One scored run. Holds measurements and outcomes only: no answer text, transcript or binary content.
@@ -237,6 +265,8 @@ pub struct RunRow {
     pub repetition: u32,
     pub outcome: TaskOutcome,
     pub failure: Option<FailureKind>,
+    /// How the answer object was found; `None` when there was none.
+    pub extraction: Option<Extraction>,
     pub tool_calls: u64,
     pub tool_errors: u64,
     pub turns: u64,
@@ -257,7 +287,7 @@ pub fn score(
     result: &RunnerResult,
 ) -> Result<RunRow, String> {
     let contract = suite.contract(task, server)?;
-    let (attempt, mut failure) = attempt(result);
+    let (attempt, mut failure, extraction) = attempt(result);
     let outcome = match &attempt {
         TaskAttempt::Answer(answer) if contract.matches(answer) => TaskOutcome::AnswerMatches,
         TaskAttempt::Answer(_) => {
@@ -273,6 +303,7 @@ pub fn score(
         repetition,
         outcome,
         failure,
+        extraction,
         tool_calls: result.tool_calls.len() as u64,
         tool_errors: result.tool_calls.iter().filter(|call| call.is_error).count() as u64,
         turns: result.turns,
@@ -315,6 +346,12 @@ fn group_summary(rows: &[&RunRow]) -> Value {
             *failures.entry(kind).or_default() += 1;
         }
     }
+    let mut extractions: BTreeMap<Extraction, usize> = BTreeMap::new();
+    for row in rows {
+        if let Some(kind) = row.extraction {
+            *extractions.entry(kind).or_default() += 1;
+        }
+    }
     let cost: Option<f64> = rows.iter().map(|row| row.cost_usd).sum();
     json!({
         "correct": correct, "runs": rows.len(),
@@ -327,6 +364,7 @@ fn group_summary(rows: &[&RunRow]) -> Value {
         "cache_write_tokens": spread(rows.iter().map(|row| row.usage.cache_write)),
         "wall_ms": spread(rows.iter().map(|row| row.wall_ms)),
         "failures": failures,
+        "answer_extraction": extractions,
         "totals": {
             "tool_calls": rows.iter().map(|row| row.tool_calls).sum::<u64>(),
             "input_tokens": rows.iter().map(|row| row.usage.input).sum::<u64>(),

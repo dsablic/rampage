@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use rampage_eval::agent_bench::{
-    FailureKind, NeutralSuite, RunnerResult, extract_answer, markdown_tables, score, spread, summarize,
+    Extraction, FailureKind, NeutralSuite, RunnerResult, extract_answer, markdown_tables, score, spread, summarize,
 };
 use rampage_eval::parity_tasks::{TaskKind, TaskOutcome, load_tasks};
 use serde_json::{Value, json};
@@ -73,10 +73,13 @@ fn neutral_suite_must_match_the_canonical_ids() {
 
 #[test]
 fn answers_are_one_json_object_alone_or_in_a_single_fence() {
-    assert_eq!(extract_answer(" {\"a\":1}\n").unwrap(), json!({"a": 1}));
-    assert_eq!(extract_answer("```json\n{\"a\":1}\n```").unwrap(), json!({"a": 1}));
-    assert_eq!(extract_answer("```\n{\"a\":1}\n```").unwrap(), json!({"a": 1}));
-    for text in ["The answer is {\"a\":1}", "[1]", "```json\n{\"a\":1}\n```\n```{}```", ""] {
+    let object = json!({"a": 1});
+    assert_eq!(extract_answer(" {\"a\":1}\n").unwrap(), (object.clone(), Extraction::Exact));
+    assert_eq!(extract_answer("```json\n{\"a\":1}\n```").unwrap(), (object.clone(), Extraction::Fenced));
+    assert_eq!(extract_answer("```\n{\"a\":1}\n```").unwrap(), (object.clone(), Extraction::Fenced));
+    assert_eq!(extract_answer("So 3*7 = 21.\n\n{\"a\":1}\n").unwrap(), (object.clone(), Extraction::Trailing));
+    assert_eq!(extract_answer("Done.\n```json\n{\"a\":\n 1}\n```").unwrap(), (object.clone(), Extraction::Trailing));
+    for text in ["The answer is {\"a\":1}", "[1]", "{\"a\":1}\nThat is all.", "Prose.\n{\"a\":1} and more", ""] {
         assert!(extract_answer(text).is_err(), "{text}");
     }
 }
@@ -90,6 +93,7 @@ fn scoring_uses_the_frozen_contract_and_per_server_probe_truth() {
     let row = score(main, &suite, "rampage", 1, &result("{\"return_value\":5}", "ok")).unwrap();
     assert_eq!(row.outcome, TaskOutcome::AnswerMatches);
     assert_eq!((row.tool_calls, row.tool_errors, row.failure), (2, 1, None));
+    assert_eq!(row.extraction, Some(Extraction::Exact));
     let row = score(main, &suite, "rea", 1, &result("{\"return_value\":6}", "ok")).unwrap();
     assert_eq!((row.outcome, row.failure), (TaskOutcome::AnswerMismatch, Some(FailureKind::WrongAnswer)));
     let patch = task("capability-patch-export");
