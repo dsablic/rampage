@@ -374,3 +374,13 @@ fn rows_carry_category_and_partial_credit_into_the_summary() {
     assert!(tables.contains("| cpp | rea | 0/1 | 0.500 |"), "{tables}");
     assert!(tables.contains("- cpp-hierarchy-x64-elf rampage r1: timeout"), "{tables}");
 }
+
+#[test]
+fn recorded_rows_read_back_unchanged_for_reruns() {
+    let suite = NeutralSuite::from_toml(NEUTRAL_V2).unwrap();
+    let tasks = suite_v2();
+    let row = score(&tasks[0], &suite, "rea", 2, 1, &result("{\"chain\": []}", "ok")).unwrap();
+    let line = serde_json::to_string(&row).unwrap();
+    let back: rampage_eval::agent_bench::RunRow = serde_json::from_str(&line).unwrap();
+    assert_eq!(serde_json::to_string(&back).unwrap(), line);
+}

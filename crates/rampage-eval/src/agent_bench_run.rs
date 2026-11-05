@@ -117,6 +117,14 @@ pub struct AgentBenchArgs {
     /// Why the run is being rescored; recorded in the report's `rescore` block.
     #[arg(long, requires = "rescore", default_value = "rescored from the recorded transcripts")]
     rescore_reason: String,
+    /// Run these runs again (TASK:SERVER:REPETITION, repeatable) in an existing --out-dir and keep every other
+    /// recorded run: the earlier rows move to the report's `superseded_runs` and their directories to
+    /// runs/superseded/. For runs a harness fault may have affected, never to retry an outcome.
+    #[arg(long, conflicts_with = "rescore", requires = "rerun_reason")]
+    rerun: Vec<String>,
+    /// Why the runs are run again; recorded in the report's `rerun` block.
+    #[arg(long)]
+    rerun_reason: Option<String>,
     /// MAX_MCP_OUTPUT_TOKENS for every run, the same for every server.
     #[arg(long, default_value_t = 200_000)]
     max_mcp_output_tokens: u64,
@@ -225,6 +233,26 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
         }
     }
     let rows_path = out_dir.join("runs.jsonl");
+    let mut recorded: Vec<RunRow> = Vec::new();
+    if !args.rerun.is_empty() {
+        for spec in &args.rerun {
+            let parts: Vec<&str> = spec.split(':').collect();
+            if parts.len() != 3 || parts[2].parse::<u32>().is_err() {
+                return Err(format!("--rerun {spec}: expected TASK:SERVER:REPETITION"));
+            }
+        }
+        let kept = out_dir.join("runs.before-rerun.jsonl");
+        if !kept.exists() {
+            std::fs::copy(&rows_path, &kept).map_err(|error| format!("{}: {error}", rows_path.display()))?;
+            std::fs::copy(out_dir.join("report.json"), out_dir.join("report.before-rerun.json"))
+                .map_err(|error| format!("no measured report to rerun into: {error}"))?;
+        }
+        for line in read(&rows_path)?.lines().filter(|line| !line.trim().is_empty()) {
+            recorded.push(serde_json::from_str(line).map_err(|error| format!("{}: {error}", rows_path.display()))?);
+        }
+        std::fs::remove_file(&rows_path).map_err(|error| error.to_string())?;
+    }
+    let mut superseded: Vec<Value> = Vec::new();
     let kept = out_dir.join("runs.before-rescore.jsonl");
     if args.rescore && rows_path.is_file() && !kept.exists() {
         std::fs::rename(&rows_path, &kept).map_err(|error| format!("{}: {error}", rows_path.display()))?;
@@ -250,6 +278,30 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
                             "completed_runs": rows.len(), "planned_runs": total}));
                         break 'runs;
                     }
+                }
+                if !args.rerun.is_empty() {
+                    let spec = format!("{}:{server}:{repetition}", task.id);
+                    let earlier = recorded
+                        .iter()
+                        .find(|row| row.task_id == task.id && row.server == **server && row.repetition == repetition)
+                        .cloned();
+                    if !args.rerun.contains(&spec) {
+                        if let Some(row) = earlier {
+                            let line = serde_json::to_string(&row).map_err(|error| error.to_string())?;
+                            writeln!(rows_file, "{line}").map_err(|error| error.to_string())?;
+                            rows.push(row);
+                        }
+                        continue;
+                    }
+                    let Some(earlier) = earlier else { return Err(format!("--rerun {spec}: no recorded run")) };
+                    let name = format!("{}-r{repetition}", task.id);
+                    let from = out_dir.join("runs").join(server).join(&name);
+                    let to = out_dir.join("runs/superseded").join(server).join(&name);
+                    std::fs::create_dir_all(to.parent().expect("has a parent")).map_err(|error| error.to_string())?;
+                    std::fs::rename(&from, &to).map_err(|error| format!("{}: {error}", from.display()))?;
+                    let mut value = json!(earlier);
+                    value["superseded_reason"] = json!(args.rerun_reason);
+                    superseded.push(value);
                 }
                 let fixture = root.join(&task.fixture.path);
                 let row = run_one(&RunSetup {
@@ -324,7 +376,22 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
         "runs": rows,
     });
     let report_path = out_dir.join("report.json");
-    let report = if args.rescore {
+    let report = if !args.rerun.is_empty() {
+        let earlier: Value = serde_json::from_str(&read(&out_dir.join("report.before-rerun.json"))?)
+            .map_err(|error| error.to_string())?;
+        let mut report = report;
+        for key in ["versions", "run_unix_ms", "protocol", "attachments"] {
+            if let Some(value) = earlier.get(key) {
+                report[key] = value.clone();
+            }
+        }
+        report["superseded_runs"] = json!(superseded);
+        report["rerun"] = json!({"reason": args.rerun_reason, "runs": args.rerun,
+            "commit": git(&root, &["rev-parse", "HEAD"]), "versions": versions,
+            "run_unix_ms": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .ok().map(|duration| duration.as_millis() as u64)});
+        report
+    } else if args.rescore {
         let earlier_path = out_dir.join("report.before-rescore.json");
         if !earlier_path.is_file() {
             std::fs::copy(&report_path, &earlier_path)

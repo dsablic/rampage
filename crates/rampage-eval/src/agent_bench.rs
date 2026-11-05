@@ -249,7 +249,7 @@ pub struct RunnerIdentity {
 }
 
 /// Why a run did not produce the expected answer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureKind {
     Timeout,
@@ -263,7 +263,7 @@ pub enum FailureKind {
 
 /// How the final answer's JSON object was found. Only `Exact` follows the prompt to the letter; every kind is
 /// scored the same, and the report counts the others.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Extraction {
     /// The whole reply is one JSON object.
@@ -332,7 +332,7 @@ pub fn attempt(result: &RunnerResult) -> (TaskAttempt, Option<FailureKind>, Opti
 }
 
 /// One scored run. Holds measurements and outcomes only: no answer text, transcript or binary content.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunRow {
     pub task_id: String,
     pub kind: TaskKind,
