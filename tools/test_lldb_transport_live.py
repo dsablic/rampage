@@ -124,8 +124,6 @@ def test_owned_stopped_native_fixture_serves_queries_closes_listener_and_retains
         "    debugger.HandleCommand('command script add -f transport_checks.interrupted_launch transport-interrupt')\n"
     )
     root = Path(tempfile.gettempdir()).resolve()
-    if (root / "opencode").is_dir():
-        root /= "opencode"
     with tempfile.TemporaryDirectory(prefix="rq-", dir=root) as directory:
         private = Path(directory)
         private.chmod(0o700)

@@ -145,12 +145,7 @@ pub(super) fn run(args: RunArgs) -> Result<ExitCode, String> {
             }
         };
         let agent = if status == "matches" && selected.contains(&task.id) {
-            Some(super::parity_live::run(
-                task,
-                &path,
-                args.agent_model.as_deref().expect("selected model"),
-                args.agent_provider,
-            )?)
+            Some(super::parity_live::run(task, &path, args.agent_model.as_deref().expect("selected model"))?)
         } else {
             None
         };
@@ -239,7 +234,7 @@ pub(super) fn run(args: RunArgs) -> Result<ExitCode, String> {
             "measured_analysis_tasks": measured_analysis,
             "analysis_answer_matches": analysis_matches, "provider_tasks_started": provider_tasks_started,
             "requested_model": args.agent_model, "selected_tasks": selected,
-            "requested_provider": args.agent_model.as_ref().map(|_| args.agent_provider.tag()),
+            "requested_provider": args.agent_model.as_ref().map(|_| "anthropic"),
             "defined_analysis_tasks": tasks.iter().filter(|task| task.kind == TaskKind::Analysis).count(),
             "defined_capability_probes": tasks.iter().filter(|task| task.kind == TaskKind::Capability).count(),
             "fixture_failures": fixture_failures, "tasks": task_rows,

@@ -1,5 +1,5 @@
 //! Opt-in phase-end central-struct reconstruction on an owned, source-recipe-pinned DWARF ELF.
-//! Never compiles or executes the target. Uses current OpenCode authentication and the fixed paired model.
+//! Never compiles or executes the target. Uses the Anthropic transport and the fixed paired model.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use rampage_agent::Anthropic;
 use rampage_api::DebugTypesManifest;
 use rampage_api::annotations::{Annotations, parse_local_names, parse_local_types, parse_type_library};
 use rampage_decompiler::VariableStorage;
 use rampage_decompiler::results::Storage;
 use rampage_eval::parity_agent::{AgentConfig, AgentDisposition, AgentRun, ModelSource, ToolCall, run_task};
-use rampage_eval::parity_opencode::{MODEL, MODEL_VARIANT, OpenCodeTransport};
 use rampage_eval::parity_tasks::{AnswerContract, CapabilityStatus, FixtureIdentity, ParityTask, TaskKind};
 use rampage_loaders::debug_types::{DebugScalarEncoding, DebugTypeKind, DebugTypeReport};
 use rmcp::model::{
@@ -23,6 +23,9 @@ use rmcp::service::{RequestContext, RoleClient, RoleServer, RunningService};
 use rmcp::{ClientHandler, ErrorData, Peer, ServerHandler, ServiceExt};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+
+/// The pinned live model, requested through the in-process Anthropic transport (ANTHROPIC_API_KEY).
+const MODEL: &str = "claude-sonnet-5-5";
 
 const IMAGE_SHA: &str = "47458e57eaa7ec0e522b4db0ad3d57b284eef61d52f141b9fb02dc9ce2ed58ed";
 const SOURCE_SHA: &str = "67d0d1d7392e8accb45bbdf612394ba065952dc0d36d15a6cd5b67082bed6115";
@@ -74,7 +77,7 @@ impl OwnedFixture {
             return Err("fixture differs from the source-recipe-pinned C++ x64 ELF");
         }
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let root = std::env::temp_dir().join("opencode");
+        let root = std::env::temp_dir();
         std::fs::create_dir_all(&root).map_err(|_| "create temporary root")?;
         let directory = root.join(format!(
             "rampage-debug-type-import-{}-{}",
@@ -145,7 +148,7 @@ impl OwnedFixture {
 
 impl Drop for OwnedFixture {
     fn drop(&mut self) {
-        // Only this exclusively created directory is owned, including the isolated OpenCode context.
+        // Only this exclusively created directory is owned, including its model-context subdirectory.
         let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
@@ -1431,11 +1434,11 @@ async fn measure(owned: &OwnedFixture) -> Result<Value, &'static str> {
     config.max_tool_calls = 32;
     config.max_record_bytes = 65_536;
     config.max_retained_bytes = 2_000_000;
-    let transport = match OpenCodeTransport::new(&owned.context) {
-        Ok(transport) => transport,
-        Err(_) => {
+    let transport = match Anthropic::from_environment() {
+        Some(transport) => transport,
+        None => {
             first.close().await?;
-            return Err("prepare OpenCode transport");
+            return Err("set ANTHROPIC_API_KEY for the Anthropic transport");
         }
     };
     let run = run_task(&first.client, Some(transport), ModelSource::Provider, &task(), &owned.path, &config).await;
@@ -1468,7 +1471,7 @@ async fn measure(owned: &OwnedFixture) -> Result<Value, &'static str> {
         && checks.errors == 0;
     Ok(json!({"measurement": "phase1-6-debug-type-import",
         "design": "paired-owned-central-struct-reconstruction-not-blind-whole-program-re",
-        "requested_model": MODEL, "model_variant": MODEL_VARIANT, "fixture_sha256": IMAGE_SHA,
+        "requested_model": MODEL, "transport": "anthropic", "fixture_sha256": IMAGE_SHA,
         "source_sha256": SOURCE_SHA, "source_recipe": "crates/rampage-eval/tasks/phase1-6/debug-types.toml",
         "method": METHOD, "wrapper": WRAPPER, "agent_summary": summary(&run),
         "task_contract": {"fields": ["owner_size", "cell_stride", "bias_offset", "next_offset",

@@ -41,8 +41,6 @@ def transport() -> Any:
 @pytest.fixture
 def socket_path() -> Iterator[Path]:
     root = Path(tempfile.gettempdir()).resolve()
-    if (root / "opencode").is_dir():
-        root /= "opencode"
     with tempfile.TemporaryDirectory(prefix="rq-", dir=root) as directory:
         parent = Path(directory)
         parent.chmod(0o700)

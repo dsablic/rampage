@@ -74,8 +74,6 @@ def exercise_workspace(tmp_path: Path, architecture: str) -> None:
         timeout=30,
     )
     temporary_root = Path(tempfile.gettempdir()).resolve()
-    if (temporary_root / "opencode").is_dir():
-        temporary_root /= "opencode"
     with tempfile.TemporaryDirectory(prefix="rw-", dir=temporary_root) as directory:
         private = Path(directory)
         private.chmod(0o700)

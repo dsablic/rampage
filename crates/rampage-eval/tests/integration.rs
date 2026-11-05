@@ -9,6 +9,5 @@ mod parity_agent;
 mod parity_cli;
 mod parity_graph;
 mod parity_health;
-mod parity_opencode;
 mod parity_tasks;
 mod strip_mips;

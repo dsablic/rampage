@@ -39,7 +39,7 @@ environment, never from a command-line argument or report. No provider means unr
 exit for the requested live measurement. The runner uses actual MCP JSON-RPC discovery/calls against an
 in-memory server, isolates fixture copies and restricts read-only inspection. Requested/returned models,
 provider usage, errors and truncation are retained. Limits: scripted-model tests are plumbing checks, not AI
-success. Anthropic retains its existing transport; OpenCode uses the metered route below.
+success.
 
 Each discovered catalog snapshot is retained up to the discovery bound (1,000,000 serialized bytes, beyond which
 discovery fails rather than truncating), not the 32,768-byte default per-record bound that still applies to tool
@@ -56,12 +56,33 @@ untruncated; a third distinct catalog (for example core plus detection, 85,410 b
 the catalogs' share, and the all-group snapshot is then retained as a labeled truncated prefix. Earlier reports,
 including the Phase 3.3 supplement, keep their truncated records and lack the two new fields.
 
-`--agent-provider opencode --agent-model github-copilot/gpt-6.1-sol` reuses the local authenticated OpenCode API,
-with the explicit `default` variant. A temporary, one-step agent has host tools disabled; generated JSON intents
-are executed only by the benchmark's real MCP client. Actual returned model, reported input/output/reasoning/cache
-tokens and timing are retained. CLI operations and capture output are bounded, and owned sessions are deleted.
-Limits: this is a JSON-intent adapter, not native provider function calling; informational schema annotations,
-opaque provider state and repeated prompt/page bodies are omitted explicitly. No credentials enter the report.
+The accepted Phase 0 baseline and the Phase 1 and 3.3 live results were collected through an OpenCode JSON-intent
+adapter with `github-copilot/gpt-6.1-sol`. That adapter is retired; those results stay published as history and
+are not comparable with runs through the agent runner below (different model, client and prompts).
+
+### Head-to-head agent runs
+
+`rampage-eval agent-bench` runs the canonical tasks through an external agent runner against one MCP server at a
+time and scores the answers against the same manifest contracts. The default runner,
+`tools/agent-bench/claude-runner.py`, drives `claude -p` with only the one server's tools allowed, every built-in
+tool removed and denied, no setting sources (or `--bare` when `ANTHROPIC_API_KEY` is set), and checks the
+stream's init event: any extra tool, MCP server, user plugin, skill, agent, slash command or hook fails the run.
+It writes a normalized result (answer, tool calls with byte sizes and timings, turns, token usage, cost, wall
+time, exit kind, runner identity) that names no Claude Code format, so another agent CLI needs only another
+runner script with the same output; `--runner` selects it.
+
+```sh
+rampage-eval agent-bench --servers rampage,rea --tasks all --repeat 3 --model claude-sonnet-5-5 \
+  --report-json docs/benchmarks/agent-h2h-DATE.json --report-md docs/benchmarks/agent-h2h-DATE.md
+```
+
+Prompts come from `crates/rampage-eval/tasks/h2h/neutral.toml`: tool-neutral wording for each canonical task,
+with the reason for every change from the frozen question. Capability probes ask about the connected server's
+own tools, so their truth is per server, with its evidence. Runs are sequential; each gets a fresh private
+directory outside the repository holding its own copy of the fixture as `fixture.bin`. Raw streams stay in
+`target/bench/h2h/` (mode 0600); reports hold measurements and outcomes, never answers or transcripts. The
+`rea` server is REA (morluto/rea) over headless Ghidra, built from a pinned commit under `target/bench/rea/` and
+described by its `install.json`; results are in [benchmarks](benchmarks.md).
 
 A complete live run selects the full canonical task set with `--agent-max-tasks 20`, adds corpus and graph
 receipts, enables health samples, and uses `--require-complete`. Custom `--tasks` runs remain valid measurements

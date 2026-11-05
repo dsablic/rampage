@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use rampage_agent::Anthropic;
 use rampage_api::annotations::{
     Annotations, DerivedTypeHint, TypeHintAnnotation, TypeHintEvidence, TypeHintTarget, encode_type_hints,
     parse_local_names, parse_local_types, parse_type_hints, parse_type_library,
@@ -13,13 +14,15 @@ use rampage_api::annotations::{
 use rampage_decompiler::VariableStorage;
 use rampage_decompiler::results::Storage;
 use rampage_eval::parity_agent::{AgentConfig, AgentDisposition, AgentRun, ModelSource, ToolCall, run_task};
-use rampage_eval::parity_opencode::{MODEL, MODEL_VARIANT, OpenCodeTransport};
 use rampage_eval::parity_tasks::{AnswerContract, CapabilityStatus, FixtureIdentity, ParityTask, TaskKind};
 use rmcp::model::{CallToolRequestParams, CallToolResult, ClientConfig};
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::{ClientHandler, Peer, ServiceExt};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+
+/// The pinned live model, requested through the in-process Anthropic transport (ANTHROPIC_API_KEY).
+const MODEL: &str = "claude-sonnet-5-5";
 
 const CALLEE: &str = "0x201160";
 const CALLER: &str = "0x201170";
@@ -67,7 +70,7 @@ impl OwnedFixture {
             return Err("embedded type-propagation snapshot identity mismatch");
         }
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let root = std::env::temp_dir().join("opencode");
+        let root = std::env::temp_dir();
         std::fs::create_dir_all(&root).map_err(|_| "create temporary root")?;
         let directory = root.join(format!(
             "rampage-type-propagation-{}-{}",
@@ -885,11 +888,11 @@ async fn measure(owned: &OwnedFixture) -> Result<Value, &'static str> {
             return Err(stage);
         }
     };
-    let transport = match OpenCodeTransport::new(&owned.context) {
-        Ok(transport) => transport,
-        Err(_) => {
+    let transport = match Anthropic::from_environment() {
+        Some(transport) => transport,
+        None => {
             first.close().await?;
-            return Err("prepare OpenCode transport");
+            return Err("set ANTHROPIC_API_KEY for the Anthropic transport");
         }
     };
     let run = run_task(&first.client, Some(transport), ModelSource::Provider, &task, &owned.path, &config).await;
@@ -913,7 +916,7 @@ async fn measure(owned: &OwnedFixture) -> Result<Value, &'static str> {
     Ok(json!({
         "schema_version": 1, "measurement": "phase1-5-type-propagation",
         "design": "seeded-owned-direct-call-fixture-not-blind-re",
-        "requested_model": MODEL, "model_variant": MODEL_VARIANT, "fixture_sha256": FIXTURE_SHA256,
+        "requested_model": MODEL, "transport": "anthropic", "fixture_sha256": FIXTURE_SHA256,
         "caller": CALLER, "callee": CALLEE, "agent_summary": summary(&run), "seed_metrics": seed.summary(),
         "preparation_wall_time_ms": preparation_wall_time_ms,
         "initial_verifier_metrics": initial_checks.summary(), "fresh_verifier_metrics": fresh_checks.summary(),

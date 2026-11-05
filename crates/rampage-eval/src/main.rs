@@ -191,9 +191,6 @@ struct RunArgs {
     /// Explicit model for opt-in MCP agent tasks (existing Anthropic transport); no model fallback.
     #[arg(long, requires = "suite")]
     agent_model: Option<String>,
-    /// Explicit benchmark provider. OpenCode reuses local authenticated API discovery with a pinned model.
-    #[arg(long, requires = "agent_model", value_enum, default_value_t = AgentProvider::Anthropic)]
-    agent_provider: AgentProvider,
     /// Task IDs to attempt with --agent-model; repeatable. Default selects the first bounded task subset.
     #[arg(long, requires = "agent_model")]
     agent_task: Vec<String>,
@@ -238,21 +235,6 @@ struct RunArgs {
 #[derive(Clone, Copy, ValueEnum)]
 enum ParitySuite {
     Parity,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum AgentProvider {
-    Anthropic,
-    Opencode,
-}
-
-impl AgentProvider {
-    fn tag(self) -> &'static str {
-        match self {
-            Self::Anthropic => "anthropic",
-            Self::Opencode => "opencode",
-        }
-    }
 }
 
 fn main() -> ExitCode {
