@@ -18,8 +18,29 @@ use super::read;
 
 pub const DEFAULT_RUNNER: &str = "python3 -I tools/agent-bench/claude-runner.py";
 
+/// Which task set to run: the frozen canonical manifests with `tasks/h2h/neutral.toml`, or suite v2's manifests
+/// under `tasks/v2/` with `tasks/h2h/neutral-v2.toml`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Suite {
+    Canonical,
+    V2,
+}
+
+impl Suite {
+    fn paths(self, root: &Path) -> (PathBuf, PathBuf) {
+        let tasks = root.join("crates/rampage-eval/tasks");
+        match self {
+            Self::Canonical => (tasks.clone(), tasks.join("h2h/neutral.toml")),
+            Self::V2 => (tasks.join("v2"), tasks.join("h2h/neutral-v2.toml")),
+        }
+    }
+}
+
 #[derive(clap::Args)]
 pub struct AgentBenchArgs {
+    /// The task set.
+    #[arg(long, value_enum, default_value = "canonical")]
+    suite: Suite,
     /// MCP servers to compare, in run order within each task.
     #[arg(long, value_delimiter = ',', default_value = "rampage,rea")]
     servers: Vec<String>,
@@ -31,12 +52,27 @@ pub struct AgentBenchArgs {
     repeat: u32,
     #[arg(long, default_value = "claude-sonnet-5-5")]
     model: String,
-    /// Model turn limit per run.
+    /// Model turn limit per run, unless the task sets its own.
     #[arg(long, default_value_t = 40)]
     max_turns: u32,
-    /// Wall-clock limit per run, in seconds.
+    /// Wall-clock limit per run in seconds, unless the task sets its own.
     #[arg(long, default_value_t = 900)]
     timeout_s: u64,
+    /// Stop before starting another run once the reported model spend reaches this many US dollars, counting
+    /// --spent-usd and every run so far; the report records the stop.
+    #[arg(long)]
+    cost_cap_usd: Option<f64>,
+    /// Spend already used by earlier passes of the same workstream, counted against --cost-cap-usd.
+    #[arg(long, default_value_t = 0.0, requires = "cost_cap_usd")]
+    spent_usd: f64,
+    /// REA_GHIDRA_STARTUP_TIMEOUT_MS for the REA server: how long REA lets Ghidra import and analyze before
+    /// failing (REA's own default, 330000, applies when unset).
+    #[arg(long)]
+    rea_ghidra_startup_timeout_ms: Option<u64>,
+    /// Measurements made outside the agent runs (NAME=PATH to a JSON file), embedded in the report under
+    /// `attachments.NAME`.
+    #[arg(long = "attach", value_parser = parse_attachment)]
+    attachments: Vec<(String, PathBuf)>,
     /// The runner command, split on whitespace; a relative script path resolves against the repository root.
     #[arg(long, default_value = DEFAULT_RUNNER)]
     runner: String,
@@ -88,9 +124,8 @@ pub struct AgentBenchArgs {
 pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
     let root = args.repository_root.clone().unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
     let root = std::fs::canonicalize(&root).map_err(|error| format!("{}: {error}", root.display()))?;
-    let task_directory = root.join("crates/rampage-eval/tasks");
+    let (task_directory, suite_path) = args.suite.paths(&root);
     let mut tasks = load_tasks(&task_directory).map_err(|error| error.to_string())?;
-    let suite_path = task_directory.join("h2h/neutral.toml");
     let suite_text = read(&suite_path)?;
     let suite = NeutralSuite::from_toml(&suite_text).map_err(|error| format!("{}: {error}", suite_path.display()))?;
     suite.check_against(&tasks, &args.servers)?;
@@ -141,6 +176,9 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
                 if let Some(families) = &args.rea_tool_families {
                     env["REA_MCP_TOOL_FAMILIES"] = json!(families);
                 }
+                if let Some(timeout) = args.rea_ghidra_startup_timeout_ms {
+                    env["REA_GHIDRA_STARTUP_TIMEOUT_MS"] = json!(timeout.to_string());
+                }
                 let config = json!({"mcpServers": {"rea": {"type": "stdio",
                     "command": node, "args": [entry, "mcp"], "env": env}}});
                 let record = absolute(args.rea_install_record.as_ref(), "target/bench/rea/install.json")?;
@@ -156,7 +194,9 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
                     json!({"install": install, "node": node_version,
                     "ghidra": ghidra_version(&args.ghidra_dir), "java_home": args.java_home,
                     "provider": "ghidra",
-                    "tool_families": args.rea_tool_families.as_deref().unwrap_or("default (complete catalog)")}),
+                    "tool_families": args.rea_tool_families.as_deref().unwrap_or("default (complete catalog)"),
+                    "ghidra_startup_timeout_ms": args.rea_ghidra_startup_timeout_ms
+                        .map_or_else(|| json!("default (330000)"), |timeout| json!(timeout))}),
                 )
             }
         };
@@ -190,11 +230,22 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
         .map_err(|error| format!("{}: {error}", rows_path.display()))?;
     let mut rows = Vec::new();
     let total = args.repeat as usize * tasks.len() * args.servers.len();
-    for repetition in 1..=args.repeat {
+    let mut stopped: Option<Value> = None;
+    'runs: for repetition in 1..=args.repeat {
         for task in &tasks {
             for (position, server) in server_order(&args.servers, repetition).into_iter().enumerate() {
+                if let Some(cap) = args.cost_cap_usd.filter(|_| !args.rescore) {
+                    let spent = args.spent_usd + rows.iter().filter_map(|row: &RunRow| row.cost_usd).sum::<f64>();
+                    if spent >= cap {
+                        eprintln!("cost cap reached: ${spent:.2} of ${cap:.2}; stopping before {} {server}", task.id);
+                        stopped = Some(json!({"reason": "cost cap", "cap_usd": cap, "spent_usd": spent,
+                            "completed_runs": rows.len(), "planned_runs": total}));
+                        break 'runs;
+                    }
+                }
                 let fixture = root.join(&task.fixture.path);
                 let row = run_one(&RunSetup {
+                    root: &root,
                     task,
                     suite: &suite,
                     server,
@@ -245,6 +296,13 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
             "order": "for each repetition, for each task, each server in turn, sequentially; the --servers order \
                 on odd repetitions and its reverse on even ones",
             "max_mcp_output_tokens": args.max_mcp_output_tokens,
+            "suite": format!("{:?}", args.suite).to_lowercase(),
+            "task_limits": tasks.iter().map(|task| {
+                let (max_turns, timeout_s) = limits(&suite, task, &args);
+                (task.id.clone(), json!({"max_turns": max_turns, "timeout_s": timeout_s}))
+            }).collect::<BTreeMap<_, _>>(),
+            "cost_cap_usd": args.cost_cap_usd,
+            "spent_before_usd": args.cost_cap_usd.map(|_| args.spent_usd),
             "neutral_suite_sha256": hex(&Sha256::digest(suite_text.as_bytes())),
             "task_definition_sha256": task_hashes(&task_directory, &tasks)?,
             "runner_command": args.runner,
@@ -252,6 +310,8 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
         },
         "runners": runners,
         "versions": versions,
+        "stopped": stopped,
+        "attachments": attachments(&args.attachments)?,
         "summary": summary,
         "runs": rows,
     });
@@ -286,6 +346,7 @@ fn server_order(servers: &[String], repetition: u32) -> Vec<&String> {
 }
 
 struct RunSetup<'a> {
+    root: &'a Path,
     task: &'a ParityTask,
     suite: &'a NeutralSuite,
     server: &'a str,
@@ -309,11 +370,22 @@ fn run_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
     if hash_file(&target)? != setup.task.fixture.sha256 {
         return Err(format!("{}: fixture differs from its declared digest", setup.task.id));
     }
+    let mut companions = Vec::new();
+    for companion in &setup.task.fixture.companions {
+        let source = setup.root.join(&companion.path);
+        let copy = workdir.path.join(&companion.name);
+        std::fs::copy(&source, &copy).map_err(|error| format!("{}: {error}", source.display()))?;
+        if hash_file(&copy)? != companion.sha256 {
+            return Err(format!("{}: companion {} differs from its declared digest", setup.task.id, companion.name));
+        }
+        companions.push((companion.name.clone(), copy.to_string_lossy().into_owned()));
+    }
+    let (max_turns, timeout_s) = limits(setup.suite, setup.task, setup.args);
     let run_dir =
         setup.out_dir.join("runs").join(setup.server).join(format!("{}-r{}", setup.task.id, setup.repetition));
     std::fs::create_dir_all(&run_dir).map_err(|error| error.to_string())?;
     let prompt = run_dir.join("prompt.txt");
-    write_private(&prompt, setup.suite.prompt(setup.task, &target.to_string_lossy()).as_bytes())?;
+    write_private(&prompt, setup.suite.prompt_with(setup.task, &target.to_string_lossy(), &companions).as_bytes())?;
     let result_path = run_dir.join("result.json");
     let _ = std::fs::remove_file(&result_path);
     let status = Command::new(&setup.runner[0])
@@ -326,8 +398,8 @@ fn run_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
         .arg("--system-file")
         .arg(setup.system)
         .args(["--model", &setup.args.model])
-        .args(["--max-turns", &setup.args.max_turns.to_string()])
-        .args(["--timeout-s", &setup.args.timeout_s.to_string()])
+        .args(["--max-turns", &max_turns.to_string()])
+        .args(["--timeout-s", &timeout_s.to_string()])
         .args(["--max-mcp-output-tokens", &setup.args.max_mcp_output_tokens.to_string()])
         .arg("--workdir")
         .arg(&workdir.path)
@@ -347,6 +419,7 @@ fn rescore_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
     let run_dir =
         setup.out_dir.join("runs").join(setup.server).join(format!("{}-r{}", setup.task.id, setup.repetition));
     let result_path = run_dir.join("result.json");
+    let (max_turns, timeout_s) = limits(setup.suite, setup.task, setup.args);
     let status = Command::new(&setup.runner[0])
         .args(&setup.runner[1..])
         .arg("--renormalize")
@@ -356,8 +429,8 @@ fn rescore_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
         .arg("--prompt-file")
         .arg(run_dir.join("prompt.txt"))
         .args(["--model", &setup.args.model])
-        .args(["--max-turns", &setup.args.max_turns.to_string()])
-        .args(["--timeout-s", &setup.args.timeout_s.to_string()])
+        .args(["--max-turns", &max_turns.to_string()])
+        .args(["--timeout-s", &timeout_s.to_string()])
         .arg("--workdir")
         .arg(&run_dir)
         .arg("--out")
@@ -401,6 +474,30 @@ impl Drop for Workdir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
+}
+
+/// A task's turn and time limits: its own from the neutral suite, else the run's defaults.
+fn limits(suite: &NeutralSuite, task: &ParityTask, args: &AgentBenchArgs) -> (u32, u64) {
+    let neutral = &suite.tasks[&task.id];
+    (neutral.max_turns.unwrap_or(args.max_turns), neutral.timeout_s.unwrap_or(args.timeout_s))
+}
+
+fn parse_attachment(text: &str) -> Result<(String, PathBuf), String> {
+    let (name, path) = text.split_once('=').ok_or("expected NAME=PATH")?;
+    if name.is_empty() || !name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-') {
+        return Err(format!("invalid attachment name {name:?}"));
+    }
+    Ok((name.to_owned(), PathBuf::from(path)))
+}
+
+fn attachments(items: &[(String, PathBuf)]) -> Result<Value, String> {
+    let mut object = serde_json::Map::new();
+    for (name, path) in items {
+        let value: Value =
+            serde_json::from_str(&read(path)?).map_err(|error| format!("{}: {error}", path.display()))?;
+        object.insert(name.clone(), value);
+    }
+    Ok(Value::Object(object))
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {

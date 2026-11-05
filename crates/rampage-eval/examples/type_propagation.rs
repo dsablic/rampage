@@ -221,6 +221,7 @@ fn task() -> ParityTask {
             sha256: FIXTURE_SHA256.into(),
             source: "tests/fixtures/src/type-propagation.c".into(),
             build: "crates/rampage-eval/examples/type_propagation.rs".into(),
+            companions: Vec::new(),
         },
         truth_reference: "Owned snapshot, explicit callee native storage, provenance-bound receipts and identity log"
             .into(),
@@ -234,6 +235,7 @@ fn task() -> ParityTask {
                 ("analyst_types_preserved".into(), json!(true)),
                 ("derived_hints_persisted".into(), json!(true)),
             ]),
+            hex_integers: false,
         },
     }
 }
@@ -1113,7 +1115,7 @@ mod tests {
         let path = Path::new("owned.snapshot.json");
         let mut run = AgentRun::without_provider(&AgentConfig::new(MODEL));
         run.model_source = Some(ModelSource::Provider);
-        let AnswerContract::Exact { fields } = task().answer else { panic!("exact contract") };
+        let AnswerContract::Exact { fields, .. } = task().answer else { panic!("exact contract") };
         run.disposition = AgentDisposition::Answer { answer: json!(fields) };
         run.calls = vec![
             receipt("propagate_types", propagation_input(path, false), report(false)),

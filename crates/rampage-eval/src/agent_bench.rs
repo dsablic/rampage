@@ -28,6 +28,18 @@ pub struct NeutralSuite {
 #[serde(deny_unknown_fields)]
 pub struct NeutralTask {
     pub question: String,
+    /// Report grouping, such as `cpp` or `scale`; tasks without one are reported as `uncategorized`.
+    #[serde(default)]
+    pub category: Option<String>,
+    /// How the answer is scored, in words, for the published report; the contract is the manifest's.
+    #[serde(default)]
+    pub scoring: Option<String>,
+    /// Per-task model turn limit, overriding the run's default.
+    #[serde(default)]
+    pub max_turns: Option<u32>,
+    /// Per-task wall-clock limit in seconds, overriding the run's default.
+    #[serde(default)]
+    pub timeout_s: Option<u64>,
     /// Why the wording differs from the frozen manifest, when it does.
     #[serde(default)]
     pub change: Option<String>,
@@ -111,7 +123,7 @@ impl NeutralSuite {
                     return Err(format!("{}: analysis tasks score against the manifest contract", task.id));
                 }
                 TaskKind::Capability => {
-                    let AnswerContract::Exact { fields } = &task.answer else {
+                    let AnswerContract::Exact { fields, .. } = &task.answer else {
                         return Err(format!("{}: capability probes must have an exact contract", task.id));
                     };
                     if fields.keys().map(String::as_str).collect::<Vec<_>>() != ["available"] {
@@ -128,10 +140,23 @@ impl NeutralSuite {
     }
 
     pub fn prompt(&self, task: &ParityTask, opened_path: &str) -> String {
-        let path = serde_json::to_string(opened_path).expect("path string is serializable");
+        self.prompt_with(task, opened_path, &[])
+    }
+
+    /// The prompt for a task whose companion files were copied to `companions` (name, path), in manifest order.
+    pub fn prompt_with(&self, task: &ParityTask, opened_path: &str, companions: &[(String, String)]) -> String {
+        let quote = |path: &str| serde_json::to_string(path).expect("path string is serializable");
+        let path = quote(opened_path);
+        let also = if companions.is_empty() {
+            String::new()
+        } else {
+            let list: Vec<String> = companions.iter().map(|(_, path)| quote(path)).collect();
+            format!(" The task also uses {}; refer to them as the question does.", list.join(" and "))
+        };
+        let read = if companions.is_empty() { "the file" } else { "the files" };
         format!(
-            "Analyze the binary at {path}. Use only the tools of the connected MCP server; there is no other \
-             way to read the file.\n\n{}\n\n\
+            "Analyze the binary at {path}.{also} Use only the tools of the connected MCP server; there is no \
+             other way to read {read}.\n\n{}\n\n\
              Finish with only one JSON object, without prose or code fences, holding exactly the requested \
              fields. If the evidence is insufficient, finish with {{\"status\":\"unknown\",\"reason\":\"...\"}}; \
              if the server cannot do what the question needs, finish with \
@@ -152,6 +177,7 @@ impl NeutralSuite {
                 Ok(match truth {
                     ProbeTruth::Is(available) => Expected::Contract(AnswerContract::Exact {
                         fields: BTreeMap::from([("available".to_owned(), json!(available))]),
+                        hex_integers: false,
                     }),
                     ProbeTruth::Either(_) => Expected::AnyAvailable,
                 })
@@ -310,10 +336,15 @@ pub fn attempt(result: &RunnerResult) -> (TaskAttempt, Option<FailureKind>, Opti
 pub struct RunRow {
     pub task_id: String,
     pub kind: TaskKind,
+    /// The neutral suite's category for the task, or `uncategorized`.
+    pub category: String,
     pub server: String,
     pub repetition: u32,
     pub outcome: TaskOutcome,
     pub failure: Option<FailureKind>,
+    /// Partial credit for set answers (Jaccard index, defined before any run); `None` for exact contracts. A run
+    /// without a scorable answer gets 0.
+    pub partial: Option<f64>,
     /// How the answer object was found; `None` when there was none.
     pub extraction: Option<Extraction>,
     /// Calls to the server's tools that the client ran (refused calls and ToolSearch excluded).
@@ -350,6 +381,13 @@ pub fn score(
     let (attempt, mut failure, extraction) = attempt(result);
     let server_calls: Vec<_> =
         result.tool_calls.iter().filter(|call| !call.rejected && call.name != TOOL_SEARCH).collect();
+    let partial = match (&expected, task.kind) {
+        (Expected::Contract(contract), TaskKind::Analysis) => match &attempt {
+            TaskAttempt::Answer(answer) => contract.partial(answer),
+            _ => contract.partial(&Value::Null),
+        },
+        _ => None,
+    };
     let outcome = match &attempt {
         TaskAttempt::Answer(answer) if expected.matches(answer) => TaskOutcome::AnswerMatches,
         TaskAttempt::Answer(_) => {
@@ -361,10 +399,12 @@ pub fn score(
     Ok(RunRow {
         task_id: task.id.clone(),
         kind: task.kind,
+        category: suite.tasks[&task.id].category.clone().unwrap_or_else(|| "uncategorized".to_owned()),
         server: server.to_owned(),
         repetition,
         outcome,
         failure,
+        partial,
         extraction,
         tool_calls: server_calls.len() as u64,
         tool_errors: server_calls.iter().filter(|call| call.is_error).count() as u64,
@@ -419,8 +459,15 @@ fn group_summary(rows: &[&RunRow]) -> Value {
         }
     }
     let cost: Option<f64> = rows.iter().map(|row| row.cost_usd).sum();
+    let partials: Option<Vec<f64>> = rows.iter().map(|row| row.partial).collect();
+    let partial = partials.filter(|values| !values.is_empty()).map(|values| {
+        let sum: f64 = values.iter().sum();
+        (sum / values.len() as f64 * 1000.0).round() / 1000.0
+    });
+    let limits_hit =
+        rows.iter().filter(|row| matches!(row.runner_exit, RunnerExit::Timeout | RunnerExit::MaxTurns)).count();
     json!({
-        "correct": correct, "runs": rows.len(),
+        "correct": correct, "runs": rows.len(), "partial_credit_mean": partial, "limits_hit": limits_hit,
         "tool_calls": spread(rows.iter().map(|row| row.tool_calls)),
         "tool_errors": spread(rows.iter().map(|row| row.tool_errors)),
         "turns": spread(rows.iter().map(|row| row.turns)),
@@ -460,10 +507,38 @@ pub fn summarize(rows: &[RunRow]) -> Value {
             summary["task_id"] = json!(task);
             summary["server"] = json!(server);
             summary["kind"] = json!(rows[0].kind);
+            summary["category"] = json!(rows[0].category);
             summary
         })
         .collect();
     let servers: BTreeSet<&str> = rows.iter().map(|row| row.server.as_str()).collect();
+    let categories: BTreeSet<&str> = rows.iter().map(|row| row.category.as_str()).collect();
+    let by_category: BTreeMap<&str, BTreeMap<&str, Value>> = categories
+        .iter()
+        .map(|category| {
+            let per_server = servers
+                .iter()
+                .map(|server| {
+                    let rows: Vec<&RunRow> = rows
+                        .iter()
+                        .filter(|row| {
+                            row.server == *server && row.category == *category && row.kind == TaskKind::Analysis
+                        })
+                        .collect();
+                    (*server, group_summary(&rows))
+                })
+                .collect();
+            (*category, per_server)
+        })
+        .collect();
+    let limits: Vec<Value> = rows
+        .iter()
+        .filter(|row| matches!(row.runner_exit, RunnerExit::Timeout | RunnerExit::MaxTurns))
+        .map(|row| {
+            json!({"task_id": row.task_id, "server": row.server, "repetition": row.repetition,
+            "limit": row.runner_exit})
+        })
+        .collect();
     let aggregates: BTreeMap<&str, Value> = servers
         .iter()
         .map(|server| {
@@ -479,7 +554,7 @@ pub fn summarize(rows: &[RunRow]) -> Value {
             )
         })
         .collect();
-    json!({"tasks": tasks, "servers": aggregates})
+    json!({"tasks": tasks, "servers": aggregates, "categories": by_category, "limits_hit": limits})
 }
 
 /// The markdown tables of a summary; the caller adds provenance and limitations around them.
@@ -526,6 +601,40 @@ pub fn markdown_tables(summary: &Value) -> String {
                 analysis["totals"]["tool_errors"],
                 analysis["totals"]["truncated_results"],
                 failures(&analysis["failures"]),
+            ));
+        }
+    }
+    if let Some(categories) = summary["categories"]
+        .as_object()
+        .filter(|categories| categories.len() > 1 || categories.keys().any(|category| category != "uncategorized"))
+    {
+        output.push_str("\nPer category (analysis tasks):\n\n");
+        output.push_str("| Category | Server | Correct | Partial credit, mean | Tool calls | Wall s | Failures |\n");
+        output.push_str("| --- | --- | --: | --: | --: | --: | --- |\n");
+        for (category, servers) in categories {
+            for (server, group) in servers.as_object().into_iter().flatten() {
+                output.push_str(&format!(
+                    "| {category} | {server} | {}/{} | {} | {} | {} | {} |\n",
+                    group["correct"],
+                    group["runs"],
+                    group["partial_credit_mean"].as_f64().map_or("–".to_owned(), |value| format!("{value:.3}")),
+                    cell(&group["tool_calls"]),
+                    seconds(&group["wall_ms"]),
+                    failures(&group["failures"]),
+                ));
+            }
+        }
+    }
+    let limits = summary["limits_hit"].as_array().cloned().unwrap_or_default();
+    if !limits.is_empty() {
+        output.push_str("\nRuns that hit a limit:\n\n");
+        for limit in &limits {
+            output.push_str(&format!(
+                "- {} {} r{}: {}\n",
+                limit["task_id"].as_str().unwrap_or(""),
+                limit["server"].as_str().unwrap_or(""),
+                limit["repetition"],
+                limit["limit"].as_str().unwrap_or("")
             ));
         }
     }

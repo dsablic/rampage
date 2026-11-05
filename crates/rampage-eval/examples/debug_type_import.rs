@@ -181,6 +181,7 @@ fn task() -> ParityTask {
             sha256: IMAGE_SHA.into(),
             source: "tests/fixtures/src/debug-types.cpp".into(),
             build: "crates/rampage-eval/tasks/phase1-6/debug-types.toml".into(),
+            companions: Vec::new(),
         },
         truth_reference: "Source-recipe SHA, compiler layout table and independent debug::type_graph DTO".into(),
         required_capabilities: ["import_debug_types", "get_type", "decompile", "edit_variable"]
@@ -198,6 +199,7 @@ fn task() -> ParityTask {
                 ("typed_cells".into(), json!(true)),
                 ("analyst_edits_preserved".into(), json!(true)),
             ]),
+            hex_integers: false,
         },
     }
 }

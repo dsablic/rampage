@@ -146,6 +146,7 @@ fn task() -> ParityTask {
             sha256: FIXTURE_SHA256.into(),
             source: "tests/fixtures/src/typed-data.c".into(),
             build: "crates/rampage-eval/examples/typed_data.rs".into(),
+            companions: Vec::new(),
         },
         truth_reference: "Owned original snapshot bytes, seeded native types and identity-scoped log".into(),
         required_capabilities: ["apply_data_type", "apply_enum", "apply_offset", "read_data", "disassemble"]
@@ -164,6 +165,7 @@ fn task() -> ParityTask {
                 ("enum_display".into(), json!("TypedMode::MODE_READY")),
                 ("field_display".into(), json!("TypedRecord.value")),
             ]),
+            hex_integers: false,
         },
     }
 }
