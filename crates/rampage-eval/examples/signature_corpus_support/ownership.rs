@@ -278,9 +278,11 @@ struct ObjectTlsContext<'object, 'data> {
 }
 
 fn static_tls_layout<'a>(file: &object::File<'a>, records: &mut usize) -> Result<StaticTls<'a>, String> {
-    use object::read::elf::{Dyn, ProgramHeader};
     use object::elf::*;
-    let object::File::Elf64(elf) = file else { return Err("TLS rewrite requires ELF64".into()); };
+    use object::read::elf::{Dyn, ProgramHeader};
+    let object::File::Elf64(elf) = file else {
+        return Err("TLS rewrite requires ELF64".into());
+    };
     if file.architecture() != object::Architecture::X86_64 || !file.is_little_endian() {
         return Err("TLS rewrite requires little-endian x86-64".into());
     }
@@ -290,34 +292,43 @@ fn static_tls_layout<'a>(file: &object::File<'a>, records: &mut usize) -> Result
     let mut dynamic_count = 0;
     for header in elf.elf_program_headers() {
         charge(records)?;
-        if header.p_type(endian) == PT_INTERP { return Err("TLS rewrite refuses an ELF interpreter".into()); }
+        if header.p_type(endian) == PT_INTERP {
+            return Err("TLS rewrite refuses an ELF interpreter".into());
+        }
         if header.p_type(endian) == PT_TLS && tls.replace(header).is_some() {
             return Err("TLS rewrite requires exactly one PT_TLS".into());
         }
         if let Some(entries) = header.dynamic(endian, elf.data()).map_err(|error| error.to_string())? {
             dynamic_count += 1;
-            if dynamic_count > 1 { return Err("ambiguous ELF dynamic segments for TLS rewrite".into()); }
+            if dynamic_count > 1 {
+                return Err("ambiguous ELF dynamic segments for TLS rewrite".into());
+            }
             let mut terminated = false;
             let mut flags = None;
             for entry in entries {
                 charge(records)?;
                 let tag = entry.d_tag(endian);
-                if tag == DT_NULL { terminated = true; break; }
+                if tag == DT_NULL {
+                    terminated = true;
+                    break;
+                }
                 if matches!(tag, DT_NEEDED | DT_FILTER | DT_AUXILIARY) {
                     return Err("TLS rewrite refuses external dynamic modules".into());
                 }
                 if tag == DT_FLAGS_1 {
                     let value = entry.d_val(endian);
-                    if flags.replace(value).is_some() { return Err("ambiguous static PIE flags".into()); }
+                    if flags.replace(value).is_some() {
+                        return Err("ambiguous static PIE flags".into());
+                    }
                     pie = value & DF_1_PIE.0 != 0;
                 }
             }
-            if !terminated { return Err("unterminated ELF dynamic segment for TLS rewrite".into()); }
+            if !terminated {
+                return Err("unterminated ELF dynamic segment for TLS rewrite".into());
+            }
         }
     }
-    if !matches!(file.kind(), object::ObjectKind::Executable)
-        && !(file.kind() == object::ObjectKind::Dynamic && pie)
-    {
+    if !matches!(file.kind(), object::ObjectKind::Executable) && !(file.kind() == object::ObjectKind::Dynamic && pie) {
         return Err("TLS rewrite requires static ET_EXEC or explicitly marked static PIE".into());
     }
     for symbol in file.dynamic_symbols() {
@@ -327,24 +338,37 @@ fn static_tls_layout<'a>(file: &object::File<'a>, records: &mut usize) -> Result
         }
     }
     let tls = tls.ok_or("TLS rewrite has no PT_TLS")?;
-    let (base, offset, size, filesz, align) = (tls.p_vaddr(endian), tls.p_offset(endian),
-        tls.p_memsz(endian), tls.p_filesz(endian), tls.p_align(endian));
-    if align == 0 || !align.is_power_of_two() || base % align != 0 || offset % align != 0
-        || size == 0 || size > MAX_BYTES as u64 || filesz > size
+    let (base, offset, size, filesz, align) =
+        (tls.p_vaddr(endian), tls.p_offset(endian), tls.p_memsz(endian), tls.p_filesz(endian), tls.p_align(endian));
+    if align == 0
+        || !align.is_power_of_two()
+        || base % align != 0
+        || offset % align != 0
+        || size == 0
+        || size > MAX_BYTES as u64
+        || filesz > size
         || tls.data(endian, elf.data()).is_err()
     {
         return Err("unsupported PT_TLS size, alignment, first-byte placement or backing".into());
     }
     let end = extent(base, size)?;
     let file_end = extent(offset, filesz)?;
-    let loads = elf.elf_program_headers().iter().filter(|header| {
-        header.p_type(endian) == PT_LOAD && header.p_flags(endian).contains(PF_R | PF_W)
-            && base >= header.p_vaddr(endian) && offset >= header.p_offset(endian)
-            && base - header.p_vaddr(endian) == offset - header.p_offset(endian)
-            && header.p_vaddr(endian).checked_add(header.p_memsz(endian)).is_some_and(|limit| end <= limit)
-            && header.p_offset(endian).checked_add(header.p_filesz(endian)).is_some_and(|limit| file_end <= limit)
-    }).count();
-    if loads != 1 { return Err("PT_TLS does not have unique consistent writable PT_LOAD backing".into()); }
+    let loads = elf
+        .elf_program_headers()
+        .iter()
+        .filter(|header| {
+            header.p_type(endian) == PT_LOAD
+                && header.p_flags(endian).contains(PF_R | PF_W)
+                && base >= header.p_vaddr(endian)
+                && offset >= header.p_offset(endian)
+                && base - header.p_vaddr(endian) == offset - header.p_offset(endian)
+                && header.p_vaddr(endian).checked_add(header.p_memsz(endian)).is_some_and(|limit| end <= limit)
+                && header.p_offset(endian).checked_add(header.p_filesz(endian)).is_some_and(|limit| file_end <= limit)
+        })
+        .count();
+    if loads != 1 {
+        return Err("PT_TLS does not have unique consistent writable PT_LOAD backing".into());
+    }
     let block_size = extent(size, align - 1)? & !(align - 1);
     let mut symbols = BTreeMap::new();
     for symbol in file.symbols() {
@@ -358,8 +382,15 @@ fn static_tls_layout<'a>(file: &object::File<'a>, records: &mut usize) -> Result
             }
         }
     }
-    Ok(StaticTls { base, file_offset: offset, initialized_size: filesz,
-        memory_size: size, block_size, alignment: align, symbols })
+    Ok(StaticTls {
+        base,
+        file_offset: offset,
+        initialized_size: filesz,
+        memory_size: size,
+        block_size,
+        alignment: align,
+        symbols,
+    })
 }
 
 enum ExactTlsBytes {
@@ -371,8 +402,10 @@ enum ExactTlsBytes {
 const TLS_LD_LOCAL_EXEC: [u8; 12] = [0x66, 0x66, 0x66, 0x64, 0x48, 0x8b, 0x04, 0x25, 0, 0, 0, 0];
 
 fn tls_symbol_value(
-    context: &mut ObjectTlsContext<'_, '_>, linked_file: &object::File<'_>,
-    layout: &StaticTls<'_>, field: &RelocatedField,
+    context: &mut ObjectTlsContext<'_, '_>,
+    linked_file: &object::File<'_>,
+    layout: &StaticTls<'_>,
+    field: &RelocatedField,
 ) -> Result<(u64, u64), String> {
     use object::elf::*;
     let source = context.source;
@@ -381,29 +414,37 @@ fn tls_symbol_value(
     };
     let symbol = source.symbol_by_index(tls_index).map_err(|error| error.to_string())?;
     if !matches!(symbol.flags(), object::SymbolFlags::Elf { st_info, .. } if st_info.st_type() == STT_TLS)
-        || symbol.is_undefined() || symbol.is_weak() || symbol.size() == 0
+        || symbol.is_undefined()
+        || symbol.is_weak()
+        || symbol.size() == 0
     {
         return Err("TLS proof requires a defined nonweak native source STT_TLS symbol".into());
     }
     let name = symbol.name().map_err(|error| error.to_string())?;
-    let &(value, size, section_index) = layout.symbols.get(name)
-        .ok_or("raw source TLS name absent from linked TLS")?;
+    let &(value, size, section_index) = layout.symbols.get(name).ok_or("raw source TLS name absent from linked TLS")?;
     let linked_section = linked_file.section_by_index(section_index).map_err(|error| error.to_string())?;
     let source_index = symbol.section_index().ok_or("source TLS has no section")?;
-    let source_section = source.section_by_index(source_index)
-        .map_err(|error| error.to_string())?;
-    let tls_section = |section: &object::Section<'_, '_>| matches!(section.flags(),
+    let source_section = source.section_by_index(source_index).map_err(|error| error.to_string())?;
+    let tls_section = |section: &object::Section<'_, '_>| {
+        matches!(section.flags(),
         object::SectionFlags::Elf { sh_flags, sh_type } if sh_flags.contains(SHF_ALLOC | SHF_TLS)
-            && matches!(sh_type, SHT_PROGBITS | SHT_NOBITS));
+            && matches!(sh_type, SHT_PROGBITS | SHT_NOBITS))
+    };
     let source_value = symbol.address().checked_sub(source_section.address()).ok_or("invalid source TLS value")?;
     let linked_value = extent(layout.base, value)?;
-    if !tls_section(&source_section) || !tls_section(&linked_section) || size != symbol.size()
-        || source_section.align() == 0 || !source_section.align().is_power_of_two()
-        || linked_section.align() == 0 || !linked_section.align().is_power_of_two()
-        || linked_section.align() > layout.alignment || linked_section.address() % linked_section.align() != 0
+    if !tls_section(&source_section)
+        || !tls_section(&linked_section)
+        || size != symbol.size()
+        || source_section.align() == 0
+        || !source_section.align().is_power_of_two()
+        || linked_section.align() == 0
+        || !linked_section.align().is_power_of_two()
+        || linked_section.align() > layout.alignment
+        || linked_section.address() % linked_section.align() != 0
         || linked_section.address() < layout.base
         || extent(linked_section.address(), linked_section.size())? > extent(layout.base, layout.memory_size)?
-        || extent(source_value, size)? > source_section.size() || extent(value, size)? > layout.memory_size
+        || extent(source_value, size)? > source_section.size()
+        || extent(value, size)? > layout.memory_size
         || linked_value < linked_section.address()
         || extent(linked_value, size)? > extent(linked_section.address(), linked_section.size())?
     {
@@ -411,8 +452,10 @@ fn tls_symbol_value(
     }
     let input_base = linked_value.checked_sub(source_value).ok_or("source TLS input-section base underflow")?;
     let input_end = extent(input_base, source_section.size())?;
-    if source_section.align() > layout.alignment || input_base % source_section.align() != 0
-        || input_base < linked_section.address() || input_base < layout.base
+    if source_section.align() > layout.alignment
+        || input_base % source_section.align() != 0
+        || input_base < linked_section.address()
+        || input_base < layout.base
         || input_end > extent(linked_section.address(), linked_section.size())?
         || input_end > extent(layout.base, layout.memory_size)?
     {
@@ -424,7 +467,9 @@ fn tls_symbol_value(
     let object::SectionFlags::Elf { sh_type: linked_type, .. } = linked_section.flags() else {
         return Err("linked TLS section has no native ELF storage type".into());
     };
-    if source_type != linked_type { return Err("source and linked TLS initialization classes disagree".into()); }
+    if source_type != linked_type {
+        return Err("source and linked TLS initialization classes disagree".into());
+    }
     let relative = linked_section.address().checked_sub(layout.base).ok_or("TLS section base underflow")?;
     if linked_type == SHT_PROGBITS {
         let expected_offset = extent(layout.file_offset, relative)?;
@@ -438,7 +483,8 @@ fn tls_symbol_value(
         {
             return Err("TLS PROGBITS backing contradicts PT_TLS initialized bytes or actual file bounds".into());
         }
-    } else if relative < layout.initialized_size || linked_section.file_range().is_some()
+    } else if relative < layout.initialized_size
+        || linked_section.file_range().is_some()
         || source_section.file_range().is_some()
     {
         return Err("TLS NOBITS overlaps initialized PT_TLS bytes or claims file backing".into());
@@ -448,15 +494,22 @@ fn tls_symbol_value(
         std::collections::btree_map::Entry::Occupied(entry) if *entry.get() != input_base => {
             return Err("referenced symbols infer contradictory bases for one source TLS input section".into());
         }
-        std::collections::btree_map::Entry::Vacant(entry) => { entry.insert(input_base); }
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(input_base);
+        }
         _ => {}
     }
     Ok((value, size))
 }
 
 fn tls_rewrites(
-    context: &mut ObjectTlsContext<'_, '_>, linked_file: &object::File<'_>, layout: &Result<StaticTls<'_>, String>,
-    section: &[u8], offset: u64, linked: &[u8], fields: &[RelocatedField],
+    context: &mut ObjectTlsContext<'_, '_>,
+    linked_file: &object::File<'_>,
+    layout: &Result<StaticTls<'_>, String>,
+    section: &[u8],
+    offset: u64,
+    linked: &[u8],
+    fields: &[RelocatedField],
 ) -> Result<BTreeMap<u64, ExactTlsBytes>, String> {
     use object::elf::*;
     let source = context.source;
@@ -470,18 +523,26 @@ fn tls_rewrites(
     let mut ld_pairs = 0;
     for (index, field) in fields.iter().enumerate().skip(first).take_while(|(_, field)| field.offset < end) {
         let local = field.typ == R_X86_64_TLSLD;
-        if field.typ != R_X86_64_TLSGD && !local { continue; }
+        if field.typ != R_X86_64_TLSGD && !local {
+            continue;
+        }
         let prefix = if local { 3 } else { 4 };
         let length = if local { 12 } else { 16 };
         let start = field.offset.checked_sub(prefix).ok_or("TLS pair prefix underflow")?;
-        let Some(relative) = start.checked_sub(offset) else { continue; };
+        let Some(relative) = start.checked_sub(offset) else {
+            continue;
+        };
         let at = usize::try_from(relative).map_err(|_| "TLS pair offset overflow")?;
         if local {
             if linked.get(at..at + 12) != Some(TLS_LD_LOCAL_EXEC.as_slice()) {
                 return Err("unsupported TLSLD linked opcode/register/padding sequence".into());
             }
-        } else if linked.get(at..at + 12) != Some(LE.as_slice()) { continue; }
-        if extent(start, length)? > end { return Err("TLS pair straddles producer function boundary".into()); }
+        } else if linked.get(at..at + 12) != Some(LE.as_slice()) {
+            continue;
+        }
+        if extent(start, length)? > end {
+            return Err("TLS pair straddles producer function boundary".into());
+        }
         let model = if local { "TLSLD" } else { "TLSGD" };
         let layout = layout.as_ref().map_err(|error| format!("{model}-to-LE proof refused: {error}"))?;
         let first = usize::try_from(start).map_err(|_| "TLS source offset overflow")?;
@@ -490,12 +551,15 @@ fn tls_rewrites(
             return Err("noncanonical TLS source instruction/register sequence".into());
         }
         let call = fields.get(index + 1).ok_or("TLS rewrite lacks paired call relocation")?;
-        if field.width != 4 || field.explicit_addend != Some(-4) || call.typ != R_X86_64_PLT32
+        if field.width != 4
+            || field.explicit_addend != Some(-4)
+            || call.typ != R_X86_64_PLT32
             || call.offset != extent(field.offset, if local { 5 } else { 8 })?
-            || call.width != 4 || call.explicit_addend != Some(-4)
-            || index.checked_sub(1).is_some_and(|previous| {
-                fields[previous].offset + fields[previous].width as u64 > start
-            })
+            || call.width != 4
+            || call.explicit_addend != Some(-4)
+            || index
+                .checked_sub(1)
+                .is_some_and(|previous| fields[previous].offset + fields[previous].width as u64 > start)
             || fields.get(index + 2).is_some_and(|next| next.offset < start + length)
         {
             return Err("TLS rewrite requires an isolated indexed TLS/PLT32 pair with explicit -4 addends".into());
@@ -504,8 +568,10 @@ fn tls_rewrites(
             return Err("TLS resolver relocation is not a native symbol index".into());
         };
         let resolver = source.symbol_by_index(call_index).map_err(|error| error.to_string())?;
-        if resolver.name_bytes().map_err(|error| error.to_string())? != b"__tls_get_addr" || !resolver.is_undefined()
-            || !resolver.is_global() || resolver.is_weak()
+        if resolver.name_bytes().map_err(|error| error.to_string())? != b"__tls_get_addr"
+            || !resolver.is_undefined()
+            || !resolver.is_global()
+            || resolver.is_weak()
             || !matches!(resolver.flags(), object::SymbolFlags::Elf { st_info, .. }
                 if matches!(st_info.st_type(), STT_FUNC | STT_NOTYPE))
         {
@@ -530,12 +596,18 @@ fn tls_rewrites(
         return Err("TLSLD-to-LE requires DTPOFF32 fields in the same producer function".into());
     }
     for field in fields[first..last].iter().filter(|field| field.typ == R_X86_64_DTPOFF32) {
-        if ld_pairs == 0 { return Err("DTPOFF32 has no proven TLSLD-to-LE frame in the producer function".into()); }
-        if extent(field.offset, 4)? > end { return Err("DTPOFF32 straddles producer function boundary".into()); }
+        if ld_pairs == 0 {
+            return Err("DTPOFF32 has no proven TLSLD-to-LE frame in the producer function".into());
+        }
+        if extent(field.offset, 4)? > end {
+            return Err("DTPOFF32 straddles producer function boundary".into());
+        }
         let layout = layout.as_ref().map_err(|error| format!("DTPOFF32 proof refused: {error}"))?;
         let (value, size) = tls_symbol_value(context, linked_file, layout, field)?;
         let addend = field.explicit_addend.ok_or("DTPOFF32 requires an explicit native RELA addend")?;
-        if addend < 0 || addend as u64 >= size { return Err("DTPOFF32 addend leaves native TLS symbol range".into()); }
+        if addend < 0 || addend as u64 >= size {
+            return Err("DTPOFF32 addend leaves native TLS symbol range".into());
+        }
         let at = usize::try_from(field.offset).map_err(|_| "DTPOFF32 source offset overflow")?;
         if section.get(at..at + 4) != Some([0; 4].as_slice()) {
             return Err("noncanonical DTPOFF32 RELA source field".into());
@@ -552,8 +624,11 @@ fn relocation_bits(arch: object::Architecture, typ: object::elf::RelocationType)
     use object::elf::*;
     let field = match (arch, typ) {
         (_, R_X86_64_NONE) => (0, 0),
-        (X86_64, R_X86_64_PC32 | R_X86_64_PLT32 | R_X86_64_32 | R_X86_64_32S
-            | R_X86_64_GOTPCREL | R_X86_64_TLSGD | R_X86_64_TLSLD)
+        (
+            X86_64,
+            R_X86_64_PC32 | R_X86_64_PLT32 | R_X86_64_32 | R_X86_64_32S | R_X86_64_GOTPCREL | R_X86_64_TLSGD
+            | R_X86_64_TLSLD,
+        )
         | (I386, R_386_32 | R_386_PC32 | R_386_PLT32)
         | (Aarch64, R_AARCH64_ABS32 | R_AARCH64_PREL32)
         | (Arm, R_ARM_ABS32 | R_ARM_REL32 | R_ARM_ABS32_NOI | R_ARM_REL32_NOI) => (4, u32::MAX as u64),
@@ -574,7 +649,9 @@ fn relocation_bits(arch: object::Architecture, typ: object::elf::RelocationType)
 }
 
 fn relocated_fields(
-    source: &object::File<'_>, section: &object::Section<'_, '_>, records: &mut usize,
+    source: &object::File<'_>,
+    section: &object::Section<'_, '_>,
+    records: &mut usize,
 ) -> Result<Vec<RelocatedField>, String> {
     let mut fields = Vec::new();
     for (offset, relocation) in section.relocations() {
@@ -583,10 +660,15 @@ fn relocated_fields(
             return Err("expected explicit native ELF relocation flags".into());
         };
         let (width, bits) = relocation_bits(source.architecture(), r_type)?;
-        if width == 0 { continue; }
-        if extent(offset, width as u64)? > section.size() { return Err("relocation exceeds owned section".into()); }
+        if width == 0 {
+            continue;
+        }
+        if extent(offset, width as u64)? > section.size() {
+            return Err("relocation exceeds owned section".into());
+        }
         let partial = matches!(source.architecture(), object::Architecture::Arm | object::Architecture::Aarch64)
-            && width == 4 && bits != u32::MAX as u64;
+            && width == 4
+            && bits != u32::MAX as u64;
         if partial && !source.is_little_endian() {
             return Err("big-endian ARM/AArch64 instruction relocations are unsupported".into());
         }
@@ -619,23 +701,30 @@ fn relocated_fields(
         if width == 8 {
             mask = if source.is_little_endian() { bits.to_le_bytes() } else { bits.to_be_bytes() };
         } else {
-            let bytes = if source.is_little_endian() {
-                (bits as u32).to_le_bytes()
-            } else {
-                (bits as u32).to_be_bytes()
-            };
+            let bytes =
+                if source.is_little_endian() { (bits as u32).to_le_bytes() } else { (bits as u32).to_be_bytes() };
             mask[..4].copy_from_slice(&bytes);
         }
         if source.architecture() == object::Architecture::Aarch64
-            && matches!(r_type, object::elf::R_AARCH64_LDST16_ABS_LO12_NC
-                | object::elf::R_AARCH64_LDST32_ABS_LO12_NC | object::elf::R_AARCH64_LDST64_ABS_LO12_NC
-                | object::elf::R_AARCH64_LDST128_ABS_LO12_NC)
+            && matches!(
+                r_type,
+                object::elf::R_AARCH64_LDST16_ABS_LO12_NC
+                    | object::elf::R_AARCH64_LDST32_ABS_LO12_NC
+                    | object::elf::R_AARCH64_LDST64_ABS_LO12_NC
+                    | object::elf::R_AARCH64_LDST128_ABS_LO12_NC
+            )
         {
             required_zero[..4].copy_from_slice(&(0x003f_fc00u32 & !(bits as u32)).to_le_bytes());
         }
-        fields.push(RelocatedField { offset, mask, required_zero, width, typ: r_type,
+        fields.push(RelocatedField {
+            offset,
+            mask,
+            required_zero,
+            width,
+            typ: r_type,
             target: relocation.target(),
-            explicit_addend: (!relocation.has_implicit_addend()).then_some(relocation.addend()) });
+            explicit_addend: (!relocation.has_implicit_addend()).then_some(relocation.addend()),
+        });
     }
     fields.sort_unstable_by_key(|field| field.offset);
     if fields.windows(2).any(|pair| pair[0].offset + pair[0].width as u64 > pair[1].offset) {
@@ -646,15 +735,24 @@ fn relocated_fields(
 
 #[cfg(test)]
 fn verify_function_bytes(
-    section: &[u8], offset: u64, linked: &[u8], fields: &[RelocatedField],
-    byte_budget: &mut usize, records: &mut usize,
+    section: &[u8],
+    offset: u64,
+    linked: &[u8],
+    fields: &[RelocatedField],
+    byte_budget: &mut usize,
+    records: &mut usize,
 ) -> Result<(), String> {
     verify_function_binding(section, offset, linked, fields, byte_budget, records, &BTreeMap::new())
 }
 
 fn verify_function_binding(
-    section: &[u8], offset: u64, linked: &[u8], fields: &[RelocatedField],
-    byte_budget: &mut usize, records: &mut usize, rewrites: &BTreeMap<u64, ExactTlsBytes>,
+    section: &[u8],
+    offset: u64,
+    linked: &[u8],
+    fields: &[RelocatedField],
+    byte_budget: &mut usize,
+    records: &mut usize,
+    rewrites: &BTreeMap<u64, ExactTlsBytes>,
 ) -> Result<(), String> {
     *byte_budget = byte_budget.checked_sub(linked.len()).ok_or("ownership byte-comparison budget exceeded")?;
     let end = extent(offset, linked.len() as u64)?;
@@ -664,11 +762,13 @@ fn verify_function_binding(
     let first = fields.partition_point(|field| field.offset + field.width as u64 <= offset);
     let mut cursor = 0;
     let mut immutable = false;
-    let mismatch = |index: usize| format!(
-        "owned function bytes differ outside native relocation bits at function offset {index:#x} \
+    let mismatch = |index: usize| {
+        format!(
+            "owned function bytes differ outside native relocation bits at function offset {index:#x} \
          (producer={:#04x}, linked={:#04x}); opcode-changing relaxation is unsupported, including with --no-relax",
-        source[index], linked[index],
-    );
+            source[index], linked[index],
+        )
+    };
     let mut index = first;
     while let Some(field) = fields.get(index).filter(|field| field.offset < end) {
         charge(records)?;
@@ -701,16 +801,21 @@ fn verify_function_binding(
             return Err(mismatch(cursor + index));
         }
         immutable |= at > cursor;
-        for (index, (((before, after), mask), zero)) in source[at..at + field.width].iter()
-            .zip(&linked[at..at + field.width]).zip(&field.mask[..field.width])
-            .zip(&field.required_zero[..field.width]).enumerate()
+        for (index, (((before, after), mask), zero)) in source[at..at + field.width]
+            .iter()
+            .zip(&linked[at..at + field.width])
+            .zip(&field.mask[..field.width])
+            .zip(&field.required_zero[..field.width])
+            .enumerate()
         {
             if (*before | *after) & *zero != 0 {
                 return Err("nonzero fixed high immediate bits in scaled AArch64 LDST LO12 relocation".into());
             }
             let keep = !*mask;
             immutable |= keep != 0;
-            if (*before ^ *after) & keep != 0 { return Err(mismatch(at + index)); }
+            if (*before ^ *after) & keep != 0 {
+                return Err(mismatch(at + index));
+            }
         }
         cursor = at + field.width;
         index += 1;
@@ -719,7 +824,9 @@ fn verify_function_binding(
         return Err(mismatch(cursor + index));
     }
     immutable |= cursor < source.len();
-    if !immutable { return Err("producer function has no immutable bits outside relocation fields".into()); }
+    if !immutable {
+        return Err("producer function has no immutable bits outside relocation fields".into());
+    }
     Ok(())
 }
 
@@ -887,11 +994,18 @@ pub fn linked_definitions(
             let source_bytes = section.data().map_err(|error| error.to_string())?;
             let linked_bytes = linked.read(address, symbol.size()).ok_or("unbacked linked producer function")?;
             let fields = relocation_fields.get(&section_index.0).ok_or("missing checked section relocation fields")?;
-            let rewrites = tls_rewrites(&mut tls_context, &file, &tls_layout,
-                source_bytes, offset, linked_bytes, fields)?;
+            let rewrites =
+                tls_rewrites(&mut tls_context, &file, &tls_layout, source_bytes, offset, linked_bytes, fields)?;
             verify_function_binding(
-                source_bytes, offset, linked_bytes, fields, &mut byte_budget, &mut records, &rewrites,
-            ).map_err(|error| format!("{name} at {address:#x}: {error}"))?;
+                source_bytes,
+                offset,
+                linked_bytes,
+                fields,
+                &mut byte_budget,
+                &mut records,
+                &rewrites,
+            )
+            .map_err(|error| format!("{name} at {address:#x}: {error}"))?;
             for proof in rewrites.values() {
                 match proof {
                     ExactTlsBytes::GeneralDynamic(_) => result.tls_gd_to_le_verified_pairs += 1,
@@ -938,7 +1052,9 @@ mod tests {
     use crate::fixture_support;
 
     fn native_object(
-        arch: object::Architecture, body: &[u8], relocation: Option<(u64, object::elf::RelocationType)>,
+        arch: object::Architecture,
+        body: &[u8],
+        relocation: Option<(u64, object::elf::RelocationType)>,
     ) -> Vec<u8> {
         let mut object = object::write::Object::new(object::BinaryFormat::Elf, arch, object::Endianness::Little);
         let text = object.add_section(Vec::new(), b".text.foo".to_vec(), object::SectionKind::Text);
@@ -946,23 +1062,43 @@ mod tests {
         bytes.resize(body.len().max(16).next_multiple_of(16), 0x90);
         object.append_section_data(text, &bytes, 16);
         let symbol = object.add_symbol(object::write::Symbol {
-            name: b"foo".to_vec(), value: 0, size: body.len() as u64, kind: object::SymbolKind::Text,
-            scope: object::SymbolScope::Linkage, weak: true,
-            section: object::write::SymbolSection::Section(text), flags: object::SymbolFlags::None,
+            name: b"foo".to_vec(),
+            value: 0,
+            size: body.len() as u64,
+            kind: object::SymbolKind::Text,
+            scope: object::SymbolScope::Linkage,
+            weak: true,
+            section: object::write::SymbolSection::Section(text),
+            flags: object::SymbolFlags::None,
         });
         if let Some((offset, r_type)) = relocation {
             let symbol = if matches!(r_type, object::elf::R_X86_64_TLSGD | object::elf::R_X86_64_TLSDESC)
                 && arch == object::Architecture::X86_64
             {
                 object.add_symbol(object::write::Symbol {
-                    name: b"tls_variable".to_vec(), value: 0, size: 8, kind: object::SymbolKind::Tls,
-                    scope: object::SymbolScope::Linkage, weak: false,
-                    section: object::write::SymbolSection::Undefined, flags: object::SymbolFlags::None,
+                    name: b"tls_variable".to_vec(),
+                    value: 0,
+                    size: 8,
+                    kind: object::SymbolKind::Tls,
+                    scope: object::SymbolScope::Linkage,
+                    weak: false,
+                    section: object::write::SymbolSection::Undefined,
+                    flags: object::SymbolFlags::None,
                 })
-            } else { symbol };
-            object.add_relocation(text, object::write::Relocation {
-                offset, symbol, addend: 0, flags: object::RelocationFlags::Elf { r_type },
-            }).unwrap();
+            } else {
+                symbol
+            };
+            object
+                .add_relocation(
+                    text,
+                    object::write::Relocation {
+                        offset,
+                        symbol,
+                        addend: 0,
+                        flags: object::RelocationFlags::Elf { r_type },
+                    },
+                )
+                .unwrap();
         }
         object.write().unwrap()
     }
@@ -978,7 +1114,9 @@ mod tests {
         text.sh_offset = 0x1000;
         let text_size = text.sh_size;
         for symbol in &mut image.symbols {
-            if symbol.section == Some(text_id) { symbol.st_value += 0x201000; }
+            if symbol.section == Some(text_id) {
+                symbol.st_value += 0x201000;
+            }
         }
         image.header.e_type = object::elf::ET_EXEC;
         image.header.e_entry = 0x201000;
@@ -1007,22 +1145,32 @@ mod tests {
         let path = files.write("linked.elf", image);
         let binary = Binary::open(path).unwrap();
         let mut archive = b"!<arch>\n".to_vec();
-        archive.extend_from_slice(format!("{:<16}{:<12}{:<6}{:<6}{:<8}{:<10}`\n",
-            "foo.o/", 0, 0, 0, 644, source.len()).as_bytes());
+        archive.extend_from_slice(
+            format!("{:<16}{:<12}{:<6}{:<6}{:<8}{:<10}`\n", "foo.o/", 0, 0, 0, 644, source.len()).as_bytes(),
+        );
         archive.extend_from_slice(source);
-        if source.len() % 2 != 0 { archive.push(b'\n'); }
+        if source.len() % 2 != 0 {
+            archive.push(b'\n');
+        }
         let archive_sha256 = super::super::digest(&archive);
         let object_sha256 = super::super::digest(source);
         let receipt = OwnedObject {
-            archive_path: "lib.a", archive_sha256: &archive_sha256, archive_bytes: &archive,
-            member_ordinal: 0, original_name: "foo.o", object_path: "foo.o",
-            object_sha256: &object_sha256, object_bytes: source,
+            archive_path: "lib.a",
+            archive_sha256: &archive_sha256,
+            archive_bytes: &archive,
+            member_ordinal: 0,
+            original_name: "foo.o",
+            object_path: "foo.o",
+            object_sha256: &object_sha256,
+            object_bytes: source,
         };
         let object = object::File::parse(source).map_err(|error| error.to_string())?;
         let size = object.section_by_name(".text.foo").unwrap().size();
-        let map = format!("             VMA              LMA     Size Align Out     In      Symbol\n\
+        let map = format!(
+            "             VMA              LMA     Size Align Out     In      Symbol\n\
             {:>16} {:>16} {:>8x} {:>5} .text\n{:>16} {:>16} {:>8x} {:>5}         lib.a(foo.o):(.text.foo)\n",
-            "201000", "201000", size, 16, "201000", "201000", size, 16);
+            "201000", "201000", size, 16, "201000", "201000", size, 16
+        );
         linked_definitions(map.as_bytes(), &binary, &[receipt])
     }
 
@@ -1031,11 +1179,18 @@ mod tests {
     }
 
     fn native_tls_model_source(
-        model: object::elf::RelocationType, addend: i64, call_addend: Option<i64>,
-        resolver: &[u8], target: &[u8], dtp_addend: Option<i64>,
+        model: object::elf::RelocationType,
+        addend: i64,
+        call_addend: Option<i64>,
+        resolver: &[u8],
+        target: &[u8],
+        dtp_addend: Option<i64>,
     ) -> Vec<u8> {
-        let mut object = object::write::Object::new(object::BinaryFormat::Elf,
-            object::Architecture::X86_64, object::Endianness::Little);
+        let mut object = object::write::Object::new(
+            object::BinaryFormat::Elf,
+            object::Architecture::X86_64,
+            object::Endianness::Little,
+        );
         let text = object.add_section(Vec::new(), b".text.foo".to_vec(), object::SectionKind::Text);
         let local = model == object::elf::R_X86_64_TLSLD;
         let mut body = if local {
@@ -1047,37 +1202,73 @@ mod tests {
         body.resize(body.len().next_multiple_of(16), 0x90);
         object.append_section_data(text, &body, 16);
         object.add_symbol(object::write::Symbol {
-            name: b"foo".to_vec(), value: 0, size: function_size, kind: object::SymbolKind::Text,
-            scope: object::SymbolScope::Linkage, weak: false,
-            section: object::write::SymbolSection::Section(text), flags: object::SymbolFlags::None,
+            name: b"foo".to_vec(),
+            value: 0,
+            size: function_size,
+            kind: object::SymbolKind::Text,
+            scope: object::SymbolScope::Linkage,
+            weak: false,
+            section: object::write::SymbolSection::Section(text),
+            flags: object::SymbolFlags::None,
         });
         let tls = object.add_section(Vec::new(), b".tbss.tls_variable".to_vec(), object::SectionKind::UninitializedTls);
         object.append_section_bss(tls, 8, 8);
         let variable = object.add_symbol(object::write::Symbol {
-            name: target.to_vec(), value: 0, size: 8, kind: object::SymbolKind::Tls,
-            scope: object::SymbolScope::Linkage, weak: false,
-            section: object::write::SymbolSection::Section(tls), flags: object::SymbolFlags::None,
+            name: target.to_vec(),
+            value: 0,
+            size: 8,
+            kind: object::SymbolKind::Tls,
+            scope: object::SymbolScope::Linkage,
+            weak: false,
+            section: object::write::SymbolSection::Section(tls),
+            flags: object::SymbolFlags::None,
         });
-        object.add_relocation(text, object::write::Relocation {
-            offset: if local { 3 } else { 4 }, symbol: variable, addend,
-            flags: object::RelocationFlags::Elf { r_type: model },
-        }).unwrap();
+        object
+            .add_relocation(
+                text,
+                object::write::Relocation {
+                    offset: if local { 3 } else { 4 },
+                    symbol: variable,
+                    addend,
+                    flags: object::RelocationFlags::Elf { r_type: model },
+                },
+            )
+            .unwrap();
         if let Some(addend) = call_addend {
             let resolver = object.add_symbol(object::write::Symbol {
-                name: resolver.to_vec(), value: 0, size: 0, kind: object::SymbolKind::Text,
-                scope: object::SymbolScope::Linkage, weak: false,
-                section: object::write::SymbolSection::Undefined, flags: object::SymbolFlags::None,
+                name: resolver.to_vec(),
+                value: 0,
+                size: 0,
+                kind: object::SymbolKind::Text,
+                scope: object::SymbolScope::Linkage,
+                weak: false,
+                section: object::write::SymbolSection::Undefined,
+                flags: object::SymbolFlags::None,
             });
-            object.add_relocation(text, object::write::Relocation {
-                offset: if local { 8 } else { 12 }, symbol: resolver, addend,
-                flags: object::RelocationFlags::Elf { r_type: object::elf::R_X86_64_PLT32 },
-            }).unwrap();
+            object
+                .add_relocation(
+                    text,
+                    object::write::Relocation {
+                        offset: if local { 8 } else { 12 },
+                        symbol: resolver,
+                        addend,
+                        flags: object::RelocationFlags::Elf { r_type: object::elf::R_X86_64_PLT32 },
+                    },
+                )
+                .unwrap();
         }
         if let Some(addend) = dtp_addend {
-            object.add_relocation(text, object::write::Relocation {
-                offset: 15, symbol: variable, addend,
-                flags: object::RelocationFlags::Elf { r_type: object::elf::R_X86_64_DTPOFF32 },
-            }).unwrap();
+            object
+                .add_relocation(
+                    text,
+                    object::write::Relocation {
+                        offset: 15,
+                        symbol: variable,
+                        addend,
+                        flags: object::RelocationFlags::Elf { r_type: object::elf::R_X86_64_DTPOFF32 },
+                    },
+                )
+                .unwrap();
         }
         object.write().unwrap()
     }
@@ -1086,8 +1277,13 @@ mod tests {
         use object::elf::*;
         let plain = native_image(body);
         let mut image = object::build::elf::Builder::read(plain.as_slice()).unwrap();
-        let file_offset = image.sections.iter().filter(|section| section.sh_flags.contains(SHF_EXECINSTR))
-            .map(|section| section.sh_offset + section.sh_size).max().unwrap();
+        let file_offset = image
+            .sections
+            .iter()
+            .filter(|section| section.sh_flags.contains(SHF_EXECINSTR))
+            .map(|section| section.sh_offset + section.sh_size)
+            .max()
+            .unwrap();
         let section = image.sections.add();
         section.name = b".tbss".as_slice().into();
         section.sh_type = SHT_NOBITS;
@@ -1137,8 +1333,8 @@ mod tests {
         use object::elf::*;
         let original = native_tls_source(-4, Some(-4), b"__tls_get_addr", b"tls_variable");
         let mut source = Builder::read(original.as_slice()).unwrap();
-        let id = source.symbols.iter().find(|symbol| symbol.name.as_slice() == b"tls_variable")
-            .unwrap().section.unwrap();
+        let id =
+            source.symbols.iter().find(|symbol| symbol.name.as_slice() == b"tls_variable").unwrap().section.unwrap();
         let section = source.sections.get_mut(id);
         section.name = b".tdata.tls_variable".as_slice().into();
         section.sh_type = SHT_PROGBITS;
@@ -1172,42 +1368,78 @@ mod tests {
 
     fn shared_tls_sources(split_objects: bool) -> Vec<Vec<u8>> {
         let groups = if split_objects { vec![vec![0], vec![1]] } else { vec![vec![0, 1]] };
-        groups.into_iter().map(|group| {
-            let mut object = object::write::Object::new(object::BinaryFormat::Elf,
-                object::Architecture::X86_64, object::Endianness::Little);
-            let tls = object.add_section(Vec::new(), b".tbss.shared".to_vec(), object::SectionKind::UninitializedTls);
-            object.append_section_bss(tls, group.len() as u64 * 8, 8);
-            let resolver = object.add_symbol(object::write::Symbol {
-                name: b"__tls_get_addr".to_vec(), value: 0, size: 0, kind: object::SymbolKind::Text,
-                scope: object::SymbolScope::Linkage, weak: false,
-                section: object::write::SymbolSection::Undefined, flags: object::SymbolFlags::None,
-            });
-            for (offset, member) in group.into_iter().enumerate() {
-                let suffix = if member == 0 { "a" } else { "b" };
-                let variable = object.add_symbol(object::write::Symbol {
-                    name: format!("tls_{suffix}").into_bytes(), value: offset as u64 * 8, size: 8,
-                    kind: object::SymbolKind::Tls, scope: object::SymbolScope::Linkage, weak: false,
-                    section: object::write::SymbolSection::Section(tls), flags: object::SymbolFlags::None,
+        groups
+            .into_iter()
+            .map(|group| {
+                let mut object = object::write::Object::new(
+                    object::BinaryFormat::Elf,
+                    object::Architecture::X86_64,
+                    object::Endianness::Little,
+                );
+                let tls =
+                    object.add_section(Vec::new(), b".tbss.shared".to_vec(), object::SectionKind::UninitializedTls);
+                object.append_section_bss(tls, group.len() as u64 * 8, 8);
+                let resolver = object.add_symbol(object::write::Symbol {
+                    name: b"__tls_get_addr".to_vec(),
+                    value: 0,
+                    size: 0,
+                    kind: object::SymbolKind::Text,
+                    scope: object::SymbolScope::Linkage,
+                    weak: false,
+                    section: object::write::SymbolSection::Undefined,
+                    flags: object::SymbolFlags::None,
                 });
-                let text = object.add_section(Vec::new(), format!(".text.foo_{suffix}").into_bytes(),
-                    object::SectionKind::Text);
-                object.append_section_data(text,
-                    &[0x66, 0x48, 0x8d, 0x3d, 0, 0, 0, 0, 0x66, 0x66, 0x48, 0xe8, 0, 0, 0, 0], 16);
-                object.add_symbol(object::write::Symbol {
-                    name: format!("foo_{suffix}").into_bytes(), value: 0, size: 16, kind: object::SymbolKind::Text,
-                    scope: object::SymbolScope::Linkage, weak: false,
-                    section: object::write::SymbolSection::Section(text), flags: object::SymbolFlags::None,
-                });
-                for (offset, symbol, r_type) in [(4, variable, object::elf::R_X86_64_TLSGD),
-                    (12, resolver, object::elf::R_X86_64_PLT32)]
-                {
-                    object.add_relocation(text, object::write::Relocation {
-                        offset, symbol, addend: -4, flags: object::RelocationFlags::Elf { r_type },
-                    }).unwrap();
+                for (offset, member) in group.into_iter().enumerate() {
+                    let suffix = if member == 0 { "a" } else { "b" };
+                    let variable = object.add_symbol(object::write::Symbol {
+                        name: format!("tls_{suffix}").into_bytes(),
+                        value: offset as u64 * 8,
+                        size: 8,
+                        kind: object::SymbolKind::Tls,
+                        scope: object::SymbolScope::Linkage,
+                        weak: false,
+                        section: object::write::SymbolSection::Section(tls),
+                        flags: object::SymbolFlags::None,
+                    });
+                    let text = object.add_section(
+                        Vec::new(),
+                        format!(".text.foo_{suffix}").into_bytes(),
+                        object::SectionKind::Text,
+                    );
+                    object.append_section_data(
+                        text,
+                        &[0x66, 0x48, 0x8d, 0x3d, 0, 0, 0, 0, 0x66, 0x66, 0x48, 0xe8, 0, 0, 0, 0],
+                        16,
+                    );
+                    object.add_symbol(object::write::Symbol {
+                        name: format!("foo_{suffix}").into_bytes(),
+                        value: 0,
+                        size: 16,
+                        kind: object::SymbolKind::Text,
+                        scope: object::SymbolScope::Linkage,
+                        weak: false,
+                        section: object::write::SymbolSection::Section(text),
+                        flags: object::SymbolFlags::None,
+                    });
+                    for (offset, symbol, r_type) in
+                        [(4, variable, object::elf::R_X86_64_TLSGD), (12, resolver, object::elf::R_X86_64_PLT32)]
+                    {
+                        object
+                            .add_relocation(
+                                text,
+                                object::write::Relocation {
+                                    offset,
+                                    symbol,
+                                    addend: -4,
+                                    flags: object::RelocationFlags::Elf { r_type },
+                                },
+                            )
+                            .unwrap();
+                    }
                 }
-            }
-            object.write().unwrap()
-        }).collect()
+                object.write().unwrap()
+            })
+            .collect()
     }
 
     fn shared_tls_image(values: [u64; 2], tls_base: u64) -> Vec<u8> {
@@ -1255,27 +1487,42 @@ mod tests {
         let binary = Binary::open(path).map_err(|error| error.to_string())?;
         let mut archive = b"!<arch>\n".to_vec();
         for (index, source) in sources.iter().enumerate() {
-            archive.extend_from_slice(format!("{:<16}{:<12}{:<6}{:<6}{:<8}{:<10}`\n",
-                format!("{index}.o/"), 0, 0, 0, 644, source.len()).as_bytes());
+            archive.extend_from_slice(
+                format!("{:<16}{:<12}{:<6}{:<6}{:<8}{:<10}`\n", format!("{index}.o/"), 0, 0, 0, 644, source.len())
+                    .as_bytes(),
+            );
             archive.extend_from_slice(source);
-            if source.len() % 2 != 0 { archive.push(b'\n'); }
+            if source.len() % 2 != 0 {
+                archive.push(b'\n');
+            }
         }
         let archive_hash = super::super::digest(&archive);
         let object_hashes: Vec<_> = sources.iter().map(|bytes| super::super::digest(bytes)).collect();
         let paths: Vec<_> = (0..sources.len()).map(|index| format!("object{index}.o")).collect();
         let names: Vec<_> = (0..sources.len()).map(|index| format!("{index}.o")).collect();
-        let receipts: Vec<_> = sources.iter().enumerate().map(|(index, source)| OwnedObject {
-            archive_path: "shared.a", archive_sha256: &archive_hash, archive_bytes: &archive,
-            member_ordinal: index, original_name: &names[index], object_path: &paths[index],
-            object_sha256: &object_hashes[index], object_bytes: source,
-        }).collect();
+        let receipts: Vec<_> = sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| OwnedObject {
+                archive_path: "shared.a",
+                archive_sha256: &archive_hash,
+                archive_bytes: &archive,
+                member_ordinal: index,
+                original_name: &names[index],
+                object_path: &paths[index],
+                object_sha256: &object_hashes[index],
+                object_bytes: source,
+            })
+            .collect();
         let mut map = String::from("             VMA              LMA     Size Align Out     In      Symbol\n");
         map.push_str(&format!("{:>16x} {:>16x} {:>8x} {:>5} .text\n", 0x201000, 0x201000, 32, 16));
         for (member, suffix) in ["a", "b"].into_iter().enumerate() {
             let address = 0x201000 + member * 16;
             let object = if sources.len() == 1 { 0 } else { member };
-            map.push_str(&format!("{address:>16x} {address:>16x} {:>8x} {:>5}         {}:(.text.foo_{suffix})\n",
-                16, 16, paths[object]));
+            map.push_str(&format!(
+                "{address:>16x} {address:>16x} {:>8x} {:>5}         {}:(.text.foo_{suffix})\n",
+                16, 16, paths[object]
+            ));
         }
         linked_definitions(map.as_bytes(), &binary, &receipts)
     }
@@ -1295,8 +1542,10 @@ mod tests {
         let split = shared_tls_sources(true);
         let first = object::File::parse(split[0].as_slice()).unwrap();
         let second = object::File::parse(split[1].as_slice()).unwrap();
-        assert_eq!(first.section_by_name(".tbss.shared").unwrap().index(),
-            second.section_by_name(".tbss.shared").unwrap().index());
+        assert_eq!(
+            first.section_by_name(".tbss.shared").unwrap().index(),
+            second.section_by_name(".tbss.shared").unwrap().index()
+        );
         let receipt = collect_shared_tls(&split, &shared_tls_image([0x28, 0x40], 0x202000)).unwrap();
         assert_eq!(receipt.definitions.len(), 2);
         let shared = shared_tls_sources(false);
@@ -1343,8 +1592,11 @@ mod tests {
         section.data = SectionData::UninitializedData(0x100);
         let mut too_large = Vec::new();
         source.write(&mut too_large).unwrap();
-        assert!(probe_native_tls_target(&too_large, &image).unwrap_err()
-            .contains("derived source TLS input-section placement"));
+        assert!(
+            probe_native_tls_target(&too_large, &image)
+                .unwrap_err()
+                .contains("derived source TLS input-section placement")
+        );
     }
 
     #[test]
@@ -1393,8 +1645,11 @@ mod tests {
         });
         assert!(probe_native_tls_target(&source, &initialized_overlap).unwrap_err().contains("TLS NOBITS"));
         let (initialized_source, _) = initialized_tls_fixture(&local);
-        assert!(probe_native_tls_target(&initialized_source, &zero_tail).unwrap_err()
-            .contains("initialization classes disagree"));
+        assert!(
+            probe_native_tls_target(&initialized_source, &zero_tail)
+                .unwrap_err()
+                .contains("initialization classes disagree")
+        );
     }
 
     #[test]
@@ -1430,9 +1685,13 @@ mod tests {
             image.symbols.iter_mut().find(|symbol| symbol.name.as_slice() == b"tls_variable").unwrap().st_value = 0x30;
         });
         assert!(collect_native_image(&source, &wrong_symbol).is_err());
-        let dynamic = native_tls_image(&local, |image| { image.header.e_type = object::elf::ET_DYN; });
+        let dynamic = native_tls_image(&local, |image| {
+            image.header.e_type = object::elf::ET_DYN;
+        });
         assert!(collect_native_image(&source, &dynamic).is_err());
-        let duplicate_tls = native_tls_image(&local, |image| { image.segments.add().p_type = object::elf::PT_TLS; });
+        let duplicate_tls = native_tls_image(&local, |image| {
+            image.segments.add().p_type = object::elf::PT_TLS;
+        });
         assert!(collect_native_image(&source, &duplicate_tls).is_err());
 
         let mut short_source = object::build::elf::Builder::read(source.as_slice()).unwrap();
@@ -1460,10 +1719,10 @@ mod tests {
     #[test]
     fn canonical_tls_ld_to_le_binds_module_base_and_each_dtpoff32_field_exactly() {
         use object::elf::*;
-        let source = native_tls_model_source(R_X86_64_TLSLD, -4, Some(-4),
-            b"__tls_get_addr", b"tls_variable", Some(0));
-        let local = [0x66, 0x66, 0x66, 0x64, 0x48, 0x8b, 0x04, 0x25, 0, 0, 0, 0,
-            0x48, 0x8b, 0x80, 0x88, 0xff, 0xff, 0xff, 0xc3];
+        let source = native_tls_model_source(R_X86_64_TLSLD, -4, Some(-4), b"__tls_get_addr", b"tls_variable", Some(0));
+        let local = [
+            0x66, 0x66, 0x66, 0x64, 0x48, 0x8b, 0x04, 0x25, 0, 0, 0, 0, 0x48, 0x8b, 0x80, 0x88, 0xff, 0xff, 0xff, 0xc3,
+        ];
         let image = native_tls_image(&local, |_| {});
         let receipt = collect_native_image(&source, &image).unwrap();
         assert_eq!(receipt.tls_gd_to_le_verified_pairs, 0);
@@ -1522,8 +1781,11 @@ mod tests {
         short.symbols.iter_mut().find(|symbol| symbol.name.as_slice() == b"foo").unwrap().st_size = 18;
         let mut bytes = Vec::new();
         short.write(&mut bytes).unwrap();
-        assert!(collect_native_image(&bytes, &native_tls_image(&local[..18], |_| {})).unwrap_err()
-            .contains("DTPOFF32 straddles producer function"));
+        assert!(
+            collect_native_image(&bytes, &native_tls_image(&local[..18], |_| {}))
+                .unwrap_err()
+                .contains("DTPOFF32 straddles producer function")
+        );
 
         let mut missing_ld = object::build::elf::Builder::read(source.as_slice()).unwrap();
         for section in &mut missing_ld.sections {
@@ -1540,8 +1802,8 @@ mod tests {
     fn dtpoff32_subobject_addend_is_computed_from_its_native_symbol_and_checked_range() {
         use object::build::elf::{Builder, SectionData};
         use object::elf::*;
-        let original = native_tls_model_source(R_X86_64_TLSLD, -4, Some(-4),
-            b"__tls_get_addr", b"tls_variable", Some(8));
+        let original =
+            native_tls_model_source(R_X86_64_TLSLD, -4, Some(-4), b"__tls_get_addr", b"tls_variable", Some(8));
         let mut source = Builder::read(original.as_slice()).unwrap();
         let variable = source.symbols.iter_mut().find(|symbol| symbol.name.as_slice() == b"tls_variable").unwrap();
         variable.st_size = 16;
@@ -1551,8 +1813,9 @@ mod tests {
         section.data = SectionData::UninitializedData(16);
         let mut bytes = Vec::new();
         source.write(&mut bytes).unwrap();
-        let local = [0x66, 0x66, 0x66, 0x64, 0x48, 0x8b, 0x04, 0x25, 0, 0, 0, 0,
-            0x48, 0x8b, 0x80, 0x90, 0xff, 0xff, 0xff, 0xc3];
+        let local = [
+            0x66, 0x66, 0x66, 0x64, 0x48, 0x8b, 0x04, 0x25, 0, 0, 0, 0, 0x48, 0x8b, 0x80, 0x90, 0xff, 0xff, 0xff, 0xc3,
+        ];
         let image = native_tls_image(&local, |image| {
             image.symbols.iter_mut().find(|symbol| symbol.name.as_slice() == b"tls_variable").unwrap().st_size = 16;
         });
@@ -1626,8 +1889,8 @@ mod tests {
     fn x64_tlsgd_to_local_exec_without_static_tls_metadata_is_refused() {
         let general_dynamic = [0x66, 0x48, 0x8d, 0x3d, 0, 0, 0, 0, 0x66, 0x66, 0x48, 0xe8, 0, 0, 0, 0];
         let local_exec = [0x64, 0x48, 0x8b, 0x04, 0x25, 0, 0, 0, 0, 0x48, 0x8d, 0x80, 0x88, 0xff, 0xff, 0xff];
-        let source = native_object(object::Architecture::X86_64, &general_dynamic,
-            Some((4, object::elf::R_X86_64_TLSGD)));
+        let source =
+            native_object(object::Architecture::X86_64, &general_dynamic, Some((4, object::elf::R_X86_64_TLSGD)));
         let error = collect_native(&source, &local_exec).unwrap_err();
         assert!(error.contains("TLSGD-to-LE proof refused"), "{error}");
     }
@@ -1651,10 +1914,14 @@ mod tests {
             let section = file.section_by_name(".text.foo").unwrap();
             let fields = relocated_fields(&file, &section, &mut 0).unwrap();
             let bytes = section.data().unwrap();
-            assert!(verify_function_bytes(bytes, 0, &(word ^ immediate).to_le_bytes(), &fields,
-                &mut 1024, &mut 0).is_ok(), "{typ:?}");
-            assert!(verify_function_bytes(bytes, 0, &(word ^ opcode).to_le_bytes(), &fields,
-                &mut 1024, &mut 0).is_err(), "{typ:?}");
+            assert!(
+                verify_function_bytes(bytes, 0, &(word ^ immediate).to_le_bytes(), &fields, &mut 1024, &mut 0).is_ok(),
+                "{typ:?}"
+            );
+            assert!(
+                verify_function_bytes(bytes, 0, &(word ^ opcode).to_le_bytes(), &fields, &mut 1024, &mut 0).is_err(),
+                "{typ:?}"
+            );
         }
     }
 
@@ -1673,13 +1940,15 @@ mod tests {
             let section = file.section_by_name(".text.foo").unwrap();
             let fields = relocated_fields(&file, &section, &mut 0).unwrap();
             let bytes = section.data().unwrap();
-            assert!(verify_function_bytes(bytes, 0, &(word | allowed).to_le_bytes(), &fields,
-                &mut 1024, &mut 0).is_ok(), "{typ:?}");
+            assert!(
+                verify_function_bytes(bytes, 0, &(word | allowed).to_le_bytes(), &fields, &mut 1024, &mut 0).is_ok(),
+                "{typ:?}"
+            );
             if typ == R_AARCH64_LDST64_ABS_LO12_NC {
                 assert_eq!(word | illegal, 0xf9480000);
             }
-            let error = verify_function_bytes(bytes, 0, &(word | illegal).to_le_bytes(), &fields,
-                &mut 1024, &mut 0).unwrap_err();
+            let error = verify_function_bytes(bytes, 0, &(word | illegal).to_le_bytes(), &fields, &mut 1024, &mut 0)
+                .unwrap_err();
             assert!(error.contains("fixed high immediate bits"), "{typ:?}: {error}");
 
             let invalid_word = word | illegal;
@@ -1687,8 +1956,15 @@ mod tests {
             let file = object::File::parse(invalid_source.as_slice()).unwrap();
             let section = file.section_by_name(".text.foo").unwrap();
             let fields = relocated_fields(&file, &section, &mut 0).unwrap();
-            let error = verify_function_bytes(section.data().unwrap(), 0, &invalid_word.to_le_bytes(), &fields,
-                &mut 1024, &mut 0).unwrap_err();
+            let error = verify_function_bytes(
+                section.data().unwrap(),
+                0,
+                &invalid_word.to_le_bytes(),
+                &fields,
+                &mut 1024,
+                &mut 0,
+            )
+            .unwrap_err();
             assert!(error.contains("fixed high immediate bits"), "same invalid {typ:?}: {error}");
         }
     }
@@ -1696,15 +1972,23 @@ mod tests {
     #[test]
     fn a64_add_and_byte_load_relocations_keep_the_full_twelve_immediate_bits() {
         use object::elf::{R_AARCH64_ADD_ABS_LO12_NC, R_AARCH64_LDST8_ABS_LO12_NC};
-        for (typ, word) in [(R_AARCH64_ADD_ABS_LO12_NC, 0x91000000u32),
-            (R_AARCH64_LDST8_ABS_LO12_NC, 0x39400000)]
-        {
+        for (typ, word) in [(R_AARCH64_ADD_ABS_LO12_NC, 0x91000000u32), (R_AARCH64_LDST8_ABS_LO12_NC, 0x39400000)] {
             let source = native_object(object::Architecture::Aarch64, &word.to_le_bytes(), Some((0, typ)));
             let file = object::File::parse(source.as_slice()).unwrap();
             let section = file.section_by_name(".text.foo").unwrap();
             let fields = relocated_fields(&file, &section, &mut 0).unwrap();
-            assert!(verify_function_bytes(section.data().unwrap(), 0, &(word | 0x003ffc00).to_le_bytes(), &fields,
-                &mut 1024, &mut 0).is_ok(), "{typ:?}");
+            assert!(
+                verify_function_bytes(
+                    section.data().unwrap(),
+                    0,
+                    &(word | 0x003ffc00).to_le_bytes(),
+                    &fields,
+                    &mut 1024,
+                    &mut 0
+                )
+                .is_ok(),
+                "{typ:?}"
+            );
         }
     }
 
