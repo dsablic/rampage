@@ -18,20 +18,21 @@ It writes registers or memory, or kills a target, only when a tool asks for it a
 
 ## Setup
 
-Start the stub yourself, then start the MCP server with the endpoint allowed.
+Start the stub yourself, then start the MCP server with the endpoint allowed. The examples use
+`rampage server serve`; the compatibility spelling `rampage mcp` takes the same options.
 
 A Linux program under gdbserver:
 
 ```sh
 gdbserver :2345 ./prog
-rampage mcp --debug-endpoint 127.0.0.1:2345
+rampage server serve --debug-endpoint 127.0.0.1:2345
 ```
 
 Firmware in QEMU system mode, halted at reset:
 
 ```sh
 qemu-system-arm -M lm3s6965evb -kernel fw.elf -nographic -s -S
-rampage mcp --debug-endpoint 127.0.0.1:1234
+rampage server serve --debug-endpoint 127.0.0.1:1234
 ```
 
 QEMU's `-s` listens on TCP port 1234.
@@ -41,7 +42,7 @@ A macOS program under Apple's debugserver (launched, or attached by pid):
 ```sh
 debugserver 127.0.0.1:2345 ./prog
 debugserver 127.0.0.1:2345 --attach=<pid>
-rampage mcp --debug-endpoint 127.0.0.1:2345
+rampage server serve --debug-endpoint 127.0.0.1:2345
 ```
 
 A Windows program under gdbserver or lldb-server, on a Windows host (see [Windows](#windows-gdbserver-and-lldb-server)):
@@ -49,7 +50,7 @@ A Windows program under gdbserver or lldb-server, on a Windows host (see [Window
 ```text
 gdbserver.exe 0.0.0.0:2345 prog.exe
 lldb-server.exe gdbserver 0.0.0.0:2345 -- prog.exe
-rampage mcp --debug-endpoint winhost:2345
+rampage server serve --debug-endpoint winhost:2345
 ```
 
 An endpoint is either `host:port` or `unix:` followed by an absolute socket path. Repeat `--debug-endpoint` to
@@ -803,7 +804,7 @@ lldb-server.exe gdbserver 0.0.0.0:2345 -- prog.exe
 lldb-server.exe gdbserver 0.0.0.0:2345 --attach <pid>
 ```
 
-Then `rampage mcp --debug-endpoint winhost:2345`. The endpoint is not on loopback, so only the operator's listing
+Then `rampage server serve --debug-endpoint winhost:2345`. The endpoint is not on loopback, so only the operator's listing
 allows it (see [Consent](#consent)); the stub accepts anyone who reaches the port, so keep it on a trusted network
 or tunnel it (`ssh -L 2345:localhost:2345 winhost` and `--debug-endpoint 127.0.0.1:2345`). gdbserver's
 `--once` ends it after one connection. A process gdbserver launched runs in a new process group, which matters for

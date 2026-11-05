@@ -34,26 +34,9 @@ format builds without verified function truth remain unscored rather than counti
 - Read-only stopped-session [LLDB queries](lldb-query.md) are available through an explicitly operator-started
   local Unix socket, CLI/MCP requests and a local desktop query window. They do not attach, control execution,
   evaluate expressions or write target memory; observations remain non-atomic and separate from snapshot identity.
-- [Debug sessions](debug-control.md) with operator-started GDB remote stubs (gdbserver, QEMU, OpenOCD, Apple's
-  `debugserver`, and on Windows MinGW-w64 `gdbserver.exe` or `lldb-server`, not yet live-verified): the MCP `debug`
-  group, present only when the server is started with an allowed endpoint, reads
-  registers from the stub's target description (or LLDB's `qRegisterInfo`), memory, threads (with names and
-  dispatch queues from debugserver), svr4, Windows-style or dyld module lists and memory maps or regions, and
-  captures a stopped target to a `rampage-snapshot-v1` file. Data byte order comes only from stop-bound evidence
-  (x86, Cortex-M AIRCR, ARM CPSR.E, or an LLDB stub stating it). Mach and Windows exceptions are typed in stop
-  events (Windows ones from gdbserver's exception record or lldb-server's description), and
-  arm64 return addresses lose their pointer authentication codes before step out and annotation. All-stop
-  execution control continues, waits, interrupts and single-steps, and sets hardware or
-  software breakpoints and watchpoints the stub inserts, with typed stop events, hit counts and stop epochs that
-  refuse stale requests. Binding a project to a runtime module (by build ID, UUID or a PE image's CodeView record,
-  path, or mapped bytes, with a slide verified against target memory, leaving out what a moved PE image's base
-  relocations patch; a dyld shared-cache library only from its extracted image) adds breakpoints by static address or function name, stop locations with
-  function, offset and `show_address` arguments, register values annotated with what they point at, stepping over
-  calls with rampage's decoder and out of functions from their entry through temporary breakpoints, and evidence
-  items for the findings ledger. With the operator's `--debug-writes`, memory and register writes read the old bytes
-  first (with an optional compare-and-set `expect`), refuse ranges under software breakpoints and read back with a
-  `verified` flag; with `--debug-kill`, disconnecting can kill the target. It never launches, attaches or delivers
-  signals, and writes or kills only when a tool is called for it.
+- [Debug sessions](debug-control.md) (MCP `debug` group, only with an operator-allowed endpoint): inspection,
+  snapshots, all-stop execution control and project correlation over GDB remote stubs, Apple's `debugserver` and
+  Windows RSP stubs (the last two not yet live-verified); writes and kill only behind operator flags.
 
 The previously reported decoder comparisons sampled words across every encoding: A32 matched `llvm-mc` on
 97.95%, 16-bit Thumb on 100%, and 32-bit Thumb on 97.49%. AArch64 matched every instruction sampled from
@@ -189,9 +172,8 @@ annotation operations in one existing undo/history step. See [tool views and bat
 questions, each with the tool calls that support it, a confidence and an open/resolved/rejected status. Entries
 live in the annotation log, so they survive the session, replay on reopen, undo and redo like comments, and are
 shared with other processes under the log's lock; ids are stable and not reused within the log. Entries made on
-another build of the binary are kept and flagged. The ledger holds at most 1,024 entries and 2 MiB, and stops
-taking writes while a quarter of the log's read and cache budgets is still free, so it never crowds out names and
-comments or makes the log unreadable. See [MCP edits](mcp.md#edits-and-session-state).
+another build of the binary are kept and flagged. Its size limits, which keep it from crowding out other edits,
+are in [MCP edits](mcp.md#edits-and-session-state).
 
 ## Checked patches and assembly
 
@@ -445,7 +427,5 @@ Test fixtures live in `tests/fixtures`; `tests/fixtures/build.sh` rebuilds them 
 see [source installation](plugins.md#source-installation) for retention, staging and partial-publication behavior.
 See [extension points](plugins.md): builtin registries remain internal; the explicit experimental triage-component
 host is separate, with no stable public plugin API or automatic discovery.
-The [LLDB query bridge](lldb-query.md) provides bounded read-only queries in an existing authorized stopped
-session through explicit CLI/MCP requests and a local UI window; it is not an attach/resume controller.
 
 [arm-spec]: https://developer.arm.com/Architectures/A-Profile%20Architecture

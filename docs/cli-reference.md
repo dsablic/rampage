@@ -213,12 +213,8 @@ Global `--image-offset` and pointer-comparison peer-image options are not substi
 | `pack list` / `pack check DIR` | `packs list` / `packs check DIR` |
 | `server serve [--all-tools]` | `mcp [--all-tools]` |
 
-Both serving spellings take the same debug options. `--debug-endpoint HOST:PORT|unix:/PATH` (repeatable, or
-`RAMPAGE_DEBUG_ENDPOINTS` as a comma-separated list) allows the `debug` group to connect to an operator-started GDB
-remote stub, inspect it and control its execution. `--debug-writes` (or `RAMPAGE_DEBUG_WRITES=1`) also serves
-`debug_write_memory` and `debug_write_register`, and `--debug-kill` (or `RAMPAGE_DEBUG_KILL=1`) lets
-`debug_disconnect` kill the target with `kill: true`. Writes and kill are off by default, happen only when a tool
-asks for them, and without an endpoint are refused at startup. See [debug control](debug-control.md#consent).
+Both serving spellings take the same debug options, `--debug-endpoint`, `--debug-writes` and `--debug-kill`, with
+their `RAMPAGE_DEBUG_*` variables; [debug control](debug-control.md#consent) lists what each allows.
 
 Registered workflows are `triage-report`, `find-main`, `network-surface`, `find-crypto`, `persistence-surface`,
 `string-decoding` and `diff-builds`. Reports retain evidence, confidence, limits and suggested next tools.

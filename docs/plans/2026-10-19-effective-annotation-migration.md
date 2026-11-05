@@ -1,5 +1,7 @@
 # Effective annotation read migration
 
+**Date:** 2026-10-19. **Status:** historical; implemented with Phase 3.2's checked patches (see [patching](../patching.md)).
+
 This development reference governs the Phase 3.2 immutable-patch-view integration. It does not authorize
 changes to production source-validation, type/layout proofs, annotation history or debugger/capture writes.
 

@@ -46,11 +46,9 @@ Calling `enable_tools` without arguments lists each group's description, tool na
 `{"groups": ["detection"]}` enables that group; `{"groups": ["all"]}` enables every group. Enabling sends
 `notifications/tools/list_changed`. A call to a disabled group's tool fails with the group to enable and runs
 nothing. `--all-tools` lists all groups at startup; `RAMPAGE_MCP_TOOLS=all` or a comma-separated list such as
-`detection,types` also selects startup groups. `core` is always served. The `debug` group exists only when the
-server is started with `--debug-endpoint HOST:PORT|unix:/PATH` (repeatable) or `RAMPAGE_DEBUG_ENDPOINTS`; without
-one, `enable_tools` does not list it and its tools cannot be called. `--debug-writes` (or `RAMPAGE_DEBUG_WRITES=1`)
-adds the two write tools, and `--debug-kill` (or `RAMPAGE_DEBUG_KILL=1`) adds a `kill` argument to
-`debug_disconnect`; both are off by default and refused at startup without an endpoint.
+`detection,types` also selects startup groups. `core` is always served. The `debug` group exists only on a server
+started with an allowed debug endpoint, and its write tools and `kill` argument only with the operator's
+`--debug-writes` and `--debug-kill`; the flags and variables are in [debug control](debug-control.md#consent).
 
 Workflow reports name the `group` of suggested next tools. The desktop assistant offers every binary tool
 without group gating, plus the interactive `show_address`; it does not offer file tools
@@ -182,65 +180,15 @@ evaluate expressions or write target memory. Initial session queries return a to
 queries. Stale tokens fail without automatic refresh. Responses retain the backend's error/observation envelope
 and remain non-atomic. See [LLDB queries](lldb-query.md) for request operations, endpoint policy and limits.
 
-The `debug` tools talk to a GDB remote stub the operator started and allowed (gdbserver, QEMU, OpenOCD, Apple's
-`debugserver`, MinGW-w64 `gdbserver.exe` or `lldb-server` on Windows...). With debugserver they also use LLDB's
-extensions where it offers them: `qHostInfo` and
-`qProcessInfo` (CPU type, a stated byte order, pointer authentication address bits, shown as `lldb` and
-`address_mask` by `debug_connect`), `qRegisterInfo` without a target description, `jThreadsInfo` (thread names,
-dispatch queues), the dyld image list (`debug_modules` entries gain `dyld`: header address, UUID, segments and
-`in_shared_cache`) and `qMemoryRegionInfo` (regions with permissions). Stop events gain `exception` for Mach
-exceptions (`EXC_BAD_ACCESS` with `fault_address`, `EXC_BREAKPOINT`, `EXC_BAD_INSTRUCTION`...). On a Windows
-target (`debug_connect` reports `windows`: the stub and what shows it) `debug_modules` entries gain `pe` (the
-image's runtime base, how it was derived, machine, whether it is a DLL, and its CodeView record), the main
-executable is listed even when gdbserver leaves it out (found through the process environment block), and stop
-events carry a Windows `exception` (`"system": "windows"`, the code and name, the address, and for access
-violations `access` and `fault_address`) from gdbserver's exception record or lldb-server's description. After an
-interrupt, which Windows delivers in a thread it creates, reads and steps without `thread` use another thread.
-`debug_connect` takes only an allowed endpoint and returns a session ID; at most four sessions are open per MCP
-connection, and they detach when it ends. `debug_status`, `debug_registers`, `debug_read_memory` (at most the
-session's `max_read_length` bytes per call, short reads reported per chunk) and `debug_modules` read the stopped
-target and report the stop epoch they read at; pass `epoch` to have a read refused if the target has stopped again
-since. `debug_snapshot` writes a new `rampage-snapshot-v1` file (a file write) and refuses targets whose data byte
-order is unknown.
-
-`debug_bind` (or `debug_connect` with `path`) binds a binary to one of the session's runtime modules. It opens the
-binary like the project tools do, in the same project cache, matches it by build ID or Mach-O UUID read from target
-memory, a PE image by its CodeView record (PDB GUID and age) read from its mapped debug directory, then by path or
-file name (case-insensitively, and ignoring `\\?\` and slash direction, on Windows), then by mapped header bytes (or,
-with no module list, by the code mapped at the
-slide), verifies the slide against target memory and reports the evidence; without a match it needs an explicit
-`slide`. A session binds at most eight projects, and `debug_status` lists them. With a binding,
-`debug_breakpoints` takes `static_address` or `function` instead of `address`, stop events gain `locations`
-(static address, function, offset and `show_address` arguments for the pc, matched breakpoints and the watch
-address), `debug_registers` with `annotate: true` says what values point at, and `debug_evidence` returns a bounded
-record of the stop with a ready `record_finding` evidence item. A Mach-O image dyld reports binds by its UUID at
-dyld's header address minus its `__TEXT` address; a library in the dyld shared cache binds only from an image
-extracted from the cache with the same UUID (`shared_cache_image` otherwise). A PE image binds at its runtime base
-minus its preferred `ImageBase`, and slide verification leaves out the bytes its base relocations patch when the
-loader moved it. On arm64, pointer authentication codes
-are taken off return addresses before step out and annotation (`signed_value` keeps the signed one).
-
-Execution control is all-stop. `debug_breakpoints` sets (`software`, `hardware`, `write`, `read`, `access`), clears
-and lists breakpoints and watchpoints the stub inserts at runtime addresses. `debug_continue` resumes every thread
-without delivering a signal and waits up to `timeout_ms` for a typed stop event; `debug_wait` waits again,
-`debug_interrupt` stops a running target, and `debug_step` single-steps up to 1,000 instructions, steps over calls
-(`over`, decoding the instruction at the pc with rampage's decoder) or out of a function from its first instruction
-in a bound project (`out`); both run to a temporary breakpoint that is removed at the next stop, whatever it is.
-Execution tools take the caller's `epoch`. While the target runs, only `debug_status`, `debug_wait`, `debug_interrupt` and
-`debug_disconnect` are served. `debug_disconnect` interrupts a running target, removes every breakpoint and
-detaches, which lets the target run; a refused detach keeps the session open. Nothing delivers a signal.
-
-Writes and kill exist only with the operator's flags, and happen only when called. `debug_write_memory` writes 1 to
-4096 bytes of a stopped target at the caller's epoch: it reads the bytes there first and refuses (writing nothing)
-when `expect` differs or a software breakpoint covers the range, writes with `X` or else `M` chunk by chunk,
-stopping at the first refusal, and reads back, returning `before`, `after`, each chunk's outcome and `verified`
-(false when the target dropped the write, as flash or ROM may). `debug_write_register` writes one register with `P`,
-or else `g` then `G` with only that register changed, from hex bytes in the stub's order or an integer when the
-endianness is known, and reads it back. Neither changes the epoch, and writing the pc does not resume.
-`debug_disconnect` with `kill: true` removes breakpoints and sends `vKill;<pid>` (multiprocess) or `k`, reporting
-`killed`, `exited`, or `lost` when the stub closed the connection without confirming; a refused or unsupported kill
-keeps the session open. Without the flag, `kill: true` is refused with `not_allowed`. No flash programming and no
-automatic writes.
+The `debug` tools connect to a GDB remote stub the operator started and allowed (gdbserver, QEMU, OpenOCD, Apple's
+`debugserver`, or `gdbserver.exe` and `lldb-server` on Windows) and inspect and control it in all-stop mode.
+`debug_connect` returns a session ID; at most four sessions are open per MCP connection, and they detach when it
+ends. Reads report the stop epoch they read at, and execution tools require the caller's epoch. `debug_bind` (or
+`debug_connect` with `path`) binds a project to a runtime module, which adds breakpoints by function name or static
+address, located stops, annotated registers and `debug_evidence` items for `record_finding`. With the operator's
+flags, `debug_write_memory`, `debug_write_register` and `debug_disconnect` with `kill: true` change the target;
+nothing writes or kills on its own, and no signal is delivered. [Debug control](debug-control.md) has each tool's
+arguments and results, the macOS and Windows specifics, and the limits.
 
 Debug tools carry MCP annotations: inspection tools and `debug_wait` are read-only; `debug_snapshot` only adds a
 file; execution tools, `debug_disconnect` and the write tools are neither read-only nor idempotent and may be

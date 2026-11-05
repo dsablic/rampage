@@ -1,5 +1,8 @@
 # Processor identity and decoder migration
 
+**Date:** 2026-10-19. **Status:** historical; implemented with Phase 4.1's Raw Projects (see
+[Sleigh decoding](../sleigh-decoding.md)); the Phase 4.2 work it names remains open.
+
 This development plan governs ordinary-project integration of the MSP430, AVR8 and 6502 pilots. The
 explicit-window workflow is not a substitute for that integration, and pilot success does not admit the
 remaining processor roster.

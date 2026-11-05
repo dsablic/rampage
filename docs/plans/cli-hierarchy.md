@@ -1,5 +1,7 @@
 # CLI noun/verb hierarchy
 
+**Date:** 2026-10-13. **Status:** historical; implemented (see the [CLI reference](../cli-reference.md)).
+
 ## Scope
 
 The command hierarchy changes discovery and spelling, not analysis behavior, argument interpretation or MCP
