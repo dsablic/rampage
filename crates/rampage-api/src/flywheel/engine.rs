@@ -319,7 +319,7 @@ impl Engine {
 
     /// Discovery and bundled-only identification of the stripped binary, through the same project analysis and
     /// identification the API serves, cached by (binary hash, bundled database hash, rampage build id).
-    fn baseline(&self, index: usize) -> Result<(Vec<(u64, u64)>, BTreeMap<u64, String>), FlywheelError> {
+    fn baseline(&self, index: usize) -> Result<Baseline, FlywheelError> {
         let path = self.baseline_path(index)?;
         if let Ok(text) = std::fs::read_to_string(&path)
             && let Ok(cached) = serde_json::from_str::<CachedBaseline>(&text)
@@ -358,6 +358,9 @@ impl Engine {
         Ok((functions, names))
     }
 }
+
+/// Discovered extents and the bundled-only names of one binary.
+type Baseline = (Vec<(u64, u64)>, BTreeMap<u64, String>);
 
 #[derive(Serialize, Deserialize)]
 struct CachedTruth {

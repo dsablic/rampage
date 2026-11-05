@@ -117,7 +117,7 @@ impl Row {
 /// Parses a pattern: pairs of hex digits for fixed bytes and `..` (or `??`) for wildcards; whitespace is ignored.
 pub fn parse_pattern(text: &str) -> Result<Vec<Option<u8>>, String> {
     let compact: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
-    if compact.is_empty() || compact.len() % 2 != 0 {
+    if compact.is_empty() || !compact.len().is_multiple_of(2) {
         return Err("pattern must be pairs of hex digits or `..`, at least one byte".to_owned());
     }
     compact
@@ -287,9 +287,7 @@ mod tests {
             .chain(std::iter::repeat_n(0x90, 24))
             .collect();
         let mut pattern: Vec<Option<u8>> = body.iter().map(|&byte| Some(byte)).collect();
-        for index in 5..9 {
-            pattern[index] = None;
-        }
+        pattern[5..9].fill(None);
         let row = row(&format_pattern(&pattern));
         row.validate(&arches()).unwrap();
         let databases = databases(std::slice::from_ref(&row)).unwrap();
@@ -335,6 +333,6 @@ mod tests {
             ..a.clone()
         };
         assert_eq!(rows_hash(&[a.clone(), b.clone()]), rows_hash(&[b.clone(), spelled]));
-        assert_ne!(rows_hash(&[a.clone()]), rows_hash(&[a, b]));
+        assert_ne!(rows_hash(std::slice::from_ref(&a)), rows_hash(&[a, b]));
     }
 }

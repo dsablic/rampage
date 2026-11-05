@@ -158,7 +158,7 @@ pub fn pack_layer(directory: &std::path::Path) -> Result<Option<Layer>, Flywheel
     {
         databases.extend(packs.signatures_for(arch).map(|(_, database)| database.clone()));
     }
-    Ok((!databases.is_empty()).then(|| Layer { name, databases, patterns: None }))
+    Ok((!databases.is_empty()).then_some(Layer { name, databases, patterns: None }))
 }
 
 #[cfg(test)]
