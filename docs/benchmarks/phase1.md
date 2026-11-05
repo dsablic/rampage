@@ -46,7 +46,7 @@ allocation extents and unknown-versus-absent bounds/strides have independent pro
 API and the other six changed-crate suites passed in named runs after correcting the explicit Win32 convention
 declarator; scoped all-target Clippy, actual MCP fixtures, collector tests and independent reviews passed.
 This is not full-workspace/release acceptance. Static investigation revalidation preserved 892 C bytes and six
-descriptors with warnings on an installed ARM64 core, without annotation changes. An original firmware window
+descriptors with warnings on a third-party ARM64 plugin image, without annotation changes. An original firmware window
 returned eight decoder observations without execution or new device/full-map claims.
 
 **Remaining phase-end gate:** obtain a genuine live completion of checked import → analyst retype → verified
@@ -101,7 +101,7 @@ strict fingerprint errors; no worker-to-inline fallback is introduced.
 
 Target-model import prototypes cover portable `memcpy`, explicitly selected POSIX `recv`, corrected Windows
 `recv` and x86/x64 `CreateFileW`, with native-parser width/convention tests. Default/ELF is not Linux proof.
-An installed ARM64 core revalidation still returned 892 C bytes and six descriptors, preserving warnings and
+A third-party ARM64 image revalidation still returned 892 C bytes and six descriptors, preserving warnings and
 leaving annotations unchanged.
 
 API, decompiler, evaluator, MCP and UI suites passed in the broad run. That run reached an outdated worker
@@ -147,7 +147,7 @@ make every page unusable; omissions are explicit. Tracker IR collection skips ty
 and infrastructure errors are not silently downgraded to unsupported tracking.
 
 All seven changed-crate suites, scoped all-target Clippy, frame/worker/MCP tests and six collector regressions
-passed, with independent reviews. An installed ARM64 core query returned six native variables, six tracker
+passed, with independent reviews. A third-party ARM64 image query returned six native variables, six tracker
 slots and six register-evidence rows, preserving its recovery warnings and making no annotation changes.
 Limits: recovered inventory and static candidates, not a complete frame-size bound, ABI proof or runtime capture.
 Earlier publications, including the failed Phase 1.2 summary contract, remain unchanged.
@@ -186,8 +186,8 @@ Clang-built x64/AArch64 fixtures and the source recipe distinguish explicit oper
 widths and memory displacements. Native/worker/MCP tests cover arrays of structs in real decompiled C, ordinary
 and exact-entry replay, UTF-16 surrogate pairs, invalid encodings, integers beyond JSON float precision, NaNs,
 partial/zero-fill bytes, and shared-client rename conflicts. The first typed-log transition checks the complete
-legacy prefix before append; malformed old logs are refused without rewriting them. An installed ARM64 image
-revalidation returned stored bytes and explicit zero-fill without creating commercial annotations or assigning
+legacy prefix before append; malformed old logs are refused without rewriting them. A third-party ARM64 image
+revalidation returned stored bytes and explicit zero-fill without creating annotations or assigning
 unproved layouts.
 
 All seven changed-crate suites, scoped all-target Clippy, 11 grader regressions and fresh-context reviews passed.
@@ -228,9 +228,9 @@ width rather than the earlier 8-byte default exposed during implementation.
 
 API, decompiler, worker, MCP, evaluator and UI suites, scoped all-target Clippy, grader regressions and independent
 reviews passed. Ordinary oversized comments/long histories remain undoable; blocked legacy undo still displays
-other clients' refreshed edits. A real installed ARM64 query found that read-only inspection incorrectly tried
-to create a writer lock beside a protected image. A subsequent detached-read fix preserved bounds and returned
-the native 4-byte integer layout without creating commercial annotations or lock files; the live measurement
+other clients' refreshed edits. A third-party ARM64 image query found that read-only inspection incorrectly tried
+to create a writer lock beside a read-only image. A subsequent detached-read fix preserved bounds and returned
+the native 4-byte integer layout without creating annotations or lock files; the live measurement
 remains bound to its original source revision.
 
 Limits: bounded type-only C/header preparation and explicit minimal ABI profiles, not arbitrary preprocessing,
@@ -273,8 +273,8 @@ Owned native tests cover x64/AArch64 register parameters, addressable x64 stack 
 replacement/clearing and refusal without partial renames. Invalid declarations, keywords, stale/ambiguous storage
 and oversized refreshed results leave annotations unchanged. Sequential renames can reuse names vacated by the
 same replay batch; native swaps, fresh-engine replay and final-name collision refusal have regression coverage.
-A real installed ARM64 core revalidation returned
-six variable descriptors (three editable, three explicitly unsupported); no commercial annotations were changed.
+A third-party ARM64 image revalidation returned
+six variable descriptors (three editable, three explicitly unsupported); no annotations were changed.
 The Phase 0 publication stays frozen; the current local-rename inventory probe now expects the implemented tool.
 Limits: single whole mappings and same-size types; no project type library, cross-call propagation or UI editor.
 Changed-crate API, decompiler, worker, MCP, evaluator and UI suites and scoped all-target Clippy passed;

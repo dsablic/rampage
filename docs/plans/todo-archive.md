@@ -37,8 +37,8 @@ was available in the benchmark's configured project context. Optional unscored p
   reject ambiguous/stale/unsupported selectors, keywords and oversized results without partial persistence.
 - [x] Measure a live supplied-layout task with the current OpenCode model through actual MCP, independently verify
   native state and persisted storage bindings; publish source/executable/fixture hashes and measured totals.
-- [x] Repeat a real ARM64 audio-core decompilation read-only: six descriptors, three editable and three explicit
-  refusals, recovery warnings retained. No commercial annotations or inputs changed.
+- [x] Repeat a third-party ARM64 audio-plugin decompilation read-only: six descriptors, three editable and three
+  explicit refusals, recovery warnings retained. No annotations or inputs changed.
 
 Limits: one whole register/stack mapping and same-size types. No UI local editor, type library or cross-call
 propagation. The accepted Phase 0 publication is unchanged; the current capability probe now expects this feature.
@@ -50,7 +50,7 @@ Evidence and measurement limits are in `docs/benchmarks.md` and `docs/local-vari
 - [x] Bounded C header import and permissively licensed minimal C/POSIX/Win32 type profiles.
 - [x] Native/API/MCP undo/replay acceptance, compiler-matched layouts, measured owned workload and independent review.
 - [x] Preserve ordinary legacy undo refresh, oversized-comment/long-history compatibility and empty-history no-op.
-- [x] Read queries use bounded detached snapshots; real protected-image inspection creates no annotation/lock files.
+- [x] Read queries use bounded detached snapshots; read-only image inspection creates no annotation/lock files.
 - [x] Publish the first live run without retry/regrading: correct native state, workflow and fresh-server persistence,
   10 MCP calls / 6 model turns; strict final-summary contract failed and remains `task_verified=false`.
 
@@ -76,7 +76,7 @@ Clippy and grader regressions passed. Instruction operands are supported; arbitr
 - [x] Native address-space widths and configured base context are direct evidence; tracker coordinates stay separate.
 - [x] Bound repeated metadata, preserve complete paged rows and propagate infrastructure failures.
 - [x] Native/worker/MCP and first live read-only workflow passed: one query / two turns; fresh-server/log/byte checks.
-- [x] Revalidate an installed ARM64 core frame without annotations or warning suppression.
+- [x] Revalidate a third-party ARM64 plugin frame without annotations or warning suppression.
 
 Implementation `8fdfb2b`; audited metrics and limits are in `docs/benchmarks.md`. All seven changed-crate suites
 and scoped Clippy passed. No complete frame-size or ABI callee-save claim is made.
@@ -346,7 +346,7 @@ completion of earlier phases does not close the independent live/N, library-reca
 
 Earlier Phase 3 delivery implemented annotation-backed effective bytes, bounded assembly, create-new export,
 compact views and batching through existing history. Its mechanical and live measurements retain their separate
-acceptance limits. No commercial target execution or in-place binary modification is authorized.
+acceptance limits. No third-party target execution or in-place binary modification is in scope.
 
 ### Implemented Phase 1 milestones
 
@@ -357,6 +357,7 @@ acceptance limits. No commercial target execution or in-place binary modificatio
 
 ## Audio/firmware investigation acceptance workloads
 
+The workload: explain a third-party audio plugin or firmware image you are authorized to analyse.
 The batches below track investigation outcomes and remaining blockers, not a competing feature queue.
 The goal is to answer: what features exist, where their code lives, how parameters reach processing, and
 which links are static candidates versus observed execution. Ship reusable improvements driven by actual
@@ -365,11 +366,11 @@ investigation obstacles, not a plugin-specific analyzer or another extension fra
 ### Validated investigation baseline
 
 - [x] Reproduce and fix native decompilation rejecting mapped code reached below the requested entry;
-  owned x86-64/AArch64 regression and real installed-image retest.
+  owned x86-64/AArch64 regression and a retest on the third-party image.
 - [x] Add explicit MCP `decompile(view="code")`: complete C text without token/graph bulk, retaining native
   diagnostics, recovery status, exact-entry context and visible detail omissions; oversized code still refuses.
 - [x] Recognize ARM64 literal-load import stubs and preserve Mach-O entry-leading NOPs without changing ELF
-  resolver-padding handling; owned positive/negative regressions and real installed-image retest.
+  resolver-padding handling; owned positive/negative regressions and a retest on the third-party image.
 - [x] Close the baseline batch with scoped validation and independent review; retain the broader-run timeout
   limitation and keep machine-local MCP configuration separate. Full-workspace/release acceptance is not claimed.
 
@@ -382,7 +383,7 @@ Question: starting from a named processing block, which record identifies it and
 - [x] Reproduce the current manual descriptor-table traversal and record the external-tool handoffs and
   unresolved links. Choose one already-located block and a second block as a transfer check.
   Repeated two related block traversals with MCP data inspection/decompilation; the table/string inspection
-  handoffs to external tools are no longer required. This is not the second-vendor transfer gate.
+  handoffs to external tools are no longer required. This is not the second-implementation transfer gate.
 - [x] Add bounded read-only mapped-data inspection to the shared API, CLI and MCP. Reuse existing image
   identity/address/mapping logic; report image addresses separately from file offsets, and preserve gaps,
   unavailable backing and declared zero-fill rather than manufacturing bytes.
@@ -1207,7 +1208,7 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   Markdown in the implementation batch; wrap-up adds controlled Python acceptance tooling. CI triggers, build
   settings, commercial inputs and capture artifacts are unchanged or absent.
 - [ ] New live end-to-end LLDB workspace acceptance, broader ABI/platform coverage and performance measurements.
-  Owned protocol mocks and image fixtures do not establish arbitrary-host or commercial-runtime acceptance.
+  Owned protocol mocks and image fixtures do not establish arbitrary-host or third-party-runtime acceptance.
   The owned x86-64 live gate compiled but Apple LLDB refused launch with `Bad CPU type in executable` on the
   arm64 host, before UI observations. No Rosetta installation or ARM64 data-order guess bypassed that blocker.
 - [x] Final publication review closed 32-bit sample-width handling and capture paint-time mapped-header reads.

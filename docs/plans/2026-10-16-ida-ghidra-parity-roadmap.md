@@ -93,13 +93,13 @@ Main gaps, by impact on an agent's ability to finish real tasks:
    MCP test suite before commit; record any timeout honestly rather than claiming a full-workspace pass.
 6. **Licensing.** Only permissively licensed inputs (Apache/MIT/BSD/zlib/PD) in the repo. Signature DBs are
    generated from open-source libraries we build ourselves. Do not ship IDA `.sig`/`.til` files or anything
-   extracted from commercial binaries. Commercial binaries may be used locally for evaluation only and never
-   committed.
+   extracted from third-party binaries. Third-party binaries are never committed; acceptance workloads run
+   locally on binaries you are authorized to analyse.
 7. **Commits.** One commit per reviewed slice, imperative subject. No release tags and no CI dispatch.
-8. **Relationship to the audio-plugin investigation in `todo.md`.** Close its "Current baseline" batch first
-   (it is mid-flight). After that, this roadmap is the active priority, and the audio-plugin and
-   unknown-firmware investigations become *acceptance workloads*: at the end of each phase, re-run one real
-   investigation through MCP and note which blockers the phase removed. (The user should confirm this ordering;
+8. **Relationship to the investigation workloads in `todo.md`.** Close its "Current baseline" batch first
+   (it is mid-flight). After that, this roadmap is the active priority, and the investigations (explain a
+   third-party audio plugin or firmware image you are authorized to analyse) become *acceptance workloads*: at
+   the end of each phase, re-run one real investigation through MCP and note which blockers the phase removed. (The user should confirm this ordering;
    if they prefer to finish Batches 2-3 first, start Phase 0 after Batch 3.)
 
 ---

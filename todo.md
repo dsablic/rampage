@@ -40,6 +40,7 @@ during the benchmark.
 
 ## Audio/firmware investigation acceptance workloads
 
+The workload: explain a third-party audio plugin or firmware image you are authorized to analyse.
 The batches below track investigation outcomes and remaining blockers, not a competing feature queue.
 The goal is to answer: what features exist, where their code lives, how parameters reach processing, and
 which links are static candidates versus observed execution. Ship reusable improvements driven by actual
@@ -50,7 +51,7 @@ investigation obstacles, not a plugin-specific analyzer or another extension fra
 #### Batch 2 / P0: explain one complete named effect
 
 Question: how does one simple user-visible effect turn its parameters and input buffers into output?
-Choose an accessible EQ/filter/delay-sized effect, not an entire amp suite or a protection wrapper.
+Choose a small, self-contained effect (EQ, filter or delay sized), not an entire effect suite.
 
 - [x] Match the selected catalogue ID and parameter metadata to code/data evidence, keeping resource
   declarations distinct from binary associations and runtime availability.
@@ -60,7 +61,7 @@ Choose an accessible EQ/filter/delay-sized effect, not an entire amp suite or a 
   Record buffer shapes, state, coefficient updates, bypass and sample-rate/block-size behavior where supported.
 - [ ] Produce an evidence-linked feature map using existing annotations/workflows where sufficient:
   feature, module/slice identity, address, role, supporting references, confidence and unresolved links.
-  Keep the actual commercial investigation local; repository examples use owned inputs and generic descriptions.
+  Keep third-party inputs local; repository examples use owned inputs and generic descriptions.
 - [ ] Fix only the highest-impact blockers on that path. Current candidates are an unresolved bounded ARM64
   parameter-routing jump table and incorrect/missing recovered signatures or mixed integer/float storage types.
   Diagnose the specific shape before choosing a recovery change; warnings remain visible until actually resolved.
@@ -73,13 +74,13 @@ Choose an accessible EQ/filter/delay-sized effect, not an entire amp suite or a 
 Done: a reader can follow one named effect from controls to sample processing, locate the relevant code in MCP,
 and see exactly which associations remain uncertain. A primitive alone or a plausible decompilation is not enough.
 
-#### Batch 3 / P0: transfer to another vendor before expanding scope
+#### Batch 3 / P0: transfer to an independent implementation before expanding scope
 
-- [ ] Apply the same catalogue -> descriptor -> code workflow to one normally installed second-vendor plugin.
-  Do not add vendor-name conditions to make the case pass.
+- [ ] Apply the same catalogue -> descriptor -> code workflow to a second plugin from a different developer that
+  you are authorized to analyse. Do not add developer-specific conditions to make the case pass.
 - [ ] Find a meaningful processing or parameter/state path, not just exports or a factory forwarding wrapper.
-  If activation/protection blocks investigation, record the boundary and select another accessible candidate;
-  no license changes, protection bypass, installer execution or security-setting changes.
+  If a candidate cannot be inspected statically, record the boundary and select another accessible candidate;
+  no installer execution or security-setting changes.
 - [ ] Compare manual handoffs, critical unresolved links and query cost against the starting investigation.
   Record regressions as well as gains; an explicit refusal is honest reporting, not transfer success.
 
@@ -314,7 +315,7 @@ Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.m
 Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#exact-entry-analysis-and-local-debugger-workspace).
 
 - [ ] New live end-to-end LLDB workspace acceptance, broader ABI/platform coverage and performance measurements.
-  Owned protocol mocks and image fixtures do not establish arbitrary-host or commercial-runtime acceptance.
+  Owned protocol mocks and image fixtures do not establish arbitrary-host or third-party-runtime acceptance.
   The owned x86-64 live gate compiled but Apple LLDB refused launch with `Bad CPU type in executable` on the
   arm64 host, before UI observations. No Rosetta installation or ARM64 data-order guess bypassed that blocker.
 - [ ] Larger matched-setting corpora; bounded host context does not promise constant latency, complete discovery
@@ -465,7 +466,7 @@ Work in this order, with synthetic regressions and fresh-context review for each
    opt-in (`audit --include-discovery` / MCP `include_discovery`), not a hidden prerequisite for sampling.
 3. [ ] Authorized capture workflow: bounded module/range selection and actual memory-permission checks in the
    stopped-process LLDB exporter, capture failures and provenance. No automatic plugin launch, installation,
-   debugger attachment, licensing changes or target-memory writes; controlled live tests use our own fixtures.
+   debugger attachment or target-memory writes; controlled live tests use our own fixtures.
    - [x] Exact mapping permissions, bounded inspection, complete reads, expression-stop identity checks and
      atomic no-clobber publication; breakpoint normalization recorded in provenance.
    - [x] Explicit UUID/original-address range and seed selection with checked slides, section coverage and
@@ -501,12 +502,12 @@ Work in this order, with synthetic regressions and fresh-context review for each
    capture selected code and referenced data, correlate the original UUID, rerun diagnostics/decompilation and
    report before/after warning/coverage metrics. This is blocked on an authorized host capture, not static parsing.
 
-Commercial plugin bytes and captured process contents are local investigation inputs, not committed fixtures.
-No protection bypass, patching or claims of license-state recovery are part of this work.
+Third-party plugin bytes and captured process contents are local investigation inputs, not committed fixtures.
+Patching is not part of this work.
 
 Acceptance gate for each milestone: behavioral regressions, malformed-input tests, `cargo fmt --check`,
-`cargo clippy --all-targets -- -D warnings`, workspace tests, and independent review. Commercial samples are
-read-only triage inputs, never bypass or patch fixtures. Runtime tests use programs we build ourselves.
+`cargo clippy --all-targets -- -D warnings`, workspace tests, and independent review. Third-party samples are
+read-only triage inputs, never patch fixtures. Runtime tests use programs we build ourselves.
 
 - [x] Initial runtime images: validated sparse snapshot format, CLI/API/UI loading, explicit code seeds, provenance,
   virtual-address handling and controlled LLDB export/correlation. Persistence and cross-module work remain above.
