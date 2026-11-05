@@ -145,7 +145,13 @@ async fn six_tool_views_use_identical_projection_semantics_and_full_default_with
                 let mut input = args.clone();
                 input["view"] = serde_json::to_value(view).unwrap();
                 let result = connection.call(name, input).await;
-                match project_tool_view(full.clone(), kind, view) {
+                // function_summary's compact views add its callees and fit rather than refuse.
+                let expected = if kind == ToolViewKind::FunctionSummary {
+                    rampage_api::project_function_summary(full.clone(), view, rampage_api::SummaryPages::default())
+                } else {
+                    project_tool_view(full.clone(), kind, view)
+                };
+                match expected {
                     Ok(expected) => assert_eq!(body(&result), expected, "{name}: {view:?}"),
                     Err(_) => {
                         assert_eq!(result.is_error, Some(true));

@@ -14,7 +14,8 @@ use crate::{ApiError, FileOffset};
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RawProjectRequest {
-    /// Closed Raw language ID, not a path, architecture alias, compiler or ABI selection.
+    /// Closed Raw language ID (any case), or a processor alias such as `msp430`, `avr` or `z80`; not a path,
+    /// compiler or ABI selection.
     #[schemars(schema_with = "profile_schema")]
     pub profile: String,
     /// Original-file BYTE offset of the first code byte.
@@ -36,7 +37,8 @@ fn profile_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     let ids: Vec<&str> = RawProfile::ALL.iter().map(|profile| profile.language_id()).collect();
     schemars::json_schema!({
         "type": "string",
-        "description": "Closed Raw language ID, not a path, architecture alias, compiler or ABI selection.",
+        "description": "Closed Raw language ID (any case), or a processor alias such as msp430, avr or z80; not a \
+                        path, compiler or ABI selection. ARM/Thumb and x86 code use inspect_raw_code instead.",
         "enum": ids,
     })
 }
@@ -45,10 +47,137 @@ fn invalid(message: &str) -> ApiError {
     ApiError::Invalid(message.to_owned())
 }
 
+/// Short names agents use for each Raw profile's processor, lowercased with separators removed.
+const PROFILE_ALIASES: [(RawProfile, &[&str]); 16] = [
+    (RawProfile::Msp430, &["msp430", "timsp430"]),
+    (RawProfile::Avr8, &["avr", "avr8", "atmega", "atmelavr"]),
+    (RawProfile::Mos6502, &["6502", "mos6502"]),
+    (RawProfile::I8051, &["8051", "i8051", "mcs51", "intel8051"]),
+    (RawProfile::Pic16, &["pic16"]),
+    (RawProfile::SuperH2, &["sh2", "superh2"]),
+    (RawProfile::V850, &["v850", "necv850"]),
+    (RawProfile::Tricore, &["tricore", "aurix"]),
+    (RawProfile::Xtensa, &["xtensa"]),
+    (RawProfile::Z80, &["z80"]),
+    (RawProfile::Hcs12, &["hcs12", "s12", "68hc12", "hc12"]),
+    (RawProfile::Mc6805, &["6805", "mc6805", "hc05", "68hc05"]),
+    (RawProfile::Cr16c, &["cr16c"]),
+    (RawProfile::Ebpf, &["ebpf"]),
+    (RawProfile::Loongarch64, &["loongarch64", "loongarch", "la64"]),
+    (RawProfile::Hexagon, &["hexagon", "qdsp6"]),
+];
+
+/// Families agents name that no Raw profile covers, though a profile's name may look close (PIC32 is MIPS, not
+/// PIC-16).
+const UNPROFILED_FAMILIES: [&str; 14] = [
+    "pic10", "pic12", "pic17", "pic18", "pic24", "pic32", "dspic", "mips", "riscv", "rv32", "rv64", "ppc", "powerpc",
+    "sparc",
+];
+
+/// Names of processors that have no Raw profile because inspect_raw_code decodes them in a headerless file.
+const RAW_CODE_ARCHES: [&str; 14] =
+    ["arm", "thumb", "cortex", "armv", "aarch", "arm64", "a64", "x86", "x64", "amd64", "i386", "i686", "ia32", "intel"];
+
+/// The closed profile `name` selects: an exact language ID, the same ID in any case, or a processor alias such as
+/// `msp430` or `avr`. Otherwise an error naming the closest profiles, or inspect_raw_code for ARM and x86 code.
+pub fn resolve_raw_profile(name: &str) -> Result<RawProfile, String> {
+    if let Ok(profile) = RawProfile::from_language_id(name) {
+        return Ok(profile);
+    }
+    if let Some(profile) = RawProfile::ALL.into_iter().find(|profile| profile.language_id().eq_ignore_ascii_case(name))
+    {
+        return Ok(profile);
+    }
+    let key: String = name.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase();
+    if let Some((profile, _)) = PROFILE_ALIASES.iter().find(|(_, aliases)| aliases.contains(&key.as_str())) {
+        return Ok(*profile);
+    }
+    let profiles: Vec<&str> = RawProfile::ALL.iter().map(|profile| profile.language_id()).collect();
+    // Another variant, byte order or size of a profiled processor is not covered: say so rather than offer the
+    // profile, which would decode different instructions.
+    let language_prefix = name.split(':').next().unwrap_or(name);
+    if name.contains(':')
+        && let Some(profile) = RawProfile::ALL.into_iter().find(|profile| {
+            profile.language_id().split(':').next().is_some_and(|prefix| prefix.eq_ignore_ascii_case(language_prefix))
+        })
+    {
+        return Err(format!(
+            "unsupported Raw profile {name:?}: no Raw profile covers this variant; the only {language_prefix} \
+             profile is {:?}. All Raw profiles: {}",
+            profile.language_id(),
+            profiles.join(", ")
+        ));
+    }
+    if UNPROFILED_FAMILIES.iter().any(|family| key.starts_with(family)) {
+        return Err(format!(
+            "unsupported Raw profile {name:?}: no Raw profile covers this processor. All Raw profiles: {}",
+            profiles.join(", ")
+        ));
+    }
+    if RAW_CODE_ARCHES.iter().any(|arch| key.starts_with(arch)) {
+        return Err(format!(
+            "unsupported Raw profile {name:?}, not a closed Raw language ID: ARM/Thumb (Cortex-M), AArch64 and \
+             x86 code have no Raw profile. Decode a headerless file's bytes with inspect_raw_code \
+             instead, e.g. {{\"path\":...,\"offset\":0,\"length\":256,\
+             \"arch\":\"arm\",\"mode\":\"thumb\",\"code_byte_order\":\"little\",\"data_byte_order\":\"little\",\
+             \"base_address\":0}}. Raw profiles: {}",
+            profiles.join(", ")
+        ));
+    }
+    let mut ranked: Vec<(usize, &str)> = PROFILE_ALIASES
+        .iter()
+        .map(|(profile, aliases)| {
+            let language = profile.language_id();
+            let distance = aliases
+                .iter()
+                .map(|alias| edit_distance(&key, alias))
+                .chain([edit_distance(&key, &alias_key(language))])
+                .min()
+                .unwrap_or(usize::MAX);
+            (distance, language)
+        })
+        .collect();
+    ranked.sort();
+    // Only near spellings are offered; a distant name gets the full list alone.
+    let near = (key.len() / 3).max(2);
+    let closest: Vec<&str> =
+        ranked.iter().take_while(|(distance, _)| *distance <= near).take(3).map(|(_, profile)| *profile).collect();
+    let closest = if closest.is_empty() { String::new() } else { format!("; closest: {}", closest.join(", ")) };
+    Err(format!(
+        "unsupported Raw profile {name:?}, not a closed Raw language ID or alias{closest}. All Raw profiles: {}",
+        profiles.join(", ")
+    ))
+}
+
+/// The processor part of a language ID as an alias key (`TI_MSP430:LE:16:default` -> `timsp430`).
+fn alias_key(language_id: &str) -> String {
+    language_id
+        .split(':')
+        .next()
+        .unwrap_or(language_id)
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    for (row, left) in left.chars().enumerate() {
+        let mut current = vec![row + 1];
+        for (column, right) in right.iter().enumerate() {
+            let substitution = previous[column] + usize::from(left != *right);
+            current.push(substitution.min(previous[column + 1] + 1).min(current[column] + 1));
+        }
+        previous = current;
+    }
+    previous[right.len()]
+}
+
 impl RawProjectRequest {
     fn options(&self) -> Result<(usize, RawCodeOptions), ApiError> {
-        let profile = RawProfile::from_language_id(&self.profile)
-            .map_err(|_| invalid("unsupported Raw profile; select one of the closed Raw language IDs"))?;
+        let profile = resolve_raw_profile(&self.profile).map_err(ApiError::Invalid)?;
         let length = usize::try_from(self.length.0)
             .ok()
             .filter(|length| (1..=MAX_RAW_BYTES).contains(length))
@@ -75,4 +204,43 @@ pub fn open_raw_binary(path: &Path, request: &RawProjectRequest) -> Result<Binar
     let bytes = source.read()?;
     source.revalidate()?;
     Binary::from_raw_code(bytes, options).map_err(|source| ApiError::Load { path: path.to_owned(), source })
+}
+
+/// What to do with a file no native loader recognises: the Raw selectors that read headerless code, with examples.
+pub fn headerless_guidance() -> String {
+    let profiles: Vec<&str> = RawProfile::ALL.iter().map(|profile| profile.language_id()).collect();
+    format!(
+        "The file has no recognised executable header; for a headerless image (raw firmware, a memory dump) choose \
+         how to read it. ARM/Thumb (Cortex-M), AArch64 and x86 bytes: inspect_raw_code, e.g. {{\"path\":...,\
+         \"offset\":0,\"length\":256,\"arch\":\"arm\",\"mode\":\"thumb\",\"code_byte_order\":\"little\",\
+         \"data_byte_order\":\"little\",\"base_address\":0}}. Other processors: pass `raw` to a raw-capable tool \
+         (binary_info, list_functions, disassemble, decompile, ...), e.g. \"raw\":{{\"profile\":\"msp430\",\
+         \"offset\":0,\"length\":4096,\"base_address\":0}}; profiles: {}. carve finds executables embedded in it.",
+        profiles.join(", ")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review of the benchmark v2 fixes: ambiguous aliases and hints offered a profile for another variant.
+    #[test]
+    fn aliases_select_one_profile_and_other_variants_are_not_offered_one() {
+        assert_eq!(resolve_raw_profile("msp430"), Ok(RawProfile::Msp430));
+        assert_eq!(resolve_raw_profile("TI_MSP430:le:16:DEFAULT"), Ok(RawProfile::Msp430));
+        for ambiguous in ["pic", "sh", "superh", "bpf", "cr16"] {
+            assert!(resolve_raw_profile(ambiguous).is_err(), "{ambiguous}");
+        }
+        for variant in ["SuperH:LE:32:SH-4", "Xtensa:BE:32:default", "avr8:LE:16:extended"] {
+            let error = resolve_raw_profile(variant).unwrap_err();
+            assert!(error.contains("no Raw profile covers this variant"), "{error}");
+        }
+        for family in ["pic32", "PIC32MX", "mips32", "riscv32"] {
+            let error = resolve_raw_profile(family).unwrap_err();
+            assert!(error.contains("no Raw profile covers this processor") && !error.contains("closest"), "{error}");
+        }
+        assert!(resolve_raw_profile("msp431").unwrap_err().contains("closest: TI_MSP430:LE:16:default"));
+        assert!(resolve_raw_profile("cortex-m3").unwrap_err().contains("inspect_raw_code"));
+    }
 }

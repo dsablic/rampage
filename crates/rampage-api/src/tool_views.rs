@@ -30,9 +30,15 @@ pub enum ToolViewKind {
 
 /// Full preserves the original JSON value. Other views omit only named, known payloads and retain unknown fields.
 /// The complete serialized result, including omission receipts, must fit the byte budget or the call refuses.
-pub fn project_tool_view(mut value: Value, kind: ToolViewKind, view: ToolView) -> Result<Value, ApiError> {
+pub fn project_tool_view(value: Value, kind: ToolViewKind, view: ToolView) -> Result<Value, ApiError> {
+    let value = project(value, kind, view)?;
+    checked(value, kind, view)
+}
+
+/// The view projection of `value` before its byte budget is checked.
+fn project(mut value: Value, kind: ToolViewKind, view: ToolView) -> Result<Value, ApiError> {
     if view == ToolView::Full {
-        return checked(value, kind, view);
+        return Ok(value);
     }
     if view == ToolView::Code && matches!(kind, ToolViewKind::BinaryInfo | ToolViewKind::InspectData) {
         return Err(ApiError::Invalid(format!(
@@ -51,7 +57,7 @@ pub fn project_tool_view(mut value: Value, kind: ToolViewKind, view: ToolView) -
             } else {
                 // The native listing is already the code representation: do not reconstruct instruction text.
                 value.as_array().ok_or_else(|| invalid("disassembly is not an instruction array"))?;
-                return checked(value, kind, view);
+                return Ok(value);
             }
         }
         ToolViewKind::FunctionGraph => graph(&mut value, view, "", &mut projection)?,
@@ -74,7 +80,226 @@ pub fn project_tool_view(mut value: Value, kind: ToolViewKind, view: ToolView) -
             },
         }),
     );
-    checked(value, kind, view)
+    Ok(value)
+}
+
+/// Where the pages of a fitted function summary's long lists start.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SummaryPages {
+    pub block_offset: usize,
+    pub reference_offset: usize,
+    pub callee_offset: usize,
+}
+
+/// Bytes kept free for the paging fields a fitted summary adds.
+const SUMMARY_PAGING_SLACK: usize = 1024;
+
+/// Projects a function summary like [`project_tool_view`], adding `callees` (the distinct call targets among its
+/// references) to the summary and code views. A summary or code view too large for the byte budget, or asked for
+/// a later page, is fitted instead of refused: the graph blocks, references and callees are paged as whole rows
+/// with `*_offset`/`*_next_offset` fields, and bulky optional analyses that still do not fit are omitted with
+/// receipts. view=full keeps its exact-or-refuse contract.
+pub fn project_function_summary(value: Value, view: ToolView, pages: SummaryPages) -> Result<Value, ApiError> {
+    if view == ToolView::Full {
+        return project_tool_view(value, ToolViewKind::FunctionSummary, view);
+    }
+    let callees = summary_callees(&value);
+    let mut value = project(value, ToolViewKind::FunctionSummary, view)?;
+    object(&mut value, "function summary")?.insert("callees".into(), Value::Array(callees));
+    // Reference rows are paged by items_offset in these views; the native page offset would read as a second one.
+    if let Some(references) = value.get_mut("references").and_then(Value::as_object_mut)
+        && let Some(offset) = references.remove("offset")
+    {
+        references.insert("items_offset".into(), offset);
+    }
+    let paged = pages.block_offset != 0 || pages.reference_offset != 0 || pages.callee_offset != 0;
+    if !paged && fits(&value) {
+        return Ok(value);
+    }
+    fit_summary(value, view, pages)
+}
+
+fn fits(value: &Value) -> bool {
+    let mut counter = JsonByteCounter::new(Some(MAX_TOOL_VIEW_BYTES));
+    serde_json::to_writer(&mut counter, value).is_ok()
+}
+
+fn json_bytes(value: &Value) -> usize {
+    let mut counter = JsonByteCounter::new(None);
+    serde_json::to_writer(&mut counter, value).map_or(usize::MAX, |()| counter.bytes)
+}
+
+/// The distinct call targets among a native summary's references, in first-call order, with their call counts.
+fn summary_callees(value: &Value) -> Vec<Value> {
+    let mut callees: Vec<(Value, Value, u64)> = Vec::new();
+    let items = value.get("references").and_then(|references| references.get("items")).and_then(Value::as_array);
+    for item in items.into_iter().flatten().filter(|item| item.get("kind") == Some(&json!("call"))) {
+        let target = item.get("to").cloned().unwrap_or(Value::Null);
+        match callees.iter_mut().find(|(address, _, _)| *address == target) {
+            Some((_, _, calls)) => *calls += 1,
+            None => callees.push((target, item.get("to_name").cloned().unwrap_or(Value::Null), 1)),
+        }
+    }
+    callees
+        .into_iter()
+        .map(|(address, name, calls)| json!({ "address": address, "name": name, "calls": calls }))
+        .collect()
+}
+
+/// Takes the list at `path` out of `value`, leaving an empty one in its place.
+fn take_list(value: &mut Value, path: &[&str]) -> Vec<Value> {
+    let Some(list) = path.iter().try_fold(&mut *value, |at, key| at.get_mut(*key)) else { return Vec::new() };
+    match list.take() {
+        Value::Array(items) => {
+            *list = Value::Array(Vec::new());
+            items
+        }
+        other => {
+            *list = other;
+            Vec::new()
+        }
+    }
+}
+
+/// The whole rows of `items` from `offset` that fit `share` JSON bytes, charged to `budget`: the rows, the clamped
+/// offset, where the next page starts, and whether the bytes (not the list's end) ended the page.
+fn fitted_list(
+    items: Vec<Value>,
+    offset: usize,
+    share: usize,
+    budget: &mut usize,
+) -> (Vec<Value>, usize, Option<usize>, bool) {
+    let total = items.len();
+    let offset = offset.min(total);
+    let mut rows = Vec::new();
+    let mut used = 0;
+    for item in items.into_iter().skip(offset) {
+        let size = json_bytes(&item) + 1;
+        if used + size > share {
+            break;
+        }
+        used += size;
+        rows.push(item);
+    }
+    *budget -= used;
+    let next = offset + rows.len();
+    let more = next < total;
+    (rows, offset, more.then_some(next), more)
+}
+
+fn fit_summary(mut value: Value, view: ToolView, pages: SummaryPages) -> Result<Value, ApiError> {
+    let blocks = take_list(&mut value, &["graph", "blocks"]);
+    // Each block is paged with the edges that leave it, which keep their whole-function block indices.
+    let mut outgoing: Vec<Vec<Value>> = vec![Vec::new(); blocks.len()];
+    let mut stray_edges = Vec::new();
+    for edge in take_list(&mut value, &["graph", "edges"]) {
+        match edge.get("from").and_then(Value::as_u64).and_then(|from| outgoing.get_mut(from as usize)) {
+            Some(edges) => edges.push(edge),
+            None => stray_edges.push(edge),
+        }
+    }
+    let blocks: Vec<Value> =
+        blocks.into_iter().zip(outgoing).map(|(block, edges)| Value::Array(vec![block, Value::Array(edges)])).collect();
+    let references = take_list(&mut value, &["references", "items"]);
+    let callees = take_list(&mut value, &["callees"]);
+    // A summary view records one omission receipt per block; a paged result sums them into one.
+    if let Some(omissions) = value.pointer_mut("/view_projection/omissions").and_then(Value::as_array_mut) {
+        let per_block =
+            |receipt: &Value| receipt["path"].as_str().is_some_and(|path| path.starts_with("/graph/blocks/"));
+        let (blocks_count, bytes, items) = omissions.iter().filter(|receipt| per_block(receipt)).fold(
+            (0u64, 0u64, 0u64),
+            |(count, bytes, items), receipt| {
+                (
+                    count + 1,
+                    bytes + receipt["json_bytes"].as_u64().unwrap_or(0),
+                    items + receipt["items"].as_u64().unwrap_or(0),
+                )
+            },
+        );
+        if blocks_count != 0 {
+            omissions.retain(|receipt| !per_block(receipt));
+            omissions.push(json!({
+                "path": "/graph/blocks/*/lines", "blocks": blocks_count, "items": items, "json_bytes": bytes,
+                "reason": "instruction text/bytes omitted; bounds, counts and non-rendering evidence retained",
+            }));
+        }
+    }
+    // Bulky optional analyses go, largest first, only while the result without its lists still does not fit.
+    let mut omitted = Vec::new();
+    while json_bytes(&value) + SUMMARY_PAGING_SLACK > MAX_TOOL_VIEW_BYTES {
+        let object = object(&mut value, "function summary")?;
+        // Everything but the identity, the paged lists' holders, limitations and the projection receipt may go.
+        let largest = object
+            .iter()
+            .filter(|(key, _)| !matches!(key.as_str(), "graph" | "references" | "limitations" | "view_projection"))
+            .map(|(key, field)| (json_bytes(field), key.clone()))
+            .max();
+        let Some((bytes, key)) = largest else {
+            return Err(invalid(
+                "function_summary fixed fields exceed the tool JSON byte budget even without its lists",
+            ));
+        };
+        object.remove(&key);
+        omitted.push(
+            json!({ "path": format!("/{key}"), "reason": "omitted to fit the byte budget", "json_bytes": bytes }),
+        );
+    }
+    // The paging fields and receipt are measured once built; a page that overruns is rebuilt with more room.
+    let mut slack = SUMMARY_PAGING_SLACK;
+    loop {
+        let mut budget = MAX_TOOL_VIEW_BYTES.saturating_sub(json_bytes(&value) + slack);
+        // Callees, the compact answer, may take a quarter; references half of what is left; blocks the rest.
+        let callees = fitted_list(callees.clone(), pages.callee_offset, budget / 4, &mut budget);
+        let references = fitted_list(references.clone(), pages.reference_offset, budget / 2, &mut budget);
+        let blocks = fitted_list(blocks.clone(), pages.block_offset, budget, &mut budget);
+        if blocks.0.is_empty() && blocks.2.is_some() {
+            return Err(invalid(&format!(
+                "function_summary {view:?} view: graph block {} alone exceeds the tool JSON byte budget; retry \
+                 with view=summary or use disassemble with a smaller count",
+                blocks.1
+            )));
+        }
+        let mut page = value.clone();
+        let object = object(&mut page, "function summary")?;
+        object.insert("callees".into(), Value::Array(callees.0));
+        object.insert("callees_offset".into(), json!(callees.1));
+        object.insert("callees_next_offset".into(), json!(callees.2));
+        if let Some(references_object) = object.get_mut("references").and_then(Value::as_object_mut) {
+            references_object.insert("items".into(), Value::Array(references.0));
+            references_object.insert("items_offset".into(), json!(references.1));
+            references_object.insert("items_next_offset".into(), json!(references.2));
+        }
+        if let Some(graph) = object.get_mut("graph").and_then(Value::as_object_mut) {
+            let (mut page_blocks, mut page_edges) = (Vec::new(), stray_edges.clone());
+            for unit in blocks.0 {
+                if let Value::Array(mut parts) = unit {
+                    if let Some(Value::Array(edges)) = parts.pop() {
+                        page_edges.extend(edges);
+                    }
+                    page_blocks.extend(parts.pop());
+                }
+            }
+            graph.insert("edges".into(), Value::Array(page_edges));
+            graph.insert("blocks".into(), Value::Array(page_blocks));
+            graph.insert("blocks_offset".into(), json!(blocks.1));
+            graph.insert("blocks_next_offset".into(), json!(blocks.2));
+        }
+        object.insert(
+            "fitted".into(),
+            json!({
+                "byte_budget": MAX_TOOL_VIEW_BYTES,
+                "byte_capped": callees.3 || references.3 || blocks.3,
+                "omitted": omitted,
+                "continue_with": "pass block_offset, reference_offset or callee_offset set to the matching \
+                                  *_next_offset for the next page of that list; a page holds the edges leaving its \
+                                  blocks, which index blocks by their position in the whole function",
+            }),
+        );
+        if fits(&page) || slack >= MAX_TOOL_VIEW_BYTES {
+            return checked(page, ToolViewKind::FunctionSummary, view);
+        }
+        slack *= 2;
+    }
 }
 
 fn invalid(message: &str) -> ApiError {
@@ -1065,6 +1290,99 @@ mod tests {
             validated_indirect_targets: Vec::new(),
         };
         serde_json::to_value(result).unwrap()
+    }
+
+    /// Benchmark v2: function_summary on Hugo's `images.DecodeImageConfig` (94 blocks, 747 instructions, long Go
+    /// names) exceeded the 60000-byte budget in both summary and code views in every scale-callees run. A summary
+    /// as large is fitted: whole pages of blocks, references and callees with next offsets, never a refusal.
+    #[test]
+    fn oversized_function_summaries_are_paged_not_refused() {
+        let name = |index: usize| format!("github.com/gohugoio/hugo/resources/images.(*Decoder).callee_{index:04}");
+        let mut graph = native_graph();
+        graph.blocks = (0..120u64)
+            .map(|block| crate::GraphBlock {
+                start: 0x1000 + block * 0x100,
+                lines: (0..8u64)
+                    .map(|line| {
+                        let address = 0x1000 + block * 0x100 + line * 4;
+                        let mut call = native_line(address, Flow::Call(0x9000 + block * 8 + line));
+                        call.comment = Some(name((block * 8 + line) as usize));
+                        call
+                    })
+                    .collect(),
+            })
+            .collect();
+        graph.edges = (0..119).map(|from| crate::Edge { from, to: from + 1, kind: crate::EdgeKind::Taken }).collect();
+        let items: Vec<crate::XrefRow> = (0..960u64)
+            .map(|index| crate::XrefRow {
+                from: 0x1000 + index * 4,
+                to: 0x9000 + index,
+                kind: rampage_analysis::discover::XrefKind::Call,
+                from_function: Some("github.com/gohugoio/hugo/resources/images.DecodeImageConfig".into()),
+                to_name: Some(name(index as usize)),
+            })
+            .collect();
+        let mut summary: Value = native_function_summary();
+        summary["graph"] = serde_json::to_value(graph).unwrap();
+        summary["references"] = json!({ "total": 960, "offset": 0, "items": items });
+        for view in [ToolView::Summary, ToolView::Code] {
+            assert!(project_tool_view(summary.clone(), ToolViewKind::FunctionSummary, view).is_err());
+            let mut pages = SummaryPages::default();
+            let (mut blocks, mut references, mut callees) = (0, 0, 0);
+            loop {
+                let page = project_function_summary(summary.clone(), view, pages).unwrap();
+                assert!(serde_json::to_vec(&page).unwrap().len() <= MAX_TOOL_VIEW_BYTES);
+                assert_eq!(page["graph"]["blocks_offset"], json!(pages.block_offset));
+                let page_blocks = page["graph"]["blocks"].as_array().unwrap().len();
+                // A page carries exactly the edges leaving its blocks, by whole-function index.
+                let edges: Vec<u64> = page["graph"]["edges"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|edge| edge["from"].as_u64().unwrap())
+                    .collect();
+                let first = pages.block_offset.min(120) as u64;
+                let expected: Vec<u64> = (first..first + page_blocks as u64).filter(|from| *from < 119).collect();
+                assert_eq!(edges, expected, "{view:?}");
+                blocks += page_blocks;
+                references += page["references"]["items"].as_array().unwrap().len();
+                callees += page["callees"].as_array().unwrap().len();
+                if let Some(callee) = page["callees"].get(0) {
+                    assert_eq!(callee["calls"], 1, "{view:?}");
+                }
+                let next = |value: &Value| value.as_u64().map(|next| next as usize);
+                let (block, reference, callee) = (
+                    next(&page["graph"]["blocks_next_offset"]),
+                    next(&page["references"]["items_next_offset"]),
+                    next(&page["callees_next_offset"]),
+                );
+                if block.is_none() && reference.is_none() && callee.is_none() {
+                    break;
+                }
+                pages = SummaryPages {
+                    block_offset: block.unwrap_or(120),
+                    reference_offset: reference.unwrap_or(960),
+                    callee_offset: callee.unwrap_or(960),
+                };
+            }
+            assert_eq!((blocks, references, callees), (120, 960, 960), "{view:?}");
+        }
+        // A summary that fits is unchanged apart from its callee list.
+        let small = project_function_summary(native_function_summary(), ToolView::Summary, SummaryPages::default());
+        let small = small.unwrap();
+        assert_eq!(small["callees"], json!([]));
+        assert!(small.get("fitted").is_none());
+        // Exactly the shared projection plus callees, with the references page offset named items_offset.
+        for view in [ToolView::Summary, ToolView::Code] {
+            let mut expected =
+                project_tool_view(native_function_summary(), ToolViewKind::FunctionSummary, view).unwrap();
+            expected["callees"] = json!([]);
+            let references = expected["references"].as_object_mut().unwrap();
+            let offset = references.remove("offset").unwrap();
+            references.insert("items_offset".into(), offset);
+            let actual = project_function_summary(native_function_summary(), view, SummaryPages::default());
+            assert_eq!(actual.unwrap(), expected, "{view:?}");
+        }
     }
 
     #[test]

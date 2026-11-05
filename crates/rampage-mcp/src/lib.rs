@@ -591,6 +591,18 @@ impl RampageServer {
         Ok((json!({ "newly_enabled": newly_enabled, "groups": groups }), !newly.is_empty()))
     }
 
+    /// The input schema `list_tools` gives `name`, when this server serves it.
+    fn advertised_schema(&self, name: &str) -> Option<Value> {
+        if let Some(tool) = self.tools.iter().find(|tool| tool.name == name) {
+            return Some(Value::Object(with_binary_arguments(name, &tool.input_schema)));
+        }
+        if let Some(tool) = self.file_tools.iter().find(|tool| tool.name == name) {
+            return Some(tool.input_schema.clone());
+        }
+        // Debug tools check their own arguments, refusing options the operator has not allowed by name.
+        None
+    }
+
     /// Why `name` cannot be called now, when it belongs to a group that is not enabled.
     fn disabled_reason(&self, name: &str) -> Option<String> {
         let (group, _) = self.catalog().find(|(_, tool)| *tool == name)?;
@@ -659,13 +671,15 @@ impl RampageServer {
             };
             let mut project = if tool.reads_annotations {
                 let project =
-                    self.session.open_at(&PathBuf::from(path), arch, image).map_err(|error| error_text(&error))?;
+                    self.session.open_at(&PathBuf::from(path), arch, image).map_err(|error| open_error(&error))?;
                 // Other clients (the UI, the CLI) may have saved names since the last call.
                 project.refresh_annotations().map_err(|error| error_text(&error))?;
                 project
             } else {
                 let binary = rampage_loaders::Binary::open_image(path, image, arch);
-                let project = Project::new(binary.map_err(|error| error_text(&error))?);
+                let project = Project::new(binary.map_err(|source| {
+                    open_error(&rampage_api::ApiError::Load { path: PathBuf::from(path), source })
+                })?);
                 project.set_packs(self.packs());
                 Arc::new(project)
             };
@@ -710,6 +724,14 @@ impl RampageServer {
         // Raw annotations are memory-only and shared through the session, so there is no log to refresh.
         self.session.open_raw(path, &request).map_err(|error| format!("`raw`: {}", error_text(&error)))
     }
+}
+
+/// Why a native open failed; for a file without a recognised header, also how to read it as headerless code.
+fn open_error(error: &rampage_api::ApiError) -> String {
+    let text = error_text(error);
+    let headerless = matches!(error, rampage_api::ApiError::Load { source: rampage_loaders::LoadError::Parse(_), .. })
+        && text.contains("Unknown file magic");
+    if headerless { format!("{text}. {}", rampage_api::headerless_guidance()) } else { text }
 }
 
 /// An `image_offset` or `image_length` argument (see [`FileOffset`]); `null` means none.
@@ -795,6 +817,18 @@ impl ServerHandler for RampageServer {
                 reason
             };
             return Ok(CallToolResult::error(vec![ContentBlock::text(reason)]).into());
+        }
+        if let Some(schema) = self.advertised_schema(&name)
+            && let Err(message) = tools::check_arguments(&name, &schema, &arguments)
+        {
+            // The import tools answer every failure with their own JSON receipt.
+            let apply_requested = arguments.get("apply").map_or(Some(false), Value::as_bool);
+            let message = match name.as_str() {
+                "import_pdb_names" => tools::pdb_import_error(&message, apply_requested),
+                "import_debug_layouts" => tools::debug_layout_import_error(&message, apply_requested),
+                _ => message,
+            };
+            return Ok(CallToolResult::error(vec![ContentBlock::text(message)]).into());
         }
         let server = self.clone();
         // A cancelled request (notifications/cancelled, or the connection closing) sets the flag the debug tools

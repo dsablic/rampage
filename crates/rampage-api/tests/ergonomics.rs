@@ -78,7 +78,12 @@ fn five_project_views_delegate_to_one_projection_and_default_full_is_native_json
         for view in [ToolView::Full, ToolView::Summary, ToolView::Code] {
             let mut args = args.clone();
             args["view"] = serde_json::to_value(view).unwrap();
-            let expected = project_tool_view(raw.clone(), kind, view);
+            // function_summary's compact views add its callees and fit rather than refuse.
+            let expected = if kind == ToolViewKind::FunctionSummary {
+                rampage_api::project_function_summary(raw.clone(), view, rampage_api::SummaryPages::default())
+            } else {
+                project_tool_view(raw.clone(), kind, view)
+            };
             match expected {
                 Ok(expected) => assert_eq!(call(&project, name, args), expected, "{name}: {view:?}"),
                 Err(_) => {

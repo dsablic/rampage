@@ -228,7 +228,10 @@ impl Agent {
                 true
             },
             &mut || Ok(()),
-            &mut |tools, name, input| tools::call(tools, project, name, input),
+            &mut |tools, name, input| match tools::check_tool_arguments(tools, name, &input) {
+                Ok(()) => tools::call(tools, project, name, input),
+                Err(error) => (error, true),
+            },
         );
         if result.is_err() {
             self.messages.truncate(checkpoint);
@@ -289,6 +292,10 @@ impl Agent {
                 Ok(())
             },
             &mut |tools, name, input| {
+                // Unknown or missing arguments are refused, naming the tool's arguments, before admission.
+                if let Err(error) = tools::check_tool_arguments(tools, name, &input) {
+                    return (error, true);
+                }
                 let (result, stamp) = tools::call_shared_bound_revision(
                     tools,
                     &mut project.borrow_mut(),
@@ -715,6 +722,40 @@ mod tests {
         assert_eq!(results[0]["tool_use_id"], "t1");
         assert!(results[0]["content"].as_str().unwrap().contains("push"));
         assert!(requests[0]["tools"].as_array().unwrap().iter().all(|tool| tool["input_schema"]["type"] == "object"));
+    }
+
+    /// Benchmark v2: a call with `address`/`length` instead of `at`/`count` disassembled the entry point. The
+    /// assistant paths (ask, and ask_shared_cancellable, which the desktop UI uses) refuse it like MCP does.
+    #[test]
+    fn unknown_arguments_are_refused_on_both_assistant_paths() {
+        let script = || Script {
+            responses: Mutex::new(vec![
+                json!({
+                    "stop_reason": "tool_use",
+                    "content": [{
+                        "type": "tool_use", "id": "t1", "name": "disassemble",
+                        "input": { "address": "main", "length": 3 }
+                    }]
+                }),
+                json!({ "stop_reason": "end_turn", "content": [{ "type": "text", "text": "done" }] }),
+            ]),
+            requests: Mutex::new(Vec::new()),
+        };
+        let check = |script: &Script, events: &[Event]| {
+            assert!(matches!(&events[0], Event::Tool { name, failed: true, .. } if name == "disassemble"));
+            let requests = script.requests.lock().unwrap();
+            let result = requests[1]["messages"][2]["content"][0]["content"].as_str().unwrap().to_owned();
+            assert!(result.contains("unknown fields `address` (did you mean `at`?)"), "{result}");
+            assert!(result.contains("Arguments of disassemble:"), "{result}");
+        };
+        let project = project("hello-x64.elf");
+        let (borrowed, mut events) = (script(), Vec::new());
+        Agent::new(&project).ask(&borrowed, &project, "main?", &mut |event| events.push(event)).unwrap();
+        check(&borrowed, &events);
+        let shared = Arc::new(project);
+        let (script, mut events) = (script(), Vec::new());
+        Agent::new(&shared).ask_shared(&script, &shared, "main?", &mut |event| events.push(event)).unwrap();
+        check(&script, &events);
     }
 
     #[test]

@@ -36,6 +36,30 @@ fn recovers_class_names_and_base_edges_from_stripped_rtti() {
     assert!(recovery.rtti_classes.iter().all(|class| class.abi == "itanium"));
 }
 
+/// Benchmark v2: class_evidence found no classes in a stripped arm64 Mach-O built with the linker's default
+/// chained fixups, where typeinfo records hold chain-encoded rebases and binds instead of addresses.
+#[test]
+fn recovers_the_same_classes_through_chained_fixups() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/classes-chained-arm64.macho");
+    let binary = Binary::open(path).unwrap();
+    assert!(binary.has_chained_fixups());
+    let chained = rtti::recover(&binary).unwrap();
+    let names = |classes: &[rtti::RttiClass]| {
+        let mut names: Vec<(String, Vec<String>)> = classes
+            .iter()
+            .map(|class| {
+                let mut bases = class.bases.clone();
+                bases.sort();
+                (class.name.clone(), bases)
+            })
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(names(&chained), names(&rtti::recover(&fixture()).unwrap()));
+    assert_eq!(chained.len(), 4, "{chained:?}");
+}
+
 #[test]
 fn an_admitted_native_fixture_without_rtti_is_a_successful_empty_scan() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf");

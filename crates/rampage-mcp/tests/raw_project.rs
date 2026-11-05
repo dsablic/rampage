@@ -89,6 +89,38 @@ async fn call(client: &RunningService<RoleClient, Client>, tool: &str, arguments
     (text, result.is_error == Some(true))
 }
 
+/// Benchmark v2 firmware runs: 20 of rampage's 41 errors came from a headerless Cortex-M3 image. binary_info
+/// refused it without saying how to read it, and `raw` rejected `cortex-m3`, `thumb` and `ARM:LE:32:Cortex`
+/// without naming the right tool or profile.
+#[tokio::test]
+async fn headerless_files_and_unknown_profiles_say_what_to_use_instead() {
+    let fixture = FixtureCopy::new();
+    let client = connect().await;
+    let path = fixture.file().to_string_lossy().into_owned();
+    let (text, failed) = call(&client, "binary_info", json!({ "path": path })).await;
+    assert!(failed && text.contains("Unknown file magic"), "{text}");
+    assert!(text.contains("inspect_raw_code") && text.contains("\"profile\":\"msp430\""), "{text}");
+
+    let mut selector = raw(&[]);
+    for profile in ["cortex-m3", "thumb", "ARM:LE:32:Cortex", "armv7m"] {
+        selector["profile"] = json!(profile);
+        let (text, failed) = call(&client, "disassemble", json!({ "path": path, "raw": selector })).await;
+        assert!(failed && text.contains("with inspect_raw_code"), "{text}");
+        assert!(text.contains("\"mode\":\"thumb\""), "{text}");
+    }
+    selector["profile"] = json!("msp431");
+    let (text, failed) = call(&client, "disassemble", json!({ "path": path, "raw": selector })).await;
+    assert!(failed && text.contains("closest: TI_MSP430:LE:16:default"), "{text}");
+    // Aliases and any letter case select the reviewed profile.
+    for profile in ["msp430", "MSP430", "ti_msp430:le:16:default"] {
+        selector["profile"] = json!(profile);
+        let (text, failed) = call(&client, "binary_info", json!({ "path": path, "raw": selector })).await;
+        assert!(!failed, "{profile}: {text}");
+        assert!(text.contains("\"arch\":\"msp430\""), "{text}");
+    }
+    client.cancel().await.unwrap();
+}
+
 #[tokio::test]
 async fn raw_selector_is_offered_only_on_raw_capable_tools() {
     let client = connect().await;
