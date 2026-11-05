@@ -20,6 +20,11 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 that answer common first questions, such as `language_metadata` and `class_evidence` for class names and
 hierarchies, are in `core` so that a client deferring schemas still sees their names.
 
+Claude Code shows a model only the first 4,096 characters of the server instructions. The instructions therefore
+open with the essentials (how to enable groups, one line per group naming its key tools, the first calls, the debug
+consent and endpoints) and mark the start of the details; tests in `crates/rampage-mcp/src/lib.rs` keep the
+essentials at least 300 characters short of the cut. Put new detail after that mark or in a tool description.
+
 - `core`: `triage`, `binary_info`, `list_functions`, `disassemble`, `decompile`, `function_graph`,
   `assemble`, `patch_bytes`, `revert_patch`, `list_patches`, `export_patched`,
   `function_summary`, `xrefs`, `search`, `list_strings`, `list_imports`, `list_exports`, `rename`, `set_comment`,
