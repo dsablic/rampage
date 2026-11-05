@@ -1,6 +1,8 @@
 # Debugger on Windows targets (Phase 9.6): short design for review
 
-Status: **proposal, not approved.** Nothing here is implemented. The parent design
+Status: **Option A approved 2026-11-05** (RSP stub route first; Option B deferred behind its own design). No Windows
+VM was offered, so 9.6a ships with fake-stub coverage plus an opt-in live test against an operator-provided endpoint,
+and the docs mark it "not live-verified" until that test runs. The parent design
 (`docs/plans/2026-10-29-debugger-control.md`) requires a separate short design for Windows before any code. 9.1–9.4 are
 done, and 9.5 (macOS `debugserver`) is in progress.
 
