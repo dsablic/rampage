@@ -9,6 +9,7 @@ use rampage_loaders::Binary;
 use rampage_signatures::{SignatureDb, named_functions};
 use serde::Deserialize;
 
+mod agent_bench_run;
 mod parity;
 mod parity_completion;
 mod parity_graph_files;
@@ -87,6 +88,10 @@ enum Command {
     /// --min-recall or --min-precision). A toolid slice takes no --target: its truth names the binaries. A types
     /// slice decompiles every function of its type truth in the stripped target and scores one --metric.
     Run(Box<RunArgs>),
+    /// Run the canonical tasks head to head through an external agent runner (default: Claude Code via
+    /// tools/agent-bench/claude-runner.py) against each MCP server, sequentially, and score the answers.
+    /// This spends model usage. Prints the summary tables; records and private transcripts go to --out-dir.
+    AgentBench(Box<agent_bench_run::AgentBenchArgs>),
 }
 
 /// The heuristic family a slice evaluates.
@@ -264,6 +269,7 @@ fn main() -> ExitCode {
         Command::Strip { input, output, keep_symbols } => strip(&input, &output, keep_symbols),
         Command::StripPe { input, output } => strip_pe_file(&input, &output),
         Command::Run(args) => run(*args),
+        Command::AgentBench(args) => agent_bench_run::run(*args),
     };
     match result {
         Ok(code) => code,

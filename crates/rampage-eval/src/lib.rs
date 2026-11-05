@@ -16,6 +16,7 @@
 //!
 //! Whether a report is acceptable depends on the family, so the pass/fail rule is a separate [`Gate`].
 
+pub mod agent_bench;
 pub mod parity_agent;
 pub mod parity_graph;
 pub mod parity_opencode;
