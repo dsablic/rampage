@@ -291,6 +291,14 @@ class CommandTest(unittest.TestCase):
             self.assertIn("--bare", bare)
             self.assertNotIn("--setting-sources", bare)
             self.assertNotIn("--system-prompt", bare)
+            self.assertNotIn("--max-budget-usd", bare)
+
+    def test_a_budget_caps_the_session(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self.arguments(Path(directory))
+            arguments.max_budget_usd = 0.75
+            command = runner.claude_command(arguments, None, "bare")
+            self.assertEqual(command[command.index("--max-budget-usd") + 1], "0.7500")
 
     def test_isolation_mode_and_child_environment(self) -> None:
         self.assertEqual(runner.isolation_mode({"ANTHROPIC_API_KEY": "k"}), "bare")

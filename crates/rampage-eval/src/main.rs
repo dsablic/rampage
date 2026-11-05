@@ -10,6 +10,7 @@ use rampage_signatures::{SignatureDb, named_functions};
 use serde::Deserialize;
 
 mod agent_bench_run;
+mod flywheel_run;
 mod parity;
 mod parity_completion;
 mod parity_graph_files;
@@ -92,6 +93,16 @@ enum Command {
     /// tools/agent-bench/claude-runner.py) against each MCP server, sequentially, and score the answers.
     /// This spends model usage. Prints the summary tables; records and private transcripts go to --out-dir.
     AgentBench(Box<agent_bench_run::AgentBenchArgs>),
+    /// Measure a flywheel corpus split (train, heldout or fast) under the bundled databases, optionally with packs
+    /// layered over them: per-slice precision, recall and F1 with TP/FP/FN, deltas against the cached baseline and
+    /// the changed cases. Truth and baseline analysis are cached under the flywheel directory.
+    FlywheelEval(Box<flywheel_run::FlywheelEvalArgs>),
+    /// Run the flywheel's agent loop: start rampage's MCP server with --corpus, drive an agent through the runner
+    /// for up to --rounds sessions within --budget-usd, and write a run report under target/flywheel/runs/. This
+    /// spends model usage.
+    Flywheel(Box<flywheel_run::FlywheelArgs>),
+    /// Remove a promoted flywheel entry by its revert id, regenerating the promoted pack without it.
+    FlywheelRevert(flywheel_run::FlywheelRevertArgs),
 }
 
 /// The heuristic family a slice evaluates.
@@ -252,6 +263,9 @@ fn main() -> ExitCode {
         Command::StripPe { input, output } => strip_pe_file(&input, &output),
         Command::Run(args) => run(*args),
         Command::AgentBench(args) => agent_bench_run::run(*args),
+        Command::FlywheelEval(args) => flywheel_run::eval(*args),
+        Command::Flywheel(args) => flywheel_run::run(*args),
+        Command::FlywheelRevert(args) => flywheel_run::revert_entry(args),
     };
     match result {
         Ok(code) => code,
