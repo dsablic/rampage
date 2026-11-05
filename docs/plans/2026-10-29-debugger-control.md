@@ -1,10 +1,11 @@
 # Debugger execution control (Phase 9) — design for review
 
-Status: **approved 2026-10-29** with the decisions under "Approval decisions" below. 9.1–9.4 are done; 9.5
-(macOS `debugserver`) and 9.6a (Windows through RSP stubs) are implemented, with live acceptance pending. See
-[Phased delivery](#phased-delivery) and the user-facing [debug control guide](../debug-control.md). The parity roadmap requires an approved design
-before any launch, attach, resume, step, breakpoint or target-write code lands (`docs/plans/2026-10-16-ida-ghidra-
-parity-roadmap.md`, Phase 9; `todo.md` "execution-control debugger integration requires separate design/review").
+Status: **approved 2026-10-29** with the decisions under "Approval decisions" below. 9.1–9.4 are done; 9.5 (macOS
+`debugserver`) and 9.6a (Windows through RSP stubs) are implemented, with live acceptance pending. See
+[Phased delivery](#phased-delivery) and the user-facing [debug control guide](../debug-control.md). The parity
+roadmap requires an approved design before any launch, attach, resume, step, breakpoint or target-write code lands
+(`docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md`, Phase 9; `todo.md` "execution-control debugger integration
+requires separate design/review").
 
 ## Why now
 
