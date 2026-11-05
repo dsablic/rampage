@@ -362,6 +362,44 @@ fn byte_and_work_budgets_report_lower_bounds_not_complete_totals() {
     assert_eq!(report.stop_reason, SearchStopReason::MatchWorkBudget);
     assert_eq!(report.budget.match_work, 2);
     assert_eq!(report.scanned_bytes, 2);
+    // Byte patterns resume at the first start they could not afford to compare.
+    assert_eq!(report.resume_at, Some(0x1002));
+    assert_eq!(report.unscanned_ranges, [UnscannedRange { start: 0x1002, end: 0x1005 }]);
+}
+
+/// Benchmark v2: a 42-character text search over the 50 MB Hugo image stopped on match_work after 1.6 MB, with
+/// no hits, because each candidate start was charged the whole needle length. Exact text is charged one unit per
+/// candidate start, and a stopped scan says where to resume and what it left unscanned.
+#[test]
+fn exact_text_work_is_linear_in_the_haystack_and_a_stopped_scan_can_resume() {
+    let needle = "cascade is only supported for branch nodes";
+    let mut data = vec![b'x'; 8 * 1024 * 1024];
+    let at = data.len() - 1000;
+    data[at..at + needle.len()].copy_from_slice(needle.as_bytes());
+    let project = Project::new(snapshot(&[(0x1000, &data), (0x2000_0000, b"tail")]));
+    let mut query = text(needle, SearchTextEncoding::Ascii, false);
+    // Less than the old per-start charge of the needle length (8 MiB x 42), more than one unit per start.
+    query.budget.match_work = 9 * 1024 * 1024;
+    let report = project.search(&query).unwrap();
+    assert_eq!(addresses(&report), [0x1000 + at as u64]);
+    assert_eq!(report.stop_reason, SearchStopReason::Complete);
+    assert!(report.resume_at.is_none() && report.unscanned_ranges.is_empty());
+
+    query.budget.match_work = 1024 * 1024;
+    let report = project.search(&query).unwrap();
+    assert_eq!((report.total, report.stop_reason), (0, SearchStopReason::MatchWorkBudget));
+    let resume = report.resume_at.unwrap();
+    assert_eq!(resume, 0x1000 + 1024 * 1024);
+    assert_eq!(
+        report.unscanned_ranges,
+        [
+            UnscannedRange { start: resume, end: 0x1000 + data.len() as u64 },
+            UnscannedRange { start: 0x2000_0000, end: 0x2000_0004 }
+        ]
+    );
+    query.budget.match_work = MAX_SEARCH_MATCH_WORK;
+    query.range = Some(SearchRange { start: resume, end: 0x1000 + data.len() as u64 });
+    assert_eq!(addresses(&project.search(&query).unwrap()), [0x1000 + at as u64]);
 }
 
 #[test]

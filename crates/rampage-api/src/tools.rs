@@ -2152,7 +2152,8 @@ pub fn tools() -> Vec<Tool> {
              {\"kind\":\"string\",\"text\":\"hello\",\"encoding\":\"utf8\"}}}. Context defaults true. \
              offset/limit (1..1000) page hits, never restrict scan work. total_is_exact distinguishes exact totals \
              from observed lower bounds; stop_reason/budget explain incomplete scans. more/next_offset page \
-             observed rows even after incomplete scans, not scan resumption. Complete JSON stays within 60000 \
+             observed rows even after incomplete scans; a stopped byte/text scan gives resume_at and \
+             unscanned_ranges to continue from. Complete JSON stays within 60000 \
              bytes with whole hit rows and no wrapper string cutting. Native context truncation/provenance and \
              retained source paths are preserved. Capture file_offset is null. No annotations or source writes.",
             |project, request: crate::SearchRequest| project.search_page(&request),

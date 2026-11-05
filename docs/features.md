@@ -194,7 +194,9 @@ them. See [patching/export contracts](patching.md), [assembly grammar and limits
 The Core `search` tool and `binary search` CLI query mapped bytes, ASCII/Unicode UTF-16 text and regex,
 structured immediates, mnemonic/operand globs, and retained references or referencing functions. Results
 preserve function context, native evidence and address ordering; incomplete scans report lower-bound totals
-and explicit budgets rather than complete negative answers. See [search reference](search.md).
+and explicit budgets rather than complete negative answers. Exact text is matched in linear time against the
+budget, so a default search covers a 50 MB image, and a stopped byte/text scan says where to resume and which
+ranges it left unscanned. See [search reference](search.md).
 
 Search is static and read-only. Native preparation/scanning is bounded and cancellable after the existing
 non-interruptible analysis/cache initialization. Unmapped overlays, virtual gaps and zero-fill are not

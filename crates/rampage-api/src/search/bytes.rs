@@ -257,11 +257,16 @@ impl Matcher {
     }
 }
 
+/// Candidate starts searched per exact-needle chunk, between cancellation checks.
+const EXACT_CHUNK: usize = 1 << 20;
+
 struct Scan<'a> {
     query: &'a SearchQuery,
     control: &'a SearchControl<'a>,
     report: SearchReport,
     retained: Vec<SearchHit>,
+    /// The first address whose matches were not searched when a budget or cancellation stopped the scan.
+    resume_at: Option<u64>,
 }
 
 impl Scan<'_> {
@@ -302,7 +307,61 @@ impl Scan<'_> {
         true
     }
 
+    /// Exact needles: a linear substring search charging one unit of match work per candidate start, so the
+    /// default budget covers a whole large image instead of a few MiB of `length`-byte comparisons.
+    fn exact(&mut self, view: &VirtualBytes<'_>, size: usize, needle: &[u8], alignment: usize) {
+        let length = needle.len();
+        if size < length {
+            self.report.scanned_bytes += size as u64;
+            return;
+        }
+        let finder = memchr::memmem::Finder::new(needle);
+        let starts = size - length + 1;
+        let mut scratch = Vec::new();
+        let mut next = 0;
+        while next < starts {
+            if self.control.cancelled() {
+                self.report.stop_reason = SearchStopReason::Cancelled;
+                break;
+            }
+            let available = self.query.budget.match_work - self.report.budget.match_work;
+            let chunk = (starts - next).min(EXACT_CHUNK).min(usize::try_from(available).unwrap_or(usize::MAX));
+            if chunk == 0 {
+                self.report.stop_reason = SearchStopReason::MatchWorkBudget;
+                break;
+            }
+            self.report.budget.match_work += chunk as u64;
+            let window = view.window(next, chunk + length - 1, &mut scratch);
+            let mut from = 0;
+            let mut stopped = false;
+            while let Some(found) = finder.find(&window[from..]) {
+                let offset = next + from + found;
+                from += found + 1;
+                if alignment == 2 && !(view.address() + offset as u64).is_multiple_of(2) {
+                    continue;
+                }
+                if !self.hit(view, offset, length) {
+                    stopped = true;
+                    break;
+                }
+            }
+            next += chunk;
+            if stopped {
+                break;
+            }
+        }
+        self.report.scanned_bytes += if next == starts { size } else { next + length - 1 } as u64;
+        if matches!(self.report.stop_reason, SearchStopReason::MatchWorkBudget | SearchStopReason::Cancelled)
+            && next < starts
+        {
+            self.resume_at = Some(view.address() + next as u64);
+        }
+    }
+
     fn literals(&mut self, view: &VirtualBytes<'_>, size: usize, matcher: &Matcher, length: usize) {
+        if let Matcher::Exact { needle, alignment } = matcher {
+            return self.exact(view, size, needle, *alignment as usize);
+        }
         if size < length {
             self.report.scanned_bytes += size as u64;
             return;
@@ -316,6 +375,7 @@ impl Scan<'_> {
         let mut scratch = Vec::with_capacity(length);
         for offset in (first..=size - length).step_by(alignment) {
             if !self.charge(length as u64) {
+                self.resume_at = Some(view.address() + offset as u64);
                 break;
             }
             consumed = offset + length;
@@ -524,6 +584,8 @@ pub(super) fn search(
             budget: SearchBudgetEvidence { limits: query.budget, match_work: 0 },
             invalid_utf16_units: 0,
             utf16_trailing_bytes: 0,
+            resume_at: None,
+            unscanned_ranges: Vec::new(),
             limitations: [
                 "Byte/text results are content matches, not evidence of execution or references.",
                 "Only stored mapped bytes are searched; overlay, virtual gaps and zero-fill are excluded.",
@@ -545,27 +607,29 @@ pub(super) fn search(
             .collect(),
         },
         retained: Vec::new(),
+        resume_at: None,
     };
     if control.cancelled() {
         scan.report.stop_reason = SearchStopReason::Cancelled;
     }
-    for pieces in spans.chunk_by(|left, right| left.address + left.size == right.address) {
-        if scan.report.stop_reason != SearchStopReason::Complete {
-            break;
-        }
-        if control.cancelled() {
-            scan.report.stop_reason = SearchStopReason::Cancelled;
-            break;
-        }
-        let remaining = query.budget.scan_bytes - scan.report.scanned_bytes;
-        if remaining == 0 {
-            scan.report.stop_reason = SearchStopReason::ScanByteBudget;
-            break;
-        }
-        // Cutting a regex haystack would manufacture an end-of-run anchor at the budget boundary.
+    let domains: Vec<&[ByteSpan]> = spans.chunk_by(|left, right| left.address + left.size == right.address).collect();
+    let mut unscanned_from = None;
+    for (index, pieces) in domains.iter().copied().enumerate() {
         let view = VirtualBytes { pieces, image: project.binary.image_bytes() };
-        if matches!(matcher, Matcher::AsciiRegex(_) | Matcher::UnicodeRegex { .. }) && remaining < view.size() {
+        let remaining = query.budget.scan_bytes - scan.report.scanned_bytes;
+        if scan.report.stop_reason == SearchStopReason::Complete && control.cancelled() {
+            scan.report.stop_reason = SearchStopReason::Cancelled;
+        } else if scan.report.stop_reason == SearchStopReason::Complete
+            && (remaining == 0
+                // Cutting a regex haystack would manufacture an end-of-run anchor at the budget boundary.
+                || (matches!(matcher, Matcher::AsciiRegex(_) | Matcher::UnicodeRegex { .. })
+                    && remaining < view.size()))
+        {
             scan.report.stop_reason = SearchStopReason::ScanByteBudget;
+        }
+        if scan.report.stop_reason != SearchStopReason::Complete {
+            scan.resume_at = Some(view.address());
+            unscanned_from = Some(index);
             break;
         }
         let size = view.size().min(remaining) as usize;
@@ -578,7 +642,30 @@ pub(super) fn search(
         }
         if scan.report.stop_reason == SearchStopReason::Complete && size as u64 != view.size() {
             scan.report.stop_reason = SearchStopReason::ScanByteBudget;
+            if let Some(length) = matcher.literal_len() {
+                scan.resume_at = Some(view.address() + size.saturating_sub(length - 1) as u64);
+            }
         }
+        if scan.report.stop_reason != SearchStopReason::Complete {
+            // A domain stopped before it started (regex or no byte budget left) resumes at its start.
+            let end = view.address() + view.size();
+            let started = scan.resume_at.is_some_and(|at| at >= view.address() && at < end);
+            if !started && scan.report.stop_reason != SearchStopReason::ResultCap {
+                scan.resume_at.get_or_insert(view.address());
+            }
+            unscanned_from = Some(index);
+            break;
+        }
+    }
+    if let (Some(index), Some(resume)) = (unscanned_from, scan.resume_at) {
+        for pieces in &domains[index..] {
+            let last = pieces.last().expect("domain has a piece");
+            let (start, end) = (pieces[0].address.max(resume), last.address + last.size);
+            if start < end {
+                scan.report.unscanned_ranges.push(UnscannedRange { start, end });
+            }
+        }
+        scan.report.resume_at = Some(resume);
     }
     scan.report.total_is_exact = scan.report.stop_reason == SearchStopReason::Complete;
     scan.report.truncated = !scan.report.total_is_exact;

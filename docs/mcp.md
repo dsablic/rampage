@@ -125,6 +125,11 @@ Binary tools take `path`, optional `arch`, and optional `image_offset`/`image_le
 symbols, exports, import-stub names and `sub_<hex>`. Runtime comparison slots/ranges and branch windows require
 explicit hexadecimal addresses. See [CLI global options](cli-reference.md#global-options-and-addresses).
 
+A byte or text `search` charges one unit of match work per candidate start for exact text, so the default
+budget covers a 50 MB image; byte patterns with wildcards still charge their length per start. When a budget or
+cancellation stops a byte/text scan, the report gives `resume_at` (search again with `range.start` there) and
+`unscanned_ranges`, and the page a `scan_resume` hint.
+
 List queries use `offset`/`limit`, generally defaulting to 100 entries and capped at 1000. `list_functions`
 filters with `name_contains`; strings/imports/exports filter with `contains`. Disassembly counts are capped at
 1000. Large ordinary binary-tool results can be truncated after 60,000 UTF-8 bytes with an added text marker;

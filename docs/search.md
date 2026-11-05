@@ -125,6 +125,13 @@ instructions and 100,000 results. Byte patterns contain at most 4,096 bytes; reg
 cache are each capped at 1 MiB. Mappings are also bounded. Reports distinguish instruction, source-byte,
 reference and matching-work counters rather than presenting them as physical I/O measurements.
 
+Exact text (ASCII or UTF-16) is matched with a linear substring search and charged one matching-work unit per
+candidate start, so the default budget covers about 64 MB of mapped bytes; byte patterns with wildcards are
+charged their length per candidate start. When a budget or cancellation stops a byte/text scan, the report
+gives `resume_at`, the first address whose matches were not searched, and `unscanned_ranges`; searching again
+with `range.start` at `resume_at` continues the scan. A regex scan resumes at the start of the domain it stopped
+in, which may repeat that domain's earlier hits.
+
 Decoder windows and required semantic lookahead are charged before use. Pointer/literal probes consume
 the same inspection budget; duplicate probes within one instruction can reuse checked bytes. Unaccepted
 decoder windows still count as inspected source. `inspected_code_bytes` is supplementary evidence and must
