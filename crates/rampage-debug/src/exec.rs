@@ -120,6 +120,38 @@ pub struct Breakpoint {
     pub hits: u64,
     /// Whether the stub holds it. A process that exited takes its breakpoints with it.
     pub inserted: bool,
+    /// A temporary breakpoint of a step over or out: removed at the next stop, whatever stops the target.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub temporary: bool,
+    /// Where the caller placed it from, when it gave a static location rather than a runtime address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<Placement>,
+}
+
+/// The static location a breakpoint was placed from: a bound project's address, its module and the function there.
+/// It is recorded with the entry as given; this crate does not interpret it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Placement {
+    #[serde(serialize_with = "hex_address")]
+    pub static_address: u64,
+    /// The bound project's path.
+    pub path: String,
+    pub module: String,
+    pub function: Option<String>,
+    pub offset_in_function: Option<u64>,
+}
+
+/// What became of a temporary breakpoint at the stop that removed it (or tried to).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TemporaryOutcome {
+    pub id: u32,
+    #[serde(serialize_with = "hex_address")]
+    pub address: u64,
+    /// Whether this stop is the temporary breakpoint's hit.
+    pub hit: bool,
+    /// Whether it is gone from the stub and the table.
+    pub removed: bool,
+    pub error: Option<String>,
 }
 
 impl Breakpoint {
@@ -177,6 +209,9 @@ pub enum StopCause {
     Watchpoint,
     /// A single step completed.
     Step,
+    /// The temporary breakpoint of a step over or out, and no breakpoint of the table.
+    #[serde(rename = "temporary_breakpoint")]
+    Temporary,
     /// The stop that answered rampage's interrupt.
     Interrupted,
     /// Any other signal: a fault, a SIGTRAP no table entry explains, a signal from elsewhere.
@@ -220,6 +255,9 @@ pub struct StopEvent {
     pub console: Console,
     /// Things that went wrong without failing the stop, such as a breakpoint not re-inserted after a step past it.
     pub warnings: Vec<String>,
+    /// Temporary breakpoints this stop removed (or failed to), and whether it was their hit.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub temporary: Vec<TemporaryOutcome>,
 }
 
 /// At most [`MAX_EVENT_REASONS`] of `stop`'s reasons.
@@ -319,7 +357,7 @@ mod tests {
     use super::*;
 
     fn entry(id: u32, kind: BreakKind, address: u64, size: u64) -> Breakpoint {
-        Breakpoint { id, kind, address, size, hits: 0, inserted: true }
+        Breakpoint { id, kind, address, size, hits: 0, inserted: true, temporary: false, placement: None }
     }
 
     fn signal(text: &str) -> StopReply {

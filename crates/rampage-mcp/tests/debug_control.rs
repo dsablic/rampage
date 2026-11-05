@@ -14,11 +14,13 @@ use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::{RoleClient, RunningService};
 use serde_json::{Value, json};
 
-const DEBUG_TOOLS: [&str; 12] = [
+const DEBUG_TOOLS: [&str; 14] = [
+    "debug_bind",
     "debug_breakpoints",
     "debug_connect",
     "debug_continue",
     "debug_disconnect",
+    "debug_evidence",
     "debug_interrupt",
     "debug_modules",
     "debug_read_memory",
@@ -94,7 +96,7 @@ async fn debug_tools_inspect_snapshot_and_detach_through_mcp() {
     let listing = json_of(&call(&client, "enable_tools", json!({})).await);
     let group = listing["groups"].as_array().unwrap().iter().find(|group| group["name"] == "debug").unwrap();
     assert_eq!(group["enabled"], false);
-    assert_eq!(group["tool_count"], 12);
+    assert_eq!(group["tool_count"], 14);
     assert!(!names(&client).await.iter().any(|name| name.starts_with("debug_")));
     let disabled = call(&client, "debug_connect", json!({})).await;
     assert!(text(&disabled).contains("not enabled"));
@@ -119,6 +121,15 @@ async fn debug_tools_inspect_snapshot_and_detach_through_mcp() {
     assert_eq!(memory["data"][0]["hex"], "0000012049000000");
     let modules = json_of(&call(&client, "debug_modules", json!({ "session": "s1" })).await);
     assert_eq!(modules["regions"].as_array().unwrap().len(), 2);
+    // The transcript maps only the first 8 bytes of flash, so the firmware does not match without a slide; given
+    // one, it binds through the server's project session and reports the unverifiable slide.
+    let firmware = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware/cortex-m3.elf");
+    let unmatched = call(&client, "debug_bind", json!({ "session": "s1", "path": firmware })).await;
+    assert!(text(&unmatched).starts_with("no_module_match"), "{}", text(&unmatched));
+    let bound = json_of(&call(&client, "debug_bind", json!({ "session": "s1", "path": firmware, "slide": 0 })).await);
+    assert_eq!(bound["binding"]["evidence"]["kind"], "explicit_slide");
+    let status = json_of(&call(&client, "debug_status", json!({ "session": "s1" })).await);
+    assert_eq!(status["bindings"][0]["slide"], "0x0");
     let unknown = call(&client, "debug_status", json!({ "session": "s7" })).await;
     assert!(text(&unknown).starts_with("unknown_session"));
 

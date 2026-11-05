@@ -863,7 +863,7 @@ fn hex_address_digits(text: &str) -> Option<&str> {
 }
 
 /// The address in a default function name `sub_<hex>`, as `resolve` reads it.
-fn default_name_address(text: &str) -> Option<u64> {
+pub(crate) fn default_name_address(text: &str) -> Option<u64> {
     text.strip_prefix("sub_").and_then(|hex| u64::from_str_radix(hex, 16).ok())
 }
 

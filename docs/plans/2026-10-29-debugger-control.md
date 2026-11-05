@@ -102,7 +102,7 @@ recorded in the project's findings ledger with the debug session as evidence.
 |---|---|---|
 | 9.1 | **Done 2026-10-29** (`55f9f22`; live QEMU Cortex-M3 acceptance passes). `rampage-debug` crate: framing, parser fuzzing, scripted fake stub for tests; read-only tools (`connect`, `status`, `registers`, `read_memory`, `modules`, `snapshot`, `disconnect` with detach). No execution. | Low: equivalent to today's read-only LLDB bridge over a different transport. |
 | 9.2 | **Done 2026-11-04** (`aea1240`; live QEMU Cortex-M3 acceptance passes). Execution control: continue/wait/interrupt, step, breakpoints and watchpoints; stop epochs enforced. | Medium. |
-| 9.3 | Static correlation: binding, slides, symbolic breakpoints, step-over via rampage decoders, stop-location enrichment. | Medium. |
+| 9.3 | **Done 2026-11-05** (`5dd53a7`; live QEMU Cortex-M3 acceptance passes). Static correlation: binding, slides, symbolic breakpoints, step-over via rampage decoders, stop-location enrichment. | Medium. |
 | 9.4 | Writes behind `--debug-writes`; kill behind `--debug-kill`. | Higher; reviewed separately. |
 | 9.5 | macOS `debugserver` acceptance (RSP plus LLDB extensions); evaluate driving LLDB's SB API through the existing bridge for crash/core files. | Platform-dependent. |
 | 9.6 | Windows: separate short design (dbgeng vs. a GDB stub such as a Windows gdbserver). Not started before 9.1–9.4 land. | — |
@@ -161,3 +161,26 @@ Each step follows the wave cadence: implementation, fresh-context review, fixes,
   so `debug_continue` removes the breakpoints at the pc, single-steps the thread and re-inserts them first. Without
   `vCont`, an `Hc<thread>` step is undone with `Hc-1` before a plain `c` (added to the execution class); a stub
   refusing it is not continued.
+- **9.3, step out:** only from a function's first instruction in a bound project, where the ABI's return address
+  (lr, x30, ra, `[rsp]`/`[esp]`) is reliable; elsewhere it is refused rather than guessed. Frame unwinding would
+  lift this and is not in 9.3.
+- **9.3, frames:** a step over or out checks the thread and stack pointer at the return address and stops,
+  reported as `inner_frame` or `other_thread`, when a recursive frame or another thread got there first, rather
+  than running on until the right frame arrives.
+- **9.3, temporary breakpoints:** all-stop stubs cannot take a breakpoint out while the target runs, so a step
+  over or out that times out or is cancelled leaves its temporary breakpoint inserted until the next stop (which
+  removes it whatever it is) or the disconnect. A table breakpoint at the same address stands in for it.
+- **9.3, plain steps:** `debug_step` without `over` still does not take breakpoints at the pc out (QEMU steps
+  anyway); `over` does, for calls and single steps alike.
+- **9.3, findings:** ledger evidence is a `{tool, detail}` reference of at most 300 bytes, so `debug_evidence`
+  returns the structured record in its result and a compact text item for `record_finding`; the ledger format is
+  unchanged.
+- **9.3, agent-level scorecard task:** not added. The parity runner (`crates/rampage-eval/src/parity_agent.rs`)
+  serves an in-memory `RampageServer` without a debug registry, allows only listed read-only tools plus opt-in edit
+  classes, requires every call's `path` to be the fixture (debug tools take a `session`), and has no harness-owned
+  emulator lifecycle; its answers must be deterministic, and the firmware's `tick` returns nothing. Adding it needs
+  a QEMU-owning task kind, an execution-effect permission class for the debug tools and `record_finding`, and a
+  firmware function with arguments and a return value. The live acceptance runs the same sequence through the tool
+  layer instead (break on a named function, read registers, step out, record a finding with `debug_evidence`).
+- **9.3, stop locations:** `debug_status`'s `last_stop` is not located; the results of continue, wait, interrupt
+  and step are.

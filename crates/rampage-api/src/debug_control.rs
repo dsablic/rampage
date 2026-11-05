@@ -70,6 +70,10 @@ pub struct DebugRegistry {
     reserved: Mutex<usize>,
     next: AtomicU32,
     config: Config,
+    /// Projects bound to each session's modules, by session number.
+    pub(crate) bindings: Mutex<BTreeMap<u32, Vec<Arc<crate::debug_correlation::Binding>>>>,
+    /// Where projects open when a caller gives no project session of its own (see [`crate::tools::DebugTool`]).
+    pub(crate) projects: Arc<crate::Session>,
 }
 
 impl std::fmt::Debug for DebugRegistry {
@@ -78,7 +82,7 @@ impl std::fmt::Debug for DebugRegistry {
     }
 }
 
-fn failure(code: &str, message: impl std::fmt::Display) -> ApiError {
+pub(crate) fn failure(code: &str, message: impl std::fmt::Display) -> ApiError {
     let text = format!("{code}: {message}");
     match code {
         "unknown_session" => ApiError::NotFound(text),
@@ -87,7 +91,7 @@ fn failure(code: &str, message: impl std::fmt::Display) -> ApiError {
     }
 }
 
-fn debug_failure(error: rampage_debug::DebugError) -> ApiError {
+pub(crate) fn debug_failure(error: rampage_debug::DebugError) -> ApiError {
     failure(error.code(), error)
 }
 
@@ -107,6 +111,8 @@ impl DebugRegistry {
             reserved: Mutex::default(),
             next: AtomicU32::new(1),
             config: Config::default(),
+            bindings: Mutex::default(),
+            projects: Arc::default(),
         })
     }
 
@@ -126,8 +132,13 @@ impl DebugRegistry {
         self.endpoints.iter().map(|(text, _)| text.clone()).collect()
     }
 
-    fn session(&self, id: &str) -> Result<Arc<Session>, ApiError> {
-        let number = id.strip_prefix('s').and_then(|number| number.parse::<u32>().ok());
+    /// Whether session number `number` is still open.
+    pub(crate) fn has_session(&self, number: u32) -> bool {
+        self.sessions.lock().unwrap_or_else(PoisonError::into_inner).contains_key(&number)
+    }
+
+    pub(crate) fn session(&self, id: &str) -> Result<Arc<Session>, ApiError> {
+        let number = session_number(id);
         let sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
         number
             .and_then(|number| sessions.get(&number).cloned())
@@ -234,6 +245,7 @@ impl DebugRegistry {
             }),
             waiting: status.waiting,
             console: status.console,
+            bindings: self.binding_views(id),
             threads: FittedPage::empty(),
         };
         let budget = item_budget(&result)?;
@@ -263,6 +275,22 @@ impl DebugRegistry {
         limit: Option<usize>,
         epoch: Option<u64>,
     ) -> Result<DebugRegisters, ApiError> {
+        self.registers_annotated(id, thread, names, offset, limit, epoch, false)
+    }
+
+    /// [`DebugRegistry::registers_at`]; with `annotate`, each value that points into a bound module also gets the
+    /// static address and the function, symbol or string it points at.
+    #[allow(clippy::too_many_arguments)]
+    pub fn registers_annotated(
+        &self,
+        id: &str,
+        thread: Option<&str>,
+        names: Option<&[String]>,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        epoch: Option<u64>,
+        annotate: bool,
+    ) -> Result<DebugRegisters, ApiError> {
         let session = self.session(id)?;
         let thread = thread.map(parse_thread).transpose()?;
         if let Some(names) = names {
@@ -282,23 +310,36 @@ impl DebugRegistry {
             }
         }
         let registers = session.registers_at(thread, epoch).map_err(debug_failure)?;
+        let mut limitations = match registers.byte_order {
+            ByteOrder::Unknown => vec![format!(
+                "data byte order is unknown ({}); `value` is null and `bytes` are as the stub sent them",
+                session.info().byte_order_evidence
+            )],
+            _ => Vec::new(),
+        };
+        let annotations = if annotate {
+            let (annotations, notes) = self.annotate_registers(id, &session, &registers.registers);
+            limitations.extend(notes);
+            annotations
+        } else {
+            Vec::new()
+        };
         let selected: Vec<_> = registers
             .registers
             .into_iter()
-            .filter(|register| names.is_none_or(|names| names.contains(&register.name)))
+            .enumerate()
+            .filter(|(_, register)| names.is_none_or(|names| names.contains(&register.name)))
+            .map(|(index, register)| crate::debug_correlation::AnnotatedRegister {
+                register,
+                points_to: annotations.get(index).cloned().flatten(),
+            })
             .collect();
         let mut result = DebugRegisters {
             session: id.to_owned(),
             thread: registers.thread,
             epoch: registers.epoch,
             endianness: registers.byte_order,
-            limitations: match registers.byte_order {
-                ByteOrder::Unknown => vec![format!(
-                    "data byte order is unknown ({}); `value` is null and `bytes` are as the stub sent them",
-                    session.info().byte_order_evidence
-                )],
-                _ => Vec::new(),
-            },
+            limitations,
             registers: FittedPage::empty(),
         };
         let budget = item_budget(&result)?;
@@ -397,7 +438,8 @@ impl DebugRegistry {
             result.limitations.push(format!("only the first 256 of {regions_total} memory-map regions are listed"));
         }
         result.limitations.push(
-            "modules are not matched to files on disk or to a project; l_addr is a load bias, not a header address"
+            "modules are matched to projects only by debug_bind (debug_status lists bindings); l_addr is a load \
+             bias, not a header address"
                 .into(),
         );
         let budget = item_budget(&result)?;
@@ -409,7 +451,7 @@ impl DebugRegistry {
     /// the session open and attached: the result says so, and disconnecting can be retried.
     pub fn disconnect(&self, id: &str) -> Result<DebugDisconnected, ApiError> {
         let session = self.session(id)?;
-        let number = id.strip_prefix('s').and_then(|number| number.parse::<u32>().ok()).expect("a known session id");
+        let number = session_number(id).expect("a known session id");
         let (state, error, closed, removed, failures) = match session.detach() {
             Ok(detached) => {
                 let error = match &detached.state {
@@ -431,6 +473,7 @@ impl DebugRegistry {
         };
         if closed {
             self.sessions.lock().unwrap_or_else(PoisonError::into_inner).remove(&number);
+            self.bindings.lock().unwrap_or_else(PoisonError::into_inner).remove(&number);
         }
         Ok(DebugDisconnected {
             session: id.to_owned(),
@@ -448,7 +491,7 @@ impl DebugRegistry {
     pub fn resume(&self, id: &str, epoch: u64, timeout_ms: Option<u64>, cancel: &Cancel) -> Result<DebugRun, ApiError> {
         let session = self.session(id)?;
         let run = session.resume(Some(epoch), run_wait(timeout_ms)?, cancel).map_err(debug_failure)?;
-        Ok(DebugRun { session: id.to_owned(), run })
+        Ok(self.run_result(id, &session, run))
     }
 
     /// Waits up to `timeout_ms` (default 5000, at most 60000) for a running target to stop; a target that is not
@@ -456,14 +499,23 @@ impl DebugRegistry {
     pub fn wait(&self, id: &str, timeout_ms: Option<u64>, cancel: &Cancel) -> Result<DebugRun, ApiError> {
         let session = self.session(id)?;
         let run = session.wait(run_wait(timeout_ms)?, cancel).map_err(debug_failure)?;
-        Ok(DebugRun { session: id.to_owned(), run })
+        Ok(self.run_result(id, &session, run))
     }
 
     /// Sends the interrupt byte to a running target and waits up to 3 s for its stop.
     pub fn interrupt(&self, id: &str, cancel: &Cancel) -> Result<DebugRun, ApiError> {
         let session = self.session(id)?;
         let run = session.interrupt(rampage_debug::INTERRUPT_WAIT, cancel).map_err(debug_failure)?;
-        Ok(DebugRun { session: id.to_owned(), run })
+        Ok(self.run_result(id, &session, run))
+    }
+
+    /// A run's result, with the stop's locations in the bound projects when it stopped.
+    pub(crate) fn run_result(&self, id: &str, session: &Session, run: rampage_debug::Run) -> DebugRun {
+        let locations = match (&run.state, &run.event) {
+            (rampage_debug::State::Stopped, Some(event)) => Some(self.stop_locations(id, session, event)),
+            _ => None,
+        };
+        DebugRun { session: id.to_owned(), run, locations }
     }
 
     /// Single-steps `thread` (the stop's thread when omitted) `count` (1..=1000, default 1) instructions at `epoch`.
@@ -478,7 +530,11 @@ impl DebugRegistry {
         let session = self.session(id)?;
         let thread = thread.map(parse_thread).transpose()?;
         let steps = session.step(Some(epoch), thread, count.unwrap_or(1), cancel).map_err(debug_failure)?;
-        Ok(DebugSteps { session: id.to_owned(), steps })
+        let locations = match (&steps.state, &steps.event) {
+            (rampage_debug::State::Stopped, Some(event)) => Some(self.stop_locations(id, &session, event)),
+            _ => None,
+        };
+        Ok(DebugSteps { session: id.to_owned(), steps, locations })
     }
 
     /// Inserts a breakpoint or watchpoint at a runtime `address`, at `epoch`. `size` is a breakpoint's instruction
@@ -552,22 +608,14 @@ impl DebugRegistry {
     ) -> Result<DebugSnapshot, ApiError> {
         let session = self.session(id)?;
         let info = session.info();
-        let arch = match info.family {
-            Family::X86 => Arch::X86,
-            Family::X86_64 => Arch::X86_64,
-            Family::Aarch64 => Arch::Aarch64,
-            Family::Arm => Arch::Arm,
-            Family::Riscv32 => Arch::Riscv32,
-            Family::Riscv64 => Arch::Riscv64,
-            Family::Other => {
-                return Err(failure(
-                    "unsupported",
-                    format!(
-                        "the target architecture `{}` has no rampage snapshot architecture",
-                        info.architecture.as_deref().unwrap_or("unknown")
-                    ),
-                ));
-            }
+        let Some(arch) = family_arch(info.family) else {
+            return Err(failure(
+                "unsupported",
+                format!(
+                    "the target architecture `{}` has no rampage snapshot architecture",
+                    info.architecture.as_deref().unwrap_or("unknown")
+                ),
+            ));
         };
         let data_big_endian = match info.byte_order {
             ByteOrder::Little => false,
@@ -781,6 +829,24 @@ impl Drop for DebugRegistry {
     }
 }
 
+/// The session number of a session ID (`s3` is 3).
+pub(crate) fn session_number(id: &str) -> Option<u32> {
+    id.strip_prefix('s').and_then(|number| number.parse::<u32>().ok())
+}
+
+/// The rampage architecture of a target family, when it has one.
+pub(crate) fn family_arch(family: Family) -> Option<Arch> {
+    match family {
+        Family::X86 => Some(Arch::X86),
+        Family::X86_64 => Some(Arch::X86_64),
+        Family::Aarch64 => Some(Arch::Aarch64),
+        Family::Arm => Some(Arch::Arm),
+        Family::Riscv32 => Some(Arch::Riscv32),
+        Family::Riscv64 => Some(Arch::Riscv64),
+        Family::Other => None,
+    }
+}
+
 /// The snapshot `thread_id` of `thread`: its thread ID, or with several processes `pid << 32 | tid`, so threads
 /// of different processes with the same thread ID stay distinct. `0x0` stands for the stub's current thread when it
 /// lists none.
@@ -851,7 +917,7 @@ fn page(limit: Option<usize>) -> usize {
     limit.unwrap_or(DEFAULT_THREAD_PAGE).clamp(1, 1000)
 }
 
-fn parse_thread(text: &str) -> Result<ThreadId, ApiError> {
+pub(crate) fn parse_thread(text: &str) -> Result<ThreadId, ApiError> {
     ThreadId::parse(text).ok_or_else(|| {
         failure("invalid_argument", format!("`{text}` is not a thread ID (hex `tid` or `p<pid>.<tid>`, as listed)"))
     })
@@ -954,6 +1020,8 @@ pub struct DebugStatus {
     /// Calls in progress that wait for the target to stop.
     pub waiting: usize,
     pub console: rampage_debug::Console,
+    /// Projects bound to the session's modules (debug_bind).
+    pub bindings: Vec<crate::debug_correlation::BindingView>,
     pub threads: FittedPage<rampage_debug::ThreadInfo>,
 }
 
@@ -963,6 +1031,9 @@ pub struct DebugRun {
     pub session: String,
     #[serde(flatten)]
     pub run: rampage_debug::Run,
+    /// Where the stop is in the bound projects: the pc, each matched breakpoint and the watch address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locations: Option<crate::debug_correlation::StopLocations>,
 }
 
 #[derive(Debug, Serialize)]
@@ -970,6 +1041,9 @@ pub struct DebugSteps {
     pub session: String,
     #[serde(flatten)]
     pub steps: rampage_debug::Steps,
+    /// Where the final stop is in the bound projects.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locations: Option<crate::debug_correlation::StopLocations>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1015,7 +1089,7 @@ impl From<DebugBreakKind> for BreakKind {
     }
 }
 
-fn run_wait(timeout_ms: Option<u64>) -> Result<std::time::Duration, ApiError> {
+pub(crate) fn run_wait(timeout_ms: Option<u64>) -> Result<std::time::Duration, ApiError> {
     let timeout = timeout_ms.unwrap_or(DEFAULT_RUN_WAIT_MS);
     if timeout > MAX_RUN_WAIT_MS {
         return Err(failure("invalid_argument", format!("timeout_ms must be at most {MAX_RUN_WAIT_MS}")));
@@ -1030,7 +1104,7 @@ pub struct DebugRegisters {
     pub epoch: u64,
     pub endianness: ByteOrder,
     pub limitations: Vec<String>,
-    pub registers: FittedPage<rampage_debug::RegisterValue>,
+    pub registers: FittedPage<crate::debug_correlation::AnnotatedRegister>,
 }
 
 #[derive(Debug, Serialize)]

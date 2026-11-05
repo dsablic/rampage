@@ -127,9 +127,13 @@ const INSTRUCTIONS_DEBUG: &str = "\
 Debug: the operator allowed GDB remote stubs at these endpoints: {endpoints}. debug_connect opens a session (the \
 stub must already be running; rampage launches and attaches to nothing), then debug_status, debug_registers, \
 debug_read_memory and debug_modules inspect the stopped target and debug_snapshot writes a rampage-snapshot-v1 file \
-the other tools can open. Execution control is all-stop: debug_breakpoints sets hardware or software breakpoints and \
-watchpoints at runtime addresses, debug_continue resumes without delivering a signal and waits for the stop, \
-debug_wait waits again, debug_interrupt stops a running target, debug_step single-steps. Each stop is a new epoch; \
+the other tools can open. debug_bind (or debug_connect with path) binds a binary to a runtime module with a verified \
+slide; then breakpoints take a static_address or function name, stops report locations (function, offset, \
+show_address), debug_registers annotate: true says what values point at, and debug_evidence gives an evidence item \
+for record_finding. Execution control is all-stop: debug_breakpoints sets hardware or software breakpoints and \
+watchpoints, debug_continue resumes without delivering a signal and waits for the stop, debug_wait waits again, \
+debug_interrupt stops a running target, debug_step single-steps, steps over calls (over) or out of a function from \
+its entry (out). Each stop is a new epoch; \
 pass the epoch you last saw to execution tools (stale_epoch otherwise) and optionally to reads. debug_disconnect \
 removes breakpoints and detaches, which lets the target run. Nothing writes registers or memory or kills; runtime \
 bytes stay local.";
@@ -470,7 +474,8 @@ impl RampageServer {
             if raw.is_some() {
                 return CallToolResult::error(vec![ContentBlock::text(raw_refusal(name))]);
             }
-            return match tool.call_cancellable(registry, Value::Object(arguments), cancel) {
+            // Bound projects open in the server's session, sharing its cache with the project tools.
+            return match tool.call_in(registry, &self.session, Value::Object(arguments), cancel) {
                 Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
                 Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
             };

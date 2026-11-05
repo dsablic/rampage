@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::{Effect, MAX_RESULT_CHARS, arguments, error_chain, schema};
-use crate::{DebugBreakKind, DebugRange, DebugRegistry, FileOffset};
+use crate::{BreakTarget, DebugBreakKind, DebugRange, DebugRegistry, EvidenceRange, FileOffset, Session};
 
 /// A tool that works on the debug sessions of one MCP connection.
 pub struct DebugTool {
@@ -16,7 +16,7 @@ pub struct DebugTool {
     pub description: &'static str,
     pub input_schema: Value,
     pub effect: Effect,
-    handler: fn(&DebugRegistry, Value, &Cancel) -> Result<Value, String>,
+    handler: fn(&DebugRegistry, &Session, Value, &Cancel) -> Result<Value, String>,
 }
 
 impl DebugTool {
@@ -24,13 +24,25 @@ impl DebugTool {
         self.call_cancellable(registry, input, &Cancel::default())
     }
 
-    /// Calls the tool; setting `cancel` ends a wait early (the target is not touched) and stops a long read or
-    /// snapshot between chunks.
+    /// Calls the tool, opening bound projects in the registry's own project session; setting `cancel` ends a wait
+    /// early (the target is not touched) and stops a long read or snapshot between chunks.
     pub fn call_cancellable(&self, registry: &DebugRegistry, input: Value, cancel: &Cancel) -> Result<Value, String> {
+        self.call_in(registry, &registry.projects, input, cancel)
+    }
+
+    /// [`DebugTool::call_cancellable`], opening the projects `debug_bind` binds in `projects` (the server's
+    /// session), so they share its project cache with the project tools.
+    pub fn call_in(
+        &self,
+        registry: &DebugRegistry,
+        projects: &Session,
+        input: Value,
+        cancel: &Cancel,
+    ) -> Result<Value, String> {
         if input.to_string().len() > 65_536 {
             return Err("invalid_argument: debug tool arguments exceed 65536 bytes".into());
         }
-        (self.handler)(registry, input, cancel)
+        (self.handler)(registry, projects, input, cancel)
     }
 }
 
@@ -49,6 +61,38 @@ struct ConnectArgs {
     /// One of the endpoints the operator allowed, exactly as listed (`host:port` or `unix:/path`). May be omitted
     /// when exactly one is allowed.
     endpoint: Option<String>,
+    /// A binary to bind after connecting, as debug_bind does: the main executable or the firmware.
+    path: Option<String>,
+    /// With path: as debug_bind's module.
+    module: Option<String>,
+    /// With path: as debug_bind's slide.
+    slide: Option<FileOffset>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BindArgs {
+    session: String,
+    /// The binary to bind (the original image, not a snapshot); opened like the project tools open it.
+    path: String,
+    /// Only a runtime module with this path or file name (as debug_modules lists it); for a target without a
+    /// module list, the label the binding gets. Binding the same module again replaces it.
+    module: Option<String>,
+    /// runtime = static + slide (hex string or integer). Needed only when no module matches; still verified
+    /// against target memory and reported.
+    slide: Option<FileOffset>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EvidenceArgs {
+    session: String,
+    /// The stop epoch the caller expects; refused with stale_epoch when the session has moved on.
+    epoch: Option<u64>,
+    /// 1..=8 registers to record; by default the pc, stack pointer, return-address register and first arguments.
+    names: Option<Vec<String>>,
+    /// At most 4 runtime memory ranges of 1..=64 bytes to record.
+    memory: Option<Vec<EvidenceRange>>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -76,6 +120,9 @@ struct RegistersArgs {
     limit: Option<usize>,
     /// The stop epoch the caller expects; refused with stale_epoch when the session has moved on.
     epoch: Option<u64>,
+    /// Also report, for each value that points into a bound project, the static address and the function,
+    /// symbol or string there (points_to).
+    annotate: Option<bool>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -140,10 +187,18 @@ struct StepArgs {
     session: String,
     /// The stop epoch the caller last saw; refused with stale_epoch otherwise.
     epoch: u64,
-    /// The thread to step, as debug_status lists it; the stop's thread (else the first listed) when omitted.
+    /// The thread to step, as debug_status lists it; the stop's thread (else the first listed) when omitted. Not
+    /// with over or out, which step the stopped thread.
     thread: Option<String>,
-    /// Instructions to step, 1..=1000 (default 1).
+    /// Instructions to step, 1..=1000 (default 1); with over, a call and its return count as one. Not with out.
     count: Option<u32>,
+    /// Step over calls: a call runs to the instruction after it (a temporary breakpoint there), anything else
+    /// steps one instruction.
+    over: Option<bool>,
+    /// Step out: from a function's first instruction in a bound project, run to its return address.
+    out: Option<bool>,
+    /// over and out: how long each run to a temporary breakpoint waits, 0..=60000 ms (default 5000).
+    timeout_ms: Option<u64>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -163,8 +218,17 @@ struct BreakpointsArgs {
     epoch: Option<u64>,
     /// set: software (Z0, planted by the stub), hardware (Z1), or a write, read or access watchpoint (Z2..Z4).
     kind: Option<DebugBreakKind>,
-    /// set: the runtime address (hex string or integer). On ARM an odd address means Thumb code.
+    /// set: the runtime address (hex string or integer). On ARM an odd address means Thumb code. Give exactly one
+    /// of address, static_address and function.
     address: Option<FileOffset>,
+    /// set: an address in a bound project (as project tools show it), mapped through the binding's slide.
+    static_address: Option<FileOffset>,
+    /// set: a function of a bound project by name: the user's names first, then symbols. A name with several
+    /// addresses is refused with the candidates.
+    function: Option<String>,
+    /// set with static_address or function: the bound project's path; may be omitted when one project is bound
+    /// (function then searches every bound project).
+    path: Option<String>,
     /// set, breakpoints: the instruction size sent as the Z kind; by default x86 1, AArch64 4, RISC-V 4 (pass 2
     /// for a compressed instruction), Cortex-M 2, A-profile ARM 2 or 4 from CPSR.T.
     size: Option<u64>,
@@ -196,13 +260,85 @@ pub fn debug_tools() -> Vec<DebugTool> {
                 detach when the MCP connection ends) with architecture, endianness (unknown unless stop-bound \
                 evidence fixes it: x86, Cortex-M AIRCR or ARM CPSR.E), pointer size, the stub's features, state, \
                 typed stop reason, stop epoch, a page of threads and whether modules and a memory map are available. \
-                Connecting does not resume the target; execution control is debug_continue, debug_step, \
-                debug_interrupt and debug_breakpoints. Never writes or kills.",
+                With path (and optionally module and slide), it then binds that binary as debug_bind does and \
+                reports binding, or binding_error with the session still open. Connecting does not resume the \
+                target; execution control is debug_continue, debug_step, debug_interrupt and debug_breakpoints. \
+                Never writes or kills.",
             input_schema: schema::<ConnectArgs>(),
             effect: Effect::None,
-            handler: |registry, input, _cancel| {
+            handler: |registry, projects, input, _cancel| {
                 let args: ConnectArgs = arguments(input)?;
-                output(registry.connect(args.endpoint.as_deref()))
+                if args.path.is_none() && (args.module.is_some() || args.slide.is_some()) {
+                    return Err("invalid_argument: module and slide apply only with path".into());
+                }
+                let connection = registry.connect(args.endpoint.as_deref()).map_err(|error| error_chain(&error))?;
+                let session = connection.session.clone();
+                let mut value = output(Ok::<_, crate::ApiError>(connection))?;
+                if let Some(path) = args.path {
+                    let bound = registry.bind(
+                        &session,
+                        projects,
+                        std::path::Path::new(&path),
+                        args.module.as_deref(),
+                        args.slide.map(|slide| slide.0),
+                    );
+                    match bound {
+                        Ok(bound) => {
+                            value["binding"] = serde_json::to_value(bound.binding).map_err(|e| e.to_string())?
+                        }
+                        Err(error) => value["binding_error"] = Value::String(error_chain(&error)),
+                    }
+                }
+                Ok(value)
+            },
+        },
+        DebugTool {
+            name: "debug_bind",
+            description: "Bind a binary (opened like the project tools open it, sharing their cache) to one runtime \
+                module of a debug session, so breakpoints can be placed by static address or function name, stops \
+                and register values are located in the project, and step over/out work. Modules are matched, in \
+                order of evidence, by GNU build ID or Mach-O UUID (read from target memory), by path then file name, \
+                then by their mapped header bytes; a target that lists no modules (bare-metal firmware) matches \
+                when the image's code is mapped byte for byte at qOffsets or 0. The evidence that matched is \
+                reported; a mere name match must also verify. The slide (runtime = static + slide: svr4 l_addr for \
+                ELF; for library lists the address minus the header's or first section's link address, whichever \
+                verifies) is verified by comparing windows at the entry point, the start, middle and end of each code \
+                segment and up to 16 function entries with target memory: any difference refuses. The project's \
+                analysis runs at bind time, so later stops name functions without waiting. Without a \
+                match, pass slide to bind anyway; its verification is reported as a limitation. module restricts \
+                the match to a module of that path or file name. At most 8 bindings per session; binding the same \
+                module again replaces it; debug_status lists them. Reads only.",
+            input_schema: schema::<BindArgs>(),
+            effect: Effect::None,
+            handler: |registry, projects, input, _cancel| {
+                let args: BindArgs = arguments(input)?;
+                output(registry.bind(
+                    &args.session,
+                    projects,
+                    std::path::Path::new(&args.path),
+                    args.module.as_deref(),
+                    args.slide.map(|slide| slide.0),
+                ))
+            },
+        },
+        DebugTool {
+            name: "debug_evidence",
+            description: "A bounded, typed record of a stopped target to cite in record_finding: endpoint, session, \
+                epoch, thread, the pc and its location in a bound project, up to 8 registers (default: pc, stack \
+                pointer, return-address register and the first argument registers) and up to 4 memory ranges of at \
+                most 64 bytes. ledger_evidence is a ready evidence item ({tool: debug_evidence, detail}, at most 300 \
+                bytes, clipped with ...) to pass in record_finding's evidence list; the full object is not stored in \
+                the ledger. Optional epoch is checked (stale_epoch). Reads only.",
+            input_schema: schema::<EvidenceArgs>(),
+            effect: Effect::None,
+            handler: |registry, _projects, input, _cancel| {
+                let args: EvidenceArgs = arguments(input)?;
+                output(registry.evidence(
+                    &args.session,
+                    args.epoch,
+                    args.names.as_deref(),
+                    args.memory.as_deref().unwrap_or_default(),
+                ))
             },
         },
         DebugTool {
@@ -215,7 +351,7 @@ pub fn debug_tools() -> Vec<DebugTool> {
                 running it reports without touching the stub. Does not resume, wait or interrupt.",
             input_schema: schema::<StatusArgs>(),
             effect: Effect::None,
-            handler: |registry, input, _cancel| {
+            handler: |registry, _projects, input, _cancel| {
                 let args: StatusArgs = arguments(input)?;
                 output(registry.status(&args.session, args.offset, args.limit))
             },
@@ -227,18 +363,22 @@ pub fn debug_tools() -> Vec<DebugTool> {
                 as the stub sent them, and value decoded in the session's byte order (null when the byte order is \
                 unknown or the stub marks the register unavailable). Reports the stop epoch it read at; pass epoch to \
                 refuse (stale_epoch) if the target stopped again since. Refused with target_running while the target \
-                runs. Paged with offset/limit within 60000 JSON bytes. No writes, no expression evaluation.",
+                runs. Paged with offset/limit within 60000 JSON bytes. With annotate: true, each value that points \
+                into a bound project's mapped segments gets points_to: runtime and static address, module, the \
+                function and offset (code), the name there (symbol) or a string preview of at most 80 characters \
+                (from the file); other values stay unannotated. No writes, no expression evaluation.",
             input_schema: schema::<RegistersArgs>(),
             effect: Effect::None,
-            handler: |registry, input, _cancel| {
+            handler: |registry, _projects, input, _cancel| {
                 let args: RegistersArgs = arguments(input)?;
-                output(registry.registers_at(
+                output(registry.registers_annotated(
                     &args.session,
                     args.thread.as_deref(),
                     args.names.as_deref(),
                     args.offset,
                     args.limit,
                     args.epoch,
+                    args.annotate.unwrap_or(false),
                 ))
             },
         },
@@ -254,7 +394,7 @@ pub fn debug_tools() -> Vec<DebugTool> {
                 writes; MMIO reads go to the device as the stub performs them.",
             input_schema: schema::<ReadMemoryArgs>(),
             effect: Effect::None,
-            handler: |registry, input, cancel| {
+            handler: |registry, _projects, input, cancel| {
                 let args: ReadMemoryArgs = arguments(input)?;
                 let limit = registry.tool_read_limit(&args.session).map_err(|error| error_chain(&error))?;
                 if !(1..=limit).contains(&args.length) {
@@ -279,12 +419,12 @@ pub fn debug_tools() -> Vec<DebugTool> {
                 l_addr load bias, l_ld, lm, and a GNU build ID when the module's ELF header is mapped at its load \
                 bias) or Windows-style library lists (segment/section addresses), the exec file, qOffsets, and \
                 memory-map regions (start, length, ram/rom/flash, flash block size). Modules are paged (offset/limit, \
-                byte-fitted); at most 256 regions are listed. Modules are not matched to files or a project here, \
-                and stubs without these lists report none, with limitations saying so. Optional epoch is checked \
+                byte-fitted); at most 256 regions are listed. Modules are matched to a project by debug_bind, not \
+                here, and stubs without these lists report none, with limitations saying so. Optional epoch is checked \
                 (stale_epoch); refused with target_running while the target runs.",
             input_schema: schema::<ModulesArgs>(),
             effect: Effect::None,
-            handler: |registry, input, _cancel| {
+            handler: |registry, _projects, input, _cancel| {
                 let args: ModulesArgs = arguments(input)?;
                 output(registry.modules_at(&args.session, args.offset, args.limit, args.epoch))
             },
@@ -305,7 +445,7 @@ pub fn debug_tools() -> Vec<DebugTool> {
                 reads and writes nothing.",
             input_schema: schema::<SnapshotArgs>(),
             effect: Effect::FileWrite,
-            handler: |registry, input, cancel| {
+            handler: |registry, _projects, input, cancel| {
                 let args: SnapshotArgs = arguments(input)?;
                 output(registry.snapshot_at(&args.session, &args.output, &args.ranges, args.epoch, cancel))
             },
@@ -321,7 +461,7 @@ pub fn debug_tools() -> Vec<DebugTool> {
                 (detached: false, closed: false) and disconnecting can be retried.",
             input_schema: schema::<SessionArgs>(),
             effect: Effect::Execution,
-            handler: |registry, input, _cancel| {
+            handler: |registry, _projects, input, _cancel| {
                 let args: SessionArgs = arguments(input)?;
                 output(registry.disconnect(&args.session))
             },
@@ -337,12 +477,13 @@ pub fn debug_tools() -> Vec<DebugTool> {
                 debug_wait, debug_interrupt or debug_disconnect. A thread stopped at an inserted breakpoint first \
                 steps past it (z, one step, Z back; the step is its own stop and epoch, and a step that stops for \
                 another reason answers instead of resuming). Resumes WITHOUT delivering any pending signal: \
-                continuing after a fault usually faults again at the same pc. All-stop only. No writes, no signal delivery, no kill, \
-                no symbolic or static-address breakpoints. Cancelling the call ends the wait (cancelled: true), not \
-                the run.",
+                continuing after a fault usually faults again at the same pc. A stop also gets locations: the pc, \
+                each matched breakpoint and the watch address in the bound projects (static address, module, \
+                function and offset, show_address arguments), or null with the reason. All-stop only. No writes, no \
+                signal delivery, no kill. Cancelling the call ends the wait (cancelled: true), not the run.",
             input_schema: schema::<ContinueArgs>(),
             effect: Effect::Execution,
-            handler: |registry, input, cancel| {
+            handler: |registry, _projects, input, cancel| {
                 let args: ContinueArgs = arguments(input)?;
                 output(registry.resume(&args.session, args.epoch, args.timeout_ms, cancel))
             },
@@ -355,7 +496,7 @@ pub fn debug_tools() -> Vec<DebugTool> {
                 call ends the wait (cancelled: true), not the run.",
             input_schema: schema::<WaitArgs>(),
             effect: Effect::None,
-            handler: |registry, input, cancel| {
+            handler: |registry, _projects, input, cancel| {
                 let args: WaitArgs = arguments(input)?;
                 output(registry.wait(&args.session, args.timeout_ms, cancel))
             },
@@ -369,7 +510,7 @@ pub fn debug_tools() -> Vec<DebugTool> {
                 threads stop together (all-stop only). No signal is delivered and nothing is written.",
             input_schema: schema::<SessionArgs>(),
             effect: Effect::Execution,
-            handler: |registry, input, cancel| {
+            handler: |registry, _projects, input, cancel| {
                 let args: SessionArgs = arguments(input)?;
                 output(registry.interrupt(&args.session, cancel))
             },
@@ -382,30 +523,69 @@ pub fn debug_tools() -> Vec<DebugTool> {
                 signal, another thread, exit). Returns requested and completed steps, the pc after each completed \
                 step, the final stop event and epoch (each step is a stop and a new epoch). Steps run through the \
                 session loop: debug_status, debug_interrupt (ends the steps) and debug_disconnect are served \
-                meanwhile. A step that does not finish within the request timeout leaves the target running. Steps machine instructions only: no \
-                step-over or step-out, no signal delivery, no writes. All-stop: other threads stay stopped.",
+                meanwhile. A step that does not finish within the request timeout leaves the target running. \
+                over: true decodes the instruction at the pc with rampage's decoder (from target memory, else the \
+                bound file; bytes_source says which); a call (x86 call, ARM/Thumb bl/blx, AArch64 bl/blr, RISC-V \
+                jal/jalr linking ra or t0) runs to the instruction after it through a temporary hardware (else \
+                software) breakpoint, waiting up to timeout_ms, and anything else single-steps; count applies. out: \
+                true runs from a function's first instruction in a bound project to the ABI's return address (lr, \
+                x30, ra, x86 [rsp]/[esp]); anywhere else it is refused. Arrival counts only for the same thread \
+                with the frame's stack pointer (at least the call's for over, above the entry's on x86 and at least \
+                it elsewhere for out); a recursive inner frame or another thread reaching the address stops there as \
+                inner_frame or other_thread and nothing more runs. A temporary breakpoint is removed at the \
+                next stop whatever it is (its hit, another breakpoint, a fault; after a timeout or cancel, the stop \
+                debug_wait or debug_interrupt brings) and by disconnecting; a table breakpoint at the same address \
+                stands in for it and stays. Breakpoints at the pc are stepped past, not hit again. Results report \
+                each step's outcome (stepped, returned, stopped_elsewhere, inner_frame, other_thread, running, \
+                cancelled) and the final stop's \
+                locations. No signal delivery, no writes, never patches instructions. All-stop: other threads stay \
+                stopped.",
             input_schema: schema::<StepArgs>(),
             effect: Effect::Execution,
-            handler: |registry, input, cancel| {
+            handler: |registry, _projects, input, cancel| {
                 let args: StepArgs = arguments(input)?;
-                output(registry.step(&args.session, args.epoch, args.thread.as_deref(), args.count, cancel))
+                let (over, out) = (args.over.unwrap_or(false), args.out.unwrap_or(false));
+                if over && out {
+                    return Err("invalid_argument: give over or out, not both".into());
+                }
+                if (over || out) && args.thread.is_some() {
+                    return Err("invalid_argument: over and out step the stopped thread; thread does not apply".into());
+                }
+                if !(over || out) && args.timeout_ms.is_some() {
+                    return Err("invalid_argument: timeout_ms applies only with over or out".into());
+                }
+                if over {
+                    output(registry.step_over(&args.session, args.epoch, args.count, args.timeout_ms, cancel))
+                } else if out {
+                    if args.count.is_some_and(|count| count != 1) {
+                        return Err("invalid_argument: out steps out of one function; count does not apply".into());
+                    }
+                    output(registry.step_out(&args.session, args.epoch, args.timeout_ms, cancel))
+                } else {
+                    output(registry.step(&args.session, args.epoch, args.thread.as_deref(), args.count, cancel))
+                }
             },
         },
         DebugTool {
             name: "debug_breakpoints",
-            description: "Breakpoints and watchpoints the stub inserts, by runtime address only (static or symbolic \
-                placement is a later phase). action set (epoch, kind software|hardware|write|read|access, address, \
-                size for breakpoints or length for watchpoints) inserts Z0..Z4 and returns the entry with its ID; \
-                an empty stub reply is unsupported and an E reply is target_error, and rampage never plants a \
-                software breakpoint by writing memory. action clear (epoch, id) removes it (z0..z4). action list \
-                pages the table (at most 64 entries) with kind, address, size, hit count and whether the stub holds \
-                it. Breakpoint size defaults by architecture: x86 1, AArch64 4, RISC-V 4 (2 for compressed), \
-                Cortex-M 2, A-profile ARM 2 or 4 from CPSR.T; an odd ARM address means Thumb. Hits are counted when a \
-                stop matches: watch address within a watchpoint, swbreak/hwbreak or a SIGTRAP pc after a continue at \
-                a breakpoint. Detaching removes every entry. Set and clear are refused while the target runs.",
+            description: "Breakpoints and watchpoints the stub inserts. action set (epoch, kind \
+                software|hardware|write|read|access, size for breakpoints or length for watchpoints, and exactly one \
+                of: address, a runtime address; static_address, an address in a bound project (path, or the only \
+                binding); function, a code address or function start in a bound project by name, the user's names \
+                first, then symbols, refused with candidates when it names several addresses) inserts Z0..Z4 and returns the entry with its ID and, \
+                when placed statically, its placement (static address, path, module, function and offset); an \
+                empty stub reply is unsupported and an E reply is target_error, and rampage never plants a software \
+                breakpoint by writing memory. action clear (epoch, id) removes it (z0..z4). action list pages the \
+                table (at most 64 entries, plus temporary ones of a step over or out) with kind, address, size, hit \
+                count, whether the stub holds it and its placement. Breakpoint size defaults by architecture: x86 1, \
+                AArch64 4, RISC-V 4 (2 for compressed), Cortex-M 2; A-profile ARM placed by static_address or \
+                function follows the project's mapping of that code (2 Thumb, 4 ARM), and by address an odd address \
+                means Thumb, else CPSR.T decides. Hits are counted when a stop matches: watch \
+                address within a watchpoint, swbreak/hwbreak or a SIGTRAP pc after a continue at a breakpoint. \
+                Detaching removes every entry. Set and clear are refused while the target runs.",
             input_schema: schema::<BreakpointsArgs>(),
             effect: Effect::Execution,
-            handler: |registry, input, _cancel| {
+            handler: |registry, _projects, input, _cancel| {
                 let args: BreakpointsArgs = arguments(input)?;
                 let epoch =
                     || args.epoch.ok_or_else(|| "invalid_argument: set and clear need the caller's epoch".to_owned());
@@ -423,12 +603,24 @@ pub fn debug_tools() -> Vec<DebugTool> {
                             ("limit", args.limit.is_some()),
                         ])?;
                         let kind = args.kind.ok_or("invalid_argument: set needs kind")?;
-                        let address = args.address.ok_or("invalid_argument: set needs address")?;
-                        output(registry.set_breakpoint(
+                        let target = match (args.address, args.static_address, args.function) {
+                            (Some(address), None, None) => {
+                                unused(&[("path", args.path.is_some())])?;
+                                BreakTarget::Runtime(address.0)
+                            }
+                            (None, Some(address), None) => BreakTarget::Static { address: address.0, path: args.path },
+                            (None, None, Some(name)) => BreakTarget::Function { name, path: args.path },
+                            _ => {
+                                return Err("invalid_argument: set needs exactly one of address, static_address and \
+                                            function"
+                                    .into());
+                            }
+                        };
+                        output(registry.set_breakpoint_at(
                             &args.session,
                             epoch()?,
                             kind,
-                            address.0,
+                            target,
                             args.size,
                             args.length,
                         ))
@@ -437,6 +629,9 @@ pub fn debug_tools() -> Vec<DebugTool> {
                         unused(&[
                             ("kind", args.kind.is_some()),
                             ("address", args.address.is_some()),
+                            ("static_address", args.static_address.is_some()),
+                            ("function", args.function.is_some()),
+                            ("path", args.path.is_some()),
                             ("size", args.size.is_some()),
                             ("length", args.length.is_some()),
                             ("offset", args.offset.is_some()),
@@ -450,6 +645,9 @@ pub fn debug_tools() -> Vec<DebugTool> {
                             ("epoch", args.epoch.is_some()),
                             ("kind", args.kind.is_some()),
                             ("address", args.address.is_some()),
+                            ("static_address", args.static_address.is_some()),
+                            ("function", args.function.is_some()),
+                            ("path", args.path.is_some()),
                             ("size", args.size.is_some()),
                             ("length", args.length.is_some()),
                             ("id", args.id.is_some()),

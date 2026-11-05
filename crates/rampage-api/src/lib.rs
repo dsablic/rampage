@@ -12,6 +12,7 @@ mod carve;
 mod correlation;
 mod data;
 mod debug_control;
+mod debug_correlation;
 mod debug_import;
 mod debug_layout_import;
 pub(crate) mod debug_type_import;
@@ -98,6 +99,11 @@ pub use debug_control::{
     DEFAULT_RUN_WAIT_MS, DebugBreakKind, DebugBreakpoint, DebugBreakpoints, DebugBytes, DebugConnection,
     DebugDisconnected, DebugMemory, DebugModules, DebugRange, DebugRegisters, DebugRegistry, DebugRun, DebugSnapshot,
     DebugStatus, DebugSteps, MAX_DEBUG_SESSIONS, MAX_RUN_WAIT_MS, tool_read_limit,
+};
+pub use debug_correlation::{
+    AnnotatedRegister, BindEvidence, BindingView, BreakTarget, BreakpointLocated, DebugBinding, DebugEvidence,
+    DebugLocation, DebugStepped, EvidenceMemory, EvidenceRange, EvidenceRegister, Located, MAX_BINDINGS, OverStep,
+    Pointee, STEP_OUT_RULE, ShowAddress, SlideCheck, StopLocations,
 };
 pub use debug_import::DebugImport;
 pub use debug_layout_import::{

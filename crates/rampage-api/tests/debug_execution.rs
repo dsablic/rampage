@@ -59,8 +59,16 @@ fn execution_tools_are_marked_as_changing_the_target() {
     for name in ["debug_continue", "debug_interrupt", "debug_step", "debug_breakpoints", "debug_disconnect"] {
         assert_eq!(effect(name), Effect::Execution, "{name}");
     }
-    for name in ["debug_connect", "debug_status", "debug_registers", "debug_read_memory", "debug_modules", "debug_wait"]
-    {
+    for name in [
+        "debug_connect",
+        "debug_bind",
+        "debug_status",
+        "debug_registers",
+        "debug_read_memory",
+        "debug_modules",
+        "debug_wait",
+        "debug_evidence",
+    ] {
         assert_eq!(effect(name), Effect::None, "{name}");
     }
     assert_eq!(effect("debug_snapshot"), Effect::FileWrite);
@@ -69,7 +77,8 @@ fn execution_tools_are_marked_as_changing_the_target() {
         assert!(description(name).contains("No signal") || description(name).contains("no signal"), "{name}");
         assert!(description(name).contains("All-stop") || description(name).contains("all-stop"), "{name}");
     }
-    assert!(description("debug_breakpoints").contains("runtime address only"));
+    assert!(description("debug_breakpoints").contains("static_address"));
+    assert!(description("debug_step").contains("never patches instructions"));
     assert!(description("debug_breakpoints").contains("never plants a software breakpoint by writing memory"));
 }
 

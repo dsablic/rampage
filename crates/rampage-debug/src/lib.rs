@@ -24,12 +24,13 @@ mod xml;
 
 pub use client::{Console, PacketClass, Permit};
 pub use exec::{
-    BreakKind, Breakpoint, Cancel, MAX_BREAKPOINTS, MAX_STEPS, MAX_WATCH_LENGTH, StopCause, StopEvent, WatchHit,
+    BreakKind, Breakpoint, Cancel, MAX_BREAKPOINTS, MAX_STEPS, MAX_WATCH_LENGTH, Placement, StopCause, StopEvent,
+    TemporaryOutcome, WatchHit,
 };
 pub use maps::{Module, Offsets, Region};
 pub use session::{
-    ByteOrder, CLOSE_DETACH, Config, Detached, INTERRUPT_WAIT, Info, MemoryChunk, MemoryRead, Modules, RegisterValue,
-    Registers, Run, Session, State, Status, Steps, ThreadInfo,
+    ByteOrder, CLOSE_DETACH, Config, Detached, INTERRUPT_WAIT, Info, MAX_TEMPORARY, MemoryChunk, MemoryRead, Modules,
+    RegisterValue, Registers, Run, Session, State, Status, Steps, TemporaryPlacement, ThreadInfo,
 };
 pub use stop::{StopReason, StopReply, ThreadId};
 pub use target::{Family, Layout, LayoutSource, Register};

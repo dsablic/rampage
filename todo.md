@@ -1343,7 +1343,8 @@ Checked items below describe bounded, tested capabilities; sections marked parti
 - [ ] Future: read-only GDB and Windows debugger inspection backends, each with separate platform acceptance.
 - [x] Execution-control design approved 2026-10-29 (`docs/plans/2026-10-29-debugger-control.md`); Phase 9.1
   (read-only GDB remote protocol tools, `docs/debug-control.md`) and 9.2 (all-stop execution control: continue/wait/interrupt, step,
-  breakpoints and watchpoints, stop epochs, cancellation) are done; 9.3 (static correlation) is next. Launch, attach, resume, step, breakpoints, expressions and
+  breakpoints and watchpoints, stop epochs, cancellation) and 9.3 (static correlation: project binding, symbolic breakpoints,
+  step-over/out, stop locations) are done; 9.4 (writes and kill behind flags) is next. Launch, attach, resume, step, breakpoints, expressions and
   target writes are not part of the read-only workspace milestone.
 
 ### Deferred exact-entry UI and reviewed static workspaces

@@ -237,7 +237,7 @@ fn with_operand_comments(comment: Option<String>, annotations: &[OperandAnnotati
 
 /// The NUL-terminated printable ASCII string at `address`, if there is one of at least four characters. Long
 /// strings are cut at 80 characters.
-fn string_at(binary: &Binary, address: u64) -> Option<String> {
+pub(crate) fn string_at(binary: &Binary, address: u64) -> Option<String> {
     const LIMIT: usize = 80;
     let bytes = binary.read_to_segment_end(address)?;
     let text: Vec<u8> = bytes.iter().copied().take_while(|&byte| byte != 0).take(LIMIT + 1).collect();

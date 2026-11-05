@@ -37,9 +37,9 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
 - `carve`: `carve`, `archive_inventory`.
 - `formats`: `build_info`, `pe_resources`, `pe_load_config`, `pyinstaller_archive`, `wasm_module`.
-- `debug`, only on a server started with a debug endpoint: `debug_connect`, `debug_status`, `debug_registers`,
-  `debug_read_memory`, `debug_modules`, `debug_snapshot`, `debug_continue`, `debug_wait`, `debug_interrupt`,
-  `debug_step`, `debug_breakpoints`, `debug_disconnect`.
+- `debug`, only on a server started with a debug endpoint: `debug_connect`, `debug_bind`, `debug_status`,
+  `debug_registers`, `debug_read_memory`, `debug_modules`, `debug_snapshot`, `debug_continue`, `debug_wait`,
+  `debug_interrupt`, `debug_step`, `debug_breakpoints`, `debug_evidence`, `debug_disconnect`.
 
 Calling `enable_tools` without arguments lists each group's description, tool names/count and enabled state.
 `{"groups": ["detection"]}` enables that group; `{"groups": ["all"]}` enables every group. Enabling sends
@@ -187,11 +187,23 @@ target and report the stop epoch they read at; pass `epoch` to have a read refus
 since. `debug_snapshot` writes a new `rampage-snapshot-v1` file (a file write) and refuses targets whose data byte
 order is unknown.
 
+`debug_bind` (or `debug_connect` with `path`) binds a binary to one of the session's runtime modules. It opens the
+binary like the project tools do, in the same project cache, matches it by build ID or Mach-O UUID read from target
+memory, then by path or file name, then by mapped header bytes (or, with no module list, by the code mapped at the
+slide), verifies the slide against target memory and reports the evidence; without a match it needs an explicit
+`slide`. A session binds at most eight projects, and `debug_status` lists them. With a binding,
+`debug_breakpoints` takes `static_address` or `function` instead of `address`, stop events gain `locations`
+(static address, function, offset and `show_address` arguments for the pc, matched breakpoints and the watch
+address), `debug_registers` with `annotate: true` says what values point at, and `debug_evidence` returns a bounded
+record of the stop with a ready `record_finding` evidence item.
+
 Execution control is all-stop. `debug_breakpoints` sets (`software`, `hardware`, `write`, `read`, `access`), clears
 and lists breakpoints and watchpoints the stub inserts at runtime addresses. `debug_continue` resumes every thread
 without delivering a signal and waits up to `timeout_ms` for a typed stop event; `debug_wait` waits again,
-`debug_interrupt` stops a running target, and `debug_step` single-steps up to 1,000 instructions. Execution tools
-take the caller's `epoch`. While the target runs, only `debug_status`, `debug_wait`, `debug_interrupt` and
+`debug_interrupt` stops a running target, and `debug_step` single-steps up to 1,000 instructions, steps over calls
+(`over`, decoding the instruction at the pc with rampage's decoder) or out of a function from its first instruction
+in a bound project (`out`); both run to a temporary breakpoint that is removed at the next stop, whatever it is.
+Execution tools take the caller's `epoch`. While the target runs, only `debug_status`, `debug_wait`, `debug_interrupt` and
 `debug_disconnect` are served. `debug_disconnect` interrupts a running target, removes every breakpoint and
 detaches, which lets the target run; a refused detach keeps the session open. Nothing writes registers or memory,
 delivers a signal or kills.
@@ -203,7 +215,9 @@ open-world. Cancelling a call (`notifications/cancelled`, or the connection clos
 
 Errors start with a code: `unknown_session`, `endpoint_not_allowed`, `session_limit`, `timeout`,
 `connection_lost`, `protocol_error`, `target_error`, `unsupported`, `session_not_stopped`, `target_running`,
-`not_running`, `stale_epoch`, `cancelled` or `invalid_argument`. See [debug control](debug-control.md).
+`not_running`, `stale_epoch`, `cancelled` or `invalid_argument`; binding and placement add `no_module_match`,
+`slide_mismatch`, `slide_unverified`, `ambiguous_module`, `arch_mismatch`, `binding_limit`, `not_bound`,
+`ambiguous_name`, `not_code`, `step_out_refused` and `undecodable`. See [debug control](debug-control.md).
 
 ## Raw projects
 

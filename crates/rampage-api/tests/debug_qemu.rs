@@ -268,3 +268,130 @@ fn breaks_steps_watches_and_interrupts_a_cortex_m3() {
     assert_eq!(disconnected["removal_failures"], json!([]));
     drop(qemu);
 }
+
+/// The address of the `bl` that calls `target` inside `caller`, decoded with rampage's Thumb decoder.
+fn call_site(caller: (u64, u64), target: u64) -> u64 {
+    let binary = rampage_loaders::Binary::open(firmware()).unwrap();
+    let mut decoder = binary.decoder().unwrap();
+    let (start, size) = caller;
+    let mut at = start;
+    while at < start + size {
+        let bytes = binary.read(at, (start + size - at).min(4)).unwrap();
+        let insn = decoder.decode(bytes, at);
+        if insn.flow == rampage_arch::Flow::Call(target) {
+            return at;
+        }
+        at += u64::from(insn.len.max(2));
+    }
+    panic!("no call to {target:#x} in {start:#x}..{:#x}", start + size);
+}
+
+#[test]
+#[ignore = "needs qemu-system-arm; run with RAMPAGE_QEMU_LIVE=1"]
+fn correlates_a_cortex_m3_with_its_firmware() {
+    let Some((qemu, endpoint)) = start(true) else { return };
+    // A copy, so the finding recorded at the end does not write beside the committed fixture.
+    let directory =
+        std::env::temp_dir().canonicalize().unwrap().join(format!("rampage-qemu-bind-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("cortex-m3.elf");
+    std::fs::copy(firmware(), &path).unwrap();
+    let registry = DebugRegistry::new(&[endpoint]).unwrap();
+    let tools = debug_tools();
+    let call = |name: &str, input: Value| {
+        tools.iter().find(|tool| tool.name == name).unwrap().call_cancellable(&registry, input, &DebugCancel::new())
+    };
+    // debug_connect with path binds the firmware: there is no module list, so the image's code must be mapped
+    // byte for byte at slide 0.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let connection = loop {
+        match call("debug_connect", json!({ "path": path })) {
+            Ok(connection) => break connection,
+            Err(error) if Instant::now() < deadline && error.starts_with("connect_failed") => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => panic!("{error}"),
+        }
+    };
+    let binding = &connection["binding"];
+    assert_eq!(binding["evidence"]["kind"], "mapped_bytes", "{connection}");
+    assert_eq!(binding["slide"], "0x0");
+    assert_eq!(binding["verification"]["outcome"], "matched");
+    let (tick, _) = symbol("tick");
+    let (reset, reset_size) = symbol("reset_handler");
+    let (counter, _) = symbol("counter");
+    let site = call_site((reset, reset_size), tick);
+
+    // Break on tick by name: the stop is located in tick.
+    let set = call(
+        "debug_breakpoints",
+        json!({"session": "s1", "action": "set", "epoch": 1, "kind": "hardware", "function": "tick"}),
+    )
+    .unwrap();
+    assert_eq!(set["breakpoint"]["placement"]["function"], "tick");
+    let breakpoint = set["breakpoint"]["id"].as_u64().unwrap();
+    let hit = call("debug_continue", json!({"session": "s1", "epoch": 1})).unwrap();
+    assert_eq!(hit["event"]["reason"], "breakpoint", "{hit}");
+    assert_eq!(hit["locations"]["pc"]["location"]["function"], "tick", "{hit}");
+    assert_eq!(hit["locations"]["pc"]["location"]["offset_in_function"], 0);
+    let epoch = hit["epoch"].as_u64().unwrap();
+
+    // Registers that point into the image are annotated: pc in tick, lr back in reset_handler.
+    let registers = call("debug_registers", json!({"session": "s1", "epoch": epoch, "annotate": true})).unwrap();
+    let items = registers["registers"]["items"].as_array().unwrap();
+    let annotated = |name: &str| items.iter().find(|item| item["name"] == name).unwrap()["points_to"].clone();
+    assert_eq!(annotated("pc")["function"], "tick", "{registers}");
+    assert_eq!(annotated("lr")["function"], "reset_handler", "{registers}");
+
+    // Evidence for the ledger, recorded as a finding on the bound copy at the end.
+    let evidence = call("debug_evidence", json!({"session": "s1", "epoch": epoch})).unwrap();
+    assert!(evidence["ledger_evidence"]["detail"].as_str().unwrap().contains("(tick+0x0)"), "{evidence}");
+
+    // Step out: back in reset_handler, right after the call.
+    let out = call("debug_step", json!({"session": "s1", "epoch": epoch, "out": true})).unwrap();
+    assert_eq!(out["completed"], 1, "{out}");
+    assert_eq!(out["event"]["reason"], "temporary_breakpoint", "{out}");
+    assert_eq!(out["event"]["pc"], format!("{:#x}", site + 4));
+    assert_eq!(out["locations"]["pc"]["location"]["function"], "reset_handler", "{out}");
+    let listed = call("debug_breakpoints", json!({"session": "s1", "action": "list"})).unwrap();
+    assert_eq!(listed["breakpoints"]["total"], 1, "only the user's breakpoint is left: {listed}");
+    let epoch = out["epoch"].as_u64().unwrap();
+
+    // Step over the bl tick call site without stopping inside tick: clear tick's breakpoint, step to the call
+    // (the loop's branch back) and over it.
+    call("debug_breakpoints", json!({"session": "s1", "action": "clear", "epoch": epoch, "id": breakpoint})).unwrap();
+    let read_counter = || {
+        let read = registry.read_memory("s1", counter, 4, None).unwrap();
+        u32::from_le_bytes(read.chunks[0].bytes[..].try_into().unwrap())
+    };
+    let before = read_counter();
+    let over = call("debug_step", json!({"session": "s1", "epoch": epoch, "over": true, "count": 2})).unwrap();
+    assert_eq!(over["completed"], 2, "{over}");
+    assert_eq!(over["steps"][0]["outcome"], "stepped");
+    assert_eq!(over["steps"][1]["pc"], format!("{site:#x}"));
+    assert_eq!(over["steps"][1]["flow"], "call");
+    assert_eq!(over["steps"][1]["outcome"], "returned");
+    assert_eq!(over["event"]["reason"], "temporary_breakpoint");
+    assert_eq!(over["event"]["pc"], format!("{:#x}", site + 4));
+    assert_eq!(over["locations"]["pc"]["location"]["function"], "reset_handler");
+    assert_eq!(read_counter(), before + 1, "tick ran once, without a stop inside it");
+    let listed = call("debug_breakpoints", json!({"session": "s1", "action": "list"})).unwrap();
+    assert_eq!(listed["breakpoints"]["total"], 0);
+
+    let disconnected = call("debug_disconnect", json!({"session": "s1"})).unwrap();
+    assert_eq!(disconnected["state"], "detached", "{disconnected}");
+    drop(qemu);
+
+    let project = rampage_api::Session::default().open(&path, None).unwrap();
+    let request: rampage_api::LedgerRequest = serde_json::from_value(json!({
+        "kind": "finding",
+        "text": format!("tick increments counter: it read {} after one call over", before + 1),
+        "function": "tick",
+        "evidence": [evidence["ledger_evidence"]],
+    }))
+    .unwrap();
+    assert_eq!(project.record_finding(&request).unwrap().finding.evidence[0].tool, "debug_evidence");
+    drop(project);
+    std::fs::remove_dir_all(directory).unwrap();
+}

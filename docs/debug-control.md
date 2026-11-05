@@ -4,9 +4,10 @@ Rampage's MCP server can connect to a GDB Remote Serial Protocol stub that an op
 `gdbserver` on Linux or Android, QEMU's `-s`/`-gdb` stub, OpenOCD, probe-rs and similar. An agent can then read
 the stopped target's registers, memory, threads, loaded modules and memory map, capture it to a snapshot file
 that every runtime and analysis tool opens, and control its execution: continue, wait, interrupt, single-step, and
-set breakpoints and watchpoints.
+set breakpoints and watchpoints. With a project bound to the target, it can also place breakpoints by function name
+or static address, see stops and register values in the project's terms, and step over calls or out of functions.
 
-These are steps 9.1 (inspection) and 9.2 (execution control) of the
+These are steps 9.1 (inspection), 9.2 (execution control) and 9.3 (static correlation) of the
 [debugger design](plans/2026-10-29-debugger-control.md). Rampage never launches or attaches to a process, and it
 never writes registers or memory, delivers a signal, enters non-stop mode or kills a target. The protocol client
 keeps every such packet off the wire.
@@ -89,17 +90,19 @@ another debugger on the stub, DMA or other cores, can change memory between read
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `debug_connect` | `endpoint?` | Session ID, architecture, `endianness` and its evidence, pointer size, the stub's `qSupported` features, packet size, state, typed stop reply, epoch, a page of threads, whether modules and a memory map are available, limitations |
-| `debug_status` | `session`, `offset?`, `limit?` | State (with `reason` when lost), epoch, stop reply, bounded console output, a byte-fitted page of threads |
-| `debug_registers` | `session`, `thread?`, `names?`, `offset?`, `limit?` | Per register: name, regnum, bitsize, type, group, `bytes` as sent and `value` decoded |
+| `debug_connect` | `endpoint?`, `path?`, `module?`, `slide?` | Session ID, architecture, `endianness` and its evidence, pointer size, the stub's `qSupported` features, packet size, state, typed stop reply, epoch, a page of threads, whether modules and a memory map are available, limitations; with `path`, the `binding` or `binding_error` |
+| `debug_bind` | `session`, `path`, `module?`, `slide?` | The binding: module, path, arch, slide, evidence, verification, limitations; whether it replaced one |
+| `debug_status` | `session`, `offset?`, `limit?` | State (with `reason` when lost), epoch, stop reply, bounded console output, the bindings, a byte-fitted page of threads |
+| `debug_registers` | `session`, `thread?`, `names?`, `offset?`, `limit?`, `annotate?` | Per register: name, regnum, bitsize, type, group, `bytes` as sent and `value` decoded; with `annotate`, `points_to` |
 | `debug_read_memory` | `session`, `address`, `length` (1..=`max_read_length`), `thread?` | Hex runs of the bytes read, the thread used, plus every chunk's address, requested and read counts, and error |
 | `debug_modules` | `session`, `offset?`, `limit?` | Modules and memory-map regions, the exec file and `qOffsets` |
 | `debug_snapshot` | `session`, `output`, `ranges` | A new `rampage-snapshot-v1` file |
-| `debug_continue` | `session`, `epoch`, `timeout_ms?` (default 5000, at most 60000) | A [stop event](#stop-events) and the new epoch, or `state: "running"` |
+| `debug_continue` | `session`, `epoch`, `timeout_ms?` (default 5000, at most 60000) | A [stop event](#stop-events), its [locations](#stop-locations) and the new epoch, or `state: "running"` |
 | `debug_wait` | `session`, `timeout_ms?` | The same shape as `debug_continue` |
 | `debug_interrupt` | `session` | The same shape, after waiting up to 3 s for the stop |
-| `debug_step` | `session`, `epoch`, `thread?`, `count?` (1..=1000, default 1) | Requested and completed steps, the pc after each completed step, the final stop event and epoch |
-| `debug_breakpoints` | `session`, `action` (`set`, `clear`, `list`), and per action: `epoch`, `kind`, `address`, `size` or `length`, `id`, `offset`, `limit` | The entry set or cleared, or a byte-fitted page of the table |
+| `debug_step` | `session`, `epoch`, `thread?`, `count?` (1..=1000, default 1), `over?`, `out?`, `timeout_ms?` | Requested and completed steps, the pc after each completed step (over and out: each step's outcome), the final stop event, its locations and epoch |
+| `debug_breakpoints` | `session`, `action` (`set`, `clear`, `list`), and per action: `epoch`, `kind`, one of `address`, `static_address` or `function` (with `path?`), `size` or `length`, `id`, `offset`, `limit` | The entry set or cleared, or a byte-fitted page of the table |
+| `debug_evidence` | `session`, `epoch?`, `names?`, `memory?` | Endpoint, epoch, thread, the pc and its location, up to 8 registers and 4 memory ranges, and a `ledger_evidence` item for `record_finding` |
 | `debug_disconnect` | `session` | The final state, `detached`, `closed`, any detach error, `breakpoints_removed` and `removal_failures` |
 
 `debug_registers`, `debug_read_memory`, `debug_modules` and `debug_snapshot` also take an optional `epoch`, refused
@@ -168,7 +171,9 @@ Rampage drives the stub in all-stop mode: every thread resumes together and stop
   `debug_interrupt`. No step of a request starts more than 60 s after it began (`truncated` says so), so a request
   takes at most 60 s plus one step's 10 s.
 - Each step is a stop, so stepping `count` instructions moves the epoch by up to `count`.
-- Stepping is by machine instruction only. Stepping over or out of a call needs rampage's decoders and is step 9.3.
+- A plain step does not take breakpoints at the pc out first; QEMU executes the instruction anyway, other stubs
+  may report the breakpoint again. Stepping over (below) does take them out.
+- `over` and `out` are described under [stepping over and out](#stepping-over-and-out).
 
 ### Breakpoints and watchpoints
 
@@ -182,8 +187,8 @@ Rampage drives the stub in all-stop mode: every thread resumes together and stop
 | `read` | `Z3` | A read watchpoint |
 | `access` | `Z4` | A read-or-write watchpoint |
 
-- Addresses are runtime addresses. Placing a breakpoint by static address or function name in a bound project is
-  step 9.3.
+- `address` is a runtime address. With a [bound project](#binding-a-project), `static_address` (an address as the
+  project tools show it) or `function` (a name) places it instead; see [placing breakpoints](#placing-breakpoints).
 - An empty reply means the stub does not support that kind (`unsupported`); an `E nn` reply means it refused this
   one (`target_error`). Rampage never emulates a software breakpoint by writing an instruction into memory. On a
   stub without `Z0`, try `hardware`.
@@ -205,13 +210,15 @@ Rampage drives the stub in all-stop mode: every thread resumes together and stop
   ARM with an unreadable or undecodable CPSR needs an explicit `size`.
 - `action: "clear"` sends the matching `z` packet and drops the entry; a refused removal keeps it. Entries of an
   exited process are dropped without a packet.
-- `action: "list"` pages the table: ID, kind, address, size, hit count and whether the stub holds the entry.
+- `action: "list"` pages the table: ID, kind, address, size, hit count, whether the stub holds the entry, its
+  `placement` when it was placed statically, and `temporary: true` for a step's temporary breakpoint not yet removed.
 
 ### Stop events
 
 A stop event reports:
 
-- `reason`: `breakpoint`, `watchpoint`, `step`, `interrupted`, `signal`, `exited` or `terminated`.
+- `reason`: `breakpoint`, `watchpoint`, `step`, `temporary_breakpoint` (a step over or out arrived, and no table
+  breakpoint explains the stop), `interrupted`, `signal`, `exited` or `terminated`.
 - `signal`, `exit_status`, `thread`, and the stop reply as parsed.
 - `pc`: the stopped thread's pc, from the stop reply's expedited registers, else read with `p` (or `g`), decoded in
   the session's byte order. It is null when the byte order is unknown (AArch64, RISC-V); `pc_bytes` always has the
@@ -221,6 +228,7 @@ A stop event reports:
 - `reasons`: at most 16 of the stop reply's reasons. Its expedited registers are not repeated (a stub may send
   1,024 fields of 4 KiB); read them with `debug_registers`.
 - `epoch`: the epoch this stop started, `console`: output received while the target ran, and `warnings`.
+- `temporary`: the temporary breakpoints this stop removed (or failed to remove), each with `hit` and `removed`.
 
 `debug_status` and `debug_connect` give the stop reply with at most 32 short expedited registers and 16 reasons,
 and `debug_status` leaves `console` out of `last_stop`, since its own `console` already holds it. Every result
@@ -294,8 +302,8 @@ Each list is read only when the stub advertises it:
   flash block sizes.
 
 `qOffsets` is always asked for, and an empty reply is accepted. A module's GNU build ID is reported when its ELF
-header is mapped at its load bias, which holds for shared objects and PIE executables. Modules are not matched
-to files on disk or to a project; that is step 9.3.
+header is mapped at its load bias, which holds for shared objects and PIE executables. `debug_modules` does not
+match modules to files; `debug_bind` does.
 
 ### Snapshots
 
@@ -321,6 +329,173 @@ architecture and data byte order. The file uses the format in [runtime snapshots
   slide), not header addresses.
 - No entry point or seeds are recorded.
 
+## Static correlation
+
+### Binding a project
+
+`debug_bind { session, path, module?, slide? }` binds a binary to one runtime module of a session. The binary opens
+the way the project tools open it, in the MCP server's project cache, so a binding and a `decompile` of the same
+path share one project and its names. It must be the original image (not a snapshot) and of the target's
+architecture (`arch_mismatch` otherwise); for a universal Mach-O the target's architecture picks the slice.
+`debug_connect` with `path` connects and then binds; a binding that fails leaves the session open and reports
+`binding_error`.
+
+Modules from `debug_modules` are matched in order of evidence, and the evidence that matched is reported:
+
+| Evidence | How |
+|---|---|
+| `build_id` | The ELF file's GNU build ID equals the module's, as the stub's module list reports it or as rampage reads it from the ELF headers and notes mapped at the module's load bias |
+| `uuid` | The Mach-O file's `LC_UUID` equals the one read from the module's mapped header |
+| `path`, `basename` | The module's reported path (or, for the main program with no name, the exec file) equals the project's path, or only their file names are equal |
+| `header_bytes` | The module's mapped header bytes (up to 256) equal the file's first bytes |
+| `mapped_bytes` | The stub lists no modules (bare-metal firmware): every verification window (below) is readable and equal at the slide (`qOffsets` `Text`, else 0, or the caller's), at least 16 bytes in all |
+| `explicit_slide` | Nothing matched and the caller gave `slide` |
+
+`module` restricts the match to a module with that path or file name; for a target without a module list it is the
+binding's label, and it must name exactly one module (`ambiguous_module` otherwise). Several modules matching
+equally well are refused (`ambiguous_module`) unless `module` picks one. A target whose architecture has no rampage
+equivalent cannot be checked against the project and binds only with an explicit `slide`.
+Without a match the bind is refused (`no_module_match`) unless the caller gives `slide`: rampage never binds
+silently on a weak match.
+
+**Slide.** `runtime = static + slide`, wrapping at the pointer width. For svr4 modules (Linux, Android) the slide is
+the link map's `l_addr`. For library lists that give segment or section addresses (Windows-style, Mach-O), it is that
+address minus the file's header address, or minus its first section's address: every stage (identity, name,
+header bytes) verifies each candidate and keeps the first that matches. A caller's `slide` overrides the computed
+one, and the difference is reported.
+
+**Verification.** Rampage compares windows of up to 32 bytes of the file with target memory at the slide: the entry
+point, the start, middle and end of every executable segment's file bytes (at most 8 segments) and up to 16
+function entries spread over the image. It reports `matched` (at least one window read and none differs; unreadable
+windows are counted in `detail`), `mismatched` (any window differs), `unreadable` (none could be read) or
+`no_file_bytes`. Comparing many places catches a rebuilt image that shares its first bytes (a vector table, a
+header) with the one running, though an edit outside every window still goes unnoticed:
+
+- `mismatched` refuses the bind (`slide_mismatch`) unless `slide` was given; then it binds with the failure in
+  `limitations`.
+- `unreadable` or `no_file_bytes` binds with a limitation when the evidence identifies the image (build ID, UUID,
+  header or mapped bytes) or the slide is explicit, and refuses (`slide_unverified`) when only a name matched.
+
+Target memory can differ from the file for good reasons (relocations, self-modifying code, a stub's own breakpoint
+instructions), so a verified slide shows that the compared window matches, not that the whole image does.
+
+A session binds at most 8 projects, one per module; binding the same module again replaces it. `debug_status` lists
+the bindings, and they end with the session (a bind that finishes after a disconnect is refused). Binding runs the
+project's whole-program analysis, so the execution tools that follow only use its cached result and never wait for
+it; a failed analysis is a limitation, and locations then have a null `function` with `function_note`. Like the
+project tools, bindings reread the annotation log before resolving names or locating addresses, so names other
+clients saved since are seen.
+
+### Placing breakpoints
+
+`debug_breakpoints` with `action: "set"` takes exactly one of:
+
+- `address`: a runtime address, as before;
+- `static_address`: an address in a bound project, with `path` naming the project (it may be omitted when one is
+  bound). It must fall in a mapped segment;
+- `function`: a name in a bound project: a user name first, then the loader's symbol, export, stub and import
+  names, then `sub_<hex>`. It must name code or a known function start; a data symbol or an import slot is refused
+  (`not_code`). A name at several addresses (two static functions in different files, say) is refused
+  with `ambiguous_name` and at most 16 `name@address` candidates; place it by `static_address` instead. Without
+  `path`, every bound project is searched, and a name found in several is refused.
+
+The entry records its `placement`: the static address, path, module, function and offset in the function (null when
+the address lies below the function's start, in a cold part). On A-profile ARM, a breakpoint's kind follows the
+project's mapping of the code it is placed in (2 for Thumb, 4 for ARM), not the state the target is stopped in;
+watchpoints take the exact data address.
+
+### Stop locations
+
+A stop event from `debug_continue`, `debug_wait`, `debug_interrupt` or `debug_step` comes with `locations`:
+
+- `pc`, each matched breakpoint and the watch address, each as `{ runtime_address, location, reason }`;
+- `location` is `{ runtime_address, static_address, module, path, function, function_address, offset_in_function,
+  show_address }` when the address falls in a bound project's mapped segments. `function` is what project tools
+  call the function containing it (from the project's analysis; null outside every function found), and
+  `show_address` holds the arguments for the `show_address` tool;
+- otherwise `location` is null and `reason` says why: nothing is bound, the address is outside every bound module,
+  or the pc could not be read.
+
+When the session's byte order is unknown (AArch64, RISC-V), the pc's two decodings are tried and the one inside a
+bound module is used, as `pc_evidence` says; if neither or both are, the pc is not located. `debug_status`'s
+`last_stop` is not located.
+
+### Register annotations
+
+`debug_registers` with `annotate: true` adds `points_to` to each register whose value (at most 64 bits, not 0, and no
+wider than the target's addresses) falls in a bound project's mapped segments: the location as above, a `kind` (`code` inside a function, `string`, `symbol`
+or `data`), the name at exactly that address, and for non-code a string preview of at most 80 printable ASCII
+characters read from the file. Values elsewhere stay unannotated. Small integers in an image linked at a low
+address (firmware at 0) are annotated too: annotation says where a value would point, not that it is a pointer.
+With an unknown byte order, values are read in the order that puts the pc inside a bound module, as `limitations`
+says, and not at all when the pc does not settle it.
+
+### Stepping over and out
+
+`debug_step` with `over: true` steps the stopped thread `count` times (1..=1000; a call and its return count as one):
+
+1. It reads the pc and the instruction bytes at it from target memory (15 bytes on x86, 4 elsewhere), and decodes
+   them with rampage's decoder: the bound project's when the pc is in one, else the session architecture's raw
+   decoder. ARM state is Thumb on M-profile, else CPSR.T, else the project's Thumb ranges. When target memory is
+   unreadable or does not decode (a stub's own breakpoint instruction, say), the file's bytes are used;
+   `bytes_source` says which.
+2. A call runs to the instruction after it: rampage places a temporary breakpoint at `pc + length` (hardware,
+   falling back to software; never by writing memory), continues, and waits up to `timeout_ms` (default 5000).
+   Calls are x86 `call`, ARM/Thumb `bl`/`blx`, AArch64 `bl`/`blr` and RISC-V `jal`/`jalr` linking `ra` (or `t0`, the
+   ABI's alternate link register), conditional ones included. Breakpoints at the pc are stepped past first, as
+   `debug_continue` does.
+3. Anything else is one instruction step, with breakpoints at the pc taken out for the step and put back at its
+   stop.
+
+`debug_step` with `out: true` runs from a function's first instruction to its return address.
+On A-profile ARM the temporary breakpoint's kind follows the destination's state: Thumb for a call made in Thumb
+state or an odd `lr`, ARM (size 4) otherwise. The rule: **the pc
+must be the first instruction of a function in a bound project** (the start of a function the project's analysis
+found, or of a function symbol), where the return address is still where the ABI puts it on entry: ARM/Thumb `lr`
+(refused when it is an M-profile `EXC_RETURN` value, since exception handlers return by exception return), AArch64
+`x30`, RISC-V `ra`, x86-64 `[rsp]` and x86 `[esp]` (read from target memory). Anywhere else the return address may
+have been saved and overwritten, so `out` is refused (`step_out_refused`) with the function and offset. `out` takes
+no `count`; neither `over` nor `out` takes `thread`.
+
+Temporary breakpoints:
+
+- A temporary breakpoint is removed at the next stop, whatever the stop is: its own hit (`reason:
+  "temporary_breakpoint"`), a user breakpoint or watchpoint, a fault, an interrupt or an exit. The stop event's
+  `temporary` list says whether it was hit and removed.
+- If the run does not stop within `timeout_ms`, or the call is cancelled, the target keeps running with the
+  temporary breakpoint inserted; the result is `running` with a warning, and the stop that `debug_wait` or
+  `debug_interrupt` later brings removes it. Disconnecting removes it too.
+- If the continue fails before anything runs, the temporary breakpoint is removed at once.
+- A breakpoint of the table already at the return address stands in for the temporary one: none is inserted, the
+  stop is that breakpoint's hit (counted), and it stays. A temporary breakpoint therefore never removes a user's.
+- At most 4 temporary breakpoints wait for removal at a time (a stub that refuses to remove them leaves them in the
+  table, marked temporary, and they are tried again at every stop).
+
+Each step's result gives its pc, length, flow, `bytes_source`, return address, the temporary or user breakpoint
+used, and its `outcome`: `stepped`, `returned`, `stopped_elsewhere` (another stop came first), `running` or
+`cancelled`. The request stops at the first step that is not `stepped` or `returned`. The last 32 steps are listed
+(`steps_omitted` counts the rest), no step starts after 60 s, and the final stop comes with its locations.
+
+Arrival at the return address is checked against the frame and thread. Rampage records the thread and the stack
+pointer when it places the temporary breakpoint, and at the hit requires the same thread and a stack pointer at least
+the call's (over) or the entry's (out; above it by the popped return address on x86). A recursive inner frame
+reaching the same address has a lower stack pointer and is reported as `inner_frame`; another thread as
+`other_thread`. Either way the request stops there (it does not run on looking for the right frame) and says so in
+`warnings`; the temporary breakpoint is already gone. When the stack pointer cannot be read the hit is accepted with
+a warning that the frame was not checked.
+
+### Evidence for findings
+
+`debug_evidence { session, epoch?, names?, memory? }` returns a bounded record of the stopped target: endpoint,
+session, epoch, thread, the pc and its location, up to 8 registers (by default the pc, stack pointer,
+return-address register and the first argument registers) and up to 4 memory ranges of at most 64 bytes.
+`ledger_evidence` is an evidence item `record_finding` takes as is: `{ tool: "debug_evidence", detail }`, where
+`detail` is a compact text form of the record within the ledger's 300 bytes: the location, then the memory, then
+the registers; items that do not fit are left out whole, counted in the detail and named in `limitations`. The
+ledger stores only
+that item; the structured record is in the tool result, not in the ledger, because ledger evidence is a reference to
+a tool call and its outcome rather than a data store.
+
 ## Limits
 
 | Limit | Value |
@@ -339,19 +514,23 @@ architecture and data byte order. The file uses the format in [runtime snapshots
 | Console-output and notification packets per request | 256 |
 | Waiting for a stop (`debug_continue`, `debug_wait`) | 5 s by default, 60 s at most |
 | Waiting after an interrupt | 3 s |
-| Breakpoints and watchpoints per session | 64 |
+| Breakpoints and watchpoints per session | 64, plus at most 4 temporary ones |
+| Bound projects per session | 8 |
+| Candidates listed for an ambiguous name | 16 |
+| Over-steps listed in a result | the last 32 |
+| `debug_evidence` | 8 registers, 4 memory ranges of at most 64 bytes, 300-byte ledger detail |
 | Watchpoint length | 4096 bytes |
 | Steps per request | 1,000, and 60 s in all |
 
-## What 9.1 and 9.2 do not do
+## What 9.1 to 9.3 do not do
 
 - No launch or attach, no register or memory writes, no kill (writes and kill are step 9.4).
 - No signal delivery on resume: never `C`, `S` or `vCont;C`/`vCont;S`. A pending signal is discarded.
 - No non-stop mode and no per-thread resume: every thread runs and stops together.
 - No software-breakpoint emulation by writing memory; a stub without `Z0` reports it unsupported.
-- No conditions or ignore counts on breakpoints, no step over or step out.
-- No static correlation: no slides, symbols, breakpoints by static address or function name, or binding to a
-  project (9.3).
+- No conditions or ignore counts on breakpoints.
+- No source-level stepping and no frame unwinding: step out works only from a function's first instruction.
+- No relocation of runtime bytes to file bytes beyond the slide, and no binding of snapshots.
 - No LLDB `debugserver` extensions (9.5) and no Windows debugging (9.6).
 - No expression evaluation and no monitor commands (`qRcmd`).
 - Runtime bytes stay local. They are never published anywhere except the snapshot file you name.
@@ -376,6 +555,16 @@ target, then break on `tick` with a hardware breakpoint, continue twice with it 
 `counter` advances by one per hit), step three instructions, catch the write to `counter`
 with a watchpoint, see a short continue report `running`, interrupt it, have a stale epoch refused, and disconnect,
 which removes the breakpoint and detaches.
+
+The static correlation tests bind an owned x86-64 PIE with a GNU build ID (`tests/fixtures/debug-correlation`,
+rebuilt with its `build.sh`), mapped into the fake target at a load bias: binding by build ID, by path and by file
+name, refusal without a match and binding with an explicit slide, a slide that does not verify, breakpoints by
+function name and static address, an ambiguous name, stop locations, register annotations, stepping over a call
+and a non-call, the temporary breakpoint's removal after a timeout, a cancel and another stop, user breakpoints at
+the pc and at the return address, stepping out, and evidence accepted by the findings ledger. Live, `debug_connect`
+with the firmware's path binds it at slide 0 verified by its mapped code; a breakpoint by `function: "tick"` stops
+in `tick`, annotated registers point into `tick` and `reset_handler`, step out lands after the `bl tick`, and step
+over runs that call site without stopping inside `tick` (`counter` advances by one).
 
 ```sh
 RAMPAGE_QEMU_LIVE=1 cargo nextest run -p rampage-api --run-ignored only -E 'test(debug_qemu::)'

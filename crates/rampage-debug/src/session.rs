@@ -11,8 +11,8 @@ use serde::Serialize;
 
 use crate::client::{Client, Console, Permit};
 use crate::exec::{
-    self, BreakKind, Breakpoint, Cancel, MAX_BREAKPOINTS, MAX_STEPS, MAX_WATCH_LENGTH, Origin, StopCause, StopEvent,
-    VCont, stop_reasons,
+    self, BreakKind, Breakpoint, Cancel, MAX_BREAKPOINTS, MAX_STEPS, MAX_WATCH_LENGTH, Origin, Placement, StopCause,
+    StopEvent, TemporaryOutcome, VCont, stop_reasons,
 };
 use crate::maps::{self, Module, Offsets, Region};
 use crate::packet::{self, decode_hex, encode_hex, parse_hex_u64};
@@ -45,6 +45,18 @@ const STEP_BUDGET: Duration = Duration::from_secs(60);
 const INTERRUPT_PEEK: Duration = Duration::from_millis(5);
 /// How long an interrupt waits for the stop it asks for.
 pub const INTERRUPT_WAIT: Duration = Duration::from_secs(3);
+/// Most temporary breakpoints (of steps over or out) the table holds beyond [`MAX_BREAKPOINTS`].
+pub const MAX_TEMPORARY: usize = 4;
+
+/// Where [`Session::set_temporary`] put a step's temporary breakpoint.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "placed", rename_all = "snake_case")]
+pub enum TemporaryPlacement {
+    /// A new temporary entry, removed at the next stop.
+    Inserted { breakpoint: Breakpoint },
+    /// A breakpoint of the table already at that address stands in for it and stays.
+    Existing { breakpoint: Breakpoint },
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
@@ -259,15 +271,52 @@ pub struct Modules {
 
 enum Request {
     Status,
-    Registers { thread: Option<ThreadId>, epoch: Option<u64> },
-    Memory { address: u64, length: usize, thread: Option<ThreadId>, epoch: Option<u64>, cancel: Cancel },
-    Modules { epoch: Option<u64> },
-    Continue { epoch: Option<u64>, wait: Duration, cancel: Cancel },
-    Wait { wait: Duration, cancel: Cancel },
-    Interrupt { wait: Duration, cancel: Cancel },
-    Step { epoch: Option<u64>, thread: Option<ThreadId>, count: u32, cancel: Cancel },
-    SetBreakpoint { epoch: Option<u64>, kind: BreakKind, address: u64, size: Option<u64> },
-    ClearBreakpoint { epoch: Option<u64>, id: u32 },
+    Registers {
+        thread: Option<ThreadId>,
+        epoch: Option<u64>,
+    },
+    Memory {
+        address: u64,
+        length: usize,
+        thread: Option<ThreadId>,
+        epoch: Option<u64>,
+        cancel: Cancel,
+    },
+    Modules {
+        epoch: Option<u64>,
+    },
+    Continue {
+        epoch: Option<u64>,
+        wait: Duration,
+        cancel: Cancel,
+    },
+    Wait {
+        wait: Duration,
+        cancel: Cancel,
+    },
+    Interrupt {
+        wait: Duration,
+        cancel: Cancel,
+    },
+    Step {
+        epoch: Option<u64>,
+        thread: Option<ThreadId>,
+        count: u32,
+        past: bool,
+        cancel: Cancel,
+    },
+    SetBreakpoint {
+        epoch: Option<u64>,
+        kind: BreakKind,
+        address: u64,
+        size: Option<u64>,
+        placement: Option<Placement>,
+        temporary: bool,
+    },
+    ClearBreakpoint {
+        epoch: Option<u64>,
+        id: u32,
+    },
     Breakpoints,
     Detach,
 }
@@ -300,6 +349,7 @@ enum Response {
     Run(Run),
     Steps(Steps),
     Breakpoint(Breakpoint),
+    Temporary(TemporaryPlacement),
     Breakpoints(Vec<Breakpoint>),
     Detached(Detached),
 }
@@ -508,10 +558,24 @@ impl Session {
         count: u32,
         cancel: &Cancel,
     ) -> Result<Steps, DebugError> {
+        self.step_with(epoch, thread, count, false, cancel)
+    }
+
+    /// [`Session::step`]; with `past`, every step first takes out the inserted breakpoints at the thread's pc and
+    /// puts them back at the step's stop, as a continue does, so a stub that would report one again at once (rather
+    /// than execute the instruction) still steps.
+    pub fn step_with(
+        &self,
+        epoch: Option<u64>,
+        thread: Option<ThreadId>,
+        count: u32,
+        past: bool,
+        cancel: &Cancel,
+    ) -> Result<Steps, DebugError> {
         if !(1..=MAX_STEPS).contains(&count) {
             return Err(DebugError::Invalid(format!("count must be in 1..={MAX_STEPS}")));
         }
-        let request = Request::Step { epoch, thread, count, cancel: cancel.clone() };
+        let request = Request::Step { epoch, thread, count, past, cancel: cancel.clone() };
         match self.call(request, STEP_BUDGET + self.config.command_timeout)? {
             Response::Steps(steps) => Ok(steps),
             _ => unreachable!("step request"),
@@ -527,10 +591,41 @@ impl Session {
         address: u64,
         size: Option<u64>,
     ) -> Result<Breakpoint, DebugError> {
-        let request = Request::SetBreakpoint { epoch, kind, address, size };
+        self.set_breakpoint_placed(epoch, kind, address, size, None)
+    }
+
+    /// [`Session::set_breakpoint`], recording the static location it was placed from with the entry.
+    pub fn set_breakpoint_placed(
+        &self,
+        epoch: Option<u64>,
+        kind: BreakKind,
+        address: u64,
+        size: Option<u64>,
+        placement: Option<Placement>,
+    ) -> Result<Breakpoint, DebugError> {
+        let request = Request::SetBreakpoint { epoch, kind, address, size, placement, temporary: false };
         match self.call(request, self.config.command_timeout)? {
             Response::Breakpoint(breakpoint) => Ok(breakpoint),
             _ => unreachable!("breakpoint request"),
+        }
+    }
+
+    /// Places a step's temporary breakpoint at `address` (`size` as for [`Session::set_breakpoint`]): a hardware
+    /// breakpoint, else a software one the stub plants. A breakpoint of the table already at that address stands
+    /// in for it instead, so the temporary one never takes out the caller's. A temporary entry is removed at the
+    /// next stop, whatever the stop is, and by detaching.
+    pub fn set_temporary(
+        &self,
+        epoch: Option<u64>,
+        address: u64,
+        size: Option<u64>,
+        placement: Option<Placement>,
+    ) -> Result<TemporaryPlacement, DebugError> {
+        let request =
+            Request::SetBreakpoint { epoch, kind: BreakKind::Hardware, address, size, placement, temporary: true };
+        match self.call(request, self.config.command_timeout)? {
+            Response::Temporary(placed) => Ok(placed),
+            _ => unreachable!("temporary breakpoint request"),
         }
     }
 
@@ -624,6 +719,11 @@ struct Stepping {
     step_deadline: Instant,
     /// An interrupt asked the steps to end.
     halt: bool,
+    /// Each step first takes out the inserted breakpoints at the pc.
+    past: bool,
+    /// Decided once when a step's stop arrives, so the temporary breakpoints and the continue agree: whether the
+    /// continue behind a step past breakpoints goes on (not halted, not cancelled).
+    go_on: bool,
     purpose: Purpose,
 }
 
@@ -948,8 +1048,8 @@ impl Worker {
                     Err(error) => Err(error),
                 }
             }
-            Request::Step { epoch, thread, count, cancel } if self.state != State::Running => {
-                match self.start_steps(epoch, thread, count, cancel, &reply, deadline) {
+            Request::Step { epoch, thread, count, past, cancel } if self.state != State::Running => {
+                match self.start_steps(epoch, thread, count, past, cancel, &reply, deadline) {
                     Ok(()) => return false,
                     Err(error) => Err(error),
                 }
@@ -1063,34 +1163,61 @@ impl Worker {
     ) -> Result<bool, DebugError> {
         self.check_epoch(epoch)?;
         self.require_stopped()?;
-        let stop = self.stop.clone();
-        let at_pc: Vec<usize> = if self.breakpoints.iter().any(|entry| entry.inserted && !entry.kind.is_watchpoint()) {
-            let pcs = match &stop {
-                Some(stop) => match self.stop_pc(stop, deadline) {
-                    Ok((_, pcs)) => pcs,
-                    Err(error) if error.fatal() => return Err(error),
-                    Err(_) => Vec::new(),
-                },
-                None => Vec::new(),
-            };
-            (0..self.breakpoints.len())
-                .filter(|index| {
-                    let entry = &self.breakpoints[*index];
-                    entry.inserted && !entry.kind.is_watchpoint() && pcs.contains(&entry.address)
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let at_pc = self.breakpoints_at_pc(deadline)?;
         if at_pc.is_empty() {
             self.resume_all(deadline)?;
             return Ok(false);
         }
+        self.lift(&at_pc, deadline)?;
+        let thread = self.step_thread(None)?;
+        let packet = self.step_packet(thread, deadline)?;
+        self.stepping = Some(Stepping {
+            thread,
+            packet,
+            reply: reply.clone(),
+            cancel: cancel.clone(),
+            step_deadline: Instant::now(),
+            halt: false,
+            past: false,
+            go_on: true,
+            purpose: Purpose::PastBreakpoints { wait },
+        });
+        if let Err(error) = self.next_step(deadline) {
+            self.stepping = None;
+            self.put_back(&error, deadline);
+            return Err(error);
+        }
+        Ok(true)
+    }
+
+    /// Indices of the inserted breakpoints (not watchpoints) at the stopped thread's pc.
+    fn breakpoints_at_pc(&mut self, deadline: Instant) -> Result<Vec<usize>, DebugError> {
+        if !self.breakpoints.iter().any(|entry| entry.inserted && !entry.kind.is_watchpoint()) {
+            return Ok(Vec::new());
+        }
+        let pcs = match self.stop.clone() {
+            Some(stop) => match self.stop_pc(&stop, deadline) {
+                Ok((_, pcs)) => pcs,
+                Err(error) if error.fatal() => return Err(error),
+                Err(_) => Vec::new(),
+            },
+            None => Vec::new(),
+        };
+        Ok((0..self.breakpoints.len())
+            .filter(|index| {
+                let entry = &self.breakpoints[*index];
+                entry.inserted && !entry.kind.is_watchpoint() && pcs.contains(&entry.address)
+            })
+            .collect())
+    }
+
+    /// Takes the breakpoints at `at_pc` out of the stub, to be put back at the next stop. If the stub refuses one,
+    /// the ones already taken out go back and nothing runs.
+    fn lift(&mut self, at_pc: &[usize], deadline: Instant) -> Result<(), DebugError> {
         for (done, index) in at_pc.iter().enumerate() {
             let packet = self.breakpoints[*index].remove_packet();
             let removed = self.command(&packet, deadline)?;
             if removed != b"OK" {
-                // Put back the ones already taken out; the continue does not go ahead.
                 let mut warnings = Vec::new();
                 for earlier in &at_pc[..done] {
                     let insert = self.breakpoints[*earlier].insert_packet();
@@ -1098,6 +1225,7 @@ impl Worker {
                         self.breakpoints[*earlier].inserted = false;
                         warnings.push(format!("breakpoint {} could not be re-inserted", self.breakpoints[*earlier].id));
                     }
+                    self.reinsert.retain(|id| *id != self.breakpoints[*earlier].id);
                 }
                 return Err(DebugError::Target(format!(
                     "cannot step past breakpoint {}: the stub refused `{packet}` ({}){}",
@@ -1109,30 +1237,18 @@ impl Worker {
             self.breakpoints[*index].inserted = false;
             self.reinsert.push(self.breakpoints[*index].id);
         }
-        let thread = self.step_thread(None)?;
-        let packet = self.step_packet(thread, deadline)?;
-        self.stepping = Some(Stepping {
-            thread,
-            packet,
-            reply: reply.clone(),
-            cancel: cancel.clone(),
-            step_deadline: Instant::now(),
-            halt: false,
-            purpose: Purpose::PastBreakpoints { wait },
-        });
-        if let Err(error) = self.next_step(deadline) {
-            self.stepping = None;
-            // Nothing ran: put the breakpoints back before failing.
-            for id in std::mem::take(&mut self.reinsert) {
-                let Some(index) = self.breakpoints.iter().position(|entry| entry.id == id) else { continue };
-                let packet = self.breakpoints[index].insert_packet();
-                if !error.fatal() && self.command(&packet, deadline).is_ok_and(|reply| reply == b"OK") {
-                    self.breakpoints[index].inserted = true;
-                }
+        Ok(())
+    }
+
+    /// Puts back the breakpoints taken out to step past them when the step never ran because of `error`.
+    fn put_back(&mut self, error: &DebugError, deadline: Instant) {
+        for id in std::mem::take(&mut self.reinsert) {
+            let Some(index) = self.breakpoints.iter().position(|entry| entry.id == id) else { continue };
+            let packet = self.breakpoints[index].insert_packet();
+            if !error.fatal() && self.command(&packet, deadline).is_ok_and(|reply| reply == b"OK") {
+                self.breakpoints[index].inserted = true;
             }
-            return Err(error);
         }
-        Ok(true)
     }
 
     /// Resumes every thread: `vCont;c`, else `c` once no `Hc<thread>` limits it.
@@ -1181,11 +1297,13 @@ impl Worker {
     }
 
     /// Starts a step request; its stops are handled in the main loop.
+    #[allow(clippy::too_many_arguments)]
     fn start_steps(
         &mut self,
         epoch: Option<u64>,
         thread: Option<ThreadId>,
         count: u32,
+        past: bool,
         cancel: Cancel,
         reply: &Sender<Result<Response, DebugError>>,
         deadline: Instant,
@@ -1213,6 +1331,8 @@ impl Worker {
             cancel,
             step_deadline: Instant::now(),
             halt: false,
+            past,
+            go_on: true,
             purpose: Purpose::Steps { steps: Box::new(steps), budget: Instant::now() + STEP_BUDGET },
         });
         self.next_step(deadline).inspect_err(|_| self.stepping = None)
@@ -1242,22 +1362,50 @@ impl Worker {
                 return Ok(());
             }
         }
-        let (packet, thread) = (stepping.packet.clone(), stepping.thread);
+        let (packet, thread, past) = (stepping.packet.clone(), stepping.thread, stepping.past);
+        if past {
+            // The pc is the stepped thread's only when it is the stop's thread; otherwise nothing is taken out.
+            let stop_thread = match &self.stop {
+                Some(StopReply::Signal { thread, .. }) => *thread,
+                _ => None,
+            };
+            if stop_thread.is_none() || thread.is_none() || stop_thread == thread {
+                let at_pc = match self.breakpoints_at_pc(deadline) {
+                    Ok(at_pc) => at_pc,
+                    Err(error) => {
+                        self.stepping = None;
+                        return Err(error);
+                    }
+                };
+                if let Err(error) = self.lift(&at_pc, deadline) {
+                    self.stepping = None;
+                    return Err(error);
+                }
+            }
+        }
         if packet == "s"
             && let Some(thread) = thread
         {
-            let reply = self.command(&format!("Hc{thread}"), deadline)?;
+            let reply = match self.command(&format!("Hc{thread}"), deadline) {
+                Ok(reply) => reply,
+                Err(error) => {
+                    self.stepping = None;
+                    self.put_back(&error, deadline);
+                    return Err(error);
+                }
+            };
             if reply != b"OK" {
                 self.stepping = None;
-                return Err(DebugError::Target(format!(
-                    "cannot select thread {thread} to step: {}",
-                    reply_text(&reply)
-                )));
+                let error =
+                    DebugError::Target(format!("cannot select thread {thread} to step: {}", reply_text(&reply)));
+                self.put_back(&error, deadline);
+                return Err(error);
             }
             self.hc_thread = true;
         }
         if let Err(error) = self.resume(&packet, Origin::Step(thread)) {
             self.stepping = None;
+            self.put_back(&error, deadline);
             return Err(error);
         }
         if let Some(stepping) = &mut self.stepping {
@@ -1335,7 +1483,7 @@ impl Worker {
                 let wait = *wait;
                 let stepping = self.stepping.take().expect("stepping");
                 let warnings = event.warnings.clone();
-                if !completed || stepping.halt || stepping.cancel.is_cancelled() {
+                if !completed || !stepping.go_on {
                     // The step stopped for its own reason (or was halted): that stop is the continue's answer.
                     let mut run = self.run_state(stepping.cancel.is_cancelled());
                     run.warnings = warnings;
@@ -1439,6 +1587,9 @@ impl Worker {
     fn finish_run(&mut self, reply: Vec<u8>, deadline: Instant, list_threads: bool) -> Result<StopEvent, DebugError> {
         let interrupted = std::mem::take(&mut self.interrupted);
         self.resumed_at = None;
+        if let Some(stepping) = &mut self.stepping {
+            stepping.go_on = !stepping.halt && !stepping.cancel.is_cancelled();
+        }
         if reply.is_empty() || is_error(&reply) {
             self.state = State::Stopped;
             return Err(if reply.is_empty() {
@@ -1495,6 +1646,7 @@ impl Worker {
                 Err(error) => warnings.push(format!("breakpoint {id} could not be re-inserted: {error}")),
             }
         }
+        let (reason, breakpoints, temporary) = self.settle_temporary(reason, breakpoints, &pcs, deadline)?;
         let event = StopEvent {
             epoch: self.epoch,
             reason,
@@ -1509,9 +1661,79 @@ impl Worker {
             stop,
             console: self.client.run_console.clone(),
             warnings,
+            temporary,
         };
         self.last_stop = Some(event.clone());
         Ok(event)
+    }
+
+    /// Takes the temporary breakpoints of a step over or out out of the stub and the table at this stop, whatever
+    /// the stop is, and tells their hit apart from the table's breakpoints: a stop only they explain is
+    /// [`StopCause::Temporary`]. The one stop that keeps them is the single step a continue takes past breakpoints at
+    /// the pc on its way, unless that step lands on one. A temporary breakpoint the stub will not take out stays in
+    /// the table (marked temporary) and is tried again at the next stop.
+    fn settle_temporary(
+        &mut self,
+        reason: StopCause,
+        mut breakpoints: Vec<u32>,
+        pcs: &[u64],
+        deadline: Instant,
+    ) -> Result<(StopCause, Vec<u32>, Vec<TemporaryOutcome>), DebugError> {
+        if !self.breakpoints.iter().any(|entry| entry.temporary) {
+            return Ok((reason, breakpoints, Vec::new()));
+        }
+        let temporary: Vec<(u32, u64)> =
+            self.breakpoints.iter().filter(|entry| entry.temporary).map(|entry| (entry.id, entry.address)).collect();
+        let past_step =
+            matches!(&self.stepping, Some(Stepping { purpose: Purpose::PastBreakpoints { .. }, go_on: true, .. }));
+        // A step past breakpoints that completes on a temporary breakpoint's address has arrived (a call to the
+        // next instruction, say): the continue does not go on.
+        let landed = past_step && reason == StopCause::Step;
+        let hit: Vec<u32> = temporary
+            .iter()
+            .filter(|(id, address)| breakpoints.contains(id) || (landed && pcs.contains(address)))
+            .map(|(id, _)| *id)
+            .collect();
+        breakpoints.retain(|id| !temporary.iter().any(|(temporary, _)| temporary == id));
+        let reason =
+            if !hit.is_empty() && breakpoints.is_empty() && matches!(reason, StopCause::Breakpoint | StopCause::Step) {
+                StopCause::Temporary
+            } else {
+                reason
+            };
+        if past_step && reason == StopCause::Step {
+            return Ok((reason, breakpoints, Vec::new()));
+        }
+        let mut outcomes = Vec::new();
+        for (id, address) in temporary {
+            let Some(index) = self.breakpoints.iter().position(|entry| entry.id == id) else { continue };
+            let mut outcome = TemporaryOutcome { id, address, hit: hit.contains(&id), removed: true, error: None };
+            if self.breakpoints[index].inserted && self.state == State::Stopped {
+                let packet = self.breakpoints[index].remove_packet();
+                match self.command(&packet, deadline) {
+                    Ok(reply) if reply == b"OK" => {}
+                    Ok(reply) => {
+                        outcome.removed = false;
+                        outcome.error = Some(format!(
+                            "the stub refused `{packet}` ({}); it stays in the table and is taken out at the next stop \
+                             or when disconnecting",
+                            reply_text(&reply)
+                        ));
+                    }
+                    Err(error) if error.fatal() => return Err(error),
+                    Err(error) => {
+                        outcome.removed = false;
+                        outcome.error = Some(format!("`{packet}` failed: {error}"));
+                    }
+                }
+            }
+            if outcome.removed {
+                self.breakpoints.remove(index);
+                self.reinsert.retain(|pending| *pending != id);
+            }
+            outcomes.push(outcome);
+        }
+        Ok((reason, breakpoints, outcomes))
     }
 
     /// The stopped thread's pc: its bytes as sent, and its value in the session's byte order (both orders when the
@@ -1560,7 +1782,76 @@ impl Worker {
         Ok((Some(bytes), pcs))
     }
 
+    /// Places a step's temporary breakpoint: a breakpoint of the table already at `address` stands in for it, else
+    /// a new temporary hardware breakpoint, else a software one.
+    fn set_temporary(
+        &mut self,
+        info: &Info,
+        epoch: Option<u64>,
+        address: u64,
+        size: Option<u64>,
+        placement: Option<Placement>,
+        deadline: Instant,
+    ) -> Result<TemporaryPlacement, DebugError> {
+        self.check_epoch(epoch)?;
+        self.require_stopped()?;
+        let (at, _) = self.breakpoint_address(info, BreakKind::Hardware, address, size, deadline)?;
+        if let Some(existing) =
+            self.breakpoints.iter().find(|entry| entry.inserted && !entry.kind.is_watchpoint() && entry.address == at)
+        {
+            return Ok(TemporaryPlacement::Existing { breakpoint: existing.clone() });
+        }
+        if self.breakpoints.iter().filter(|entry| entry.temporary).count() >= MAX_TEMPORARY {
+            return Err(DebugError::Invalid(format!(
+                "{MAX_TEMPORARY} temporary breakpoints are still waiting to be taken out; stop the target first"
+            )));
+        }
+        match self.set_breakpoint(info, None, BreakKind::Hardware, address, size, placement.clone(), true, deadline) {
+            Ok(breakpoint) => Ok(TemporaryPlacement::Inserted { breakpoint }),
+            Err(DebugError::Unsupported(_) | DebugError::Target(_)) => self
+                .set_breakpoint(info, None, BreakKind::Software, address, size, placement, true, deadline)
+                .map(|breakpoint| TemporaryPlacement::Inserted { breakpoint })
+                .map_err(|error| match error {
+                    DebugError::Unsupported(message) | DebugError::Target(message) => DebugError::Unsupported(format!(
+                        "neither a hardware nor a software breakpoint could be placed for the step: {message}"
+                    )),
+                    other => other,
+                }),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// The address and `Z` size of a breakpoint (not a watchpoint) at `address`: on ARM an odd address is Thumb
+    /// code at the even one, and the size defaults by architecture and instruction set state.
+    fn breakpoint_address(
+        &mut self,
+        info: &Info,
+        kind: BreakKind,
+        address: u64,
+        size: Option<u64>,
+        deadline: Instant,
+    ) -> Result<(u64, u64), DebugError> {
+        debug_assert!(!kind.is_watchpoint());
+        let m_profile = target::m_profile(info.layout.as_ref());
+        let mut address = address;
+        let mut thumb = None;
+        if info.family == Family::Arm && address & 1 == 1 {
+            // An odd ARM address names Thumb code; the stub takes the instruction's address.
+            address &= !1;
+            thumb = Some(true);
+            if size == Some(4) {
+                return Err(DebugError::Invalid("an odd (Thumb) address cannot take an ARM-state size 4".into()));
+            }
+        }
+        if info.family == Family::Arm && !m_profile && thumb.is_none() && size.is_none() {
+            thumb = self.cpsr_thumb(info, deadline)?;
+        }
+        let size = exec::breakpoint_size(info.family, m_profile, thumb, size).map_err(DebugError::Invalid)?;
+        Ok((address, size))
+    }
+
     /// Inserts a breakpoint or watchpoint and adds it to the table.
+    #[allow(clippy::too_many_arguments)]
     fn set_breakpoint(
         &mut self,
         info: &Info,
@@ -1568,11 +1859,14 @@ impl Worker {
         kind: BreakKind,
         address: u64,
         size: Option<u64>,
+        placement: Option<Placement>,
+        temporary: bool,
         deadline: Instant,
     ) -> Result<Breakpoint, DebugError> {
         self.check_epoch(epoch)?;
         self.require_stopped()?;
-        if self.breakpoints.len() >= MAX_BREAKPOINTS {
+        let held = self.breakpoints.iter().filter(|entry| !entry.temporary).count();
+        if !temporary && held >= MAX_BREAKPOINTS {
             return Err(DebugError::Invalid(format!(
                 "the session already holds {MAX_BREAKPOINTS} breakpoints and watchpoints; clear one first"
             )));
@@ -1586,29 +1880,19 @@ impl Worker {
             }
             (address, length)
         } else {
-            let m_profile = target::m_profile(info.layout.as_ref());
-            let mut address = address;
-            let mut thumb = None;
-            if info.family == Family::Arm && address & 1 == 1 {
-                // An odd ARM address names Thumb code; the stub takes the instruction's address.
-                address &= !1;
-                thumb = Some(true);
-                if size == Some(4) {
-                    return Err(DebugError::Invalid("an odd (Thumb) address cannot take an ARM-state size 4".into()));
-                }
-            }
-            if info.family == Family::Arm && !m_profile && thumb.is_none() && size.is_none() {
-                thumb = self.cpsr_thumb(info, deadline)?;
-            }
-            let size = exec::breakpoint_size(info.family, m_profile, thumb, size).map_err(DebugError::Invalid)?;
-            (address, size)
+            self.breakpoint_address(info, kind, address, size, deadline)?
         };
         if let Some(existing) =
             self.breakpoints.iter().find(|entry| entry.kind == kind && entry.address == address && entry.size == size)
         {
-            return Err(DebugError::Invalid(format!("this is already set as breakpoint {}", existing.id)));
+            return Err(DebugError::Invalid(format!(
+                "this is already set as {}breakpoint {}",
+                if existing.temporary { "temporary " } else { "" },
+                existing.id
+            )));
         }
-        let entry = Breakpoint { id: self.next_breakpoint, kind, address, size, hits: 0, inserted: true };
+        let entry =
+            Breakpoint { id: self.next_breakpoint, kind, address, size, hits: 0, inserted: true, temporary, placement };
         let packet = entry.insert_packet();
         let reply = self.command(&packet, deadline)?;
         if reply == b"OK" {
@@ -1760,8 +2044,11 @@ impl Worker {
                 self.use_thread(None, deadline)?;
                 self.modules(&info, deadline).map(Response::Modules)
             }
-            Request::SetBreakpoint { epoch, kind, address, size } => {
-                self.set_breakpoint(&info, epoch, kind, address, size, deadline).map(Response::Breakpoint)
+            Request::SetBreakpoint { epoch, kind, address, size, placement, temporary: false } => self
+                .set_breakpoint(&info, epoch, kind, address, size, placement, false, deadline)
+                .map(Response::Breakpoint),
+            Request::SetBreakpoint { epoch, address, size, placement, temporary: true, .. } => {
+                self.set_temporary(&info, epoch, address, size, placement, deadline).map(Response::Temporary)
             }
             Request::ClearBreakpoint { epoch, id } => {
                 self.clear_breakpoint(epoch, id, deadline).map(Response::Breakpoint)

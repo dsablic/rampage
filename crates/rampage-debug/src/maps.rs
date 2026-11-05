@@ -206,7 +206,7 @@ pub fn parse_offsets(reply: &str) -> Result<Offsets, String> {
 }
 
 /// Where an ELF image's build-ID note lies, from its header and program headers (read from target memory).
-pub(crate) struct ElfHeader {
+pub struct ElfHeader {
     pub little: bool,
     pub wide: bool,
     pub phoff: u64,
@@ -214,7 +214,7 @@ pub(crate) struct ElfHeader {
     pub phnum: u64,
 }
 
-pub(crate) fn elf_header(bytes: &[u8]) -> Option<ElfHeader> {
+pub fn elf_header(bytes: &[u8]) -> Option<ElfHeader> {
     if bytes.len() < 64 || &bytes[..4] != b"\x7fELF" {
         return None;
     }
@@ -236,7 +236,7 @@ pub(crate) fn elf_header(bytes: &[u8]) -> Option<ElfHeader> {
 }
 
 /// The `(offset_in_image, size)` of each `PT_NOTE` segment in `headers`, which hold `phnum` program headers.
-pub(crate) fn note_segments(header: &ElfHeader, headers: &[u8]) -> Vec<(u64, u64)> {
+pub fn note_segments(header: &ElfHeader, headers: &[u8]) -> Vec<(u64, u64)> {
     let mut notes = Vec::new();
     for index in 0..header.phnum as usize {
         let start = index * header.phentsize as usize;
@@ -252,7 +252,7 @@ pub(crate) fn note_segments(header: &ElfHeader, headers: &[u8]) -> Vec<(u64, u64
 }
 
 /// The `NT_GNU_BUILD_ID` descriptor in a note segment's bytes, as hex.
-pub(crate) fn build_id(notes: &[u8], little: bool) -> Option<String> {
+pub fn build_id(notes: &[u8], little: bool) -> Option<String> {
     let mut at = 0usize;
     while at + 12 <= notes.len() {
         let read = |offset: usize| read_uint(&notes[at + offset..at + offset + 4], little) as usize;

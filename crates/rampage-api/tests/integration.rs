@@ -13,6 +13,7 @@ mod capture_session;
 mod compiled_arm64;
 mod correlation;
 mod debug_control;
+mod debug_correlation;
 mod debug_cpp_layout_acceptance;
 mod debug_execution;
 mod debug_import;
