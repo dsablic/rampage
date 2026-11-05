@@ -56,7 +56,7 @@ an entry.
 
 All sixteen selected families are admitted. Each row's code-space facts and byte order are checked against the
 verified native translator before any decoder is used. Recall is measured on owned fixtures through the ordinary
-Project path (`rampage-eval processor-roster`, [benchmarks](benchmarks.md)): each fixture has two truth functions;
+Project path (`rampage-eval processor-roster`, [benchmarks](benchmarks/phase4-1.md)): each fixture has two truth functions;
 "manual" seeds every truth entry, "caller" seeds only the base entry.
 
 | Profile | Byte order | Entries manual / caller | Exact extents manual / caller | Gates on misses | C |
