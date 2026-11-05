@@ -10,7 +10,8 @@ diagnostics and limitations: **3,842 → 2,195 serialized bytes, saving 1,647 by
 3,259 → 1,878 bytes. These are byte measurements, not provider-token estimates or the planned 50% target.
 
 One unchanged canonical helper question used the same `github-copilot/gpt-6.1-sol`, `default` route and answered
-`{"return_value":22}` correctly, with zero model/tool errors:
+`{"return_value":22}` correctly, with zero model/tool errors. That OpenCode route is retired; these numbers are
+history, not comparable with the [head-to-head agent runs](agent-h2h-2026-11-05.md):
 
 | Metric | Frozen helper baseline | Current first attempt |
 | --- | ---: | ---: |

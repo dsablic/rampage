@@ -12,6 +12,7 @@ Per-phase reports, newest first. Each is a recorded measurement with its own lim
 
 | Report | Contents |
 | --- | --- |
+| [Head-to-head agent runs: rampage vs REA](benchmarks/agent-h2h-2026-11-05.md) | 20 canonical tasks × 3 through `claude-sonnet-5-5`, 2026-11-05. |
 | [Phase 9 debugger acceptance](benchmarks/phase9-debugger.md) | GDB stub, debugserver and Windows acceptance, 2026-10-29 to 2026-11-05. |
 | [REA formats and ledger wave](benchmarks/rea-formats-ledger.md) | Format tools and findings ledger, 2026-10-29. |
 | [Phase 4.1 benchmark reports](benchmarks/phase4-1.md) | Sleigh processor roster as Raw Projects and the explicit-window checkpoint. |
@@ -49,7 +50,8 @@ SHA-256 `7248d6e31c3394fb44ffcafc1181a67114822637247ce82c793866ee99deacc4`. The 
 | Phase 0 evidence completeness | 22/22 checks met; `phase0_complete=true` |
 
 The fixed model was `github-copilot/gpt-6.1-sol`, variant `default`, through the explicitly labeled OpenCode
-JSON-intent adapter. Host tools were disabled; actual analysis used MCP against copied fixtures. Contract
+JSON-intent adapter, since retired. These task results are history and are not comparable with the
+[head-to-head agent runs](benchmarks/agent-h2h-2026-11-05.md) (other model, client and prompts). Host tools were disabled; actual analysis used MCP against copied fixtures. Contract
 matches are not claims of general reverse-engineering parity. The unknown capability probe reflects limited
 visibility of write-tool definitions; the other failed probe mixed answer and unsupported-control fields.
 
