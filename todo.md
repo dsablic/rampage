@@ -11,6 +11,23 @@
 This file holds open items. Done sections, including every completed parity phase, are archived verbatim in
 [docs/plans/todo-archive.md](docs/plans/todo-archive.md); each section below that lost done items links to them.
 
+## Head-to-head agent benchmark follow-ups (2026-11-05)
+
+Observations from [the rampage vs REA runs](docs/benchmarks/agent-h2h-2026-11-05.md); rampage was not tuned
+during the benchmark.
+
+- [ ] The model sometimes calls a bare tool name (`enable_tools`, `list_strings`) and the client refuses it: 4
+  of 6 C++ runs in the first run, 2 in the second. Check whether tool descriptions or `enable_tools` output name
+  tools in a way that invites unprefixed calls.
+- [ ] The second run's one rampage miss (`objc-superclasses`) never enabled the `types` group for
+  `language_metadata`. Consider whether `types` belongs in the default groups, now that Claude Code defers MCP
+  schemas through ToolSearch and a larger default set costs little up front.
+- [ ] Results over Claude Code's 50,000-character limit are spilled to an unreadable file. rampage had none in
+  the benchmark; consider declaring `anthropic/maxResultSizeChars` on tools that can legitimately return more.
+- [ ] Add harder, less-saturated agent tasks: both servers score 49–51/51 on the current 17, so the set no longer
+  separates them on accuracy, only on calls, tokens and time.
+- [ ] Repeat the head-to-head with a second model or client before drawing conclusions beyond this one.
+
 ## Open acceptance gate: live Phase 1 completion
 
 - [ ] Genuine live checked import → central C++ struct retype → owner-linked field verification and fresh replay.

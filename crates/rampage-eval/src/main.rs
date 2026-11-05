@@ -9,6 +9,7 @@ use rampage_loaders::Binary;
 use rampage_signatures::{SignatureDb, named_functions};
 use serde::Deserialize;
 
+mod agent_bench_run;
 mod parity;
 mod parity_completion;
 mod parity_graph_files;
@@ -87,6 +88,10 @@ enum Command {
     /// --min-recall or --min-precision). A toolid slice takes no --target: its truth names the binaries. A types
     /// slice decompiles every function of its type truth in the stripped target and scores one --metric.
     Run(Box<RunArgs>),
+    /// Run the canonical tasks head to head through an external agent runner (default: Claude Code via
+    /// tools/agent-bench/claude-runner.py) against each MCP server, sequentially, and score the answers.
+    /// This spends model usage. Prints the summary tables; records and private transcripts go to --out-dir.
+    AgentBench(Box<agent_bench_run::AgentBenchArgs>),
 }
 
 /// The heuristic family a slice evaluates.
@@ -186,9 +191,6 @@ struct RunArgs {
     /// Explicit model for opt-in MCP agent tasks (existing Anthropic transport); no model fallback.
     #[arg(long, requires = "suite")]
     agent_model: Option<String>,
-    /// Explicit benchmark provider. OpenCode reuses local authenticated API discovery with a pinned model.
-    #[arg(long, requires = "agent_model", value_enum, default_value_t = AgentProvider::Anthropic)]
-    agent_provider: AgentProvider,
     /// Task IDs to attempt with --agent-model; repeatable. Default selects the first bounded task subset.
     #[arg(long, requires = "agent_model")]
     agent_task: Vec<String>,
@@ -235,21 +237,6 @@ enum ParitySuite {
     Parity,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
-enum AgentProvider {
-    Anthropic,
-    Opencode,
-}
-
-impl AgentProvider {
-    fn tag(self) -> &'static str {
-        match self {
-            Self::Anthropic => "anthropic",
-            Self::Opencode => "opencode",
-        }
-    }
-}
-
 fn main() -> ExitCode {
     let result = match Cli::parse().command {
         Command::ArtifactInfo { input } => artifact_info(&input),
@@ -264,6 +251,7 @@ fn main() -> ExitCode {
         Command::Strip { input, output, keep_symbols } => strip(&input, &output, keep_symbols),
         Command::StripPe { input, output } => strip_pe_file(&input, &output),
         Command::Run(args) => run(*args),
+        Command::AgentBench(args) => agent_bench_run::run(*args),
     };
     match result {
         Ok(code) => code,

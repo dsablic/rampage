@@ -1,0 +1,6830 @@
+{
+  "schema_version": 1,
+  "benchmark": "agent-h2h",
+  "label": "full2-2026-11-05",
+  "run_unix_ms": 1793870582043,
+  "protocol": {
+    "model": "claude-sonnet-5-5",
+    "repeat": 3,
+    "max_turns": 40,
+    "timeout_s": 900,
+    "servers": [
+      "rampage",
+      "rea"
+    ],
+    "tasks": [
+      "arithmetic-arm64-elf",
+      "capability-decompile",
+      "capability-local-variable-rename",
+      "capability-patch-export",
+      "cpp-class-names-arm64-macho",
+      "cpp-multiple-inheritance-arm64-macho",
+      "format-arm64-elf",
+      "format-arm64-macho",
+      "format-mips-be-elf",
+      "format-thumb-elf",
+      "format-x64-elf",
+      "format-x64-pe",
+      "go-package-functions-x64-elf",
+      "greeting-x64-elf",
+      "greeting-x64-pe",
+      "helper-arithmetic-x64-elf",
+      "helper-plt-result-x64-elf",
+      "main-return-arm64-macho",
+      "main-return-x64-elf",
+      "objc-superclasses-arm64-macho"
+    ],
+    "order": "for each repetition, for each task, each server in turn, sequentially; the --servers order on odd repetitions and its reverse on even ones",
+    "max_mcp_output_tokens": 200000,
+    "neutral_suite_sha256": "65ab55b0c14460d14d95601dc7dbf54d06566d84864b22f6821a330afb3ef190",
+    "task_definition_sha256": {
+      "arithmetic-arm64-elf": "f8efd46506cfa12650044890768ab777d99e2b5251ca119ad05de1fca3be52ce",
+      "capability-decompile": "182ecaed6a44fc8ac866242dc04cbb73fec80acbf9d4894f363bdda47ade3977",
+      "capability-local-variable-rename": "12005e75f63fe463ad53953e1cc1597176bcfaa8074bfc03312819ef27b85ef9",
+      "capability-patch-export": "1117da5782b608760edfc682e33569e002009e6360ec87e65ec0ab5fb64f551f",
+      "cpp-class-names-arm64-macho": "bfe9d17fb3204e5a2c1b98062655822dd05a60968d48f12e60e629fe52310ff0",
+      "cpp-multiple-inheritance-arm64-macho": "64bd626465740422725dfe3f7821d84601888170b6500f834ab8a15650dbac06",
+      "format-arm64-elf": "739b0e6e98a827c223fe61f3e1303217b82b1ea708044ce50bede851bba402af",
+      "format-arm64-macho": "bf6965c20793c488f6e4f328caf34f0dc9ba20de3c50cf370b57bba2d7a59470",
+      "format-mips-be-elf": "861295e16e06af27acf675b70fae14b690a603011998dd44abcff7be1cada5e0",
+      "format-thumb-elf": "612c3c041131f3bf44e308006afd4568c12ef56e14d5c632a17cea37d9aebd92",
+      "format-x64-elf": "66d670368aafddb24a1f4bf46ac24b1123ecad179723fd4d5ff89ea489e6a066",
+      "format-x64-pe": "dbe0eec78439fe48eed064d2adc613e08b5c684d61672790c99b9a20fdfc43da",
+      "go-package-functions-x64-elf": "431c8735b080223cc63c6c362e6fb6acd5f3108e7fbc64ffd17e4d4d873703a3",
+      "greeting-x64-elf": "85043f963c4eebff39bb06005b06b93c82fb0bf7f6bcd0918c8f1973795fb50d",
+      "greeting-x64-pe": "908ff83e24672173124c9e54625f5ff353bcd0431215427ab79051cf4f5d9297",
+      "helper-arithmetic-x64-elf": "f0e24e7b55a6a66a66d7d33c61a11569df7ada16dd48524402733b1e7529ee08",
+      "helper-plt-result-x64-elf": "d8f2d1405336fbd5671391965688b17bd5c57b9f56e3090a8b0080142c78eec2",
+      "main-return-arm64-macho": "7344ffae2b85de24710890544526deaccd3960ab386b43980011f6c3adc04d23",
+      "main-return-x64-elf": "9ab20febc88b8a93db6ca6744200a6d972a31db9042b102d7079bb78de348f43",
+      "objc-superclasses-arm64-macho": "6b07f3f2f831c03bc036ddfaae8404a706a284e1a94cae9642c95f5e9a50977d"
+    },
+    "runner_command": "python3 -I tools/agent-bench/claude-runner.py",
+    "fixture_name_in_workdir": "fixture.bin"
+  },
+  "runners": [
+    {
+      "name": "claude-code",
+      "version": "2.1.318",
+      "model": "claude-sonnet-5-5",
+      "isolation": "setting-sources-none"
+    }
+  ],
+  "versions": {
+    "rampage": {
+      "binary_sha256": "777cd6af5727fa639e6b2985590dae7620298840062233bdfcf2e62ee04d008d",
+      "worker_beside_binary": true,
+      "commit": "7b40eed3c5aaa4d38402032cb3ef5a503472cb24",
+      "worktree_dirty": false,
+      "groups": "default (core plus enable_tools)"
+    },
+    "rea": {
+      "install": {
+        "source": "https://github.com/morluto/rea",
+        "commit": "970969cb53f788976e64eae387076fcea104b603",
+        "commit_date": "2026-11-05T15:14:04+08:00",
+        "package_version": "6.8.0",
+        "why_not_npm_release": "rea-agents 6.8.0 (latest npm release) admits only Ghidra 12.1.x; main admits 12.x (>=12.1), so the pinned main commit is built from source for Ghidra 12.2",
+        "node": "v24.22.1",
+        "npm": "11.19.1",
+        "install_command": "HUSKY=0 npm ci --ignore-scripts --no-audit --no-fund --cache ../npm-cache --userconfig /dev/null",
+        "build_command": "npm run build:cached (turbo: metadata:check, compile, artifacts:skills)",
+        "lockfile_sha256": "3b3f017c523a8ca17c205f818b1f2fe8d8660fecfd36b1cd625ec2509fa28be6",
+        "lockfile_packages": 963,
+        "lockfile_all_registry_npmjs_with_integrity": true,
+        "installed_packages": 730,
+        "runtime_dependencies": {
+          "@babel/parser": "8.0.4",
+          "@babel/types": "8.0.4",
+          "@bufbuild/protobuf": "2.16.0",
+          "@clack/prompts": "1.7.0",
+          "@electron/asar": "4.2.0",
+          "@jridgewell/trace-mapping": "0.3.31",
+          "@lydell/node-pty": "1.1.0",
+          "@modelcontextprotocol/client": "2.3.1",
+          "@modelcontextprotocol/server": "2.3.1",
+          "@msgpack/msgpack": "3.1.3",
+          "@xmldom/xmldom": "0.9.12",
+          "@xterm/addon-serialize": "0.14.0",
+          "@xterm/headless": "6.0.0",
+          "@zip.js/zip.js": "2.15.0",
+          "ajv": "8.20.0",
+          "ajv-formats": "3.0.1",
+          "canonicalize": "3.0.0",
+          "cborg": "6.1.3",
+          "cross-spawn": "7.0.6",
+          "diff": "9.0.0",
+          "evmole": "0.9.3",
+          "har-schema": "2.0.0",
+          "ignore": "7.0.6",
+          "incur": "0.6.1",
+          "isomorphic-git": "1.38.7",
+          "jsonc-parser": "3.3.1",
+          "lossless-json": "4.3.1",
+          "openpgp": "6.3.2",
+          "parse5": "8.0.1",
+          "pino": "10.4.0",
+          "playwright-core": "1.64.1",
+          "plist": "5.0.0",
+          "saxes": "6.0.0",
+          "semver": "7.8.5",
+          "smol-toml": "1.9.0",
+          "stream-chain": "4.2.6",
+          "stream-json": "3.7.0",
+          "tokenx": "1.3.0",
+          "write-file-atomic": "7.0.0",
+          "ws": "8.21.0",
+          "yaml": "2.9.0",
+          "zod": "4.6.6"
+        },
+        "skipped_install_scripts": [
+          "esbuild",
+          "frida",
+          "fsevents",
+          "vitepress/node_modules/esbuild"
+        ],
+        "skipped_prepare_script": "scripts/prepare.mjs (release-please patch for development, husky git hooks)",
+        "doctor": "rea doctor --provider ghidra --json: healthy; ghidra-version 12.2 compatible 12.x (>=12.1)",
+        "ghidra_smoke": "rea decompile --procedure main hello-x64.elf --provider ghidra: returned pseudocode in 11 s"
+      },
+      "node": "v24.22.1",
+      "ghidra": "12.2 PUBLIC",
+      "java_home": "/opt/homebrew/opt/openjdk@25/libexec/openjdk.jdk/Contents/Home",
+      "provider": "ghidra",
+      "tool_families": "default (complete catalog)"
+    }
+  },
+  "summary": {
+    "tasks": [
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 2,
+          "min": 2,
+          "max": 2
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 4,
+          "min": 4,
+          "max": 4
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 8
+        },
+        "output_tokens": {
+          "median": 358,
+          "min": 358,
+          "max": 379
+        },
+        "cache_read_tokens": {
+          "median": 10696,
+          "min": 10696,
+          "max": 10696
+        },
+        "cache_write_tokens": {
+          "median": 8986,
+          "min": 8986,
+          "max": 10204
+        },
+        "wall_ms": {
+          "median": 6947,
+          "min": 6546,
+          "max": 7021
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 6,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 24,
+          "output_tokens": 1095,
+          "cache_read_tokens": 32088,
+          "cache_write_tokens": 28176,
+          "wall_ms": 20514,
+          "cost_usd": 0.12691080000000002
+        },
+        "task_id": "arithmetic-arm64-elf",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 2,
+          "min": 2,
+          "max": 3
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 4,
+          "min": 4,
+          "max": 5
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 10
+        },
+        "output_tokens": {
+          "median": 269,
+          "min": 269,
+          "max": 336
+        },
+        "cache_read_tokens": {
+          "median": 15682,
+          "min": 15682,
+          "max": 24097
+        },
+        "cache_write_tokens": {
+          "median": 9062,
+          "min": 9062,
+          "max": 10688
+        },
+        "wall_ms": {
+          "median": 17914,
+          "min": 17426,
+          "max": 21443
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 7,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 26,
+          "output_tokens": 874,
+          "cache_read_tokens": 55461,
+          "cache_write_tokens": 28812,
+          "wall_ms": 56783,
+          "cost_usd": 0.1295861
+        },
+        "task_id": "arithmetic-arm64-elf",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "input_tokens": {
+          "median": 2,
+          "min": 2,
+          "max": 2
+        },
+        "output_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 105
+        },
+        "cache_read_tokens": {
+          "median": 981,
+          "min": 981,
+          "max": 981
+        },
+        "cache_write_tokens": {
+          "median": 2862,
+          "min": 2862,
+          "max": 2862
+        },
+        "wall_ms": {
+          "median": 3055,
+          "min": 2560,
+          "max": 3463
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 0,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 0,
+          "rejected_calls": 0,
+          "input_tokens": 6,
+          "output_tokens": 121,
+          "cache_read_tokens": 2943,
+          "cache_write_tokens": 8586,
+          "wall_ms": 9078,
+          "cost_usd": 0.0358603
+        },
+        "task_id": "capability-decompile",
+        "server": "rampage",
+        "kind": "capability"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "input_tokens": {
+          "median": 2,
+          "min": 2,
+          "max": 2
+        },
+        "output_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 8
+        },
+        "cache_read_tokens": {
+          "median": 981,
+          "min": 981,
+          "max": 981
+        },
+        "cache_write_tokens": {
+          "median": 5521,
+          "min": 5521,
+          "max": 5521
+        },
+        "wall_ms": {
+          "median": 2847,
+          "min": 2829,
+          "max": 3129
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 0,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 0,
+          "rejected_calls": 0,
+          "input_tokens": 6,
+          "output_tokens": 24,
+          "cache_read_tokens": 2943,
+          "cache_write_tokens": 16563,
+          "wall_ms": 8805,
+          "cost_usd": 0.0667983
+        },
+        "task_id": "capability-decompile",
+        "server": "rea",
+        "kind": "capability"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 2,
+          "min": 2,
+          "max": 2
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 5,
+          "min": 5,
+          "max": 5
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 8
+        },
+        "output_tokens": {
+          "median": 315,
+          "min": 310,
+          "max": 319
+        },
+        "cache_read_tokens": {
+          "median": 11138,
+          "min": 11138,
+          "max": 11138
+        },
+        "cache_write_tokens": {
+          "median": 8560,
+          "min": 8555,
+          "max": 8564
+        },
+        "wall_ms": {
+          "median": 6772,
+          "min": 6181,
+          "max": 6900
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 6,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 6,
+          "rejected_calls": 0,
+          "input_tokens": 24,
+          "output_tokens": 944,
+          "cache_read_tokens": 33414,
+          "cache_write_tokens": 25679,
+          "wall_ms": 19853,
+          "cost_usd": 0.11554539999999999
+        },
+        "task_id": "capability-local-variable-rename",
+        "server": "rampage",
+        "kind": "capability"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 2,
+          "min": 2,
+          "max": 3
+        },
+        "input_tokens": {
+          "median": 6,
+          "min": 6,
+          "max": 6
+        },
+        "output_tokens": {
+          "median": 189,
+          "min": 186,
+          "max": 331
+        },
+        "cache_read_tokens": {
+          "median": 7490,
+          "min": 7490,
+          "max": 7490
+        },
+        "cache_write_tokens": {
+          "median": 6648,
+          "min": 6645,
+          "max": 13940
+        },
+        "wall_ms": {
+          "median": 5293,
+          "min": 5156,
+          "max": 5600
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 0,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 4,
+          "rejected_calls": 0,
+          "input_tokens": 18,
+          "output_tokens": 706,
+          "cache_read_tokens": 22470,
+          "cache_write_tokens": 27233,
+          "wall_ms": 16049,
+          "cost_usd": 0.11827499999999999
+        },
+        "task_id": "capability-local-variable-rename",
+        "server": "rea",
+        "kind": "capability"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 2,
+          "min": 2,
+          "max": 2
+        },
+        "input_tokens": {
+          "median": 6,
+          "min": 6,
+          "max": 6
+        },
+        "output_tokens": {
+          "median": 183,
+          "min": 165,
+          "max": 238
+        },
+        "cache_read_tokens": {
+          "median": 4829,
+          "min": 4829,
+          "max": 4829
+        },
+        "cache_write_tokens": {
+          "median": 4522,
+          "min": 4504,
+          "max": 4827
+        },
+        "wall_ms": {
+          "median": 5208,
+          "min": 4487,
+          "max": 5381
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 0,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 18,
+          "output_tokens": 586,
+          "cache_read_tokens": 14487,
+          "cache_write_tokens": 13853,
+          "wall_ms": 15076,
+          "cost_usd": 0.0627567
+        },
+        "task_id": "capability-patch-export",
+        "server": "rampage",
+        "kind": "capability"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 4,
+          "min": 3,
+          "max": 4
+        },
+        "input_tokens": {
+          "median": 10,
+          "min": 6,
+          "max": 10
+        },
+        "output_tokens": {
+          "median": 457,
+          "min": 272,
+          "max": 653
+        },
+        "cache_read_tokens": {
+          "median": 20074,
+          "min": 7488,
+          "max": 20076
+        },
+        "cache_write_tokens": {
+          "median": 13562,
+          "min": 11622,
+          "max": 19834
+        },
+        "wall_ms": {
+          "median": 9063,
+          "min": 5313,
+          "max": 11167
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 0,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 8,
+          "rejected_calls": 0,
+          "input_tokens": 26,
+          "output_tokens": 1382,
+          "cache_read_tokens": 47638,
+          "cache_write_tokens": 45018,
+          "wall_ms": 25543,
+          "cost_usd": 0.1987078
+        },
+        "task_id": "capability-patch-export",
+        "server": "rea",
+        "kind": "capability"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 2,
+          "min": 2,
+          "max": 2
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 5,
+          "min": 4,
+          "max": 6
+        },
+        "input_tokens": {
+          "median": 10,
+          "min": 10,
+          "max": 14
+        },
+        "output_tokens": {
+          "median": 280,
+          "min": 255,
+          "max": 367
+        },
+        "cache_read_tokens": {
+          "median": 14667,
+          "min": 14465,
+          "max": 21530
+        },
+        "cache_write_tokens": {
+          "median": 6024,
+          "min": 5923,
+          "max": 6576
+        },
+        "wall_ms": {
+          "median": 7598,
+          "min": 6554,
+          "max": 8352
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 6,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 4,
+          "rejected_calls": 2,
+          "input_tokens": 34,
+          "output_tokens": 902,
+          "cache_read_tokens": 50662,
+          "cache_write_tokens": 18523,
+          "wall_ms": 22504,
+          "cost_usd": 0.0882462
+        },
+        "task_id": "cpp-class-names-arm64-macho",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 1,
+        "runs": 3,
+        "tool_calls": {
+          "median": 2,
+          "min": 2,
+          "max": 3
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 4,
+          "min": 4,
+          "max": 5
+        },
+        "input_tokens": {
+          "median": 10,
+          "min": 10,
+          "max": 12
+        },
+        "output_tokens": {
+          "median": 361,
+          "min": 342,
+          "max": 585
+        },
+        "cache_read_tokens": {
+          "median": 26471,
+          "min": 25347,
+          "max": 37927
+        },
+        "cache_write_tokens": {
+          "median": 10471,
+          "min": 9911,
+          "max": 12229
+        },
+        "wall_ms": {
+          "median": 23234,
+          "min": 18295,
+          "max": 24173
+        },
+        "failures": {
+          "wrong_answer": 2
+        },
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 7,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 32,
+          "output_tokens": 1288,
+          "cache_read_tokens": 89745,
+          "cache_write_tokens": 32611,
+          "wall_ms": 65702,
+          "cost_usd": 0.1523625
+        },
+        "task_id": "cpp-class-names-arm64-macho",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 2,
+          "min": 2,
+          "max": 2
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 5,
+          "min": 5,
+          "max": 5
+        },
+        "input_tokens": {
+          "median": 14,
+          "min": 12,
+          "max": 14
+        },
+        "output_tokens": {
+          "median": 335,
+          "min": 335,
+          "max": 335
+        },
+        "cache_read_tokens": {
+          "median": 21199,
+          "min": 20825,
+          "max": 21199
+        },
+        "cache_write_tokens": {
+          "median": 6468,
+          "min": 6453,
+          "max": 6468
+        },
+        "wall_ms": {
+          "median": 8892,
+          "min": 8544,
+          "max": 11517
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 6,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 6,
+          "rejected_calls": 0,
+          "input_tokens": 40,
+          "output_tokens": 1005,
+          "cache_read_tokens": 63223,
+          "cache_write_tokens": 19389,
+          "wall_ms": 28953,
+          "cost_usd": 0.09400830000000002
+        },
+        "task_id": "cpp-multiple-inheritance-arm64-macho",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 8,
+          "min": 6,
+          "max": 8
+        },
+        "tool_errors": {
+          "median": 1,
+          "min": 0,
+          "max": 1
+        },
+        "turns": {
+          "median": 10,
+          "min": 8,
+          "max": 10
+        },
+        "input_tokens": {
+          "median": 18,
+          "min": 16,
+          "max": 18
+        },
+        "output_tokens": {
+          "median": 2054,
+          "min": 1897,
+          "max": 2281
+        },
+        "cache_read_tokens": {
+          "median": 92120,
+          "min": 73374,
+          "max": 97255
+        },
+        "cache_write_tokens": {
+          "median": 22973,
+          "min": 21524,
+          "max": 26040
+        },
+        "wall_ms": {
+          "median": 37339,
+          "min": 35542,
+          "max": 37683
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 22,
+          "tool_errors": 2,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 52,
+          "output_tokens": 6232,
+          "cache_read_tokens": 262749,
+          "cache_write_tokens": 70537,
+          "wall_ms": 110564,
+          "cost_usd": 0.37084690000000003
+        },
+        "task_id": "cpp-multiple-inheritance-arm64-macho",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 2,
+          "min": 1,
+          "max": 2
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 4,
+          "min": 3,
+          "max": 5
+        },
+        "input_tokens": {
+          "median": 10,
+          "min": 8,
+          "max": 14
+        },
+        "output_tokens": {
+          "median": 382,
+          "min": 289,
+          "max": 555
+        },
+        "cache_read_tokens": {
+          "median": 14753,
+          "min": 9628,
+          "max": 21172
+        },
+        "cache_write_tokens": {
+          "median": 5557,
+          "min": 4144,
+          "max": 6843
+        },
+        "wall_ms": {
+          "median": 9098,
+          "min": 6017,
+          "max": 9507
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 2,
+          "trailing": 1
+        },
+        "totals": {
+          "tool_calls": 5,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 4,
+          "rejected_calls": 0,
+          "input_tokens": 32,
+          "output_tokens": 1226,
+          "cache_read_tokens": 45553,
+          "cache_write_tokens": 16544,
+          "wall_ms": 24622,
+          "cost_usd": 0.0830553
+        },
+        "task_id": "format-arm64-elf",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 6,
+          "min": 2,
+          "max": 7
+        },
+        "tool_errors": {
+          "median": 3,
+          "min": 0,
+          "max": 3
+        },
+        "turns": {
+          "median": 9,
+          "min": 5,
+          "max": 10
+        },
+        "input_tokens": {
+          "median": 22,
+          "min": 14,
+          "max": 22
+        },
+        "output_tokens": {
+          "median": 773,
+          "min": 504,
+          "max": 840
+        },
+        "cache_read_tokens": {
+          "median": 74963,
+          "min": 32072,
+          "max": 78228
+        },
+        "cache_write_tokens": {
+          "median": 14385,
+          "min": 9207,
+          "max": 16052
+        },
+        "wall_ms": {
+          "median": 28267,
+          "min": 22025,
+          "max": 32616
+        },
+        "failures": {},
+        "answer_extraction": {
+          "trailing": 3
+        },
+        "totals": {
+          "tool_calls": 15,
+          "tool_errors": 6,
+          "truncated_results": 0,
+          "tool_search_calls": 6,
+          "rejected_calls": 0,
+          "input_tokens": 58,
+          "output_tokens": 2117,
+          "cache_read_tokens": 185263,
+          "cache_write_tokens": 39644,
+          "wall_ms": 82908,
+          "cost_usd": 0.1983883
+        },
+        "task_id": "format-arm64-elf",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 1,
+          "min": 1,
+          "max": 2
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 3,
+          "min": 3,
+          "max": 4
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 10
+        },
+        "output_tokens": {
+          "median": 246,
+          "min": 224,
+          "max": 305
+        },
+        "cache_read_tokens": {
+          "median": 9628,
+          "min": 9628,
+          "max": 14751
+        },
+        "cache_write_tokens": {
+          "median": 4142,
+          "min": 4142,
+          "max": 4810
+        },
+        "wall_ms": {
+          "median": 5984,
+          "min": 5567,
+          "max": 6586
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 2,
+          "trailing": 1
+        },
+        "totals": {
+          "tool_calls": 4,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 26,
+          "output_tokens": 775,
+          "cache_read_tokens": 34007,
+          "cache_write_tokens": 13094,
+          "wall_ms": 18137,
+          "cost_usd": 0.0635787
+        },
+        "task_id": "format-arm64-macho",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 8
+        },
+        "output_tokens": {
+          "median": 243,
+          "min": 242,
+          "max": 243
+        },
+        "cache_read_tokens": {
+          "median": 15406,
+          "min": 15406,
+          "max": 15406
+        },
+        "cache_write_tokens": {
+          "median": 7147,
+          "min": 7147,
+          "max": 7147
+        },
+        "wall_ms": {
+          "median": 11556,
+          "min": 11212,
+          "max": 14412
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 3,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 24,
+          "output_tokens": 728,
+          "cache_read_tokens": 46218,
+          "cache_write_tokens": 21441,
+          "wall_ms": 37180,
+          "cost_usd": 0.09771380000000002
+        },
+        "task_id": "format-arm64-macho",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 3,
+          "min": 3,
+          "max": 4
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 1
+        },
+        "turns": {
+          "median": 7,
+          "min": 6,
+          "max": 7
+        },
+        "input_tokens": {
+          "median": 18,
+          "min": 12,
+          "max": 20
+        },
+        "output_tokens": {
+          "median": 719,
+          "min": 679,
+          "max": 745
+        },
+        "cache_read_tokens": {
+          "median": 37679,
+          "min": 22276,
+          "max": 38624
+        },
+        "cache_write_tokens": {
+          "median": 8802,
+          "min": 8099,
+          "max": 9981
+        },
+        "wall_ms": {
+          "median": 13502,
+          "min": 10247,
+          "max": 13865
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 2,
+          "trailing": 1
+        },
+        "totals": {
+          "tool_calls": 10,
+          "tool_errors": 1,
+          "truncated_results": 0,
+          "tool_search_calls": 7,
+          "rejected_calls": 0,
+          "input_tokens": 50,
+          "output_tokens": 2143,
+          "cache_read_tokens": 98579,
+          "cache_write_tokens": 26882,
+          "wall_ms": 37614,
+          "cost_usd": 0.1389159
+        },
+        "task_id": "format-mips-be-elf",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "tool_errors": {
+          "median": 1,
+          "min": 0,
+          "max": 1
+        },
+        "turns": {
+          "median": 5,
+          "min": 5,
+          "max": 6
+        },
+        "input_tokens": {
+          "median": 10,
+          "min": 10,
+          "max": 14
+        },
+        "output_tokens": {
+          "median": 329,
+          "min": 327,
+          "max": 479
+        },
+        "cache_read_tokens": {
+          "median": 23530,
+          "min": 23530,
+          "max": 32266
+        },
+        "cache_write_tokens": {
+          "median": 9403,
+          "min": 9400,
+          "max": 13371
+        },
+        "wall_ms": {
+          "median": 20180,
+          "min": 18079,
+          "max": 20842
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 9,
+          "tool_errors": 2,
+          "truncated_results": 0,
+          "tool_search_calls": 4,
+          "rejected_calls": 0,
+          "input_tokens": 34,
+          "output_tokens": 1135,
+          "cache_read_tokens": 79326,
+          "cache_write_tokens": 32174,
+          "wall_ms": 59101,
+          "cost_usd": 0.1480466
+        },
+        "task_id": "format-mips-be-elf",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 7,
+          "min": 7,
+          "max": 8
+        },
+        "input_tokens": {
+          "median": 20,
+          "min": 18,
+          "max": 24
+        },
+        "output_tokens": {
+          "median": 761,
+          "min": 748,
+          "max": 819
+        },
+        "cache_read_tokens": {
+          "median": 36703,
+          "min": 36622,
+          "max": 46015
+        },
+        "cache_write_tokens": {
+          "median": 8791,
+          "min": 7858,
+          "max": 8866
+        },
+        "wall_ms": {
+          "median": 12586,
+          "min": 12011,
+          "max": 13791
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 9,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 10,
+          "rejected_calls": 0,
+          "input_tokens": 62,
+          "output_tokens": 2328,
+          "cache_read_tokens": 119340,
+          "cache_write_tokens": 25515,
+          "wall_ms": 38388,
+          "cost_usd": 0.137398
+        },
+        "task_id": "format-thumb-elf",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 7,
+          "min": 7,
+          "max": 8
+        },
+        "tool_errors": {
+          "median": 4,
+          "min": 3,
+          "max": 4
+        },
+        "turns": {
+          "median": 9,
+          "min": 9,
+          "max": 10
+        },
+        "input_tokens": {
+          "median": 16,
+          "min": 16,
+          "max": 18
+        },
+        "output_tokens": {
+          "median": 654,
+          "min": 563,
+          "max": 774
+        },
+        "cache_read_tokens": {
+          "median": 56186,
+          "min": 56159,
+          "max": 71144
+        },
+        "cache_write_tokens": {
+          "median": 15643,
+          "min": 13982,
+          "max": 17789
+        },
+        "wall_ms": {
+          "median": 29450,
+          "min": 27276,
+          "max": 30904
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 2,
+          "trailing": 1
+        },
+        "totals": {
+          "tool_calls": 22,
+          "tool_errors": 11,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 50,
+          "output_tokens": 1991,
+          "cache_read_tokens": 183489,
+          "cache_write_tokens": 47414,
+          "wall_ms": 87630,
+          "cost_usd": 0.22801490000000002
+        },
+        "task_id": "format-thumb-elf",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 8
+        },
+        "output_tokens": {
+          "median": 246,
+          "min": 222,
+          "max": 249
+        },
+        "cache_read_tokens": {
+          "median": 9628,
+          "min": 9628,
+          "max": 9628
+        },
+        "cache_write_tokens": {
+          "median": 4144,
+          "min": 4144,
+          "max": 4144
+        },
+        "wall_ms": {
+          "median": 5814,
+          "min": 5150,
+          "max": 7236
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 3,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 24,
+          "output_tokens": 717,
+          "cache_read_tokens": 28884,
+          "cache_write_tokens": 12432,
+          "wall_ms": 18200,
+          "cost_usd": 0.059834399999999996
+        },
+        "task_id": "format-x64-elf",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 1,
+          "min": 1,
+          "max": 2
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 3,
+          "min": 3,
+          "max": 4
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 10
+        },
+        "output_tokens": {
+          "median": 251,
+          "min": 248,
+          "max": 315
+        },
+        "cache_read_tokens": {
+          "median": 15406,
+          "min": 15406,
+          "max": 23532
+        },
+        "cache_write_tokens": {
+          "median": 7145,
+          "min": 7145,
+          "max": 8784
+        },
+        "wall_ms": {
+          "median": 11339,
+          "min": 11101,
+          "max": 29176
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 4,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 26,
+          "output_tokens": 814,
+          "cache_read_tokens": 54344,
+          "cache_write_tokens": 23074,
+          "wall_ms": 51616,
+          "cost_usd": 0.1059224
+        },
+        "task_id": "format-x64-elf",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 8
+        },
+        "output_tokens": {
+          "median": 221,
+          "min": 221,
+          "max": 221
+        },
+        "cache_read_tokens": {
+          "median": 9628,
+          "min": 9628,
+          "max": 9628
+        },
+        "cache_write_tokens": {
+          "median": 4142,
+          "min": 4142,
+          "max": 4142
+        },
+        "wall_ms": {
+          "median": 5707,
+          "min": 5239,
+          "max": 6071
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 3,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 24,
+          "output_tokens": 663,
+          "cache_read_tokens": 28884,
+          "cache_write_tokens": 12426,
+          "wall_ms": 17017,
+          "cost_usd": 0.0592704
+        },
+        "task_id": "format-x64-pe",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 8
+        },
+        "output_tokens": {
+          "median": 239,
+          "min": 237,
+          "max": 247
+        },
+        "cache_read_tokens": {
+          "median": 15406,
+          "min": 15406,
+          "max": 15406
+        },
+        "cache_write_tokens": {
+          "median": 7150,
+          "min": 7150,
+          "max": 7150
+        },
+        "wall_ms": {
+          "median": 11753,
+          "min": 11124,
+          "max": 13287
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 3,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 24,
+          "output_tokens": 723,
+          "cache_read_tokens": 46218,
+          "cache_write_tokens": 21450,
+          "wall_ms": 36164,
+          "cost_usd": 0.0976998
+        },
+        "task_id": "format-x64-pe",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 8
+        },
+        "output_tokens": {
+          "median": 238,
+          "min": 238,
+          "max": 238
+        },
+        "cache_read_tokens": {
+          "median": 9514,
+          "min": 9514,
+          "max": 9514
+        },
+        "cache_write_tokens": {
+          "median": 4082,
+          "min": 4082,
+          "max": 4082
+        },
+        "wall_ms": {
+          "median": 5845,
+          "min": 5651,
+          "max": 12268
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 3,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 24,
+          "output_tokens": 714,
+          "cache_read_tokens": 28542,
+          "cache_write_tokens": 12246,
+          "wall_ms": 23764,
+          "cost_usd": 0.05902620000000001
+        },
+        "task_id": "go-package-functions-x64-elf",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 8,
+          "min": 5,
+          "max": 9
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 1
+        },
+        "turns": {
+          "median": 11,
+          "min": 7,
+          "max": 12
+        },
+        "input_tokens": {
+          "median": 24,
+          "min": 16,
+          "max": 28
+        },
+        "output_tokens": {
+          "median": 1187,
+          "min": 607,
+          "max": 1514
+        },
+        "cache_read_tokens": {
+          "median": 118175,
+          "min": 63332,
+          "max": 170517
+        },
+        "cache_write_tokens": {
+          "median": 21804,
+          "min": 14581,
+          "max": 27151
+        },
+        "wall_ms": {
+          "median": 48128,
+          "min": 41305,
+          "max": 52323
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 2,
+          "trailing": 1
+        },
+        "totals": {
+          "tool_calls": 22,
+          "tool_errors": 1,
+          "truncated_results": 2,
+          "tool_search_calls": 5,
+          "rejected_calls": 0,
+          "input_tokens": 68,
+          "output_tokens": 3308,
+          "cache_read_tokens": 352024,
+          "cache_write_tokens": 63536,
+          "wall_ms": 141756,
+          "cost_usd": 0.3225624
+        },
+        "task_id": "go-package-functions-x64-elf",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 8
+        },
+        "output_tokens": {
+          "median": 197,
+          "min": 197,
+          "max": 229
+        },
+        "cache_read_tokens": {
+          "median": 10436,
+          "min": 10436,
+          "max": 10436
+        },
+        "cache_write_tokens": {
+          "median": 5635,
+          "min": 5635,
+          "max": 5635
+        },
+        "wall_ms": {
+          "median": 5712,
+          "min": 5372,
+          "max": 9896
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 3,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 24,
+          "output_tokens": 623,
+          "cache_read_tokens": 31308,
+          "cache_write_tokens": 16905,
+          "wall_ms": 20980,
+          "cost_usd": 0.0770288
+        },
+        "task_id": "greeting-x64-elf",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 2,
+          "min": 2,
+          "max": 2
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 4,
+          "min": 4,
+          "max": 4
+        },
+        "input_tokens": {
+          "median": 10,
+          "min": 10,
+          "max": 10
+        },
+        "output_tokens": {
+          "median": 292,
+          "min": 292,
+          "max": 293
+        },
+        "cache_read_tokens": {
+          "median": 24730,
+          "min": 24730,
+          "max": 24912
+        },
+        "cache_write_tokens": {
+          "median": 9372,
+          "min": 9372,
+          "max": 9463
+        },
+        "wall_ms": {
+          "median": 21815,
+          "min": 21627,
+          "max": 21923
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 6,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 30,
+          "output_tokens": 877,
+          "cache_read_tokens": 74372,
+          "cache_write_tokens": 28207,
+          "wall_ms": 65365,
+          "cost_usd": 0.1290952
+        },
+        "task_id": "greeting-x64-elf",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 8
+        },
+        "output_tokens": {
+          "median": 231,
+          "min": 231,
+          "max": 231
+        },
+        "cache_read_tokens": {
+          "median": 9774,
+          "min": 9774,
+          "max": 9774
+        },
+        "cache_write_tokens": {
+          "median": 4737,
+          "min": 4737,
+          "max": 4737
+        },
+        "wall_ms": {
+          "median": 5840,
+          "min": 5516,
+          "max": 6360
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 3,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 24,
+          "output_tokens": 693,
+          "cache_read_tokens": 29322,
+          "cache_write_tokens": 14211,
+          "wall_ms": 17716,
+          "cost_usd": 0.0667542
+        },
+        "task_id": "greeting-x64-pe",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 5,
+          "min": 5,
+          "max": 5
+        },
+        "input_tokens": {
+          "median": 10,
+          "min": 10,
+          "max": 10
+        },
+        "output_tokens": {
+          "median": 346,
+          "min": 346,
+          "max": 346
+        },
+        "cache_read_tokens": {
+          "median": 24056,
+          "min": 24056,
+          "max": 24056
+        },
+        "cache_write_tokens": {
+          "median": 11392,
+          "min": 11392,
+          "max": 11392
+        },
+        "wall_ms": {
+          "median": 30701,
+          "min": 29925,
+          "max": 33746
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 9,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 30,
+          "output_tokens": 1038,
+          "cache_read_tokens": 72168,
+          "cache_write_tokens": 34176,
+          "wall_ms": 94372,
+          "cost_usd": 0.15436080000000002
+        },
+        "task_id": "greeting-x64-pe",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 2,
+          "min": 2,
+          "max": 2
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 4,
+          "min": 4,
+          "max": 4
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 8
+        },
+        "output_tokens": {
+          "median": 377,
+          "min": 377,
+          "max": 377
+        },
+        "cache_read_tokens": {
+          "median": 10782,
+          "min": 10782,
+          "max": 10782
+        },
+        "cache_write_tokens": {
+          "median": 7350,
+          "min": 7350,
+          "max": 7350
+        },
+        "wall_ms": {
+          "median": 7130,
+          "min": 6956,
+          "max": 7492
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 6,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 24,
+          "output_tokens": 1131,
+          "cache_read_tokens": 32346,
+          "cache_write_tokens": 22050,
+          "wall_ms": 21578,
+          "cost_usd": 0.10279260000000001
+        },
+        "task_id": "helper-arithmetic-x64-elf",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 5,
+          "min": 5,
+          "max": 5
+        },
+        "tool_errors": {
+          "median": 2,
+          "min": 2,
+          "max": 2
+        },
+        "turns": {
+          "median": 7,
+          "min": 7,
+          "max": 7
+        },
+        "input_tokens": {
+          "median": 12,
+          "min": 12,
+          "max": 12
+        },
+        "output_tokens": {
+          "median": 470,
+          "min": 470,
+          "max": 470
+        },
+        "cache_read_tokens": {
+          "median": 36001,
+          "min": 35983,
+          "max": 36003
+        },
+        "cache_write_tokens": {
+          "median": 14074,
+          "min": 14056,
+          "max": 14076
+        },
+        "wall_ms": {
+          "median": 22917,
+          "min": 22052,
+          "max": 23276
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 15,
+          "tool_errors": 6,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 36,
+          "output_tokens": 1410,
+          "cache_read_tokens": 107987,
+          "cache_write_tokens": 42206,
+          "wall_ms": 68245,
+          "cost_usd": 0.1937947
+        },
+        "task_id": "helper-arithmetic-x64-elf",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 4,
+          "min": 3,
+          "max": 4
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 6,
+          "min": 5,
+          "max": 6
+        },
+        "input_tokens": {
+          "median": 12,
+          "min": 12,
+          "max": 12
+        },
+        "output_tokens": {
+          "median": 574,
+          "min": 503,
+          "max": 607
+        },
+        "cache_read_tokens": {
+          "median": 24860,
+          "min": 24553,
+          "max": 24873
+        },
+        "cache_write_tokens": {
+          "median": 6690,
+          "min": 6336,
+          "max": 6703
+        },
+        "wall_ms": {
+          "median": 10508,
+          "min": 10215,
+          "max": 10530
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 1,
+          "trailing": 2
+        },
+        "totals": {
+          "tool_calls": 11,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 36,
+          "output_tokens": 1684,
+          "cache_read_tokens": 74286,
+          "cache_write_tokens": 19729,
+          "wall_ms": 31253,
+          "cost_usd": 0.1032566
+        },
+        "task_id": "helper-plt-result-x64-elf",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 8,
+          "min": 7,
+          "max": 9
+        },
+        "tool_errors": {
+          "median": 2,
+          "min": 2,
+          "max": 2
+        },
+        "turns": {
+          "median": 10,
+          "min": 9,
+          "max": 11
+        },
+        "input_tokens": {
+          "median": 18,
+          "min": 16,
+          "max": 18
+        },
+        "output_tokens": {
+          "median": 859,
+          "min": 757,
+          "max": 860
+        },
+        "cache_read_tokens": {
+          "median": 78997,
+          "min": 69233,
+          "max": 82932
+        },
+        "cache_write_tokens": {
+          "median": 18783,
+          "min": 18342,
+          "max": 20427
+        },
+        "wall_ms": {
+          "median": 27723,
+          "min": 27316,
+          "max": 28868
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 1,
+          "trailing": 2
+        },
+        "totals": {
+          "tool_calls": 24,
+          "tool_errors": 6,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 52,
+          "output_tokens": 2476,
+          "cache_read_tokens": 231162,
+          "cache_write_tokens": 57552,
+          "wall_ms": 83907,
+          "cost_usd": 0.2781882
+        },
+        "task_id": "helper-plt-result-x64-elf",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 8
+        },
+        "output_tokens": {
+          "median": 187,
+          "min": 187,
+          "max": 187
+        },
+        "cache_read_tokens": {
+          "median": 10420,
+          "min": 10420,
+          "max": 10420
+        },
+        "cache_write_tokens": {
+          "median": 5658,
+          "min": 5658,
+          "max": 5658
+        },
+        "wall_ms": {
+          "median": 5376,
+          "min": 5198,
+          "max": 6910
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 3,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 24,
+          "output_tokens": 561,
+          "cache_read_tokens": 31260,
+          "cache_write_tokens": 16974,
+          "wall_ms": 17484,
+          "cost_usd": 0.07668
+        },
+        "task_id": "main-return-arm64-macho",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 4,
+          "min": 4,
+          "max": 4
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 6,
+          "min": 6,
+          "max": 6
+        },
+        "input_tokens": {
+          "median": 12,
+          "min": 12,
+          "max": 12
+        },
+        "output_tokens": {
+          "median": 391,
+          "min": 390,
+          "max": 392
+        },
+        "cache_read_tokens": {
+          "median": 35317,
+          "min": 35317,
+          "max": 35317
+        },
+        "cache_write_tokens": {
+          "median": 12945,
+          "min": 12944,
+          "max": 12946
+        },
+        "wall_ms": {
+          "median": 20208,
+          "min": 19528,
+          "max": 21246
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 12,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 36,
+          "output_tokens": 1173,
+          "cache_read_tokens": 105951,
+          "cache_write_tokens": 38835,
+          "wall_ms": 60982,
+          "cost_usd": 0.1777371
+        },
+        "task_id": "main-return-arm64-macho",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 1,
+          "min": 1,
+          "max": 1
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 3,
+          "min": 3,
+          "max": 3
+        },
+        "input_tokens": {
+          "median": 8,
+          "min": 8,
+          "max": 8
+        },
+        "output_tokens": {
+          "median": 187,
+          "min": 187,
+          "max": 187
+        },
+        "cache_read_tokens": {
+          "median": 10420,
+          "min": 10420,
+          "max": 10420
+        },
+        "cache_write_tokens": {
+          "median": 5627,
+          "min": 5627,
+          "max": 5627
+        },
+        "wall_ms": {
+          "median": 5968,
+          "min": 5373,
+          "max": 7509
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 3,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 24,
+          "output_tokens": 561,
+          "cache_read_tokens": 31260,
+          "cache_write_tokens": 16881,
+          "wall_ms": 18850,
+          "cost_usd": 0.076308
+        },
+        "task_id": "main-return-x64-elf",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 4,
+          "min": 4,
+          "max": 4
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 6,
+          "min": 6,
+          "max": 6
+        },
+        "input_tokens": {
+          "median": 12,
+          "min": 10,
+          "max": 12
+        },
+        "output_tokens": {
+          "median": 394,
+          "min": 374,
+          "max": 397
+        },
+        "cache_read_tokens": {
+          "median": 38447,
+          "min": 29797,
+          "max": 38470
+        },
+        "cache_write_tokens": {
+          "median": 16102,
+          "min": 16079,
+          "max": 16162
+        },
+        "wall_ms": {
+          "median": 23457,
+          "min": 21822,
+          "max": 23493
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 12,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 34,
+          "output_tokens": 1165,
+          "cache_read_tokens": 106714,
+          "cache_write_tokens": 48343,
+          "wall_ms": 68772,
+          "cost_usd": 0.2157614
+        },
+        "task_id": "main-return-x64-elf",
+        "server": "rea",
+        "kind": "analysis"
+      },
+      {
+        "correct": 2,
+        "runs": 3,
+        "tool_calls": {
+          "median": 6,
+          "min": 4,
+          "max": 8
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 10,
+          "min": 6,
+          "max": 10
+        },
+        "input_tokens": {
+          "median": 18,
+          "min": 12,
+          "max": 20
+        },
+        "output_tokens": {
+          "median": 2193,
+          "min": 994,
+          "max": 3631
+        },
+        "cache_read_tokens": {
+          "median": 78559,
+          "min": 36115,
+          "max": 120257
+        },
+        "cache_write_tokens": {
+          "median": 29003,
+          "min": 18982,
+          "max": 30552
+        },
+        "wall_ms": {
+          "median": 25739,
+          "min": 13656,
+          "max": 39273
+        },
+        "failures": {
+          "wrong_answer": 1
+        },
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 18,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 5,
+          "rejected_calls": 0,
+          "input_tokens": 50,
+          "output_tokens": 6818,
+          "cache_read_tokens": 234931,
+          "cache_write_tokens": 78537,
+          "wall_ms": 78668,
+          "cost_usd": 0.4059211
+        },
+        "task_id": "objc-superclasses-arm64-macho",
+        "server": "rampage",
+        "kind": "analysis"
+      },
+      {
+        "correct": 3,
+        "runs": 3,
+        "tool_calls": {
+          "median": 4,
+          "min": 4,
+          "max": 4
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 6,
+          "min": 6,
+          "max": 7
+        },
+        "input_tokens": {
+          "median": 10,
+          "min": 10,
+          "max": 14
+        },
+        "output_tokens": {
+          "median": 403,
+          "min": 381,
+          "max": 498
+        },
+        "cache_read_tokens": {
+          "median": 25660,
+          "min": 25660,
+          "max": 37611
+        },
+        "cache_write_tokens": {
+          "median": 27694,
+          "min": 27665,
+          "max": 29245
+        },
+        "wall_ms": {
+          "median": 28818,
+          "min": 27729,
+          "max": 29141
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 12,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 4,
+          "rejected_calls": 0,
+          "input_tokens": 34,
+          "output_tokens": 1282,
+          "cache_read_tokens": 88931,
+          "cache_write_tokens": 84604,
+          "wall_ms": 85688,
+          "cost_usd": 0.3601971
+        },
+        "task_id": "objc-superclasses-arm64-macho",
+        "server": "rea",
+        "kind": "analysis"
+      }
+    ],
+    "servers": {
+      "rampage": {
+        "analysis": {
+          "correct": 50,
+          "runs": 51,
+          "tool_calls": {
+            "median": 2,
+            "min": 1,
+            "max": 8
+          },
+          "tool_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 1
+          },
+          "turns": {
+            "median": 4,
+            "min": 3,
+            "max": 10
+          },
+          "input_tokens": {
+            "median": 8,
+            "min": 8,
+            "max": 24
+          },
+          "output_tokens": {
+            "median": 289,
+            "min": 187,
+            "max": 3631
+          },
+          "cache_read_tokens": {
+            "median": 10696,
+            "min": 9514,
+            "max": 120257
+          },
+          "cache_write_tokens": {
+            "median": 5658,
+            "min": 4082,
+            "max": 30552
+          },
+          "wall_ms": {
+            "median": 7021,
+            "min": 5150,
+            "max": 39273
+          },
+          "failures": {
+            "wrong_answer": 1
+          },
+          "answer_extraction": {
+            "exact": 46,
+            "trailing": 5
+          },
+          "totals": {
+            "tool_calls": 102,
+            "tool_errors": 1,
+            "truncated_results": 0,
+            "tool_search_calls": 69,
+            "rejected_calls": 2,
+            "input_tokens": 546,
+            "output_tokens": 23639,
+            "cache_read_tokens": 994475,
+            "cache_write_tokens": 370514,
+            "wall_ms": 456242,
+            "cost_usd": 1.8189855
+          }
+        },
+        "capability_probes": {
+          "correct": 9,
+          "runs": 9,
+          "tool_calls": {
+            "median": 0,
+            "min": 0,
+            "max": 2
+          },
+          "tool_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "turns": {
+            "median": 2,
+            "min": 1,
+            "max": 5
+          },
+          "input_tokens": {
+            "median": 6,
+            "min": 2,
+            "max": 8
+          },
+          "output_tokens": {
+            "median": 183,
+            "min": 8,
+            "max": 319
+          },
+          "cache_read_tokens": {
+            "median": 4829,
+            "min": 981,
+            "max": 11138
+          },
+          "cache_write_tokens": {
+            "median": 4522,
+            "min": 2862,
+            "max": 8564
+          },
+          "wall_ms": {
+            "median": 5208,
+            "min": 2560,
+            "max": 6900
+          },
+          "failures": {},
+          "answer_extraction": {
+            "exact": 9
+          },
+          "totals": {
+            "tool_calls": 6,
+            "tool_errors": 0,
+            "truncated_results": 0,
+            "tool_search_calls": 9,
+            "rejected_calls": 0,
+            "input_tokens": 48,
+            "output_tokens": 1651,
+            "cache_read_tokens": 50844,
+            "cache_write_tokens": 48118,
+            "wall_ms": 44007,
+            "cost_usd": 0.21416240000000003
+          }
+        }
+      },
+      "rea": {
+        "analysis": {
+          "correct": 49,
+          "runs": 51,
+          "tool_calls": {
+            "median": 4,
+            "min": 1,
+            "max": 9
+          },
+          "tool_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 4
+          },
+          "turns": {
+            "median": 6,
+            "min": 3,
+            "max": 12
+          },
+          "input_tokens": {
+            "median": 12,
+            "min": 8,
+            "max": 28
+          },
+          "output_tokens": {
+            "median": 391,
+            "min": 237,
+            "max": 2281
+          },
+          "cache_read_tokens": {
+            "median": 32072,
+            "min": 15406,
+            "max": 170517
+          },
+          "cache_write_tokens": {
+            "median": 12945,
+            "min": 7145,
+            "max": 29245
+          },
+          "wall_ms": {
+            "median": 23234,
+            "min": 11101,
+            "max": 52323
+          },
+          "failures": {
+            "wrong_answer": 2
+          },
+          "answer_extraction": {
+            "exact": 44,
+            "trailing": 7
+          },
+          "totals": {
+            "tool_calls": 204,
+            "tool_errors": 34,
+            "truncated_results": 2,
+            "tool_search_calls": 58,
+            "rejected_calls": 0,
+            "input_tokens": 646,
+            "output_tokens": 28631,
+            "cache_read_tokens": 2142122,
+            "cache_write_tokens": 714616,
+            "wall_ms": 1256735,
+            "cost_usd": 3.3602781999999993
+          }
+        },
+        "capability_probes": {
+          "correct": 9,
+          "runs": 9,
+          "tool_calls": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "tool_errors": {
+            "median": 0,
+            "min": 0,
+            "max": 0
+          },
+          "turns": {
+            "median": 2,
+            "min": 1,
+            "max": 4
+          },
+          "input_tokens": {
+            "median": 6,
+            "min": 2,
+            "max": 10
+          },
+          "output_tokens": {
+            "median": 189,
+            "min": 8,
+            "max": 653
+          },
+          "cache_read_tokens": {
+            "median": 7490,
+            "min": 981,
+            "max": 20076
+          },
+          "cache_write_tokens": {
+            "median": 6648,
+            "min": 5521,
+            "max": 19834
+          },
+          "wall_ms": {
+            "median": 5293,
+            "min": 2829,
+            "max": 11167
+          },
+          "failures": {},
+          "answer_extraction": {
+            "exact": 9
+          },
+          "totals": {
+            "tool_calls": 0,
+            "tool_errors": 0,
+            "truncated_results": 0,
+            "tool_search_calls": 12,
+            "rejected_calls": 0,
+            "input_tokens": 50,
+            "output_tokens": 2112,
+            "cache_read_tokens": 73051,
+            "cache_write_tokens": 88814,
+            "wall_ms": 50397,
+            "cost_usd": 0.3837811
+          }
+        }
+      }
+    }
+  },
+  "runs": [
+    {
+      "task_id": "arithmetic-arm64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 8,
+        "output": 379,
+        "cache_read": 10696,
+        "cache_write": 10204
+      },
+      "cost_usd": 0.0456916,
+      "wall_ms": 6546,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "arithmetic-arm64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 4,
+      "usage": {
+        "input": 8,
+        "output": 269,
+        "cache_read": 15682,
+        "cache_write": 9062
+      },
+      "cost_usd": 0.04052220000000001,
+      "wall_ms": 17914,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-decompile",
+      "kind": "capability",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 0,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 1,
+      "usage": {
+        "input": 2,
+        "output": 8,
+        "cache_read": 981,
+        "cache_write": 2862
+      },
+      "cost_usd": 0.0116301,
+      "wall_ms": 2560,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-decompile",
+      "kind": "capability",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 0,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 1,
+      "usage": {
+        "input": 2,
+        "output": 8,
+        "cache_read": 981,
+        "cache_write": 5521
+      },
+      "cost_usd": 0.0222661,
+      "wall_ms": 3129,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-local-variable-rename",
+      "kind": "capability",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 5,
+      "usage": {
+        "input": 8,
+        "output": 315,
+        "cache_read": 11138,
+        "cache_write": 8560
+      },
+      "cost_usd": 0.0385198,
+      "wall_ms": 6181,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-local-variable-rename",
+      "kind": "capability",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 2,
+      "usage": {
+        "input": 6,
+        "output": 189,
+        "cache_read": 7490,
+        "cache_write": 6648
+      },
+      "cost_usd": 0.029243,
+      "wall_ms": 5156,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-patch-export",
+      "kind": "capability",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 2,
+      "usage": {
+        "input": 6,
+        "output": 165,
+        "cache_read": 4829,
+        "cache_write": 4504
+      },
+      "cost_usd": 0.0201609,
+      "wall_ms": 5381,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-patch-export",
+      "kind": "capability",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 6,
+        "output": 272,
+        "cache_read": 7488,
+        "cache_write": 11622
+      },
+      "cost_usd": 0.049968799999999994,
+      "wall_ms": 5313,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "cpp-class-names-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 255,
+        "cache_read": 14465,
+        "cache_write": 5923
+      },
+      "cost_usd": 0.0277085,
+      "wall_ms": 7598,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "cpp-class-names-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 5,
+      "usage": {
+        "input": 12,
+        "output": 585,
+        "cache_read": 37927,
+        "cache_write": 12229
+      },
+      "cost_usd": 0.0585827,
+      "wall_ms": 24173,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "cpp-multiple-inheritance-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 5,
+      "usage": {
+        "input": 14,
+        "output": 335,
+        "cache_read": 21199,
+        "cache_write": 6468
+      },
+      "cost_usd": 0.031369900000000006,
+      "wall_ms": 11517,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "cpp-multiple-inheritance-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 6,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 8,
+      "usage": {
+        "input": 16,
+        "output": 2054,
+        "cache_read": 73374,
+        "cache_write": 21524
+      },
+      "cost_usd": 0.1140054,
+      "wall_ms": 37339,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-arm64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "trailing",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 5,
+      "usage": {
+        "input": 14,
+        "output": 555,
+        "cache_read": 21172,
+        "cache_write": 6843
+      },
+      "cost_usd": 0.0350672,
+      "wall_ms": 9507,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-arm64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "trailing",
+      "tool_calls": 7,
+      "tool_errors": 3,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 10,
+      "usage": {
+        "input": 22,
+        "output": 840,
+        "cache_read": 78228,
+        "cache_write": 16052
+      },
+      "cost_usd": 0.0804748,
+      "wall_ms": 32616,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 305,
+        "cache_read": 14751,
+        "cache_write": 4810
+      },
+      "cost_usd": 0.023785100000000003,
+      "wall_ms": 6586,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 243,
+        "cache_read": 15406,
+        "cache_write": 7147
+      },
+      "cost_usd": 0.0325746,
+      "wall_ms": 11212,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-mips-be-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "trailing",
+      "tool_calls": 4,
+      "tool_errors": 1,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 6,
+      "usage": {
+        "input": 12,
+        "output": 679,
+        "cache_read": 22276,
+        "cache_write": 8802
+      },
+      "cost_usd": 0.0442496,
+      "wall_ms": 10247,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-mips-be-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 1,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 5,
+      "usage": {
+        "input": 10,
+        "output": 327,
+        "cache_read": 23530,
+        "cache_write": 9400
+      },
+      "cost_usd": 0.043243,
+      "wall_ms": 18079,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-thumb-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 4,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 8,
+      "usage": {
+        "input": 24,
+        "output": 819,
+        "cache_read": 46015,
+        "cache_write": 8866
+      },
+      "cost_usd": 0.0483035,
+      "wall_ms": 13791,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-thumb-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "trailing",
+      "tool_calls": 8,
+      "tool_errors": 4,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 10,
+      "usage": {
+        "input": 18,
+        "output": 774,
+        "cache_read": 71144,
+        "cache_write": 15643
+      },
+      "cost_usd": 0.07746240000000001,
+      "wall_ms": 29450,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 246,
+        "cache_read": 9628,
+        "cache_write": 4144
+      },
+      "cost_usd": 0.020014800000000003,
+      "wall_ms": 7236,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 251,
+        "cache_read": 15406,
+        "cache_write": 7145
+      },
+      "cost_usd": 0.0326466,
+      "wall_ms": 11339,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-x64-pe",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 221,
+        "cache_read": 9628,
+        "cache_write": 4142
+      },
+      "cost_usd": 0.0197568,
+      "wall_ms": 6071,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-x64-pe",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 239,
+        "cache_read": 15406,
+        "cache_write": 7150
+      },
+      "cost_usd": 0.0325466,
+      "wall_ms": 11124,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "go-package-functions-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 238,
+        "cache_read": 9514,
+        "cache_write": 4082
+      },
+      "cost_usd": 0.019675400000000003,
+      "wall_ms": 5651,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "go-package-functions-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 9,
+      "tool_errors": 1,
+      "truncated_results": 1,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 12,
+      "usage": {
+        "input": 28,
+        "output": 1514,
+        "cache_read": 170517,
+        "cache_write": 27151
+      },
+      "cost_usd": 0.14085170000000002,
+      "wall_ms": 52323,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "greeting-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 229,
+        "cache_read": 10436,
+        "cache_write": 5635
+      },
+      "cost_usd": 0.0258896,
+      "wall_ms": 5712,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "greeting-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 293,
+        "cache_read": 24912,
+        "cache_write": 9463
+      },
+      "cost_usd": 0.0432932,
+      "wall_ms": 21923,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "greeting-x64-pe",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 231,
+        "cache_read": 9774,
+        "cache_write": 4737
+      },
+      "cost_usd": 0.0222514,
+      "wall_ms": 5516,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "greeting-x64-pe",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 5,
+      "usage": {
+        "input": 10,
+        "output": 346,
+        "cache_read": 24056,
+        "cache_write": 11392
+      },
+      "cost_usd": 0.05145360000000001,
+      "wall_ms": 30701,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "helper-arithmetic-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 8,
+        "output": 377,
+        "cache_read": 10782,
+        "cache_write": 7350
+      },
+      "cost_usd": 0.0342642,
+      "wall_ms": 7492,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "helper-arithmetic-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 5,
+      "tool_errors": 2,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 7,
+      "usage": {
+        "input": 12,
+        "output": 470,
+        "cache_read": 36003,
+        "cache_write": 14076
+      },
+      "cost_usd": 0.0646283,
+      "wall_ms": 22917,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "helper-plt-result-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "trailing",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 6,
+      "usage": {
+        "input": 12,
+        "output": 574,
+        "cache_read": 24860,
+        "cache_write": 6690
+      },
+      "cost_usd": 0.03501,
+      "wall_ms": 10508,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "helper-plt-result-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "trailing",
+      "tool_calls": 7,
+      "tool_errors": 2,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 9,
+      "usage": {
+        "input": 18,
+        "output": 757,
+        "cache_read": 78997,
+        "cache_write": 18342
+      },
+      "cost_usd": 0.08887370000000001,
+      "wall_ms": 27316,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "main-return-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 187,
+        "cache_read": 10420,
+        "cache_write": 5658
+      },
+      "cost_usd": 0.02556,
+      "wall_ms": 5376,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "main-return-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 6,
+      "usage": {
+        "input": 12,
+        "output": 390,
+        "cache_read": 35317,
+        "cache_write": 12944
+      },
+      "cost_usd": 0.059231700000000005,
+      "wall_ms": 20208,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "main-return-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 187,
+        "cache_read": 10420,
+        "cache_write": 5627
+      },
+      "cost_usd": 0.025436,
+      "wall_ms": 5373,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "main-return-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 6,
+      "usage": {
+        "input": 10,
+        "output": 394,
+        "cache_read": 29797,
+        "cache_write": 16162
+      },
+      "cost_usd": 0.07158769999999999,
+      "wall_ms": 21822,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "objc-superclasses-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_mismatch",
+      "failure": "wrong_answer",
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 6,
+      "usage": {
+        "input": 12,
+        "output": 994,
+        "cache_read": 36115,
+        "cache_write": 18982
+      },
+      "cost_usd": 0.0895035,
+      "wall_ms": 13656,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "objc-superclasses-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 6,
+      "usage": {
+        "input": 10,
+        "output": 381,
+        "cache_read": 25660,
+        "cache_write": 27665
+      },
+      "cost_usd": 0.117056,
+      "wall_ms": 28818,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "arithmetic-arm64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 8,
+        "output": 269,
+        "cache_read": 15682,
+        "cache_write": 9062
+      },
+      "cost_usd": 0.04052220000000001,
+      "wall_ms": 17426,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "arithmetic-arm64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 4,
+      "usage": {
+        "input": 8,
+        "output": 358,
+        "cache_read": 10696,
+        "cache_write": 8986
+      },
+      "cost_usd": 0.04060960000000001,
+      "wall_ms": 6947,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-decompile",
+      "kind": "capability",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 0,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 1,
+      "usage": {
+        "input": 2,
+        "output": 8,
+        "cache_read": 981,
+        "cache_write": 5521
+      },
+      "cost_usd": 0.0222661,
+      "wall_ms": 2829,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-decompile",
+      "kind": "capability",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 0,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 1,
+      "usage": {
+        "input": 2,
+        "output": 105,
+        "cache_read": 981,
+        "cache_write": 2862
+      },
+      "cost_usd": 0.0126001,
+      "wall_ms": 3463,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-local-variable-rename",
+      "kind": "capability",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 2,
+      "usage": {
+        "input": 6,
+        "output": 186,
+        "cache_read": 7490,
+        "cache_write": 6645
+      },
+      "cost_usd": 0.029201,
+      "wall_ms": 5293,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-local-variable-rename",
+      "kind": "capability",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 5,
+      "usage": {
+        "input": 8,
+        "output": 319,
+        "cache_read": 11138,
+        "cache_write": 8564
+      },
+      "cost_usd": 0.0385758,
+      "wall_ms": 6900,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-patch-export",
+      "kind": "capability",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 3,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 457,
+        "cache_read": 20076,
+        "cache_write": 19834
+      },
+      "cost_usd": 0.0859336,
+      "wall_ms": 9063,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-patch-export",
+      "kind": "capability",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 2,
+      "usage": {
+        "input": 6,
+        "output": 183,
+        "cache_read": 4829,
+        "cache_write": 4522
+      },
+      "cost_usd": 0.0204129,
+      "wall_ms": 4487,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "cpp-class-names-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_mismatch",
+      "failure": "wrong_answer",
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 361,
+        "cache_read": 26471,
+        "cache_write": 10471
+      },
+      "cost_usd": 0.0481611,
+      "wall_ms": 18295,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "cpp-class-names-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 1,
+      "position": 1,
+      "turns": 6,
+      "usage": {
+        "input": 14,
+        "output": 367,
+        "cache_read": 21530,
+        "cache_write": 6576
+      },
+      "cost_usd": 0.032155,
+      "wall_ms": 8352,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "cpp-multiple-inheritance-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 8,
+      "tool_errors": 1,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 10,
+      "usage": {
+        "input": 18,
+        "output": 2281,
+        "cache_read": 97255,
+        "cache_write": 26040
+      },
+      "cost_usd": 0.1367315,
+      "wall_ms": 37683,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "cpp-multiple-inheritance-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 5,
+      "usage": {
+        "input": 12,
+        "output": 335,
+        "cache_read": 20825,
+        "cache_write": 6453
+      },
+      "cost_usd": 0.0312685,
+      "wall_ms": 8544,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-arm64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "trailing",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 5,
+      "usage": {
+        "input": 14,
+        "output": 504,
+        "cache_read": 32072,
+        "cache_write": 9207
+      },
+      "cost_usd": 0.0451032,
+      "wall_ms": 22025,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-arm64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 382,
+        "cache_read": 14753,
+        "cache_write": 5557
+      },
+      "cost_usd": 0.0275433,
+      "wall_ms": 9098,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 242,
+        "cache_read": 15406,
+        "cache_write": 7147
+      },
+      "cost_usd": 0.0325646,
+      "wall_ms": 11556,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 224,
+        "cache_read": 9628,
+        "cache_write": 4142
+      },
+      "cost_usd": 0.0197868,
+      "wall_ms": 5567,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-mips-be-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 6,
+      "usage": {
+        "input": 14,
+        "output": 479,
+        "cache_read": 32266,
+        "cache_write": 13371
+      },
+      "cost_usd": 0.0615286,
+      "wall_ms": 20842,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-mips-be-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 3,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 7,
+      "usage": {
+        "input": 20,
+        "output": 719,
+        "cache_read": 38624,
+        "cache_write": 9981
+      },
+      "cost_usd": 0.0510164,
+      "wall_ms": 13865,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-thumb-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 7,
+      "tool_errors": 4,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 9,
+      "usage": {
+        "input": 16,
+        "output": 654,
+        "cache_read": 56186,
+        "cache_write": 13982
+      },
+      "cost_usd": 0.0681186,
+      "wall_ms": 27276,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-thumb-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 3,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 7,
+      "usage": {
+        "input": 18,
+        "output": 748,
+        "cache_read": 36622,
+        "cache_write": 7858
+      },
+      "cost_usd": 0.0426102,
+      "wall_ms": 12011,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 315,
+        "cache_read": 23532,
+        "cache_write": 8784
+      },
+      "cost_usd": 0.040659200000000006,
+      "wall_ms": 29176,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 249,
+        "cache_read": 9628,
+        "cache_write": 4144
+      },
+      "cost_usd": 0.0200448,
+      "wall_ms": 5814,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-x64-pe",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 237,
+        "cache_read": 15406,
+        "cache_write": 7150
+      },
+      "cost_usd": 0.0325266,
+      "wall_ms": 13287,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-x64-pe",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 221,
+        "cache_read": 9628,
+        "cache_write": 4142
+      },
+      "cost_usd": 0.0197568,
+      "wall_ms": 5707,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "go-package-functions-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "trailing",
+      "tool_calls": 8,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 11,
+      "usage": {
+        "input": 24,
+        "output": 1187,
+        "cache_read": 118175,
+        "cache_write": 21804
+      },
+      "cost_usd": 0.1109515,
+      "wall_ms": 48128,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "go-package-functions-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 238,
+        "cache_read": 9514,
+        "cache_write": 4082
+      },
+      "cost_usd": 0.019675400000000003,
+      "wall_ms": 5845,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "greeting-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 292,
+        "cache_read": 24730,
+        "cache_write": 9372
+      },
+      "cost_usd": 0.042901,
+      "wall_ms": 21815,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "greeting-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 197,
+        "cache_read": 10436,
+        "cache_write": 5635
+      },
+      "cost_usd": 0.0255696,
+      "wall_ms": 9896,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "greeting-x64-pe",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 5,
+      "usage": {
+        "input": 10,
+        "output": 346,
+        "cache_read": 24056,
+        "cache_write": 11392
+      },
+      "cost_usd": 0.05145360000000001,
+      "wall_ms": 33746,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "greeting-x64-pe",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 231,
+        "cache_read": 9774,
+        "cache_write": 4737
+      },
+      "cost_usd": 0.0222514,
+      "wall_ms": 6360,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "helper-arithmetic-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 5,
+      "tool_errors": 2,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 7,
+      "usage": {
+        "input": 12,
+        "output": 470,
+        "cache_read": 35983,
+        "cache_write": 14056
+      },
+      "cost_usd": 0.0645463,
+      "wall_ms": 22052,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "helper-arithmetic-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 4,
+      "usage": {
+        "input": 8,
+        "output": 377,
+        "cache_read": 10782,
+        "cache_write": 7350
+      },
+      "cost_usd": 0.0342642,
+      "wall_ms": 6956,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "helper-plt-result-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 9,
+      "tool_errors": 2,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 11,
+      "usage": {
+        "input": 18,
+        "output": 860,
+        "cache_read": 82932,
+        "cache_write": 20427
+      },
+      "cost_usd": 0.0986372,
+      "wall_ms": 27723,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "helper-plt-result-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 6,
+      "usage": {
+        "input": 12,
+        "output": 607,
+        "cache_read": 24873,
+        "cache_write": 6703
+      },
+      "cost_usd": 0.0353933,
+      "wall_ms": 10530,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "main-return-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 6,
+      "usage": {
+        "input": 12,
+        "output": 392,
+        "cache_read": 35317,
+        "cache_write": 12946
+      },
+      "cost_usd": 0.059259700000000005,
+      "wall_ms": 19528,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "main-return-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 187,
+        "cache_read": 10420,
+        "cache_write": 5658
+      },
+      "cost_usd": 0.02556,
+      "wall_ms": 5198,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "main-return-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 6,
+      "usage": {
+        "input": 12,
+        "output": 397,
+        "cache_read": 38470,
+        "cache_write": 16102
+      },
+      "cost_usd": 0.07224900000000001,
+      "wall_ms": 23493,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "main-return-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 187,
+        "cache_read": 10420,
+        "cache_write": 5627
+      },
+      "cost_usd": 0.025436,
+      "wall_ms": 7509,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "objc-superclasses-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 6,
+      "usage": {
+        "input": 10,
+        "output": 403,
+        "cache_read": 25660,
+        "cache_write": 27694
+      },
+      "cost_usd": 0.117392,
+      "wall_ms": 27729,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "objc-superclasses-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 6,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 3,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 10,
+      "usage": {
+        "input": 20,
+        "output": 2193,
+        "cache_read": 78559,
+        "cache_write": 29003
+      },
+      "cost_usd": 0.1458379,
+      "wall_ms": 25739,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "arithmetic-arm64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 8,
+        "output": 358,
+        "cache_read": 10696,
+        "cache_write": 8986
+      },
+      "cost_usd": 0.04060960000000001,
+      "wall_ms": 7021,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "arithmetic-arm64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 5,
+      "usage": {
+        "input": 10,
+        "output": 336,
+        "cache_read": 24097,
+        "cache_write": 10688
+      },
+      "cost_usd": 0.0485417,
+      "wall_ms": 21443,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-decompile",
+      "kind": "capability",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 0,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 1,
+      "usage": {
+        "input": 2,
+        "output": 8,
+        "cache_read": 981,
+        "cache_write": 2862
+      },
+      "cost_usd": 0.0116301,
+      "wall_ms": 3055,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-decompile",
+      "kind": "capability",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 0,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 1,
+      "usage": {
+        "input": 2,
+        "output": 8,
+        "cache_read": 981,
+        "cache_write": 5521
+      },
+      "cost_usd": 0.0222661,
+      "wall_ms": 2847,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-local-variable-rename",
+      "kind": "capability",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 5,
+      "usage": {
+        "input": 8,
+        "output": 310,
+        "cache_read": 11138,
+        "cache_write": 8555
+      },
+      "cost_usd": 0.0384498,
+      "wall_ms": 6772,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-local-variable-rename",
+      "kind": "capability",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 6,
+        "output": 331,
+        "cache_read": 7490,
+        "cache_write": 13940
+      },
+      "cost_usd": 0.059830999999999995,
+      "wall_ms": 5600,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-patch-export",
+      "kind": "capability",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 2,
+      "usage": {
+        "input": 6,
+        "output": 238,
+        "cache_read": 4829,
+        "cache_write": 4827
+      },
+      "cost_usd": 0.0221829,
+      "wall_ms": 5208,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "capability-patch-export",
+      "kind": "capability",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 3,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 653,
+        "cache_read": 20074,
+        "cache_write": 13562
+      },
+      "cost_usd": 0.0628054,
+      "wall_ms": 11167,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "cpp-class-names-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 1,
+      "position": 0,
+      "turns": 5,
+      "usage": {
+        "input": 10,
+        "output": 280,
+        "cache_read": 14667,
+        "cache_write": 6024
+      },
+      "cost_usd": 0.028382699999999997,
+      "wall_ms": 6554,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "cpp-class-names-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_mismatch",
+      "failure": "wrong_answer",
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 342,
+        "cache_read": 25347,
+        "cache_write": 9911
+      },
+      "cost_usd": 0.045618700000000005,
+      "wall_ms": 23234,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "cpp-multiple-inheritance-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 5,
+      "usage": {
+        "input": 14,
+        "output": 335,
+        "cache_read": 21199,
+        "cache_write": 6468
+      },
+      "cost_usd": 0.031369900000000006,
+      "wall_ms": 8892,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "cpp-multiple-inheritance-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 8,
+      "tool_errors": 1,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 10,
+      "usage": {
+        "input": 18,
+        "output": 1897,
+        "cache_read": 92120,
+        "cache_write": 22973
+      },
+      "cost_usd": 0.12011,
+      "wall_ms": 35542,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-arm64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 289,
+        "cache_read": 9628,
+        "cache_write": 4144
+      },
+      "cost_usd": 0.020444800000000003,
+      "wall_ms": 6017,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-arm64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "trailing",
+      "tool_calls": 6,
+      "tool_errors": 3,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 9,
+      "usage": {
+        "input": 22,
+        "output": 773,
+        "cache_read": 74963,
+        "cache_write": 14385
+      },
+      "cost_usd": 0.0728103,
+      "wall_ms": 28267,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "trailing",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 246,
+        "cache_read": 9628,
+        "cache_write": 4142
+      },
+      "cost_usd": 0.0200068,
+      "wall_ms": 5984,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 243,
+        "cache_read": 15406,
+        "cache_write": 7147
+      },
+      "cost_usd": 0.0325746,
+      "wall_ms": 14412,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-mips-be-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 3,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 7,
+      "usage": {
+        "input": 18,
+        "output": 745,
+        "cache_read": 37679,
+        "cache_write": 8099
+      },
+      "cost_usd": 0.0436499,
+      "wall_ms": 13502,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-mips-be-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 1,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 5,
+      "usage": {
+        "input": 10,
+        "output": 329,
+        "cache_read": 23530,
+        "cache_write": 9403
+      },
+      "cost_usd": 0.043275,
+      "wall_ms": 20180,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-thumb-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 3,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 7,
+      "usage": {
+        "input": 20,
+        "output": 761,
+        "cache_read": 36703,
+        "cache_write": 8791
+      },
+      "cost_usd": 0.0464843,
+      "wall_ms": 12586,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-thumb-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 7,
+      "tool_errors": 3,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 9,
+      "usage": {
+        "input": 16,
+        "output": 563,
+        "cache_read": 56159,
+        "cache_write": 17789
+      },
+      "cost_usd": 0.0824339,
+      "wall_ms": 30904,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 222,
+        "cache_read": 9628,
+        "cache_write": 4144
+      },
+      "cost_usd": 0.0197748,
+      "wall_ms": 5150,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 248,
+        "cache_read": 15406,
+        "cache_write": 7145
+      },
+      "cost_usd": 0.0326166,
+      "wall_ms": 11101,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-x64-pe",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 221,
+        "cache_read": 9628,
+        "cache_write": 4142
+      },
+      "cost_usd": 0.0197568,
+      "wall_ms": 5239,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "format-x64-pe",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 247,
+        "cache_read": 15406,
+        "cache_write": 7150
+      },
+      "cost_usd": 0.0326266,
+      "wall_ms": 11753,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "go-package-functions-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 238,
+        "cache_read": 9514,
+        "cache_write": 4082
+      },
+      "cost_usd": 0.019675400000000003,
+      "wall_ms": 12268,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "go-package-functions-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 5,
+      "tool_errors": 0,
+      "truncated_results": 1,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 7,
+      "usage": {
+        "input": 16,
+        "output": 607,
+        "cache_read": 63332,
+        "cache_write": 14581
+      },
+      "cost_usd": 0.0707592,
+      "wall_ms": 41305,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "greeting-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 197,
+        "cache_read": 10436,
+        "cache_write": 5635
+      },
+      "cost_usd": 0.0255696,
+      "wall_ms": 5372,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "greeting-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 292,
+        "cache_read": 24730,
+        "cache_write": 9372
+      },
+      "cost_usd": 0.042901,
+      "wall_ms": 21627,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "greeting-x64-pe",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 231,
+        "cache_read": 9774,
+        "cache_write": 4737
+      },
+      "cost_usd": 0.0222514,
+      "wall_ms": 5840,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "greeting-x64-pe",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 5,
+      "usage": {
+        "input": 10,
+        "output": 346,
+        "cache_read": 24056,
+        "cache_write": 11392
+      },
+      "cost_usd": 0.05145360000000001,
+      "wall_ms": 29925,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "helper-arithmetic-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 8,
+        "output": 377,
+        "cache_read": 10782,
+        "cache_write": 7350
+      },
+      "cost_usd": 0.0342642,
+      "wall_ms": 7130,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "helper-arithmetic-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 5,
+      "tool_errors": 2,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 7,
+      "usage": {
+        "input": 12,
+        "output": 470,
+        "cache_read": 36001,
+        "cache_write": 14074
+      },
+      "cost_usd": 0.0646201,
+      "wall_ms": 23276,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "helper-plt-result-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "trailing",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 5,
+      "usage": {
+        "input": 12,
+        "output": 503,
+        "cache_read": 24553,
+        "cache_write": 6336
+      },
+      "cost_usd": 0.0328533,
+      "wall_ms": 10215,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "helper-plt-result-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "trailing",
+      "tool_calls": 8,
+      "tool_errors": 2,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 10,
+      "usage": {
+        "input": 16,
+        "output": 859,
+        "cache_read": 69233,
+        "cache_write": 18783
+      },
+      "cost_usd": 0.0906773,
+      "wall_ms": 28868,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "main-return-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 187,
+        "cache_read": 10420,
+        "cache_write": 5658
+      },
+      "cost_usd": 0.02556,
+      "wall_ms": 6910,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "main-return-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 6,
+      "usage": {
+        "input": 12,
+        "output": 391,
+        "cache_read": 35317,
+        "cache_write": 12945
+      },
+      "cost_usd": 0.059245700000000005,
+      "wall_ms": 21246,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "main-return-x64-elf",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 1,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 187,
+        "cache_read": 10420,
+        "cache_write": 5627
+      },
+      "cost_usd": 0.025436,
+      "wall_ms": 5968,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "main-return-x64-elf",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 6,
+      "usage": {
+        "input": 12,
+        "output": 374,
+        "cache_read": 38447,
+        "cache_write": 16079
+      },
+      "cost_usd": 0.07192470000000001,
+      "wall_ms": 23457,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "objc-superclasses-arm64-macho",
+      "kind": "analysis",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 8,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 10,
+      "usage": {
+        "input": 18,
+        "output": 3631,
+        "cache_read": 120257,
+        "cache_write": 30552
+      },
+      "cost_usd": 0.1705797,
+      "wall_ms": 39273,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "objc-superclasses-arm64-macho",
+      "kind": "analysis",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 7,
+      "usage": {
+        "input": 14,
+        "output": 498,
+        "cache_read": 37611,
+        "cache_write": 29245
+      },
+      "cost_usd": 0.1257491,
+      "wall_ms": 29141,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    }
+  ]
+}

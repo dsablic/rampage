@@ -1,21 +1,24 @@
 //! Opt-in, paired local-typing measurement, not a blind whole-program RE benchmark.
-//! Uses existing OpenCode service authentication; never reads API keys or prints provider transcripts.
+//! Uses the in-process Anthropic transport (ANTHROPIC_API_KEY); never prints keys or provider transcripts.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use rampage_agent::Anthropic;
 use rampage_api::annotations::{Annotations, parse_local_names, parse_local_types};
 use rampage_decompiler::VariableStorage;
 use rampage_eval::parity_agent::{AgentConfig, AgentDisposition, ModelSource, run_task};
-use rampage_eval::parity_opencode::{MODEL, MODEL_VARIANT, OpenCodeTransport};
 use rampage_eval::parity_tasks::{AnswerContract, CapabilityStatus, FixtureIdentity, ParityTask, TaskKind};
 use rmcp::model::{CallToolRequestParams, ClientConfig};
 use rmcp::service::RoleClient;
 use rmcp::{ClientHandler, Peer, ServiceExt};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+
+/// The pinned live model, requested through the in-process Anthropic transport (ANTHROPIC_API_KEY).
+const MODEL: &str = "claude-sonnet-5-5";
 
 const ENTRY: &str = "0x4000ae";
 const ENTRY_ADDRESS: u64 = 0x4000ae;
@@ -41,7 +44,7 @@ struct OwnedFixture {
 impl OwnedFixture {
     fn new(original: &Path) -> Result<Self, &'static str> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let root = std::env::temp_dir().join("opencode");
+        let root = std::env::temp_dir();
         std::fs::create_dir_all(&root).map_err(|_| "create temporary root")?;
         let directory =
             root.join(format!("rampage-local-typing-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
@@ -208,7 +211,7 @@ async fn measure_connected(client: &Peer<RoleClient>, owned: &OwnedFixture) -> R
     let initial_local = stack_local(&initial)?;
     let initial_storage = initial_local["storage"].clone();
     let initial_key = initial_local["key"].clone();
-    let transport = OpenCodeTransport::new(&owned.context).map_err(|_| "prepare OpenCode transport")?;
+    let transport = Anthropic::from_environment().ok_or("set ANTHROPIC_API_KEY for the Anthropic transport")?;
     let mut config = AgentConfig::new(MODEL);
     config.allow_variable_edits = true;
     config.max_turns = 12;
@@ -278,7 +281,7 @@ async fn measure_connected(client: &Peer<RoleClient>, owned: &OwnedFixture) -> R
         .collect();
     Ok(json!({
         "measurement": "phase1-1-local-typing", "design": "paired-owned-fixture-not-blind-whole-program-re",
-        "requested_model": MODEL, "model_variant": MODEL_VARIANT, "model_source": run.model_source,
+        "requested_model": MODEL, "transport": "anthropic", "model_source": run.model_source,
         "fixture_sha256": owned.digest, "entry": ENTRY,
         "initial_local_name": initial_local["name"], "initial_storage": initial_storage,
         "initial_storage_key": initial_key,

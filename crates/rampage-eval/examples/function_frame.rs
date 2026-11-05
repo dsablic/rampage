@@ -1,21 +1,24 @@
 //! Opt-in, seeded read-only frame analysis on an isolated owned snapshot, not a blind RE benchmark.
-//! Reuses the existing MCP/OpenCode driver; never emits provider transcripts or answer text.
+//! Reuses the MCP driver over the Anthropic transport; never emits provider transcripts or answer text.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use rampage_agent::Anthropic;
 use rampage_api::annotations::{Annotations, parse_local_names, parse_local_types};
 use rampage_decompiler::VariableStorage;
 use rampage_eval::parity_agent::{AgentConfig, AgentDisposition, AgentRun, ModelSource, ToolCall, run_task};
-use rampage_eval::parity_opencode::{MODEL, MODEL_VARIANT, OpenCodeTransport};
 use rampage_eval::parity_tasks::{AnswerContract, CapabilityStatus, FixtureIdentity, ParityTask, TaskKind};
 use rmcp::model::{CallToolRequestParams, CallToolResult, ClientConfig};
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::{ClientHandler, Peer, ServiceExt};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+
+/// The pinned live model, requested through the in-process Anthropic transport (ANTHROPIC_API_KEY).
+const MODEL: &str = "claude-sonnet-5-5";
 
 const ENTRY: &str = "0x210124";
 const OWNED_FIXTURE: &[u8] = include_bytes!("../../../tests/data/function-frame-arm64.snapshot.json");
@@ -49,7 +52,7 @@ impl OwnedFixture {
             return Err("embedded function-frame snapshot identity mismatch");
         }
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let root = std::env::temp_dir().join("opencode");
+        let root = std::env::temp_dir();
         std::fs::create_dir_all(&root).map_err(|_| "create temporary root")?;
         let directory = root.join(format!(
             "rampage-function-frame-{}-{}",
@@ -657,11 +660,11 @@ async fn measure(owned: &OwnedFixture) -> Result<Value, &'static str> {
             return Err(stage);
         }
     };
-    let transport = match OpenCodeTransport::new(&owned.context) {
-        Ok(transport) => transport,
-        Err(_) => {
+    let transport = match Anthropic::from_environment() {
+        Some(transport) => transport,
+        None => {
             first.close().await?;
-            return Err("prepare OpenCode transport");
+            return Err("set ANTHROPIC_API_KEY for the Anthropic transport");
         }
     };
     let run = run_task(&first.client, Some(transport), ModelSource::Provider, &task, &owned.path, &config).await;
@@ -680,7 +683,7 @@ async fn measure(owned: &OwnedFixture) -> Result<Value, &'static str> {
     let workflow = workflow_verified(&run, &owned.path, &baseline);
     Ok(json!({
         "measurement": "phase1-4-function-frame", "design": "seeded-read-only-owned-fixture-not-blind-re",
-        "requested_model": MODEL, "model_variant": MODEL_VARIANT, "fixture_sha256": FIXTURE_SHA256,
+        "requested_model": MODEL, "transport": "anthropic", "fixture_sha256": FIXTURE_SHA256,
         "entry": ENTRY, "agent_summary": summary(&run), "seed_metrics": seed.summary(),
         "preparation_wall_time_ms": preparation_wall_time_ms, "verifier_metrics": checks.summary(),
         "verification_wall_time_ms": checked_at.elapsed().as_millis(),

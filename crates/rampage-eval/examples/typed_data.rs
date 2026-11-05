@@ -1,20 +1,23 @@
 //! Opt-in typed-data measurement on an isolated owned snapshot, not a blind RE benchmark.
-//! Reuses the Phase 1.2 driver and OpenCode authentication; never emits provider transcripts.
+//! Reuses the Phase 1.2 driver over the Anthropic transport; never emits provider transcripts.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use rampage_agent::Anthropic;
 use rampage_api::annotations::{Annotations, parse_data_type, parse_operand_types, parse_type_library};
 use rampage_eval::parity_agent::{AgentConfig, AgentDisposition, AgentRun, ModelSource, ToolCall, run_task};
-use rampage_eval::parity_opencode::{MODEL, MODEL_VARIANT, OpenCodeTransport};
 use rampage_eval::parity_tasks::{AnswerContract, CapabilityStatus, FixtureIdentity, ParityTask, TaskKind};
 use rmcp::model::{CallToolRequestParams, CallToolResult, ClientConfig};
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::{ClientHandler, Peer, ServiceExt};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+
+/// The pinned live model, requested through the in-process Anthropic transport (ANTHROPIC_API_KEY).
+const MODEL: &str = "claude-sonnet-5-5";
 
 const OWNED_FIXTURE: &[u8] = include_bytes!("../../../tests/data/typed-data-x64.snapshot.json");
 const FIXTURE_SHA256: &str = "0507caa9fe630d14243cf9d2419ad15516475fd831d0a4390d9c5dcf40275f94";
@@ -51,7 +54,7 @@ impl OwnedFixture {
             return Err("embedded typed-data snapshot identity mismatch");
         }
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let root = std::env::temp_dir().join("opencode");
+        let root = std::env::temp_dir();
         std::fs::create_dir_all(&root).map_err(|_| "create temporary root")?;
         let directory =
             root.join(format!("rampage-typed-data-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
@@ -756,7 +759,7 @@ fn summary(run: &AgentRun, task: &ParityTask) -> Value {
 async fn measure(owned: &OwnedFixture) -> Result<Value, &'static str> {
     let task = task();
     task.validate().map_err(|_| "validate measurement task")?;
-    let transport = OpenCodeTransport::new(&owned.context).map_err(|_| "prepare OpenCode transport")?;
+    let transport = Anthropic::from_environment().ok_or("set ANTHROPIC_API_KEY for the Anthropic transport")?;
     let mut config = AgentConfig::new(MODEL);
     config.allow_data_type_edits = true;
     config.allow_variable_edits = false;
@@ -794,7 +797,7 @@ async fn measure(owned: &OwnedFixture) -> Result<Value, &'static str> {
         && owned.unchanged()?;
     Ok(json!({
         "measurement": "phase1-3-typed-data", "design": "paired-owned-fixture-not-blind-whole-program-re",
-        "requested_model": MODEL, "model_variant": MODEL_VARIANT, "fixture_sha256": FIXTURE_SHA256,
+        "requested_model": MODEL, "transport": "anthropic", "fixture_sha256": FIXTURE_SHA256,
         "agent_summary": summary(&run, &task), "seed_tool_calls": seed_checks.calls,
         "seed_tool_errors": seed_checks.errors, "seed_transport_errors": seed_checks.transport_errors,
         "preparation_wall_time_ms": preparation_wall_time_ms,

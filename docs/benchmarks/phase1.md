@@ -280,7 +280,8 @@ Limits: single whole mappings and same-size types; no project type library, cros
 Changed-crate API, decompiler, worker, MCP, evaluator and UI suites and scoped all-target Clippy passed;
 existing opt-in tests remain skipped. This is not full-workspace/release acceptance.
 
-To repeat only this supplied-layout task, using existing OpenCode authentication and the pinned model:
+The run above used the since-retired OpenCode adapter. The example now uses the in-process Anthropic transport
+(`ANTHROPIC_API_KEY`) with its pinned model, so a repeat is a new measurement, not comparable with the one above:
 
 ```sh
 cargo run --locked -j 2 -p rampage-eval --example local_typing -- tests/data/local-variables-x64.snapshot.json

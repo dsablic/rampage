@@ -1,20 +1,23 @@
 //! Opt-in project type-library measurement on an isolated owned snapshot, not a blind RE benchmark.
-//! Reuses existing OpenCode authentication and emits bounded metrics, never provider transcripts.
+//! Uses the Anthropic transport and emits bounded metrics, never provider transcripts.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use rampage_agent::Anthropic;
 use rampage_api::annotations::{Annotations, LibraryDeclaration, parse_type_library};
 use rampage_eval::parity_agent::{AgentConfig, AgentDisposition, AgentRun, ModelSource, ToolCall, run_task};
-use rampage_eval::parity_opencode::{MODEL, MODEL_VARIANT, OpenCodeTransport};
 use rampage_eval::parity_tasks::{AnswerContract, CapabilityStatus, FixtureIdentity, ParityTask, TaskKind};
 use rmcp::model::{CallToolRequestParams, CallToolResult, ClientConfig};
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::{ClientHandler, Peer, ServiceExt};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+
+/// The pinned live model, requested through the in-process Anthropic transport (ANTHROPIC_API_KEY).
+const MODEL: &str = "claude-sonnet-5-5";
 
 const OWNED_FIXTURE: &[u8] = include_bytes!("../../../tests/data/local-variables-x64.snapshot.json");
 const MAX_OUTPUT_BYTES: usize = 65_536;
@@ -39,7 +42,7 @@ struct OwnedFixture {
 impl OwnedFixture {
     fn new(original: &Path) -> Result<Self, &'static str> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let root = std::env::temp_dir().join("opencode");
+        let root = std::env::temp_dir();
         std::fs::create_dir_all(&root).map_err(|_| "create temporary root")?;
         let directory =
             root.join(format!("rampage-type-library-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
@@ -430,7 +433,7 @@ fn task_verified(run: &AgentRun, task: &ParityTask, native_state: bool, workflow
 async fn measure(owned: &OwnedFixture) -> Result<Value, &'static str> {
     let task = task(&owned.digest);
     task.validate().map_err(|_| "validate measurement task")?;
-    let transport = OpenCodeTransport::new(&owned.context).map_err(|_| "prepare OpenCode transport")?;
+    let transport = Anthropic::from_environment().ok_or("set ANTHROPIC_API_KEY for the Anthropic transport")?;
     let mut config = AgentConfig::new(MODEL);
     config.allow_type_library_edits = true;
     config.max_turns = 12;
@@ -451,7 +454,7 @@ async fn measure(owned: &OwnedFixture) -> Result<Value, &'static str> {
     let native_state = initial["native_state_verified"] == true && fresh["native_state_verified"] == true && stable_log;
     Ok(json!({
         "measurement": "phase1-2-type-library", "design": "paired-owned-fixture-not-blind-whole-program-re",
-        "requested_model": MODEL, "model_variant": MODEL_VARIANT, "fixture_sha256": owned.digest,
+        "requested_model": MODEL, "transport": "anthropic", "fixture_sha256": owned.digest,
         "agent_summary": summary(&run, &task),
         "evaluator_tool_calls": checks.calls, "evaluator_tool_errors": checks.errors,
         "evaluator_transport_errors": checks.transport_errors, "expected_missing_type_errors": 2,

@@ -58,8 +58,9 @@ without group gating, plus the interactive `show_address`; it does not offer fil
 
 The [parity scorecard](parity-scorecard.md) records static metrics and task definitions separately from
 live MCP/model results. Limits: contract checks and scripted transport tests are not AI task-success measurements.
-The optional OpenCode transport emits one-turn JSON intents; the benchmark executes them through actual MCP
-discovery/calls, with host tools disabled and fixture paths restricted. It does not execute analyzed programs.
+Head-to-head agent runs drive an agent CLI against `rampage mcp` (or another server) through
+`tools/agent-bench/claude-runner.py`, with only that server's tools allowed; see the
+[parity scorecard](parity-scorecard.md#head-to-head-agent-runs). They do not execute analyzed programs.
 The local stripped Lua workload was also inspected through `triage_report`: static toolchain/string evidence
 does not imply target execution, and bundled signature results are distinct from matched-twin evaluator scores.
 
