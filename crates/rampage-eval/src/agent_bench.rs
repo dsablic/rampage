@@ -33,9 +33,44 @@ pub struct NeutralTask {
     pub change: Option<String>,
     /// Capability probes only: the `available` truth for each server, by MCP server name.
     #[serde(default)]
-    pub truth: BTreeMap<String, bool>,
+    pub truth: BTreeMap<String, ProbeTruth>,
     #[serde(default)]
     pub truth_evidence: BTreeMap<String, String>,
+}
+
+/// A capability probe's expected `available` for one server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum ProbeTruth {
+    Is(bool),
+    /// The server advertises a general tool (such as a raw command runner) whose reach depends on the host, so
+    /// either boolean is accepted. Spelled `"either"` in the suite.
+    Either(EitherTag),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EitherTag {
+    Either,
+}
+
+/// What a server's answer is scored against.
+#[derive(Debug, Clone)]
+pub enum Expected {
+    Contract(AnswerContract),
+    /// Exactly `{"available": <any boolean>}`.
+    AnyAvailable,
+}
+
+impl Expected {
+    pub fn matches(&self, answer: &Value) -> bool {
+        match self {
+            Self::Contract(contract) => contract.matches(answer),
+            Self::AnyAvailable => answer
+                .as_object()
+                .is_some_and(|object| object.len() == 1 && object.get("available").is_some_and(Value::is_boolean)),
+        }
+    }
 }
 
 impl NeutralSuite {
@@ -105,16 +140,21 @@ impl NeutralSuite {
         )
     }
 
-    /// The contract a server's answer is scored against.
-    pub fn contract(&self, task: &ParityTask, server: &str) -> Result<AnswerContract, String> {
+    /// What a server's answer is scored against.
+    pub fn expected(&self, task: &ParityTask, server: &str) -> Result<Expected, String> {
         match task.kind {
-            TaskKind::Analysis => Ok(task.answer.clone()),
+            TaskKind::Analysis => Ok(Expected::Contract(task.answer.clone())),
             TaskKind::Capability => {
                 let truth = self.tasks[&task.id]
                     .truth
                     .get(server)
                     .ok_or_else(|| format!("{}: no capability truth for server {server}", task.id))?;
-                Ok(AnswerContract::Exact { fields: BTreeMap::from([("available".to_owned(), json!(truth))]) })
+                Ok(match truth {
+                    ProbeTruth::Is(available) => Expected::Contract(AnswerContract::Exact {
+                        fields: BTreeMap::from([("available".to_owned(), json!(available))]),
+                    }),
+                    ProbeTruth::Either(_) => Expected::AnyAvailable,
+                })
             }
         }
     }
@@ -138,6 +178,9 @@ pub struct RunnerResult {
     pub isolation_evidence: Option<Value>,
 }
 
+/// The client tool that loads deferred MCP tool schemas; its calls are not server tool calls.
+pub const TOOL_SEARCH: &str = "ToolSearch";
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunnerToolCall {
     pub name: String,
@@ -146,6 +189,12 @@ pub struct RunnerToolCall {
     pub is_error: bool,
     #[serde(default)]
     pub duration_ms: Option<u64>,
+    /// The client replaced the result with a preview or an error because it was too large.
+    #[serde(default)]
+    pub truncated: bool,
+    /// The client refused the call (no such tool, or permission denied); nothing ran.
+    #[serde(default)]
+    pub rejected: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -267,8 +316,18 @@ pub struct RunRow {
     pub failure: Option<FailureKind>,
     /// How the answer object was found; `None` when there was none.
     pub extraction: Option<Extraction>,
+    /// Calls to the server's tools that the client ran (refused calls and ToolSearch excluded).
     pub tool_calls: u64,
+    /// Of those, the ones whose result was an error.
     pub tool_errors: u64,
+    /// Of those, the ones whose result the client truncated or spilled to a file.
+    pub truncated_results: u64,
+    /// ToolSearch calls that loaded deferred tool schemas.
+    pub tool_search_calls: u64,
+    /// Calls the client refused: an unknown tool name, or a permission denial.
+    pub rejected_calls: u64,
+    /// 0 when this server ran first for its task and repetition, 1 when second.
+    pub position: u32,
     pub turns: u64,
     pub usage: RunnerUsage,
     pub cost_usd: Option<f64>,
@@ -284,12 +343,15 @@ pub fn score(
     suite: &NeutralSuite,
     server: &str,
     repetition: u32,
+    position: u32,
     result: &RunnerResult,
 ) -> Result<RunRow, String> {
-    let contract = suite.contract(task, server)?;
+    let expected = suite.expected(task, server)?;
     let (attempt, mut failure, extraction) = attempt(result);
+    let server_calls: Vec<_> =
+        result.tool_calls.iter().filter(|call| !call.rejected && call.name != TOOL_SEARCH).collect();
     let outcome = match &attempt {
-        TaskAttempt::Answer(answer) if contract.matches(answer) => TaskOutcome::AnswerMatches,
+        TaskAttempt::Answer(answer) if expected.matches(answer) => TaskOutcome::AnswerMatches,
         TaskAttempt::Answer(_) => {
             failure = Some(FailureKind::WrongAnswer);
             TaskOutcome::AnswerMismatch
@@ -304,8 +366,12 @@ pub fn score(
         outcome,
         failure,
         extraction,
-        tool_calls: result.tool_calls.len() as u64,
-        tool_errors: result.tool_calls.iter().filter(|call| call.is_error).count() as u64,
+        tool_calls: server_calls.len() as u64,
+        tool_errors: server_calls.iter().filter(|call| call.is_error).count() as u64,
+        truncated_results: server_calls.iter().filter(|call| call.truncated).count() as u64,
+        tool_search_calls: result.tool_calls.iter().filter(|call| call.name == TOOL_SEARCH).count() as u64,
+        rejected_calls: result.tool_calls.iter().filter(|call| call.rejected).count() as u64,
+        position,
         turns: result.turns,
         usage: result.usage,
         cost_usd: result.cost_usd,
@@ -367,6 +433,10 @@ fn group_summary(rows: &[&RunRow]) -> Value {
         "answer_extraction": extractions,
         "totals": {
             "tool_calls": rows.iter().map(|row| row.tool_calls).sum::<u64>(),
+            "tool_errors": rows.iter().map(|row| row.tool_errors).sum::<u64>(),
+            "truncated_results": rows.iter().map(|row| row.truncated_results).sum::<u64>(),
+            "tool_search_calls": rows.iter().map(|row| row.tool_search_calls).sum::<u64>(),
+            "rejected_calls": rows.iter().map(|row| row.rejected_calls).sum::<u64>(),
             "input_tokens": rows.iter().map(|row| row.usage.input).sum::<u64>(),
             "output_tokens": rows.iter().map(|row| row.usage.output).sum::<u64>(),
             "cache_read_tokens": rows.iter().map(|row| row.usage.cache_read).sum::<u64>(),
@@ -435,14 +505,14 @@ pub fn markdown_tables(summary: &Value) -> String {
     };
     let mut output = String::new();
     output.push_str("| Server | Analysis correct | Probes correct | Tool calls | Input tokens | Output tokens | ");
-    output.push_str("Cache read | Cache write | Wall s | Analysis failures |\n");
-    output.push_str("| --- | --: | --: | --: | --: | --: | --: | --: | --: | --- |\n");
+    output.push_str("Cache read | Cache write | Wall s | Tool errors | Truncated | Analysis failures |\n");
+    output.push_str("| --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --- |\n");
     if let Some(servers) = summary["servers"].as_object() {
         for (server, aggregate) in servers {
             let analysis = &aggregate["analysis"];
             let probes = &aggregate["capability_probes"];
             output.push_str(&format!(
-                "| {server} | {}/{} | {}/{} | {} | {} | {} | {} | {} | {} | {} |\n",
+                "| {server} | {}/{} | {}/{} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
                 analysis["correct"],
                 analysis["runs"],
                 probes["correct"],
@@ -453,6 +523,8 @@ pub fn markdown_tables(summary: &Value) -> String {
                 cell(&analysis["cache_read_tokens"]),
                 cell(&analysis["cache_write_tokens"]),
                 seconds(&analysis["wall_ms"]),
+                analysis["totals"]["tool_errors"],
+                analysis["totals"]["truncated_results"],
                 failures(&analysis["failures"]),
             ));
         }
@@ -479,4 +551,36 @@ pub fn markdown_tables(summary: &Value) -> String {
         ));
     }
     output
+}
+
+/// Carry the measured run's provenance into a rescored report and record what the rescore changed.
+///
+/// `earlier` is the report the run wrote; `rescored` is the freshly scored one. The rescore changes only
+/// outcomes, failures and extraction kinds, so `versions`, `run_unix_ms` and `protocol` stay those of the
+/// measurement.
+pub fn rescored_report(earlier: &Value, mut rescored: Value, commit: Option<String>, reason: &str) -> Value {
+    for key in ["versions", "run_unix_ms", "protocol"] {
+        if let Some(value) = earlier.get(key) {
+            rescored[key] = value.clone();
+        }
+    }
+    let empty = Vec::new();
+    let before = earlier["runs"].as_array().unwrap_or(&empty);
+    let after = rescored["runs"].as_array().unwrap_or(&empty);
+    let key = |run: &Value| (run["task_id"].clone(), run["server"].clone(), run["repetition"].clone());
+    let changed: Vec<Value> = after
+        .iter()
+        .filter_map(|run| {
+            let old = before.iter().find(|old| key(old) == key(run))?;
+            let fields = ["outcome", "failure", "extraction"];
+            (fields.iter().any(|field| old[*field] != run[*field])).then(|| {
+                json!({"task_id": run["task_id"], "server": run["server"], "repetition": run["repetition"],
+                    "before": {"outcome": old["outcome"], "failure": old["failure"], "extraction": old["extraction"]},
+                    "after": {"outcome": run["outcome"], "failure": run["failure"], "extraction": run["extraction"]}})
+            })
+        })
+        .collect();
+    rescored["rescore"] = json!({"commit": commit, "reason": reason, "changed_runs": changed,
+        "earlier_rescore": earlier.get("rescore")});
+    rescored
 }

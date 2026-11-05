@@ -135,6 +135,9 @@ class IsolationTest(unittest.TestCase):
             lambda event: event["mcp_servers"].append({"name": "other", "status": "connected"}),
             lambda event: event["mcp_servers"][0].update(status="failed"),
             lambda event: event["plugins"].append({"name": "x", "path": "/home/user/x", "source": "x@market"}),
+            lambda event: event["plugins"].append({"name": "x", "path": "builtin", "source": "x@builtin"}),
+            lambda event: event["tools"].append("Read"),
+            lambda event: event.update(tools=["ToolSearch"]),
             lambda event: event["slash_commands"].append("review"),
             lambda event: event["agents"].append("my-agent"),
             lambda event: event.update(skills=["deploy"]),
@@ -145,6 +148,32 @@ class IsolationTest(unittest.TestCase):
             event = copy.deepcopy(sample_init())
             mutate(event)
             self.assertNotEqual(runner.check_init(event, "rampage"), [], event)
+
+    def test_tool_search_is_the_only_allowed_built_in(self) -> None:
+        event = sample_init()
+        event["tools"].append("ToolSearch")
+        self.assertEqual(runner.check_init(event, "rampage"), [])
+        self.assertTrue(runner.init_evidence(event)["deferred_tool_loading"])
+
+    def test_a_non_empty_memory_directory_is_a_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            event = sample_init()
+            event["memory_paths"] = {"auto": directory}
+            self.assertEqual(runner.check_init(event, "rampage"), [])
+            (Path(directory) / "MEMORY.md").write_text("remember")
+            self.assertIn("memory directory is not empty", runner.check_init(event, "rampage")[0])
+
+    def test_normalize_checks_the_init_event_itself(self) -> None:
+        lines = []
+        for arrival, line in sample_lines():
+            event = json.loads(line)
+            if event.get("subtype") == "init":
+                event["tools"].append("Bash")
+                line = json.dumps(event)
+            lines.append((arrival, line))
+        result = normalized(runner.parse_stream(lines, "rampage"))
+        self.assertEqual(result["exit"], "error")
+        self.assertIn("tools outside", result["error"])
 
     def test_server_prompts_may_appear_as_slash_commands(self) -> None:
         event = sample_init()
@@ -165,30 +194,50 @@ class IsolationTest(unittest.TestCase):
         self.assertTrue(leaked["error"].startswith("isolation: tools outside"))
 
 
-def with_rejected_outside_call(lines: list[tuple[float, str]]) -> list[tuple[float, str]]:
-    """Add a model call to a tool that does not exist, which Claude Code answers with an error."""
+def with_outside_call(
+    lines: list[tuple[float, str]],
+    text: str = "<tool_use_error>Error: No such tool available: enable_tools</tool_use_error>",
+    name: str = "enable_tools",
+) -> list[tuple[float, str]]:
+    """Add a model call to a tool outside the server, answered with an error carrying `text`."""
     call = {"type": "assistant", "message": {"model": MODEL, "id": "msg_rejected", "role": "assistant",
-            "content": [{"type": "tool_use", "id": "toolu_rejected", "name": "enable_tools", "input": {}}]}}
+            "content": [{"type": "tool_use", "id": "toolu_rejected", "name": name, "input": {}}]}}
     answer = {"type": "user", "message": {"role": "user", "content": [
         {"type": "tool_result", "tool_use_id": "toolu_rejected", "is_error": True,
-         "content": "<tool_use_error>Error: No such tool available: enable_tools</tool_use_error>"}]}}
+         "content": text}]}}
     return [lines[0], (0.1, json.dumps(call)), (0.2, json.dumps(answer)), *lines[1:]]
 
 
 class RejectedCallTest(unittest.TestCase):
     def test_a_rejected_call_to_a_missing_tool_is_a_model_error_not_a_leak(self) -> None:
-        parsed = runner.parse_stream(with_rejected_outside_call(sample_lines()), "rampage")
+        parsed = runner.parse_stream(with_outside_call(sample_lines()), "rampage")
         result = normalized(parsed)
         self.assertEqual(result["exit"], "ok")
         self.assertEqual(result["rejected_outside_calls"], ["enable_tools"])
         self.assertEqual(len(result["tool_calls"]), 5)
         self.assertTrue(result["tool_calls"][0]["is_error"])
+        self.assertTrue(result["tool_calls"][0]["rejected"])
+
+    def test_an_outside_call_that_ran_and_failed_is_a_leak(self) -> None:
+        lines = with_outside_call(sample_lines(), "Exit code 1: cat: no such file", "Bash")
+        result = normalized(runner.parse_stream(lines, "rampage"))
+        self.assertEqual(result["exit"], "error")
+        self.assertIn("outside the server: ['Bash']", result["error"])
+
+    def test_truncated_results_are_counted(self) -> None:
+        lines = with_outside_call(
+            sample_lines(), "<persisted-output>\nOutput too large (63.7KB). Full output saved to: x", "mcp__rampage__x"
+        )
+        parsed = runner.parse_stream(lines, "rampage")
+        self.assertEqual(parsed["truncated_results"], 1)
+        self.assertTrue(parsed["tool_calls"][0]["truncated"])
+        self.assertGreater(parsed["first_request_tokens"], 0)
 
     def test_renormalize_recomputes_from_the_transcript_and_keeps_timings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             transcript = root / "transcript.jsonl"
-            lines = with_rejected_outside_call(sample_lines())
+            lines = with_outside_call(sample_lines())
             transcript.write_text("\n".join(line for _, line in lines) + "\n")
             previous = normalized(runner.parse_stream(lines, "rampage"), duration_ms=4321)
             previous["exit"], previous["error"] = "error", "isolation: calls to tools outside the server"
@@ -226,12 +275,13 @@ class CommandTest(unittest.TestCase):
             arguments = self.arguments(Path(directory))
             command = runner.claude_command(arguments, "system text", "setting-sources-none")
             self.assertIn("--strict-mcp-config", command)
-            self.assertIn("--allowedTools=mcp__rea__*", command)
+            self.assertIn("--allowedTools=mcp__rea__*,ToolSearch", command)
             denied = next(part for part in command if part.startswith("--disallowedTools="))
             for tool in ("Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "Agent",
                          "Task", "NotebookEdit", "TodoWrite", "Skill"):
                 self.assertIn(tool, denied.split("=", 1)[1].split(","))
-            self.assertEqual(command[command.index("--tools") + 1], "")
+            self.assertEqual(command[command.index("--tools") + 1], "ToolSearch")
+            self.assertNotIn("ToolSearch", denied)
             self.assertEqual(command[command.index("--setting-sources") + 1], "")
             self.assertEqual(command[command.index("--permission-mode") + 1], "dontAsk")
             self.assertEqual(command[command.index("--system-prompt") + 1], "system text")
@@ -249,6 +299,12 @@ class CommandTest(unittest.TestCase):
             {"PATH": "/bin", "HOME": "/home/u", "CLAUDE_EFFORT": "max", "CLAUDECODE": "1", "CLAUDE_CODE_X": "y"}
         )
         self.assertEqual(environment, {"PATH": "/bin", "HOME": "/home/u"})
+        limited = runner.child_environment({"PATH": "/bin", "MAX_MCP_OUTPUT_TOKENS": "9"}, 200000)
+        self.assertEqual(limited["MAX_MCP_OUTPUT_TOKENS"], "200000")
+        self.assertEqual(
+            runner.client_project_dir(Path("/home/u"), Path("/private/var/tmp/agent-bench-1-0")),
+            Path("/home/u/.claude/projects/-private-var-tmp-agent-bench-1-0"),
+        )
 
     def test_mcp_config_must_hold_exactly_the_named_server(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

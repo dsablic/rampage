@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use rampage_eval::agent_bench::{
-    Extraction, FailureKind, NeutralSuite, RunnerResult, extract_answer, markdown_tables, score, spread, summarize,
+    Extraction, FailureKind, NeutralSuite, RunnerResult, extract_answer, markdown_tables, rescored_report, score,
+    spread, summarize,
 };
 use rampage_eval::parity_tasks::{TaskKind, TaskOutcome, load_tasks};
 use serde_json::{Value, json};
@@ -72,7 +73,7 @@ fn neutral_suite_must_match_the_canonical_ids() {
 }
 
 #[test]
-fn answers_are_one_json_object_alone_or_in_a_single_fence() {
+fn answers_are_one_json_object_alone_fenced_or_ending_the_reply() {
     let object = json!({"a": 1});
     assert_eq!(extract_answer(" {\"a\":1}\n").unwrap(), (object.clone(), Extraction::Exact));
     assert_eq!(extract_answer("```json\n{\"a\":1}\n```").unwrap(), (object.clone(), Extraction::Fenced));
@@ -90,16 +91,24 @@ fn scoring_uses_the_frozen_contract_and_per_server_probe_truth() {
     let tasks = canonical();
     let task = |id: &str| tasks.iter().find(|task| task.id == id).unwrap();
     let main = task("main-return-x64-elf");
-    let row = score(main, &suite, "rampage", 1, &result("{\"return_value\":5}", "ok")).unwrap();
+    let row = score(main, &suite, "rampage", 1, 0, &result("{\"return_value\":5}", "ok")).unwrap();
     assert_eq!(row.outcome, TaskOutcome::AnswerMatches);
     assert_eq!((row.tool_calls, row.tool_errors, row.failure), (2, 1, None));
     assert_eq!(row.extraction, Some(Extraction::Exact));
-    let row = score(main, &suite, "rea", 1, &result("{\"return_value\":6}", "ok")).unwrap();
+    let row = score(main, &suite, "rea", 1, 0, &result("{\"return_value\":6}", "ok")).unwrap();
     assert_eq!((row.outcome, row.failure), (TaskOutcome::AnswerMismatch, Some(FailureKind::WrongAnswer)));
     let patch = task("capability-patch-export");
     let yes = result("{\"available\":true}", "ok");
-    assert_eq!(score(patch, &suite, "rampage", 1, &yes).unwrap().outcome, TaskOutcome::AnswerMatches);
-    assert_eq!(score(patch, &suite, "rea", 1, &yes).unwrap().outcome, TaskOutcome::AnswerMismatch);
+    assert_eq!(score(patch, &suite, "rampage", 1, 0, &yes).unwrap().outcome, TaskOutcome::AnswerMatches);
+    let no = result("{\"available\":false}", "ok");
+    assert_eq!(score(patch, &suite, "rampage", 1, 0, &no).unwrap().outcome, TaskOutcome::AnswerMismatch);
+    // REA advertises raw Rizin/Cutter command runners, so either boolean is accepted, but only that field.
+    assert_eq!(score(patch, &suite, "rea", 1, 0, &yes).unwrap().outcome, TaskOutcome::AnswerMatches);
+    assert_eq!(score(patch, &suite, "rea", 1, 0, &no).unwrap().outcome, TaskOutcome::AnswerMatches);
+    let extra = result("{\"available\":true,\"via\":\"rizin\"}", "ok");
+    assert_eq!(score(patch, &suite, "rea", 1, 0, &extra).unwrap().outcome, TaskOutcome::AnswerMismatch);
+    let decompile = task("capability-decompile");
+    assert_eq!(score(decompile, &suite, "rea", 1, 0, &no).unwrap().outcome, TaskOutcome::AnswerMismatch);
     for (answer, exit, kind) in [
         ("{\"return_value\":5}", "timeout", FailureKind::Timeout),
         ("", "max_turns", FailureKind::MaxTurns),
@@ -108,11 +117,11 @@ fn scoring_uses_the_frozen_contract_and_per_server_probe_truth() {
         ("{\"status\":\"unknown\",\"reason\":\"no main\"}", "ok", FailureKind::Unknown),
         ("{\"status\":\"unsupported\",\"reason\":\"no tool\"}", "ok", FailureKind::Unsupported),
     ] {
-        let row = score(main, &suite, "rea", 1, &result(answer, exit)).unwrap();
+        let row = score(main, &suite, "rea", 1, 0, &result(answer, exit)).unwrap();
         assert_eq!(row.failure, Some(kind), "{answer} {exit}");
         assert_ne!(row.outcome, TaskOutcome::AnswerMatches);
     }
-    let error = score(main, &suite, "rea", 1, &result("", "error")).unwrap();
+    let error = score(main, &suite, "rea", 1, 0, &result("", "error")).unwrap();
     assert_eq!(error.runner_error.as_deref(), Some("boom"));
 }
 
@@ -123,10 +132,10 @@ fn summaries_report_accuracy_spread_and_failures_per_task_and_server() {
     let main = tasks.iter().find(|task| task.id == "main-return-x64-elf").unwrap();
     let probe = tasks.iter().find(|task| task.id == "capability-decompile").unwrap();
     let rows = vec![
-        score(main, &suite, "rampage", 1, &result("{\"return_value\":5}", "ok")).unwrap(),
-        score(main, &suite, "rampage", 2, &result("{\"return_value\":4}", "ok")).unwrap(),
-        score(main, &suite, "rampage", 3, &result("", "timeout")).unwrap(),
-        score(probe, &suite, "rampage", 1, &result("{\"available\":true}", "ok")).unwrap(),
+        score(main, &suite, "rampage", 1, 0, &result("{\"return_value\":5}", "ok")).unwrap(),
+        score(main, &suite, "rampage", 2, 0, &result("{\"return_value\":4}", "ok")).unwrap(),
+        score(main, &suite, "rampage", 3, 0, &result("", "timeout")).unwrap(),
+        score(probe, &suite, "rampage", 1, 0, &result("{\"available\":true}", "ok")).unwrap(),
     ];
     let summary = summarize(&rows);
     let task = &summary["tasks"][1];
@@ -147,4 +156,60 @@ fn summaries_report_accuracy_spread_and_failures_per_task_and_server() {
 fn spread_takes_an_observed_median() {
     assert_eq!(spread([4, 1, 3, 2]), json!({"median": 2, "min": 1, "max": 4}));
     assert_eq!(spread([]), Value::Null);
+}
+
+#[test]
+fn server_calls_exclude_tool_search_and_refused_calls() {
+    let suite = NeutralSuite::from_toml(NEUTRAL).unwrap();
+    let tasks = canonical();
+    let main = tasks.iter().find(|task| task.id == "main-return-x64-elf").unwrap();
+    let mut run = result("{\"return_value\":5}", "ok");
+    run.tool_calls[1].truncated = true;
+    let mut search = run.tool_calls[0].clone();
+    search.name = "ToolSearch".to_owned();
+    let mut refused = run.tool_calls[0].clone();
+    refused.name = "enable_tools".to_owned();
+    refused.is_error = true;
+    refused.rejected = true;
+    run.tool_calls.extend([search, refused]);
+    let row = score(main, &suite, "rampage", 2, 1, &run).unwrap();
+    assert_eq!(
+        (row.tool_calls, row.tool_errors, row.truncated_results, row.tool_search_calls, row.rejected_calls),
+        (2, 1, 1, 1, 1)
+    );
+    assert_eq!(row.position, 1);
+}
+
+#[test]
+fn a_rescored_report_keeps_the_measured_provenance_and_lists_changed_runs() {
+    let earlier = json!({
+        "versions": {"rampage": {"commit": "measured"}}, "run_unix_ms": 7, "protocol": {"repeat": 3},
+        "runs": [
+            {"task_id": "a", "server": "rea", "repetition": 1, "outcome": "failed", "failure": "runner_error",
+             "extraction": null},
+            {"task_id": "b", "server": "rea", "repetition": 1, "outcome": "answer_matches", "failure": null,
+             "extraction": "exact"}
+        ]
+    });
+    let rescored = json!({
+        "versions": {"rampage": {"commit": "later", "worktree_dirty": true}}, "run_unix_ms": 99,
+        "protocol": {"repeat": 3, "changed": true},
+        "runs": [
+            {"task_id": "a", "server": "rea", "repetition": 1, "outcome": "answer_matches", "failure": null,
+             "extraction": "exact"},
+            {"task_id": "b", "server": "rea", "repetition": 1, "outcome": "answer_matches", "failure": null,
+             "extraction": "exact"}
+        ]
+    });
+    let report = rescored_report(&earlier, rescored, Some("abc".to_owned()), "rule fixed");
+    assert_eq!(report["versions"], earlier["versions"]);
+    assert_eq!(report["run_unix_ms"], 7);
+    assert_eq!(report["protocol"], earlier["protocol"]);
+    assert_eq!(report["rescore"]["commit"], "abc");
+    assert_eq!(report["rescore"]["reason"], "rule fixed");
+    let changed = report["rescore"]["changed_runs"].as_array().unwrap();
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0]["task_id"], "a");
+    assert_eq!(changed[0]["before"]["failure"], "runner_error");
+    assert_eq!(changed[0]["after"]["outcome"], "answer_matches");
 }

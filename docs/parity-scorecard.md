@@ -58,28 +58,41 @@ including the Phase 3.3 supplement, keep their truncated records and lack the tw
 
 The accepted Phase 0 baseline and the Phase 1 and 3.3 live results were collected through an OpenCode JSON-intent
 adapter with `github-copilot/gpt-6.1-sol`. That adapter is retired; those results stay published as history and
-are not comparable with runs through the agent runner below (different model, client and prompts).
+are not comparable with runs through the agent runner below (different model, client and prompts). The six live
+examples that used that adapter (`local_typing`, `function_frame`, `debug_type_import`, `type_library`,
+`type_propagation`, `typed_data`) now use the in-process Anthropic transport with a pinned `claude-sonnet-5-5`
+and need `ANTHROPIC_API_KEY`. They stay in process rather than moving to the agent runner because they rely on
+the parity agent's per-argument write policy (for example, edits only on the owned fixture), which a
+`claude -p` session cannot enforce.
 
 ### Head-to-head agent runs
 
 `rampage-eval agent-bench` runs the canonical tasks through an external agent runner against one MCP server at a
 time and scores the answers against the same manifest contracts. The default runner,
-`tools/agent-bench/claude-runner.py`, drives `claude -p` with only the one server's tools allowed, every built-in
-tool removed and denied, no setting sources (or `--bare` when `ANTHROPIC_API_KEY` is set), and checks the
-stream's init event: any extra tool, MCP server, user plugin, skill, agent, slash command or hook fails the run.
-It writes a normalized result (answer, tool calls with byte sizes and timings, turns, token usage, cost, wall
-time, exit kind, runner identity) that names no Claude Code format, so another agent CLI needs only another
-runner script with the same output; `--runner` selects it.
+`tools/agent-bench/claude-runner.py`, drives `claude -p` with only the one server's tools and `ToolSearch` (Claude
+Code's loader for deferred MCP tool schemas) allowed, every other built-in tool removed and denied, no setting
+sources (or `--bare` when `ANTHROPIC_API_KEY` is set), `MAX_MCP_OUTPUT_TOKENS` set the same for every server
+(200,000 by default), and checks the stream's init event: any extra tool, MCP server, plugin outside Claude
+Code's pinned built-ins, skill, agent, slash command, hook or non-empty memory directory fails the run, as does
+a call outside the server that ran. It deletes Claude Code's per-project directory for the run's working
+directory afterwards. It writes a normalized result (answer, tool calls with byte sizes, timings and truncation
+or refusal flags, turns, token usage, cost, wall time, exit kind, runner identity) that names no Claude Code
+format, so another agent CLI needs only another runner script with the same output; `--runner` selects it.
 
 ```sh
-rampage-eval agent-bench --servers rampage,rea --tasks all --repeat 3 --model claude-sonnet-5-5 \
-  --report-json docs/benchmarks/agent-h2h-DATE.json --report-md docs/benchmarks/agent-h2h-DATE.md
+rampage-eval agent-bench --label NAME --servers rampage,rea --tasks all --repeat 3 --model claude-sonnet-5-5 \
+  --report-json docs/benchmarks/agent-h2h-DATE.json --report-md target/bench/h2h/NAME/tables.md
 ```
+
+`--report-md` receives only the generated tables; the published `agent-h2h-DATE.md` is written by hand around
+them. `--rescore` recomputes a finished run from its recorded transcripts without model calls, keeping the
+measured run's versions, time and protocol and recording what changed in a `rescore` block.
 
 Prompts come from `crates/rampage-eval/tasks/h2h/neutral.toml`: tool-neutral wording for each canonical task,
 with the reason for every change from the frozen question. Capability probes ask about the connected server's
-own tools, so their truth is per server, with its evidence. Runs are sequential; each gets a fresh private
-directory outside the repository holding its own copy of the fixture as `fixture.bin`. Raw streams stay in
+own tools, so their truth is per server, with its evidence. Runs are sequential, the servers alternating which
+goes first per repetition; each gets a fresh private directory outside the repository holding its own copy of
+the fixture as `fixture.bin`. Raw streams stay in
 `target/bench/h2h/` (mode 0600); reports hold measurements and outcomes, never answers or transcripts. The
 `rea` server is REA (morluto/rea) over headless Ghidra, built from a pinned commit under `target/bench/rea/` and
 described by its `install.json`; results are in [benchmarks](benchmarks.md).

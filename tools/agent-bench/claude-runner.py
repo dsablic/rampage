@@ -4,10 +4,11 @@ This is the swap point between the benchmark harness and an agent CLI. The harne
 stream format: it reads the normalized result JSON this script writes, and a runner for another agent CLI only
 has to emit the same JSON. The script decides nothing about scoring.
 
-Isolation: built-in tools are removed and denied, only `mcp__<server>__*` tools are allowed, no setting sources
-(or `--bare` when ANTHROPIC_API_KEY is set) are loaded, and the stream's `system`/`init` event is checked before
-the model answers. Anything beyond the one server's tools and Claude Code's built-in plugins and agents fails
-the run.
+Isolation: built-in tools are removed and denied except ToolSearch, which Claude Code uses to load deferred MCP
+tool schemas on demand; only `mcp__<server>__*` tools and ToolSearch are allowed, no setting sources (or `--bare`
+when ANTHROPIC_API_KEY is set) are loaded, and the stream's `system`/`init` event is checked. Anything beyond the
+one server's tools, ToolSearch and Claude Code's built-in plugins and agents fails the run, as does a non-empty
+memory directory or a call outside the server that ran.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -66,12 +68,36 @@ BUILTIN_TOOLS = (
     "TaskOutput",
     "TaskStop",
     "TodoWrite",
-    "ToolSearch",
     "WebFetch",
     "WebSearch",
     "Workflow",
     "Write",
 )
+
+# The only built-in tool a run may use: it loads deferred MCP tool schemas and touches no file or network.
+ALLOWED_BUILTINS = ("ToolSearch",)
+
+# Claude Code's built-in plugins as of 2.1.318; any other plugin came from user configuration.
+BUILTIN_PLUGINS = frozenset(
+    {
+        "cc-plugin-agents-md",
+        "cc-plugin-plugin-authoring",
+        "cc-plugin-privacy",
+        "cc-plugin-sec-default",
+        "cc-plugin-telemetry",
+    }
+)
+
+# Claude Code's answer to a call it refused to run: an unknown tool, or one the permission mode denied.
+REJECTION = re.compile(
+    r"No such tool available|haven't granted it yet|Permission to use \S+ (?:has been|was) denied"
+)
+
+# Claude Code's replacements for a tool result too large to show inline.
+TRUNCATION = re.compile(r"<persisted-output>|Output too large|exceeds maximum allowed tokens|<truncated-output>")
+
+# Default MAX_MCP_OUTPUT_TOKENS, the same for every server; Claude Code's own default is 25,000.
+DEFAULT_MAX_MCP_OUTPUT_TOKENS = 200_000
 
 # Claude Code's own agents. Without the Agent tool none of them can run; anything else came from user config.
 BUILTIN_AGENTS = frozenset(
@@ -86,6 +112,7 @@ ENVIRONMENT_ALLOWLIST = (
     "LANG",
     "LC_ALL",
     "LOGNAME",
+    "MAX_MCP_OUTPUT_TOKENS",
     "PATH",
     "SHELL",
     "TERM",
@@ -104,8 +131,16 @@ def isolation_mode(environment: dict[str, str]) -> str:
     return "bare" if environment.get("ANTHROPIC_API_KEY") else "setting-sources-none"
 
 
-def child_environment(environment: dict[str, str]) -> dict[str, str]:
-    return {name: environment[name] for name in ENVIRONMENT_ALLOWLIST if name in environment}
+def child_environment(environment: dict[str, str], max_mcp_output_tokens: int | None = None) -> dict[str, str]:
+    child = {name: environment[name] for name in ENVIRONMENT_ALLOWLIST if name in environment}
+    if max_mcp_output_tokens is not None:
+        child["MAX_MCP_OUTPUT_TOKENS"] = str(max_mcp_output_tokens)
+    return child
+
+
+def client_project_dir(home: Path, workdir: Path) -> Path:
+    """Where Claude Code keeps a session's per-project files (spilled tool results, memory) for this cwd."""
+    return home / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(workdir))
 
 
 def read_mcp_config(path: Path, server: str) -> dict[str, Any]:
@@ -128,8 +163,8 @@ def claude_command(arguments: argparse.Namespace, system_prompt: str | None, iso
         str(arguments.mcp_config),
         "--strict-mcp-config",
         "--tools",
-        "",
-        f"--allowedTools=mcp__{arguments.server_name}__*",
+        ",".join(ALLOWED_BUILTINS),
+        f"--allowedTools=mcp__{arguments.server_name}__*," + ",".join(ALLOWED_BUILTINS),
         "--disallowedTools=" + ",".join(BUILTIN_TOOLS),
         "--permission-mode",
         "dontAsk",
@@ -157,7 +192,9 @@ def check_init(event: dict[str, Any], server: str) -> list[str]:
     if not isinstance(tools, list) or not tools:
         problems.append("init event lists no tools")
         tools = []
-    extra_tools = [tool for tool in tools if not str(tool).startswith(prefix)]
+    extra_tools = [tool for tool in tools if not str(tool).startswith(prefix) and tool not in ALLOWED_BUILTINS]
+    if not any(str(tool).startswith(prefix) for tool in tools):
+        problems.append(f"no {prefix}* tools")
     if extra_tools:
         problems.append(f"tools outside {prefix}*: {extra_tools}")
     servers = event.get("mcp_servers")
@@ -174,7 +211,8 @@ def check_init(event: dict[str, Any], server: str) -> list[str]:
         if not (
             isinstance(plugin, dict)
             and plugin.get("path") == "builtin"
-            and str(plugin.get("source", "")).endswith("@builtin")
+            and plugin.get("name") in BUILTIN_PLUGINS
+            and plugin.get("source") == f"{plugin.get('name')}@builtin"
         )
     ]
     if extra_plugins:
@@ -189,12 +227,20 @@ def check_init(event: dict[str, Any], server: str) -> list[str]:
         problems.append(f"skills loaded: {event.get('skills')}")
     if event.get("additional_directories"):
         problems.append(f"additional directories: {event.get('additional_directories')}")
+    for kind, directory in (event.get("memory_paths") or {}).items():
+        try:
+            if Path(directory).is_dir() and any(Path(directory).iterdir()):
+                problems.append(f"{kind} memory directory is not empty: {directory}")
+        except OSError as error:
+            problems.append(f"{kind} memory directory unreadable: {error}")
     return problems
 
 
 def init_evidence(event: dict[str, Any]) -> dict[str, Any]:
+    tools = event.get("tools") or []
     return {
-        "tool_count": len(event.get("tools") or []),
+        "tool_count": len(tools),
+        "deferred_tool_loading": any(tool in ALLOWED_BUILTINS for tool in tools),
         "mcp_servers": event.get("mcp_servers"),
         "plugins": [plugin.get("source") for plugin in event.get("plugins") or [] if isinstance(plugin, dict)],
         "slash_commands": event.get("slash_commands"),
@@ -222,6 +268,14 @@ def content_bytes(content: Any) -> int:
     return len(json.dumps(content, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
 
 
+def content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(str(block.get("text", "")) for block in content if isinstance(block, dict))
+    return ""
+
+
 def parse_stream(lines: list[tuple[float, str]], server: str) -> dict[str, Any]:
     """Normalize a recorded stream of (arrival seconds, JSON line) pairs. Pure: no process or clock access."""
     init: dict[str, Any] | None = None
@@ -229,6 +283,8 @@ def parse_stream(lines: list[tuple[float, str]], server: str) -> dict[str, Any]:
     usage_by_message: dict[str, dict[str, Any]] = {}
     message_order: list[str] = []
     calls: list[dict[str, Any]] = []
+    result_texts: list[str] = []
+    first_request_tokens: int | None = None
     call_index: dict[str, int] = {}
     started: dict[str, float] = {}
     last_text = ""
@@ -260,6 +316,12 @@ def parse_stream(lines: list[tuple[float, str]], server: str) -> dict[str, Any]:
                 message_order.append(identity)
             if isinstance(message.get("usage"), dict):
                 usage_by_message[identity] = message["usage"]
+                if first_request_tokens is None:
+                    first = message["usage"]
+                    first_request_tokens = sum(
+                        int(first.get(key) or 0)
+                        for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+                    )
             else:
                 usage_by_message.setdefault(identity, {})
             if message.get("model"):
@@ -274,6 +336,7 @@ def parse_stream(lines: list[tuple[float, str]], server: str) -> dict[str, Any]:
                     identifier = str(block.get("id", ""))
                     call_index[identifier] = len(calls)
                     started[identifier] = arrival
+                    result_texts.append("")
                     calls.append(
                         {
                             "name": str(block.get("name", "")),
@@ -296,6 +359,8 @@ def parse_stream(lines: list[tuple[float, str]], server: str) -> dict[str, Any]:
                     continue
                 calls[index]["output_bytes"] = content_bytes(block.get("content"))
                 calls[index]["is_error"] = bool(block.get("is_error", False))
+                result_texts[index] = content_text(block.get("content"))
+                calls[index]["truncated"] = bool(TRUNCATION.search(result_texts[index][:4096]))
                 if identifier in started:
                     calls[index]["duration_ms"] = round((arrival - started[identifier]) * 1000)
         elif kind == "result":
@@ -336,11 +401,18 @@ def parse_stream(lines: list[tuple[float, str]], server: str) -> dict[str, Any]:
             exit_kind = "error"
             error = f"result {subtype or 'unknown'}: {str(result.get('result') or '')[:MAX_ERROR_TEXT]}"
     prefix = f"mcp__{server}__"
-    # A call to a tool outside the server that Claude Code rejected (no such tool, or denied) ran nothing: it
-    # is a model error inside the run. One that returned a result means something else was reachable.
-    outside = [call for call in calls if not call["name"].startswith(prefix)]
-    stray = sorted({call["name"] for call in outside if not call["is_error"]})
-    rejected = sorted({call["name"] for call in outside if call["is_error"]})
+    # A call outside the server that Claude Code refused (no such tool, or permission denied) ran nothing: it is
+    # a model error inside the run. Any other outside call, successful or failed, reached something else.
+    stray: set[str] = set()
+    rejected: set[str] = set()
+    for call, text in zip(calls, result_texts):
+        if call["name"].startswith(prefix) or call["name"] in ALLOWED_BUILTINS:
+            continue
+        if call["is_error"] and not call.get("unanswered") and REJECTION.search(text):
+            call["rejected"] = True
+            rejected.add(call["name"])
+        else:
+            stray.add(call["name"])
     return {
         "init": init,
         "answer": answer,
@@ -353,8 +425,10 @@ def parse_stream(lines: list[tuple[float, str]], server: str) -> dict[str, Any]:
         "error": error,
         "models": sorted(models),
         "hook_events": hook_events,
-        "stray_tools": stray,
-        "rejected_outside_calls": rejected,
+        "stray_tools": sorted(stray),
+        "rejected_outside_calls": sorted(rejected),
+        "truncated_results": sum(1 for call in calls if call.get("truncated")),
+        "first_request_tokens": first_request_tokens,
         "malformed_lines": malformed,
     }
 
@@ -375,6 +449,8 @@ def normalize(
     problems = list(leak)
     if parsed["init"] is None:
         problems.append("no init event")
+    else:
+        problems += [problem for problem in check_init(init, server) if problem not in problems]
     if parsed["hook_events"]:
         problems.append(f"hook events ran: {parsed['hook_events']}")
     if parsed["stray_tools"]:
@@ -408,6 +484,8 @@ def normalize(
         },
         "isolation_evidence": init_evidence(init) if parsed["init"] is not None else None,
         "rejected_outside_calls": parsed["rejected_outside_calls"],
+        "truncated_results": parsed["truncated_results"],
+        "first_request_tokens": parsed["first_request_tokens"],
         "server": server,
     }
 
@@ -440,7 +518,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(f"workdir {arguments.workdir} is not a directory")
     prompt = arguments.prompt_file.read_text(encoding="utf-8")
     system_prompt = arguments.system_file.read_text(encoding="utf-8") if arguments.system_file else None
-    environment = child_environment(dict(os.environ))
+    environment = child_environment(dict(os.environ), arguments.max_mcp_output_tokens)
     isolation = isolation_mode(environment)
     command = claude_command(arguments, system_prompt, isolation)
     lines: list[tuple[float, str]] = []
@@ -495,7 +573,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
         tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-MAX_ERROR_TEXT:].strip()
         process_error = f"claude exited {process.returncode}" + (f": {tail}" if tail else "")
     parsed = parse_stream(lines, arguments.server_name)
-    return normalize(
+    result = normalize(
         parsed,
         server=arguments.server_name,
         requested_model=arguments.model,
@@ -505,6 +583,21 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
         leak=leak,
         process_error=process_error,
     )
+    result["client_settings"] = {"MAX_MCP_OUTPUT_TOKENS": environment.get("MAX_MCP_OUTPUT_TOKENS")}
+    result["client_project_dir_removed"] = remove_client_project_dir(environment, arguments.workdir)
+    return result
+
+
+def remove_client_project_dir(environment: dict[str, str], workdir: Path) -> bool:
+    """Delete the per-project directory Claude Code made for this run's workdir (spilled results, memory)."""
+    home = environment.get("HOME")
+    if not home:
+        return False
+    directory = client_project_dir(Path(home), workdir.resolve())
+    if not directory.is_dir():
+        return False
+    shutil.rmtree(directory)
+    return True
 
 
 def renormalize(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -554,6 +647,12 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--out", type=Path, required=True, help="normalized result JSON")
     result.add_argument("--transcript", type=Path, required=True, help="raw stream, written 0600")
     result.add_argument("--claude-bin", default=os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude")
+    result.add_argument(
+        "--max-mcp-output-tokens",
+        type=int,
+        default=DEFAULT_MAX_MCP_OUTPUT_TOKENS,
+        help="MAX_MCP_OUTPUT_TOKENS for the session, the same for every server",
+    )
     result.add_argument(
         "--renormalize",
         action="store_true",

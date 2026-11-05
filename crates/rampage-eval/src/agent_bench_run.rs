@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rampage_eval::agent_bench::{NeutralSuite, RunRow, RunnerResult, markdown_tables, score, summarize};
+use rampage_eval::agent_bench::{
+    NeutralSuite, RunRow, RunnerResult, markdown_tables, rescored_report, score, summarize,
+};
 use rampage_eval::parity_tasks::{ParityTask, load_tasks};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -72,6 +74,15 @@ pub struct AgentBenchArgs {
     /// (`--renormalize`), then score and report again. The earlier rows are kept as runs.before-rescore.jsonl.
     #[arg(long)]
     rescore: bool,
+    /// Why the run is being rescored; recorded in the report's `rescore` block.
+    #[arg(long, requires = "rescore", default_value = "rescored from the recorded transcripts")]
+    rescore_reason: String,
+    /// MAX_MCP_OUTPUT_TOKENS for every run, the same for every server.
+    #[arg(long, default_value_t = 200_000)]
+    max_mcp_output_tokens: u64,
+    /// REA_MCP_TOOL_FAMILIES for the REA server; unset (REA's complete catalog) by default.
+    #[arg(long)]
+    rea_tool_families: Option<String>,
 }
 
 pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
@@ -125,10 +136,13 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
             _ => {
                 let entry = absolute(args.rea_entry.as_ref(), "target/bench/rea/src/scripts/rea.mjs")?;
                 let node = which(&args.node)?;
+                let mut env = json!({"GHIDRA_INSTALL_DIR": args.ghidra_dir, "JAVA_HOME": args.java_home,
+                    "REA_ANALYSIS_PROVIDER": "ghidra"});
+                if let Some(families) = &args.rea_tool_families {
+                    env["REA_MCP_TOOL_FAMILIES"] = json!(families);
+                }
                 let config = json!({"mcpServers": {"rea": {"type": "stdio",
-                    "command": node, "args": [entry, "mcp"],
-                    "env": {"GHIDRA_INSTALL_DIR": args.ghidra_dir, "JAVA_HOME": args.java_home,
-                        "REA_ANALYSIS_PROVIDER": "ghidra"}}}});
+                    "command": node, "args": [entry, "mcp"], "env": env}}});
                 let record = absolute(args.rea_install_record.as_ref(), "target/bench/rea/install.json")?;
                 let install: Value = serde_json::from_str(&read(&record)?).map_err(|error| error.to_string())?;
                 let node_version = Command::new(&node)
@@ -141,7 +155,8 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
                     config,
                     json!({"install": install, "node": node_version,
                     "ghidra": ghidra_version(&args.ghidra_dir), "java_home": args.java_home,
-                    "provider": "ghidra", "tool_families": "default"}),
+                    "provider": "ghidra",
+                    "tool_families": args.rea_tool_families.as_deref().unwrap_or("default (complete catalog)")}),
                 )
             }
         };
@@ -177,13 +192,14 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
     let total = args.repeat as usize * tasks.len() * args.servers.len();
     for repetition in 1..=args.repeat {
         for task in &tasks {
-            for server in &args.servers {
+            for (position, server) in server_order(&args.servers, repetition).into_iter().enumerate() {
                 let fixture = root.join(&task.fixture.path);
                 let row = run_one(&RunSetup {
                     task,
                     suite: &suite,
                     server,
                     repetition,
+                    position: position as u32,
                     fixture: &fixture,
                     config: &servers[server],
                     system: &system_path,
@@ -226,7 +242,9 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
         "protocol": {
             "model": args.model, "repeat": args.repeat, "max_turns": args.max_turns, "timeout_s": args.timeout_s,
             "servers": args.servers, "tasks": tasks.iter().map(|task| &task.id).collect::<Vec<_>>(),
-            "order": "for each repetition, for each task, each server in turn; sequential",
+            "order": "for each repetition, for each task, each server in turn, sequentially; the --servers order \
+                on odd repetitions and its reverse on even ones",
+            "max_mcp_output_tokens": args.max_mcp_output_tokens,
             "neutral_suite_sha256": hex(&Sha256::digest(suite_text.as_bytes())),
             "task_definition_sha256": task_hashes(&task_directory, &tasks)?,
             "runner_command": args.runner,
@@ -237,8 +255,20 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
         "summary": summary,
         "runs": rows,
     });
+    let report_path = out_dir.join("report.json");
+    let report = if args.rescore {
+        let earlier_path = out_dir.join("report.before-rescore.json");
+        if !earlier_path.is_file() {
+            std::fs::copy(&report_path, &earlier_path)
+                .map_err(|error| format!("{}: no measured report to rescore: {error}", report_path.display()))?;
+        }
+        let earlier: Value = serde_json::from_str(&read(&earlier_path)?).map_err(|error| error.to_string())?;
+        rescored_report(&earlier, report, git(&root, &["rev-parse", "HEAD"]), &args.rescore_reason)
+    } else {
+        report
+    };
     let pretty = serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?;
-    std::fs::write(out_dir.join("report.json"), &pretty).map_err(|error| error.to_string())?;
+    std::fs::write(&report_path, &pretty).map_err(|error| error.to_string())?;
     let markdown = markdown_tables(&report["summary"]);
     std::fs::write(out_dir.join("tables.md"), &markdown).map_err(|error| error.to_string())?;
     if let (Some(json_path), Some(md_path)) = (&args.report_json, &args.report_md) {
@@ -250,11 +280,17 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// The --servers order on odd repetitions and its reverse on even ones, so no server always runs first.
+fn server_order(servers: &[String], repetition: u32) -> Vec<&String> {
+    if repetition % 2 == 1 { servers.iter().collect() } else { servers.iter().rev().collect() }
+}
+
 struct RunSetup<'a> {
     task: &'a ParityTask,
     suite: &'a NeutralSuite,
     server: &'a str,
     repetition: u32,
+    position: u32,
     fixture: &'a Path,
     config: &'a Path,
     system: &'a Path,
@@ -292,6 +328,7 @@ fn run_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
         .args(["--model", &setup.args.model])
         .args(["--max-turns", &setup.args.max_turns.to_string()])
         .args(["--timeout-s", &setup.args.timeout_s.to_string()])
+        .args(["--max-mcp-output-tokens", &setup.args.max_mcp_output_tokens.to_string()])
         .arg("--workdir")
         .arg(&workdir.path)
         .arg("--out")
@@ -303,7 +340,7 @@ fn run_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
     let text = read(&result_path).map_err(|error| format!("runner exited {status} without a result: {error}"))?;
     let result: RunnerResult =
         serde_json::from_str(&text).map_err(|error| format!("{}: {error}", result_path.display()))?;
-    score(setup.task, setup.suite, setup.server, setup.repetition, &result)
+    score(setup.task, setup.suite, setup.server, setup.repetition, setup.position, &result)
 }
 
 fn rescore_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
@@ -332,7 +369,7 @@ fn rescore_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
     let text = read(&result_path).map_err(|error| format!("runner exited {status} without a result: {error}"))?;
     let result: RunnerResult =
         serde_json::from_str(&text).map_err(|error| format!("{}: {error}", result_path.display()))?;
-    score(setup.task, setup.suite, setup.server, setup.repetition, &result)
+    score(setup.task, setup.suite, setup.server, setup.repetition, setup.position, &result)
 }
 
 /// A fresh private directory outside the repository, so no project file or other run's output is visible.
@@ -431,4 +468,17 @@ fn ghidra_version(directory: &Path) -> Option<String> {
             .trim()
             .to_owned(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::server_order;
+
+    #[test]
+    fn server_order_alternates_by_repetition() {
+        let servers = vec!["rampage".to_owned(), "rea".to_owned()];
+        assert_eq!(server_order(&servers, 1), [&servers[0], &servers[1]]);
+        assert_eq!(server_order(&servers, 2), [&servers[1], &servers[0]]);
+        assert_eq!(server_order(&servers, 3), [&servers[0], &servers[1]]);
+    }
 }

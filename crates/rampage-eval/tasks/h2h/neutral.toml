@@ -3,7 +3,8 @@
 # One entry per canonical task in ../*.toml. Answers are scored against those frozen manifests' contracts;
 # only the wording here is used in prompts. `change` records why a question differs from the frozen one.
 # Capability probes ask about the connected server's own tools, so their truth is per MCP server name, with
-# the evidence it was taken from.
+# the evidence it was taken from. "either" accepts both booleans: the server advertises a general command runner
+# whose reach depends on what the host has installed.
 
 version = 1
 
@@ -46,14 +47,17 @@ change = "The frozen wording names enableable groups, which is rampage's term."
 
 [tasks.capability-local-variable-rename.truth]
 rampage = true
-rea = false
+rea = "either"
 
 [tasks.capability-local-variable-rename.truth_evidence]
 rampage = "edit_variable in the types group renames parameters and locals by storage (docs/mcp.md)."
 rea = """
-annotate_native_function edits only a function's name and entry comments, set_address_name names addresses;
-no tool renames decompiler locals (REA docs/installation.md, Ghidra section). execute_rizin_command and
-rizin_debug_command need a rizin install, which this host lacks.
+No dedicated tool: annotate_native_function edits only a function's name and entry comments, set_address_name
+names addresses (REA docs/installation.md, Ghidra section). But REA's `native` tool family, which also holds
+its Mach-O, PE and ELF inspectors, advertises execute_rizin_command and cutter_command, raw Rizin/Cutter
+command runners whose descriptions say commands can mutate files; Rizin can rename variables. Whether that
+counts depends on a rizin install, which this host lacks, and REA_MCP_TOOL_FAMILIES cannot drop those tools
+without dropping the whole family. Either answer is accepted.
 """
 
 [tasks.capability-patch-export]
@@ -69,13 +73,15 @@ the per-server truth below is current.
 
 [tasks.capability-patch-export.truth]
 rampage = true
-rea = false
+rea = "either"
 
 [tasks.capability-patch-export.truth_evidence]
 rampage = "patch_bytes and export_patched are in the core group (docs/mcp.md)."
 rea = """
-Ghidra sessions never write executable bytes and no tool exports a patched file (REA docs/installation.md);
-execute_rizin_command needs a rizin install, which this host lacks.
+Ghidra sessions never write executable bytes and no dedicated tool exports a patched file (REA
+docs/installation.md). execute_rizin_command and cutter_command stay advertised in the `native` family and say
+commands can mutate files; Rizin can write bytes. Whether that counts depends on a rizin install, which this host
+lacks. Either answer is accepted.
 """
 
 [tasks.cpp-class-names-arm64-macho]
