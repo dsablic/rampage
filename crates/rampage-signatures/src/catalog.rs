@@ -8,6 +8,8 @@ use crate::{SignatureDb, SignatureDbError};
 const MAX_INDEX_BYTES: usize = 128 * 1024;
 const MAX_PROFILES: usize = 128;
 const RECOGNITION: &str = "same_build";
+/// The id prefix of a bundled profile holding flywheel promotions (`flywheel-libid-x86_64`).
+pub const FLYWHEEL_PROFILE_PREFIX: &str = "flywheel-";
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -83,8 +85,11 @@ fn validate_profiles(profiles: &[BundledProfile]) -> Result<(), SignatureDbError
         }
         match (&profile.archive_sha256, &profile.archive_identity_unavailable) {
             (Some(hash), None) if valid_digest(hash) => {}
+            // Flywheel promotions are signature rows gated on a corpus, not builds of one source archive; their
+            // provenance (corpus version, gate result, revert id) is in data/flywheel/.
             (None, Some(reason))
-                if matches!(profile.id.as_str(), "legacy-musl-x86_64" | "legacy-musl-aarch64")
+                if (matches!(profile.id.as_str(), "legacy-musl-x86_64" | "legacy-musl-aarch64")
+                    || profile.id.starts_with(FLYWHEEL_PROFILE_PREFIX))
                     && !reason.trim().is_empty()
                     && reason.len() <= 4096
                     && !reason.chars().any(char::is_control) => {}
@@ -95,7 +100,8 @@ fn validate_profiles(profiles: &[BundledProfile]) -> Result<(), SignatureDbError
 }
 
 impl BundledMetadata {
-    pub(super) fn parse(index: &str) -> Result<Self, SignatureDbError> {
+    /// Parses and checks a generated index (as `data/corpus-<arch>.index.json` holds it).
+    pub fn parse(index: &str) -> Result<Self, SignatureDbError> {
         if index.len() > MAX_INDEX_BYTES {
             return Err(SignatureDbError::LimitExceeded("bundled index bytes"));
         }
@@ -124,7 +130,8 @@ impl BundledMetadata {
         Ok(metadata)
     }
 
-    pub(super) fn load(&self, gzip: &[u8]) -> Result<SignatureDb, SignatureDbError> {
+    /// Loads the asset this index describes, checking its digest, lengths, architecture, scheme and counts.
+    pub fn load(&self, gzip: &[u8]) -> Result<SignatureDb, SignatureDbError> {
         if gzip.len() != self.compressed_bytes || digest(gzip) != self.gzip_sha256 {
             return Err(invalid("bundled gzip digest or length mismatch"));
         }
