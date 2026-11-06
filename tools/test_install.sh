@@ -248,6 +248,20 @@ failure
 contains "$install_bin/rampage" 'old rampage'
 absent "$case_root/cargo.log"
 
+start_case archive_symlinked_bin
+mkdir -p "$case_root/outside" "$case_root/archive-tree/rampage-0.0.0-test"
+for name in rampage rampage-worker; do printf 'outside %s\n' "$name" > "$case_root/outside/$name"; done
+ln -s "$case_root/outside" "$case_root/archive-tree/rampage-0.0.0-test/bin"
+archive="$case_root/rampage-0.0.0-test.tar.gz"
+tar -czf "$archive" -C "$case_root/archive-tree" rampage-0.0.0-test
+sha256_file "$archive"
+invoke "$case_root/root" --archive "$archive"
+failure
+contains "$case_root/outside/rampage" 'outside rampage'
+contains "$case_root/outside/rampage-worker" 'outside rampage-worker'
+absent "$install_bin/rampage"
+contains "$case_root/stderr" 'not a regular directory'
+
 start_case archive_without_plugin_worker
 make_archive
 printf 'old plugin worker\n' > "$install_bin/rampage-plugin-worker"

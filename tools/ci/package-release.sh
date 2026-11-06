@@ -64,7 +64,8 @@ archive="$out/$name.tar.gz"
 if tar --version 2>/dev/null | grep -q 'GNU tar'; then
     tar -C "$stage" --sort=name --owner=0 --group=0 --numeric-owner -czf "$archive" "$name"
 else
-    tar -C "$stage" --uid 0 --gid 0 -czf "$archive" "$name"
+    # bsdtar on macOS would otherwise add AppleDouble ._* entries for extended attributes.
+    COPYFILE_DISABLE=1 tar -C "$stage" --no-mac-metadata --uid 0 --gid 0 -czf "$archive" "$name"
 fi
 (
     cd "$out"

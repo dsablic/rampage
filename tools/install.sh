@@ -194,6 +194,13 @@ if [ -n "$archive" ]; then
     fi
     mkdir unpack bin
     tar -xzf "$archive" -C unpack
+    # Only regular directories down to bin/, so no entry can lead the moves below outside staging.
+    for directory in unpack/* unpack/*/bin; do
+        if [ -L "$directory" ] || ! [ -d "$directory" ]; then
+            echo "The archive's $directory is not a regular directory." >&2
+            exit 1
+        fi
+    done
     for name in "${names[@]}"; do
         found=(unpack/*/bin/"$name")
         if [ "${#found[@]}" -ne 1 ] || [ -L "${found[0]}" ] || ! [ -f "${found[0]}" ]; then
