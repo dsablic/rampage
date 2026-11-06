@@ -251,7 +251,8 @@ restored all 51 held-out slices to the baseline exactly.
   analyst's replayed record.
 
 ### Gaps for M2
-- **Export and bundling.** `.rpack` export/import, `packs diff` and `rampage-eval bundle` are not built yet.
+- **Export and bundling.** `.rpack` export/import, `packs diff` and `rampage-eval bundle` are not built yet (built
+  in M2, below).
 - **A split that tests changed code.**
   - A configuration hold-out (compiler × opt per arch) as a second split view.
   - A metric restricted to novel held-out bodies, so a gain from changed code can be gated directly.
@@ -261,3 +262,145 @@ restored all 51 held-out slices to the baseline exactly.
 - **Observations unused.** Observations are recorded but not yet read into the corpus.
 - **Other families.** The transcript miner and the tool-ID and discovery families are not started. Their split
   rule is in [docs/flywheel.md](../flywheel.md).
+
+## M2 implementation notes (2026-11-06)
+
+M2 asks one question: does the AI proposer beat a deterministic signature generator at generalising library
+identification? It also ships export, import and bundling. The how-to is in [docs/flywheel.md](../flywheel.md) and
+[docs/data-packs.md](../data-packs.md#export-and-import).
+
+### As built
+- **Deterministic arm.** `rampage-eval flywheel-baseline` generates every eligible row from the training truth:
+  - one row per distinct (architecture, masked body);
+  - at least 32 bytes and at most 2080, passing the row schema;
+  - bodies with more than one name dropped, as the signature builder makes them never answer;
+  - bodies that also match other names or code outside the truth in training or negatives dropped.
+
+  It is saved per corpus, build and minimum length, and is the default baseline: a corpus server gates every
+  candidate against bundled + arm + promoted rows. `--flywheel-baseline bundled` keeps M1's comparison for
+  diagnostics only. Against the arm the false-positive rules also run on the deployed state, which drops the arm,
+  so a row that only collides with an arm row cannot pass as harmless.
+- **Novel-only metric.** `novelty:novel` and `novelty:recognised` are gated held-out slices. `require_novel_gain`
+  (default: on against the arm, `min_novel_f1_gain` 0.001) adds a held-out rule. The proposer still sees only
+  pass/fail and the overall delta.
+- **Generalising rows.** These are what rampage's PAT matcher supports:
+  - whole-byte wildcards: `wildcards`, `wildcard_spans`, and `merge_cases` over same-length training variants;
+  - an exact module length;
+  - a pattern shorter than its module: `keep_prefix` or `length`.
+
+  Nibble wildcards, PAT CRCs and references are not usable (the matcher has no nibble wildcards; CRCs and
+  references are unsupported or weaker), and FID is hash-based with a semantic adapter.
+  `corpus_failures` adds `variants` (the same function's other training bodies) and `outcome: "all"` (every
+  training body, since the arm leaves few failures), both from the training split only.
+- **Export and import.** `rampage pack export|import|diff` moves packs as `.rpack` files: one gzip'd JSON archive
+  with the files and a manifest (format version, version range, families, file hashes, content hash, per-entry
+  provenance). Import checks everything before staging and loading the pack.
+- **Bundling.** `rampage-eval bundle --from PACK [--entries ...]` merges entries into
+  `crates/rampage-signatures/data/flywheel/libid.json`. It regenerates the corpus assets with those rows as their
+  PAT namespace and reruns the gate with the regenerated databases against the current ones (no rebuild). It writes
+  a commit-ready change, `change.patch` and a summary, and never commits. `--remove ID` reverts by provenance id.
+
+### Baseline (corpus `libid-738deabb4598`, gated scope)
+The corpus version matches M1's, but 64 binaries (60 zig O0, 4 clang O0) differ from `expected-digests.json`, so
+these numbers are measured afresh rather than compared with M1's corpus identity. The arm holds 3,691 rows. From
+5,106 training bodies it dropped:
+- 228 bodies shorter than 32 bytes;
+- 1,068 longer than a row allows;
+- 100 with ambiguous names;
+- 19 that collide with other code.
+
+| Split | State | Scope | TP | FP | FN | Precision | Recall | F1 |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| train | bundled | all | 989 | 54 | 12963 | 0.948 | 0.071 | 0.132 |
+| train | bundled + arm | all | 9521 | 54 | 4431 | 0.994 | 0.682 | 0.809 |
+| heldout | bundled | all | 1005 | 60 | 13315 | 0.944 | 0.070 | 0.131 |
+| heldout | bundled + arm | all | 8119 | 65 | 6201 | 0.992 | 0.567 | 0.722 |
+| heldout | bundled | novel | 245 | 6 | 4343 | 0.976 | 0.053 | 0.101 |
+| heldout | bundled + arm | novel | 679 | 7 | 3909 | 0.990 | 0.148 | 0.258 |
+| heldout | bundled | recognised | 760 | 18 | 8972 | 0.977 | 0.078 | 0.145 |
+| heldout | bundled + arm | recognised | 7440 | 22 | 2292 | 0.997 | 0.765 | 0.865 |
+| negative | both | all | 0 | 26 | 1224 | — | — | — |
+
+The arm alone reaches what M1's agent reached and far beyond: +7,114 held-out TP (M1's agent: +368). It fails the
+held-out gate on 5 new false positives. Its 434 "novel" gains are bodies whose masked form differs from training
+only where masking is asymmetric (a field equal to its masked value reads as fixed), so a training pattern still
+matches.
+
+### Acceptance run
+`rampage-eval flywheel --rounds 6 --budget-usd 5` used the arm baseline with the novel gain required (Sonnet 5.5,
+unattended). It ran six rounds for **$1.28** and promoted **nothing**.
+- **Candidates:** each round proposed one candidate of 6 to 15 rows, built from bodies the arm already names.
+  - prefix rows (`keep_prefix` of 48 to 200 bytes, the module length kept);
+  - `merge_cases` over same-length zig variants (`_tr_tally`, `flush_pending`, `LZ4_initStream`);
+  - the position-dependent wildcards masking already gives.
+- **Gates:** all six passed the fast gate, and all six moved held-out F1 by exactly +0.000000. They failed the
+  overall-gain and novel-gain rules, with no false positive. Six of 20 held-out evaluations were used.
+- **The agent's diagnosis, consistent every round:**
+  - unchanged code is already covered by the arm;
+  - changed functions mostly change length, and a PAT row binds the module length;
+  - same-length variants across configurations are rare and differ in many bytes, so training gives no evidence
+    for which bytes change between versions.
+
+**Where the headroom was.** `flywheel-baseline` measures it from held-out truth, for the operator only:
+- 4,588 novel held-out library functions in all;
+- 3,230 have a training body with the same name and architecture;
+- 1,577 have one of exactly the same length;
+- 1,519 would merge with it into a schema-valid row.
+- Of the same-length ones, 717 differ in only 1 to 2 bytes and 422 in 3 to 8.
+
+So wildcard generalisation had a ceiling of roughly a thousand novel functions. The agent's strategy (unconstrained
+tails, merges across compiler configurations) did not aim at it: the varying bytes are operands that change with
+the source version, not with the build configuration, and nothing in training points at which ones. A plain rule
+"wildcard immediates and displacements" is deterministic too, so it would belong in the arm, not in the agent.
+
+### Export, import and bundle demonstration
+Nothing was promoted, so a scripted known-good candidate stood in: 24 long cJSON x86_64 arm rows, proposed through
+the MCP server in the diagnostic `bundled` mode, in a separate flywheel directory.
+- **Promotion:** it passed both gates (held-out +88 TP, +0 FP, F1 +0.0106) and was promoted as `rv-e9329f9d1856`.
+- **Export and import:** `rampage pack export` wrote a 9.3 KB `.rpack`. `rampage pack import` into a clean scratch
+  directory checked it and installed 3 files; `pack check` loads 24 signatures. On a held-out cJSON binary,
+  `--pack` names 12 functions from it.
+- **Bundle:** `rampage-eval bundle --from <imported> --patch-only` passed the gate against the bundled baseline:
+  - held-out +88 TP, +0 FP, F1 +0.0106;
+  - train +108 TP;
+  - negatives +0;
+  - novel +0.
+- **The change:** it is left as `target/flywheel/bundle/m2-demo/change.patch` (47 KB, not committed). It
+  regenerates `corpus-x86_64.json.gz` and its index with a `flywheel-libid-x86_64` profile, and adds the entry to
+  `data/flywheel/libid.json`. With the patch applied, the rampage-signatures suite (154 tests, including the
+  bundled catalog and index checks) passes; it reverses cleanly.
+
+### Timings (shared laptop)
+- **Corpus build:** 84 s.
+- **flywheel-baseline:** 23 s; generating the arm takes 1.5 s.
+- **Server open:** 15 s.
+- **corpus_failures:** 5 to 6 s.
+- **Fast gate:** 0.7 s with cached reference names, 4.9 s cold.
+- **Held-out gate:** 2.4 s.
+- **Rounds:** 33 to 54 s each; the whole run took 292 s.
+- **bundle:** 20 s.
+
+### Deviations and decisions
+- **What counts as novel.** Novelty compares masked bodies, as the spec defines it. The arm's 434 novel gains show
+  where that definition is generous; the gate measures candidates over the arm, so they do not count for an agent.
+- **What the arm drops.** It drops ambiguous and colliding bodies rather than emitting ambiguous records. Its own
+  answers are the same either way. A proposed row for such a body fails the fast or deployed-state gate.
+- **Bundle baseline.** The bundle gate runs against the bundled baseline, with the novel rule off by default
+  (`--require-novel-gain true` turns it on): its baseline is the bundled databases, not the arm.
+- **Bundle measurement.** Bundling measures the regenerated assets against the repository's current assets, both in
+  place of the compiled-in ones, so nothing is rebuilt between bundle and remove. A bundle refuses files with
+  uncommitted edits, which would leak into its patch.
+- **Archive integrity.** Archive hashes are integrity checks, not signatures. For flywheel packs, import also checks
+  that the signature files are exactly what the entries' rows produce.
+- **Archive format.** An archive is gzip'd JSON rather than tar, which avoids a new dependency and path-handling
+  risk in an extractor.
+
+### Recommendation
+Libid is not worth more AI effort in this form:
+- the deterministic arm captures the recognisable gain;
+- the remaining same-length headroom is mechanical (operand wildcarding), so it should become a deterministic arm
+  v2 and be measured the same way;
+- what is left beyond that (changed lengths) is out of reach for byte patterns.
+
+The next AI family should be one with no deterministic generator: compiler and tool identification, where rules
+must be written rather than extracted, after its rules move into data.

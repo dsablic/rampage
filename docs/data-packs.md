@@ -78,14 +78,18 @@ An archive is one gzip member holding one JSON document: the pack's files in the
 Export refuses a pack that does not load cleanly, or whose contents are directories (YARA or capa rule trees):
 an archive carries files only. Import refuses, before writing anything, an archive whose format version is
 unknown, whose range excludes this rampage, whose file list, file hashes, content hash or entry summaries do not
-match, whose paths leave the pack, or whose entries lack a passing gate result. It then writes the pack to a
+match, whose paths leave the pack, whose pack name is not a plain identifier, whose declarations differ from its
+`rampage-pack.toml`, or whose entries lack a passing gate result. For a flywheel pack it also refuses signature
+databases that are not exactly what the entries' rows produce, and entries whose rows lack their candidate
+hash. It then writes the pack to a
 staging directory beside the destination, loads it as `--pack` would, and moves it into place only if every
 content loads. The destination must not exist or must be empty. `diff` runs the same checks and lists files,
 entries and signature rows added or removed against a pack directory (or an empty one); `--json` gives each.
 
-Nothing in an archive is executed, and a hash proves only that the archive is what its exporter wrote, not
-that its data is right. To take imported flywheel entries into rampage's bundled databases, `rampage-eval bundle`
-reruns the flywheel gate on them first ([flywheel](flywheel.md#bundle-a-promotion)).
+Nothing in an archive is executed. The hashes are integrity checks, not a signature: they catch damage and
+inconsistent edits, but anyone can rewrite an archive and recompute them, so they say nothing about who made it
+or whether its data is right. To take imported flywheel entries into rampage's bundled databases,
+`rampage-eval bundle` reruns the flywheel gate on them first ([flywheel](flywheel.md#bundle-a-promotion)).
 
 ## Constant databases
 

@@ -1,7 +1,9 @@
 # The flywheel fast loop
 
 The flywheel lets an AI agent improve rampage's heuristics through rampage's own MCP server, gated on held-out
-ground truth. Milestone 1 covers library-identification (libid) signatures. The design is in
+ground truth. It covers library-identification (libid) signatures. Milestone 1 built the loop; milestone 2 made
+a deterministic signature generator the bar the agent must clear, added a novel-only metric and rows that
+generalise, and ships promotions out as `.rpack` archives and into the bundled databases. The design is in
 [the fast-loop plan](plans/2026-11-05-flywheel-fast-loop.md); the guardrails are in
 [the flywheel strategy](plans/2026-10-12-heuristic-self-improvement-flywheel.md).
 
@@ -12,10 +14,12 @@ Everything the loop writes lives under `target/flywheel/`:
 | `sources/` | Downloaded source archives, checked against their pinned SHA-256 |
 | `corpus/<version>/` | The built corpus: `bin/` (stripped binaries and symbolized twins), `obj/`, `lib/`, `manifest.json` |
 | `cache/` | Truth by file hashes; baseline analysis by (binary hash, bundled-database hash, rampage build id) |
+| `baseline/libid/<key>/` | The deterministic arm (`arm.json`, a data pack of its rows) and its `report.md` |
 | `scratch/libid/<id>/` | Candidates, each a data pack with a `candidate.json` |
 | `evaluations/libid/<corpus key>/` | Gate results by (candidate hash, corpus identity, baseline hash), and the held-out budget |
 | `promoted/libid/` | The promoted pack (`rampage-pack.toml`, `sigs/`) and `entries.json` with provenance |
 | `runs/<label>/` | Run reports (`report.json`, `report.md`), and each round's transcript, prompt and server events |
+| `bundle/<label>/` | A bundle's `summary.md`, `summary.json` and `change.patch` |
 
 Nothing under `target/` is committed. The repository holds the recipe (`tools/flywheel/corpus.json`), the driver
 programs (`tools/flywheel/drivers/`), the build script and a reference build's digests
@@ -87,7 +91,52 @@ program, so naming them is not counted as a gain.
 | `opt:` | yes | Per optimisation level |
 | `program_library:` | yes | Per library the program links |
 | `cell:` | yes | All four together |
+| `novelty:novel`, `novelty:recognised` | yes | Held-out only: the target libraries' functions whose masked body training does not hold (novel), and the rest |
 | `origin:<library>`, `origin:runtime`, `origin:none` | no | Every outcome, by where the function comes from (`none`: the truth has no function) |
+
+**Novel and recognised.** A held-out function is *recognised* when its masked body (scheme 2, as a signature
+sees it) equals the masked body of some training library function, and *novel* otherwise; a body failing the
+confidence gate counts as novel. A gain on recognised functions is recognition of code unchanged between versions,
+which the deterministic arm already gets; a gain on novel ones needs a row that survives a code change. Masking
+is not symmetric (a field that happens to equal its masked form reads as fixed), so a training pattern can still
+match a few novel bodies: the arm itself names some.
+
+## The deterministic arm
+
+```sh
+rampage-eval flywheel-baseline --family libid --corpus target/flywheel/corpus/<version>
+```
+
+The arm is every signature row a plain generator makes from the training split's truth, with no AI. For each
+target-library truth function of the training binaries it takes the body as scheme 2 masks it (the `masked_bytes`
+a `corpus_failures` group shows) and keeps one row per distinct (architecture, masked body), under the rules a
+proposed row meets:
+
+- the pattern is at least `min_pattern_bytes` and at most a row's 2080 bytes, and passes the row schema;
+- a body seen with more than one name is ambiguous and dropped, as the signature builder makes it never answer;
+- a body whose pattern also matches another name, or code outside the truth, in any training or negative binary
+  is dropped: a proposed row like it would fail the fast gate.
+
+It reads training and negative binaries only. The arm is saved under `baseline/libid/<corpus key>-<key>/`
+(`arm.json` and a data pack of its rows), keyed by the corpus identity, the rampage build and the minimum length,
+and regenerated when any changes (`--regenerate` forces it). The command evaluates the arm through the same gate
+against the bundled databases, and reports bundled-only and bundled-plus-arm metrics on every split, overall and
+for novel and recognised held-out functions.
+
+**The arm is the default baseline.** A corpus server gates every candidate against the bundled databases plus the
+arm plus the promoted rows (`rampage mcp --corpus DIR --flywheel-baseline arm`, the default). A candidate's rows are
+merged with the arm's into one database, so a row repeating an arm body under another name makes both ambiguous
+instead of overriding it. Against the arm the held-out gate also requires a novel-body gain (below), because the
+arm already names the recognised functions. `--flywheel-baseline bundled` restores M1's bundled-only comparison
+for diagnostics; it is never the comparison for a promotion that is meant to show the agent adds value.
+`corpus_failures` lists only what the baseline still misses, and names the baseline in its header.
+
+The arm is never promoted or deployed. A candidate row whose pattern also matches a body an arm row names under
+another name only makes that body ambiguous in the merged evaluation (a lost name, not a false one), yet once
+promoted without the arm it would name the body wrongly. So against the arm the false-positive rules are also
+checked on the deployed state, the promoted rows plus the candidate's without the arm:
+`deployed_train_fp_increase` and `deployed_negative_matches` in the fast stage, `heldout_deployed_fp_increase`
+(pass or fail only) in the held-out stage.
 
 ## Measure
 
@@ -123,19 +172,69 @@ conservative:
 | `min_f1_gain` | 0.001 | Held-out gate: gated F1 must rise by at least this much, and by more than zero. |
 | `max_fp_increase` | 0 | Held-out gate: false positives may not rise. |
 | `max_heldout_evaluations` | 20 | Held-out evaluations per corpus, counted across every server and run (cached results excepted). |
+| `require_novel_gain` | unset | Held-out gate: the `novelty:novel` slice's F1 must rise too. Unset, it is required exactly when the arm is the baseline; `--require-novel-gain true/false` on the server or the run overrides it. |
+| `min_novel_f1_gain` | 0.001 | The least novel-slice F1 gain, when one is required (and more than zero). |
 
-A candidate is always evaluated merged with the rows already promoted, against the current promoted state, which
-is exactly what promoting it would produce. A promotion changes the baseline hash, so earlier gate results stop
-counting.
+A candidate is always evaluated merged with the reference rows (the arm's, when it is the baseline, and the rows
+already promoted), against that reference, which is exactly what promoting it would produce. A promotion changes
+the baseline hash, so earlier gate results stop counting. Only binaries a candidate row can match are identified
+again; the rest keep the reference's answers, which are computed once per baseline.
 
-The held-out stage returns only the verdict and the gated overall delta. Per-slice deltas, or counts of fixed and
-broken functions, would tell a proposer which held-out code its rows touch.
+The held-out stage returns only the verdict and the gated overall delta. The novel rule reports pass or fail
+without its delta. Per-slice deltas, or counts of fixed and broken functions, would tell a proposer which
+held-out code its rows touch.
+
+## Rows that generalise
+
+A row is a FLIRT PAT record, and can use everything rampage's PAT matcher supports:
+
+- whole-byte wildcards (`..`) anywhere: changed constants, displacements, register bytes (ModRM, REX, an AArch64
+  instruction word's register bytes), call targets. There are no nibble or bit wildcards.
+- an exact module length: a body matches only at exactly that many bytes, so code whose length changed between
+  versions cannot be reached by a byte pattern.
+- a pattern shorter than the module: `length` above the pattern's own length leaves the remaining bytes
+  unconstrained, as a PAT tail that ends early does.
+
+PAT's CRC16 field is not used (explicit bytes are stronger), and the matcher does not support references or
+dumpsig tuples. Ghidra FID records are hashes that need a semantic adapter, not byte patterns, so they are not a
+row form.
+
+`propose_heuristic` builds rows from training bodies:
+
+| Field | Effect |
+|---|---|
+| `case` | Start from a training body: a failure group, or any variant id `corpus_failures` listed |
+| `pattern` + `arch` | Start from explicit hex with `..` wildcards |
+| `wildcards` | Byte offsets that become wildcards |
+| `wildcard_spans` | `[start, end)` ranges that become wildcards |
+| `merge_cases` | Other training bodies of the same arch and length; every byte where any differs becomes a wildcard |
+| `keep_prefix` | Keep only the first N bytes; the body's length is kept as the module length |
+| `length` | The module length, for a `pattern` row shorter than the body |
+
+The schema still applies: the explicit pattern is at least `min_pattern_bytes`, has at least 6 fixed bytes and
+fixed bytes in at least half its positions, and a pattern shorter than its module ends in a fixed byte. More
+wildcards match more code, and the fast gate's training and negative checks, and the held-out false-positive rule,
+catch the collisions. Each row's preview says how many training functions it matches, whether their truth is its
+name, and whether the baseline already holds it.
+
+**Every training body.** Against the arm few training failures are left, so `corpus_failures` with
+`outcome: "all"` lists every training library body, failing or not (`failing` says which): the bodies the
+baseline already names are the ones a generalising row starts from. `proposable: true` leaves out bodies too short
+or long for a row.
+
+**Training-only variants.** `corpus_failures` with `variants: true` lists, per group, the same function's other
+training bodies (other compilers and optimisation levels) with their case ids, configurations and, for
+same-length ones, how many bytes differ. They come from the training split alone; a held-out body is never listed
+or merged. Bytes that vary across configurations are the evidence for which bytes may vary across versions.
 
 ## Run a loop
 
 ```sh
 rampage-eval flywheel --family libid --corpus target/flywheel/corpus/<version> --rounds 4 --budget-usd 5
 ```
+
+`--baseline arm` (the default) or `bundled` and `--require-novel-gain true/false` are passed to every round's
+server.
 
 Each round is one agent session through `tools/agent-bench/claude-runner.py` (default model `claude-sonnet-5-5`;
 `--runner` swaps it). The session sees only rampage's MCP server, started with `--corpus`. A corpus server serves
@@ -160,7 +259,9 @@ check counts as not ending `ok`.
 - cost and number of calls;
 - each candidate's fast and held-out verdicts, and its revert id if it was promoted.
 
-It ends with the held-out metrics under the promoted pack against the bundled baseline, gated and by origin.
+It ends with the held-out metrics under the promoted pack against the bundled baseline, gated and by origin,
+and a reference table: bundled only, bundled plus the arm, and bundled plus the arm plus the promoted rows,
+overall and for novel and recognised functions, with the promoted rows' delta over the arm.
 `report.json` holds the same data plus tokens, per-tool calls and times, and each candidate's gate checks.
 Each round's `round-N/` directory keeps:
 
@@ -184,6 +285,43 @@ regenerates the pack, which restores exactly the state before that promotion.
 
 Writers hold a file lock, and `entries.json` is written last. A pack that does not match `entries.json` is
 regenerated from it when a server opens the corpus.
+
+## Export, import and bundle
+
+A promoted pack leaves the machine as a `.rpack` archive ([data packs](data-packs.md#export-and-import)):
+
+```sh
+rampage pack export target/flywheel/promoted/libid -o libid.rpack
+rampage pack import libid.rpack --into /path/to/libid      # checks hashes and version range first
+rampage --pack /path/to/libid function identify stripped.elf
+```
+
+### Bundle a promotion
+
+```sh
+rampage-eval bundle --from /path/to/libid --corpus target/flywheel/corpus/<version> [--entries rv-...]
+rampage-eval bundle --remove rv-... --corpus target/flywheel/corpus/<version>
+```
+
+The bundled-database source for flywheel promotions is `crates/rampage-signatures/data/flywheel/libid.json`: every
+bundled entry with its provenance id (the revert id it was promoted under), the pack it came from, its corpus,
+what it was gated against, the deltas at promotion and at bundling, and its rows. The bundled assets
+(`data/corpus-<arch>.json.gz` and `.index.json`) hold those rows as their PAT namespace, with a
+`flywheel-libid-<arch>` provenance profile; their hash entries are never changed. In a bundled database a PAT row
+names a function only when the hash entries have no answer for it, never against one.
+
+`bundle --from <pack>` merges the selected entries (default: all) into the source, regenerates the affected
+assets and indexes, and reruns the gate on the corpus: every split identified with the regenerated databases
+against the repository's current ones, so nothing is rebuilt. The rules are the fast gate and the held-out gate
+against the bundled baseline (overall gain, no new false positive, no slice regression; a novel gain only with
+`--require-novel-gain true`), because an entry gated against an older baseline, or the arm, must pass again. An
+asset whose PAT namespace is not exactly the source's rows is refused.
+
+When the gate passes, the change stays in the working tree, commit-ready, and is written to
+`target/flywheel/bundle/<label>/change.patch` (`git diff --binary`) with `summary.md` and `summary.json`;
+`--patch-only` writes them and restores the tree. It never commits. When the gate fails, nothing is changed.
+`--remove <id>` takes an entry out the same way; it must add no false positive on any split. After a bundle is
+committed, rebuild rampage so the compiled-in databases carry it.
 
 ## Observations
 
