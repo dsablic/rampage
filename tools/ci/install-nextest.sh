@@ -28,5 +28,8 @@ if sha256sum --version 2> /dev/null | grep GNU > /dev/null; then
 else
     printf '%s  %s\n' "$checksum" "$scratch/$archive" | shasum -a 256 --check
 fi
-tar -xzf "$scratch/$archive" -C "$HOME/.cargo/bin" cargo-nextest
+# Cargo finds subcommands in $CARGO_HOME/bin even when it is not on PATH. The macOS runner image does not create it.
+destination="${CARGO_HOME:-$HOME/.cargo}/bin"
+mkdir -p "$destination"
+tar -xzf "$scratch/$archive" -C "$destination" cargo-nextest
 cargo nextest --version
