@@ -13,6 +13,11 @@ pub(crate) fn page(project: &Project, request: &SearchRequest) -> Result<Value, 
     receipt["unavailable_observed_hits"] = json!(report.total.saturating_sub(available));
     receipt["totals_scope"] = json!("whole_scan");
     receipt["continuation_scope"] = json!("observed_hit_rows_not_scan_resume");
+    if let Some(resume) = report.resume_at {
+        receipt["scan_resume"] = json!(format!(
+            "the scan stopped at {resume:#x}; search again with range.start {resume:#x} to cover unscanned_ranges"
+        ));
+    }
     update_page(&mut receipt, report.offset, report.total, available, false);
     if receipt.to_string().len() > MAX_RESULT_CHARS {
         return Err(too_large());

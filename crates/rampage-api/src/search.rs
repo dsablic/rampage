@@ -262,6 +262,22 @@ pub struct SearchBudgetEvidence {
     pub match_work: u64,
 }
 
+/// Unscanned ranges listed in one report; the rest are counted.
+pub const MAX_UNSCANNED_RANGES: usize = 32;
+
+fn is_zero<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
+/// A half-open mapped range a stopped scan did not search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct UnscannedRange {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub start: u64,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub end: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchReport {
     pub source: SearchSource,
@@ -282,6 +298,18 @@ pub struct SearchReport {
     pub budget: SearchBudgetEvidence,
     pub invalid_utf16_units: u64,
     pub utf16_trailing_bytes: u64,
+    /// When a budget or cancellation stopped a byte/text scan: the first address whose matches were not searched.
+    /// Searching again with `range.start` here (and the same end) continues the scan.
+    #[serde(serialize_with = "rampage_arch::hex::optional_address", skip_serializing_if = "Option::is_none")]
+    pub resume_at: Option<u64>,
+    /// The first [`MAX_UNSCANNED_RANGES`] mapped ranges, from `resume_at` on, that the stopped scan left
+    /// unsearched; `unscanned_range_count` and `unscanned_bytes` cover all of them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unscanned_ranges: Vec<UnscannedRange>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub unscanned_range_count: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub unscanned_bytes: u64,
     pub limitations: Vec<String>,
 }
 
@@ -445,6 +473,10 @@ fn native_report(project: &Project, query: &SearchQuery) -> Result<(SearchReport
             budget: SearchBudgetEvidence { limits: query.budget, match_work: 0 },
             invalid_utf16_units: 0,
             utf16_trailing_bytes: 0,
+            resume_at: None,
+            unscanned_ranges: Vec::new(),
+            unscanned_range_count: 0,
+            unscanned_bytes: 0,
             limitations: vec![
                 "Only production-discovered instruction boundaries and retained references are searched.".into(),
                 "Native discovery/cache initialization is not interruptible; cancellation is checked \

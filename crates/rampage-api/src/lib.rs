@@ -187,7 +187,7 @@ pub use plugin_triage::{
 };
 pub use pointer_compare::{PointerChange, PointerComparison};
 pub use pointer_observation::{PointerAssessment, PointerObservation};
-pub use project::{AnalysisCacheStatus, PdbImport, PdbPreview, Project};
+pub use project::{AnalysisCacheStatus, GoLiteral, PdbImport, PdbPreview, Project, StringRow};
 pub use project_workspace::{
     LoadedProjectModule, LoadedProjectWorkspace, ProjectWorkspaceCaptureIdentity, ProjectWorkspaceIdentity,
     ProjectWorkspaceImage, ProjectWorkspaceManifest, ProjectWorkspaceModule, ProjectWorkspaceModuleInput,
@@ -225,7 +225,7 @@ pub use raw_code::{
     RawCodeRequest, RawCodeRow, RawCodeStopReason, inspect_raw_code,
 };
 pub use raw_file::{RawByteOrder, RawContinuation, RawFileReport, RawFileRequest, inspect_raw_file};
-pub use raw_project::{RawProjectRequest, open_raw_binary};
+pub use raw_project::{RawProjectRequest, headerless_guidance, open_raw_binary, resolve_raw_profile};
 pub use rows::{
     Annotation, AnnotationList, EditResult, FittedPage, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Page,
     StringsQuery, Summary, label,
@@ -239,7 +239,7 @@ pub use session::{MAX_RAW_PROJECTS, Session};
 pub use signature_import::load_signature_database;
 pub use signatures::{SignatureApplication, SignatureMatch, USER_SIGNATURES};
 pub use summary::FunctionSummary;
-pub use tool_views::{ToolView, ToolViewKind, project_tool_view};
+pub use tool_views::{SummaryPages, ToolView, ToolViewKind, project_function_summary, project_tool_view};
 pub use type_headers::{HeaderBundle, HeaderDeclaration, HeaderProvenance, PreparedHeader};
 pub use type_library::{DeclareTypesRequest, TypeLibraryEdit, TypeLibraryEntry, TypeLibraryPage};
 pub use typed_data::{

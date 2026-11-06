@@ -31,6 +31,9 @@ strip -o bin/hello-x64-stripped.macho bin/hello-x64.macho
 # Stripped C++ fixture for RTTI class recovery: classic rebase (-no_fixup_chains) keeps on-disk pointers real.
 clang++ -arch arm64 -O1 -Wl,-no_fixup_chains -o bin/classes-arm64.macho src/classes.cpp
 strip bin/classes-arm64.macho
+# The same source with the linker's default chained fixups: typeinfo pointers on disk are chain encodings.
+clang++ -arch arm64 -O1 -o bin/classes-chained-arm64.macho src/classes.cpp
+strip bin/classes-chained-arm64.macho
 # Objective-C metadata: arm64 and arm64e use chained fixups (arm64e pointers are authenticated) and relative
 # method lists, with category merging off so a category on a local class survives; x86_64 targets 10.14 for
 # classic rebase/bind info and absolute method lists. The stripped copies keep only the runtime metadata.

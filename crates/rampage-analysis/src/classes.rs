@@ -310,9 +310,10 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
              `rtti_classes`."
                 .to_owned(),
             "`rtti_classes` recovers names and direct base edges from Itanium/MSVC RTTI in file-backed data \
-             sections; followed pointers must land in mapped data and names must demangle. Chained-fixup or \
-             relocated pointers that are unresolved on disk are not followed, so classes whose RTTI pointers \
-             are not image-backed are missed."
+             sections; followed pointers must land in mapped data and names must demangle. Mach-O chained \
+             rebases are followed, and chained binds to the C++ runtime's typeinfo vtables are accepted; other \
+             relocated pointers unresolved on disk are not, so classes whose RTTI pointers are not image-backed \
+             are missed."
                 .to_owned(),
             "Named vtables are examined only in static ELF and Mach-O read-only, image-backed tables; snapshots \
              are disabled."

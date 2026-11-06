@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard};
 
-use rampage_analysis::discover::Program;
+use rampage_analysis::discover::{Program, XrefKind};
 use rampage_analysis::functions::{self, Names};
 use rampage_analysis::strings::{self, FoundString};
 use rampage_analysis::triage::{self, Triage};
@@ -833,6 +833,98 @@ impl Project {
             scanned.iter().filter(|string| string.text.chars().count() >= min_len && matcher.matches(&string.text));
         Page::of(selected, query.offset, query.limit).map(FoundString::clone)
     }
+
+    /// [`Project::strings`] as the list_strings tool returns them: with `contains`, where in each string the text
+    /// matches; in a Go image, a long run is flagged as concatenated literals, and a match gets the referenced
+    /// literal bounds around it, since Go string data is not NUL-terminated.
+    pub fn string_rows(&self, query: &StringsQuery) -> Page<StringRow> {
+        let go = self.binary.go_table.is_some();
+        let needle = query.contains.as_deref().map(str::to_lowercase).filter(|needle| !needle.is_empty());
+        // Go runs are split by the addresses code references, so a Go image needs its (cached) analysis.
+        let program = if go { self.analysis().ok().map(|analysis| &analysis.program) } else { None };
+        self.strings(query).map(|string| {
+            let unit = if string.encoding == strings::Encoding::Utf16Le { 2 } else { 1 };
+            let match_address = needle.as_deref().and_then(|needle| {
+                let at = string.text.to_lowercase().find(needle)?;
+                Some(string.address + (string.text[..at].chars().count() * unit) as u64)
+            });
+            let end = string.address + (string.text.chars().count() * unit) as u64;
+            // A run joins several literals when code references more than one address inside it.
+            let referenced_starts = program.map_or(0, |program| {
+                let first = program.xrefs.partition_point(|xref| xref.to < string.address);
+                let last = program.xrefs.partition_point(|xref| xref.to < end);
+                let mut targets: Vec<u64> = program.xrefs[first..last]
+                    .iter()
+                    .filter(|xref| xref.kind == XrefKind::Data)
+                    .map(|xref| xref.to)
+                    .collect();
+                targets.dedup();
+                targets.len()
+            });
+            let literal = program.zip(match_address).map(|(program, matched)| {
+                // Data references are sorted by target: the last referenced address at or before the match, and
+                // the first after it, bound the literal the match is in.
+                let first = program.xrefs.partition_point(|xref| xref.to < string.address);
+                let after = program.xrefs.partition_point(|xref| xref.to <= matched);
+                let start = program.xrefs[first..after].iter().rev().find(|xref| xref.kind == XrefKind::Data);
+                let next = program.xrefs[after..]
+                    .iter()
+                    .take_while(|xref| xref.to < end)
+                    .find(|xref| xref.kind == XrefKind::Data)
+                    .map_or(end, |xref| xref.to);
+                GoLiteral {
+                    start: start.map(|xref| xref.to),
+                    start_is_match: start.is_some_and(|xref| xref.to == matched),
+                    end: next,
+                    start_references: start.map_or(0, |xref| program.xrefs_to(xref.to).len()),
+                }
+            });
+            let blob = referenced_starts > 1;
+            StringRow {
+                note: blob.then_some(GO_BLOB_NOTE),
+                match_address,
+                go_literal: literal.filter(|_| blob),
+                string,
+            }
+        })
+    }
+}
+
+const GO_BLOB_NOTE: &str = "Go string data is not NUL-terminated: code references several addresses inside this \
+                            run, so it joins several literals. Do not count offsets by hand: use match_address, \
+                            go_literal (bounded by addresses code references; when start_is_match is false, start \
+                            may begin an earlier literal), or the address and length a referencing instruction or \
+                            string header gives.";
+
+/// One list_strings row.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StringRow {
+    #[serde(flatten)]
+    pub string: FoundString,
+    /// With `contains`: the address where the text first matches (case-insensitively) inside this string.
+    #[serde(serialize_with = "rampage_arch::hex::optional_address", skip_serializing_if = "Option::is_none")]
+    pub match_address: Option<u64>,
+    /// In a Go image with `contains`: the literal around the match, bounded by referenced addresses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub go_literal: Option<GoLiteral>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<&'static str>,
+}
+
+/// The bounds of the Go string literal holding a match, from the data references into the run.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct GoLiteral {
+    /// The last referenced address at or before the match, inside the run; `null` when none is referenced.
+    #[serde(serialize_with = "rampage_arch::hex::optional_address")]
+    pub start: Option<u64>,
+    /// Whether `start` is the match itself. Otherwise the match is inside a literal whose own start is not
+    /// referenced by code, and `start` may begin an earlier literal.
+    pub start_is_match: bool,
+    /// The first referenced address after the match inside the run, else the run's end (exclusive).
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub end: u64,
+    /// How many references target `start`.
+    pub start_references: usize,
 }
 
 /// Refuses a name that is not an identifier, or that `resolve` would read as an address. `resolve` parses `0x...`

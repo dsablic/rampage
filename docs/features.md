@@ -95,7 +95,8 @@ Address-bound signatures, calling conventions, type declarations and typed globa
 and dependency-checked undo/redo. Embedded DWARF scalar/pointer signatures can be previewed and imported
 without replacing analyst signatures. Named Itanium and MSVC vtables provide bounded class evidence, including
 the C++ class name, not inferred object layouts. For stripped binaries, Itanium and MSVC RTTI scanning recovers
-class names and base-class edges. See [debug signature import](debug-signatures.md). MCP serves this evidence as
+class names and base-class edges, following Mach-O chained rebases and accepting chained binds to the C++
+runtime's typeinfo vtables, as arm64 images linked with the default chained fixups store them. See [debug signature import](debug-signatures.md). MCP serves this evidence as
 `class_evidence`, and demangled names with Objective-C classes, superclasses, methods and properties as
 `language_metadata`; both are core tools, listed without enabling a group.
 
@@ -193,7 +194,9 @@ them. See [patching/export contracts](patching.md), [assembly grammar and limits
 The Core `search` tool and `binary search` CLI query mapped bytes, ASCII/Unicode UTF-16 text and regex,
 structured immediates, mnemonic/operand globs, and retained references or referencing functions. Results
 preserve function context, native evidence and address ordering; incomplete scans report lower-bound totals
-and explicit budgets rather than complete negative answers. See [search reference](search.md).
+and explicit budgets rather than complete negative answers. Exact text is matched in linear time against the
+budget, so a default search covers a 50 MB image, and a stopped byte/text scan says where to resume and which
+ranges it left unscanned. See [search reference](search.md).
 
 Search is static and read-only. Native preparation/scanning is bounded and cancellable after the existing
 non-interruptible analysis/cache initialization. Unmapped overlays, virtual gaps and zero-fill are not

@@ -28,6 +28,29 @@ during the benchmark.
   separates them on accuracy, only on calls, tokens and time.
 - [ ] Repeat the head-to-head with a second model or client before drawing conclusions beyond this one.
 
+## Benchmark suite v2 follow-ups (2026-11-05)
+
+From [suite v2](docs/benchmarks/agent-h2h-v2-2026-11-05.md). Fixed: `function_summary` fitting, linear exact-text
+search with a resume cursor, Go string-run match addresses, raw-profile aliases and headerless guidance, hex ARM
+immediates in `inspect_raw_code`, one-line argument errors and unknown-argument refusal, chained-fixup RTTI.
+
+- [ ] `search` `functions_referencing` a string stops on `match_work_budget` with nothing scanned on the 50 MB
+  Hugo image (all 4 scale-string runs): `prepare_search` charges a B-tree insert for every discovered block of
+  the whole program before decoding, then decodes every instruction to compare its references. For string
+  references, find the string's addresses first (the now-linear text search) and walk the retained xrefs to
+  them, decoding only the referencing sites; until then agents fall back to text search + `xrefs`.
+- [ ] Byte patterns with wildcards still charge their length per candidate start; a 50 MB image needs a
+  literal-prefix prefilter or a larger default budget.
+- [ ] ARM immediates are printed in LLVM's decimal (`movt r1, #1934`) by the shared native renderer, used by
+  `disassemble` and search operand globs too. Only `inspect_raw_code` appends hex now; adding it to the native
+  listing needs its own field or comment so CLI/UI comment columns and operand-glob matching stay unchanged.
+- [ ] No Raw Project profile for ARM/Thumb (Cortex-M): firmware runs needed `inspect_raw_code`, which has no
+  functions, xrefs or decompilation. A reviewed ARM/Thumb Raw profile would let `raw` serve them.
+- [ ] Go string literals referenced only through static `{ptr, len}` headers in data (not by code) get no
+  `go_literal` start, since data-to-data references are not retained; reading headers would bound them too.
+- [ ] `function_graph` refuses oversized views like `function_summary` did; page its blocks the same way (edges
+  index whole-function block positions, so paging keeps them valid).
+
 ## Open acceptance gate: live Phase 1 completion
 
 - [ ] Genuine live checked import → central C++ struct retype → owner-linked field verification and fresh replay.

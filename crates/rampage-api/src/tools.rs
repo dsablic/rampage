@@ -1,7 +1,7 @@
 //! The analysis tools AI models call, shared by the MCP server and the UI's assistant: each has a name, a
 //! description, a JSON schema for its input, and a handler that runs it against a project.
 
-use crate::tool_views::{ToolView, ToolViewKind, project_tool_view};
+use crate::tool_views::{SummaryPages, ToolView, ToolViewKind, project_function_summary, project_tool_view};
 use crate::workflows::{WORKFLOWS, Workflow};
 use crate::{ApiError, FunctionsQuery, ListQuery, Packs, Project, StringsQuery, WorkflowReport, XrefQuery};
 use schemars::JsonSchema;
@@ -24,6 +24,7 @@ const DEFAULT_PAGE: usize = 100;
 const MAX_PDB_DETAIL_BYTES: usize = 4096;
 const MAX_PDB_ERROR_BYTES: usize = 1024;
 
+mod arguments;
 mod debug_tools;
 #[cfg(test)]
 mod patch_dispatch_tests;
@@ -822,6 +823,23 @@ struct ViewedAt {
     at: String,
     #[serde(default)]
     view: ToolView,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+struct FunctionSummaryArgs {
+    /// Numeric address string or existing symbol, import, export, analyst or sub_<hex> name.
+    at: String,
+    #[serde(default)]
+    view: ToolView,
+    /// summary/code views: first graph block of a fitted page (the previous page's graph.blocks_next_offset).
+    #[serde(default)]
+    block_offset: usize,
+    /// summary/code views: first reference row of a fitted page (references.items_next_offset).
+    #[serde(default)]
+    reference_offset: usize,
+    /// summary/code views: first callee of a fitted page (callees_next_offset).
+    #[serde(default)]
+    callee_offset: usize,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -2152,7 +2170,8 @@ pub fn tools() -> Vec<Tool> {
              {\"kind\":\"string\",\"text\":\"hello\",\"encoding\":\"utf8\"}}}. Context defaults true. \
              offset/limit (1..1000) page hits, never restrict scan work. total_is_exact distinguishes exact totals \
              from observed lower bounds; stop_reason/budget explain incomplete scans. more/next_offset page \
-             observed rows even after incomplete scans, not scan resumption. Complete JSON stays within 60000 \
+             observed rows even after incomplete scans; a stopped byte/text scan gives resume_at and \
+             unscanned_ranges to continue from. Complete JSON stays within 60000 \
              bytes with whole hit rows and no wrapper string cutting. Native context truncation/provenance and \
              retained source paths are preserved. Capture file_offset is null. No annotations or source writes.",
             |project, request: crate::SearchRequest| project.search_page(&request),
@@ -2173,14 +2192,31 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "function_summary",
-            "Structural function summary, not native recovered C. view=full (default) preserves original JSON; \
-             summary omits instruction/IR rendering with exact counts and omission receipts; code retains native \
-             instructions and labels partial structural pseudocode explicitly. Source/control/diagnostic/type \
-             evidence stays retained. Oversized results refuse; choose a compact view rather than truncated output.",
-            |project, arguments: ViewedAt| {
-                let value = serde_json::to_value(project.function_summary(project.resolve(&arguments.at)?)?)
-                    .map_err(|error| ApiError::Invalid(error.to_string()))?;
-                project_tool_view(value, ToolViewKind::FunctionSummary, arguments.view)
+            "Structural function summary, not native recovered C. view=full (default) preserves original JSON and \
+             refuses when oversized; summary omits instruction/IR rendering with exact counts and omission receipts; \
+             code retains native instructions and labels partial structural pseudocode explicitly. summary and code \
+             add `callees` (distinct call targets with names and call counts, from all references) and refuse \
+             for size only when one graph block alone exceeds the budget: a large function's graph blocks, \
+             references and callees are paged as whole rows (block_offset, \
+             reference_offset, callee_offset; *_next_offset says where the next page starts), and a `fitted` \
+             receipt names any optional analysis omitted to fit 60000 bytes.",
+            |project, arguments: FunctionSummaryArgs| {
+                let summary = project.function_summary(project.resolve(&arguments.at)?)?;
+                let entry = summary.graph.address;
+                let mut value = serde_json::to_value(summary).map_err(|error| ApiError::Invalid(error.to_string()))?;
+                if arguments.view != ToolView::Full && value["references"]["total"].as_u64() > Some(1000) {
+                    // The native summary keeps the first 1000 references; the compact views page and derive
+                    // callees from all of them.
+                    let all = project.xrefs(XrefQuery::From(entry), None, None)?;
+                    value["references"] =
+                        serde_json::to_value(all).map_err(|error| ApiError::Invalid(error.to_string()))?;
+                }
+                let pages = SummaryPages {
+                    block_offset: arguments.block_offset,
+                    reference_offset: arguments.reference_offset,
+                    callee_offset: arguments.callee_offset,
+                };
+                project_function_summary(value, arguments.view, pages)
             },
         ),
         tool(
@@ -2632,10 +2668,14 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "list_strings",
-            "Printable strings with their addresses. Filter with `contains`; paginated.",
+            "Printable strings with their addresses. Filter with `contains`; paginated. With `contains`, \
+             match_address is where the text matches inside each string. Go string data is not NUL-terminated, so \
+             in a Go image a run that code references at several addresses carries a note, and a match its \
+             go_literal bounds from those references; never count offsets into a run by hand. In a Go image the \
+             listing runs the (cached) whole-program analysis.",
             |project, mut query: StringsQuery| {
                 query.limit = page_limit(query.limit);
-                Ok(project.strings(&query))
+                Ok(project.string_rows(&query))
             },
         ),
         tool(
@@ -3299,6 +3339,8 @@ fn fit_committed_result(value: Value) -> Value {
         "entry_evidence_omitted": original.as_array().map(|items| items.len().saturating_sub(8)),
     })
 }
+
+pub use arguments::{admitted_arguments, check_arguments, check_tool_arguments};
 
 fn dispatch(
     tools: &[Tool],
