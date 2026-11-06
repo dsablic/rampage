@@ -10,6 +10,7 @@ use rampage_signatures::{SignatureDb, named_functions};
 use serde::Deserialize;
 
 mod agent_bench_run;
+mod bundle;
 mod flywheel_run;
 mod parity;
 mod parity_completion;
@@ -103,6 +104,15 @@ enum Command {
     Flywheel(Box<flywheel_run::FlywheelArgs>),
     /// Remove a promoted flywheel entry by its revert id, regenerating the promoted pack without it.
     FlywheelRevert(flywheel_run::FlywheelRevertArgs),
+    /// Generate the flywheel's deterministic arm (every signature row a plain generator makes from the training
+    /// split's truth) and evaluate it through the gate against the bundled databases: the bar an AI proposer must
+    /// clear. Reports bundled-only and bundled-plus-arm metrics, overall and for novel and recognised held-out
+    /// functions.
+    FlywheelBaseline(Box<flywheel_run::FlywheelBaselineArgs>),
+    /// Merge promoted flywheel entries into the repository's bundled signature sources, regenerate the bundled
+    /// assets, rerun the gate against the bundled baseline and write a commit-ready change with a summary (never
+    /// committed); or remove a bundled entry by its provenance id.
+    Bundle(Box<bundle::BundleArgs>),
 }
 
 /// The heuristic family a slice evaluates.
@@ -266,6 +276,8 @@ fn main() -> ExitCode {
         Command::FlywheelEval(args) => flywheel_run::eval(*args),
         Command::Flywheel(args) => flywheel_run::run(*args),
         Command::FlywheelRevert(args) => flywheel_run::revert_entry(args),
+        Command::FlywheelBaseline(args) => flywheel_run::baseline(*args),
+        Command::Bundle(args) => bundle::run(*args),
     };
     match result {
         Ok(code) => code,
