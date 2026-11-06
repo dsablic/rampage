@@ -13,7 +13,7 @@ general C++ decompilation acceptance.
 | `tests/fixtures/debug-cpp-virtuals/oracle.json` | Expected layout, method access/arithmetic and raw table words |
 | `tests/fixtures/debug-cpp-virtuals/verify_virtual_oracle.py` | Checks source constants, compiler dumps and ELF facts |
 | `tools/ci/debug-cpp-virtual-oracle.sh` | Generates fixtures; `--check` runs a command within their lifetime |
-| `tools/ci/debug-cpp-virtual-acceptance.sh` | Runs local loader/API/worker/UI tests within the owned fixture lifetime |
+| `tools/ci/debug-cpp-virtual-acceptance.sh` | Runs local loader/API/worker/UI tests within the owned fixture lifetime. Needs Apple clang 21+ (it checks the `_vtable$` DWARF artifacts that compiler emits); CI skips it, with a notice, on runners with an older compiler |
 | `tools/cpp_virtual_corpus.py` | Controls native/reference inputs, separate CLI integration and bounded report output |
 | `tools/ghidra_cpp_virtual_export.java` | Installed-Ghidra readback/export adapter; not a target program |
 

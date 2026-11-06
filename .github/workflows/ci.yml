@@ -299,6 +299,14 @@ jobs:
         run: |
           export RUST_SYSROOT="$(rustc --print sysroot)"
           export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
+          # The oracle pins Apple clang 21+, which emits the `_vtable$` DWARF artifacts it checks. GitHub's macOS
+          # images ship an older Apple clang, so the lane runs only where that compiler is present (locally on a
+          # current macOS release) and is skipped, visibly, elsewhere.
+          major=$(clang --version | sed -n 's/^Apple clang version \([0-9]*\).*/\1/p')
+          if [ "${major:-0}" -lt 21 ]; then
+            echo "::notice::Skipping the opaque-vptr acceptance: it needs Apple clang 21+, this runner has $(clang --version | head -1)"
+            exit 0
+          fi
           bash tools/ci/debug-cpp-virtual-acceptance.sh
       - name: Opt-in native compiled fixture and isolated CLI acceptance
         timeout-minutes: 5
