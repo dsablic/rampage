@@ -51,6 +51,42 @@ within per-pack/overall budgets; at most 64 packs load. Failed content is report
 content from loading. YARA `include` statements are refused in user, pack and agent rule sets: each rule file
 must stand alone. A manifest's provenance/license fields describe its data, not authorization to disclose a binary.
 
+## Export and import
+
+A pack moves between machines as one `.rpack` archive, so installing a pack someone else made (for example the
+[flywheel's](flywheel.md) promoted signatures) is a copy and a check, not a conversion.
+
+```sh
+rampage pack export target/flywheel/promoted/libid -o libid.rpack
+rampage pack diff libid.rpack --against ~/packs/libid      # what an import would change
+rampage pack import libid.rpack --into ~/packs/libid       # default: ./<pack name>
+rampage --pack ~/packs/libid function identify stripped.elf
+```
+
+An archive is one gzip member holding one JSON document: the pack's files in the formats above
+(`rampage-pack.toml`, every file its contents name, and a flywheel pack's `entries.json`), and a manifest with:
+
+- the archive `format` and `format_version` (1), and `rampage_version`: the rampage versions that load it, from
+  the exporting version up to (not including) its next breaking version;
+- the pack's declarations (name, version, licence, source, description) and its `families` (`libid` for a
+  flywheel pack, otherwise its content kinds);
+- each file's SHA-256 and size, and `content_sha256` over all of the above;
+- for a flywheel pack, one summary per promoted entry: its revert id, family, candidate hash, row count, corpus
+  version and split, what it was gated against (`arm:<hash>` or `bundled`), both gate verdicts and the held-out
+  delta. `entries.json` keeps the full provenance.
+
+Export refuses a pack that does not load cleanly, or whose contents are directories (YARA or capa rule trees):
+an archive carries files only. Import refuses, before writing anything, an archive whose format version is
+unknown, whose range excludes this rampage, whose file list, file hashes, content hash or entry summaries do not
+match, whose paths leave the pack, or whose entries lack a passing gate result. It then writes the pack to a
+staging directory beside the destination, loads it as `--pack` would, and moves it into place only if every
+content loads. The destination must not exist or must be empty. `diff` runs the same checks and lists files,
+entries and signature rows added or removed against a pack directory (or an empty one); `--json` gives each.
+
+Nothing in an archive is executed, and a hash proves only that the archive is what its exporter wrote, not
+that its data is right. To take imported flywheel entries into rampage's bundled databases, `rampage-eval bundle`
+reruns the flywheel gate on them first ([flywheel](flywheel.md#bundle-a-promotion)).
+
 ## Constant databases
 
 A constants file holds `{"constants": [...]}`. Each entry has:

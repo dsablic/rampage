@@ -2952,6 +2952,97 @@ pub fn packs_check(out: &mut impl Write, directory: &Path, options: &Options) ->
     Ok(())
 }
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub fn packs_export(out: &mut impl Write, directory: &Path, output: &Path, options: &Options) -> Result<()> {
+    let manifest = rampage_api::pack_archive::export(directory, output, VERSION)?;
+    if options.json {
+        return write_json(out, &serde_json::json!({ "archive": output, "manifest": manifest }));
+    }
+    writeln!(
+        out,
+        "exported {} {} to {} ({} files, {} entries, families {}; rampage {} up to {}; content sha256 {})",
+        manifest.pack.name,
+        manifest.pack.version,
+        output.display(),
+        manifest.files.len(),
+        manifest.entries.len(),
+        manifest.families.join(", "),
+        manifest.rampage_version.min,
+        manifest.rampage_version.max_exclusive,
+        manifest.content_sha256
+    )?;
+    Ok(())
+}
+
+pub fn packs_import(out: &mut impl Write, archive: &Path, into: Option<&Path>, options: &Options) -> Result<()> {
+    let destination = match into {
+        Some(directory) => directory.to_owned(),
+        None => {
+            let checked = rampage_api::pack_archive::read(archive, VERSION)?;
+            Path::new(".").join(&checked.manifest.pack.name)
+        }
+    };
+    let report = rampage_api::pack_archive::import(archive, &destination, VERSION)?;
+    if options.json {
+        return write_json(out, &report);
+    }
+    let manifest = &report.manifest;
+    writeln!(
+        out,
+        "imported {} {} into {} ({} files, {} entries, content sha256 {} verified); load it with {}",
+        manifest.pack.name,
+        manifest.pack.version,
+        report.directory.display(),
+        manifest.files.len(),
+        manifest.entries.len(),
+        manifest.content_sha256,
+        report.load_with
+    )?;
+    for entry in &manifest.entries {
+        writeln!(
+            out,
+            "  {} {} ({} rows, corpus {}, gated against {}): fast {}, held-out {}",
+            entry.id,
+            entry.family,
+            entry.rows,
+            entry.corpus_version,
+            entry.baseline.as_deref().unwrap_or("bundled"),
+            if entry.fast.passed { "passed" } else { "failed" },
+            if entry.heldout.passed { "passed" } else { "failed" }
+        )?;
+    }
+    Ok(())
+}
+
+pub fn packs_diff(out: &mut impl Write, archive: &Path, against: Option<&Path>, options: &Options) -> Result<()> {
+    let diff = rampage_api::pack_archive::diff(archive, against, VERSION)?;
+    if options.json {
+        return write_json(out, &diff);
+    }
+    writeln!(
+        out,
+        "{} against {}",
+        diff.pack,
+        against.map_or("an empty directory".to_owned(), |path| path.display().to_string())
+    )?;
+    for (label, items) in [
+        ("file added", &diff.files_added),
+        ("file changed", &diff.files_changed),
+        ("file removed", &diff.files_removed),
+        ("entry added", &diff.entries_added),
+        ("entry removed", &diff.entries_removed),
+        ("row added", &diff.rows_added),
+        ("row removed", &diff.rows_removed),
+    ] {
+        for item in items {
+            writeln!(out, "  {label}: {item}")?;
+        }
+    }
+    writeln!(out, "  {} files and {} entries unchanged", diff.files_unchanged, diff.entries_kept)?;
+    Ok(())
+}
+
 fn render_pack(out: &mut impl Write, pack: &PackInfo) -> Result<()> {
     let location = match &pack.directory {
         Some(directory) => directory.display().to_string(),
