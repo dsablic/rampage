@@ -6,23 +6,24 @@ wrong. The point is to catch regressions and large gaps in rampage's own analysi
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
 descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
 
-## Phase reports
+## Benchmark reports
 
-Per-phase reports, newest first. Each is a recorded measurement with its own limits.
+Reports by area, newest first. Each is a recorded measurement with its own limits. Report file names keep the
+internal milestone numbers they were recorded under.
 
 | Report | Contents |
 | --- | --- |
 | [Head-to-head agent runs: rampage vs REA](benchmarks/agent-h2h-2026-11-05.md) | 20 canonical tasks × 3 through `claude-sonnet-5-5`, 2026-11-05. |
 | [Head-to-head suite v2: rampage vs REA](benchmarks/agent-h2h-v2-2026-11-05.md) | 15 harder tasks (C++, typing, investigation, 50 MB scale, raw firmware, diffing) × 3 through `claude-sonnet-5-5`, 2026-11-05. |
-| [Phase 9 debugger acceptance](benchmarks/phase9-debugger.md) | GDB stub, debugserver and Windows acceptance, 2026-10-29 to 2026-11-05. |
-| [REA formats and ledger wave](benchmarks/rea-formats-ledger.md) | Format tools and findings ledger, 2026-10-29. |
-| [Phase 4.1 benchmark reports](benchmarks/phase4-1.md) | Sleigh processor roster as Raw Projects and the explicit-window checkpoint. |
-| [Phase 3 benchmark reports](benchmarks/phase3.md) | Search, patch/export round trip and compact views. |
-| [Phase 2 benchmark reports](benchmarks/phase2.md) | Library corpus delivery, recall and fuzzy candidates. |
-| [Phase 1 benchmark reports](benchmarks/phase1.md) | The interactive typing loop, 1.1 to 1.6. |
-| [Phase 0 pilot and raw-window acceptance](benchmarks/phase0-pilot.md) | Scorecard pilot runs and the raw-window workflow check before the accepted baseline. |
+| [Debugger acceptance](benchmarks/phase9-debugger.md) | GDB stub, debugserver and Windows acceptance, 2026-10-29 to 2026-11-05. |
+| [Format tools and findings ledger](benchmarks/rea-formats-ledger.md) | Format tools and findings ledger, 2026-10-29. |
+| [Raw processor profiles](benchmarks/phase4-1.md) | Sleigh processor roster as Raw Projects and the explicit-window checkpoint. |
+| [Search, patching and views](benchmarks/phase3.md) | Search, patch/export round trip and compact views. |
+| [Library identification](benchmarks/phase2.md) | Library corpus delivery, recall and fuzzy candidates. |
+| [Interactive typing](benchmarks/phase1.md) | The interactive typing loop: local variables, types, data and operand typing, frames and propagation. |
+| [Scorecard pilot and raw-window acceptance](benchmarks/phase0-pilot.md) | Scorecard pilot runs and the raw-window workflow check before the accepted baseline. |
 
-## Parity scorecard — accepted Phase 0 baseline
+## Parity scorecard: the accepted baseline
 
 **Run:** 2026-10-17 07:44:31 UTC. **Collector commit:** `65a7e99`. The
 [machine-readable publication](benchmarks/phase0-2026-10-17.json) binds the private full report and evaluator
@@ -42,13 +43,13 @@ SHA-256 `7248d6e31c3394fb44ffcafc1181a67114822637247ce82c793866ee99deacc4`. The 
 | Parameter type classes | 224 correct, 108 wrong, 13 missed, 13 extra; precision/recall 0.6493 |
 | Decompiler health | 247/247 exact-entry C returns across 13 targets; 14 warning-bearing, 0 API errors |
 | Decompiler timing | 9.45 s summed call timings; individual measurements retained in JSON |
-| Fixed-model analysis contracts | 17/17 matched on the canonical owned task set |
+| Fixed-model analysis contracts | 17/17 matched on the canonical task set written by the rampage project |
 | Three capability probes, reported separately | 1 match, 1 unknown, 1 control-format failure |
 | Actual MCP/model activity | 38 MCP tool calls, 49 model turns; 0 tool errors or model-transport errors |
 | Reported provider usage | 286183 input, 4347 output, 1555 reasoning tokens; cache read/write both 0 |
 | Task / end-to-end wall time | 208.045 s / 224.913 s |
 | Ghidra MCP task comparison | Unavailable in configured project; rampage-only task baseline |
-| Phase 0 evidence completeness | 22/22 checks met; `phase0_complete=true` |
+| Baseline evidence completeness | 22/22 required checks met |
 
 The fixed model was `github-copilot/gpt-6.1-sol`, variant `default`, through the explicitly labeled OpenCode
 JSON-intent adapter, since retired. These task results are history and are not comparable with the
@@ -358,3 +359,26 @@ Its four controlled cases passed 15 selected assertions (x64/ARM64 greeting call
 x64 arguments). That pass is bounded integration coverage, not a general decompilation accuracy percentage.
 This is the previously recorded integration result, not a rerun during this documentation review. See the
 [corpus runner reference](decompiler-corpus.md) for identity scope, assertion denominators and resource limits.
+
+## Earlier measurements
+
+These were recorded during development and are not rerun on each release.
+
+- **Decoder comparisons.** Words sampled across every encoding: A32 matched `llvm-mc` on 97.95%, 16-bit Thumb on
+  100% and 32-bit Thumb on 97.49%. AArch64 matched every instruction sampled from Chrome's arm64 code and 99.85%
+  of sampled words across encodings. These are sampled output comparisons, not proof of exhaustive instruction
+  coverage or semantic correctness.
+- **Library identification.** Cross-program library-ID recall was 0.92 (x86-64) and 0.82 (AArch64), at precision
+  1.00, on the evaluated samples; it is not expected accuracy on arbitrary inputs. The bundled corpus's recall on
+  matched library versions is below the project's 80% target; the [signature corpus](signature-corpus.md) records
+  each profile.
+- **Discovery speed.** On a stripped Chrome framework on an M1 Max, discovery found 176,480 functions and 14.5
+  million instructions in the x86_64 slice in about 1.2 s, and 186,252 functions and 13.8 million instructions in
+  the arm64 slice in about 1.4 s. Repeated MCP queries reuse session analysis, and cached queries took
+  milliseconds. Timings depend on the binary, machine, build and query, and are not latency guarantees.
+- **Parity scorecard.** The [parity scorecard](parity-scorecard.md) combines static evaluations, fixed-model MCP
+  task outcomes, reported token usage and timing, and checks that the baseline is complete. Its source-built
+  workloads include a pinned Lua interpreter and C++ (with exceptions), Go and Rust programs written by the
+  rampage project; format builds without verified function truth stay unscored rather than counting as
+  coverage. A measured baseline does not establish IDA or Ghidra parity, and task failures stay visible rather
+  than counting as missing measurements.

@@ -112,6 +112,7 @@
   "decompile": [
     "address",
     "code",
+    "decompiler",
     "language_id",
     "name",
     "recovery_status",

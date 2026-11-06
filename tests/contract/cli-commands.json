@@ -5286,6 +5286,11 @@
           "type": "value",
           "repeated": false,
           "required": false
+        },
+        "--require-worker": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
         }
       },
       "subcommand_required": false
@@ -7174,6 +7179,11 @@
         },
         "--require-novel-gain": {
           "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--require-worker": {
+          "type": "flag",
           "repeated": false,
           "required": false
         }

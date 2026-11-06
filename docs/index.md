@@ -29,6 +29,8 @@ Overviews:
   disclosure.
 - [CLI reference](cli-reference.md): every command, its compatibility spelling, global options and addresses.
 - [Stability policy](stability.md): what is stable in 1.x and what is experimental.
+- [Known limits](known-limits.md): supported hosts, the decompiler worker, and what rampage does not do yet.
+- [Changelog](../CHANGELOG.md).
 
 Analysis and decompilation:
 
@@ -55,6 +57,8 @@ Formats and raw code:
 - [Raw-code windows](raw-code.md), [explicit Sleigh decoding and Raw Projects](sleigh-decoding.md),
   [explicit content decoding](decoding.md), [native data inspection](data-inspection.md),
   [ZIP32 inventory](archive-inventory.md).
+- [File formats](file-formats.md): Go and Rust build info, PyInstaller archives, WebAssembly modules, PE resources
+  and load config, and .NET metadata.
 
 Library identification, detection and data packs:
 
@@ -79,7 +83,7 @@ Measurement tools:
 
 - [Parity scorecard](parity-scorecard.md), [decompiler corpus runner](decompiler-corpus.md),
   [C++ virtual corpus](cpp-virtual-corpus.md), [exact-entry measurements](entry-measurements.md),
-  [owned worker observations](worker-observations.md).
+  [worker observations](worker-observations.md).
 
 ## Explanation
 
@@ -91,7 +95,10 @@ Measurement tools:
 - [Runtime data order and ARM64 evidence](runtime-data-order.md): why architecture and runtime byte order are
   kept apart.
 
-## Plans and history
+## Internal planning (for contributors)
+
+These pages are the project's own working notes: plans, milestones and the open-work list. They are not needed to
+use rampage.
 
 - [IDA/Ghidra parity roadmap](plans/2026-10-16-ida-ghidra-parity-roadmap.md): the current plan and status.
 - [Debugger design](plans/2026-10-29-debugger-control.md) and [Windows debugger design](plans/2026-11-05-debugger-windows.md).
@@ -99,4 +106,3 @@ Measurement tools:
   [flywheel strategy](plans/2026-10-12-heuristic-self-improvement-flywheel.md).
 - [Open work](../todo.md) and the [archive of done items](plans/todo-archive.md).
 - Older plans in [docs/plans](plans/) are marked historical at the top.
-- [Changelog](../CHANGELOG.md).

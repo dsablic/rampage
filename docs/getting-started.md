@@ -7,9 +7,14 @@ Every result shown here is real output from rampage on the fixture used, shorten
 
 ## What you need
 
-- macOS on Apple silicon or Linux x64 (see [supported hosts](../README.md#supported-hosts)).
-- A Rust toolchain with edition 2024. The repository's `rust-toolchain.toml` selects stable through rustup.
-- A C/C++ compiler and zlib development files, for the embedded decompiler.
+- A supported host (see [supported hosts](../README.md#supported-hosts)):
+  - macOS on Apple silicon: tested. Intel macOS is untested.
+  - Linux x64: builds and tests in CI; first release pending.
+- A Rust toolchain through [rustup](https://rustup.rs). The repository's `rust-toolchain.toml` selects stable, with
+  edition 2024.
+- A C/C++ compiler and zlib development files, for the embedded decompiler:
+  - macOS: the Xcode Command Line Tools (`xcode-select --install`).
+  - Debian or Ubuntu: `sudo apt install build-essential zlib1g-dev clang`.
 - An MCP client. This tutorial uses [Claude Code](https://docs.claude.com/en/docs/claude-code/overview); any client
   that runs stdio MCP servers works.
 
@@ -22,8 +27,21 @@ tools/install.sh
 ```
 
 `tools/install.sh` builds release binaries and installs `rampage` and `rampage-worker` into `~/.local/bin` (pass a
-directory to install somewhere else). The two must stay side by side: decompilation runs in the supervised
-worker. Make sure the directory is on your `PATH`, then check:
+directory to install somewhere else). It compiles Ghidra's C++ decompiler and optimises the whole release build,
+with two build jobs, and starts from scratch each time it runs, so expect roughly 10 to 30 minutes depending on
+the machine: on a 10-core M1 Max that other jobs kept busy, it took 23 minutes.
+
+Keep the two executables side by side: decompilation runs in the supervised worker. If `rampage` cannot find
+`rampage-worker`, it decompiles in-process instead, and the MCP server warns about it when it starts.
+
+If `~/.local/bin` is not on your `PATH` yet, add it in your shell's startup file and open a new terminal:
+
+```sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc    # zsh, the macOS default
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc   # bash, common on Linux
+```
+
+Then check:
 
 ```sh
 rampage --version
@@ -52,6 +70,10 @@ From `~/rampage-tour`:
 ```sh
 claude mcp add rampage -- rampage server serve
 ```
+
+Claude Code's default `local` scope registers the server for this directory only, so start Claude Code from
+`~/rampage-tour` for the rest of the tutorial. To use rampage from any directory, register it with
+`claude mcp add --scope user rampage -- rampage server serve` instead.
 
 For another client, add this to its MCP configuration:
 
@@ -97,7 +119,8 @@ Candidate strings:   "correct horse", "vault", "attack at dawn", "%08x"
 next_steps:          decompile {"at": "0x100000460"}, xrefs {"from": "0x100000460"}
 ```
 
-(Condensed from the JSON report, which also carries the evidence, confidence and limitations of each finding.)
+(Condensed from the JSON report, which also carries the evidence, confidence and limitations of each finding.
+The count is of references, so it lists four strings: `main` references "attack at dawn" twice.)
 
 On a Mach-O with `LC_MAIN`, the entry point is `main` itself. The binary is stripped, so the five local functions
 have only `sub_<address>` names.
@@ -261,7 +284,9 @@ another agent) starts from them:
 
 ## 10. Pick it up from the CLI
 
-Everything was saved in `vault-arm64.macho.rampage` beside the binary. The CLI, the desktop UI and later MCP
+Everything was saved in `vault-arm64.macho.rampage` beside the binary, next to a `vault-arm64.macho.rampage.lock`
+file that lets several processes share the log safely. Keep both with the binary, and leave both out of version
+control (rampage's own `.gitignore` lists `*.rampage` and `*.rampage.lock`). The CLI, the desktop UI and later MCP
 sessions all read the same log:
 
 ```sh

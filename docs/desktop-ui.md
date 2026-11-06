@@ -146,4 +146,4 @@ UPDATE_SNAPSHOTS=1 cargo test -p rampage-ui --test integration -- snapshots::
 Review refreshed images rather than treating an update as a correctness check. Analysis jobs run in the background;
 previously reported Chrome framework samples (about 190,000 functions and 930,000 strings) rendered frames in
 a few milliseconds. This sample-specific result is not a frame-time guarantee. See
-[reported discovery timings and benchmark limits](features.md#measurements-and-development).
+[reported discovery timings and benchmark limits](benchmarks.md#earlier-measurements).

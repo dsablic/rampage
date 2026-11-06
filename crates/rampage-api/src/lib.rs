@@ -237,7 +237,7 @@ pub use search_request::{
     MAX_SEARCH_REQUEST_BYTES, SearchAddress, SearchRequest, SearchRequestMode, SearchRequestRange,
     SearchRequestReference,
 };
-pub use session::{MAX_RAW_PROJECTS, Session};
+pub use session::{MAX_RAW_PROJECTS, Session, find_decompiler_worker};
 pub use signature_import::load_signature_database;
 pub use signatures::{SignatureApplication, SignatureMatch, USER_SIGNATURES};
 pub use summary::FunctionSummary;

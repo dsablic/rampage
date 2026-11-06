@@ -317,6 +317,10 @@ impl Project {
         }
         self.build_decompiler(options, candidate).map(|_| ()).map_err(|error| error.to_string())
     }
+    /// Whether native decompilation runs in a supervised worker process (true) or in this process (false).
+    pub fn decompiles_in_worker(&self) -> bool {
+        self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner()).worker.is_some()
+    }
     /// Enables supervised child-process decompilation. No in-process fallback occurs when the worker fails.
     pub fn set_decompiler_worker(&self, config: Option<rampage_decompiler::worker::WorkerConfig>) {
         let mut state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());

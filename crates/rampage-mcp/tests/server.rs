@@ -833,6 +833,30 @@ async fn go_string_runs_give_the_exact_match_address_and_referenced_literal_boun
     client.cancel().await.unwrap();
 }
 
+/// Decompile results say whether native code ran in the supervised worker; a server requiring the worker refuses
+/// to decompile without one rather than run it in-process.
+#[tokio::test]
+async fn decompile_names_its_decompiler_and_a_required_missing_worker_refuses() {
+    let path = fixture("hello-x64.elf");
+    let client = connect().await;
+    let expected = if rampage_api::find_decompiler_worker().is_some() { "supervised" } else { "in-process" };
+    for view in ["full", "code", "summary"] {
+        let result = json_of(&call(&client, "decompile", json!({ "path": path, "at": "main", "view": view })).await);
+        assert_eq!(result["decompiler"], expected, "{view}");
+    }
+    client.cancel().await.unwrap();
+
+    let server =
+        RampageServer::with_groups(Group::ALL).requiring_decompiler_worker("/nonexistent/rampage-worker".into());
+    let client = connect_to(server).await;
+    let refused = call(&client, "decompile", json!({ "path": path, "at": "main", "view": "summary" })).await;
+    assert_eq!(refused.is_error, Some(true), "{}", text(&refused));
+    // Tools that do not decompile still work.
+    let functions = call(&client, "list_functions", json!({ "path": path })).await;
+    assert_ne!(functions.is_error, Some(true), "{}", text(&functions));
+    client.cancel().await.unwrap();
+}
+
 /// Benchmark v2: agents calling before loading a schema passed `address`/`length` to disassemble, which ignored
 /// them and listed the entry point, and `address` to decompile, whose error named only the missing `at`.
 #[tokio::test]

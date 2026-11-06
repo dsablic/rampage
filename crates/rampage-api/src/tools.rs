@@ -1225,8 +1225,15 @@ fn decompile_tool(project: &Project, args: DecompileToolArgs) -> Result<Value, A
     } else {
         serde_json::to_value(project.decompile(address)?)
     };
-    let value = value.map_err(|error| ApiError::Invalid(format!("decompilation serialization: {error}")))?;
+    let mut value = value.map_err(|error| ApiError::Invalid(format!("decompilation serialization: {error}")))?;
+    value["decompiler"] = Value::from(decompiler_mode(project));
     decompilation_view(value, args.view)
+}
+
+/// Where `project` runs native decompilation: `supervised` in the worker process, or `in-process` beside the
+/// server's own parsing when no worker was found.
+fn decompiler_mode(project: &Project) -> &'static str {
+    if project.decompiles_in_worker() { "supervised" } else { "in-process" }
 }
 
 fn decompilation_view(value: Value, view: DecompileView) -> Result<Value, ApiError> {
@@ -2238,7 +2245,8 @@ pub fn tools() -> Vec<Tool> {
                context counts, omissions and preparation timings. No silent whole-program fallback. view=full \
                (default) preserves original JSON; code omits token/structure payloads while retaining complete native \
                C, native diagnostics, recovery/context/specification evidence. summary also omits C text with exact \
-               counts and omission receipts. Oversized views refuse, never truncate strings.",
+               counts and omission receipts. Oversized views refuse, never truncate strings. `decompiler` says where \
+               native code ran: supervised (worker process) or in-process (no worker found).",
             decompile_tool,
         ),
         tool(

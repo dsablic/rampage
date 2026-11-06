@@ -106,7 +106,7 @@ FID import/query uses the explicitly configured trusted-host Rust API; the gener
 attribute targets with `--list attributes`. `--offset N` skips list entries and `--limit N` selects the page
 size (default 100). Types include fields, method/property signatures, event types, accessor tokens and IL body sizes;
 P/Invokes include DLL/export bindings. Supported attribute values and bounded decoding limits are described in
-[managed assemblies](features.md#managed-assemblies). Accessor tokens are metadata bindings, not inferred behavior.
+[managed assemblies](file-formats.md#managed-assemblies). Accessor tokens are metadata bindings, not inferred behavior.
 Verified local enum constants appear as metadata rows with field tokens, underlying integral types and exact numeric
 values. Aliases are retained; numeric custom-attribute rendering is not replaced by symbolic names.
 

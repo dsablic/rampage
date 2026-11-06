@@ -591,6 +591,10 @@ pub(crate) struct McpArgs {
     /// RAMPAGE_DEBUG_KILL=1 does the same
     #[arg(long)]
     pub(crate) debug_kill: bool,
+    /// Decompile only in the supervised rampage-worker process: without one, decompile refuses instead of running
+    /// in-process, inside this server
+    #[arg(long)]
+    pub(crate) require_worker: bool,
     #[command(flatten)]
     pub(crate) flywheel: FlywheelArgs,
 }

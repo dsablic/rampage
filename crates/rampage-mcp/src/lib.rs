@@ -44,6 +44,44 @@ List rampage's tool groups (name, one-line description, tool count and names, wh
 with `groups`, e.g. [\"detection\"] or [\"all\"]. Enabling adds the group's tools to the tool list and sends \
 notifications/tools/list_changed. Without `groups` nothing changes.";
 
+/// How a server decompiles, decided once at startup by [`decompiler_worker_startup`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerStartup {
+    /// The worker every decompilation must run in (`--require-worker`). `None` keeps per-binary discovery, which
+    /// runs in-process when no worker is found.
+    pub required: Option<PathBuf>,
+    /// What to tell the operator on stderr before serving, if anything.
+    pub warning: Option<String>,
+}
+
+/// The decompiler worker policy for a server: `require` is `--require-worker`, `found` what
+/// [`rampage_api::find_decompiler_worker`] found, and `expected` where an installed worker would be (beside the
+/// executable). Without a worker, decompilation runs in-process: the server warns, or under `require` pins
+/// `expected` so that decompile refuses until a worker is installed there, never falling back to in-process.
+pub fn decompiler_worker_startup(require: bool, found: Option<PathBuf>, expected: PathBuf) -> WorkerStartup {
+    match (require, found) {
+        (true, Some(worker)) => WorkerStartup { required: Some(worker), warning: None },
+        (true, None) => WorkerStartup {
+            warning: Some(format!(
+                "rampage: --require-worker: no rampage-worker found at {} (or in RAMPAGE_WORKER); decompile will \
+                 refuse until one is installed there",
+                expected.display()
+            )),
+            required: Some(expected),
+        },
+        (false, Some(_)) => WorkerStartup { required: None, warning: None },
+        (false, None) => WorkerStartup {
+            required: None,
+            warning: Some(format!(
+                "rampage: warning: no rampage-worker found at {} (or in RAMPAGE_WORKER); decompile will run \
+                 in-process, inside this server, not in the supervised worker. Install rampage-worker beside rampage, \
+                 or pass --require-worker to refuse instead",
+                expected.display()
+            )),
+        },
+    }
+}
+
 /// How many characters of the server instructions Claude Code shows a model; it cuts the rest. Everything an agent
 /// needs to start (the groups with their key tools, the first calls, the debug consent) comes before this mark.
 pub const INSTRUCTIONS_SHOWN_CHARS: usize = 4096;
@@ -645,6 +683,13 @@ impl RampageServer {
         Self { session: Arc::new(session), ..self }
     }
 
+    /// This server decompiling only in the supervised worker at `executable`, never in-process (see
+    /// [`Session::requiring_decompiler_worker`]), keeping its session's other settings.
+    pub fn requiring_decompiler_worker(self, executable: PathBuf) -> Self {
+        let session = Arc::try_unwrap(self.session).unwrap_or_else(|shared| shared.unloaded_copy());
+        Self { session: Arc::new(session.requiring_decompiler_worker(executable)), ..self }
+    }
+
     /// This server with `packs` layered over the bundled databases of its heuristic-database tools, keeping its
     /// session's other settings.
     pub fn with_packs(self, packs: Arc<Packs>) -> Self {
@@ -1075,19 +1120,24 @@ pub async fn serve_stdio(
     packs: Arc<Packs>,
     debug: Option<DebugRegistry>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    serve_stdio_with(groups, packs, debug, None, None).await
+    serve_stdio_with(groups, packs, debug, None, None, None).await
 }
 
-/// [`serve_stdio`], with the `improve` group over `improve`'s corpus and `report_observation` recording into
-/// `observations` when they are given.
+/// [`serve_stdio`], with the `improve` group over `improve`'s corpus, `report_observation` recording into
+/// `observations`, and every decompilation in the `required_worker` (see [`decompiler_worker_startup`]) when they
+/// are given.
 pub async fn serve_stdio_with(
     groups: BTreeSet<Group>,
     packs: Arc<Packs>,
     debug: Option<DebugRegistry>,
     improve: Option<Arc<Improve>>,
     observations: Option<Arc<ObservationStore>>,
+    required_worker: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut server = RampageServer::with_groups(groups).with_packs(packs);
+    if let Some(worker) = required_worker {
+        server = server.requiring_decompiler_worker(worker);
+    }
     if let Some(registry) = debug {
         server = server.with_debug(registry);
     }
@@ -1106,6 +1156,32 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+
+    #[test]
+    fn a_missing_worker_warns_or_under_require_pins_the_expected_path() {
+        let expected = PathBuf::from("/opt/rampage/bin/rampage-worker");
+        let found = PathBuf::from("/custom/rampage-worker");
+
+        let quiet = decompiler_worker_startup(false, Some(found.clone()), expected.clone());
+        assert_eq!(quiet, WorkerStartup { required: None, warning: None });
+
+        let fallback = decompiler_worker_startup(false, None, expected.clone());
+        assert_eq!(fallback.required, None);
+        let warning = fallback.warning.unwrap();
+        assert!(warning.contains("in-process") && warning.contains("--require-worker"), "{warning}");
+        assert!(warning.contains("/opt/rampage/bin/rampage-worker"), "{warning}");
+
+        let required = decompiler_worker_startup(true, Some(found.clone()), expected.clone());
+        assert_eq!(required, WorkerStartup { required: Some(found), warning: None });
+
+        let refusing = decompiler_worker_startup(true, None, expected.clone());
+        assert_eq!(refusing.required, Some(expected));
+        let warning = refusing.warning.unwrap();
+        assert!(warning.contains("refuse") && !warning.contains("will run in-process"), "{warning}");
+
+        let server = RampageServer::default().requiring_decompiler_worker(PathBuf::from("/nonexistent/rampage-worker"));
+        assert_eq!(server.session.required_decompiler_worker(), Some(Path::new("/nonexistent/rampage-worker")));
+    }
 
     #[test]
     fn packs_keep_the_session_settings_and_clones_keep_their_own_groups() {

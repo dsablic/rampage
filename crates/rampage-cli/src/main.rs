@@ -30,7 +30,7 @@ use crate::commands::Options;
 use crate::hierarchy::RootCommand;
 
 #[derive(Parser)]
-#[command(name = "rampage", version, about = "High-performance reverse engineering toolkit")]
+#[command(name = "rampage", version, about = "Reverse engineering toolkit built for AI agents")]
 struct Cli {
     /// Emit JSON instead of text
     #[arg(long, global = true)]
@@ -368,8 +368,10 @@ fn main() -> ExitCode {
     // Loaded on first use, so that commands which consult no heuristic database do not read any pack.
     let packs = Arc::new(Packs::lazy_with_env(&cli.packs));
     let warn = !matches!(command, Command::Packs { .. });
-    if let Command::Mcp(McpArgs { all_tools, debug_endpoints, debug_writes, debug_kill, flywheel }) = command {
-        return serve_mcp(all_tools, &debug_endpoints, (debug_writes, debug_kill), packs, flywheel);
+    if let Command::Mcp(McpArgs { all_tools, debug_endpoints, debug_writes, debug_kill, require_worker, flywheel }) =
+        command
+    {
+        return serve_mcp(all_tools, &debug_endpoints, (debug_writes, debug_kill), require_worker, packs, flywheel);
     }
     let image = cli.image_offset.map(|offset| rampage_loaders::ImageAt::new(offset, cli.image_length));
     let options = Options { json: cli.json, arch: cli.arch, image, raw, packs: Arc::clone(&packs) };
@@ -766,6 +768,7 @@ fn serve_mcp(
     all_tools: bool,
     debug_endpoints: &[String],
     consent: (bool, bool),
+    require_worker: bool,
     packs: Arc<Packs>,
     flywheel: args::FlywheelArgs,
 ) -> ExitCode {
@@ -796,6 +799,20 @@ fn serve_mcp(
             return ExitCode::FAILURE;
         }
     };
+    // A corpus server serves no analysis tool, so nothing it serves decompiles.
+    let required_worker = if improve.is_some() {
+        None
+    } else {
+        let expected = std::env::current_exe()
+            .map(|path| path.with_file_name(if cfg!(windows) { "rampage-worker.exe" } else { "rampage-worker" }))
+            .unwrap_or_else(|_| PathBuf::from("rampage-worker"));
+        let startup =
+            rampage_mcp::decompiler_worker_startup(require_worker, rampage_api::find_decompiler_worker(), expected);
+        if let Some(warning) = startup.warning {
+            eprintln!("{warning}");
+        }
+        startup.required
+    };
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -803,7 +820,8 @@ fn serve_mcp(
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(rampage_mcp::serve_stdio_with(groups, packs, debug, improve, observations)) {
+    match runtime.block_on(rampage_mcp::serve_stdio_with(groups, packs, debug, improve, observations, required_worker))
+    {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("rampage: mcp server failed: {error}");

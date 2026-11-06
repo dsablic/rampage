@@ -12,10 +12,10 @@ nobody has measured.
 
 | | rampage | Ghidra | IDA Pro | REA |
 | --- | --- | --- | --- | --- |
-| Licence | Apache-2.0 | Apache-2.0 | Commercial | Not covered here |
+| Licence | Apache-2.0 | Apache-2.0 | Commercial | MIT |
 | Written in | Rust, with Ghidra's C++ decompiler embedded | Java, with a C++ decompiler | C/C++ | TypeScript on Node, driving headless Ghidra (and optionally Rizin, Hopper or IDA) |
 | Primary interface | MCP server; CLI and desktop UI share its API | GUI; headless analyzer; Java and Python scripting | GUI; IDAPython and C++ SDK | MCP server |
-| Decompiler | Ghidra's, in a supervised worker | Ghidra's | Hex-Rays (licensed per architecture) | Ghidra's (through Ghidra) |
+| Decompiler | Ghidra's, in a supervised worker process when `rampage-worker` is installed, otherwise in-process | Ghidra's | Hex-Rays (licensed per architecture) | Ghidra's (through Ghidra) |
 | Analysis state | Loaded and analysed on first use per session; annotations in a JSON Lines log beside the binary | Project database | `.idb`/`.i64` database | Ghidra project, per REA session |
 | Heuristics | Data: signature JSON, data packs, YARA, capa, constants | Analyzers in Java; FunctionID databases | FLIRT signatures, type libraries, plugins | Those of the backing tool |
 | Scripting API | None by design; features land as MCP tools | Yes | Yes | Through the backing tool |
@@ -50,7 +50,7 @@ Read these with their caveats, which the reports state in full:
 
 Sources: [suite v2 report](benchmarks/agent-h2h-v2-2026-11-05.md) and
 [suite v1 report](benchmarks/agent-h2h-2026-11-05.md). rampage's static analysis is also compared with Ghidra's
-on owned fixtures (function starts, CFG edges, call edges, decompilation health) in
+on fixtures built by the rampage project (function starts, CFG edges, call edges, decompilation health) in
 [accuracy benchmarks](benchmarks.md); there Ghidra is a reference, not ground truth.
 
 ## What differs for an agent

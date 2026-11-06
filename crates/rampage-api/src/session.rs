@@ -26,6 +26,8 @@ pub struct Session {
     state: Mutex<State>,
     capture_annotations: Option<PathBuf>,
     packs: Arc<Packs>,
+    /// The worker every project must decompile in, chosen with [`Session::requiring_decompiler_worker`].
+    required_worker: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -81,6 +83,23 @@ impl Session {
         Self { packs, ..self }
     }
 
+    /// Decompiles every project of this session in the supervised worker at `executable`, never in-process. A
+    /// worker that later goes missing or fails makes decompilation fail; nothing falls back to in-process.
+    pub fn requiring_decompiler_worker(self, executable: PathBuf) -> Self {
+        Self { required_worker: Some(executable), ..self }
+    }
+
+    /// The worker chosen with [`Session::requiring_decompiler_worker`], if any.
+    pub fn required_decompiler_worker(&self) -> Option<&Path> {
+        self.required_worker.as_deref()
+    }
+
+    /// The worker a project opened now decompiles in: the required one, else [`find_decompiler_worker`]'s. `None`
+    /// means native decompilation runs in-process.
+    fn decompiler_worker(&self) -> Option<PathBuf> {
+        self.required_worker.clone().or_else(find_decompiler_worker)
+    }
+
     /// The data packs every project of this session uses.
     pub fn packs(&self) -> Arc<Packs> {
         Arc::clone(&self.packs)
@@ -91,10 +110,15 @@ impl Session {
         self.capture_annotations.as_deref()
     }
 
-    /// A session with this one's settings (snapshot annotation directory, packs) and none of its projects, for
-    /// changing a setting of a session that is shared and so cannot be taken apart.
+    /// A session with this one's settings (snapshot annotation directory, packs, required worker) and none of its
+    /// projects, for changing a setting of a session that is shared and so cannot be taken apart.
     pub fn unloaded_copy(&self) -> Self {
-        Self { capture_annotations: self.capture_annotations.clone(), packs: self.packs(), ..Self::default() }
+        Self {
+            capture_annotations: self.capture_annotations.clone(),
+            packs: self.packs(),
+            required_worker: self.required_worker.clone(),
+            ..Self::default()
+        }
     }
 
     pub fn open(&self, path: &Path, arch: Option<Arch>) -> Result<Arc<Project>, ApiError> {
@@ -155,7 +179,7 @@ impl Session {
             } else {
                 let project = Project::new(binary);
                 project.set_packs(Arc::clone(&self.packs));
-                if let Some(executable) = decompiler_worker() {
+                if let Some(executable) = self.decompiler_worker() {
                     project.set_decompiler_worker(Some(crate::DecompilerWorkerConfig {
                         executable: Some(executable),
                         ..Default::default()
@@ -325,7 +349,7 @@ impl Session {
                 None => state.stamps.remove(&key),
             };
         }
-        let worker = decompiler_worker();
+        let worker = self.decompiler_worker();
         if checked {
             state.projects.remove(&key);
         }
@@ -348,7 +372,9 @@ impl Session {
     }
 }
 
-fn decompiler_worker() -> Option<PathBuf> {
+/// The supervised decompiler worker: `RAMPAGE_WORKER` when set, else a `rampage-worker` file beside the running
+/// executable. `None` means decompilation runs in-process, in the same process as the parsing of the binary.
+pub fn find_decompiler_worker() -> Option<PathBuf> {
     std::env::var_os("RAMPAGE_WORKER").map(PathBuf::from).or_else(|| {
         let sibling = std::env::current_exe().ok()?.with_file_name("rampage-worker");
         sibling.is_file().then_some(sibling)

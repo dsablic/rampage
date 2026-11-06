@@ -40,7 +40,7 @@ each run 3 times per server and scored by machine against truth derived independ
 | Wall time per run outside the scale tasks, median | 12.5 s | 27.0 s |
 | Reported model cost over the scored runs | $3.63 | $5.57 |
 
-On these owned tasks with one model, rampage is modestly ahead on accuracy and clearly ahead on tool calls, time
+On these tasks with one model, rampage is modestly ahead on accuracy and clearly ahead on tool calls, time
 and tokens. The tasks were written by the rampage project and lean towards what it was built for; REA ran without
 Rizin, so part of its catalog could not run; 15 tasks × 3 runs is small. REA's denominator is 43 because two of
 its runs fell back to another model and are excluded. Read the [suite v2 report](docs/benchmarks/agent-h2h-v2-2026-11-05.md)
@@ -52,8 +52,15 @@ near 100%.
 
 ### Build and install
 
-You need a Rust toolchain with edition 2024 (`rust-toolchain.toml` selects stable), a C/C++ compiler and zlib
-development files. There are no prebuilt binaries yet.
+There are no prebuilt binaries yet, so you build from source. You need:
+
+- a Rust toolchain through [rustup](https://rustup.rs) (`rust-toolchain.toml` selects stable, edition 2024);
+- a C/C++ compiler and zlib development files, for the embedded decompiler:
+  - macOS: the Xcode Command Line Tools (`xcode-select --install`);
+  - Debian or Ubuntu: `sudo apt install build-essential zlib1g-dev clang`.
+
+The build compiles Ghidra's C++ decompiler and takes 10 to 30 minutes; see
+[getting started](docs/getting-started.md#1-build-and-install).
 
 ```sh
 git clone https://github.com/dsablic/rampage.git
@@ -61,9 +68,13 @@ cd rampage
 tools/install.sh            # builds and installs rampage and rampage-worker into ~/.local/bin
 ```
 
-`tools/install.sh ROOT` installs into `ROOT/bin` instead, and `--ui` adds the desktop client. Keep
-`rampage-worker` beside `rampage`: decompilation runs in that supervised worker process. The rest of this page
-assumes `rampage` is on `PATH`.
+`tools/install.sh ROOT` installs into `ROOT/bin` instead, and `--ui` adds the desktop client. The rest of this
+page assumes `rampage` is on `PATH`.
+
+Keep `rampage-worker` beside `rampage`: decompilation runs in that supervised worker process, with time, memory
+and output limits. **If rampage cannot find the worker, it decompiles in-process**, inside `rampage` itself. The
+MCP server warns about this at startup, and each `decompile` result says which it used (`"decompiler":
+"supervised"` or `"in-process"`). Add `--require-worker` to `rampage server serve` to refuse instead.
 
 ### Connect Claude Code
 
@@ -71,7 +82,14 @@ assumes `rampage` is on `PATH`.
 claude mcp add rampage -- rampage server serve
 ```
 
-Add `--scope user` to make it available in every project. Then ask Claude about a binary, for example:
+This registers rampage for the current directory only (Claude Code's default `local` scope). To use it in every
+project, register it with user scope:
+
+```sh
+claude mcp add --scope user rampage -- rampage server serve
+```
+
+Then ask Claude about a binary, for example:
 
 > Using rampage, look at tests/fixtures/bench-v2/bin/vault-arm64.macho. It encrypts a message with a stream
 > cipher. Which function derives the cipher's key, and what constant does it XOR into each key word?
@@ -119,9 +137,11 @@ Areas marked *experimental* may change in any release; see the [stability policy
 - **Analysis:** recursive-descent function discovery, control-flow graphs, cross-references, strings, imports
   and exports; stripped Go function names from the pclntab; C++ class names and base classes from RTTI and
   vtables; Objective-C classes, methods and properties; guided reports (`triage_report`, `find_main`,
-  `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`).
+  `network_surface`, `persistence_surface`, `string_decoding` and `diff_builds` in `core`, `find_crypto` in
+  `detection`).
 - **Decompilation:** C from the embedded Ghidra decompiler, with address-linked tokens and recovery diagnostics,
-  run in a supervised worker with time, memory and output limits.
+  run in a supervised worker with time, memory and output limits when `rampage-worker` is installed, and
+  in-process otherwise.
 - **Typing:** rename and retype locals and parameters by storage, a project type library with C declarations and
   bundled libc/POSIX/Win32 basics, types on data and operands, stack frames, type propagation across calls, and
   checked DWARF and PDB type import.
@@ -154,13 +174,20 @@ The [feature overview](docs/features.md) and [MCP reference](docs/mcp.md) descri
 
 ### Supported hosts
 
-- **macOS on Apple silicon:** tested; the primary development host.
-- **Linux x64:** building and testing in CI; first release pending.
-- **Windows:** not supported as a host in 1.0; planned for 1.x. Windows PE binaries can be analysed, and Windows
-  targets debugged through an RSP stub, from a macOS or Linux host.
+| Host | Status |
+| --- | --- |
+| macOS on Apple silicon | Tested; the primary development host. |
+| macOS on Intel | Untested: it should build from source, but no one has run the tests on it. |
+| Linux x64 | Builds and tests in CI; first release pending. |
+| Windows | Not supported as a host in 1.0; planned for 1.x. |
+
+On any host, rampage analyses PE, ELF and Mach-O binaries alike. Windows PE binaries can be analysed, and Windows
+targets debugged through an RSP stub, from a macOS or Linux host.
 
 ### Known limits
 
+- Without `rampage-worker` beside `rampage` (or named by `RAMPAGE_WORKER`), decompilation runs in-process,
+  without the worker's limits. Use `--require-worker` when you analyse hostile files.
 - Decompilation produces C; it does not prove the recovered program is correct. Results report their recovery
   issues.
 - Worker supervision bounds time, memory and output; it is not an OS sandbox. Analyse untrusted files in a VM or
@@ -173,8 +200,22 @@ The [feature overview](docs/features.md) and [MCP reference](docs/mcp.md) descri
   C++ layout recovery beyond RTTI evidence, and incremental analysis for very large binaries.
 - The benchmarks above use one model and one client; they are not general accuracy guarantees.
 
-The [comparison with Ghidra, IDA and REA](docs/comparison.md) lists what rampage does not do, and
-[the roadmap](docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md) lists what is planned.
+[Known limits](docs/known-limits.md) has the full list, and the
+[comparison with Ghidra, IDA and REA](docs/comparison.md) sets it against other tools.
+
+### Troubleshooting
+
+- **The server is not listed in `/mcp`.** `claude mcp add` without `--scope user` registers rampage only for the
+  directory you ran it in; run `claude mcp list` there, or add it again with `--scope user`. Check that
+  `rampage server serve` starts from a shell: it waits for a client on stdin (Ctrl-C ends it), and a
+  "command not found" means `rampage` is not on `PATH`.
+- **A GUI client cannot start `rampage`.** Desktop apps often do not inherit your shell's `PATH`. Put the
+  absolute path in `command`, such as `/Users/you/.local/bin/rampage` (`command -v rampage` prints it).
+- **The server warns that no `rampage-worker` was found.** `decompile` then runs in-process. Install both
+  executables with `tools/install.sh`, keep them in one directory, or set `RAMPAGE_WORKER` to the worker's path.
+- **The build is slow.** `tools/install.sh` compiles Ghidra's C++ decompiler and optimises the whole release
+  build with two jobs, from scratch on every run: expect 10 to 30 minutes. See
+  [getting started](docs/getting-started.md#1-build-and-install) for a measured time.
 
 ## Documentation and project
 

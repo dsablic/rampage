@@ -156,3 +156,39 @@ fn isolated_debug_signature_import_matches_native_name_recovery() {
     let result = project.decompile(project.resolve("debug_mix").unwrap()).unwrap();
     assert!(result.code.contains("total") && result.code.contains("message"), "{}", result.code);
 }
+
+/// Decompile results say where native code ran, and a session requiring the worker never runs it in-process.
+#[test]
+fn decompile_results_name_the_decompiler_and_a_required_worker_is_never_bypassed() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64-dyn.elf");
+    let decompile = |project: &Project| {
+        let arguments = serde_json::json!({ "at": "main", "view": "summary" });
+        rampage_api::tools::call(&rampage_api::tools::tools(), project, "decompile", arguments)
+    };
+    let field = |text: &str| serde_json::from_str::<serde_json::Value>(text).unwrap()["decompiler"].clone();
+
+    let in_process = Project::new(Binary::open(&path).unwrap());
+    assert!(!in_process.decompiles_in_worker());
+    let (text, failed) = decompile(&in_process);
+    assert!(!failed, "{text}");
+    assert_eq!(field(&text), "in-process");
+
+    let worker = std::path::PathBuf::from(env!("CARGO_BIN_EXE_rampage-worker"));
+    let session = rampage_api::Session::default().requiring_decompiler_worker(worker.clone());
+    assert_eq!(session.required_decompiler_worker(), Some(worker.as_path()));
+    let supervised = session.open(&path, None).unwrap();
+    assert!(supervised.decompiles_in_worker());
+    let (text, failed) = decompile(&supervised);
+    assert!(!failed, "{text}");
+    assert_eq!(field(&text), "supervised");
+
+    // A required worker that is missing refuses the call; nothing falls back to in-process.
+    let missing = rampage_api::Session::default()
+        .requiring_decompiler_worker("/nonexistent/rampage-worker".into())
+        .open(&path, None)
+        .unwrap();
+    assert!(missing.decompiles_in_worker());
+    let (text, failed) = decompile(&missing);
+    assert!(failed, "{text}");
+    assert!(!text.contains("\"decompiler\""), "{text}");
+}

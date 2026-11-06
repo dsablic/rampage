@@ -15,6 +15,7 @@ This page is organised from overview to detail:
 - [Raw projects](#raw-projects): headerless code through Sleigh processor profiles.
 - [Edits and session state](#edits-and-session-state): annotations, undo, batches and the findings ledger.
 - [Authorization and data disclosure](#authorization-and-data-disclosure).
+- [For contributors](#for-contributors): the instruction size budget and how agent benchmarks drive the server.
 
 For a guided first session, see [getting started](getting-started.md).
 
@@ -26,7 +27,15 @@ With the built CLI on `PATH`, add rampage to Claude Code:
 claude mcp add rampage -- rampage server serve
 ```
 
-`--scope user` makes it available in every project. For other clients, a JSON `mcpServers` entry:
+This uses Claude Code's default `local` scope, which applies only in the directory where you ran it. To make
+rampage available in every project, add it with user scope instead (the `--scope` option goes before the server
+name):
+
+```sh
+claude mcp add --scope user rampage -- rampage server serve
+```
+
+For other clients, a JSON `mcpServers` entry:
 
 ```json
 {
@@ -39,9 +48,15 @@ claude mcp add rampage -- rampage server serve
 }
 ```
 
-An absolute path to the installed CLI can replace `rampage`. Install `rampage-worker` beside it for supervised
-native decompilation. For clients that do not refresh their tool list, add `--all-tools`
-(`claude mcp add rampage -- rampage server serve --all-tools`).
+An absolute path to the installed CLI can replace `rampage`. For clients that do not refresh their tool list, add
+`--all-tools` (`claude mcp add rampage -- rampage server serve --all-tools`).
+
+Install `rampage-worker` beside `rampage` (as `tools/install.sh` does), or name it with `RAMPAGE_WORKER`.
+Decompilation then runs in that supervised worker process, with time, memory and output limits. **Without a
+worker, decompilation runs in-process**, inside the server itself. The server warns on stderr at startup when it
+finds no worker, and every `decompile` result says where it ran in its `decompiler` field: `supervised` or
+`in-process`. If you analyse hostile files, start the server with `--require-worker` so that `decompile` refuses
+instead of running in-process. Supervision bounds resources; it is not an OS sandbox.
 
 ## Server options
 
@@ -51,6 +66,7 @@ native decompilation. For clients that do not refresh their tool list, add `--al
 | `--pack DIR` | Load a [data pack](data-packs.md); repeatable. `RAMPAGE_PACKS` adds more. |
 | `--debug-endpoint ENDPOINT` | Allow the `debug` tools to connect to an operator-started stub; repeatable. See [debug control](debug-control.md#consent). |
 | `--debug-writes`, `--debug-kill` | Also allow target memory and register writes, and kill. |
+| `--require-worker` | Decompile only in the supervised `rampage-worker`: without one, `decompile` refuses instead of running in-process. |
 | `--observations DIR` | Serve `report_observation`, recording into DIR (*experimental*). |
 | `--corpus DIR` and the `--flywheel-*`, `--gate`, `--require-novel-gain` options | Serve only the `improve` group over a flywheel corpus (*experimental*); see [the flywheel](flywheel.md). |
 
@@ -100,10 +116,11 @@ started with an allowed debug endpoint, and its write tools and `kill` argument 
 The `improve` group exists only on a server started with `--corpus DIR`, which then serves `enable_tools` and the
 improve group alone; see [the flywheel](#flywheel-improve).
 
-For contributors: Claude Code shows a model only the first 4,096 characters of the server instructions. The
-instructions therefore open with the essentials (how to enable groups, one line per group naming its key tools, the first calls, the debug
-consent and endpoints) and mark the start of the details; tests in `crates/rampage-mcp/src/lib.rs` keep the
-essentials at least 300 characters short of the cut. Put new detail after that mark or in a tool description.
+Workflow reports name the `group` of suggested next tools. The [desktop assistant](desktop-ui.md) uses the same
+tools without group gating, plus the interactive `show_address`, which is not an MCP tool because the server has
+no listing to navigate. It does not offer the file tools (`carve`, `archive_inventory`, `list_packs`,
+`query_debugger`, `inspect_data`, `decode_file_range`, `inspect_raw_code`, `inspect_sleigh`,
+`pyinstaller_archive`, `wasm_module`) or the `debug` tools.
 
 ## Flywheel (improve)
 
@@ -145,21 +162,26 @@ delta only.
 Errors from these tools are JSON objects: `{"error": kind, "message": text}`. `kind` is one of
 `invalid_argument`, `not_found`, `refused`, `corpus` or `io`.
 
-Workflow reports name the `group` of suggested next tools. The desktop assistant offers every binary tool
-without group gating, plus the interactive `show_address`; it does not offer file tools
-`carve`/`archive_inventory`/`list_packs`/`query_debugger`/`inspect_data`/`decode_file_range`/`inspect_raw_code`/
-`inspect_sleigh`/`pyinstaller_archive`/`wasm_module` or the `debug` tools.
-`show_address` is not an MCP tool because the server has no interactive listing to navigate.
-
-The [parity scorecard](parity-scorecard.md) records static metrics and task definitions separately from
-live MCP/model results. Limits: contract checks and scripted transport tests are not AI task-success measurements.
-Head-to-head agent runs drive an agent CLI against `rampage server serve` (or another server) through
-`tools/agent-bench/claude-runner.py`, with only that server's tools allowed; see the
-[parity scorecard](parity-scorecard.md#head-to-head-agent-runs). They do not execute analyzed programs.
-The local stripped Lua workload was also inspected through `triage_report`: static toolchain/string evidence
-does not imply target execution, and bundled signature results are distinct from matched-twin evaluator scores.
-
 ## Inputs, paging and decompiler tokens
+
+Binary tools take `path`, optional `arch`, and optional `image_offset`/`image_length` to open an embedded view.
+`image_offset` is not the paging `offset`. Native addresses are hexadecimal strings; most queries also accept
+symbols, exports, import-stub names and `sub_<hex>`. Runtime comparison slots/ranges and branch windows require
+explicit hexadecimal addresses. See [CLI global options](cli-reference.md#global-options-and-addresses).
+
+List queries use `offset`/`limit`, generally defaulting to 100 entries and capped at 1000. `list_functions`
+filters with `name_contains`; strings/imports/exports filter with `contains`. Disassembly counts are capped at
+1000. Large ordinary binary-tool results can be truncated after 60,000 UTF-8 bytes with an added text marker;
+workflow reports shrink to remain valid JSON and retain limitations. Page or narrow a query rather than
+assuming a large response is complete. Every tool declares `_meta["anthropic/maxResultSizeChars"]` = 61,024 (the
+60,000-byte cap plus room for the marker), so Claude Code shows such a page whole instead of a 50,000-character preview.
+
+Project and file tools refuse an argument their schema does not list, and a missing required one, before
+running anything, over MCP and in the agent and desktop assistant alike. The one-line error names the tool's
+arguments, marks the required ones, and suggests the likely intended name for a habitual one (`address` for
+`at`, `length` for `count` or `size`, `query` for `mode` or `contains`), so a client calling before it has
+loaded a schema can correct the call at once; at most 8 unknown names are listed, the rest counted. Debug tools
+refuse unknown arguments through their own parsing, without the argument list. The CLI builds its own inputs.
 
 `entry_diagnostics` can report ARM ELF32 EHABI candidates using its existing `function_starts` origin. These
 are metadata assertions, not verified boundaries; `CantUnwind` and coalesced interiors are not expanded. See
@@ -212,18 +234,6 @@ headerless code: `inspect_raw_code` for ARM/Thumb, AArch64 and x86, or the `raw`
 See [raw-code windows](raw-code.md). `decode_file_range` and `inspect_data` have separate source/coordinate
 contracts; see [decoding](decoding.md) and [data inspection](data-inspection.md).
 
-Binary tools take `path`, optional `arch`, and optional `image_offset`/`image_length` to open an embedded view.
-`image_offset` is not the paging `offset`. Native addresses are hexadecimal strings; most queries also accept
-symbols, exports, import-stub names and `sub_<hex>`. Runtime comparison slots/ranges and branch windows require
-explicit hexadecimal addresses. See [CLI global options](cli-reference.md#global-options-and-addresses).
-
-Project and file tools refuse an argument their schema does not list, and a missing required one, before
-running anything, over MCP and in the agent and desktop assistant alike. The one-line error names the tool's
-arguments, marks the required ones, and suggests the likely intended name for a habitual one (`address` for
-`at`, `length` for `count` or `size`, `query` for `mode` or `contains`), so a client calling before it has
-loaded a schema can correct the call at once; at most 8 unknown names are listed, the rest counted. Debug tools
-refuse unknown arguments through their own parsing, without the argument list. The CLI builds its own inputs.
-
 With `contains`, `list_strings` rows carry `match_address`, where the text matches inside the string. Go string
 data is not NUL-terminated, so in a Go image a run that code references at more than one address carries a
 `note`, and a match its `go_literal` bounds: the last address code references at or before the match (with
@@ -247,13 +257,6 @@ cancellation stops a byte/text scan, the report gives `resume_at` (search again 
 the first 32 `unscanned_ranges` with `unscanned_range_count` and `unscanned_bytes`, and the page a `scan_resume`
 hint. A regex stopped by its text-run limit gives no `resume_at`, since resuming would meet the same run.
 
-List queries use `offset`/`limit`, generally defaulting to 100 entries and capped at 1000. `list_functions`
-filters with `name_contains`; strings/imports/exports filter with `contains`. Disassembly counts are capped at
-1000. Large ordinary binary-tool results can be truncated after 60,000 UTF-8 bytes with an added text marker;
-workflow reports shrink to remain valid JSON and retain limitations. Page or narrow a query rather than
-assuming a large response is complete. Every tool declares `_meta["anthropic/maxResultSizeChars"]` = 61,024 (the
-60,000-byte cap plus room for the marker), so Claude Code shows such a page whole instead of a 50,000-character preview.
-
 `decompile` returns C and address-linked semantic tokens alongside structured recovery evidence. Token byte
 spans index the rendered C; flow-only records can be spanless. Storage offsets are qualified by address space,
 not automatically program virtual addresses. C production and `no_reported_issues` do not establish correct
@@ -263,7 +266,7 @@ diagnostics and worker requirements; `function_summary` remains a structural alt
 `dotnet_metadata` selects `types`, `pinvokes`, `attributes` or `resources`, filtering with `contains`/`parent_token` and
 paging entries. `dotnet_il` selects a method token or qualified name and pages instructions with `offset`/`limit`,
 or starts at an IL label with `at`. Property signatures/accessor tokens and supported attribute values are
-metadata evidence. CIL is never treated as native code; see [managed assemblies](features.md#managed-assemblies).
+metadata evidence. CIL is never treated as native code; see [managed assemblies](file-formats.md#managed-assemblies).
 Resources preserve raw metadata and offset/reference availability, with independent inventory counts and truncation.
 Embedded mapping evidence does not validate payload extents; external targets and resource payloads are not read.
 `parent_token` is an attribute-target filter, not a resource-owner selector.
@@ -276,7 +279,7 @@ whether its bytes are in the file. The page holds whole rows within 60,000 JSON 
 payload bytes are spent (`decode_skipped` counts the rest); other payloads are located only. `pe_load_config` reads
 the load config up to its own declared Size, listing later fields in `absent_fields`, and adds CET flags and findings
 against the DllCharacteristics that triage reports. Both return null for a non-PE image. See
-[PE resources and load config](features.md#pe-resources-and-load-config).
+[PE resources and load config](file-formats.md#pe-resources-and-load-config).
 
 `carve` accepts any file path rather than requiring a loadable binary. Pages use `offset`/`limit` and `more`,
 not a total; scanning stops at the candidate after the page. It extracts/decompresses nothing.
@@ -289,14 +292,14 @@ JSON pages stay within 60,000 bytes and errors within 4,096 bytes. See [archive 
 `limit` page `go.deps` and `rust.packages` independently, each page holding whole items within the 60,000-byte result
 (`next_offset`, `byte_capped`). Build settings are listed up to a byte share (`settings_total`,
 `settings_byte_capped`) and roots up to 16 (`roots_total`). Both records are self-reported by the toolchain, not
-verified against code. See [toolchain build info](features.md#toolchain-build-info).
+verified against code. See [toolchain build info](file-formats.md#toolchain-build-info).
 
 `pyinstaller_archive` and `wasm_module` are file tools too: they take any file path and open no project. The first
 returns the CArchive cookie, package, Python version and a page of TOC entries (null without cookie magic, and
 `{archive: null, rejected_candidates}` when magic matches but none validates as a cookie); the second returns a core
 WebAssembly module summary and, with `list`, a page of imports, exports or functions (null without the `\0asm`
 magic). Both pages hold whole items within 60,000 JSON bytes and report `next_offset` and `byte_capped`. See
-[PyInstaller and WebAssembly](features.md#pyinstaller-archives-and-webassembly-modules).
+[PyInstaller and WebAssembly](file-formats.md#pyinstaller-archives-and-webassembly-modules).
 `observe_pointer` exposes a captured slot without modifying discovery or asserting a call edge. See
 [runtime snapshots](runtime-snapshots.md) for runtime evidence limits and [data packs](data-packs.md) for pack warnings.
 
@@ -425,3 +428,16 @@ The analysis tools read data and explicit annotations; none runs shell commands 
 can write target memory or kill it (see [debug control](debug-control.md#consent)). Debugger queries can expose
 process bytes, registers and module paths to the MCP client. Authorization to inspect that process is not
 authorization to upload its contents to a model provider.
+
+## For contributors
+
+Claude Code shows a model only the first 4,096 characters of the server instructions. The instructions therefore
+open with the essentials (how to enable groups, one line per group naming its key tools, the first calls, the
+debug consent and endpoints) and mark the start of the details; tests in `crates/rampage-mcp/src/lib.rs` keep the
+essentials at least 300 characters short of the cut. Put new detail after that mark or in a tool description.
+
+Head-to-head agent runs drive an agent CLI against `rampage server serve` (or another server) through
+`tools/agent-bench/claude-runner.py`, with only that server's tools allowed; see the
+[parity scorecard](parity-scorecard.md#head-to-head-agent-runs). The parity scorecard records static metrics and
+task definitions separately from live MCP and model results; contract checks and scripted transport tests are not
+measurements of AI task success.

@@ -69,7 +69,12 @@ fn five_project_views_delegate_to_one_projection_and_default_full_is_native_json
         (
             "decompile",
             ToolViewKind::Decompile,
-            serde_json::to_value(project.decompile(0x1000).unwrap()).unwrap(),
+            {
+                // The tool adds where native code ran; this project has no worker, so in-process.
+                let mut raw = serde_json::to_value(project.decompile(0x1000).unwrap()).unwrap();
+                raw["decompiler"] = json!("in-process");
+                raw
+            },
             json!({"at":"entry_name"}),
         ),
     ];

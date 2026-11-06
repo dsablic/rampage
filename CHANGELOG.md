@@ -25,9 +25,12 @@ started; the [roadmap](docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md) and g
 - Stripped Go function names from the pclntab; C++ class names and base classes from RTTI and vtables, including
   Mach-O chained fixups; Objective-C classes, methods and properties.
 - C decompilation through the embedded Ghidra decompiler, with processor specifications bundled, run in a
-  supervised `rampage-worker` process with time, memory and output limits.
-- Guided reports: `triage_report`, `find_main`, `network_surface`, `persistence_surface`, `string_decoding`,
-  `find_crypto` and `diff_builds`.
+  supervised `rampage-worker` process with time, memory and output limits when the worker is installed. Without
+  it, decompilation runs in-process: the MCP server warns at startup, each `decompile` result names its
+  `decompiler` (`supervised` or `in-process`), and `rampage server serve --require-worker` refuses to decompile
+  without the worker.
+- Guided reports: `triage_report`, `find_main`, `network_surface`, `persistence_surface`, `string_decoding` and
+  `diff_builds` in `core`, and `find_crypto` in the `detection` group.
 
 ### Typing and annotations
 
@@ -98,14 +101,17 @@ These ship in 1.0.0 but are outside the stability promise:
 - `rampage-eval`, the evaluation and benchmark harness.
 - The WebAssembly triage-component plugin host.
 
-### Known limits
+### Known gaps
 
-- Hosts: macOS on Apple silicon is tested. Linux x64 builds and tests in CI; Windows is not supported as a host.
-- Decompiled C is not proof of correct recovery; worker supervision is not an OS sandbox.
+[Known limits](docs/known-limits.md) lists them in full. In short:
+
+- Hosts: macOS on Apple silicon is tested; Intel macOS is untested. Linux x64 builds and tests in CI; first
+  release pending. Windows is not supported as a host.
+- Without `rampage-worker` installed, decompilation runs in-process. Decompiled C is not proof of correct
+  recovery, and worker supervision is not an OS sandbox.
 - Bundled signatures recognise the library builds they were made from, not every version of a library.
+- On a 50 MB image, `search` for the functions referencing a string stops on its work budget; a text search
+  followed by `xrefs` works.
 - Not built yet: DEX/JVM, Intel HEX/SREC and multi-region firmware maps, object-file relocation, Swift metadata,
   C++ layout recovery beyond RTTI evidence, and incremental analysis for very large binaries.
 - The annotation log has no compaction; a log at its size limits can only be read.
-- In the suite v2 benchmark, searches on a 49.2 MB Go binary stopped on their work budget before finding a
-  string's referencing function; see the [report's ranked gaps](docs/benchmarks/agent-h2h-v2-2026-11-05.md#ranked-rampage-gaps)
-  and [todo.md](todo.md) for what is fixed and what is open.

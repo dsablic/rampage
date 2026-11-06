@@ -4,5 +4,8 @@
 # Annotation logs that tools save beside binaries.
 *.rampage
 *.rampage-image
+# Their lock files, which stay beside them.
+*.rampage.lock
+*.rampage-image.lock
 # Python bytecode from the tools/ test scripts.
 __pycache__/

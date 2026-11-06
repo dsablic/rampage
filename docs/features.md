@@ -19,18 +19,12 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 | Patching | Assembler subset, checked patches, export to a new file | [Checked patches and assembly](#checked-patches-and-assembly) |
 | Search | Bytes, text, regex, immediates, instructions, references | [Search](#search) |
 | Library identification | Bundled signatures, PAT and FunctionID inputs, fuzzy candidates | [Library identification](#library-identification) |
-| Guided reports | Triage, main, network, persistence, string decoding, build diffing | [Guided reports and batch analysis](#guided-reports-and-batch-analysis) |
-| File formats | ZIP inventory, Go and Rust build info, PyInstaller, WebAssembly, PE resources, .NET | [Archive metadata](#archive-metadata) and the sections after it |
+| Guided reports | Triage, main, network, persistence, string decoding, build diffing, crypto | [Guided reports and batch analysis](#guided-reports-and-batch-analysis) |
+| File formats | ZIP inventory, Go and Rust build info, PyInstaller, WebAssembly, PE resources, .NET | [Archive metadata](#archive-metadata) and [File formats](#file-formats) |
 | Debugging | GDB remote stubs; `debugserver` and Windows stubs are *experimental* | [Debugging](#debugging) |
 | Heuristic flywheel | Agent-proposed signatures gated on held-out truth (*experimental*) | [Heuristic flywheel](#heuristic-flywheel) |
 | Desktop UI | Listings, graphs, decompilation and shared annotations (*experimental*) | [Desktop UI](#desktop-ui) |
 | Measurements | Evaluation harness, benchmarks, crates | [Measurements and development](#measurements-and-development) |
-
-The [parity scorecard](parity-scorecard.md) combines static evaluations, fixed-model MCP task outcomes,
-reported token usage/timing and explicit baseline-completeness checks. Limits: a measured baseline does not
-establish IDA/Ghidra parity, and task failures remain visible rather than counting as missing measurements.
-Its source-built workloads include a pinned Lua interpreter and owned C++/exceptions, Go and Rust programs;
-format builds without verified function truth remain unscored rather than counting as coverage.
 
 ## Formats and instruction decoding
 
@@ -59,10 +53,8 @@ format builds without verified function truth remain unscored rather than counti
   snapshots, all-stop execution control and project correlation over GDB remote stubs, Apple's `debugserver` and
   Windows RSP stubs (the last two not yet live-verified); writes and kill only behind operator flags.
 
-The previously reported decoder comparisons sampled words across every encoding: A32 matched `llvm-mc` on
-97.95%, 16-bit Thumb on 100%, and 32-bit Thumb on 97.49%. AArch64 matched every instruction sampled from
-Chrome's arm64 code and 99.85% of sampled words across encodings. These are sampled output comparisons, not
-proof of exhaustive instruction coverage or semantic correctness.
+Decoder accuracy against `llvm-mc` and real arm64 code is recorded in the
+[benchmarks](benchmarks.md#earlier-measurements).
 
 ## Function discovery, names and references
 
@@ -103,11 +95,14 @@ Processor specifications are embedded: relocated executables need no external Gh
 Bundled Darwin ARM64 rules model declared narrow integer register inputs with signed/unsigned extension to 32 bits,
 without assuming values for the upper 32 bits. General variadic-call recovery remains separate.
 
-Sessions select a supervised sibling `rampage-worker` when installed. `--isolated` explicitly requires worker
-execution; batch decompilations and workflow previews also require supervision.
-`RAMPAGE_WORKER` selects an explicit worker executable.
-Direct library projects can opt in through `set_decompiler_worker`. Supervision is not an OS sandbox, and
-in-process native decompilation must be limited to trusted inputs. Producing C or reporting no engine warnings
+Decompilation runs in a supervised `rampage-worker` process when one is installed beside `rampage` (or named by
+`RAMPAGE_WORKER`). **Without a worker, it runs in-process**, inside the server or CLI, without the worker's time,
+memory and output limits. The MCP server warns on stderr at startup when it finds no worker, and each `decompile`
+result names where it ran in `decompiler` (`supervised` or `in-process`). `rampage server serve --require-worker`
+and the CLI's `decompile --isolated` refuse to decompile without the worker; batch decompilations and workflow
+previews always require it. Direct library projects can opt in through `set_decompiler_worker`. Supervision is
+not an OS sandbox: limit in-process decompilation to trusted inputs, and analyse hostile files in a VM or
+container. Producing C or reporting no engine warnings
 does not prove correct recovery. See the [decompiler reference](../crates/rampage-decompiler/README.md) for
 compiler models, resource bounds, diagnostics and supported supervisor platforms, and the
 [integration corpus](decompiler-corpus.md) for bounded recovery checks.
@@ -207,8 +202,7 @@ effective bytes. Export publishes only a new file; source files and debugger/cap
 Unsupported profiles and incompatible image-sealed metadata reject rather than weakening evidence gates.
 
 The pure assembler supports a documented x86/x64/AArch64 subset and returns verified bytes without applying
-them. See [patching/export contracts](patching.md), [assembly grammar and limits](assembly.md), and the
-[owned real-MCP round trip](benchmarks/phase3-2-patches-2026-10-19.json).
+them. See [patching/export contracts](patching.md) and [assembly grammar and limits](assembly.md).
 
 ## Search
 
@@ -249,7 +243,7 @@ Bundled databases use deterministic gzip and lazy per-architecture decoding; pac
 The [offline corpus pipeline](signature-corpus.md) builds public-library profiles with ownership-filtered truth,
 frozen tool/input receipts and collision-preserving export. Reviewed precision-safe exports are promoted explicitly;
 raw recall/precision failures, unsupported profiles and unrun coverage remain visible. The default corpus does not
-identify arbitrary library versions, and its recall is below the 80% matched-version target.
+identify arbitrary library versions; its recall is in the [signature corpus](signature-corpus.md) reference.
 
 [User-supplied PAT inputs](signature-imports.md) match validated byte patterns, CRC windows and tails without
 converting them to native hashes. Genuine schema-6 FID databases use the separate explicitly configured trusted
@@ -261,9 +255,10 @@ rename functions. Exact signatures and existing analyst names retain priority.
 
 ## Guided reports and batch analysis
 
-`triage_report`, `find_main`, `network_surface`, `find_crypto`, `persistence_surface`, `string_decoding` and
-`diff_builds` compose primitives into bounded reports. Each finding retains evidence, source tool and confidence;
-reports state limitations and end with concrete next tool calls. These are MCP tools or CLI workflows.
+`triage_report`, `find_main`, `network_surface`, `persistence_surface`, `string_decoding` and `diff_builds` (in
+`core`) and `find_crypto` (in the `detection` group) compose primitives into bounded reports. Each finding
+retains evidence, source tool and confidence; reports state limitations and end with concrete next tool calls.
+These are MCP tools or CLI workflows.
 
 `binary analyze` (legacy `analyze`) composes workflows and explicitly selected supervised decompilations across
 supported architecture slices into one bounded report, retaining task failures and recovery diagnostics. It
@@ -277,140 +272,23 @@ sizes, CRCs and local-header offsets remain unverified payload declarations. Met
 revalidated but not atomic, and tail search may overlap member data. No member offset is followed, and no extraction,
 decompression, automatic member opening or execution occurs. See [archive inventory](archive-inventory.md).
 
-## Toolchain build info
+## File formats
 
-`binary build-info` and the MCP tool `build_info` read the build metadata toolchains embed, which survives
-stripping:
+These read embedded metadata and containers without executing, extracting or decompiling anything. The
+[file formats reference](file-formats.md) has their bounds and output.
 
-- Go build info (what `go version -m` prints) from `.go.buildinfo` (ELF), `__go_buildinfo` (Mach-O), or a
-  16-byte aligned scan of the writable data sections (PE, or images without the section), as Go's
-  `debug/buildinfo` does: a magic in read-only data is a constant, not a record, and a candidate that does not
-  decode (its version must start with `go` or `devel`) does not hide a later one. Both the go1.18+ inline layout
-  and the older pointer layout (resolved through file-backed segments) are read. Output: Go version, main package
-  path, main module, dependency modules with `=>` replacements, build settings such as `-compiler`, `CGO_ENABLED`,
-  `GOARCH`, `vcs.revision` and `vcs.time`, and whether the version agrees with the pclntab layout the loader found.
-- Rust dependency lists that [cargo-auditable](https://github.com/rust-secure-code/cargo-auditable) embeds in a
-  `.dep-v0` section (`__DATA,.dep-v0` on Mach-O): zlib-compressed JSON, decompressed under its documented 8 MiB
-  cap. Output: root package(s) and every package's name, version, source, kind and dependency indices, and the
-  zlib stream's length (`compressed_bytes`, without the section's padding).
-
-Each record is absent, present, or found but unreadable (with a reason); malformed lines and dangling indices are kept
-as warnings. Dependency modules and packages are paged, each page also fitted to the 60,000-byte result; build
-settings and up to 16 roots are listed within byte shares, with their totals. The data is self-reported by the build
-and is not verified against code; there is no vulnerability lookup.
-
-## PyInstaller archives and WebAssembly modules
-
-`binary pyinstaller-archive` and the `pyinstaller_archive` file tool find a PyInstaller CArchive by its cookie
-(`MEI\x0c\x0b\x0a\x0b\x0e`), searching back through the file's last 8 MiB so a signature appended after the archive
-is stepped over. Both the 24-byte pre-2.1 cookie and the 88-byte cookie with the Python library name are read. The
-result has the cookie offset and layout, the package and TOC extents, the Python version (312 is 3.12) and library,
-per-typecode counts and paged TOC entries: record and data file offsets, compressed and uncompressed sizes,
-compression flag, typecode and its meaning (script, module, package, PYZ, zipfile, binary, data, runtime option,
-dependency, nested package, splash, symlink) and name. An uncompressed PYZ entry's header gives the pyc magic and
-its Python version; the PYZ TOC is not decompressed. Magic matches that do not validate (a bootloader holds the
-magic as a constant) are skipped, and when none validates the result is `archive: null` with each rejected
-candidate's reason rather than an error; the walk stops at a malformed TOC record with a warning. Nothing is extracted,
-decompressed, decrypted or decompiled: hand the data offsets to `decode_file_range` or `carve`.
-
-`binary wasm-module` and the `wasm_module` file tool summarise a core WebAssembly module with `wasmparser`: header
-version and layer, up to 64 sections with offsets and sizes, index-space counts (types, imports, functions, tables,
-memories, globals, tags, exports, data and element segments), the start function, custom-section names, the `name`
-section's module name and the `producers` section. `list` pages imports (module, name, kind, type), exports (name,
-kind, index) or functions (imports first, with type signature, body offset and size, and `name`-section name).
-Project loading accepts native executables only and rejects `.wasm`, so these work on the raw file without a
-Project. A component-model binary (layer 1) is reported as unsupported without reading its sections. Parsing is
-bounded (1,048,576 decoded items, 65,536 retained per list, names cut at 256 bytes); malformed input returns what
-parsed before the error with `complete` false and the error offset in `limitations`. Limitations list the first
-of each kind (at most 32) and count repeats, and sections count against the decode budget, so a file of millions of
-unknown sections stays cheap. Modules are not validated,
-compiled, executed or disassembled.
-
-## PE resources and load config
-
-`binary pe-resources` and the `pe_resources` MCP tool list resource directory leaves: type (`RT_*` name, `#id` or
-string name), name or id, language, data RVA, size, code page, offset in the image and whether the bytes are in the
-file. The type/name/language walk stops at 3 levels, 4096 tables, 65,536 entries and 16,384 leaves, and a table
-reached twice (a loop or alias) is skipped with a warning. A declared directory size that overruns its section's file
-data (packers write these) is ignored, as Windows ignores it, and the tree is read from its RVA. Leaves are counted
-per type, keeping numeric and string-named types apart, and filtered by `RT_*` name, bare name, `16` or `#16`; pages
-hold whole rows within 60,000 JSON bytes and always decode their first payload. Version resources are decoded into
-VS_FIXEDFILEINFO (file/product versions, flags, OS, file type), StringFileInfo key/value pairs per language and code
-page, and VarFileInfo translations, within 64 KiB, 1024 nodes and 256 strings. Manifests return up to 16 KiB of UTF-8
-text plus `requestedExecutionLevel` and `dependentAssembly` names from a bounded textual scan of the first 64 KiB; it
-is not an XML parser. Icons, dialogs, string tables and other payloads are located but not interpreted or extracted.
-
-`binary pe-load-config` and `pe_load_config` read IMAGE_LOAD_CONFIG_DIRECTORY (32- and 64-bit) up to the Size the
-structure declares; fields past it are reported absent rather than read. They report the security cookie VA, SafeSEH
-handler count and up to 256 handler RVAs (native x86 only: not ARM32 or IL-only .NET), CFG GuardFlags names,
-check/dispatch pointers and function table placement, address-taken IAT, long-jump and EH continuation table counts,
-and dynamic value relocation table presence. CET flags come from the IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS debug
-entry. Findings note where the load config disagrees with the DllCharacteristics mitigations triage reports, such as
-CFG instrumentation without `GUARD_CF` or an x86 image with neither SafeSEH nor `NO_SEH`. Table contents other than
-SafeSEH handlers, CHPE, hot-patch, enclave and volatile metadata are not decoded.
-
-## Managed assemblies
-
-ECMA-335 metadata includes assembly identity, references, entry point and one paged list:
-
-- `types`: fields, method/property signatures, event types and metadata accessor tokens, plus IL body sizes.
-- `pinvokes`: the DLL export bound by each P/Invoke method.
-- `attributes`: targets and fixed/named primitive, string, type, single-dimensional array and verified
-  local-enum arguments, including boxed values and supported vectors inside `object[]`. Unsupported values report
-  errors. An attribute target can be filtered by parent token.
-- `resources`: ManifestResource tokens/names/flags, raw offsets and metadata-only implementation links.
-
-One method's CIL can be disassembled ILDasm-style with tokens resolved to names/signatures, `ldstr` literals,
-branch/switch labels, locals and exception clauses. Paging counts instructions; an IL label selects the
-instruction containing that offset. Metadata and body decoding are bounded against hostile inputs. CIL is
-reported as managed code, never treated as native instructions. See
-[managed CLI commands](cli-reference.md#managed-code) or MCP tools `dotnet_metadata` and `dotnet_il`.
-
-Events retain tokens, names, flags, bounded type rendering and same-owner add/remove/fire/other method bindings.
-EventPtr ordering is preserved; malformed types remain unreadable and invalid ownership is diagnosed. Accessor
-bindings are metadata, not proof of accessor behavior. Events do not imply resource or general attribute decoding.
-
-Verified local enum literals can carry optional `enum_constant` field metadata with an underlying integral type
-and exact decimal `value` string, including 64-bit extrema. Different named fields may retain equal values as
-aliases; duplicate Constant rows for one field invalidate that field's evidence. This requires a verified local
-enum owner, matching value-type field signature, appropriate literal flags, and exact Constant type/width/padding.
-It works without custom attributes and does not replace numeric attribute values with symbolic names or synthesize
-`Flags` combinations.
-
-Enum constants have separate bounds of 100,000 Constant rows, 100,000 owner/field work rows, 10,000 retained
-constants and 4 MiB of work/text, with bounded diagnostics. Incomplete or over-limit Constant tables yield no
-constant evidence because an unread suffix could contain duplicate parents. External assemblies are not loaded.
-
-Boxed custom-attribute values retain serialized types in their existing rendered strings, such as `box(int32, 42)`
-and `box(int32[], null)`; named arguments keep their declared `object`/`object[]` type. Boxed strings, types and
-verified local enums share the existing depth/node/text/image-work budgets, including failed type/name lookups.
-Direct jagged constructor types, unknown/external or assembly-qualified enum resolution, bare `0xFF` object tags
-and repeated object tags are unsupported. A failure in named arguments retains only fully charged valid fixed values.
-
-Serialized local enum names use exact canonical reflection spelling: literal `+`, comma, backslash, brackets,
-`*` and `&` are escaped with backslashes, while structural nesting uses an unescaped `+`. For example,
-`Demo.Mo\+de` names a literal `Mo+de`, not a nested type. Dots, slashes, whitespace, case and Unicode are preserved;
-there is no case folding, Unicode normalization, alternate spelling or general type-expression parser.
-
-Only unique local definitions with verified integral widths resolve. Assembly-qualified names remain unsupported,
-even when the assembly name appears to match the local image. Invalid/conflicting nesting, cycles, unreadable names
-or incomplete identity evidence disable the whole serialized-name index rather than proving partial uniqueness.
-Direct numeric enum decoding and constant evidence remain independent when their own evidence and budgets suffice.
-Initial nesting scans cap readable rows at 100,000 and reserve eight shared-work units per attempt before reads or
-insertion; escape expansion and failed name lookup also consume the existing decoding budgets. Within-limit ordinary
-ILAsm nested-type display is unchanged.
-
-Resource inventory distinguishes embedded-directory locations, external File/AssemblyRef links, unsupported
-ExportedType links and malformed/dangling references. An embedded `readable_location` reports only a checked,
-mapped location within a directory that fits one backed section span, not a validated length prefix or payload extent.
-No payload, external resource, assembly or named file is opened or interpreted.
-
-Resource inventory attempts at most 100,000 rows with a separate 4 MiB name-work budget; failed lookups and repeated
-linked names consume that budget. Names have a 1,024-byte cap, UTF-8-safe truncation markers and explicit flags.
-`resource_counts` separates declared/readable/retained/returned rows and reports inventory/name truncation independently
-of filtering and pagination. `declared_known` distinguishes an observed zero from an unread declaration count;
-`declared: 0` is only a placeholder when that flag is false. A recovered declaration can survive a later header
-failure, but such a header still yields no decoded rows. `contains` matches resource or linked File/AssemblyRef names.
+- **Toolchain build info** (`build_info`, `binary build-info`): Go build info as `go version -m` prints it, and the
+  Rust dependency lists that cargo-auditable embeds. Both are self-reported by the build, not verified against
+  code. See [toolchain build info](file-formats.md#toolchain-build-info).
+- **PyInstaller archives and WebAssembly modules** (`pyinstaller_archive`, `wasm_module`): the CArchive cookie,
+  Python version and table of contents, and a core WebAssembly module's sections, imports, exports and functions.
+  See [PyInstaller and WebAssembly](file-formats.md#pyinstaller-archives-and-webassembly-modules).
+- **PE resources and load config** (`pe_resources`, `pe_load_config`): resource leaves with decoded version
+  resources and manifests, and the load config's security cookie, SafeSEH, CFG and CET settings checked against
+  the header's mitigations. See [PE resources and load config](file-formats.md#pe-resources-and-load-config).
+- **Managed assemblies** (`dotnet_metadata`, `dotnet_il`): ECMA-335 metadata (types, P/Invokes, custom
+  attributes, resources) and ILDasm-style CIL for one method. CIL is reported as managed code, never as native
+  instructions. See [managed assemblies](file-formats.md#managed-assemblies).
 
 ## Debugging
 
@@ -440,17 +318,10 @@ project workspaces and an optional assistant that sends questions and tool resul
 
 ## Measurements and development
 
-The `rampage-eval` harness scores library identification on stripped reference copies and different programs
-linking the same library, and function discovery against symbol starts. It reports precision, recall and
-architecture-specific disagreements, with no-wrong-name gates and committed recall floors. Previously reported
-cross-program library-ID recall was 0.92 (x86-64) and 0.82 (AArch64), at precision 1.00. These results describe
-the evaluated samples, not expected accuracy on arbitrary inputs; see the [benchmark reference](benchmarks.md)
-for methods and comparison limits. Fixture passes do not establish IDA/Ghidra parity or semantic equivalence.
-
-Previously reported discovery on a stripped Chrome framework on an M1 Max found 176,480 functions and
-14.5 million instructions in the x86_64 slice in about 1.2 s, and 186,252 functions and 13.8 million instructions
-in the arm64 slice in about 1.4 s. Repeated MCP queries reuse session analysis; previously reported cached queries
-took milliseconds. Timings depend on the binary, machine, build and query, and are not latency guarantees.
+The `rampage-eval` harness scores library identification on stripped reference copies and on different programs
+linking the same library, and function discovery against symbol starts, with no-wrong-name gates and committed
+recall floors. The [benchmarks](benchmarks.md) hold the head-to-head agent runs, the static comparisons with
+Ghidra and earlier measurements of decoders, recall and discovery speed, each with its method and limits.
 
 | Crate | Purpose |
 | --- | --- |
