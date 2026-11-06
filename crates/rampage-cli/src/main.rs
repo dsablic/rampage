@@ -71,6 +71,34 @@ enum PacksCommand {
     List,
     /// Validate one pack directory and report each content's status; fails when anything does not load
     Check(DirectoryArgs),
+    /// Write a pack directory (for example the flywheel's promoted pack) to one portable .rpack archive: its files
+    /// in the existing pack formats and a manifest with the rampage version range, families, a content hash and
+    /// each promoted entry's provenance, revert id and gate results
+    Export {
+        /// The pack directory
+        directory: PathBuf,
+        /// The archive to write
+        #[arg(short, long, value_name = "FILE")]
+        output: PathBuf,
+    },
+    /// Check an .rpack archive (format, rampage version range, file hashes, content hash, entries) and install its
+    /// pack as a directory, loaded there first; nothing is added unless every check passes. Load it with --pack
+    Import {
+        /// The .rpack archive
+        archive: PathBuf,
+        /// The pack directory to create; it must not exist or be empty (default: ./<pack name>)
+        #[arg(long, value_name = "DIR")]
+        into: Option<PathBuf>,
+    },
+    /// Check an .rpack archive and show what importing it would change: files, promoted entries and signature rows
+    /// added or removed against an existing pack directory (or an empty one)
+    Diff {
+        /// The .rpack archive
+        archive: PathBuf,
+        /// The pack directory it would replace
+        #[arg(long, value_name = "DIR")]
+        against: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -149,7 +177,7 @@ enum Command {
     /// Detect behaviors with a directory of Mandiant capa rules and those of data packs (file-scope feature subset)
     #[command(hide = true)]
     Capa(CapaArgs),
-    /// List the data packs in effect, or check one pack directory
+    /// List the data packs in effect, check one pack directory, or export, import and diff .rpack archives
     #[command(hide = true)]
     Packs {
         #[command(subcommand)]
@@ -425,6 +453,15 @@ fn main() -> ExitCode {
         Command::Packs { action: PacksCommand::Check(DirectoryArgs { directory }) } => {
             commands::packs_check(&mut out, &directory, &options)
         }
+        Command::Packs { action: PacksCommand::Export { directory, output } } => {
+            commands::packs_export(&mut out, &directory, &output, &options)
+        }
+        Command::Packs { action: PacksCommand::Import { archive, into } } => {
+            commands::packs_import(&mut out, &archive, into.as_deref(), &options)
+        }
+        Command::Packs { action: PacksCommand::Diff { archive, against } } => {
+            commands::packs_diff(&mut out, &archive, against.as_deref(), &options)
+        }
         Command::Audit(AuditArgs { file, include_discovery, entries, at }) => {
             commands::audit(&mut out, &file, include_discovery, entries, at.as_deref(), &options)
         }
@@ -689,12 +726,18 @@ fn flywheel_context(flywheel: args::FlywheelArgs) -> Result<Flywheel, String> {
                 }
                 None => GateConfig::default(),
             };
+            let gate =
+                GateConfig { require_novel_gain: flywheel.require_novel_gain.or(gate.require_novel_gain), ..gate };
             let options = ImproveOptions {
                 corpus: corpus.clone(),
                 flywheel_dir: flywheel.flywheel_dir.clone(),
                 gate,
                 workers: flywheel.flywheel_workers.max(1),
                 run: flywheel.flywheel_run.clone(),
+                baseline: flywheel
+                    .flywheel_baseline
+                    .parse()
+                    .map_err(|error| format!("--flywheel-baseline: {error}"))?,
             };
             Some(Arc::new(Improve::open(options).map_err(|error| format!("--corpus: {error}"))?))
         }

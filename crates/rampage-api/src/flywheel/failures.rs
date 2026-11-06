@@ -15,6 +15,12 @@ use crate::flywheel::candidate::format_pattern;
 pub const TRUTH_SOURCE: &str =
     "symbol table of the binary's symbolized twin (same linked image), program functions excluded";
 
+/// The id of a training body: its architecture and masked pattern, hashed. The same body always has the same
+/// id, whether it is a failure group, a variant or a deterministic-arm row.
+pub fn case_id(arch: &str, pattern: &str) -> String {
+    format!("f{}", &sha256_text(&format!("{arch}\0{pattern}"))[..15])
+}
+
 /// One group of training failures sharing a masked body.
 #[derive(Debug, Clone, Serialize)]
 pub struct FailureGroup {
@@ -143,7 +149,7 @@ impl FailureSet {
                 let pattern = format_pattern(&group.pattern);
                 let count = |outcome| group.counts.get(&outcome).copied().unwrap_or(0);
                 FailureGroup {
-                    case: format!("f{}", &sha256_text(&format!("{}\0{pattern}", group.arch))[..15]),
+                    case: case_id(&group.arch, &pattern),
                     arch: group.arch,
                     length: group.pattern.len(),
                     proposable: (min_bytes..=crate::flywheel::MAX_PATTERN_BYTES).contains(&group.pattern.len()),

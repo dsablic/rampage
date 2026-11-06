@@ -10,6 +10,7 @@
 //! Candidates are data only: pattern rows in the existing signature pack format, never code. The held-out split is
 //! measured but never shown: no tool returns a held-out binary, function, name or truth, only metrics.
 
+mod arm;
 mod candidate;
 mod corpus;
 mod engine;
@@ -23,14 +24,35 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-pub use candidate::{Candidate, MAX_PATTERN_BYTES, MAX_ROWS, Row, RowSource, format_pattern, parse_pattern};
+pub use arm::{ARM_FILE, Arm, ArmStats};
+pub use candidate::{
+    Candidate, MAX_MODULE_BYTES, MAX_PATTERN_BYTES, MAX_ROWS, Row, RowSource, databases, format_pattern, layer,
+    parse_pattern, rows_hash, write_pack,
+};
 pub use corpus::{Corpus, CorpusBinary, CorpusManifest, Split, SplitConfig};
-pub use engine::{Counts, Engine, Gains, Layer, Loaded, Outcome, Overlap, SliceMetrics, TruthFunction};
-pub use evaluation::{ChangedCase, GateCheck, GateConfig, GateResult, SliceDelta, SplitEvaluation, evaluate_split};
+pub use engine::{
+    BodyKey, Bundled, Counts, Engine, Gains, Layer, Loaded, NovelReach, Outcome, Overlap, Proposals, SliceMetrics,
+    TruthFunction,
+};
+pub use evaluation::{
+    ChangedCase, GateCheck, GateConfig, GateResult, NOVEL_SLICE, RECOGNISED_SLICE, SliceDelta, SplitEvaluation,
+    compare, evaluate_split,
+};
 pub use failures::{FailureGroup, FailureSet};
-pub use improve::{FAMILY, Improve, ImproveOptions, ImproveTool, improve_tools};
+pub use improve::{Baseline, FAMILY, Improve, ImproveOptions, ImproveTool, improve_tools};
 pub use observations::{OBSERVATIONS_VARIABLE, ObservationStore, ObservationTool, observation_tool};
-pub use promote::{PromotedEntry, PromotedSet, pack_layer, promoted_layer, revert};
+pub use promote::{ENTRIES_FILE, PromotedEntry, PromotedSet, pack_layer, promoted_layer, revert};
+
+/// The deterministic arm for a corpus: loaded when generated before for this corpus, build and minimum pattern
+/// length, else generated from the training split and saved.
+pub fn arm(engine: &Engine, min_pattern_bytes: usize) -> Result<Arm, FlywheelError> {
+    arm::load_or_generate(engine, min_pattern_bytes)
+}
+
+/// The directory the arm for `engine`'s corpus and `min_pattern_bytes` is kept in (its record and data pack).
+pub fn arm_directory(engine: &Engine, min_pattern_bytes: usize) -> PathBuf {
+    arm::directory(engine, min_pattern_bytes)
+}
 
 /// The flywheel's working directory (by default `target/flywheel`): scratch candidates, promoted packs, caches,
 /// evaluation records, observations and run reports.

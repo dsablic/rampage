@@ -60,7 +60,7 @@ pub(crate) enum RootCommand {
     /// Inspect captured runtime state
     #[command(subcommand)]
     Runtime(RuntimeCommand),
-    /// List or validate data packs
+    /// List, validate, export, import and diff data packs
     #[command(subcommand)]
     Pack(PacksCommand),
     /// Run registered investigation workflows

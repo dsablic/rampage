@@ -1,6 +1,17 @@
-//! Candidate signature rows: a whole-function byte pattern with wildcards, a name and an optional library tag,
-//! stored as a FLIRT PAT record in the existing signature pack format. A candidate is data only; it is evaluated
-//! as a scratch data pack and never applied elsewhere.
+//! Candidate signature rows: a function byte pattern with wildcards, a name and an optional library tag, stored as a
+//! FLIRT PAT record in the existing signature pack format. A candidate is data only; it is evaluated as a scratch
+//! data pack and never applied elsewhere.
+//!
+//! What a row can express is what rampage's PAT matcher supports (`rampage_signatures::PatternDb`):
+//! - whole-byte wildcards (`..`) anywhere: a changed constant, displacement, register choice (a ModRM, REX or
+//!   instruction-word byte) or call target; there are no nibble or bit wildcards;
+//! - an exact module length: a body matches only at exactly that many bytes;
+//! - a pattern shorter than the module (`length` above the pattern's own length): the bytes past the pattern are
+//!   unconstrained, as a PAT tail that ends early leaves them.
+//!
+//! The PAT format's CRC16 field is not used (explicit bytes are stronger), and its references (`^`) and dumpsig
+//! tuples are unsupported by the matcher. Ghidra FID records are hashes needing a semantic adapter, not byte
+//! patterns, so they cannot be proposed as rows.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -16,6 +27,8 @@ use super::{FlywheelError, sha256_text, write_atomic};
 pub const MAX_ROWS: usize = 256;
 /// The longest pattern: PAT's 32-byte prefix and a tail of at most 2048 bytes (one 4096-character field).
 pub const MAX_PATTERN_BYTES: usize = 32 + 2048;
+/// The longest module a row may name.
+pub const MAX_MODULE_BYTES: usize = 0xffff;
 const MAX_NAME_CHARS: usize = 255;
 const MAX_LIBRARY_CHARS: usize = 64;
 
@@ -29,9 +42,12 @@ pub struct Row {
     /// The library the function belongs to, recorded as provenance; matching ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library: Option<String>,
-    /// The whole body: two lowercase hex digits per fixed byte, `..` per wildcard. A body matches only at
-    /// exactly this length.
+    /// The body from its first byte: two lowercase hex digits per fixed byte, `..` per wildcard.
     pub pattern: String,
+    /// The module length a body must have, when longer than the pattern: bytes past the pattern are unconstrained.
+    /// Absent, a body matches only at exactly the pattern's length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<usize>,
     /// The training failure the row was made from, when it was made from one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<RowSource>,
@@ -51,17 +67,38 @@ impl Row {
     /// offset zero, and the rest of the body as the contiguous tail.
     pub fn pat_line(&self) -> Result<String, FlywheelError> {
         let bytes = parse_pattern(&self.pattern).map_err(FlywheelError::Invalid)?;
+        let length = self.module_length(&bytes)?;
         let pat = |bytes: &[Option<u8>]| -> String {
             bytes.iter().map(|byte| byte.map_or("..".to_owned(), |byte| format!("{byte:02X}"))).collect()
         };
         let mut prefix: Vec<Option<u8>> = bytes.iter().copied().take(32).collect();
         prefix.resize(32, None);
-        let mut line = format!("{} 00 0000 {:04X} :0000 {}", pat(&prefix), bytes.len(), self.name);
+        let mut line = format!("{} 00 0000 {length:04X} :0000 {}", pat(&prefix), self.name);
         if bytes.len() > 32 {
             line.push(' ');
             line.push_str(&pat(&bytes[32..]));
         }
         Ok(line)
+    }
+
+    /// The module length a body must have: `length`, or the pattern's own length.
+    fn module_length(&self, bytes: &[Option<u8>]) -> Result<usize, FlywheelError> {
+        match self.length {
+            None => Ok(bytes.len()),
+            Some(length) if length >= bytes.len() && length <= MAX_MODULE_BYTES => Ok(length),
+            Some(length) => Err(FlywheelError::Invalid(format!(
+                "length {length} must be at least the pattern's {} bytes and at most {MAX_MODULE_BYTES}",
+                bytes.len()
+            ))),
+        }
+    }
+
+    /// The pattern as matching sees it: the pattern's bytes, then a wildcard for every byte up to `length`.
+    pub fn matcher(&self) -> Result<Vec<Option<u8>>, FlywheelError> {
+        let mut bytes = parse_pattern(&self.pattern).map_err(FlywheelError::Invalid)?;
+        let length = self.module_length(&bytes)?;
+        bytes.resize(length, None);
+        Ok(bytes)
     }
 
     /// Checks the row's fields, that its pattern is at least `min_bytes` long, and that it carries enough fixed
@@ -95,11 +132,17 @@ impl Row {
         if bytes.len() > MAX_PATTERN_BYTES {
             return invalid(format!("pattern is {} bytes; at most {MAX_PATTERN_BYTES}", bytes.len()));
         }
+        // The minimum applies to the explicit pattern, not only to the module: a short pattern on a long module
+        // constrains no more than a short body does.
         if bytes.len() < min_bytes {
             return invalid(format!(
                 "pattern is {} bytes; the gate needs at least {min_bytes}: shorter bodies collide with unrelated code",
                 bytes.len()
             ));
+        }
+        self.module_length(&bytes)?;
+        if self.length.is_some_and(|length| length > bytes.len()) && bytes.last().is_some_and(Option::is_none) {
+            return invalid("a pattern shorter than `length` must end with a fixed byte".to_owned());
         }
         let arch: Arch = self.arch.parse().map_err(FlywheelError::Invalid)?;
         let line = self.pat_line()?;
@@ -116,7 +159,8 @@ impl Row {
 
     /// The fields that make a row the heuristic it is, for hashing: provenance excluded.
     fn identity(&self) -> (String, String, String, String) {
-        let pattern = parse_pattern(&self.pattern).map(|bytes| format_pattern(&bytes)).unwrap_or_default();
+        // What matching sees: `length` equal to the pattern's own is the same row as no `length`.
+        let pattern = self.matcher().map(|bytes| format_pattern(&bytes)).unwrap_or_default();
         (self.arch.clone(), self.name.clone(), self.library.clone().unwrap_or_default(), pattern)
     }
 }
@@ -172,7 +216,7 @@ pub fn layer(name: &str, rows: &[Row]) -> Result<Option<Layer>, FlywheelError> {
     let mut patterns = Vec::new();
     for row in rows {
         let arch: Arch = row.arch.parse().map_err(FlywheelError::Invalid)?;
-        patterns.push((arch, parse_pattern(&row.pattern).map_err(FlywheelError::Invalid)?));
+        patterns.push((arch, row.matcher()?));
     }
     Ok(Some(Layer {
         name: name.to_owned(),
@@ -266,6 +310,7 @@ mod tests {
             name: "inflate".to_owned(),
             library: Some("zlib".to_owned()),
             pattern: pattern.to_owned(),
+            length: None,
             source: None,
         }
     }
@@ -343,5 +388,98 @@ mod tests {
         };
         assert_eq!(rows_hash(&[a.clone(), b.clone()]), rows_hash(&[b.clone(), spelled]));
         assert_ne!(rows_hash(std::slice::from_ref(&a)), rows_hash(&[a, b]));
+    }
+
+    fn target() -> rampage_arch::Target {
+        rampage_arch::Target {
+            arch: Arch::X86_64,
+            big_endian: false,
+            data_big_endian: false,
+            thumb: std::sync::Arc::new([]),
+            global_pointer: None,
+            got: None,
+        }
+    }
+
+    /// push rbp; mov rbp, rsp; mov eax, imm32; add eax, imm32; imul eax, eax, imm32; ... a 64-byte body whose
+    /// constants a new version could change.
+    fn versioned(constant: u8, tail: u8) -> Vec<u8> {
+        let mut body =
+            vec![0x55, 0x48, 0x89, 0xe5, 0xb8, constant, 0, 0, 0, 0x05, 0x34, 0x12, 0, 0, 0x69, 0xc0, 7, 0, 0, 0];
+        while body.len() < 62 {
+            body.extend([0x01, 0xc8]);
+        }
+        body.extend([0x5d, 0xc3]);
+        let at = body.len() - 4;
+        body[at] = tail;
+        body
+    }
+
+    #[test]
+    fn wildcards_generalise_a_row_across_a_changed_constant_and_the_schema_keeps_it_long_and_fixed() {
+        let old = versioned(1, 0x01);
+        let new = versioned(7, 0x01);
+        let exact = Row { pattern: format_pattern(&old.iter().map(|&b| Some(b)).collect::<Vec<_>>()), ..row("") };
+        let mut wildcarded: Vec<Option<u8>> = old.iter().map(|&b| Some(b)).collect();
+        wildcarded[5] = None;
+        let general = Row { pattern: format_pattern(&wildcarded), ..row("") };
+        general.validate(&arches(), 32).unwrap();
+        let image = rampage_signatures::MaskContext::default();
+        let exact_db = &databases(std::slice::from_ref(&exact)).unwrap()["x86_64"];
+        let general_db = &databases(std::slice::from_ref(&general)).unwrap()["x86_64"];
+        assert_eq!(exact_db.identify_in(&target(), &image, &old, 0x1000), Some("inflate"));
+        assert_eq!(exact_db.identify_in(&target(), &image, &new, 0x1000), None, "an exact row misses the new version");
+        assert_eq!(general_db.identify_in(&target(), &image, &new, 0x1000), Some("inflate"), "the wildcard carries");
+        assert!(pattern_matches_row(&general, &new));
+    }
+
+    fn pattern_matches_row(row: &Row, body: &[u8]) -> bool {
+        super::super::engine::pattern_matches(&row.matcher().unwrap(), body)
+    }
+
+    #[test]
+    fn a_pattern_shorter_than_its_module_leaves_the_rest_unconstrained_but_keeps_the_length() {
+        let old = versioned(1, 0x01);
+        let changed_tail = versioned(1, 0x29);
+        let prefix: Vec<Option<u8>> = old[..40].iter().map(|&b| Some(b)).collect();
+        let prefixed = Row { pattern: format_pattern(&prefix), length: Some(old.len()), ..row("") };
+        prefixed.validate(&arches(), 32).unwrap();
+        let line = prefixed.pat_line().unwrap();
+        assert!(line.contains(&format!(" 00 0000 {:04X} :0000 inflate ", old.len())), "{line}");
+        let tail = line.rsplit(' ').next().unwrap();
+        assert_eq!(tail.len(), 2 * 8, "the PAT tail ends where the pattern does: {line}");
+        assert_eq!(prefixed.matcher().unwrap().len(), old.len());
+        let database = &databases(std::slice::from_ref(&prefixed)).unwrap()["x86_64"];
+        let image = rampage_signatures::MaskContext::default();
+        assert_eq!(database.identify_in(&target(), &image, &changed_tail, 0x1000), Some("inflate"));
+        let mut longer = old.clone();
+        longer.insert(60, 0x90);
+        assert_eq!(database.identify_in(&target(), &image, &longer, 0x1000), None, "the module length still binds");
+
+        // The schema: the explicit pattern meets the minimum, `length` covers it, and it ends in a fixed byte.
+        assert!(
+            Row { length: Some(39), ..prefixed.clone() }.validate(&arches(), 32).is_err(),
+            "length below the pattern"
+        );
+        let short: Vec<Option<u8>> = old[..24].iter().map(|&b| Some(b)).collect();
+        let error = Row { pattern: format_pattern(&short), ..prefixed.clone() }.validate(&arches(), 32).unwrap_err();
+        assert!(error.message().contains("at least 32"), "{error}");
+        let mut trailing = prefix.clone();
+        trailing[39] = None;
+        assert!(Row { pattern: format_pattern(&trailing), ..prefixed.clone() }.validate(&arches(), 32).is_err());
+        assert!(Row { length: Some(MAX_MODULE_BYTES + 1), ..prefixed.clone() }.validate(&arches(), 32).is_err());
+        let half: Vec<Option<u8>> = old[..40].iter().enumerate().map(|(i, &b)| (i % 3 == 0).then_some(b)).collect();
+        assert!(
+            Row { pattern: format_pattern(&half), ..prefixed.clone() }.validate(&arches(), 32).is_err(),
+            "too few fixed"
+        );
+
+        // A length equal to the pattern's own is the same row as none.
+        let whole = Row { pattern: format_pattern(&old.iter().map(|&b| Some(b)).collect::<Vec<_>>()), ..row("") };
+        assert_eq!(
+            rows_hash(std::slice::from_ref(&whole)),
+            rows_hash(&[Row { length: Some(old.len()), ..whole.clone() }])
+        );
+        assert_ne!(rows_hash(std::slice::from_ref(&whole)), rows_hash(std::slice::from_ref(&prefixed)));
     }
 }

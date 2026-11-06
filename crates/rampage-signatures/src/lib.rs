@@ -48,7 +48,7 @@ mod pat;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-pub use bundled::{bundled, bundled_counts, bundled_ref};
+pub use bundled::{BundledMetadata, BundledProfile, FLYWHEEL_PROFILE_PREFIX, bundled, bundled_counts, bundled_ref};
 pub use compressed::{CombineError, SignatureDbError};
 pub use diagnostics::{
     CalleeNameInput, CalleeNameSource, FingerprintStatus, GateDiagnostics, KeyDiagnostics, LookupState,
@@ -876,6 +876,26 @@ impl SignatureDb {
     /// This is not a count of identified functions or public names.
     pub fn pat_records(&self) -> usize {
         self.pat.as_ref().map_or(0, |pat| pat.records().len())
+    }
+
+    /// The PAT namespace, when the database has one.
+    pub fn patterns(&self) -> Option<&PatternDb> {
+        self.pat.as_ref()
+    }
+
+    /// Replaces the PAT namespace (`None` removes it), leaving every hash entry as it is. The patterns must be for
+    /// this database's architecture, and a PAT namespace needs the current hash scheme.
+    pub fn set_patterns(&mut self, patterns: Option<PatternDb>) -> Result<(), CombineError> {
+        if let Some(patterns) = &patterns {
+            if patterns.arch() != self.arch {
+                return Err(CombineError::ArchitectureMismatch);
+            }
+            if self.scheme != CURRENT_SCHEME {
+                return Err(CombineError::SchemeMismatch);
+            }
+        }
+        self.pat = patterns;
+        Ok(())
     }
 
     fn merged_patterns(&self, other: &Self) -> Result<Option<PatternDb>, PatError> {

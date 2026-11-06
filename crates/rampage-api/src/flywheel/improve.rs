@@ -5,17 +5,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::candidate::{CANDIDATE_FILE, Candidate, Row, RowSource, format_pattern, layer, parse_pattern, write_pack};
+use super::arm::Arm;
+use super::candidate::{
+    CANDIDATE_FILE, Candidate, MAX_PATTERN_BYTES, Row, RowSource, format_pattern, layer, parse_pattern, write_pack,
+};
 use super::corpus::{Corpus, Split};
-use super::engine::{Engine, Layer, Overlap, SliceMetrics, bundled_hash, pattern_matches};
-use super::evaluation::{GateConfig, GateResult, SplitEvaluation, evaluate_split};
-use super::failures::{FailureGroup, FailureSet, TRUTH_SOURCE};
-use super::promote::{PromotedEntry, PromotedSet, promoted_layer, revert_id};
+use super::engine::{Engine, Layer, Overlap, Proposals, RUNTIME, SliceMetrics, bundled_hash, pattern_matches};
+use super::evaluation::{GateConfig, GateResult, SplitEvaluation, compare};
+use super::failures::{FailureGroup, FailureSet, TRUTH_SOURCE, case_id};
+use super::promote::{PromotedEntry, PromotedSet, revert_id};
 use super::{FileLock, FlywheelError, Paths, build_id, now_ms, read_bounded, sha256_text, write_atomic};
 use crate::rows::{FittedPage, item_budget};
 
@@ -29,6 +32,43 @@ const MAX_CASES: usize = 200;
 /// Distinct names listed in a row's training preview.
 const MAX_PREVIEW_NAMES: usize = 8;
 const MAX_LISTED: usize = 8;
+/// Variants listed per failure group.
+const MAX_VARIANTS: usize = 6;
+/// Training bodies one row may merge.
+const MAX_MERGED: usize = 16;
+
+/// What a candidate is gated against, besides the promoted rows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Baseline {
+    /// The bundled databases plus the deterministic arm: every row a plain generator makes from the training
+    /// truth. A candidate must beat what needs no AI. The default.
+    #[default]
+    Arm,
+    /// The bundled databases alone: M1's comparison, kept for diagnostics.
+    Bundled,
+}
+
+impl Baseline {
+    pub fn name(self) -> &'static str {
+        match self {
+            Baseline::Arm => "arm",
+            Baseline::Bundled => "bundled",
+        }
+    }
+}
+
+impl std::str::FromStr for Baseline {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, String> {
+        match text {
+            "arm" => Ok(Baseline::Arm),
+            "bundled" => Ok(Baseline::Bundled),
+            other => Err(format!("unknown baseline `{other}` (arm or bundled)")),
+        }
+    }
+}
 
 /// How to open the improve context.
 pub struct ImproveOptions {
@@ -41,6 +81,8 @@ pub struct ImproveOptions {
     pub workers: usize,
     /// The proposer run this server serves, recorded in candidates, promotions and the run's event log.
     pub run: Option<String>,
+    /// What candidates are gated against besides the promoted rows (default: the deterministic arm).
+    pub baseline: Baseline,
 }
 
 /// One server's improve context.
@@ -48,7 +90,16 @@ pub struct Improve {
     engine: Engine,
     gate: GateConfig,
     run: Option<String>,
+    baseline: Baseline,
+    /// The deterministic arm, when it is the baseline.
+    arm: Option<Arm>,
+    /// The arm's rows hash (`none` without the arm), computed once.
+    arm_hash: String,
+    /// The arm's rows as matching sees them, for previews.
+    arm_matchers: BTreeSet<(String, Vec<Option<u8>>)>,
     state: Mutex<State>,
+    /// The training split's library bodies, for variants and merged rows.
+    training: OnceLock<Result<Arc<TrainingIndex>, String>>,
     /// Serializes candidate and promoted-pack writes.
     writes: Mutex<()>,
     /// The held-out split's overlap with training, checked when the context opened.
@@ -57,8 +108,121 @@ pub struct Improve {
 
 #[derive(Default)]
 struct State {
-    /// The training failures, keyed by the promoted rows' hash they were computed under.
+    /// The training failures, keyed by the reference rows' hash they were computed under.
     failures: Option<(String, Arc<FailureSet>)>,
+    /// The reference's names per split, keyed by the baseline hash they were proposed under.
+    references: BTreeMap<(String, Split), Arc<Proposals>>,
+}
+
+/// One training library body (architecture and masked pattern) with where it occurs.
+struct TrainingBody {
+    arch: String,
+    pattern: Vec<Option<u8>>,
+    names: BTreeSet<String>,
+    origins: BTreeSet<String>,
+    configurations: BTreeSet<String>,
+    libraries: BTreeSet<String>,
+    binaries: BTreeSet<usize>,
+    example: (usize, u64),
+}
+
+/// Every target-library body of the training split, by case id and by (architecture, name). Built from training
+/// binaries only: a held-out body can never be listed or merged.
+struct TrainingIndex {
+    bodies: BTreeMap<String, TrainingBody>,
+    by_name: BTreeMap<(String, String), BTreeSet<String>>,
+    /// Every body as a listing group (no outcome counts), most occurrences first: `outcome: "all"`.
+    groups: Vec<FailureGroup>,
+}
+
+impl TrainingIndex {
+    fn build(engine: &Engine, min_bytes: usize) -> Result<TrainingIndex, FlywheelError> {
+        let indices = engine.corpus.indices(Split::Train);
+        let found = engine.parallel(&indices, |index| {
+            let loaded = engine.get(index)?;
+            let target = loaded.binary.target();
+            let mut bodies = Vec::new();
+            for (address, truth) in &loaded.truth {
+                if truth.origin == RUNTIME || !loaded.discovered(*address) {
+                    continue;
+                }
+                let Some(body) = loaded.body(*address) else { continue };
+                if let Some(masked) = rampage_signatures::masked_body_in(&target, &loaded.image, body, *address) {
+                    bodies.push((*address, masked, truth.name.clone(), truth.origin.clone()));
+                }
+            }
+            Ok((index, bodies))
+        })?;
+        let mut index = TrainingIndex { bodies: BTreeMap::new(), by_name: BTreeMap::new(), groups: Vec::new() };
+        for (binary, bodies) in found {
+            let entry = engine.binary(binary);
+            for (address, masked, name, origin) in bodies {
+                let pattern = format_pattern(&masked);
+                let case = case_id(&entry.arch, &pattern);
+                let body = index.bodies.entry(case.clone()).or_insert_with(|| TrainingBody {
+                    arch: entry.arch.clone(),
+                    pattern: masked,
+                    names: BTreeSet::new(),
+                    origins: BTreeSet::new(),
+                    configurations: BTreeSet::new(),
+                    libraries: BTreeSet::new(),
+                    binaries: BTreeSet::new(),
+                    example: (binary, address),
+                });
+                body.names.insert(name.clone());
+                body.origins.insert(origin);
+                body.configurations.insert(entry.configuration());
+                body.libraries.insert(entry.library.clone());
+                body.binaries.insert(binary);
+                index.by_name.entry((entry.arch.clone(), name)).or_default().insert(case);
+            }
+        }
+        let mut groups: Vec<FailureGroup> = index
+            .bodies
+            .iter()
+            .map(|(case, body)| FailureGroup {
+                case: case.clone(),
+                arch: body.arch.clone(),
+                length: body.pattern.len(),
+                proposable: (min_bytes..=MAX_PATTERN_BYTES).contains(&body.pattern.len()),
+                missed: 0,
+                wrong: 0,
+                spurious: 0,
+                occurrences: body.binaries.len(),
+                truth_names: body.names.iter().cloned().collect(),
+                proposed_names: Vec::new(),
+                origins: body.origins.iter().cloned().collect(),
+                configurations: body.configurations.iter().cloned().collect(),
+                libraries: body.libraries.iter().cloned().collect(),
+                example: super::failures::Example {
+                    binary: engine.binary(body.example.0).id.clone(),
+                    address: format!("{:#x}", body.example.1),
+                },
+                masked_bytes: format_pattern(&body.pattern),
+                wildcards: body.pattern.iter().filter(|byte| byte.is_none()).count(),
+            })
+            .collect();
+        groups.sort_by(|a, b| b.occurrences.cmp(&a.occurrences).then_with(|| a.case.cmp(&b.case)));
+        index.groups = groups;
+        Ok(index)
+    }
+
+    /// The other training bodies of the same architecture carrying any of `names`: the same function as built in
+    /// other configurations. Same-length variants first (a merged row needs them), then by occurrences.
+    fn variants(&self, case: &str, arch: &str, names: &[String], length: usize) -> Vec<&str> {
+        let mut cases: BTreeSet<&str> = BTreeSet::new();
+        for name in names {
+            if let Some(found) = self.by_name.get(&(arch.to_owned(), name.clone())) {
+                cases.extend(found.iter().map(String::as_str).filter(|other| *other != case));
+            }
+        }
+        let mut cases: Vec<&str> = cases.into_iter().collect();
+        cases.sort_by_key(|other| {
+            let body = &self.bodies[*other];
+            (body.pattern.len() != length, std::cmp::Reverse(body.binaries.len()), body.pattern.len())
+        });
+        cases
+    }
 }
 
 /// A candidate's cached gate results, keyed by (candidate hash, corpus identity, baseline hash).
@@ -111,6 +275,10 @@ impl Improve {
             )));
         }
         let engine = Engine::new(corpus, paths, options.workers);
+        let arm = match options.baseline {
+            Baseline::Arm => Some(super::arm::load_or_generate(&engine, options.gate.min_pattern_bytes)?),
+            Baseline::Bundled => None,
+        };
         // A held-out split that training already covers would measure recognition, not generalisation.
         let overlap = engine.heldout_overlap()?;
         if overlap.fraction > overlap.refused_above {
@@ -127,11 +295,22 @@ impl Improve {
             eprintln!("rampage flywheel: {warning}");
         }
         PromotedSet::load_repaired(&engine.paths, FAMILY, &engine.corpus.license())?;
+        let arm_hash = arm.as_ref().map_or_else(|| "none".to_owned(), Arm::hash);
+        let arm_matchers = arm
+            .iter()
+            .flat_map(|arm| arm.rows.iter())
+            .filter_map(|row| Some((row.arch.clone(), row.matcher().ok()?)))
+            .collect();
         Ok(Improve {
             engine,
             gate: options.gate,
             run: options.run,
+            baseline: options.baseline,
+            arm,
+            arm_hash,
+            arm_matchers,
             state: Mutex::new(State::default()),
+            training: OnceLock::new(),
             writes: Mutex::new(()),
             overlap,
         })
@@ -187,6 +366,44 @@ impl Improve {
         &self.gate
     }
 
+    /// What candidates are gated against besides the promoted rows.
+    pub fn baseline(&self) -> Baseline {
+        self.baseline
+    }
+
+    /// The deterministic arm, when it is the baseline.
+    pub fn arm(&self) -> Option<&Arm> {
+        self.arm.as_ref()
+    }
+
+    /// Whether the held-out gate needs a novel-body gain: by default exactly when the arm is the baseline.
+    pub fn novel_gain_required(&self) -> bool {
+        self.gate.novel_gain_required(self.baseline == Baseline::Arm)
+    }
+
+    /// The rows every candidate is measured on top of: the arm's (when it is the baseline), then the promoted ones.
+    fn reference_rows(&self, promoted: &PromotedSet) -> Vec<Row> {
+        let mut rows: Vec<Row> = self.arm.iter().flat_map(|arm| arm.rows.iter().cloned()).collect();
+        rows.extend(promoted.rows());
+        rows
+    }
+
+    /// A key for the reference rows without hashing them all again: the arm's hash and the promoted rows' hash.
+    fn reference_key(&self, promoted: &PromotedSet) -> String {
+        format!("{}:{}", self.arm_hash, promoted.hash())
+    }
+
+    fn training(&self) -> Result<Arc<TrainingIndex>, FlywheelError> {
+        self.training
+            .get_or_init(|| {
+                TrainingIndex::build(&self.engine, self.gate.min_pattern_bytes)
+                    .map(Arc::new)
+                    .map_err(|error| error.to_string())
+            })
+            .clone()
+            .map_err(FlywheelError::Corpus)
+    }
+
     fn promoted(&self) -> Result<PromotedSet, FlywheelError> {
         PromotedSet::load(self.paths(), FAMILY)
     }
@@ -201,17 +418,20 @@ impl Improve {
         }
         parts.push(promoted.hash());
         parts.push(self.gate.fingerprint());
+        parts.push(format!("baseline={}", self.baseline.name()));
+        parts.push(format!("arm={}", self.arm_hash));
+        parts.push(format!("novel={}", self.novel_gain_required()));
         sha256_text(&parts.join("\0"))
     }
 
     fn failures(&self, promoted: &PromotedSet) -> Result<Arc<FailureSet>, FlywheelError> {
-        let key = promoted.hash();
+        let key = self.reference_key(promoted);
         if let Some((cached, failures)) = &self.lock().failures
             && *cached == key
         {
             return Ok(Arc::clone(failures));
         }
-        let current: Vec<Layer> = promoted_layer(promoted)?.into_iter().collect();
+        let current: Vec<Layer> = layer("reference", &self.reference_rows(promoted))?.into_iter().collect();
         let failures = Arc::new(FailureSet::compute(&self.engine, &current, self.gate.min_pattern_bytes)?);
         self.lock().failures = Some((key, Arc::clone(&failures)));
         Ok(failures)
@@ -281,22 +501,31 @@ impl Improve {
             offset: Option<usize>,
             limit: Option<usize>,
             include_bytes: Option<bool>,
+            variants: Option<bool>,
+            proposable: Option<bool>,
         }
         let input: Input = parse(input)?;
         if let Some(outcome) = &input.outcome
-            && !["missed", "wrong", "spurious"].contains(&outcome.as_str())
+            && !["missed", "wrong", "spurious", "all"].contains(&outcome.as_str())
         {
-            return Err(FlywheelError::Invalid(format!("outcome {outcome:?} must be missed, wrong or spurious")));
+            return Err(FlywheelError::Invalid(format!("outcome {outcome:?} must be missed, wrong, spurious or all")));
         }
         let failures = self.failures(&self.promoted()?)?;
+        // `all` lists every training library body, failing or not: the arm already names most of them, and a row
+        // that generalises one of those is how a gain on changed held-out code can come.
+        let every = input.outcome.as_deref() == Some("all");
+        let index = if every || input.variants.unwrap_or(false) { Some(self.training()?) } else { None };
+        let groups: &[FailureGroup] = match (&index, every) {
+            (Some(index), true) => &index.groups,
+            _ => &failures.groups,
+        };
         let needle = input.name_contains.as_deref().map(str::to_lowercase);
         let configuration = |group: &FailureGroup, field: usize, want: &Option<String>| {
             want.as_ref().is_none_or(|want| {
                 group.configurations.iter().any(|entry| entry.split('/').nth(field) == Some(want.as_str()))
             })
         };
-        let selected: Vec<&FailureGroup> = failures
-            .groups
+        let selected: Vec<&FailureGroup> = groups
             .iter()
             .filter(|group| input.arch.as_ref().is_none_or(|arch| group.arch == *arch))
             .filter(|group| configuration(group, 1, &input.compiler) && configuration(group, 2, &input.opt))
@@ -309,6 +538,7 @@ impl Improve {
                 _ => true,
             })
             .filter(|group| group.occurrences >= input.min_occurrences.unwrap_or(1))
+            .filter(|group| input.proposable.is_none_or(|wanted| group.proposable == wanted))
             .filter(|group| {
                 needle.as_ref().is_none_or(|needle| {
                     group
@@ -320,12 +550,19 @@ impl Improve {
             })
             .collect();
         let include_bytes = input.include_bytes.unwrap_or(true);
+        let training = index.as_ref().filter(|_| input.variants.unwrap_or(false));
         let items: Vec<Value> = selected
             .iter()
             .map(|group| {
                 let mut item = serde_json::to_value(bounded(group)).unwrap_or(Value::Null);
                 if !include_bytes && let Some(object) = item.as_object_mut() {
                     object.remove("masked_bytes");
+                }
+                if let Some(training) = training {
+                    item["variants"] = variants(training, group, include_bytes);
+                }
+                if every {
+                    item["failing"] = json!(failures.find(&group.case).is_some());
                 }
                 item
             })
@@ -339,14 +576,22 @@ impl Improve {
             "truth_source": TRUTH_SOURCE,
             "undiscovered": failures.undiscovered,
             "below_gate": failures.below_gate,
-            "groups_total": failures.groups.len(),
+            "groups_total": groups.len(),
             "min_pattern_bytes": self.gate.min_pattern_bytes,
+            "baseline": self.baseline_description(),
+            "require_novel_gain": self.novel_gain_required(),
             "heldout_overlap": self.overlap,
             "warning": self.overlap.warning(),
-            "hint": "Each group is one masked body of a target library (training versions) missed or misnamed \
-                     across training binaries; runtime functions are not gated and not listed. The held-out split \
-                     is the libraries' newer versions: rows that only recognise the training build gain nothing. \
-                     Propose rows from `case` with the function's name; avoid groups with several truth_names.",
+            "hint": "Each group is one masked body of a target library (training versions) that the baseline \
+                     (bundled databases, the deterministic arm when it is the baseline, and promoted rows) misses or \
+                     misnames across training binaries; runtime functions are not gated and not listed. The \
+                     held-out split is the libraries' newer versions. The arm already holds a row for every \
+                     unambiguous training body, so an exact body row adds nothing and few failures are left; \
+                     `outcome: \"all\"` lists every training library body. A gain must come from rows that carry \
+                     over to changed code: wildcards over bytes that vary between versions (constants, \
+                     displacements, register choices), or a pattern shorter than the module. `variants: true` \
+                     lists the same function's bodies in other training configurations, the evidence for which \
+                     bytes vary.",
         });
         let budget = item_budget(&header).map_err(|error| FlywheelError::Invalid(error.to_string()))?;
         let page = FittedPage::of(items, input.offset, Some(limit), budget)
@@ -358,6 +603,33 @@ impl Improve {
         output["byte_capped"] = json!(page.byte_capped);
         output["groups"] = json!(page.items);
         Ok(output)
+    }
+
+    fn baseline_description(&self) -> Value {
+        json!({
+            "kind": self.baseline.name(),
+            "arm_rows": self.arm.as_ref().map(|arm| arm.rows.len()),
+            "description": match self.baseline {
+                Baseline::Arm => "bundled databases + the deterministic arm (a row for every unambiguous training \
+                                  library body) + promoted rows",
+                Baseline::Bundled => "bundled databases + promoted rows (diagnostic comparison)",
+            },
+        })
+    }
+
+    /// A training body by case id: a failure group or any other training library body (a variant).
+    fn training_body(&self, case: &str, promoted: &PromotedSet) -> Result<(String, Vec<Option<u8>>), FlywheelError> {
+        let failures = self.failures(promoted)?;
+        if let Some(group) = failures.find(case) {
+            return Ok((group.arch.clone(), parse_pattern(&group.masked_bytes).map_err(FlywheelError::Invalid)?));
+        }
+        let training = self.training()?;
+        match training.bodies.get(case) {
+            Some(body) => Ok((body.arch.clone(), body.pattern.clone())),
+            None => Err(FlywheelError::Unknown(format!(
+                "no training body {case}; corpus_failures lists failure groups and (with variants) other bodies"
+            ))),
+        }
     }
 
     /// `propose_heuristic`.
@@ -378,6 +650,12 @@ impl Improve {
             library: Option<String>,
             #[serde(default)]
             wildcards: Vec<usize>,
+            #[serde(default)]
+            wildcard_spans: Vec<[usize; 2]>,
+            #[serde(default)]
+            merge_cases: Vec<String>,
+            keep_prefix: Option<usize>,
+            length: Option<usize>,
         }
         let input: Input = parse(input)?;
         if input.rows.is_empty() || input.rows.len() > MAX_ROWS_PER_CALL {
@@ -390,21 +668,31 @@ impl Improve {
             let at = |message: String| FlywheelError::Invalid(format!("rows[{index}]: {message}"));
             let (arch, mut bytes, source) = match (&row.case, &row.pattern) {
                 (Some(case), None) => {
-                    let failures = self.failures(&promoted)?;
-                    let group = failures.find(case).ok_or_else(|| {
-                        FlywheelError::Unknown(format!(
-                            "rows[{index}]: no training failure group {case}; corpus_failures lists them"
-                        ))
+                    let (arch, bytes) = self.training_body(case, &promoted).map_err(|error| match error {
+                        FlywheelError::Unknown(message) => FlywheelError::Unknown(format!("rows[{index}]: {message}")),
+                        other => other,
                     })?;
-                    if row.arch.as_ref().is_some_and(|arch| *arch != group.arch) {
-                        return Err(at(format!("case {case} is {}, not {}", group.arch, row.arch.unwrap_or_default())));
+                    if row.arch.as_ref().is_some_and(|wanted| *wanted != arch) {
+                        return Err(at(format!("case {case} is {arch}, not {}", row.arch.unwrap_or_default())));
                     }
-                    let source = RowSource {
-                        case: case.clone(),
-                        binary: group.example.binary.clone(),
-                        address: group.example.address.clone(),
+                    let failures = self.failures(&promoted)?;
+                    let source = match failures.find(case) {
+                        Some(group) => RowSource {
+                            case: case.clone(),
+                            binary: group.example.binary.clone(),
+                            address: group.example.address.clone(),
+                        },
+                        None => {
+                            let training = self.training()?;
+                            let body = &training.bodies[case];
+                            RowSource {
+                                case: case.clone(),
+                                binary: self.engine.binary(body.example.0).id.clone(),
+                                address: format!("{:#x}", body.example.1),
+                            }
+                        }
                     };
-                    (group.arch.clone(), parse_pattern(&group.masked_bytes).map_err(at)?, Some(source))
+                    (arch, bytes, Some(source))
                 }
                 (None, Some(pattern)) => {
                     let arch = row.arch.clone().ok_or_else(|| at("a `pattern` row needs `arch`".to_owned()))?;
@@ -412,12 +700,58 @@ impl Improve {
                 }
                 _ => return Err(at("give exactly one of `case` and `pattern`".to_owned())),
             };
+            if row.merge_cases.len() > MAX_MERGED {
+                return Err(at(format!("merge at most {MAX_MERGED} cases")));
+            }
+            for case in &row.merge_cases {
+                let (other_arch, other) =
+                    self.training_body(case, &promoted).map_err(|error| at(error.message().to_owned()))?;
+                if other_arch != arch || other.len() != bytes.len() {
+                    return Err(at(format!(
+                        "merge case {case} is {other_arch}, {} bytes; it must be {arch}, {} bytes like the row",
+                        other.len(),
+                        bytes.len()
+                    )));
+                }
+                for (mine, theirs) in bytes.iter_mut().zip(&other) {
+                    if *mine != *theirs {
+                        *mine = None;
+                    }
+                }
+            }
             for &offset in &row.wildcards {
                 let slot =
                     bytes.get_mut(offset).ok_or_else(|| at(format!("wildcard offset {offset} is past the pattern")))?;
                 *slot = None;
             }
-            let row = Row { arch, name: row.name, library: row.library, pattern: format_pattern(&bytes), source };
+            for &[start, end] in &row.wildcard_spans {
+                if start >= end || end > bytes.len() {
+                    return Err(at(format!("wildcard span [{start}, {end}) must be non-empty and inside the pattern")));
+                }
+                bytes[start..end].fill(None);
+            }
+            let mut length = row.length;
+            if let Some(keep) = row.keep_prefix {
+                if keep == 0 || keep > bytes.len() {
+                    return Err(at(format!("keep_prefix {keep} must be 1 to the pattern's {} bytes", bytes.len())));
+                }
+                if length.is_some_and(|length| length != bytes.len()) {
+                    return Err(at("keep_prefix sets `length` to the body's length; give one or the other".to_owned()));
+                }
+                length = Some(bytes.len());
+                bytes.truncate(keep);
+            }
+            if bytes.len() > MAX_PATTERN_BYTES {
+                return Err(at(format!("pattern is {} bytes; at most {MAX_PATTERN_BYTES}", bytes.len())));
+            }
+            let row = Row {
+                arch,
+                name: row.name,
+                library: row.library,
+                pattern: format_pattern(&bytes),
+                length: length.filter(|&length| length != bytes.len()),
+                source,
+            };
             row.validate(&arches, self.gate.min_pattern_bytes).map_err(|error| at(error.message().to_owned()))?;
             rows.push(row);
         }
@@ -438,7 +772,12 @@ impl Improve {
         };
         let mut added = Vec::new();
         for row in rows {
-            let same = |other: &Row| other.arch == row.arch && other.name == row.name && other.pattern == row.pattern;
+            let same = |other: &Row| {
+                other.arch == row.arch
+                    && other.name == row.name
+                    && other.pattern == row.pattern
+                    && other.length == row.length
+            };
             if candidate.rows.iter().any(same) {
                 continue;
             }
@@ -464,7 +803,7 @@ impl Improve {
     /// What one row would do on the training split alone: how many training functions its pattern matches and
     /// what their truth names are. The same rows over the bundled databases decide; this is a preview.
     fn preview(&self, row: &Row) -> Result<Value, FlywheelError> {
-        let pattern = parse_pattern(&row.pattern).map_err(FlywheelError::Invalid)?;
+        let pattern = row.matcher()?;
         let mut matches = 0;
         let (mut same_name, mut other_name, mut not_library) = (0, 0, 0);
         let mut others = BTreeSet::new();
@@ -495,7 +834,9 @@ impl Improve {
             "name": row.name,
             "arch": row.arch,
             "length": pattern.len(),
+            "pattern_bytes": parse_pattern(&row.pattern).map(|bytes| bytes.len()).unwrap_or(0),
             "wildcards": pattern.iter().filter(|byte| byte.is_none()).count(),
+            "baseline_has_row": self.arm_matchers.contains(&(row.arch.clone(), pattern.clone())),
             "pat": row.pat_line()?,
             "train_preview": {
                 "matches": matches,
@@ -535,25 +876,59 @@ impl Improve {
         {
             return Ok((record.clone(), true));
         }
-        // The candidate is evaluated exactly as it would be promoted: its rows merged with the promoted ones.
-        let reference: Vec<Layer> = promoted_layer(&promoted)?.into_iter().collect();
-        let mut merged = promoted.rows();
+        // The candidate is evaluated exactly as it would be promoted: its rows merged with the reference rows (the
+        // arm's, when it is the baseline, and the promoted ones) into one database, so a row whose pattern equals a
+        // reference row's under another name makes both ambiguous rather than overriding it.
+        let reference_rows = self.reference_rows(&promoted);
+        let reference: Vec<Layer> = layer("reference", &reference_rows)?.into_iter().collect();
+        let mut merged = reference_rows;
         merged.extend(candidate.rows.iter().cloned());
         let layers: Vec<Layer> = layer("candidate", &merged)?.into_iter().collect();
+        let delta = layer("delta", &candidate.rows)?
+            .ok_or_else(|| FlywheelError::Invalid(format!("candidate {} has no rows", candidate.id)))?;
+        let split = |split: Split| -> Result<SplitEvaluation, FlywheelError> {
+            let before = self.reference_proposals(&baseline_hash, split, &reference)?;
+            let indices = self.corpus().indices(split);
+            let after = self.engine.propose_delta(&indices, &layers, &before, &delta)?;
+            compare(&self.engine, split, &before, &after)
+        };
+        // Against the arm, the false-positive rules are also checked on the state a promotion deploys: the
+        // promoted rows and the candidate's, without the arm (see `GateConfig::deployed`).
+        let deployed_key = format!("{baseline_hash}:deployed");
+        let deployed_reference: Vec<Layer> = layer("deployed", &promoted.rows())?.into_iter().collect();
+        let mut deployed_rows = promoted.rows();
+        deployed_rows.extend(candidate.rows.iter().cloned());
+        let deployed_layers: Vec<Layer> = layer("deployed candidate", &deployed_rows)?.into_iter().collect();
+        let deployed_rise = |split: Split| -> Result<i64, FlywheelError> {
+            let before = self.reference_proposals(&deployed_key, split, &deployed_reference)?;
+            let indices = self.corpus().indices(split);
+            let after = self.engine.propose_delta(&indices, &deployed_layers, &before, &delta)?;
+            let (before, after) = compare(&self.engine, split, &before, &after)?.overall();
+            Ok(after.fp() as i64 - before.fp() as i64)
+        };
         let mut record = match cached {
             Some(record) => record,
             None => {
-                let fast = evaluate_split(&self.engine, Split::Fast, &layers, &reference)?;
-                let mut train = evaluate_split(&self.engine, Split::Train, &layers, &reference)?;
-                let negative = evaluate_split(&self.engine, Split::Negative, &layers, &reference)?;
-                let gate = self.gate.fast(&fast, &train, &negative);
+                let fast = split(Split::Fast)?;
+                let mut train = split(Split::Train)?;
+                let negative = split(Split::Negative)?;
+                let mut gate = self.gate.fast(&fast, &train, &negative);
+                if self.arm.is_some() {
+                    let rises = [
+                        ("deployed_train_fp_increase", deployed_rise(Split::Train)?, self.gate.max_train_fp_increase),
+                        ("deployed_negative_matches", deployed_rise(Split::Negative)?, self.gate.max_negative_matches),
+                    ];
+                    for check in self.gate.deployed(&rises) {
+                        gate.add(check);
+                    }
+                }
                 // The fast slice's cases are kept; the training split only contributes its counts.
                 train.cases.clear();
                 EvaluationRecord {
                     candidate_hash,
                     corpus_version: self.corpus().version().to_owned(),
                     corpus_identity: self.corpus().identity().to_owned(),
-                    baseline_hash,
+                    baseline_hash: baseline_hash.clone(),
                     fast: StageRecord { evaluation: fast, gate },
                     train,
                     negative,
@@ -564,18 +939,48 @@ impl Improve {
         if heldout && record.fast.gate.passed {
             self.spend_heldout()?;
             // An error could name a held-out binary: the detail goes to the operator's log, not the proposer.
-            let evaluation = evaluate_split(&self.engine, Split::Heldout, &layers, &reference).map_err(|error| {
+            let evaluation = split(Split::Heldout).map_err(|error| {
                 eprintln!("rampage flywheel: held-out evaluation failed: {error}");
                 FlywheelError::Corpus(
                     "the held-out evaluation failed; the operator's server log has the detail".to_owned(),
                 )
             })?;
             debug_assert!(evaluation.cases.is_empty());
-            record.heldout = Some(StageRecord { gate: self.gate.heldout(&evaluation), evaluation });
+            let mut gate = self.gate.heldout(&evaluation, self.novel_gain_required());
+            if self.arm.is_some() {
+                let rise = deployed_rise(Split::Heldout).map_err(|error| {
+                    eprintln!("rampage flywheel: held-out evaluation failed: {error}");
+                    FlywheelError::Corpus(
+                        "the held-out evaluation failed; the operator's server log has the detail".to_owned(),
+                    )
+                })?;
+                for check in self.gate.deployed(&[("heldout_deployed_fp_increase", rise, self.gate.max_fp_increase)]) {
+                    gate.add(check);
+                }
+            }
+            record.heldout = Some(StageRecord { gate, evaluation });
         }
         let text = serde_json::to_string(&record).map_err(FlywheelError::json)?;
         write_atomic(&self.record_path(&key), text.as_bytes())?;
         Ok((record, false))
+    }
+
+    /// The reference's names on `split`, proposed once per baseline hash.
+    fn reference_proposals(
+        &self,
+        baseline_hash: &str,
+        split: Split,
+        reference: &[Layer],
+    ) -> Result<Arc<Proposals>, FlywheelError> {
+        let key = (baseline_hash.to_owned(), split);
+        if let Some(cached) = self.lock().references.get(&key) {
+            return Ok(Arc::clone(cached));
+        }
+        let proposals = Arc::new(self.engine.propose(&self.corpus().indices(split), reference)?);
+        let mut state = self.lock();
+        state.references.retain(|(hash, _), _| hash == baseline_hash);
+        state.references.insert(key, Arc::clone(&proposals));
+        Ok(proposals)
     }
 
     /// `evaluate_candidate`.
@@ -614,6 +1019,8 @@ impl Improve {
             "baseline_hash": record.baseline_hash,
             "cached": cached,
             "promotable": promotable,
+            "baseline": self.baseline.name(),
+            "require_novel_gain": self.novel_gain_required(),
             "heldout_evaluations_left": left,
             "fast": fast_summary(&record),
             "heldout": heldout_value,
@@ -712,6 +1119,11 @@ impl Improve {
                 .collect(),
             proposer_run: candidate.run.clone().or_else(|| self.run.clone()),
             promoted_unix_ms: now_ms(),
+            baseline: Some(match &self.arm {
+                Some(_) => format!("arm:{}", &self.arm_hash[..12]),
+                None => self.baseline.name().to_owned(),
+            }),
+            require_novel_gain: Some(self.novel_gain_required()),
         };
         promoted.entries.push(entry.clone());
         promoted.save(self.paths(), &self.corpus().license())?;
@@ -737,6 +1149,37 @@ impl Improve {
 fn parse<T: serde::de::DeserializeOwned>(input: Value) -> Result<T, FlywheelError> {
     let input = if input.is_null() { json!({}) } else { input };
     serde_json::from_value(input).map_err(|error| FlywheelError::Invalid(error.to_string()))
+}
+
+/// The other training bodies of a group's function (training split only), each with its id for `case` or
+/// `merge_cases`, its configurations, and for same-length ones how many byte positions differ from the group's.
+fn variants(training: &TrainingIndex, group: &FailureGroup, include_bytes: bool) -> Value {
+    let Ok(pattern) = parse_pattern(&group.masked_bytes) else { return json!([]) };
+    let cases = training.variants(&group.case, &group.arch, &group.truth_names, pattern.len());
+    let total = cases.len();
+    let listed: Vec<Value> = cases
+        .into_iter()
+        .take(MAX_VARIANTS)
+        .map(|case| {
+            let body = &training.bodies[case];
+            let same_length = body.pattern.len() == pattern.len();
+            let mut item = json!({
+                "case": case,
+                "length": body.pattern.len(),
+                "occurrences": body.binaries.len(),
+                "names": body.names,
+                "configurations": body.configurations.iter().take(MAX_LISTED).collect::<Vec<_>>(),
+            });
+            if same_length {
+                item["differing_bytes"] = json!(pattern.iter().zip(&body.pattern).filter(|(a, b)| a != b).count());
+            }
+            if include_bytes {
+                item["masked_bytes"] = json!(format_pattern(&body.pattern));
+            }
+            item
+        })
+        .collect();
+    json!({ "total": total, "listed": listed })
 }
 
 /// A failure group with its lists bounded for a tool result.
@@ -836,8 +1279,10 @@ pub fn improve_tools() -> Vec<ImproveTool> {
                 (arch/compiler/opt), program libraries, an example binary/address and `masked_bytes` (hex, `..` \
                 for position-dependent bytes). Only target-library functions and false names are listed. Sorted by \
                 occurrences. Filters: arch, compiler, opt, library (the program's), origin, outcome (missed, wrong, \
-                spurious), name_contains, min_occurrences. Paged with offset/limit (default 20, at most 200) and \
-                fitted to the result size.",
+                spurious, or `all` for every training library body including those the baseline already names), name_contains, min_occurrences, proposable. `variants: true` adds, per group, the same function's \
+                other training bodies (other configurations) with their case ids: the evidence for which bytes \
+                vary and should be wildcards. Paged with offset/limit (default 20, at most 200) and fitted to the \
+                result size. The header says what candidates are gated against (`baseline`).",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -846,12 +1291,19 @@ pub fn improve_tools() -> Vec<ImproveTool> {
                     "opt": { "type": "string" },
                     "library": { "type": "string", "description": "The program's library, e.g. zlib." },
                     "origin": { "type": "string", "description": "The truth function's origin: a library or runtime." },
-                    "outcome": { "type": "string", "enum": ["missed", "wrong", "spurious"] },
+                    "outcome": { "type": "string", "enum": ["missed", "wrong", "spurious", "all"], "description":
+                        "Only groups with this failure, or `all`: every training library body, failing or not \
+                        (`failing` says which), to generalise bodies the baseline already names." },
                     "name_contains": { "type": "string" },
                     "min_occurrences": { "type": "integer", "minimum": 1 },
+                    "proposable": { "type": "boolean", "description": "Only groups whose body a row can hold \
+                        (true) or only those it cannot (false)." },
                     "offset": { "type": "integer", "minimum": 0 },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
-                    "include_bytes": { "type": "boolean", "description": "Include masked_bytes (default true)." }
+                    "include_bytes": { "type": "boolean", "description": "Include masked_bytes (default true)." },
+                    "variants": { "type": "boolean", "description": "Also list each group's variants: the same \
+                        function's other bodies in the training split (other compilers, optimisation levels), with \
+                        their case ids and, for same-length ones, how many bytes differ (default false)." }
                 },
                 "additionalProperties": false
             }),
@@ -860,13 +1312,20 @@ pub fn improve_tools() -> Vec<ImproveTool> {
         ImproveTool {
             name: "propose_heuristic",
             description: "Add signature rows to a scratch candidate (a data pack under target/flywheel/scratch/; \
-                data only, never applied outside evaluation). Each row is a whole-function byte pattern, a name \
-                and an optional library tag, stored as a PAT record: give `case` (a corpus_failures group: its \
-                masked_bytes become the pattern) or `pattern` (hex, `..` wildcards) with `arch`; `wildcards` adds \
-                wildcard byte offsets. A body matches only at the pattern's exact length. Rows are schema-checked \
-                (at least the gate's minimum length, 32 bytes by default, and enough fixed bytes to ever answer). Omit `candidate` to start a new one. Returns the candidate id \
-                and hash and, per row, a training-split preview: how many training functions it matches and \
-                whether their truth is this name.",
+                data only, never applied outside evaluation). A row is a FLIRT PAT record: a byte pattern from the \
+                function's first byte, a name and an optional library tag. Start from `case` (a corpus_failures \
+                group or variant id: its masked_bytes) or `pattern` (hex, `..` per wildcard byte) with `arch`. \
+                Generalise with what the PAT matcher supports: `wildcards` (byte offsets) and `wildcard_spans` \
+                ([start, end) offset pairs) make bytes wildcards, e.g. a changed constant, displacement or \
+                register byte (whole bytes only, no nibbles); `merge_cases` lists other training bodies of the same \
+                arch and length and wildcards every byte where any differs; `keep_prefix` keeps only the first N \
+                bytes and leaves the rest of the body unconstrained (the body's length still must match), and \
+                `length` sets that module length for a `pattern` row. A body matches only at exactly the module \
+                length. Rows are schema-checked: the explicit pattern is at least the gate's minimum (32 bytes by \
+                default), with at least 6 fixed bytes and fixed bytes in at least half its positions; a pattern \
+                shorter than the module must end in a fixed byte. Omit `candidate` to start a new one. Returns the \
+                candidate id and hash and, per row, a training-split preview: how many training functions it \
+                matches, whether their truth is this name, and whether the baseline already holds the row.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -883,7 +1342,39 @@ pub fn improve_tools() -> Vec<ImproveTool> {
                                 "arch": { "type": "string" },
                                 "name": { "type": "string", "description": "The function name a match gives." },
                                 "library": { "type": "string" },
-                                "wildcards": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
+                                "wildcards": {
+                                    "type": "array",
+                                    "items": { "type": "integer", "minimum": 0 },
+                                    "description": "Byte offsets to make wildcards."
+                                },
+                                "wildcard_spans": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "array",
+                                        "items": { "type": "integer", "minimum": 0 },
+                                        "minItems": 2,
+                                        "maxItems": 2
+                                    },
+                                    "description": "[start, end) byte ranges to make wildcards."
+                                },
+                                "merge_cases": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "maxItems": MAX_MERGED,
+                                    "description": "Other training case ids of the same arch and length: every byte \
+                                        where any differs becomes a wildcard."
+                                },
+                                "keep_prefix": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "description": "Keep only the first N bytes; the rest of the body is \
+                                        unconstrained but its length must still match."
+                                },
+                                "length": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "description": "The module length for a pattern shorter than the body."
+                                }
                             },
                             "required": ["name"],
                             "additionalProperties": false
@@ -899,12 +1390,15 @@ pub fn improve_tools() -> Vec<ImproveTool> {
             name: "evaluate_candidate",
             description: "Gate a candidate, merged with the promoted rows, against the current state (bundled and \
                 promoted signatures). Only the target libraries' own functions are scored; any false name counts. \
-                stage \"fast\" (default) runs on training data and negatives: no new false positive on the full \
+                Candidates are gated against the baseline the corpus_failures header names: by default the \
+                bundled databases plus the deterministic arm (a row for every unambiguous training body) plus \
+                promoted rows, with a novel-body gain required. stage \"fast\" (default) runs on training data and negatives: no new false positive on the full \
                 training split, no name at all on the negative binaries (unrelated code), no gated slice losing F1; \
                 it returns the fast slice's per-slice deltas and its changed cases plus every name given on the \
                 negatives, paged with cases_offset/cases_limit. stage \"heldout\" runs the fast gate and, if it \
                 passes, the held-out gate on the libraries' newer versions (overall F1 gain of at least the minimum, \
-                no new false positive, no slice regression): pass/fail and the overall delta only. Results are \
+                no new false positive, no slice regression and, when required, an F1 gain on held-out functions \
+                whose bodies training does not hold): pass/fail and the overall delta only. Results are \
                 cached by (candidate hash, corpus identity, baseline hash); held-out evaluations per corpus are \
                 limited across all servers.",
             input_schema: json!({

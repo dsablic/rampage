@@ -89,6 +89,13 @@ impl Loaded {
     pub fn discovered(&self, address: u64) -> bool {
         self.functions.binary_search_by_key(&address, |&(start, _)| start).is_ok()
     }
+
+    /// The discovered function at `address` as scheme 2 masks it (`..` for position-dependent bytes), `None` when
+    /// there is none or it fails the confidence gate: the pattern a row for it starts from.
+    pub fn masked(&self, address: u64) -> Option<Vec<Option<u8>>> {
+        let body = self.body(address)?;
+        rampage_signatures::masked_body_in(&self.binary.target(), &self.image, body, address)
+    }
 }
 
 /// A layer of signature databases over the bundled ones, as a candidate or the promoted pack contributes it.
@@ -117,7 +124,15 @@ pub fn pattern_matches(pattern: &[Option<u8>], body: &[u8]) -> bool {
     pattern.len() == body.len() && pattern.iter().zip(body).all(|(want, have)| want.is_none_or(|want| want == *have))
 }
 
+/// A masked body as a signature sees it: its architecture and canonical pattern (`format_pattern`).
+pub type BodyKey = (String, String);
+
+/// Signature databases standing in for the bundled ones (one per architecture): a regenerated bundled asset measured
+/// before it is compiled in (`rampage-eval bundle`).
+pub type Bundled = Vec<SignatureDb>;
+
 /// The names one evaluation gave each binary.
+#[derive(Debug, Clone)]
 pub struct Proposals {
     pub names: BTreeMap<usize, BTreeMap<u64, String>>,
     /// Binaries identified again rather than answered from the baseline.
@@ -131,6 +146,10 @@ pub struct Engine {
     pub paths: Paths,
     workers: usize,
     loaded: Vec<OnceLock<Result<Arc<Loaded>, String>>>,
+    /// The training split's masked library bodies, once computed.
+    training: OnceLock<Result<Arc<BTreeSet<BodyKey>>, String>>,
+    /// Per held-out binary: each target-library truth function and whether its body is novel.
+    novelty: Vec<OnceLock<Arc<BTreeMap<u64, bool>>>>,
 }
 
 /// Counters of one engine's cache use, for timing reports.
@@ -146,7 +165,8 @@ pub struct LoadReport {
 impl Engine {
     pub fn new(corpus: Corpus, paths: Paths, workers: usize) -> Engine {
         let loaded = corpus.manifest.binaries.iter().map(|_| OnceLock::new()).collect();
-        Engine { corpus, paths, workers: workers.max(1), loaded }
+        let novelty = corpus.manifest.binaries.iter().map(|_| OnceLock::new()).collect();
+        Engine { corpus, paths, workers: workers.max(1), loaded, training: OnceLock::new(), novelty }
     }
 
     pub fn workers(&self) -> usize {
@@ -230,21 +250,70 @@ impl Engine {
     /// Identifies every binary of `indices` under `layers` over the bundled databases. A binary none of the layers
     /// could change keeps its cached baseline answers without being identified again.
     pub fn propose(&self, indices: &[usize], layers: &[Layer]) -> Result<Proposals, FlywheelError> {
+        self.propose_in(indices, layers, None)
+    }
+
+    /// [`Engine::propose`] with `bundled` standing in for the bundled databases: then every binary is identified
+    /// again, since the cached baseline is the compiled-in databases' answer.
+    pub fn propose_in(
+        &self,
+        indices: &[usize],
+        layers: &[Layer],
+        bundled: Option<&Bundled>,
+    ) -> Result<Proposals, FlywheelError> {
         let started = Instant::now();
         let results = self.parallel(indices, |index| {
             let loaded = self.get(index)?;
             let arch = loaded.binary.arch;
-            if !layers.iter().any(|layer| layer.could_change(arch, &loaded)) {
+            if bundled.is_none() && !layers.iter().any(|layer| layer.could_change(arch, &loaded)) {
                 return Ok((index, loaded.baseline.clone(), false));
             }
-            let mut databases: Vec<&SignatureDb> = layers
-                .iter()
-                .flat_map(|layer| layer.databases.iter().filter(move |database| database.arch() == arch))
-                .collect();
-            databases.extend(rampage_signatures::bundled_ref(arch));
-            let bodies = loaded.bodies();
-            let names = identify_program_sources(&databases, &loaded.binary.target(), &loaded.image, &bodies);
-            Ok((index, names.into_iter().map(|(address, (_, name))| (address, name.to_owned())).collect(), true))
+            Ok((index, self.identify(&loaded, layers, bundled), true))
+        })?;
+        let reidentified = results.iter().filter(|(_, _, again)| *again).count();
+        Ok(Proposals {
+            names: results.into_iter().map(|(index, names, _)| (index, names)).collect(),
+            reidentified,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    /// The names `layers` over the bundled databases (or `bundled`) give one binary's discovered functions.
+    fn identify(&self, loaded: &Loaded, layers: &[Layer], bundled: Option<&Bundled>) -> BTreeMap<u64, String> {
+        let arch = loaded.binary.arch;
+        let mut databases: Vec<&SignatureDb> = layers
+            .iter()
+            .flat_map(|layer| layer.databases.iter().filter(move |database| database.arch() == arch))
+            .collect();
+        match bundled {
+            Some(bundled) => databases.extend(bundled.iter().find(|database| database.arch() == arch)),
+            None => databases.extend(rampage_signatures::bundled_ref(arch)),
+        }
+        let bodies = loaded.bodies();
+        let names = identify_program_sources(&databases, &loaded.binary.target(), &loaded.image, &bodies);
+        names.into_iter().map(|(address, (_, name))| (address, name.to_owned())).collect()
+    }
+
+    /// The names under `layers`, where `layers` are the layers `before` was proposed under plus the rows of
+    /// `delta`: a binary none of `delta`'s patterns can match keeps its answers from `before`, since every body's
+    /// match is then the same. Exact, and much cheaper than [`Engine::propose`] when the reference layers are large
+    /// (the deterministic arm) and the candidate is a few rows.
+    pub fn propose_delta(
+        &self,
+        indices: &[usize],
+        layers: &[Layer],
+        before: &Proposals,
+        delta: &Layer,
+    ) -> Result<Proposals, FlywheelError> {
+        let started = Instant::now();
+        let results = self.parallel(indices, |index| {
+            let loaded = self.get(index)?;
+            if let Some(names) = before.names.get(&index)
+                && !delta.could_change(loaded.binary.arch, &loaded)
+            {
+                return Ok((index, names.clone(), false));
+            }
+            Ok((index, self.identify(&loaded, layers, None), true))
         })?;
         let reidentified = results.iter().filter(|(_, _, again)| *again).count();
         Ok(Proposals {
@@ -537,15 +606,26 @@ pub fn round(value: f64) -> f64 {
 /// and so does every name where the truth has no function. `origin:<library>`, `origin:runtime` and `origin:none`
 /// (names where the truth has no function) report every outcome by where the function comes from; they are
 /// never gated.
-pub fn slice_counts(engine: &Engine, outcomes: &BTreeMap<usize, BTreeMap<u64, Outcome>>) -> BTreeMap<String, Counts> {
+///
+/// On the held-out split, `novelty:novel` and `novelty:recognised` score the target libraries' functions by
+/// whether training holds their masked body ([`Engine::novelty`]); they are gated like the dimension slices.
+pub fn slice_counts(
+    engine: &Engine,
+    outcomes: &BTreeMap<usize, BTreeMap<u64, Outcome>>,
+) -> Result<BTreeMap<String, Counts>, FlywheelError> {
     let mut slices: BTreeMap<String, Counts> = BTreeMap::new();
     for (&index, outcomes) in outcomes {
         let keys = engine.binary(index).slices();
         let loaded = engine.get(index).ok();
+        let novelty = engine.novelty(index)?;
         for (address, outcome) in outcomes {
             let origin = loaded.as_ref().and_then(|loaded| loaded.truth.get(address)).map(|truth| truth.origin.clone());
             let origin_key = format!("origin:{}", origin.as_deref().unwrap_or("none"));
             slices.entry(origin_key).or_default().add(*outcome);
+            if let Some(&novel) = novelty.get(address) {
+                let slice = if novel { super::evaluation::NOVEL_SLICE } else { super::evaluation::RECOGNISED_SLICE };
+                slices.entry(slice.to_owned()).or_default().add(*outcome);
+            }
             let gated = match origin.as_deref() {
                 Some(RUNTIME) if *outcome == Outcome::Wrong => Some(Outcome::Spurious),
                 Some(RUNTIME) => None,
@@ -558,7 +638,7 @@ pub fn slice_counts(engine: &Engine, outcomes: &BTreeMap<usize, BTreeMap<u64, Ou
             }
         }
     }
-    slices
+    Ok(slices)
 }
 
 /// Whether a slice is gated: the `origin:` slices only report.
@@ -597,30 +677,31 @@ impl Overlap {
 }
 
 impl Engine {
+    /// Each target-library truth function of the binary at `index` with a body passing the confidence gate, keyed
+    /// by (architecture, masked body).
+    fn library_keys(&self, index: usize) -> Result<Vec<(u64, BodyKey)>, FlywheelError> {
+        let loaded = self.get(index)?;
+        let target = loaded.binary.target();
+        let mut keys = Vec::new();
+        for (address, truth) in &loaded.truth {
+            if truth.origin == RUNTIME {
+                continue;
+            }
+            let Some(body) = loaded.body(*address) else { continue };
+            if let Some(masked) = rampage_signatures::masked_body_in(&target, &loaded.image, body, *address) {
+                keys.push((*address, (self.binary(index).arch.clone(), super::candidate::format_pattern(&masked))));
+            }
+        }
+        Ok(keys)
+    }
+
     /// The held-out split's library bodies that training already holds: a high share means the split measures
     /// recognition of the same code, not generalisation.
     pub fn heldout_overlap(&self) -> Result<Overlap, FlywheelError> {
-        let bodies = |split: super::corpus::Split| -> Result<Vec<(String, String)>, FlywheelError> {
-            let indices = self.corpus.indices(split);
-            let lists = self.parallel(&indices, |index| {
-                let loaded = self.get(index)?;
-                let target = loaded.binary.target();
-                let mut keys = Vec::new();
-                for (address, truth) in &loaded.truth {
-                    if truth.origin == RUNTIME {
-                        continue;
-                    }
-                    let Some(body) = loaded.body(*address) else { continue };
-                    if let Some(masked) = rampage_signatures::masked_body_in(&target, &loaded.image, body, *address) {
-                        keys.push((self.binary(index).arch.clone(), super::candidate::format_pattern(&masked)));
-                    }
-                }
-                Ok(keys)
-            })?;
-            Ok(lists.into_iter().flatten().collect())
-        };
-        let training: BTreeSet<(String, String)> = bodies(super::corpus::Split::Train)?.into_iter().collect();
-        let heldout = bodies(super::corpus::Split::Heldout)?;
+        let training = self.training_bodies()?;
+        let indices = self.corpus.indices(super::corpus::Split::Heldout);
+        let lists = self.parallel(&indices, |index| self.library_keys(index))?;
+        let heldout: Vec<(String, String)> = lists.into_iter().flatten().map(|(_, key)| key).collect();
         let in_training = heldout.iter().filter(|key| training.contains(*key)).count();
         Ok(Overlap {
             heldout_bodies: heldout.len(),
@@ -631,25 +712,40 @@ impl Engine {
         })
     }
 
-    /// The training split's masked library bodies, by architecture and pattern.
-    fn training_bodies(&self) -> Result<BTreeSet<(String, String)>, FlywheelError> {
-        let indices = self.corpus.indices(super::corpus::Split::Train);
-        let lists = self.parallel(&indices, |index| {
+    /// The training split's masked library bodies, by architecture and pattern, computed once.
+    pub fn training_bodies(&self) -> Result<Arc<BTreeSet<BodyKey>>, FlywheelError> {
+        self.training
+            .get_or_init(|| {
+                let indices = self.corpus.indices(super::corpus::Split::Train);
+                let lists =
+                    self.parallel(&indices, |index| self.library_keys(index)).map_err(|error| error.to_string())?;
+                Ok(Arc::new(lists.into_iter().flatten().map(|(_, key)| key).collect()))
+            })
+            .clone()
+            .map_err(FlywheelError::Corpus)
+    }
+
+    /// Each target-library truth function of the held-out binary at `index` and whether it is novel: its masked
+    /// body is not one training holds (a body failing the confidence gate is novel too, since no training body
+    /// can equal it). Empty for a binary outside the held-out split. For scoring only: it reads held-out truth.
+    pub fn novelty(&self, index: usize) -> Result<Arc<BTreeMap<u64, bool>>, FlywheelError> {
+        if let Some(novelty) = self.novelty[index].get() {
+            return Ok(Arc::clone(novelty));
+        }
+        let mut novelty = BTreeMap::new();
+        if self.binary(index).split == super::corpus::Role::Heldout {
+            let training = self.training_bodies()?;
             let loaded = self.get(index)?;
-            let target = loaded.binary.target();
-            let mut keys = Vec::new();
             for (address, truth) in &loaded.truth {
-                if truth.origin == RUNTIME {
-                    continue;
-                }
-                let Some(body) = loaded.body(*address) else { continue };
-                if let Some(masked) = rampage_signatures::masked_body_in(&target, &loaded.image, body, *address) {
-                    keys.push((self.binary(index).arch.clone(), super::candidate::format_pattern(&masked)));
+                if truth.origin != RUNTIME {
+                    novelty.insert(*address, true);
                 }
             }
-            Ok(keys)
-        })?;
-        Ok(lists.into_iter().flatten().collect())
+            for (address, key) in self.library_keys(index)? {
+                novelty.insert(address, !training.contains(&key));
+            }
+        }
+        Ok(Arc::clone(self.novelty[index].get_or_init(|| Arc::new(novelty))))
     }
 
     /// The held-out library functions `layers` newly name correctly (against the bundled baseline), split into
@@ -693,4 +789,83 @@ pub struct Gains {
     pub novel_names: BTreeSet<String>,
 }
 
-impl Engine {}
+/// How far a byte pattern made from training could reach the novel held-out functions: an operator's ceiling,
+/// read from held-out truth, never shown to a proposer.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NovelReach {
+    /// Novel held-out target-library functions (bodies training does not hold, or failing the confidence gate).
+    pub novel: usize,
+    /// Of those, with a masked body (passing the confidence gate).
+    pub maskable: usize,
+    /// With a training body of the same name and architecture at all.
+    pub same_name: usize,
+    /// With one of exactly the same length: the only ones a PAT row, which binds the module length, can reach.
+    pub same_length: usize,
+    /// Of those, the best-merging training body leaves a row the schema accepts (fixed bytes in at least half the
+    /// positions, at least six): an oracle that knew which bytes change could name them.
+    pub mergeable: usize,
+    /// For the same-length ones: how many byte positions differ from the closest training body, in buckets.
+    pub differing_bytes: BTreeMap<String, usize>,
+}
+
+impl Engine {
+    /// [`NovelReach`] over the held-out split.
+    pub fn novel_reach(&self) -> Result<NovelReach, FlywheelError> {
+        let mut training: BTreeMap<(String, String), Vec<Vec<Option<u8>>>> = BTreeMap::new();
+        for index in self.corpus.indices(super::corpus::Split::Train) {
+            let loaded = self.get(index)?;
+            for (address, truth) in &loaded.truth {
+                if truth.origin == RUNTIME {
+                    continue;
+                }
+                if let Some(masked) = loaded.masked(*address) {
+                    let bodies = training.entry((self.binary(index).arch.clone(), truth.name.clone())).or_default();
+                    if !bodies.contains(&masked) {
+                        bodies.push(masked);
+                    }
+                }
+            }
+        }
+        let mut reach = NovelReach::default();
+        for index in self.corpus.indices(super::corpus::Split::Heldout) {
+            let loaded = self.get(index)?;
+            let arch = &self.binary(index).arch;
+            for (address, novel) in self.novelty(index)?.iter() {
+                if !novel {
+                    continue;
+                }
+                reach.novel += 1;
+                let Some(masked) = loaded.masked(*address) else { continue };
+                reach.maskable += 1;
+                let name = &loaded.truth[address].name;
+                let Some(bodies) = training.get(&(arch.clone(), name.clone())) else { continue };
+                reach.same_name += 1;
+                // The closest same-length training body: fewest differing positions, and the fixed bytes a row
+                // merging the two would keep.
+                let closest = bodies
+                    .iter()
+                    .filter(|body| body.len() == masked.len())
+                    .map(|body| {
+                        let differing = body.iter().zip(&masked).filter(|(a, b)| a != b).count();
+                        let fixed = body.iter().zip(&masked).filter(|(a, b)| a == b && a.is_some()).count();
+                        (differing, std::cmp::Reverse(fixed))
+                    })
+                    .min();
+                let Some((differing, std::cmp::Reverse(fixed))) = closest else { continue };
+                reach.same_length += 1;
+                if fixed >= 6 && fixed * 2 >= masked.len() {
+                    reach.mergeable += 1;
+                }
+                let bucket = match differing {
+                    0 => "0",
+                    1..=2 => "1-2",
+                    3..=8 => "3-8",
+                    9..=32 => "9-32",
+                    _ => "33+",
+                };
+                *reach.differing_bytes.entry(bucket.to_owned()).or_default() += 1;
+            }
+        }
+        Ok(reach)
+    }
+}

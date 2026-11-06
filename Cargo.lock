@@ -4553,6 +4553,7 @@ dependencies = [
 name = "rampage-api"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "memchr",
  "rampage-analysis",
  "rampage-arch",

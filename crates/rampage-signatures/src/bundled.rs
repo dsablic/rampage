@@ -4,7 +4,7 @@
 #[path = "catalog.rs"]
 mod catalog;
 
-pub use catalog::BundledMetadata;
+pub use catalog::{BundledMetadata, BundledProfile, FLYWHEEL_PROFILE_PREFIX};
 
 use rampage_arch::Arch;
 use std::sync::OnceLock;

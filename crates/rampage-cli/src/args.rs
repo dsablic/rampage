@@ -607,9 +607,19 @@ pub(crate) struct FlywheelArgs {
     #[arg(long, value_name = "DIR", requires = "corpus")]
     pub(crate) flywheel_dir: Option<PathBuf>,
     /// A TOML file overriding gate settings (min_f1_gain, max_slice_f1_drop, max_fp_increase,
-    /// max_fast_fp_increase, max_heldout_evaluations)
+    /// max_train_fp_increase, max_negative_matches, min_pattern_bytes, max_heldout_evaluations,
+    /// require_novel_gain, min_novel_f1_gain)
     #[arg(long, value_name = "FILE", requires = "corpus")]
     pub(crate) gate: Option<PathBuf>,
+    /// What candidates are gated against besides promoted rows: `arm` (the bundled databases plus the
+    /// deterministic arm generated from the training truth; the default) or `bundled` (the bundled databases
+    /// alone, for diagnostics)
+    #[arg(long, value_name = "BASELINE", default_value = "arm", requires = "corpus")]
+    pub(crate) flywheel_baseline: String,
+    /// Require (true) or waive (false) a held-out F1 gain on novel bodies, overriding the gate file; by default
+    /// it is required against the arm baseline only
+    #[arg(long, value_name = "BOOL", requires = "corpus")]
+    pub(crate) require_novel_gain: Option<bool>,
     /// Threads for corpus analysis and evaluation
     #[arg(long, default_value_t = 2, requires = "corpus")]
     pub(crate) flywheel_workers: usize,

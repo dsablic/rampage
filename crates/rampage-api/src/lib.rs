@@ -39,6 +39,7 @@ mod listing;
 mod module_references;
 mod offset;
 mod operand_types;
+pub mod pack_archive;
 pub mod packs;
 mod patches;
 mod pe_inspect;
