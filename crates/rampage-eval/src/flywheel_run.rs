@@ -21,21 +21,27 @@ use super::read;
 /// The fixed system prompt of every flywheel round.
 pub const SYSTEM_PROMPT: &str = "\
 You improve rampage's library-identification signatures through rampage's MCP `improve` tools; you have no other \
-tools. The corpus is split by program into a training split, which you can read, and a held-out split, which you \
-cannot: only the gate measures it.
+tools. The corpus holds target libraries (zlib, lz4, cJSON) in an older version, which is the training split you \
+can read, and their current version, which is held out: only the gate measures it. Negative binaries of unrelated \
+code must never be named. Only the target libraries' own functions are scored, not libc or compiler runtime.
 
 Work in this loop:
 1. corpus_failures lists training failures grouped by identical masked function bodies, most frequent first.
-2. Pick groups likely to generalize to unseen programs: one truth name, several occurrences, library origin. Avoid \
-groups with several truth_names.
+2. Pick groups likely to carry over to the newer library versions: one truth name, several occurrences across \
+configurations, a body long enough to be distinctive (rows need at least 32 bytes). Avoid groups with several \
+truth_names.
 3. propose_heuristic: add rows from their `case` ids, named with the truth name (one candidate can hold several \
 rows). Read each row's train_preview: matches whose truth is another name, or not library code, would be false \
 positives; leave such rows out (start a new candidate without them).
-4. evaluate_candidate (fast stage). If it fails, read the changed cases and fix the candidate.
-5. evaluate_candidate with stage \"heldout\". Held-out runs are limited, so batch several good rows per candidate.
-6. promote_candidate only when the held-out gate passed. Never try to work around the gate.
+4. evaluate_candidate (fast stage). It fails on any new false positive in training or any name on the negatives; \
+read the cases (names on negatives are listed) and drop the rows responsible.
+5. evaluate_candidate with stage \"heldout\". Held-out evaluations are limited per corpus across all rounds, so \
+batch several good rows per candidate and do not probe.
+6. promote_candidate only when the held-out gate passed. Never try to work around the gate. Zero promotions is an \
+acceptable outcome.
 
-End with a short plain-text summary: the candidates you tried, their gate results and any promotion.";
+End with a short plain-text summary: the candidates you tried, their gate results, any promotion, and why rows did \
+or did not carry over to the held-out versions.";
 
 #[derive(clap::Args)]
 pub struct FlywheelEvalArgs {
@@ -57,12 +63,9 @@ pub struct FlywheelEvalArgs {
     /// The flywheel working directory (default: two levels above the corpus).
     #[arg(long)]
     flywheel_dir: Option<PathBuf>,
-    /// Changed cases kept in the JSON (held-out cases only with --show-heldout-cases).
+    /// Changed cases kept in the JSON. A held-out evaluation keeps none.
     #[arg(long, default_value_t = 50)]
     max_cases: usize,
-    /// Print held-out changed cases too. For the operator only: never give them to a proposer.
-    #[arg(long)]
-    show_heldout_cases: bool,
     /// Also write the JSON here.
     #[arg(long)]
     out: Option<PathBuf>,
@@ -166,8 +169,17 @@ pub fn eval(args: FlywheelEvalArgs) -> Result<ExitCode, String> {
         layers.extend(pack_layer(pack).map_err(|error| format!("{}: {error}", pack.display()))?);
     }
     let evaluation = evaluate_split(&engine, split, &layers, &[]).map_err(|error| error.to_string())?;
-    let show = split != Split::Heldout || args.show_heldout_cases;
-    let mut output = evaluation_json(&evaluation, args.max_cases, show);
+    let mut output = evaluation_json(&evaluation, args.max_cases, true);
+    if split == Split::Heldout || split == Split::Train {
+        let overlap = engine.heldout_overlap().map_err(|error| error.to_string())?;
+        if let Some(warning) = overlap.warning() {
+            eprintln!("{warning}");
+        }
+        output["heldout_overlap"] = json!(overlap);
+    }
+    if split == Split::Heldout && !layers.is_empty() {
+        output["heldout_gains"] = json!(engine.heldout_gains(&layers).map_err(|error| error.to_string())?);
+    }
     output["family"] = json!(FAMILY);
     output["corpus_version"] = json!(engine.corpus.version());
     output["build_id"] = json!(build_id());
@@ -348,6 +360,20 @@ fn round_candidates(events: &[Value]) -> Vec<Value> {
     candidates.into_values().collect()
 }
 
+/// Reverts, latest first, every promotion a round's proposer run made.
+fn revert_round(paths: &Paths, run_id: &str) -> Result<Vec<String>, String> {
+    let set = PromotedSet::load(paths, FAMILY).map_err(|error| error.to_string())?;
+    let mut reverted = Vec::new();
+    for entry in set.entries.iter().rev() {
+        if entry.proposer_run.as_deref() != Some(run_id) {
+            break;
+        }
+        revert(paths, FAMILY, &entry.revert_id).map_err(|error| error.to_string())?;
+        reverted.push(entry.revert_id.clone());
+    }
+    Ok(reverted)
+}
+
 fn hex(bytes: &[u8]) -> String {
     rampage_arch::hex::bytes(bytes)
 }
@@ -510,7 +536,22 @@ pub fn run(args: FlywheelArgs) -> Result<ExitCode, String> {
             calls.len(),
             summary["candidates"].as_array().map_or(0, Vec::len)
         );
+        let failed = result["exit"].as_str() != Some("ok");
         rounds.push(summary);
+        if failed {
+            // A round that did not finish cleanly, isolation failures included, keeps nothing it promoted.
+            let reverted = revert_round(&paths, &run_id)?;
+            if let Some(last) = rounds.last_mut() {
+                last["reverted_promotions"] = json!(reverted);
+            }
+            stop = format!(
+                "round {round} ended `{}` ({}); its {} promotions were reverted",
+                result["exit"].as_str().unwrap_or("?"),
+                result["error"].as_str().unwrap_or("no error text"),
+                reverted.len()
+            );
+            break;
+        }
         if spent >= args.budget_usd {
             stop = format!("budget: ${spent:.2} spent of ${:.2}", args.budget_usd);
             break;
@@ -539,6 +580,8 @@ pub fn run(args: FlywheelArgs) -> Result<ExitCode, String> {
         "rounds_run": rounds.len(),
         "stop": stop,
         "warmup_ms": warmup_ms,
+        "heldout_overlap": engine.heldout_overlap().map_err(|error| error.to_string())?,
+        "heldout_gains": engine.heldout_gains(&layers).map_err(|error| error.to_string())?,
         "total_ms": started.elapsed().as_millis() as u64,
         "rounds": rounds,
         "promotions": new_promotions.iter().map(|entry| json!({
@@ -572,6 +615,14 @@ fn markdown(report: &Value, final_eval: &SplitEvaluation) -> String {
         report["warmup_ms"].as_f64().unwrap_or(0.0) / 1000.0,
         report["total_ms"].as_f64().unwrap_or(0.0) / 1000.0,
     );
+    let overlap = &report["heldout_overlap"];
+    text.push_str(&format!(
+        "Held-out overlap: {} of {} held-out library bodies ({:.1}%) also occur in training (limit {:.0}%).\n\n",
+        overlap["in_training"],
+        overlap["heldout_bodies"],
+        overlap["fraction"].as_f64().unwrap_or(0.0) * 100.0,
+        overlap["limit"].as_f64().unwrap_or(0.0) * 100.0
+    ));
     text.push_str("| Round | Exit | Wall s | Tool s | Cost $ | Calls | Candidates (fast / held-out / promoted) |\n");
     text.push_str("|---|---|---:|---:|---:|---:|---|\n");
     for round in report["rounds"].as_array().into_iter().flatten() {
@@ -612,7 +663,17 @@ fn markdown(report: &Value, final_eval: &SplitEvaluation) -> String {
             promotion["heldout_deltas"]
         ));
     }
-    text.push_str("\nHeld-out split with the promoted pack against the bundled baseline:\n\n");
+    let gains = &report["heldout_gains"];
+    text.push_str(&format!(
+        "\nHeld-out library functions newly named by the promoted pack: {} whose body training already held \
+         (unchanged across versions) and {} novel bodies {}.\n",
+        gains["seen_in_training"], gains["novel"], gains["novel_names"]
+    ));
+    text.push_str(
+        "\nHeld-out split with the promoted pack against the bundled baseline. Gated slices score the target \
+         libraries' functions plus every false name; `origin:` slices report every outcome by origin and are not \
+         gated:\n\n",
+    );
     text.push_str("| Slice | TP | FP | FN | F1 | dF1 | dTP | dFP |\n|---|---:|---:|---:|---:|---:|---:|---:|\n");
     let deltas = final_eval.deltas();
     for (slice, metrics) in final_eval.metrics() {
