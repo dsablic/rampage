@@ -13,6 +13,7 @@ Per-phase reports, newest first. Each is a recorded measurement with its own lim
 | Report | Contents |
 | --- | --- |
 | [Head-to-head agent runs: rampage vs REA](benchmarks/agent-h2h-2026-11-05.md) | 20 canonical tasks × 3 through `claude-sonnet-5-5`, 2026-11-05. |
+| [Head-to-head suite v2: rampage vs REA](benchmarks/agent-h2h-v2-2026-11-05.md) | 15 harder tasks (C++, typing, investigation, 50 MB scale, raw firmware, diffing) × 3 through `claude-sonnet-5-5`, 2026-11-05. |
 | [Phase 9 debugger acceptance](benchmarks/phase9-debugger.md) | GDB stub, debugserver and Windows acceptance, 2026-10-29 to 2026-11-05. |
 | [REA formats and ledger wave](benchmarks/rea-formats-ledger.md) | Format tools and findings ledger, 2026-10-29. |
 | [Phase 4.1 benchmark reports](benchmarks/phase4-1.md) | Sleigh processor roster as Raw Projects and the explicit-window checkpoint. |

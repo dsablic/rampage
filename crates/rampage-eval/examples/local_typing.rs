@@ -105,6 +105,7 @@ fn task(digest: &str) -> ParityTask {
             sha256: digest.into(),
             source: "tests/fixtures/src/local-variables.c".into(),
             build: "crates/rampage-eval/tasks/phase1-1/local-pointer.toml".into(),
+            companions: Vec::new(),
         },
         truth_reference: "Owned stack-local fixture; independently checked MCP state and sidecar".into(),
         required_capabilities: vec!["decompile".into(), "set_types".into(), "edit_variable".into()],
@@ -115,6 +116,7 @@ fn task(digest: &str) -> ParityTask {
                 ("local_name".into(), json!("state")),
                 ("local_type".into(), json!("struct PhaseState *")),
             ]),
+            hex_integers: false,
         },
     }
 }

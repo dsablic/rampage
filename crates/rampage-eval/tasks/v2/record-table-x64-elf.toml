@@ -1,0 +1,28 @@
+version = 1
+id = "record-table-x64-elf"
+kind = "analysis"
+question = """
+The function at 0x1002ab0 searches a constant table of fixed-size records for the record whose 16-bit port field
+equals its argument. For the record with port 8443, return the text of the string its name pointer refers to as name,
+and the value of its 32-bit timeout field (the record field that another function in the binary returns for a found
+record) as timeout.
+"""
+truth_reference = """
+src/services.c table entry {"quarry-admin", 8443, ..., 45000}; find_service = 0x1002ab0 from the twin's symbols; a host build of the same source prints the record for 8443 (harness run); derive-truth.py.
+"""
+required_capabilities = ["typed_data", "data_xrefs"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "services-x64-elf"
+path = "tests/fixtures/bench-v2/bin/services-x64.elf"
+sha256 = "523ed95f72e0459fa5a4996e6e9822d9b5d32e5d77c9fd7a9ad27cb32bddaa43"
+source = "tests/fixtures/bench-v2/src/services.c"
+build = "tests/fixtures/bench-v2/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+name = "quarry-admin"
+timeout = 45000

@@ -1,0 +1,27 @@
+version = 1
+id = "cpp-hierarchy-x64-elf"
+kind = "analysis"
+question = """
+This stripped x86-64 Linux executable was compiled from C++ with RTTI. Recover the inheritance hierarchy of the
+polymorphic classes declared in the global namespace; leave out C++ standard library and runtime ABI classes, which
+are all declared inside namespaces. Return every direct base-to-derived relationship as a [base, derived] pair of
+unqualified class names, in an array named edges.
+"""
+truth_reference = """
+tests/fixtures/bench-v2/src/widgets.cpp class declarations; DW_TAG_inheritance in the unstripped twin's DWARF (twins/widgets-x64.elf), cross-checked against its global-namespace _ZTS symbols; tools/agent-bench/v2/derive-truth.py.
+"""
+required_capabilities = ["rtti", "class_hierarchy"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "widgets-x64-elf"
+path = "tests/fixtures/bench-v2/bin/widgets-x64.elf"
+sha256 = "f2d53c9c1d87d1c59395309608a4abaced0e785d2e4b9ca9e25657816c6f3be2"
+source = "tests/fixtures/bench-v2/src/widgets.cpp"
+build = "tests/fixtures/bench-v2/build.sh"
+
+[answer]
+kind = "tuple_set"
+field = "edges"
+values = [["Button", "Toggle"], ["Node", "Widget"], ["Serializable", "Button"], ["Serializable", "Logger"], ["Widget", "Button"], ["Widget", "Slider"]]

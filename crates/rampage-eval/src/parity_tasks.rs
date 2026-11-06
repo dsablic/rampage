@@ -44,6 +44,19 @@ pub struct FixtureIdentity {
     pub sha256: String,
     pub source: PathBuf,
     pub build: PathBuf,
+    /// Further files the task needs beside the fixture (such as a second build to diff against), each copied
+    /// into the run's directory under `name`.
+    #[serde(default)]
+    pub companions: Vec<CompanionFixture>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompanionFixture {
+    /// The file name in the run's directory: ASCII letters, digits, `.`, `-` and `_` only.
+    pub name: String,
+    pub path: PathBuf,
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,10 +70,23 @@ pub enum CapabilityStatus {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AnswerContract {
-    /// Exactly these JSON fields and values; no substring matching or extra claims.
-    Exact { fields: BTreeMap<String, Value> },
+    /// Exactly these JSON fields and values; no substring matching or extra claims. Arrays are ordered.
+    Exact {
+        fields: BTreeMap<String, Value>,
+        /// Also accept a `0x`-prefixed hexadecimal string wherever the expected value is an integer.
+        #[serde(default)]
+        hex_integers: bool,
+    },
     /// Exactly one JSON array field, with unique strings; ordering is immaterial.
     StringSet { field: String, values: Vec<String> },
+    /// Exactly one JSON array field of fixed-length tuples (JSON arrays), unique, ordering immaterial; for
+    /// example `[base, derived]` edges or `[offset, size]` pairs.
+    TupleSet {
+        field: String,
+        values: Vec<Vec<Value>>,
+        #[serde(default)]
+        hex_integers: bool,
+    },
 }
 
 /// Runner-supplied disposition. Runtime/tool errors are failures, not unsupported capabilities.
@@ -73,7 +99,7 @@ pub enum TaskAttempt {
     Answer(Value),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskOutcome {
     AnswerMatches,
@@ -136,9 +162,7 @@ impl ParityTask {
                 return Err(format!("fixture path must be repository-relative without traversal: {}", path.display()));
             }
         }
-        if self.fixture.sha256.len() != 64
-            || !self.fixture.sha256.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
+        if !valid_sha256(&self.fixture.sha256) {
             return Err("fixture sha256 must contain 64 lowercase hexadecimal digits".to_owned());
         }
         if self.required_capabilities.is_empty()
@@ -147,8 +171,38 @@ impl ParityTask {
         {
             return Err("required_capabilities must be nonempty, unique, nonblank names".to_owned());
         }
+        for companion in &self.fixture.companions {
+            if companion.name.is_empty()
+                || companion.name == "fixture.bin"
+                || !companion.name.bytes().all(|byte| byte.is_ascii_alphanumeric() || b".-_".contains(&byte))
+            {
+                return Err(format!("invalid companion name {:?}", companion.name));
+            }
+            if companion.path.as_os_str().is_empty()
+                || companion.path.components().any(|part| !matches!(part, Component::Normal(_)))
+            {
+                return Err(format!("companion path must be repository-relative: {}", companion.path.display()));
+            }
+            if !valid_sha256(&companion.sha256) {
+                return Err("companion sha256 must contain 64 lowercase hexadecimal digits".to_owned());
+            }
+        }
         match &self.answer {
-            AnswerContract::Exact { fields } => {
+            AnswerContract::TupleSet { field, values, .. } => {
+                let width = values.first().map(Vec::len).unwrap_or(0);
+                let unique: BTreeSet<String> =
+                    values.iter().map(|tuple| Value::from(tuple.clone()).to_string()).collect();
+                if field.trim().is_empty()
+                    || width == 0
+                    || values.iter().any(|tuple| tuple.len() != width)
+                    || unique.len() != values.len()
+                {
+                    return Err(
+                        "tuple_set contract requires a field and nonempty unique tuples of one width".to_owned()
+                    );
+                }
+            }
+            AnswerContract::Exact { fields, .. } => {
                 if fields.is_empty() || fields.keys().any(|field| field.trim().is_empty()) {
                     return Err("exact contract requires nonblank fields".to_owned());
                 }
@@ -205,9 +259,14 @@ impl AnswerContract {
     pub fn matches(&self, answer: &Value) -> bool {
         let Some(object) = answer.as_object() else { return false };
         match self {
-            Self::Exact { fields } => {
-                object.len() == fields.len() && fields.iter().all(|(field, value)| object.get(field) == Some(value))
+            Self::Exact { fields, hex_integers } => {
+                object.len() == fields.len()
+                    && fields
+                        .iter()
+                        .all(|(field, value)| object.get(field).is_some_and(|got| same(value, got, *hex_integers)))
             }
+            Self::TupleSet { field, values, hex_integers } => tuple_overlap(object, field, values, *hex_integers)
+                .is_some_and(|(hits, given)| hits == values.len() && given == values.len()),
             Self::StringSet { field, values } => {
                 if object.len() != 1 {
                     return false;
@@ -219,6 +278,86 @@ impl AnswerContract {
             }
         }
     }
+}
+
+impl AnswerContract {
+    /// Partial credit, defined before any run: for set contracts the Jaccard index of the answered and expected
+    /// sets (0 for a malformed answer or one with duplicates); `None` for exact contracts, which have none.
+    pub fn partial(&self, answer: &Value) -> Option<f64> {
+        let object = answer.as_object();
+        match self {
+            Self::Exact { .. } => None,
+            Self::StringSet { field, values } => Some(
+                object
+                    .filter(|object| object.len() == 1)
+                    .and_then(|object| object.get(field)?.as_array())
+                    .and_then(|items| items.iter().map(Value::as_str).collect::<Option<Vec<_>>>())
+                    .filter(|items| items.iter().collect::<BTreeSet<_>>().len() == items.len())
+                    .map(|items| {
+                        let expected: BTreeSet<&str> = values.iter().map(String::as_str).collect();
+                        let hits = items.iter().filter(|item| expected.contains(*item)).count();
+                        hits as f64 / (expected.len() + items.len() - hits) as f64
+                    })
+                    .unwrap_or(0.0),
+            ),
+            Self::TupleSet { field, values, hex_integers } => Some(
+                object
+                    .and_then(|object| tuple_overlap(object, field, values, *hex_integers))
+                    .map(|(hits, given)| hits as f64 / (values.len() + given - hits) as f64)
+                    .unwrap_or(0.0),
+            ),
+        }
+    }
+}
+
+/// How many answered tuples match an expected one, and how many were answered; `None` when the answer is not
+/// exactly one array field of arrays without duplicates.
+fn tuple_overlap(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+    values: &[Vec<Value>],
+    hex_integers: bool,
+) -> Option<(usize, usize)> {
+    if object.len() != 1 {
+        return None;
+    }
+    let items: Vec<Value> = object
+        .get(field)?
+        .as_array()?
+        .iter()
+        .map(|item| item.is_array().then(|| normalize(item, hex_integers)))
+        .collect::<Option<_>>()?;
+    let unique: BTreeSet<String> = items.iter().map(Value::to_string).collect();
+    if unique.len() != items.len() {
+        return None;
+    }
+    let hits = values.iter().filter(|tuple| items.contains(&Value::from(tuple.to_vec()))).count();
+    Some((hits, items.len()))
+}
+
+/// Exact JSON equality, except that a `0x` hexadecimal string equals the integer it spells when `hex_integers`.
+fn same(expected: &Value, got: &Value, hex_integers: bool) -> bool {
+    expected == &normalize(got, hex_integers)
+}
+
+/// With `hex_integers`, turn every `0x`/`0X` hexadecimal string (up to 64 bits) into that integer, recursively
+/// through arrays. Expected values are always integers where an integer is meant, so a string expectation is never
+/// compared against a converted value except when the answer spelled a hex number for a string field, which fails.
+fn normalize(value: &Value, hex_integers: bool) -> Value {
+    match value {
+        Value::String(text) if hex_integers => text
+            .strip_prefix("0x")
+            .or_else(|| text.strip_prefix("0X"))
+            .filter(|digits| !digits.is_empty() && digits.len() <= 16)
+            .and_then(|digits| u64::from_str_radix(digits, 16).ok())
+            .map_or_else(|| value.clone(), Value::from),
+        Value::Array(items) => Value::Array(items.iter().map(|item| normalize(item, hex_integers)).collect()),
+        _ => value.clone(),
+    }
+}
+
+fn valid_sha256(text: &str) -> bool {
+    text.len() == 64 && text.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Parse separately named documents atomically; duplicate IDs and inconsistent fixture references are errors.

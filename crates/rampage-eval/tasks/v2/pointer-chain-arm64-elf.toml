@@ -1,0 +1,28 @@
+version = 1
+id = "pointer-chain-arm64-elf"
+kind = "analysis"
+question = """
+The function at 0x1012150 passes its second argument down, through the functions it calls, to code that adds it to
+an integer field reached from its first argument. Starting from the structure the first argument points to, give the
+byte offset of each pointer field loaded along the way, in order, followed by the byte offset of the integer field
+within the last structure; return that list as offsets, and the integer field's size in bytes as size.
+"""
+truth_reference = """
+session.primary, conn.stats and stats.bytes member offsets and size from the twin's DWARF (twins/session-arm64.elf); session_read = 0x1012150 from its symbols; derive-truth.py.
+"""
+required_capabilities = ["type_recovery", "decompile"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "session-arm64-elf"
+path = "tests/fixtures/bench-v2/bin/session-arm64.elf"
+sha256 = "bb0a0ab3c9897a4400f1ebd9741b5335fefa21b403f77463e4c6837be4b1b8a8"
+source = "tests/fixtures/bench-v2/src/session.c"
+build = "tests/fixtures/bench-v2/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+offsets = [16, 16, 8]
+size = 8

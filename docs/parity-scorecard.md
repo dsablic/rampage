@@ -88,6 +88,15 @@ rampage-eval agent-bench --label NAME --servers rampage,rea --tasks all --repeat
 them. `--rescore` recomputes a finished run from its recorded transcripts without model calls, keeping the
 measured run's versions, time and protocol and recording what changed in a `rescore` block.
 
+`--suite v2` runs [suite v2](benchmarks/agent-h2h-v2-2026-11-05.md) instead: the manifests in
+`crates/rampage-eval/tasks/v2/` with prompts, categories, scoring rules and per-task turn and time limits in
+`tasks/h2h/neutral-v2.toml`, fixtures from `tests/fixtures/bench-v2/build.sh` and
+`tools/agent-bench/v2/build-scale.sh`, and truth from `tools/agent-bench/v2/derive-truth.py`. `--cost-cap-usd`
+(with `--spent-usd` for earlier passes) stops before the next run once spend reaches the cap;
+`--rea-ghidra-startup-timeout-ms` and `--rea-ghidra-maxmem` set REA's Ghidra deadline and heap and are recorded;
+`--attach NAME=FILE` embeds measurements made outside the agent runs; `--rerun TASK:SERVER:REP` reruns runs a
+harness fault affected, keeping the originals as `superseded_runs`.
+
 Prompts come from `crates/rampage-eval/tasks/h2h/neutral.toml`: tool-neutral wording for each canonical task,
 with the reason for every change from the frozen question. Capability probes ask about the connected server's
 own tools, so their truth is per server, with its evidence. Runs are sequential, the servers alternating which

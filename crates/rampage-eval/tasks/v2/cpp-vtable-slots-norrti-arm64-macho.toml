@@ -1,0 +1,28 @@
+version = 1
+id = "cpp-vtable-slots-norrti-arm64-macho"
+kind = "analysis"
+question = """
+This stripped arm64 macOS executable was compiled from C++ without RTTI. The function at 0x100000584 allocates and
+constructs one of two polymorphic objects, depending on its argument. For a nonzero argument, list the entry
+addresses of the virtual functions in the vtable that the new object points to, in slot order starting at the slot
+the object's vtable pointer refers to, through the class's last virtual function. Return them as slots.
+"""
+truth_reference = """
+Itanium slot order from src/codec.cpp (Codec::encode, FastCodec::decode, Codec::reset, FastCodec::flush); addresses from the twin's symbols, cross-checked against dyld_info -fixups of __ZTV9FastCodec; derive-truth.py.
+"""
+required_capabilities = ["vtables", "data_xrefs"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "codec-arm64-macho"
+path = "tests/fixtures/bench-v2/bin/codec-arm64.macho"
+sha256 = "61c7467c48c15b0caed44fa8fa9cea52e46f41adfcb7a7dd0eeb531596a23f8d"
+source = "tests/fixtures/bench-v2/src/codec.cpp"
+build = "tests/fixtures/bench-v2/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+slots = [4294968552, 4294968636, 4294968624, 4294968692]

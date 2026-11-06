@@ -156,6 +156,7 @@ fn task() -> ParityTask {
             sha256: FIXTURE_SHA256.into(),
             source: "tests/fixtures/src/function-frame.c".into(),
             build: "crates/rampage-eval/examples/function_frame.rs".into(),
+            companions: Vec::new(),
         },
         truth_reference: "Owned snapshot; seeded canonical native selectors; independent MCP and identity log".into(),
         required_capabilities: vec!["function_frame".into()],
@@ -171,6 +172,7 @@ fn task() -> ParityTask {
                 ("x19_reload".into(), json!("reload_candidate")),
                 ("coordinates_merged".into(), json!(false)),
             ]),
+            hex_integers: false,
         },
     }
 }
@@ -859,7 +861,7 @@ mod tests {
     fn completed_run(baseline: &Baseline) -> AgentRun {
         let mut run = AgentRun::without_provider(&AgentConfig::new(MODEL));
         run.model_source = Some(ModelSource::Provider);
-        let AnswerContract::Exact { fields } = task().answer else { panic!("exact contract") };
+        let AnswerContract::Exact { fields, .. } = task().answer else { panic!("exact contract") };
         run.disposition = AgentDisposition::Answer { answer: json!(fields) };
         run.calls = vec![receipt(baseline.frame.clone())];
         run

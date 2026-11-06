@@ -1,0 +1,26 @@
+version = 1
+id = "scale-string-function-x64-elf"
+kind = "analysis"
+question = """
+This is a large stripped Go executable for x86-64 Linux. Which function references the text "cascade is only
+supported for branch nodes"? Return its full Go symbol name as function: the package path, the receiver if any and
+the name, written as the Go runtime records it (for example example.com/pkg.(*Type).Method).
+"""
+truth_reference = """
+The only LEAQ of the string's address in `go tool objdump` of the unstripped twin (target/bench/v2/scale/hugo-x64.elf) is in this function; tools/agent-bench/v2/go_graph.py and derive-truth.py.
+"""
+required_capabilities = ["go_metadata", "xrefs", "scale"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "hugo-v0140-x64-elf"
+path = "target/bench/v2/scale/hugo-x64-stripped.elf"
+sha256 = "20bb4db28668ff330655c1667972a15bdc08feb881c4550194cea8277a544aa9"
+source = "github.com/gohugoio/hugo@v0.140.0 (Go module proxy), built with go1.23.4"
+build = "tools/agent-bench/v2/build-scale.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+function = "github.com/gohugoio/hugo/resources/page/pagemeta.(*PageConfig).Validate"

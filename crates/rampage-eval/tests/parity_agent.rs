@@ -160,6 +160,7 @@ async fn scripted_transport_uses_actual_mcp_and_keeps_truth_out_of_model_request
     task.required_capabilities = vec!["EVALUATOR_ONLY_REQUIRED_CAPABILITY".into()];
     task.answer = rampage_eval::parity_tasks::AnswerContract::Exact {
         fields: [("EVALUATOR_ONLY_EXPECTED".into(), json!("secret"))].into(),
+        hex_integers: false,
     };
     let mut first = tool("disassemble", json!({ "path": path, "at": "0x1010518", "count": 2 }));
     first["usage"] = json!({ "input_tokens": 10, "output_tokens": 4, "cache_read_input_tokens": 0 });
