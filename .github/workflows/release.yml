@@ -16,10 +16,6 @@ on:
         description: Build and upload artefacts only; do not create a draft release
         type: boolean
         default: true
-      tag:
-        description: Existing tag to attach a draft release to (only when dry_run is off)
-        type: string
-        default: ""
       macos:
         description: Include aarch64-apple-darwin (its runner minutes cost 10x Linux on a private repo)
         type: boolean
@@ -72,8 +68,8 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
           DRY_RUN: ${{ inputs.dry_run }}
-          INPUT_TAG: ${{ inputs.tag }}
           MACOS: ${{ inputs.macos }}
         run: |
           version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
@@ -85,9 +81,13 @@ jobs:
             tag=""
             publish=false
           else
-            tag=$INPUT_TAG
+            # The binaries are built from the dispatched ref, so a draft may only come from a run on the tag itself.
+            if [ "$REF_TYPE" != tag ]; then
+              echo "::error::A non-dry run must be dispatched on the tag: gh workflow run release.yml --ref vX.Y.Z -f dry_run=false"
+              exit 1
+            fi
+            tag=$REF_NAME
             publish=true
-            test -n "$tag" || { echo "::error::A non-dry run needs an existing tag"; exit 1; }
           fi
           if [ -n "$tag" ] && [ "$tag" != "v$version" ]; then
             echo "::error::Tag $tag does not match the workspace version $version"

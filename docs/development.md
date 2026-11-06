@@ -162,7 +162,10 @@ starts the worker from its own directory), `LICENSE`, `NOTICE`, `THIRD-PARTY-NOT
   the archives, their `.sha256` files and a combined `SHA256SUMS`. Nothing is published automatically.
 - `gh workflow run release.yml --ref BRANCH` (or CI's `release_dry_run` input) is a dry run: it builds, packages and
   smoke-tests the archives and uploads them as workflow artefacts for 14 days, and never creates a release. Pass
-  `-f macos=false` to build Linux only. `-f dry_run=false -f tag=vX.Y.Z` attaches a draft to an existing tag.
+  `-f macos=false` to build Linux only. `gh workflow run release.yml --ref vX.Y.Z -f dry_run=false` rebuilds an
+  existing tag and attaches a draft to it; a non-dry run on a ref that is not a tag stops before building.
+- `release.yml` must be on the default branch before `gh workflow run release.yml` works; until then, use CI's
+  `release_dry_run` input.
 
 Install a downloaded archive with the installer, which verifies the checksum when the `.sha256` file sits next to
 the archive and then publishes the programs through the same guarded path as a source install:
