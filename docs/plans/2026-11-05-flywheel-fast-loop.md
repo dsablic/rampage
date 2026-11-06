@@ -123,78 +123,141 @@ bundled databases that passes the gate against the bundled baseline.
 ## M1 implementation notes (2026-11-06)
 
 M1 implements everything the acceptance test needs except export/import, `bundle` and the transcript miner,
-which are M2. The how-to is in [docs/flywheel.md](../flywheel.md).
+which are M2. The how-to is in [docs/flywheel.md](../flywheel.md). The first M1 run was reviewed and found to
+measure recognition of the same build rather than generalisation. A fix pass rebuilt the split and the gate, and
+the acceptance was re-run. Both are recorded here.
 
-### As built
-- **Corpus.** `tools/flywheel/build-corpus.sh` builds `libid-89cf5995396f`: zlib 1.3.1, LZ4 1.10.0 and cJSON
-  1.7.18, each pinned by SHA-256. They are built for x86-64 and AArch64 static-musl ELF, at O1, O2 and Os, with
-  `zig cc` (Zig 0.17.0) and Homebrew clang 23.1.4. Four owned driver programs per library give 144 stripped
-  binaries with symbolized twins. The split holds out one program per library: 36 held-out binaries and 108
-  training binaries. The fast slice is 36 training binaries.
-- **Truth.** Truth comes from the twin's function symbols, minus the driver object's own functions, with the
-  stripped bytes checked against the twin. Each truth function is tagged with its library, or `runtime`. It is
-  cached by binary hashes.
-- **Baseline.** The baseline is the API's own path (project analysis, then `identify_functions` with the bundled
-  databases only). It is cached by (binary hash, bundled asset SHA-256, executable SHA-256).
-- **Candidates.** Candidates are PAT records in the existing signature pack format: a whole-function pattern
-  with `..` wildcards, a name, and a library tag kept as provenance. A candidate is evaluated merged with the
-  promoted rows, exactly as promoting it would leave the pack.
-- **Incremental evaluation.** Only binaries holding a body that some row's pattern matches are identified
-  again. On the held-out split this gave the same metrics as full re-identification: 10 of 36 binaries in
-  47 ms, against 36 binaries in 226 ms.
-- **Gate defaults.** Held-out F1 must gain at least 0.001 and must rise. False positives may not rise on the
-  held-out split or the fast slice. No slice or cell may lose F1. A server runs at most 12 held-out evaluations.
+### The first split, and why it was replaced
+The first corpus (`libid-89cf5995396f`) split by program within one library version:
 
-### Baseline (bundled databases only)
+- **Corpus:** zlib 1.3.1, LZ4 1.10.0 and cJSON 1.7.18 at O1, O2 and Os.
+- **Held-out:** one driver program per library.
+- **Gate scope:** every truth function, including musl and compiler-rt.
+
+Every program of a configuration links the same library and runtime build, so holding out a program held out
+almost nothing. A review measured it:
+
+- 98.0% of held-out truth functions had the same name in training under the same configuration.
+- 56.6% of held-out bodies were byte-identical to a same-named training body.
+- Zig's O1 and O2 binaries were byte-identical (24 of 24 pairs).
+- The held-out split had only 514 functions outside the truth.
+
+Its acceptance run promoted 82 rows (held-out F1 0.4553 to 0.5856, +689 TP). Of the 663 gains the review could
+attribute:
+
+- 662 were a row matching a same-named training function in the identical configuration;
+- 74.8% were byte-identical to training;
+- 75.1% were musl or compiler-rt, not the target libraries;
+- LZ4 gained nothing;
+- 23 of the 82 rows were under 32 bytes.
+
+That result showed the loop's mechanics work. It was not evidence of generalisation.
+
+The review also found that a `--corpus` server served the core tools. Those tools take any path, so a proposer
+could have opened held-out binaries and their symbolized twins.
+
+### As built after the fix pass
+- **Corpus `libid-738deabb4598`.** Each target library is built twice: the older version for training (zlib
+  1.2.13, LZ4 1.9.4, cJSON 1.7.15) and the current version held out (zlib 1.3.1, LZ4 1.10.0, cJSON 1.7.18). Both
+  link into the same four owned drivers, for x86-64 and AArch64 at O0/O2/Os with zig cc and clang 23.
+  Negatives are inih r58, tinyexpr 1.1.1 and two owned programs, built the same way. That makes 360 binaries
+  (144 training, 144 held-out, 72 negative) with no duplicates, built in 83 s.
+  - The version hashes zig, clang and ld.lld.
+  - `tools/flywheel/expected-digests.json` records the stripped digests for a reproducibility check.
+- **Scoring.** The gated scope is the target libraries' own functions plus every false name. `origin:` slices
+  report library, runtime and none separately and are never gated. The `library:` slice is now
+  `program_library:`.
+- **Gate.**
+  - Rows must be at least 32 bytes.
+  - The fast stage refuses any new false positive on the full training split, any name at all on the negatives,
+    and any gated slice losing F1.
+  - The held-out stage needs an F1 gain of at least 0.001, no new false positive and no gated slice regression.
+  - It returns only the verdict and the overall delta.
+  - Held-out evaluations are capped at 20 per corpus, persisted across servers under a file lock.
+  - Records are keyed by corpus identity: the version, the split configuration and every binary hash.
+- **Server isolation.** A `--corpus` server serves `enable_tools` and the improve group alone; no other group can
+  be enabled. Every tool argument naming a path under the corpus or the flywheel directory is refused.
+  `report_observation` is served only in ordinary sessions, bounds the hashed size and refuses flywheel corpus
+  paths.
+- **Promotion.** Promotions take a cross-process file lock and write `entries.json` last; the pack is regenerated
+  from it when found out of date. Reverts are latest-first only; an out-of-order revert is refused with the order
+  to use.
+- **Runs.** A round that does not end `ok` reverts that round's promotions and stops the run; failing isolation
+  counts as not ending `ok`.
+
+### Overlap check (deviation)
+A server measures how many held-out library bodies (masked) also occur in training. On this corpus it is 9,734
+of 13,291 (73.2%): most zlib, LZ4 and cJSON functions are unchanged between these versions.
+
+The check now works in two tiers. Above `max_heldout_overlap` (50%) the server warns loudly: on stderr, in
+`corpus_failures` and in the run report. It refuses the corpus only above `refuse_heldout_overlap` (95%,
+essentially the same build). The limit was not raised to make the warning go away. Reports split held-out gains
+into bodies training already held and novel bodies, so recognition of unchanged code is never presented as
+generalisation.
+
+### Baseline (bundled databases only, gated scope)
 | Split | Binaries | TP | FP | FN | Precision | Recall | F1 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| train | 108 | 5481 | 44 | 14301 | 0.9920 | 0.2771 | 0.4332 |
-| heldout | 36 | 1702 | 11 | 4062 | 0.9936 | 0.2953 | 0.4553 |
-| fast | 36 | 1884 | 11 | 5022 | 0.9942 | 0.2728 | 0.4281 |
+| train (old versions) | 144 | 989 | 54 | 12963 | 0.948 | 0.071 | 0.132 |
+| heldout (current versions) | 144 | 1005 | 60 | 13315 | 0.944 | 0.070 | 0.131 |
+| fast | 36 | 324 | 14 | 3966 | 0.959 | 0.076 | 0.140 |
+| negative | 72 | 0 | 26 | 1224 | — | — | — |
 
-The slice with the most headroom is Os (held-out F1 0.267). Of the 3,023 training failure groups, 1,898 bodies
-are below the hash confidence gate: no signature can name them.
+The bundled databases name no held-out cJSON function and almost nothing at O0 (held-out recall 0.002).
 
-### Acceptance run
-`rampage-eval flywheel --rounds 4 --budget-usd 5` (Sonnet 5.5 through `claude-runner.py`, unattended) ran four
-rounds and promoted four candidates of 20, 17, 13 and 32 rows. It spent $0.62. Held-out F1 rose from 0.4553 to
-0.5856 (+689 TP, +0 FP). Every per-dimension slice improved and no cell lost F1. Reverting the last promotion reproduced its recorded
-pre-promotion metrics exactly. Reverting all four restored all 47 held-out slices, cells included, to the
-baseline exactly.
+### Acceptance run (fix pass)
+`rampage-eval flywheel --rounds 4 --budget-usd 5` (Sonnet 5.5, unattended) ran four rounds for $0.45 and
+promoted four candidates: 12, 8, 6 and 16 rows, all at least 32 bytes.
 
-### Timings (shared, heavily loaded laptop; load average about 120)
-- **Corpus build:** 117 s with sources cached, three jobs.
-- **Cold analysis:** about 55 ms per binary with three workers (108 training binaries in 6 s). Warm loads come
-  from the cache.
-- **Round:** about 24 s (target 1–3 minutes). Tool time is 1.3–2.8 s per round, mostly `corpus_failures`
-  (0.7–1.6 s); the rest is model and client time.
-- **Fast gate:** 0.27–0.69 s.
-- **Held-out gate:** 0.15–0.47 s warm, about 2.2 s on a fresh server (target under 15 minutes).
+**Overall:**
+- Gated held-out F1 rose from 0.1306 to 0.1743 (+368 TP, +0 FP).
+- No new name on the negatives, and no gated slice lost F1.
+
+**By origin:**
+- cJSON +280
+- zlib +56
+- LZ4 +32
+- runtime +0
+
+**Did it generalise?** Of the 368 held-out gains, 365 are functions whose masked body training already held,
+because the code is unchanged between versions. Only 3 are novel bodies (`cJSON_InitHooks`,
+`cJSON_PrintPreallocated`). The agent's own round summaries give the same reason: it picked long single-name bodies
+"likely to be unchanged between versions". So the promotions are honest cross-version recognition of unchanged
+library code, which is what FLIRT-style signatures do. They are not evidence that the loop learns patterns that
+survive code changes. Whole-function byte patterns cannot carry across a changed body; that needs wildcarding
+beyond scheme-2 masking, or another signature form.
+
+**Revert check.** Reverting an earlier promotion out of order was refused. Reverting all four latest-first
+restored all 51 held-out slices to the baseline exactly.
+
+### Timings (shared, heavily loaded laptop)
+- **Corpus build:** 83 s (360 binaries, three jobs, sources cached).
+- **Cold analysis:** about 40 ms per binary.
+- **Server open:** about 16 s cold for the overlap check, about 2 s warm.
+- **Round:** 23–38 s. Tool time is 4–16 s and grows as promoted rows make more binaries need identifying again.
+- **Fast stage:** 0.02–1.7 s (fast slice, full training split and negatives).
+- **Held-out gate:** 0.04–4.7 s (target under 15 minutes).
 
 ### Deviations and decisions
-- **One row form.** Rows are PAT patterns only, not masked-hash entries. PAT is the pack format's "pattern with
-  masks", and the library tag is provenance because PAT has no field for it. A pattern holds at most 2,080
-  bytes; longer bodies are flagged `proposable: false`.
-- **Gate scope.** The gate compares against the current promoted state, not the bare bundled baseline, so two
-  promotions are never credited with the same gain. `flywheel-eval` still reports deltas against the cached
+- **One row form.** Rows are PAT patterns only (the pack format's "pattern with masks"). The library tag is
+  provenance.
+- **Gate scope.** The gate compares against the current promoted state; `flywheel-eval` reports against the
   bundled baseline.
-- **Observations.** `report_observation` writes to a dedicated opt-in store (`target/flywheel/observations/`,
-  `--observations` or `RAMPAGE_OBSERVATIONS`), not the annotation sidecar, which is the analyst's replayed
-  record. The tool is served in `core` whenever a store is configured, so the `improve` group itself still
-  exists only with `--corpus`.
-- **Held-out probing.** Held-out probing is bounded by `max_heldout_evaluations`. Held-out results expose
-  overall and per-dimension metrics only; cell-level detail is a count of failing slices.
-- **Twin symbols.** `zig cc -Os` strips symbols at link time, so the corpus links with `-g` and strips debug
-  sections afterwards. The build now refuses a twin without function symbols.
+- **Revert order.** Reverts are latest-first only, rather than re-gating the remaining set.
+- **Overlap check.** It warns above 50% and refuses above 95%, as described above.
+- **No configuration hold-out view.** The configuration hold-out "second view" was not built; it needs a second
+  split definition (see the gaps).
+- **Observation store.** Observations go to a dedicated opt-in store, not the annotation sidecar, which is the
+  analyst's replayed record.
 
 ### Gaps for M2
-- **Export and bundling.** `.rpack` export/import, `packs diff` and `rampage-eval bundle` are not built yet, so
-  the acceptance's last step (bundle against the bundled baseline) is open.
-- **What the split holds out.** The split holds out programs, but the library code is shared across a
-  configuration's programs. Most gains are therefore same-build recognition (cJSON, musl and compiler-rt
-  functions present in every program). Holding out library versions or configurations would test
-  generalization harder.
-- **Corpus breadth.** The corpus has no gcc, no PE or Mach-O, and three libraries. Larger corpora need the
-  per-binary caches to stay cheap.
+- **Export and bundling.** `.rpack` export/import, `packs diff` and `rampage-eval bundle` are not built yet.
+- **A split that tests changed code.**
+  - A configuration hold-out (compiler × opt per arch) as a second split view.
+  - A metric restricted to novel held-out bodies, so a gain from changed code can be gated directly.
+- **Signature forms.** Patterns that tolerate small code changes (broader wildcards, callee-keyed rows) are needed
+  before generalisation beyond unchanged code is reachable.
+- **Corpus breadth.** The corpus has no gcc, no PE or Mach-O, and three target libraries.
 - **Observations unused.** Observations are recorded but not yet read into the corpus.
-- **Other families.** The transcript miner and the tool-ID and discovery families are not started.
+- **Other families.** The transcript miner and the tool-ID and discovery families are not started. Their split
+  rule is in [docs/flywheel.md](../flywheel.md).
