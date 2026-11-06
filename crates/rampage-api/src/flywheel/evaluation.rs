@@ -7,7 +7,13 @@ use serde::{Deserialize, Serialize};
 
 use super::FlywheelError;
 use super::corpus::Split;
-use super::engine::{Counts, Engine, Layer, Outcome, SliceMetrics, gated_slice, round, slice_counts};
+use super::engine::{Counts, Engine, Layer, Outcome, Proposals, SliceMetrics, gated_slice, round, slice_counts};
+
+/// The held-out slice of target-library functions whose masked body training does not hold: a gain here is
+/// generalisation to changed code, not recognition of unchanged code.
+pub const NOVEL_SLICE: &str = "novelty:novel";
+/// The held-out slice of target-library functions whose masked body training also holds.
+pub const RECOGNISED_SLICE: &str = "novelty:recognised";
 
 /// One slice's change from the reference to the candidate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -107,7 +113,12 @@ impl SplitEvaluation {
 
     /// The gated scope's counts before and after: target-library functions, plus every false name.
     pub fn overall(&self) -> (Counts, Counts) {
-        (self.reference.get("all").copied().unwrap_or_default(), self.candidate.get("all").copied().unwrap_or_default())
+        self.slice("all")
+    }
+
+    /// One slice's counts before and after.
+    pub fn slice(&self, slice: &str) -> (Counts, Counts) {
+        (self.reference.get(slice).copied().unwrap_or_default(), self.candidate.get(slice).copied().unwrap_or_default())
     }
 }
 
@@ -121,6 +132,18 @@ pub fn evaluate_split(
     let indices = engine.corpus.indices(split);
     let before = engine.propose(&indices, reference)?;
     let after = engine.propose(&indices, layers)?;
+    compare(engine, split, &before, &after)
+}
+
+/// Scores `split` from the names a reference (`before`) and a candidate (`after`) gave its binaries. Held-out
+/// evaluations never keep cases.
+pub fn compare(
+    engine: &Engine,
+    split: Split,
+    before: &Proposals,
+    after: &Proposals,
+) -> Result<SplitEvaluation, FlywheelError> {
+    let indices = engine.corpus.indices(split);
     let mut reference_outcomes = BTreeMap::new();
     let mut candidate_outcomes = BTreeMap::new();
     let (mut fixed, mut broken) = (0, 0);
@@ -167,8 +190,8 @@ pub fn evaluate_split(
         binaries: indices.len(),
         reidentified: before.reidentified + after.reidentified,
         elapsed_ms: before.elapsed_ms + after.elapsed_ms,
-        reference: slice_counts(engine, &reference_outcomes),
-        candidate: slice_counts(engine, &candidate_outcomes),
+        reference: slice_counts(engine, &reference_outcomes)?,
+        candidate: slice_counts(engine, &candidate_outcomes)?,
         fixed,
         broken,
         cases,
@@ -209,6 +232,14 @@ pub struct GateConfig {
     /// Held-out evaluations per corpus (across every server and run, cached results excepted), bounding how much
     /// a proposer can learn about the held-out split from its metrics.
     pub max_heldout_evaluations: usize,
+    /// Whether the held-out gate also needs an F1 gain on the novel held-out functions (bodies training does not
+    /// hold). Unset, it follows the baseline: required against the deterministic arm, which already names the
+    /// functions training holds, and not against the bundled databases alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub require_novel_gain: Option<bool>,
+    /// The novel slice's F1 must rise by at least this much (and by more than nothing) when a novel gain is
+    /// required.
+    pub min_novel_f1_gain: f64,
 }
 
 impl Default for GateConfig {
@@ -221,6 +252,8 @@ impl Default for GateConfig {
             max_negative_matches: 0,
             min_pattern_bytes: 32,
             max_heldout_evaluations: 20,
+            require_novel_gain: None,
+            min_novel_f1_gain: 0.001,
         }
     }
 }
@@ -230,8 +263,9 @@ impl GateConfig {
     pub fn from_toml(text: &str) -> Result<GateConfig, FlywheelError> {
         let config: GateConfig =
             toml::from_str(text).map_err(|error| FlywheelError::Invalid(format!("gate: {error}")))?;
-        let negative =
-            [config.min_f1_gain, config.max_slice_f1_drop].iter().any(|value| !value.is_finite() || *value < 0.0);
+        let negative = [config.min_f1_gain, config.max_slice_f1_drop, config.min_novel_f1_gain]
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0);
         if negative {
             return Err(FlywheelError::Invalid("gate: F1 thresholds must be finite and not negative".to_owned()));
         }
@@ -282,13 +316,19 @@ impl GateConfig {
         GateResult::new("fast", checks, failing)
     }
 
-    /// The held-out gate: the overall F1 gain, no new false positive, and no gated slice regression.
-    pub fn heldout(&self, evaluation: &SplitEvaluation) -> GateResult {
+    /// Whether a novel gain is required, given whether the baseline includes the deterministic arm.
+    pub fn novel_gain_required(&self, arm_baseline: bool) -> bool {
+        self.require_novel_gain.unwrap_or(arm_baseline)
+    }
+
+    /// The held-out gate: the overall F1 gain, no new false positive, no gated slice regression and, when
+    /// `require_novel`, an F1 gain on the novel held-out functions.
+    pub fn heldout(&self, evaluation: &SplitEvaluation, require_novel: bool) -> GateResult {
         let (before, after) = evaluation.overall();
         let gain = after.f1() - before.f1();
         let fp_rise = after.fp() as i64 - before.fp() as i64;
         let failing = self.failing_slices(evaluation);
-        let checks = vec![
+        let mut checks = vec![
             GateCheck::new(
                 "heldout_f1_gain",
                 gain > 0.0 && gain + 1e-12 >= self.min_f1_gain,
@@ -306,6 +346,15 @@ impl GateConfig {
                 format!("no gated slice may lose more than {} F1", self.max_slice_f1_drop),
             ),
         ];
+        if require_novel {
+            let (before, after) = evaluation.slice(NOVEL_SLICE);
+            let novel = after.f1() - before.f1();
+            checks.push(GateCheck::new(
+                "heldout_novel_f1_gain",
+                novel > 0.0 && novel + 1e-12 >= self.min_novel_f1_gain,
+                format!("novel-body F1 {novel:+.6} (at least +{})", self.min_novel_f1_gain),
+            ));
+        }
         GateResult::new("heldout", checks, failing)
     }
 
@@ -387,26 +436,26 @@ mod tests {
         let base = counts(500, 0, 500, 0);
         // Ten more correct names out of a thousand: F1 rises by about 0.0066.
         let better = counts(510, 0, 490, 0);
-        assert!(gate.heldout(&evaluation(base, better, base, better)).passed);
+        assert!(gate.heldout(&evaluation(base, better, base, better), false).passed);
 
         // One more correct name is below the default minimum gain.
         let marginal = counts(501, 0, 499, 0);
-        let result = gate.heldout(&evaluation(base, marginal, base, marginal));
+        let result = gate.heldout(&evaluation(base, marginal, base, marginal), false);
         assert!(!result.passed);
         assert!(!result.checks.iter().find(|check| check.rule == "heldout_f1_gain").unwrap().passed);
         // With a lower minimum it passes, and with none it still needs a strict gain.
         let lenient = GateConfig { min_f1_gain: 0.0, ..GateConfig::default() };
-        assert!(lenient.heldout(&evaluation(base, marginal, base, marginal)).passed);
-        assert!(!lenient.heldout(&evaluation(base, base, base, base)).passed);
+        assert!(lenient.heldout(&evaluation(base, marginal, base, marginal), false).passed);
+        assert!(!lenient.heldout(&evaluation(base, base, base, base), false).passed);
 
         // A gain bought with one false positive fails the default.
         let noisy = counts(510, 0, 490, 1);
-        let result = gate.heldout(&evaluation(base, noisy, base, noisy));
+        let result = gate.heldout(&evaluation(base, noisy, base, noisy), false);
         assert!(!result.checks.iter().find(|check| check.rule == "heldout_fp_increase").unwrap().passed);
 
         // An overall gain with one slice losing F1 fails the slice rule and names the slice.
         let slice_worse = counts(400, 1, 100, 0);
-        let result = gate.heldout(&evaluation(base, better, counts(400, 0, 100, 0), slice_worse));
+        let result = gate.heldout(&evaluation(base, better, counts(400, 0, 100, 0), slice_worse), false);
         assert!(!result.passed);
         assert_eq!(result.failing_slices, ["arch:x86_64"]);
     }
@@ -434,7 +483,42 @@ mod tests {
         let mut evaluation = evaluation(base, better, base, better);
         evaluation.reference.insert("origin:runtime".to_owned(), counts(100, 0, 0, 0));
         evaluation.candidate.insert("origin:runtime".to_owned(), counts(90, 0, 10, 0));
-        assert!(gate.heldout(&evaluation).passed, "a runtime slice losing F1 is not a gated regression");
+        assert!(gate.heldout(&evaluation, false).passed, "a runtime slice losing F1 is not a gated regression");
+    }
+
+    #[test]
+    fn a_required_novel_gain_rejects_gains_from_recognised_bodies_alone() {
+        let gate = GateConfig::default();
+        let base = counts(500, 0, 500, 0);
+        let better = counts(510, 0, 490, 0);
+        let mut recognised_only = evaluation(base, better, base, better);
+        recognised_only.reference.insert(RECOGNISED_SLICE.to_owned(), counts(400, 0, 100, 0));
+        recognised_only.candidate.insert(RECOGNISED_SLICE.to_owned(), counts(410, 0, 90, 0));
+        recognised_only.reference.insert(NOVEL_SLICE.to_owned(), counts(100, 0, 400, 0));
+        recognised_only.candidate.insert(NOVEL_SLICE.to_owned(), counts(100, 0, 400, 0));
+        assert!(gate.heldout(&recognised_only, false).passed, "without the rule, an overall gain passes");
+        let result = gate.heldout(&recognised_only, true);
+        assert!(!result.passed);
+        let novel = result.checks.iter().find(|check| check.rule == "heldout_novel_f1_gain").unwrap();
+        assert!(!novel.passed, "{novel:?}");
+
+        let mut generalised = recognised_only.clone();
+        generalised.candidate.insert(NOVEL_SLICE.to_owned(), counts(110, 0, 390, 0));
+        assert!(gate.heldout(&generalised, true).passed);
+        // Below the novel minimum, it still fails.
+        let mut marginal = recognised_only.clone();
+        marginal.candidate.insert(NOVEL_SLICE.to_owned(), counts(100, 0, 400, 0));
+        marginal.candidate.insert(NOVEL_SLICE.to_owned(), counts(101, 0, 399, 0));
+        let strict = GateConfig { min_novel_f1_gain: 0.01, ..GateConfig::default() };
+        assert!(!strict.heldout(&marginal, true).passed);
+
+        // Unset, the rule follows the baseline; a gate file can force it either way.
+        assert!(gate.novel_gain_required(true) && !gate.novel_gain_required(false));
+        let forced = GateConfig::from_toml("require_novel_gain = true\nmin_novel_f1_gain = 0.002\n").unwrap();
+        assert!(forced.novel_gain_required(false));
+        assert_eq!(forced.min_novel_f1_gain, 0.002);
+        assert!(!GateConfig::from_toml("require_novel_gain = false\n").unwrap().novel_gain_required(true));
+        assert!(GateConfig::from_toml("min_novel_f1_gain = -0.1\n").is_err());
     }
 
     #[test]

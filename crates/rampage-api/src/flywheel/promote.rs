@@ -42,6 +42,13 @@ pub struct PromotedEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposer_run: Option<String>,
     pub promoted_unix_ms: u64,
+    /// What the candidate was gated against besides earlier promotions: `arm:<rows hash>` (the deterministic arm)
+    /// or `bundled`. Absent in entries promoted before the arm existed (bundled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<String>,
+    /// Whether the held-out gate required a novel-body gain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_novel_gain: Option<bool>,
 }
 
 /// Every promoted entry of a family, in promotion order.
@@ -225,6 +232,7 @@ mod tests {
             name: name.to_owned(),
             library: Some("zlib".to_owned()),
             pattern: pattern.to_owned(),
+            length: None,
             source: Some(source.clone()),
         };
         PromotedEntry {
@@ -246,6 +254,8 @@ mod tests {
             heldout_deltas: BTreeMap::new(),
             proposer_run: Some("run/round-1".to_owned()),
             promoted_unix_ms: 1,
+            baseline: Some("arm:0123456789ab".to_owned()),
+            require_novel_gain: Some(true),
         }
     }
 

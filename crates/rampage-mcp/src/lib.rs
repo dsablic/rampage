@@ -1222,8 +1222,14 @@ mod tests {
                 "binaries": binaries,
             });
             std::fs::write(corpus.join("manifest.json"), manifest.to_string()).unwrap();
-            let options =
-                ImproveOptions { corpus, flywheel_dir: None, gate: Default::default(), workers: 1, run: None };
+            let options = ImproveOptions {
+                corpus,
+                flywheel_dir: None,
+                gate: Default::default(),
+                workers: 1,
+                run: None,
+                baseline: Default::default(),
+            };
             Arc::new(Improve::open(options).unwrap())
         }))
     }

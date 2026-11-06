@@ -5,12 +5,13 @@
 //! reveals held-out binaries or truth, that the held-out budget spans servers, and run a scripted (non-model)
 //! proposer that the negatives gate stops once, that promotes rows which carry across versions, and reverts.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rampage_api::flywheel::{
-    CorpusManifest, GateConfig, Improve, ImproveOptions, Paths, PromotedSet, Split, evaluate_split, promoted_layer,
-    revert, sha256_file,
+    Baseline, CorpusManifest, GateConfig, Improve, ImproveOptions, NOVEL_SLICE, Paths, PromotedSet, RECOGNISED_SLICE,
+    Split, evaluate_split, format_pattern, layer, parse_pattern, promoted_layer, revert, sha256_file,
 };
 use rampage_api::tools::Group;
 use rampage_mcp::RampageServer;
@@ -123,12 +124,17 @@ fn synthetic(name: &str) -> Synthetic {
 }
 
 fn improve_with(synthetic: &Synthetic, run: Option<&str>, gate: GateConfig) -> Arc<Improve> {
+    improve_in(synthetic, run, gate, Baseline::Bundled)
+}
+
+fn improve_in(synthetic: &Synthetic, run: Option<&str>, gate: GateConfig, baseline: Baseline) -> Arc<Improve> {
     let options = ImproveOptions {
         corpus: synthetic.corpus.clone(),
         flywheel_dir: None,
         gate,
         workers: 2,
         run: run.map(str::to_owned),
+        baseline,
     };
     Arc::new(Improve::open(options).unwrap())
 }
@@ -358,4 +364,182 @@ fn heldout_names(improve: &Improve) -> std::collections::BTreeSet<String> {
         }
     }
     names
+}
+
+/// The held-out binary `id`'s truth function `name`: its address and masked body. Only a test, standing in for the
+/// operator, can read held-out code.
+fn heldout_body(improve: &Improve, id: &str, name: &str) -> (u64, String) {
+    let engine = improve.engine();
+    let index = engine.corpus.manifest.binaries.iter().position(|binary| binary.id == id).unwrap();
+    let loaded = engine.get(index).unwrap();
+    let address = *loaded.truth.iter().find(|(_, truth)| truth.name == name).unwrap().0;
+    (address, format_pattern(&loaded.masked(address).unwrap()))
+}
+
+#[test]
+fn the_deterministic_arm_rows_every_unambiguous_training_body_and_novelty_splits_the_heldout_functions() {
+    let synthetic = synthetic("arm");
+    let improve = improve(&synthetic, None);
+    let engine = improve.engine();
+    let arm = rampage_api::flywheel::arm(engine, 32).unwrap();
+    let names: BTreeSet<&str> = arm.rows.iter().map(|row| row.name.as_str()).collect();
+    for name in ["ml_mix", "ml_checksum", "ml_reverse"] {
+        assert!(names.contains(name), "{name} is an unambiguous training body: {names:?}");
+    }
+    assert!(!names.contains("ml_sum_squares"), "the negative program holds the same body under another name");
+    assert!(arm.stats.colliding >= 1, "{:?}", arm.stats);
+    assert!(arm.rows.iter().all(|row| row.library.as_deref() == Some("minilib") && row.length.is_none()));
+    assert!(arm.rows.iter().all(|row| parse_pattern(&row.pattern).unwrap().len() >= 32));
+    assert_eq!(arm.rows.len(), names.len(), "one row per body: both training programs share the build");
+    assert_eq!(rampage_api::flywheel::arm(engine, 32).unwrap().hash(), arm.hash(), "saved and loaded again");
+
+    // Novelty: ml_extra is new and ml_checksum changed in version 2; the other functions are unchanged.
+    let index = engine.corpus.manifest.binaries.iter().position(|binary| binary.id == "v2-a").unwrap();
+    let loaded = engine.get(index).unwrap();
+    let novelty = engine.novelty(index).unwrap();
+    let novel_of = |name: &str| {
+        let address = loaded.truth.iter().find(|(_, truth)| truth.name == name).unwrap().0;
+        novelty[address]
+    };
+    assert!(novel_of("ml_extra") && novel_of("ml_checksum"));
+    assert!(!novel_of("ml_mix") && !novel_of("ml_reverse"));
+    let training = engine.corpus.manifest.binaries.iter().position(|binary| binary.id == "v1-a").unwrap();
+    assert!(engine.novelty(training).unwrap().is_empty(), "novelty is a held-out notion");
+
+    // The arm gains recognised functions only, without a false positive; the novel slice is untouched.
+    let layers: Vec<_> = layer("arm", &arm.rows).unwrap().into_iter().collect();
+    let evaluation = evaluate_split(engine, Split::Heldout, &layers, &[]).unwrap();
+    let (before, after) = evaluation.slice(RECOGNISED_SLICE);
+    assert!(after.tp() > before.tp(), "{before:?} -> {after:?}");
+    let (before, after) = evaluation.slice(NOVEL_SLICE);
+    assert_eq!(after.tp(), before.tp());
+    assert_eq!(after.fn_(), 4, "ml_extra and ml_checksum in two programs");
+    let (before, after) = evaluation.overall();
+    assert_eq!(after.fp(), before.fp());
+}
+
+#[tokio::test]
+async fn against_the_arm_only_a_novel_gain_passes_and_the_verdict_stays_opaque() {
+    let fixture = synthetic("armgate");
+    let improve = improve_in(&fixture, Some("scripted/arm"), GateConfig::default(), Baseline::Arm);
+    let client = connect(RampageServer::default().with_improve(Arc::clone(&improve))).await;
+    let failures = json_of(&call(&client, "corpus_failures", json!({"limit": 200, "variants": true})).await);
+    assert_eq!(failures["baseline"]["kind"], "arm", "{failures}");
+    assert_eq!(failures["require_novel_gain"], true);
+    let listed: Vec<&str> = failures["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|group| group["truth_names"].as_array().unwrap().iter().map(|name| name.as_str().unwrap()))
+        .collect();
+    assert!(!listed.contains(&"ml_mix"), "the arm names it already: {listed:?}");
+    // `outcome: all` lists every training body, the ones the arm names included, and nothing held out.
+    let every = json_of(&call(&client, "corpus_failures", json!({"outcome": "all", "limit": 200})).await);
+    let mix = every["groups"].as_array().unwrap().iter().find(|group| group["truth_names"][0] == "ml_mix").unwrap();
+    assert_eq!(mix["failing"], false, "{mix}");
+    assert!(mix["example"]["binary"].as_str().unwrap().starts_with("v1-"));
+    assert!(!every.to_string().contains("ml_extra") && !every.to_string().contains("v2-"));
+
+    // A row copying a body the arm holds adds nothing and fails the gate.
+    let copy = improve.arm().unwrap().rows.iter().find(|row| row.name == "ml_mix").unwrap().clone();
+    let rows = json!({"rows": [{"pattern": copy.pattern, "arch": "x86_64", "name": "ml_mix"}]});
+    let proposal = json_of(&call(&client, "propose_heuristic", rows).await);
+    assert_eq!(proposal["added"][0]["baseline_has_row"], true, "{proposal}");
+    let candidate = proposal["candidate"].as_str().unwrap();
+    let gated =
+        json_of(&call(&client, "evaluate_candidate", json!({"candidate": candidate, "stage": "heldout"})).await);
+    assert_eq!(gated["heldout"]["passed"], false, "{gated}");
+
+    // A row for a novel held-out body (scripted from held-out bytes, as only an operator could) passes, with the
+    // novel rule among the checks and still only the verdict and the overall delta.
+    let (_, pattern) = heldout_body(&improve, "v2-a", "ml_extra");
+    let rows = json!({"rows": [{"pattern": pattern, "arch": "x86_64", "name": "ml_extra"}]});
+    let proposal = json_of(&call(&client, "propose_heuristic", rows).await);
+    let candidate = proposal["candidate"].as_str().unwrap();
+    let gated =
+        json_of(&call(&client, "evaluate_candidate", json!({"candidate": candidate, "stage": "heldout"})).await);
+    assert_eq!(gated["heldout"]["passed"], true, "{gated}");
+    let keys: BTreeSet<&String> = gated["heldout"].as_object().unwrap().keys().collect();
+    assert_eq!(keys.into_iter().collect::<Vec<_>>(), ["checks", "elapsed_ms", "overall_delta", "passed", "status"]);
+    let checks = gated["heldout"]["checks"].as_array().unwrap();
+    let novel = checks.iter().find(|check| check["rule"] == "heldout_novel_f1_gain").unwrap();
+    assert_eq!(novel["detail"], Value::Null, "the novel delta is not shown: {gated}");
+    let promoted = json_of(&call(&client, "promote_candidate", json!({"candidate": candidate})).await);
+    assert_eq!(promoted["promoted"], true);
+    let entry = &PromotedSet::load(improve.paths(), "libid").unwrap().entries[0];
+    assert!(entry.baseline.as_deref().is_some_and(|baseline| baseline.starts_with("arm:")), "{:?}", entry.baseline);
+    assert_eq!(entry.require_novel_gain, Some(true));
+
+    // Against the bundled databases with a novel gain required, rows that only recognise unchanged code fail.
+    let other = synthetic("novelrule");
+    let gate = GateConfig { require_novel_gain: Some(true), ..GateConfig::default() };
+    let bundled = improve_in(&other, None, gate, Baseline::Bundled);
+    let client = connect(RampageServer::default().with_improve(Arc::clone(&bundled))).await;
+    let rows: Vec<Value> = ["ml_mix", "ml_reverse"]
+        .iter()
+        .map(|name| {
+            let row = improve.arm().unwrap().rows.iter().find(|row| row.name == *name).unwrap();
+            json!({"pattern": row.pattern, "arch": "x86_64", "name": name})
+        })
+        .collect();
+    let proposal = json_of(&call(&client, "propose_heuristic", json!({"rows": rows})).await);
+    let candidate = proposal["candidate"].as_str().unwrap();
+    let gated =
+        json_of(&call(&client, "evaluate_candidate", json!({"candidate": candidate, "stage": "heldout"})).await);
+    assert_eq!(gated["heldout"]["passed"], false, "{gated}");
+    let checks = gated["heldout"]["checks"].as_array().unwrap();
+    assert!(checks.iter().any(|check| check["rule"] == "heldout_f1_gain" && check["passed"] == true), "{gated}");
+    assert!(checks.iter().any(|check| check["rule"] == "heldout_novel_f1_gain" && check["passed"] == false));
+}
+
+#[tokio::test]
+async fn generalising_rows_wildcard_spans_merge_variants_and_keep_prefixes_from_training_bodies_only() {
+    let synthetic = synthetic("generalise");
+    let improve = improve(&synthetic, None);
+    let client = connect(RampageServer::default().with_improve(Arc::clone(&improve))).await;
+    let failures = json_of(&call(&client, "corpus_failures", json!({"limit": 200, "variants": true})).await);
+    let listing = failures.to_string();
+    for secret in ["v2-a", "v2-b", "ml_extra"] {
+        assert!(!listing.contains(secret), "variants reveal held-out {secret}");
+    }
+    let groups = failures["groups"].as_array().unwrap();
+    assert!(groups.iter().all(|group| group["variants"]["total"].is_u64()), "{failures}");
+    let group = groups
+        .iter()
+        .filter(|group| group["proposable"] == true && group["truth_names"].as_array().unwrap().len() == 1)
+        .max_by_key(|group| group["length"].as_u64().unwrap())
+        .unwrap();
+    let case = group["case"].as_str().unwrap();
+    let name = group["truth_names"][0].as_str().unwrap();
+    let length = group["length"].as_u64().unwrap();
+
+    let exact = json_of(&call(&client, "propose_heuristic", json!({"rows": [{"case": case, "name": name}]})).await);
+    let exact = &exact["added"][0];
+    let row = json!({"case": case, "name": name, "wildcard_spans": [[8, 12]], "merge_cases": [case]});
+    let spans = json_of(&call(&client, "propose_heuristic", json!({"rows": [row]})).await);
+    let spans = &spans["added"][0];
+    assert!(spans["wildcards"].as_u64().unwrap() >= exact["wildcards"].as_u64().unwrap(), "{spans}");
+    let matched = |row: &Value| row["train_preview"]["truth_is_this_name"].as_u64().unwrap();
+    assert!(matched(spans) >= matched(exact));
+
+    let row = json!({"case": case, "name": name, "keep_prefix": 32});
+    let prefix = json_of(&call(&client, "propose_heuristic", json!({"rows": [row]})).await);
+    let prefix = &prefix["added"][0];
+    assert_eq!(prefix["length"].as_u64().unwrap(), length, "the module length is kept: {prefix}");
+    assert_eq!(prefix["pattern_bytes"], 32);
+    assert!(prefix["pat"].as_str().unwrap().contains(&format!(" {length:04X} :0000 ")), "{prefix}");
+
+    // A merged body must have the row's length; a prefix shorter than the minimum and an unknown case are refused.
+    let other =
+        groups.iter().find(|other| other["length"].as_u64() != Some(length) && other["proposable"] == true).unwrap();
+    let row = json!({"case": case, "name": name, "merge_cases": [other["case"]]});
+    let refused = call(&client, "propose_heuristic", json!({"rows": [row]})).await;
+    assert_eq!(refused.is_error, Some(true));
+    assert!(text(&refused).contains("bytes like the row"), "{}", text(&refused));
+    let row = json!({"case": case, "name": name, "keep_prefix": 16});
+    let refused = call(&client, "propose_heuristic", json!({"rows": [row]})).await;
+    assert!(text(&refused).contains("at least 32"), "{}", text(&refused));
+    let row = json!({"case": "f000000000000000", "name": name});
+    let unknown = call(&client, "propose_heuristic", json!({"rows": [row]})).await;
+    assert_eq!(unknown.is_error, Some(true));
 }
