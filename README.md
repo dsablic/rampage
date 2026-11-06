@@ -33,9 +33,9 @@ See the [feature reference](docs/features.md) for architecture coverage and limi
 
 - **macOS on Apple silicon (ARM64):** the primary development host. Hosted CI builds and tests the whole workspace,
   including the desktop UI snapshots.
-- **Linux x86-64 (Ubuntu 24.04):** the core analysis crates have passed hosted CI. The CI job that builds and tests
-  the whole workspace on Linux is new in this preview. UI snapshot tests are macOS-only, and the desktop UI is
-  untested on Linux.
+- **Linux x86-64 (Ubuntu 24.04):** supported. Hosted CI builds the whole workspace and runs its tests, Clippy and
+  the x86-64 layout and component gates, and release archives are built for `x86_64-unknown-linux-gnu`. UI snapshot
+  tests are macOS-only; `rampage-ui` builds and ships for Linux but its interface is untested there.
 - **Windows:** not supported as a host. The analysis API uses Unix-only file APIs, and supervised decompilation and
   component plugins need 64-bit Linux or macOS. PE binaries can still be analysed, and Windows targets debugged
   through an RSP stub, from a macOS or Linux host.
