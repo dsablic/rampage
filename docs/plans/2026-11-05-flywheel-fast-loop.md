@@ -119,3 +119,145 @@ bundled databases that passes the gate against the bundled baseline.
 3. Approve the corpus build: pinned open-source packages, downloaded and compiled locally, and never committed.
 4. Approve the `.rpack` export/import format and the `bundle` integration command.
 5. Per-round model budget for unattended runs (suggested default: $5 per family per run).
+
+## M1 implementation notes (2026-11-06)
+
+M1 implements everything the acceptance test needs except export/import, `bundle` and the transcript miner,
+which are M2. The how-to is in [docs/flywheel.md](../flywheel.md). The first M1 run was reviewed and found to
+measure recognition of the same build rather than generalisation. A fix pass rebuilt the split and the gate, and
+the acceptance was re-run. Both are recorded here.
+
+### The first split, and why it was replaced
+The first corpus (`libid-89cf5995396f`) split by program within one library version:
+
+- **Corpus:** zlib 1.3.1, LZ4 1.10.0 and cJSON 1.7.18 at O1, O2 and Os.
+- **Held-out:** one driver program per library.
+- **Gate scope:** every truth function, including musl and compiler-rt.
+
+Every program of a configuration links the same library and runtime build, so holding out a program held out
+almost nothing. A review measured it:
+
+- 98.0% of held-out truth functions had the same name in training under the same configuration.
+- 56.6% of held-out bodies were byte-identical to a same-named training body.
+- Zig's O1 and O2 binaries were byte-identical (24 of 24 pairs).
+- The held-out split had only 514 functions outside the truth.
+
+Its acceptance run promoted 82 rows (held-out F1 0.4553 to 0.5856, +689 TP). Of the 663 gains the review could
+attribute:
+
+- 662 were a row matching a same-named training function in the identical configuration;
+- 74.8% were byte-identical to training;
+- 75.1% were musl or compiler-rt, not the target libraries;
+- LZ4 gained nothing;
+- 23 of the 82 rows were under 32 bytes.
+
+That result showed the loop's mechanics work. It was not evidence of generalisation.
+
+The review also found that a `--corpus` server served the core tools. Those tools take any path, so a proposer
+could have opened held-out binaries and their symbolized twins.
+
+### As built after the fix pass
+- **Corpus `libid-738deabb4598`.** Each target library is built twice: the older version for training (zlib
+  1.2.13, LZ4 1.9.4, cJSON 1.7.15) and the current version held out (zlib 1.3.1, LZ4 1.10.0, cJSON 1.7.18). Both
+  link into the same four owned drivers, for x86-64 and AArch64 at O0/O2/Os with zig cc and clang 23.
+  Negatives are inih r58, tinyexpr 1.1.1 and two owned programs, built the same way. That makes 360 binaries
+  (144 training, 144 held-out, 72 negative) with no duplicates, built in 83 s.
+  - The version hashes zig, clang and ld.lld.
+  - `tools/flywheel/expected-digests.json` records the stripped digests for a reproducibility check.
+- **Scoring.** The gated scope is the target libraries' own functions plus every false name. `origin:` slices
+  report library, runtime and none separately and are never gated. The `library:` slice is now
+  `program_library:`.
+- **Gate.**
+  - Rows must be at least 32 bytes.
+  - The fast stage refuses any new false positive on the full training split, any name at all on the negatives,
+    and any gated slice losing F1.
+  - The held-out stage needs an F1 gain of at least 0.001, no new false positive and no gated slice regression.
+  - It returns only the verdict and the overall delta.
+  - Held-out evaluations are capped at 20 per corpus, persisted across servers under a file lock.
+  - Records are keyed by corpus identity: the version, the split configuration and every binary hash.
+- **Server isolation.** A `--corpus` server serves `enable_tools` and the improve group alone; no other group can
+  be enabled. Every tool argument naming a path under the corpus or the flywheel directory is refused.
+  `report_observation` is served only in ordinary sessions, bounds the hashed size and refuses flywheel corpus
+  paths.
+- **Promotion.** Promotions take a cross-process file lock and write `entries.json` last; the pack is regenerated
+  from it when found out of date. Reverts are latest-first only; an out-of-order revert is refused with the order
+  to use.
+- **Runs.** A round that does not end `ok` reverts that round's promotions and stops the run; failing isolation
+  counts as not ending `ok`.
+
+### Overlap check (deviation)
+A server measures how many held-out library bodies (masked) also occur in training. On this corpus it is 9,734
+of 13,291 (73.2%): most zlib, LZ4 and cJSON functions are unchanged between these versions.
+
+The check now works in two tiers. Above `max_heldout_overlap` (50%) the server warns loudly: on stderr, in
+`corpus_failures` and in the run report. It refuses the corpus only above `refuse_heldout_overlap` (95%,
+essentially the same build). The limit was not raised to make the warning go away. Reports split held-out gains
+into bodies training already held and novel bodies, so recognition of unchanged code is never presented as
+generalisation.
+
+### Baseline (bundled databases only, gated scope)
+| Split | Binaries | TP | FP | FN | Precision | Recall | F1 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| train (old versions) | 144 | 989 | 54 | 12963 | 0.948 | 0.071 | 0.132 |
+| heldout (current versions) | 144 | 1005 | 60 | 13315 | 0.944 | 0.070 | 0.131 |
+| fast | 36 | 324 | 14 | 3966 | 0.959 | 0.076 | 0.140 |
+| negative | 72 | 0 | 26 | 1224 | — | — | — |
+
+The bundled databases name no held-out cJSON function and almost nothing at O0 (held-out recall 0.002).
+
+### Acceptance run (fix pass)
+`rampage-eval flywheel --rounds 4 --budget-usd 5` (Sonnet 5.5, unattended) ran four rounds for $0.45 and
+promoted four candidates: 12, 8, 6 and 16 rows, all at least 32 bytes.
+
+**Overall:**
+- Gated held-out F1 rose from 0.1306 to 0.1743 (+368 TP, +0 FP).
+- No new name on the negatives, and no gated slice lost F1.
+
+**By origin:**
+- cJSON +280
+- zlib +56
+- LZ4 +32
+- runtime +0
+
+**Did it generalise?** Of the 368 held-out gains, 365 are functions whose masked body training already held,
+because the code is unchanged between versions. Only 3 are novel bodies (`cJSON_InitHooks`,
+`cJSON_PrintPreallocated`). The agent's own round summaries give the same reason: it picked long single-name bodies
+"likely to be unchanged between versions". So the promotions are honest cross-version recognition of unchanged
+library code, which is what FLIRT-style signatures do. They are not evidence that the loop learns patterns that
+survive code changes. Whole-function byte patterns cannot carry across a changed body; that needs wildcarding
+beyond scheme-2 masking, or another signature form.
+
+**Revert check.** Reverting an earlier promotion out of order was refused. Reverting all four latest-first
+restored all 51 held-out slices to the baseline exactly.
+
+### Timings (shared, heavily loaded laptop)
+- **Corpus build:** 83 s (360 binaries, three jobs, sources cached).
+- **Cold analysis:** about 40 ms per binary.
+- **Server open:** about 16 s cold for the overlap check, about 2 s warm.
+- **Round:** 23–38 s. Tool time is 4–16 s and grows as promoted rows make more binaries need identifying again.
+- **Fast stage:** 0.02–1.7 s (fast slice, full training split and negatives).
+- **Held-out gate:** 0.04–4.7 s (target under 15 minutes).
+
+### Deviations and decisions
+- **One row form.** Rows are PAT patterns only (the pack format's "pattern with masks"). The library tag is
+  provenance.
+- **Gate scope.** The gate compares against the current promoted state; `flywheel-eval` reports against the
+  bundled baseline.
+- **Revert order.** Reverts are latest-first only, rather than re-gating the remaining set.
+- **Overlap check.** It warns above 50% and refuses above 95%, as described above.
+- **No configuration hold-out view.** The configuration hold-out "second view" was not built; it needs a second
+  split definition (see the gaps).
+- **Observation store.** Observations go to a dedicated opt-in store, not the annotation sidecar, which is the
+  analyst's replayed record.
+
+### Gaps for M2
+- **Export and bundling.** `.rpack` export/import, `packs diff` and `rampage-eval bundle` are not built yet.
+- **A split that tests changed code.**
+  - A configuration hold-out (compiler × opt per arch) as a second split view.
+  - A metric restricted to novel held-out bodies, so a gain from changed code can be gated directly.
+- **Signature forms.** Patterns that tolerate small code changes (broader wildcards, callee-keyed rows) are needed
+  before generalisation beyond unchanged code is reachable.
+- **Corpus breadth.** The corpus has no gcc, no PE or Mach-O, and three target libraries.
+- **Observations unused.** Observations are recorded but not yet read into the corpus.
+- **Other families.** The transcript miner and the tool-ID and discovery families are not started. Their split
+  rule is in [docs/flywheel.md](../flywheel.md).

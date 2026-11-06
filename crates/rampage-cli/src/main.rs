@@ -6,7 +6,7 @@ mod report;
 mod report_plugin;
 
 use std::io::{self, BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -337,8 +337,8 @@ fn main() -> ExitCode {
     // Loaded on first use, so that commands which consult no heuristic database do not read any pack.
     let packs = Arc::new(Packs::lazy_with_env(&cli.packs));
     let warn = !matches!(command, Command::Packs { .. });
-    if let Command::Mcp(McpArgs { all_tools, debug_endpoints, debug_writes, debug_kill }) = command {
-        return serve_mcp(all_tools, &debug_endpoints, (debug_writes, debug_kill), packs);
+    if let Command::Mcp(McpArgs { all_tools, debug_endpoints, debug_writes, debug_kill, flywheel }) = command {
+        return serve_mcp(all_tools, &debug_endpoints, (debug_writes, debug_kill), packs, flywheel);
     }
     let image = cli.image_offset.map(|offset| rampage_loaders::ImageAt::new(offset, cli.image_length));
     let options = Options { json: cli.json, arch: cli.arch, image, raw, packs: Arc::clone(&packs) };
@@ -675,7 +675,61 @@ fn debugger_query(out: &mut impl Write, args: QueryDebuggerArgs) -> anyhow::Resu
     Ok(())
 }
 
-fn serve_mcp(all_tools: bool, debug_endpoints: &[String], consent: (bool, bool), packs: Arc<Packs>) -> ExitCode {
+/// The improve context and observation store `flywheel` asks for.
+type Flywheel = (Option<Arc<rampage_api::flywheel::Improve>>, Option<Arc<rampage_api::flywheel::ObservationStore>>);
+
+fn flywheel_context(flywheel: args::FlywheelArgs) -> Result<Flywheel, String> {
+    use rampage_api::flywheel::{GateConfig, Improve, ImproveOptions, OBSERVATIONS_VARIABLE, ObservationStore};
+    let improve = match &flywheel.corpus {
+        Some(corpus) => {
+            let gate = match &flywheel.gate {
+                Some(path) => {
+                    let text = std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+                    GateConfig::from_toml(&text).map_err(|error| error.to_string())?
+                }
+                None => GateConfig::default(),
+            };
+            let options = ImproveOptions {
+                corpus: corpus.clone(),
+                flywheel_dir: flywheel.flywheel_dir.clone(),
+                gate,
+                workers: flywheel.flywheel_workers.max(1),
+                run: flywheel.flywheel_run.clone(),
+            };
+            Some(Arc::new(Improve::open(options).map_err(|error| format!("--corpus: {error}"))?))
+        }
+        None => None,
+    };
+    // A corpus server serves the improve group alone, without report_observation.
+    if improve.is_some() {
+        return Ok((improve, None));
+    }
+    let directory = flywheel
+        .observations
+        .clone()
+        .or_else(|| std::env::var_os(OBSERVATIONS_VARIABLE).filter(|value| !value.is_empty()).map(PathBuf::from));
+    let store = directory.map(|directory| {
+        // A store inside a flywheel directory never reads that directory's corpus or caches.
+        let flywheel = directory.parent().filter(|parent| parent.join("corpus").is_dir()).map(Path::to_path_buf);
+        Arc::new(ObservationStore::new(directory).refusing(flywheel.into_iter().collect()))
+    });
+    Ok((None, store))
+}
+
+fn serve_mcp(
+    all_tools: bool,
+    debug_endpoints: &[String],
+    consent: (bool, bool),
+    packs: Arc<Packs>,
+    flywheel: args::FlywheelArgs,
+) -> ExitCode {
+    let (improve, observations) = match flywheel_context(flywheel) {
+        Ok(context) => context,
+        Err(error) => {
+            eprintln!("rampage: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let debug_env = std::env::var(rampage_mcp::DEBUG_ENDPOINTS_ENV).ok();
     let writes_env = std::env::var(rampage_mcp::DEBUG_WRITES_ENV).ok();
     let kill_env = std::env::var(rampage_mcp::DEBUG_KILL_ENV).ok();
@@ -689,7 +743,7 @@ fn serve_mcp(all_tools: bool, debug_endpoints: &[String], consent: (bool, bool),
         }
     };
     let env = std::env::var(rampage_mcp::TOOLS_ENV).ok();
-    let groups = match rampage_mcp::initial_groups_with_debug(all_tools, env.as_deref(), debug.is_some()) {
+    let groups = match rampage_mcp::initial_groups_with(all_tools, env.as_deref(), debug.is_some(), improve.is_some()) {
         Ok(groups) => groups,
         Err(error) => {
             eprintln!("rampage: {}: {error}", rampage_mcp::TOOLS_ENV);
@@ -703,7 +757,7 @@ fn serve_mcp(all_tools: bool, debug_endpoints: &[String], consent: (bool, bool),
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(rampage_mcp::serve_stdio(groups, packs, debug)) {
+    match runtime.block_on(rampage_mcp::serve_stdio_with(groups, packs, debug, improve, observations)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("rampage: mcp server failed: {error}");

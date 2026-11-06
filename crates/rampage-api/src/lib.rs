@@ -29,6 +29,7 @@ mod dotnet;
 mod fid_signatures;
 mod files;
 mod findings;
+pub mod flywheel;
 mod frame;
 mod fuzzy_signatures;
 mod graph;

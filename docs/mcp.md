@@ -31,7 +31,8 @@ essentials at least 300 characters short of the cut. Put new detail after that m
   `annotate_batch`, `batch`, `check_names`, `undo`, `redo`, `discard_undo`, `list_annotations`, `record_finding`,
   `list_findings`, `triage_report`,
   `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`, `inspect_data`,
-  `decode_file_range`, `inspect_raw_code`, `inspect_sleigh`, `language_metadata`, `class_evidence`.
+  `decode_file_range`, `inspect_raw_code`, `inspect_sleigh`, `language_metadata`, `class_evidence`; with
+  --observations (or RAMPAGE_OBSERVATIONS), also `report_observation`.
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
   `capa_detect`, `find_crypto`, `list_packs`.
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_debug_layouts`,
@@ -47,6 +48,8 @@ essentials at least 300 characters short of the cut. Put new detail after that m
   `debug_registers`, `debug_read_memory`, `debug_modules`, `debug_snapshot`, `debug_continue`, `debug_wait`,
   `debug_interrupt`, `debug_step`, `debug_breakpoints`, `debug_evidence`, `debug_disconnect`; with the
   --debug-writes flag, also `debug_write_memory` and `debug_write_register`.
+- `improve`, only on a server started with --corpus, which then serves this group alone: `corpus_failures`,
+  `propose_heuristic`, `evaluate_candidate`, `promote_candidate`.
 
 Calling `enable_tools` without arguments lists each group's description, tool names/count and enabled state.
 `{"groups": ["detection"]}` enables that group; `{"groups": ["all"]}` enables every group. Enabling sends
@@ -55,6 +58,48 @@ nothing. `--all-tools` lists all groups at startup; `RAMPAGE_MCP_TOOLS=all` or a
 `detection,types` also selects startup groups. `core` is always served. The `debug` group exists only on a server
 started with an allowed debug endpoint, and its write tools and `kill` argument only with the operator's
 `--debug-writes` and `--debug-kill`; the flags and variables are in [debug control](debug-control.md#consent).
+The `improve` group exists only on a server started with `--corpus DIR`, which then serves `enable_tools` and the
+improve group alone; see [the flywheel](#flywheel-improve).
+
+## Flywheel (improve)
+
+`rampage mcp --corpus target/flywheel/corpus/<version>` starts a server for the flywheel ([how-to](flywheel.md)),
+through which an agent improves rampage's library-identification signatures on a prebuilt corpus.
+
+**What the server exposes.** It serves `enable_tools` and the `improve` group, and nothing else: no analysis tool,
+and no other group can be enabled. Every tool argument naming a file under the corpus or the flywheel directory is
+refused, so a proposer cannot open a corpus binary or its symbolized twin.
+
+**What it hides.** The corpus holds target libraries in an older version (training) and their current version
+(held out), plus negative binaries. No tool returns a held-out binary, function, name or truth:
+`corpus_failures` serves the training split only, and the held-out gate returns its verdict and the overall
+delta only.
+
+- `corpus_failures`: target-library training failures and false names, grouped by masked function body (same
+  architecture, length and fixed bytes). Each group has occurrences, truth names, configurations, an example and
+  `masked_bytes` (`..` for position-dependent bytes). Filters: `arch`, `compiler`, `opt`, `library`, `origin`,
+  `outcome`, `name_contains` and `min_occurrences`. Results are paged with `offset`/`limit` and fitted to the result
+  size.
+- `propose_heuristic`: adds rows to a scratch candidate under `target/flywheel/scratch/libid/<id>/`, a directory
+  that is an ordinary data pack.
+  - Each row is a whole-function PAT pattern with a name and an optional library tag, taken from a `case` or given
+    as `pattern` and `arch`, with optional extra `wildcards`.
+  - Rows are schema-checked and must be at least 32 bytes.
+  - Each added row comes back with a training-split preview.
+- `evaluate_candidate`: evaluates the candidate merged with the promoted rows, against the current state.
+  - `stage: "fast"` checks the full training split for new false positives and the negatives for any name, and
+    returns the fast slice's deltas and changed cases plus the names given on negatives.
+  - `stage: "heldout"` returns pass/fail and the overall delta only.
+  - Results are cached by (candidate hash, corpus identity, baseline hash).
+  - Held-out evaluations per corpus are capped across all servers (`max_heldout_evaluations`).
+- `promote_candidate`: refused without a passing held-out result for the same candidate hash, corpus identity
+  and baseline. It writes the rows with their provenance to `target/flywheel/promoted/libid/` and returns a revert
+  id (`rampage-eval flywheel-revert <id>`, latest first).
+- `report_observation` (core, ordinary servers with `--observations` only): records a typed, evidence-backed
+  observation in the local, opt-in observation store, as a weak label. Nothing is renamed, annotated or promoted.
+
+Errors from these tools are JSON objects: `{"error": kind, "message": text}`. `kind` is one of
+`invalid_argument`, `not_found`, `refused`, `corpus` or `io`.
 
 Workflow reports name the `group` of suggested next tools. The desktop assistant offers every binary tool
 without group gating, plus the interactive `show_address`; it does not offer file tools

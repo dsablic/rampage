@@ -85,6 +85,9 @@ pub enum Group {
     /// Read-only sessions with operator-started GDB remote stubs. Not in [`Group::ALL`]: only an MCP server started
     /// with debug endpoints has it.
     Debug,
+    /// The flywheel's improvement tools over a training corpus. Not in [`Group::ALL`]: only an MCP server started
+    /// with `--corpus` has it.
+    Improve,
 }
 
 impl Group {
@@ -110,6 +113,7 @@ impl Group {
             Group::Carve => "carve",
             Group::Formats => "formats",
             Group::Debug => "debug",
+            Group::Improve => "improve",
         }
     }
 
@@ -152,6 +156,11 @@ impl Group {
                  control (continue, wait, interrupt, step, breakpoints and watchpoints by runtime address, \
                  epoch-checked); detach. Memory and register writes and kill only when the operator's flags allow \
                  them; no signal delivery."
+            }
+            Group::Improve => {
+                "Improve rampage's library-identification signatures on the flywheel corpus: training-split \
+                 failures, candidate signature rows in a scratch pack, the fast and held-out gates (held-out \
+                 metrics only), and promotion with provenance and a revert id."
             }
         }
     }

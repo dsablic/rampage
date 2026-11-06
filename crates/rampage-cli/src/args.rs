@@ -591,6 +591,35 @@ pub(crate) struct McpArgs {
     /// RAMPAGE_DEBUG_KILL=1 does the same
     #[arg(long)]
     pub(crate) debug_kill: bool,
+    #[command(flatten)]
+    pub(crate) flywheel: FlywheelArgs,
+}
+
+/// The flywheel's opt-in tools (docs/flywheel.md).
+#[derive(Args)]
+pub(crate) struct FlywheelArgs {
+    /// Serve only the improve group, over this built flywheel corpus (target/flywheel/corpus/<version>):
+    /// training failures, candidate signature rows, the fast and held-out gates, and promotion. No analysis tool
+    /// is served and no other group can be enabled, so a proposer cannot read the corpus's binaries
+    #[arg(long, value_name = "DIR")]
+    pub(crate) corpus: Option<PathBuf>,
+    /// The flywheel working directory (default: two levels above a corpus in a corpus/ directory)
+    #[arg(long, value_name = "DIR", requires = "corpus")]
+    pub(crate) flywheel_dir: Option<PathBuf>,
+    /// A TOML file overriding gate settings (min_f1_gain, max_slice_f1_drop, max_fp_increase,
+    /// max_fast_fp_increase, max_heldout_evaluations)
+    #[arg(long, value_name = "FILE", requires = "corpus")]
+    pub(crate) gate: Option<PathBuf>,
+    /// Threads for corpus analysis and evaluation
+    #[arg(long, default_value_t = 2, requires = "corpus")]
+    pub(crate) flywheel_workers: usize,
+    /// The proposer run this server serves; its tool events go to <flywheel-dir>/runs/<RUN>/events.jsonl
+    #[arg(long, value_name = "RUN", requires = "corpus")]
+    pub(crate) flywheel_run: Option<String>,
+    /// Serve report_observation, recording evidence-backed observations into DIR (opt-in;
+    /// RAMPAGE_OBSERVATIONS does the same). A DIR inside a flywheel directory refuses that directory's files
+    #[arg(long, value_name = "DIR", conflicts_with = "corpus")]
+    pub(crate) observations: Option<PathBuf>,
 }
 
 #[derive(Args)]

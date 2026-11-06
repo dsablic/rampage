@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use rampage_api::flywheel::{Improve, ImproveTool, ObservationStore, ObservationTool, improve_tools, observation_tool};
 use rampage_api::tools::{self, DebugTool, FileTool, Group, Tool};
 use rampage_api::{DebugCancel, DebugConsent, DebugRegistry, FileOffset, Packs, Project, RawProjectRequest, Session};
 use rampage_arch::Arch;
@@ -92,6 +93,10 @@ fn group_summary(group: Group) -> &'static str {
             "a live target via GDB remote stub: debug_connect, debug_registers, debug_read_memory, \
              debug_breakpoints, debug_continue, debug_step, debug_snapshot, debug_disconnect."
         }
+        Group::Improve => {
+            "the flywheel corpus: corpus_failures (training split), propose_heuristic, evaluate_candidate (fast, \
+             then heldout), promote_candidate."
+        }
     }
 }
 
@@ -104,6 +109,23 @@ const INSTRUCTIONS_DEBUG_START: &str = "\
 Debug: the tools drive a live process through a GDB remote stub the operator started; rampage launches and \
 attaches to nothing. Breakpoints, continue and step change its state; debug_disconnect detaches and lets it run. \
 {consent} Endpoints: {endpoints}.";
+
+const INSTRUCTIONS_OBSERVATIONS: &str = "\
+report_observation (core) records an evidence-backed weak label for the corpus; it changes nothing else.";
+
+/// The whole instructions of a server started with `--corpus`, which serves only the improve group.
+const INSTRUCTIONS_CORPUS: &str = "\
+This rampage server works on the flywheel corpus and serves only the improve group: it improves rampage's \
+library-identification signatures. No analysis tool is served, and no other group can be enabled.
+
+The corpus holds target libraries (zlib, lz4, cJSON) in an older version for training and their current version, \
+held out, plus negative binaries of unrelated code. Held-out binaries are never shown, only the gate's verdict and \
+overall delta. Only the target libraries' own functions are scored; runtime functions (libc, compiler runtime) are not.
+
+- improve: corpus_failures (training failures grouped by masked body), propose_heuristic (rows into a scratch \
+candidate; check each row's train_preview), evaluate_candidate (the fast gate on training data and negatives, then \
+stage heldout), promote_candidate (only after a passing held-out gate). The gate decides, not the agent. Held-out \
+evaluations per corpus are limited across all servers.";
 
 const INSTRUCTIONS_DETAILS: &str = "\
 Details for each area follow. The full text of every tool is in its description.";
@@ -211,8 +233,11 @@ of detaching.";
 
 /// The server instructions: what an agent needs to start, within the first [`INSTRUCTIONS_SHOWN_CHARS`], then the
 /// details for clients that read the whole text.
-fn instructions(packs: &Packs, debug: Option<&DebugRegistry>) -> String {
-    let groups: String = available_groups(debug.is_some())
+fn instructions(packs: &Packs, debug: Option<&DebugRegistry>, improve: bool, observations: bool) -> String {
+    if improve {
+        return INSTRUCTIONS_CORPUS.to_owned();
+    }
+    let groups: String = available_groups(debug.is_some(), improve)
         .iter()
         .map(|group| format!("\n- {}: {}", group.name(), group_summary(*group)))
         .collect();
@@ -231,6 +256,9 @@ fn instructions(packs: &Packs, debug: Option<&DebugRegistry>) -> String {
                 .replace("{consent}", &consent)
                 .replace("{endpoints}", &registry.endpoints().join(", ")),
         );
+    }
+    if observations {
+        text.push_str(&format!("\n\n{INSTRUCTIONS_OBSERVATIONS}"));
     }
     // Only a server given packs loads them here; the problem count must be known before any tool runs.
     if packs.configured() {
@@ -271,7 +299,27 @@ pub fn initial_groups(all_tools: bool, env: Option<&str>) -> Result<BTreeSet<Gro
 
 /// [`initial_groups`] for a server that has the `debug` group when `debug` is true.
 pub fn initial_groups_with_debug(all_tools: bool, env: Option<&str>, debug: bool) -> Result<BTreeSet<Group>, String> {
-    let available = available_groups(debug);
+    initial_groups_with(all_tools, env, debug, false)
+}
+
+/// [`initial_groups`] for a server that has the `debug` group when `debug` is true and the `improve` group when
+/// `improve` is true.
+pub fn initial_groups_with(
+    all_tools: bool,
+    env: Option<&str>,
+    debug: bool,
+    improve: bool,
+) -> Result<BTreeSet<Group>, String> {
+    let available = available_groups(debug, improve);
+    if improve {
+        // A corpus server serves the improve group alone, whatever else was asked for.
+        for name in env.unwrap_or("").split(',').map(str::trim).filter(|name| !name.is_empty()) {
+            if name != "all" {
+                parse_group(name, debug, improve)?;
+            }
+        }
+        return Ok(BTreeSet::from([Group::Improve]));
+    }
     if all_tools {
         return Ok(available.into_iter().collect());
     }
@@ -280,18 +328,29 @@ pub fn initial_groups_with_debug(all_tools: bool, env: Option<&str>, debug: bool
         if name == "all" {
             groups.extend(available.iter().copied());
         } else {
-            groups.insert(parse_group(name, debug)?);
+            groups.insert(parse_group(name, debug, improve)?);
         }
     }
     Ok(groups)
 }
 
-/// Every group a server has: [`Group::ALL`], and `debug` when debug endpoints are configured.
-fn available_groups(debug: bool) -> Vec<Group> {
+/// Every group a server has: [`Group::ALL`] and `debug` when debug endpoints are configured; a server started with
+/// a corpus has the `improve` group alone, so a proposer can reach no tool that reads binaries.
+fn available_groups(debug: bool, improve: bool) -> Vec<Group> {
+    if improve {
+        return vec![Group::Improve];
+    }
     Group::ALL.into_iter().chain(debug.then_some(Group::Debug)).collect()
 }
 
-fn parse_group(name: &str, debug: bool) -> Result<Group, String> {
+fn parse_group(name: &str, debug: bool, improve: bool) -> Result<Group, String> {
+    if improve {
+        return if name == Group::Improve.name() {
+            Ok(Group::Improve)
+        } else {
+            Err(format!("this server was started with --corpus and has only the improve group, not `{name}`"))
+        };
+    }
     if debug && name == Group::Debug.name() {
         return Ok(Group::Debug);
     }
@@ -447,8 +506,8 @@ fn raw_refusal(name: &str) -> String {
     )
 }
 
-fn enable_tools_schema(debug: bool) -> Map<String, Value> {
-    let names: Vec<&str> = available_groups(debug).iter().map(|group| group.name()).chain(["all"]).collect();
+fn enable_tools_schema(debug: bool, improve: bool) -> Map<String, Value> {
+    let names: Vec<&str> = available_groups(debug, improve).iter().map(|group| group.name()).chain(["all"]).collect();
     let schema = json!({
         "type": "object",
         "properties": {
@@ -471,6 +530,12 @@ pub struct RampageServer {
     file_tools: Arc<Vec<FileTool>>,
     debug: Option<Arc<DebugRegistry>>,
     debug_tools: Arc<Vec<DebugTool>>,
+    improve: Option<Arc<Improve>>,
+    improve_tools: Arc<Vec<ImproveTool>>,
+    observations: Option<Arc<ObservationStore>>,
+    observation_tool: Arc<ObservationTool>,
+    /// Paths no tool may read: the flywheel's working directory (corpus binaries, truth caches) on a corpus server.
+    guarded: Arc<Vec<PathBuf>>,
     enabled: Mutex<BTreeSet<Group>>,
 }
 
@@ -482,6 +547,11 @@ impl Clone for RampageServer {
             file_tools: Arc::clone(&self.file_tools),
             debug: self.debug.clone(),
             debug_tools: Arc::clone(&self.debug_tools),
+            improve: self.improve.clone(),
+            improve_tools: Arc::clone(&self.improve_tools),
+            observations: self.observations.clone(),
+            observation_tool: Arc::clone(&self.observation_tool),
+            guarded: Arc::clone(&self.guarded),
             enabled: Mutex::new(self.enabled()),
         }
     }
@@ -505,8 +575,57 @@ impl RampageServer {
             file_tools: Arc::new(tools::file_tools()),
             debug: None,
             debug_tools: Arc::new(tools::debug_tools()),
+            improve: None,
+            improve_tools: Arc::new(improve_tools()),
+            observations: None,
+            observation_tool: Arc::new(observation_tool()),
+            guarded: Arc::new(Vec::new()),
             enabled: Mutex::new(enabled),
         }
+    }
+
+    /// This server serving only the `improve` group over `improve`'s corpus: no analysis tool, no other group,
+    /// and no tool argument may name a file under the corpus or the flywheel's working directory.
+    pub fn with_improve(self, improve: Arc<Improve>) -> Self {
+        let mut guarded = vec![improve.corpus().root.clone(), improve.paths().root().to_owned()];
+        guarded.extend(guarded.clone().iter().filter_map(|path| path.canonicalize().ok()));
+        Self {
+            improve: Some(improve),
+            guarded: Arc::new(guarded),
+            enabled: Mutex::new(BTreeSet::from([Group::Improve])),
+            ..self
+        }
+    }
+
+    /// The argument naming a guarded path, if any: every string value is checked, at any depth.
+    fn guarded_argument(&self, arguments: &Map<String, Value>) -> Option<String> {
+        fn strings<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
+            match value {
+                Value::String(text) => out.push(text),
+                Value::Array(items) => items.iter().for_each(|item| strings(item, out)),
+                Value::Object(map) => map.values().for_each(|item| strings(item, out)),
+                _ => {}
+            }
+        }
+        if self.guarded.is_empty() {
+            return None;
+        }
+        let mut texts = Vec::new();
+        arguments.values().for_each(|value| strings(value, &mut texts));
+        let base = std::env::current_dir().unwrap_or_default();
+        texts
+            .into_iter()
+            .find(|text| {
+                let path = base.join(text);
+                let resolved = path.canonicalize().unwrap_or(path);
+                self.guarded.iter().any(|root| resolved.starts_with(root))
+            })
+            .map(str::to_owned)
+    }
+
+    /// This server with `report_observation` (in core) recording into `store`.
+    pub fn with_observations(self, store: Arc<ObservationStore>) -> Self {
+        Self { observations: Some(store), ..self }
     }
 
     /// This server with the `debug` group, connecting only to the endpoints `registry` allows. Its sessions belong
@@ -518,7 +637,7 @@ impl RampageServer {
     }
 
     fn groups(&self) -> Vec<Group> {
-        available_groups(self.debug.is_some())
+        available_groups(self.debug.is_some(), self.improve.is_some())
     }
 
     /// This server opening binaries in `session`, with its settings.
@@ -541,12 +660,22 @@ impl RampageServer {
         self.enabled.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
-    /// Every tool this server can serve, with its group, whether enabled or not.
+    /// Every tool this server can serve, with its group, whether enabled or not. A corpus server serves the
+    /// improve tools alone.
     fn catalog(&self) -> impl Iterator<Item = (Group, &'static str)> + '_ {
-        let tools = self.tools.iter().map(|tool| (tool.group, tool.name));
-        let file_tools = self.file_tools.iter().map(|tool| (tool.group, tool.name));
-        let debug = self.debug.is_some().then(|| self.debug_tools.iter().map(|tool| (Group::Debug, tool.name)));
-        tools.chain(file_tools).chain(debug.into_iter().flatten())
+        let analysis = self.improve.is_none();
+        let tools = self.tools.iter().filter(move |_| analysis).map(|tool| (tool.group, tool.name));
+        let file_tools = self.file_tools.iter().filter(move |_| analysis).map(|tool| (tool.group, tool.name));
+        let debug =
+            (analysis && self.debug.is_some()).then(|| self.debug_tools.iter().map(|tool| (Group::Debug, tool.name)));
+        let improve = self.improve.is_some().then(|| self.improve_tools.iter().map(|tool| (Group::Improve, tool.name)));
+        let observation = (analysis && self.observations.is_some())
+            .then_some((self.observation_tool.group, self.observation_tool.name));
+        tools
+            .chain(file_tools)
+            .chain(observation)
+            .chain(debug.into_iter().flatten())
+            .chain(improve.into_iter().flatten())
     }
 
     /// Enables the groups `arguments` names, returning the groups with their tools and the ones newly enabled.
@@ -559,7 +688,7 @@ impl RampageServer {
                     match name.as_str() {
                         Some("all") => requested.extend(self.groups()),
                         Some(name) => {
-                            requested.insert(parse_group(name, self.debug.is_some())?);
+                            requested.insert(parse_group(name, self.debug.is_some(), self.improve.is_some())?);
                         }
                         None => return Err("`groups` must be a list of group names".to_owned()),
                     }
@@ -599,6 +728,14 @@ impl RampageServer {
         if let Some(tool) = self.file_tools.iter().find(|tool| tool.name == name) {
             return Some(tool.input_schema.clone());
         }
+        if self.improve.is_some()
+            && let Some(tool) = self.improve_tools.iter().find(|tool| tool.name == name)
+        {
+            return Some(tool.input_schema.clone());
+        }
+        if self.observations.is_some() && self.observation_tool.name == name {
+            return Some(self.observation_tool.input_schema.clone());
+        }
         // Debug tools check their own arguments, refusing options the operator has not allowed by name.
         None
     }
@@ -618,6 +755,17 @@ impl RampageServer {
 
     /// Runs a tool on the binary its arguments name. Failures are results the caller sees, not protocol errors.
     fn run(&self, name: &str, mut arguments: Map<String, Value>, cancel: &DebugCancel) -> CallToolResult {
+        if let Some(path) = self.guarded_argument(&arguments) {
+            return CallToolResult::error(vec![ContentBlock::text(format!(
+                "`{path}` is inside the flywheel corpus or its working directory, which no tool may read on this \
+                 server; nothing was run"
+            ))]);
+        }
+        if self.improve.is_some() && !self.improve_tools.iter().any(|tool| tool.name == name) {
+            return CallToolResult::error(vec![ContentBlock::text(format!(
+                "this server was started with --corpus and serves only the improve group; `{name}` is not served"
+            ))]);
+        }
         let raw = arguments.remove(RAW).filter(|raw| !raw.is_null());
         if let (Some(registry), Some(tool)) = (&self.debug, self.debug_tools.iter().find(|tool| tool.name == name)) {
             if raw.is_some() {
@@ -625,6 +773,15 @@ impl RampageServer {
             }
             // Bound projects open in the server's session, sharing its cache with the project tools.
             return match tool.call_in(registry, &self.session, Value::Object(arguments), cancel) {
+                Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
+                Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
+            };
+        }
+        if let Some(result) = self.call_flywheel(name, &arguments) {
+            if raw.is_some() {
+                return CallToolResult::error(vec![ContentBlock::text(raw_refusal(name))]);
+            }
+            return match result {
                 Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
                 Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
             };
@@ -699,6 +856,20 @@ impl RampageServer {
         }
     }
 
+    /// Runs `name` when it is an improve tool or `report_observation` this server serves; `None` otherwise.
+    fn call_flywheel(&self, name: &str, arguments: &Map<String, Value>) -> Option<Result<Value, String>> {
+        let input = Value::Object(arguments.clone());
+        if let Some(improve) = &self.improve
+            && let Some(tool) = self.improve_tools.iter().find(|tool| tool.name == name)
+        {
+            return Some(tool.call(improve, input));
+        }
+        match &self.observations {
+            Some(store) if self.observation_tool.name == name => Some(self.observation_tool.call(store, input)),
+            _ => None,
+        }
+    }
+
     /// The session's Raw Project for the `raw` selector of a call to `name`, refused for tools that cannot serve one
     /// and when combined with a native image selector.
     fn open_raw(
@@ -759,7 +930,12 @@ impl ServerHandler for RampageServer {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tool_list_changed().build())
             .with_server_info(Implementation::new("rampage", env!("CARGO_PKG_VERSION")))
-            .with_instructions(instructions(&self.packs(), self.debug.as_deref()))
+            .with_instructions(instructions(
+                &self.packs(),
+                self.debug.as_deref(),
+                self.improve.is_some(),
+                self.observations.is_some(),
+            ))
     }
 
     async fn list_tools(
@@ -768,21 +944,42 @@ impl ServerHandler for RampageServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let enabled = self.enabled();
-        let meta =
-            rmcp::model::Tool::new(ENABLE_TOOLS, ENABLE_TOOLS_DESCRIPTION, enable_tools_schema(self.debug.is_some()));
-        let tools = self.tools.iter().filter(|tool| enabled.contains(&tool.group)).map(|tool| {
+        let meta = rmcp::model::Tool::new(
+            ENABLE_TOOLS,
+            ENABLE_TOOLS_DESCRIPTION,
+            enable_tools_schema(self.debug.is_some(), self.improve.is_some()),
+        );
+        let catalog: BTreeSet<&str> = self.catalog().map(|(_, name)| name).collect();
+        let enabled: BTreeSet<Group> = enabled;
+        let served = |group: &Group, name: &str| enabled.contains(group) && catalog.contains(name);
+        let tools = self.tools.iter().filter(|tool| served(&tool.group, tool.name)).map(|tool| {
             rmcp::model::Tool::new(tool.name, tool.description, with_binary_arguments(tool.name, &tool.input_schema))
         });
-        let file_tools = self.file_tools.iter().filter(|tool| enabled.contains(&tool.group)).map(|tool| {
+        let file_tools = self.file_tools.iter().filter(|tool| served(&tool.group, tool.name)).map(|tool| {
             let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
             rmcp::model::Tool::new(tool.name, tool.description, schema)
         });
-        let debug_enabled = self.debug.is_some() && enabled.contains(&Group::Debug);
+        let debug_enabled = self.debug.is_some() && self.improve.is_none() && enabled.contains(&Group::Debug);
         let debug_tools = self.debug_tools.iter().filter(|_| debug_enabled).map(|tool| {
             let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
             rmcp::model::Tool::new(tool.name, tool.description, schema).annotate(debug_annotations(tool.effect))
         });
-        let all = std::iter::once(meta).chain(tools).chain(file_tools).chain(debug_tools);
+        let improve_enabled = self.improve.is_some() && enabled.contains(&Group::Improve);
+        let improve_tools = self.improve_tools.iter().filter(|_| improve_enabled).map(|tool| {
+            let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
+            rmcp::model::Tool::new(tool.name, tool.description, schema)
+        });
+        let observation = served(&self.observation_tool.group, self.observation_tool.name).then(|| {
+            let tool = &self.observation_tool;
+            let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
+            rmcp::model::Tool::new(tool.name, tool.description, schema)
+        });
+        let all = std::iter::once(meta)
+            .chain(tools)
+            .chain(file_tools)
+            .chain(observation)
+            .chain(debug_tools)
+            .chain(improve_tools);
         Ok(ListToolsResult::with_all_items(all.map(|tool| tool.with_meta(result_size_meta())).collect()))
     }
 
@@ -878,9 +1075,27 @@ pub async fn serve_stdio(
     packs: Arc<Packs>,
     debug: Option<DebugRegistry>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    serve_stdio_with(groups, packs, debug, None, None).await
+}
+
+/// [`serve_stdio`], with the `improve` group over `improve`'s corpus and `report_observation` recording into
+/// `observations` when they are given.
+pub async fn serve_stdio_with(
+    groups: BTreeSet<Group>,
+    packs: Arc<Packs>,
+    debug: Option<DebugRegistry>,
+    improve: Option<Arc<Improve>>,
+    observations: Option<Arc<ObservationStore>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut server = RampageServer::with_groups(groups).with_packs(packs);
     if let Some(registry) = debug {
         server = server.with_debug(registry);
+    }
+    if let Some(improve) = improve {
+        server = server.with_improve(improve);
+    }
+    if let Some(store) = observations {
+        server = server.with_observations(store);
     }
     server.serve(rmcp::transport::stdio()).await?.waiting().await?;
     Ok(())
@@ -913,7 +1128,7 @@ mod tests {
     #[test]
     fn every_registered_workflow_is_served_in_its_group_and_named_in_the_instructions() {
         let server = RampageServer::default();
-        let text = instructions(&Packs::default(), None);
+        let text = instructions(&Packs::default(), None, false, false);
         for workflow in rampage_api::workflows::WORKFLOWS {
             let name = workflow.name();
             assert!(server.catalog().any(|entry| entry == (workflow.group(), name)), "{name} is not served");
@@ -946,9 +1161,13 @@ mod tests {
         let registry = DebugRegistry::new(&["127.0.0.1:2345".to_owned()])
             .unwrap()
             .with_consent(DebugConsent { writes: true, kill: true });
-        let server = RampageServer::default().with_debug(registry);
+        let server = RampageServer::default()
+            .with_debug(registry)
+            .with_observations(Arc::new(ObservationStore::new(std::env::temp_dir().join("rampage-unused"))));
+        // A corpus server serves the improve group alone.
+        let corpus = RampageServer::default().with_improve(improve_fixture());
         let mut served = BTreeMap::<String, Vec<String>>::new();
-        for (group, name) in server.catalog() {
+        for (group, name) in server.catalog().chain(corpus.catalog()) {
             served.entry(group.name().to_owned()).or_default().push(name.to_owned());
         }
         for names in documented.values_mut().chain(served.values_mut()) {
@@ -971,8 +1190,46 @@ mod tests {
         assert!(initial_groups(false, Some("core,bogus")).unwrap_err().contains("unknown tool group `bogus`"));
     }
 
+    /// A corpus of two fixture binaries, enough to construct the improve group (nothing is analysed).
+    fn improve_fixture() -> Arc<Improve> {
+        use rampage_api::flywheel::{ImproveOptions, sha256_file};
+        static FIXTURE: std::sync::OnceLock<Arc<Improve>> = std::sync::OnceLock::new();
+        Arc::clone(FIXTURE.get_or_init(|| {
+            let root = std::env::temp_dir().join(format!("rampage-mcp-improve-{}", std::process::id()));
+            let corpus = root.join("corpus").join("unit-v1");
+            std::fs::create_dir_all(&corpus).unwrap();
+            let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin");
+            let mut binaries = Vec::new();
+            for program in ["corpus", "target"] {
+                let stripped = format!("{program}.elf");
+                let twin = format!("{program}.twin.elf");
+                let name = if program == "corpus" { "twin" } else { "target" };
+                let split = if program == "corpus" { "train" } else { "heldout" };
+                std::fs::copy(fixture.join(format!("eval-{name}-x86_64.elf")), corpus.join(&stripped)).unwrap();
+                let symbolized = if program == "corpus" { "eval-ref-x86_64.elf" } else { "eval-target-sym-x86_64.elf" };
+                std::fs::copy(fixture.join(symbolized), corpus.join(&twin)).unwrap();
+                binaries.push(json!({
+                    "id": program, "program": format!("musl/{program}"), "library": "musl",
+                    "library_version": program, "split": split, "arch": "x86_64",
+                    "compiler": "zig", "opt": "O1", "stripped": stripped, "twin": twin,
+                    "stripped_sha256": sha256_file(&corpus.join(&stripped)).unwrap(),
+                    "twin_sha256": sha256_file(&corpus.join(&twin)).unwrap(),
+                }));
+            }
+            let manifest = json!({
+                "schema_version": 2, "family": "libid", "name": "unit", "version": "unit-v1",
+                "split": { "rule": "version", "fast_programs_per_library": 1, "max_heldout_overlap": 1.0 },
+                "binaries": binaries,
+            });
+            std::fs::write(corpus.join("manifest.json"), manifest.to_string()).unwrap();
+            let options =
+                ImproveOptions { corpus, flywheel_dir: None, gate: Default::default(), workers: 1, run: None };
+            Arc::new(Improve::open(options).unwrap())
+        }))
+    }
+
     /// The tools an agent must find in the shown part of the instructions to know which group answers what.
-    const KEY_TOOLS: [(Group, &[&str]); 9] = [
+    const KEY_TOOLS: [(Group, &[&str]); 10] = [
         (
             Group::Core,
             &[
@@ -998,11 +1255,12 @@ mod tests {
             Group::Debug,
             &["debug_connect", "debug_read_memory", "debug_breakpoints", "debug_continue", "debug_disconnect"],
         ),
+        (Group::Improve, &["corpus_failures", "propose_heuristic", "evaluate_candidate", "promote_candidate"]),
     ];
 
     /// Every configuration whose instructions differ, with a name for the size report. The enabled groups do not
     /// change the text, so a server with all groups, or one serving Raw projects, reads the default's.
-    fn configurations() -> Vec<(&'static str, Packs, Option<DebugRegistry>)> {
+    fn configurations() -> Vec<(&'static str, Packs, Option<DebugRegistry>, bool)> {
         let debug = |writes, kill| {
             // Two endpoints, longer than a typical one, so the debug paragraph is not measured at its smallest.
             let endpoints = ["192.168.100.200:12345".to_owned(), "unix:/var/run/rampage/target-debug.sock".to_owned()];
@@ -1010,12 +1268,13 @@ mod tests {
         };
         let packs = || Packs::lazy(&[std::env::temp_dir().join("rampage-no-such-pack-directory")]);
         vec![
-            ("default", Packs::default(), None),
-            ("packs", packs(), None),
-            ("debug", Packs::default(), debug(false, false)),
-            ("debug writes", Packs::default(), debug(true, false)),
-            ("debug kill", Packs::default(), debug(false, true)),
-            ("debug writes kill packs", packs(), debug(true, true)),
+            ("default", Packs::default(), None, false),
+            ("packs", packs(), None, false),
+            ("debug", Packs::default(), debug(false, false), false),
+            ("debug writes", Packs::default(), debug(true, false), false),
+            ("debug kill", Packs::default(), debug(false, true), false),
+            ("debug writes kill packs", packs(), debug(true, true), false),
+            ("observations", Packs::default(), None, true),
         ]
     }
 
@@ -1023,14 +1282,22 @@ mod tests {
     /// names every group with its key tools, the first calls, and the debug consent and endpoints.
     #[test]
     fn the_shown_part_of_the_instructions_carries_every_group_and_its_key_tools() {
-        for (name, packs, debug) in configurations() {
-            let text = instructions(&packs, debug.as_ref());
+        for (name, packs, debug, observations) in configurations() {
+            let text = instructions(&packs, debug.as_ref(), false, observations);
             let shown: String = text.chars().take(INSTRUCTIONS_SHOWN_CHARS).collect();
             let registry = DebugRegistry::new(&["127.0.0.1:2345".to_owned()]).unwrap();
             let server = RampageServer::default().with_debug(registry);
+            let corpus = RampageServer::default().with_improve(improve_fixture());
             for (group, tools) in KEY_TOOLS {
                 if group == Group::Debug && debug.is_none() {
                     assert!(!text.contains("- debug: ") && !text.contains("debug_connect"), "{name}");
+                    continue;
+                }
+                if group == Group::Improve {
+                    assert!(!text.contains("- improve: ") && !text.contains("corpus_failures"), "{name}");
+                    for tool in tools {
+                        assert!(corpus.catalog().any(|entry| entry == (group, *tool)), "{tool} is not served");
+                    }
                     continue;
                 }
                 assert!(shown.contains(&format!("\n- {}: ", group.name())), "{name}: {group:?}");
@@ -1055,7 +1322,22 @@ mod tests {
             if packs.configured() {
                 assert!(shown.contains("Data packs: "), "{name}");
             }
+            assert_eq!(text.contains("report_observation"), observations, "{name}");
         }
+    }
+
+    /// A corpus server's instructions name the improve tools and nothing that reads a binary.
+    #[test]
+    fn a_corpus_server_is_told_it_serves_only_the_improve_group() {
+        let text = instructions(&Packs::default(), None, true, false);
+        assert!(text.chars().count() + 300 <= INSTRUCTIONS_SHOWN_CHARS);
+        for tool in ["corpus_failures", "propose_heuristic", "evaluate_candidate", "promote_candidate"] {
+            assert!(text.contains(tool), "{tool}");
+        }
+        for tool in ["triage_report", "decompile", "disassemble", "enable_tools with"] {
+            assert!(!text.contains(tool), "{tool}");
+        }
+        assert!(text.contains("Held-out binaries are never shown"));
     }
 
     /// The part before the details stays well inside the shown characters, so a new sentence there fails here
@@ -1064,8 +1346,8 @@ mod tests {
     #[test]
     fn the_essential_part_of_the_instructions_leaves_a_margin_before_the_cut() {
         const MARGIN: usize = 300;
-        for (name, packs, debug) in configurations() {
-            let text = instructions(&packs, debug.as_ref());
+        for (name, packs, debug, observations) in configurations() {
+            let text = instructions(&packs, debug.as_ref(), false, observations);
             let essentials = text.find(INSTRUCTIONS_DETAILS).expect("the details are marked");
             let essentials = text[..essentials].chars().count();
             println!("{name}: {essentials} essential characters of {} in all", text.chars().count());

@@ -181,6 +181,8 @@ def claude_command(arguments: argparse.Namespace, system_prompt: str | None, iso
         command += ["--setting-sources", ""]
     if system_prompt is not None:
         command += ["--system-prompt", system_prompt]
+    if getattr(arguments, "max_budget_usd", None) is not None:
+        command += ["--max-budget-usd", f"{arguments.max_budget_usd:.4f}"]
     return command
 
 
@@ -652,6 +654,11 @@ def parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_MAX_MCP_OUTPUT_TOKENS,
         help="MAX_MCP_OUTPUT_TOKENS for the session, the same for every server",
+    )
+    result.add_argument(
+        "--max-budget-usd",
+        type=float,
+        help="stop the session once it has spent this many dollars (claude --max-budget-usd)",
     )
     result.add_argument(
         "--renormalize",

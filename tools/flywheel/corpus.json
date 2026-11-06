@@ -1,0 +1,117 @@
+{
+  "schema_version": 2,
+  "family": "libid",
+  "name": "libid-versions",
+  "description": "Library-identification corpus for the flywheel fast loop. Each target library is built in an older version for training and its current version, held out, linked statically into the same owned driver programs, per architecture, compiler and optimisation level. Unrelated libraries and owned programs, built the same way, are negatives: no target signature may match them. Sources are downloaded and built locally and never committed.",
+  "libraries": [
+    {
+      "name": "zlib",
+      "license": "Zlib",
+      "role": "target",
+      "include": ["."],
+      "defines": ["HAVE_UNISTD_H", "HAVE_STDARG_H", "_LARGEFILE64_SOURCE=1"],
+      "sources": [
+        "adler32.c", "compress.c", "crc32.c", "deflate.c", "gzclose.c", "gzlib.c", "gzread.c", "gzwrite.c",
+        "infback.c", "inffast.c", "inflate.c", "inftrees.c", "trees.c", "uncompr.c", "zutil.c"
+      ],
+      "drivers": ["zlib/z1.c", "zlib/z2.c", "zlib/z3.c", "zlib/z4.c"],
+      "versions": [
+        {"version": "1.2.13", "split": "train", "root": "zlib-1.2.13",
+         "url": "https://github.com/madler/zlib/releases/download/v1.2.13/zlib-1.2.13.tar.gz",
+         "sha256": "b3a24de97a8fdbc835b9833169501030b8977031bcb54b3b3ac13740f846ab30"},
+        {"version": "1.3.1", "split": "heldout", "root": "zlib-1.3.1",
+         "url": "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz",
+         "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"}
+      ]
+    },
+    {
+      "name": "lz4",
+      "license": "BSD-2-Clause",
+      "role": "target",
+      "include": ["lib"],
+      "defines": [],
+      "sources": ["lib/lz4.c", "lib/lz4hc.c", "lib/lz4frame.c", "lib/xxhash.c"],
+      "drivers": ["lz4/l1.c", "lz4/l2.c", "lz4/l3.c", "lz4/l4.c"],
+      "versions": [
+        {"version": "1.9.4", "split": "train", "root": "lz4-1.9.4",
+         "url": "https://github.com/lz4/lz4/releases/download/v1.9.4/lz4-1.9.4.tar.gz",
+         "sha256": "0b0e3aa07c8c063ddf40b082bdf7e37a1562bda40a0ff5272957f3e987e0e54b"},
+        {"version": "1.10.0", "split": "heldout", "root": "lz4-1.10.0",
+         "url": "https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz",
+         "sha256": "537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b"}
+      ]
+    },
+    {
+      "name": "cjson",
+      "license": "MIT",
+      "role": "target",
+      "include": ["."],
+      "defines": [],
+      "sources": ["cJSON.c"],
+      "drivers": ["cjson/j1.c", "cjson/j2.c", "cjson/j3.c", "cjson/j4.c"],
+      "versions": [
+        {"version": "1.7.15", "split": "train", "root": "cJSON-1.7.15",
+         "url": "https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.15.tar.gz",
+         "sha256": "5308fd4bd90cef7aa060558514de6a1a4a0819974a26e6ed13973c5f624c24b2"},
+        {"version": "1.7.18", "split": "heldout", "root": "cJSON-1.7.18",
+         "url": "https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.18.tar.gz",
+         "sha256": "3aa806844a03442c00769b83e99970be70fbef03735ff898f4811dd03b9f5ee5"}
+      ]
+    },
+    {
+      "name": "inih",
+      "license": "BSD-3-Clause",
+      "role": "negative",
+      "include": ["."],
+      "defines": [],
+      "sources": ["ini.c"],
+      "drivers": ["negative/inih1.c", "negative/inih2.c"],
+      "versions": [
+        {"version": "r58", "split": "negative", "root": "inih-r58",
+         "url": "https://github.com/benhoyt/inih/archive/refs/tags/r58.tar.gz",
+         "sha256": "e79216260d5dffe809bda840be48ab0eec7737b2bb9f02d2275c1b46344ea7b7"}
+      ]
+    },
+    {
+      "name": "tinyexpr",
+      "license": "Zlib",
+      "role": "negative",
+      "include": ["."],
+      "defines": [],
+      "sources": ["tinyexpr.c"],
+      "drivers": ["negative/expr1.c", "negative/expr2.c"],
+      "versions": [
+        {"version": "1.1.1", "split": "negative", "root": "tinyexpr-1.1.1",
+         "url": "https://github.com/codeplea/tinyexpr/archive/refs/tags/v1.1.1.tar.gz",
+         "sha256": "0eca2972395bfd49910f72993a990640540838776cc9bbcdbfc130d81a87c7d5"}
+      ]
+    },
+    {
+      "name": "owned",
+      "license": "Apache-2.0",
+      "role": "negative",
+      "include": [],
+      "defines": [],
+      "sources": [],
+      "drivers": ["negative/owned1.c", "negative/owned2.c"],
+      "versions": [{"version": "1", "split": "negative"}]
+    }
+  ],
+  "arches": [
+    {"name": "x86_64", "triple": "x86_64-linux-musl"},
+    {"name": "aarch64", "triple": "aarch64-linux-musl"}
+  ],
+  "compilers": [
+    {"name": "zig", "description": "zig cc (Zig's bundled clang/LLVM); compiles and links"},
+    {"name": "clang", "description": "Homebrew clang against Zig's musl headers; zig cc links"}
+  ],
+  "optimizations": ["O0", "O2", "Os"],
+  "link": "zig cc -static -g (zig strips symbols at -Os otherwise) against Zig's musl for the triple, same -O flag; no section garbage collection",
+  "strip": "rampage-eval strip (stripped) and rampage-eval strip --keep-symbols (twin) of the same linked image",
+  "split": {
+    "rule": "version",
+    "unit": "library version: every training binary links a target library's older version, every held-out binary its current one; negatives link no target library",
+    "fast_programs_per_library": 1,
+    "max_heldout_overlap": 0.5
+  }
+}
