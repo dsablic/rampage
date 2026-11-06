@@ -29,6 +29,18 @@ See the [feature reference](docs/features.md) for architecture coverage and limi
 
 [Development and cleanup](docs/development.md) describes the smaller build profiles, validation and worktree lifecycle.
 
+## Supported hosts
+
+- **macOS on Apple silicon (ARM64):** the primary development host. Hosted CI builds and tests the whole workspace,
+  including the desktop UI snapshots.
+- **Linux x86-64 (Ubuntu 24.04):** the core analysis crates have passed hosted CI. The CI job that builds and tests
+  the whole workspace on Linux is new in this preview. UI snapshot tests are macOS-only, and the desktop UI is
+  untested on Linux.
+- **Windows:** not supported as a host. The analysis API uses Unix-only file APIs, and supervised decompilation and
+  component plugins need 64-bit Linux or macOS. PE binaries can still be analysed, and Windows targets debugged
+  through an RSP stub, from a macOS or Linux host.
+- Other hosts, such as Intel macOS and Linux ARM64, are untested.
+
 ## Rust quickstart
 
 Build with a Rust toolchain supporting edition 2024, a native C/C++ compiler and zlib development files.
@@ -126,6 +138,11 @@ Additional focused guides:
 The [development reference](docs/features.md#measurements-and-development) covers measurements, fixture rebuilding
 and decoder-table generation. Existing benchmark measurements are sample-specific, not general accuracy or
 latency guarantees.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for building, testing and how a feature lands. Report vulnerabilities
+privately as described in [SECURITY.md](SECURITY.md), not in public issues.
 
 ## License
 

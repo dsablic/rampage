@@ -1,7 +1,7 @@
 # Build and validate without accumulating large caches
 
 Use one toolchain, consistent compiler flags and one shared workspace `target` directory for routine development.
-Parallel code review does not require per-agent builds or separate target directories. Coordinate build/test runs
+Parallel code review does not require separate builds or target directories. Coordinate build/test runs
 instead of starting competing variants of the whole dependency graph.
 
 ## Build and check
@@ -36,7 +36,8 @@ optimized dependencies.
 
 The default nextest profile in `.config/nextest.toml` skips 23 of the heaviest tests (roster matrices, type
 propagation, Go decompilation), which take about a third of the suite's CPU time. Run everything with
-`cargo nextest run --profile full` before committing; `cargo test` and CI ignore the file.
+`cargo nextest run --profile full` before committing; `cargo test` ignores the file. CI's macOS job runs
+`cargo test`; its Linux workspace job runs the default nextest profile.
 
 ### One integration-test binary per crate
 

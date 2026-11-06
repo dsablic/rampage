@@ -116,7 +116,7 @@ raises `correct`/recall on a held-out slice without introducing `wrong`/`spuriou
 
 ## Notes for the executor
 
-- This is parallelizable as one agent owning `crates/rampage-eval` (+ `tools/eval-corpus.sh`), since it only
+- This can run in parallel as one slice owning `crates/rampage-eval` (+ `tools/eval-corpus.sh`), since it only
   depends on `rampage-signatures`/`rampage-loaders` and adds a new crate (auto-included by the `crates/*`
   workspace glob). It does not touch the in-flight `rampage-detect` / `rampage-yara` / capa work.
 - Later phases generalize the same `Truth`/`Report` shape to other families: discovery recall (truth = symbol

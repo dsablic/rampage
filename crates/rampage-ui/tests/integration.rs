@@ -8,4 +8,6 @@ mod debugger_workspace;
 mod debugger_workspace_live;
 mod module_references;
 mod project_workspace;
+// The reference images are rendered through Metal; other hosts have no matching renderer.
+#[cfg(target_os = "macos")]
 mod snapshots;

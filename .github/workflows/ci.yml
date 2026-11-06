@@ -215,6 +215,61 @@ jobs:
         timeout-minutes: 20
         run: bash tools/ci/linux-core.sh
 
+  linux-workspace:
+    name: Linux x86-64 workspace tests and Clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - name: Require the decompiler's C/C++ toolchain, zlib and fixture tools
+        timeout-minutes: 5
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential clang zlib1g-dev binutils
+          rustc --version --verbose
+          cargo --version
+          cc --version
+          c++ --version
+          clang --version
+          objcopy --version
+      - name: Require LLVM fixture tools
+        timeout-minutes: 3
+        run: rustup component add llvm-tools-preview
+      - name: Require the owned component guest target
+        timeout-minutes: 3
+        run: rustup target add wasm32-unknown-unknown
+      - name: Install checksum-pinned cargo-nextest
+        timeout-minutes: 3
+        run: |
+          scratch=$(mktemp -d "$RUNNER_TEMP/rampage-nextest.XXXXXX")
+          trap 'rm -rf "$scratch"' EXIT
+          archive=cargo-nextest-0.9.150-x86_64-unknown-linux-gnu.tar.gz
+          curl --fail --silent --show-error --location --retry 2 --max-time 120 \
+            "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.150/$archive" \
+            --output "$scratch/$archive"
+          checksum=b0959bc64232974224cf9fb22c915845398c0e8668fa7831eb5b43fb1eef781f
+          printf '%s  %s\n' "$checksum" "$scratch/$archive" | sha256sum --check --strict
+          tar -xzf "$scratch/$archive" -C "$HOME/.cargo/bin" cargo-nextest
+          cargo nextest --version
+      - name: Warnings-denied workspace Clippy
+        timeout-minutes: 40
+        run: time cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Build CLI and its required supervised sibling worker
+        timeout-minutes: 15
+        run: |
+          time cargo build --locked -p rampage-cli -p rampage-worker
+          test -x "$PWD/target/debug/rampage"
+          test -x "$PWD/target/debug/rampage-worker"
+      - name: Workspace tests (nextest default profile)
+        timeout-minutes: 30
+        run: time cargo nextest run --locked --workspace
+
   linux-components:
     name: Linux component runtime (separate from the core subset)
     runs-on: ubuntu-24.04
@@ -242,5 +297,7 @@ jobs:
 # Step/job timeouts bound CI execution, not individual analysis time or memory.
 # macOS runs the ordinary debug workspace suite once, plus the selected compiled-fixture and isolated gates above.
 # Linux additionally compiles x86-64 ELF layout constants/field-use oracles and runs the selected ignored layout gates.
-# Ignored million-point context and Chrome performance tests are not CI coverage; Linux checks only the named core.
-# Metal-backed UI snapshots must pass on macOS; no snapshot updates, skips, or headless Linux UI claims.
+# Linux x86-64 runs the whole workspace under nextest's default profile (the heaviest tests are filtered out; see
+# .config/nextest.toml) and warnings-denied Clippy. No job caches build output; each run builds from scratch.
+# Ignored million-point context and Chrome performance tests are not CI coverage.
+# Metal-backed UI snapshots must pass on macOS; they are compiled out on other hosts, with no headless Linux UI claims.

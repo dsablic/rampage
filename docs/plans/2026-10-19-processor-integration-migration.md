@@ -96,7 +96,7 @@ The five pilot units are:
    with preserved unknown gates and typed-capability refusals.
 
 Pilot gates apply per transformation. Units 1–3 are the representative full-loop pilots for classified
-width/model consumer migration. Once all three pass implementation, fresh-context review, correction and
+width/model consumer migration. Once all three pass implementation, independent review, correction and
 verification without outstanding mapping changes, only the classified width-consumer migration may proceed.
 An unmapped case stops pending a guide update and representative re-pilot.
 
