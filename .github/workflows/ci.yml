@@ -18,6 +18,10 @@ on:
         description: Run the macOS job (its runner minutes cost 10x Linux on a private repo)
         type: boolean
         default: false
+      linux_arm64:
+        description: Run the Linux ARM64 job (GitHub's ubuntu-24.04-arm runners serve public repositories only)
+        type: boolean
+        default: false
       full:
         description: Run every test (nextest `full` profile) instead of the default profile
         type: boolean
@@ -203,6 +207,92 @@ jobs:
         if: always()
         run: sccache --show-stats
 
+  linux-arm64:
+    name: Linux ARM64 workspace, Clippy and gates
+    needs: hygiene
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.linux_arm64) || startsWith(github.ref, 'refs/tags/') ||
+      (github.event_name != 'workflow_dispatch' && github.event.repository.private == false)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: clippy, llvm-tools-preview
+          targets: wasm32-unknown-unknown
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Require native ARM64, the decompiler's C/C++ toolchain, zlib and fixture tools
+        timeout-minutes: 5
+        env:
+          LIVE: ${{ inputs.live }}
+        run: |
+          test "$(uname -m)" = aarch64
+          packages=(build-essential clang zlib1g-dev)
+          if [ "$LIVE" = true ]; then packages+=(qemu-system-arm); fi
+          bash tools/ci/apt-install.sh "${packages[@]}"
+          rustc --version --verbose
+          cc --version
+          clang --version
+      - name: Install checksum-pinned cargo-nextest
+        timeout-minutes: 3
+        run: bash tools/ci/install-nextest.sh
+      - name: Warnings-denied workspace Clippy
+        timeout-minutes: 35
+        run: time cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Workspace tests (nextest)
+        timeout-minutes: 40
+        run: |
+          time cargo nextest run --locked --workspace --profile "$NEXTEST_PROFILE"
+          # The workspace test build also builds the CLI and worker binaries, with the same features.
+          test -x "$PWD/target/debug/rampage"
+          test -x "$PWD/target/debug/rampage-worker"
+      # The ELF layout and DWARF oracles cross-compile x86-64 fixtures with clang and link them with rust-lld, so
+      # they run on an ARM64 host. Ubuntu's ARM64 binutils cannot read x86-64 ELF, so they use the toolchain's
+      # rust-objcopy, as the macOS job does.
+      - name: Owned x86-64 ELF layout constants and field-use oracle
+        timeout-minutes: 5
+        run: |
+          export RAMPAGE_OBJCOPY="$(rustc --print sysroot)/lib/rustlib/aarch64-unknown-linux-gnu/bin/rust-objcopy"
+          time bash tools/ci/layout-oracle.sh
+      - name: Owned DWARF and C++ record layout acceptance
+        timeout-minutes: 5
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          export RUST_SYSROOT="$(rustc --print sysroot)"
+          export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
+          DEBUG_LAYOUT_CPP=1 bash tools/ci/debug-layout-oracle.sh --check \
+            cargo nextest run --locked --workspace --run-ignored all -E '(package(rampage-loaders)) & binary(integration) & test(/(debug_layouts)::/)'
+          bash tools/ci/debug-cpp-layout-oracle.sh --check \
+            cargo nextest run --locked --workspace --run-ignored all -E '(package(rampage-loaders)) & binary(integration) & test(/(debug_cpp_layouts)::/)'
+      - name: Owned import-free components and hostile resource probes
+        timeout-minutes: 10
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          bash tools/ci/plugin-triage-oracle.sh --check \
+            cargo nextest run --locked --workspace --run-ignored only -E '(package(rampage-plugin)) & binary(integration) & test(/(component|resource_controls|cancellation)::/)'
+      - name: Controlled supervised decompiler assertions and recovery gates
+        timeout-minutes: 3
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 tools/decompiler_corpus.py "$PWD/target/debug/rampage" \
+            --manifest tests/data/decompiler-corpus.json --isolated --timeout 30
+      - name: Live QEMU debugger acceptance
+        if: inputs.live
+        timeout-minutes: 10
+        env:
+          RAMPAGE_QEMU_LIVE: "1"
+        run: cargo nextest run --locked -p rampage-api --run-ignored only -E 'test(/^debug_qemu::/)'
+      - name: Compiler cache statistics
+        if: always()
+        run: sccache --show-stats
+
   macos:
     name: macOS ARM64 workspace, UI and accuracy
     needs: hygiene
@@ -332,8 +422,10 @@ jobs:
       macos: ${{ inputs.macos }}
 
 # Step/job timeouts bound CI execution, not individual analysis time or memory.
-# Both workspace jobs run nextest's default profile (the 23 heaviest tests are filtered out; see
+# The workspace jobs run nextest's default profile (the 23 heaviest tests are filtered out; see
 # .config/nextest.toml); a manual run with `full` runs every test. The Linux job also runs the owned x86-64 ELF,
 # DWARF, C++ layout and component oracles that the former linux-core and linux-components jobs ran.
+# The Linux ARM64 job runs the same oracles (they cross-compile x86-64 fixtures) plus the supervised decompiler
+# corpus gate, on a native ubuntu-24.04-arm runner.
 # Ignored million-point context and Chrome performance tests are not CI coverage.
 # Metal-backed UI snapshots must pass on macOS; they are compiled out on other hosts, with no headless Linux UI claims.

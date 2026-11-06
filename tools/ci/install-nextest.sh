@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install a checksum-pinned cargo-nextest release binary into ~/.cargo/bin (Linux x86-64 or macOS).
+# Install a checksum-pinned cargo-nextest release binary into ~/.cargo/bin (Linux x86-64, Linux ARM64 or macOS).
 set -euo pipefail
 
 version=0.9.150
@@ -7,6 +7,10 @@ case "$(uname -s)-$(uname -m)" in
     Linux-x86_64)
         platform=x86_64-unknown-linux-gnu
         checksum=b0959bc64232974224cf9fb22c915845398c0e8668fa7831eb5b43fb1eef781f
+        ;;
+    Linux-aarch64)
+        platform=aarch64-unknown-linux-gnu
+        checksum=9164568e9840c6509177086828ac7d3178c2d8feb0658b4d2bff62fa620e98c8
         ;;
     Darwin-*)
         platform=universal-apple-darwin
