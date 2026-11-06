@@ -435,7 +435,8 @@ impl Drop for SleighDecoder {
 }
 
 fn text<const N: usize>(bytes: &[c_char; N]) -> String {
-    let bytes: Vec<u8> = bytes.iter().take_while(|&&byte| byte != 0).map(|&byte| byte as u8).collect();
+    // `c_char` is `i8` on x86-64 and Apple ARM64 but `u8` on Linux ARM64, so take its byte without a cast.
+    let bytes: Vec<u8> = bytes.iter().take_while(|&&byte| byte != 0).map(|&byte| byte.to_ne_bytes()[0]).collect();
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
