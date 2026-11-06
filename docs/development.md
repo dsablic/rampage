@@ -89,32 +89,34 @@ cargo test --locked --release -p rampage-decompiler --lib
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` has four jobs:
+`.github/workflows/ci.yml` has five jobs:
 
 | Job | Runner | What it runs |
 | --- | --- | --- |
 | `hygiene` | Ubuntu 24.04 | `cargo fmt --check`, the Python tool regressions, `tools/test_install.sh`, Gitleaks over HEAD and history |
 | `clippy` | Ubuntu 24.04 | warnings-denied workspace Clippy |
 | `linux` | Ubuntu 24.04 | CLI and worker build, `cargo nextest run --workspace`, then the owned x86-64 ELF layout, DWARF/C++ layout and component oracles |
+| `linux-arm64` | Ubuntu 24.04 (ARM64) | Clippy, `cargo nextest run --workspace`, the same x86-64 ELF layout, DWARF/C++ layout and component oracles as `linux` (they cross-compile their x86-64 fixtures with clang and rust-lld and read them with `rust-objcopy`), and the supervised decompiler corpus |
 | `macos` | macOS 15 (ARM64) | Clippy, the supervised decompiler corpus, `cargo nextest run --workspace` (including the Metal UI snapshots and the rampage-eval accuracy gate), and the macOS-only module-linkage, plugin-triage, DWARF, C++ and compiled-fixture gates |
 
-`clippy`, `linux` and `macos` wait for `hygiene`, so a formatting or secret-scan failure costs seconds, not a build.
-All Rust jobs use [sccache](https://github.com/mozilla/sccache) with the GitHub Actions cache. cc-rs adopts the
+`clippy`, `linux`, `linux-arm64` and `macos` wait for `hygiene`, so a formatting or secret-scan failure costs
+seconds, not a build. All Rust jobs use [sccache](https://github.com/mozilla/sccache) with the GitHub Actions cache. cc-rs adopts the
 sccache `RUSTC_WRAPPER` as its C/C++ wrapper, so the embedded Ghidra decompiler's 92 C++ files are cached as well;
 each job prints `sccache --show-stats` at the end.
 
 **Triggers.** Manual runs (`workflow_dispatch`) and `v*` tags always run. `push` to `main` and `pull_request` are
 declared, but every job checks `github.event.repository.private == false` for those events, so they run only while
-the repository is public (macOS minutes on a private repository cost ten times Linux minutes). Making the
-repository public needs no workflow change.
+the repository is public (macOS minutes on a private repository cost ten times Linux minutes, and GitHub's
+`ubuntu-24.04-arm` runners serve public repositories only).
 
 **Manual runs.** Every input defaults to off:
 
 ```sh
-gh workflow run ci.yml --ref BRANCH                          # Linux jobs only
+gh workflow run ci.yml --ref BRANCH                          # Linux x86-64 jobs only
 gh workflow run ci.yml --ref BRANCH -f macos=true            # also macOS
+gh workflow run ci.yml --ref BRANCH -f linux_arm64=true      # also Linux ARM64
 gh workflow run ci.yml --ref BRANCH -f full=true             # nextest `full` profile (all 23 heavy tests)
-gh workflow run ci.yml --ref BRANCH -f live=true             # also the live QEMU debugger suite on Linux
+gh workflow run ci.yml --ref BRANCH -f live=true             # also the live QEMU debugger suite on both Linux jobs
 gh workflow run ci.yml --ref BRANCH -f release_dry_run=true  # also build and smoke-test release archives
 gh run watch RUN_ID; gh run view RUN_ID --log-failed
 ```
@@ -150,9 +152,9 @@ binaries), which is most of the remaining build time.
 
 ## Release procedure
 
-`.github/workflows/release.yml` builds `rampage`, `rampage-worker` and `rampage-ui` for `aarch64-apple-darwin` and
-`x86_64-unknown-linux-gnu` with ThinLTO and one codegen unit (set in the workflow's environment, so a local profile
-edit cannot change shipped binaries). `tools/ci/package-release.sh` packages each target as
+`.github/workflows/release.yml` builds `rampage`, `rampage-worker` and `rampage-ui` for `aarch64-apple-darwin`,
+`x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` (on a native `ubuntu-24.04-arm` runner) with ThinLTO
+and one codegen unit (set in the workflow's environment, so a local profile edit cannot change shipped binaries). `tools/ci/package-release.sh` packages each target as
 `rampage-VERSION-TARGET.tar.gz`: one top-level directory holding `bin/` (the programs, side by side, because the CLI
 starts the worker from its own directory), `LICENSE`, `NOTICE`, `THIRD-PARTY-NOTICES` and a README stub, plus a
 `.sha256` file. `tools/ci/check-release-archive.sh` verifies the checksum and layout, then runs `rampage --version`,
@@ -163,8 +165,8 @@ starts the worker from its own directory), `LICENSE`, `NOTICE`, `THIRD-PARTY-NOT
   `-beta.2`) makes the draft a GitHub prerelease. Nothing is published automatically.
 - `gh workflow run release.yml --ref BRANCH` (or CI's `release_dry_run` input) is a dry run: it builds, packages and
   smoke-tests the archives and uploads them as workflow artefacts for 14 days, and never creates a release. Pass
-  `-f macos=false` to build Linux only. `gh workflow run release.yml --ref vX.Y.Z -f dry_run=false` rebuilds an
-  existing tag and attaches a draft to it; a non-dry run on a ref that is not a tag stops before building.
+  `-f macos=false` to build the two Linux targets only. `gh workflow run release.yml --ref vX.Y.Z -f dry_run=false`
+  rebuilds an existing tag and attaches a draft to it; a non-dry run on a ref that is not a tag stops before building.
 - `gh workflow run release.yml` works only once `release.yml` is on the default branch; otherwise use CI's
   `release_dry_run` input.
 
@@ -192,9 +194,11 @@ installer, copy the archive's `bin/` contents into one directory on `PATH`.
 2. Regenerate `THIRD-PARTY-NOTICES` with `python3 -I tools/third-party-notices.py` and commit any change.
 3. Run the local gates: `cargo fmt --all --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings`
    and `cargo nextest run --locked --workspace --profile full`.
-4. Run `gh workflow run ci.yml --ref main -f macos=true -f full=true` and wait for it to pass.
+4. Run `gh workflow run ci.yml --ref main -f macos=true -f linux_arm64=true -f full=true` and wait for it to pass.
 5. Run a release dry run (`gh workflow run release.yml --ref main`), download an archive for your host with
-   `gh run download RUN_ID`, and run `tools/install.sh --archive …` into a scratch root.
+   `gh run download RUN_ID`, and run `tools/install.sh --archive …` into a scratch root. A clean
+   `docker run --platform linux/arm64 ubuntu:24.04` container on an Apple silicon Mac runs the Linux ARM64 archive
+   natively.
 6. Tag and push: `git tag -s vX.Y.Z -m "rampage X.Y.Z" && git push origin vX.Y.Z`. The tag must equal
    `v` plus the workspace version, or the workflow stops.
 7. Review the draft release: archive names, checksums, generated notes. Edit the notes, then publish it by hand.

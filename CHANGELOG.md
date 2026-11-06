@@ -90,6 +90,12 @@ runs without unplanned contract-snapshot changes. It summarises what rampage doe
 - Snapshot tests in `tests/contract/` pin the MCP tool schemas and result fields and the CLI commands, flags and
   `--json` fields; see [how the stable surface is checked](docs/stability.md#how-the-stable-surface-is-checked).
 
+### Hosts and installation
+
+- Supported hosts are macOS on Apple silicon, Linux x64 and Linux ARM64 (Ubuntu 24.04). Each release has prebuilt
+  archives for `aarch64-apple-darwin`, `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`, and
+  `tools/install.sh --archive` verifies an archive's checksum before installing it.
+
 ### Experimental
 
 These ship in 1.0.0 but are outside the stability promise:
@@ -107,8 +113,8 @@ These ship in 1.0.0 but are outside the stability promise:
 
 [Known limits](docs/known-limits.md) lists them in full. In short:
 
-- Hosts: macOS on Apple silicon is tested; Intel macOS is untested. Linux x64 builds and tests in CI, and this is
-  its first release. Windows is not supported as a host.
+- Hosts: macOS on Apple silicon is tested; Intel macOS is untested. Linux x64 and Linux ARM64 build and test in
+  CI, and this is their first release. Windows is not supported as a host.
 - Without `rampage-worker` installed, decompilation runs in-process. Decompiled C is not proof of correct
   recovery, and worker supervision is not an OS sandbox.
 - Bundled signatures recognise the library builds they were made from, not every version of a library.

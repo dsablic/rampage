@@ -10,9 +10,10 @@ these against other tools, and the [stability policy](stability.md) says which a
 | macOS on Apple silicon | Tested; the primary development host. |
 | macOS on Intel | Untested. It should build from source, but no one has run the test suite on it. |
 | Linux x64 (Ubuntu 24.04) | Supported: CI builds and tests the whole workspace; the desktop UI is untested there. |
+| Linux ARM64 (Ubuntu 24.04) | Supported: CI builds and tests the whole workspace on a native ARM64 runner; the desktop UI is untested there. |
 | Windows | Not supported as a host in 1.0; planned for 1.x. |
 
-Prebuilt archives cover macOS on Apple silicon and Linux x64 only; other hosts build from source, see
+Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; other hosts build from source, see
 [getting started](getting-started.md#what-you-need) for the prerequisites.
 
 ## Decompilation and safety

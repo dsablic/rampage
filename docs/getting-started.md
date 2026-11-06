@@ -9,7 +9,7 @@ Every result shown here is real output from rampage on the fixture used, shorten
 
 - A supported host (see [supported hosts](../README.md#supported-hosts)):
   - macOS on Apple silicon: tested. Intel macOS is untested.
-  - Linux x64 (Ubuntu 24.04): supported; CI builds and tests the whole workspace.
+  - Linux x64 and Linux ARM64 (Ubuntu 24.04): supported; CI builds and tests the whole workspace on both.
 - A Rust toolchain through [rustup](https://rustup.rs). The repository's `rust-toolchain.toml` selects stable, with
   edition 2024.
 - A C/C++ compiler and zlib development files, for the embedded decompiler:

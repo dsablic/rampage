@@ -53,7 +53,8 @@ near 100%.
 ### Build and install
 
 Each [GitHub release](https://github.com/dsablic/rampage/releases) has prebuilt archives for macOS on Apple silicon
-(`aarch64-apple-darwin`) and Linux x64 (`x86_64-unknown-linux-gnu`), each with a `.sha256` file. Download both into one
+(`aarch64-apple-darwin`), Linux x64 (`x86_64-unknown-linux-gnu`) and Linux ARM64 (`aarch64-unknown-linux-gnu`), each
+with a `.sha256` file. Download both into one
 directory and run `tools/install.sh --archive rampage-<version>-<target>.tar.gz` from a checkout; it verifies the
 checksum before installing. To build from source instead, you need:
 
@@ -180,8 +181,9 @@ The [feature overview](docs/features.md) and [MCP reference](docs/mcp.md) descri
 | Host | Status |
 | --- | --- |
 | macOS on Apple silicon | Tested; the primary development host. |
-| macOS on Intel, Linux ARM64 | Untested: they should build from source, but no one has run the tests on them. |
+| macOS on Intel | Untested: it should build from source, but no one has run the tests on it. |
 | Linux x64 (Ubuntu 24.04) | Supported. CI builds the whole workspace and runs its tests and Clippy; release archives are built for `x86_64-unknown-linux-gnu`. The desktop UI builds but its interface is untested there. |
+| Linux ARM64 (Ubuntu 24.04) | Supported. CI builds the whole workspace and runs its tests and Clippy on a native ARM64 runner; release archives are built for `aarch64-unknown-linux-gnu`. The desktop UI builds but its interface is untested there. |
 | Windows | Not supported as a host in 1.0; planned for 1.x. |
 
 On any host, rampage analyses PE, ELF and Mach-O binaries alike. Windows PE binaries can be analysed, and Windows
