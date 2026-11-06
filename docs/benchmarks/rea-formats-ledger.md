@@ -1,8 +1,8 @@
-# REA formats and ledger wave
+# Format tools and findings ledger
 
 Part of the [accuracy benchmarks](../benchmarks.md).
 
-## REA formats and ledger wave (2026-10-29)
+## Format tools and findings ledger acceptance
 
 The `formats` tools (`build_info`, `pe_resources`, `pe_load_config`, `pyinstaller_archive`, `wasm_module`) and the
 findings ledger have no scorecard measurement. Their acceptance is API, CLI and MCP tests on owned fixtures

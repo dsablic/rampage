@@ -4,7 +4,7 @@ rampage's analysis is measured against Ghidra as a reference. Ghidra's output is
 a matching function start does not establish a matching CFG, types or decompilation, and either tool can be
 wrong. The point is to catch regressions and large gaps in rampage's own analysis.
 The results below are recorded measurements, not a fresh run of the current working tree. Implementation
-descriptions may include later bounded improvements; those do not imply that the benchmark was rerun.
+descriptions may cover improvements made after a measurement; they do not imply that the benchmark was rerun.
 
 ## Benchmark reports
 
@@ -13,10 +13,10 @@ internal milestone numbers they were recorded under.
 
 | Report | Contents |
 | --- | --- |
-| [Head-to-head agent runs: rampage vs REA](benchmarks/agent-h2h-2026-11-05.md) | 20 canonical tasks × 3 through `claude-sonnet-5-5`, 2026-11-05. |
-| [Head-to-head suite v2: rampage vs REA](benchmarks/agent-h2h-v2-2026-11-05.md) | 15 harder tasks (C++, typing, investigation, 50 MB scale, raw firmware, diffing) × 3 through `claude-sonnet-5-5`, 2026-11-05. |
-| [Debugger acceptance](benchmarks/phase9-debugger.md) | GDB stub, debugserver and Windows acceptance, 2026-10-29 to 2026-11-05. |
-| [Format tools and findings ledger](benchmarks/rea-formats-ledger.md) | Format tools and findings ledger, 2026-10-29. |
+| [Head-to-head agent runs: rampage vs REA](benchmarks/agent-h2h-2026-11-05.md) | 20 canonical tasks × 3 through `claude-sonnet-5-5`. |
+| [Head-to-head suite v2: rampage vs REA](benchmarks/agent-h2h-v2-2026-11-05.md) | 15 harder tasks (C++, typing, investigation, 50 MB scale, raw firmware, diffing) × 3 through `claude-sonnet-5-5`. |
+| [Debugger acceptance](benchmarks/phase9-debugger.md) | GDB stub, debugserver and Windows acceptance. |
+| [Format tools and findings ledger](benchmarks/rea-formats-ledger.md) | Acceptance tests for the format tools and the findings ledger. |
 | [Raw processor profiles](benchmarks/phase4-1.md) | Sleigh processor roster as Raw Projects and the explicit-window checkpoint. |
 | [Search, patching and views](benchmarks/phase3.md) | Search, patch/export round trip and compact views. |
 | [Library identification](benchmarks/phase2.md) | Library corpus delivery, recall and fuzzy candidates. |
@@ -51,9 +51,10 @@ SHA-256 `7248d6e31c3394fb44ffcafc1181a67114822637247ce82c793866ee99deacc4`. The 
 | Ghidra MCP task comparison | Unavailable in configured project; rampage-only task baseline |
 | Baseline evidence completeness | 22/22 required checks met |
 
-The fixed model was `github-copilot/gpt-6.1-sol`, variant `default`, through the explicitly labeled OpenCode
-JSON-intent adapter, since retired. These task results are history and are not comparable with the
-[head-to-head agent runs](benchmarks/agent-h2h-2026-11-05.md) (other model, client and prompts). Host tools were disabled; actual analysis used MCP against copied fixtures. Contract
+The fixed model was `github-copilot/gpt-6.1-sol`, variant `default`, through an explicitly labeled OpenCode
+JSON-intent adapter that rampage no longer ships. These task results are not comparable with the
+[head-to-head agent runs](benchmarks/agent-h2h-2026-11-05.md) (other model, client and prompts). Host tools were
+disabled; all analysis used MCP against copied fixtures. Contract
 matches are not claims of general reverse-engineering parity. The unknown capability probe reflects limited
 visibility of write-tool definitions; the other failed probe mixed answer and unsupported-control fields.
 
@@ -63,11 +64,12 @@ retained code ranges match their twins. Extra candidates are relative to partial
 false functions. Go runtime metadata remains present; matched-twin naming is not cross-build recognition.
 Health sampling is address-sorted, not random, and timings mix initialization and cache states.
 
-An initial collection exposed a SIGCHLD interaction in the CLI wait helper. The committed collector removes
-that handler dependency and passes a CLI-wait-to-MCP-decompile regression. This table uses the full rerun with
-unchanged task definitions and fixtures, not selective retries or regrading. Totals exclude setup probes.
-No analyzed target was executed. The raw-firmware acceptance window also revalidated through MCP: 218 bytes,
-84 instruction rows, no unconsumed bytes; its mapping remains an analyst assertion, with no new memory-map claim.
+The committed collector does not depend on a SIGCHLD handler in the CLI wait helper and passes a
+CLI-wait-to-MCP-decompile regression test. A collection affected by that SIGCHLD interaction is discarded; the
+table is a full rerun with unchanged task definitions and fixtures, not selective retries or regrading. Totals
+exclude setup probes. No analyzed target was executed. The raw-firmware acceptance window also validates through
+MCP: 218 bytes, 84 instruction rows, no unconsumed bytes. Its mapping is an analyst assertion, with no new
+memory-map claim.
 
 ## Function discovery vs Ghidra
 
@@ -80,16 +82,16 @@ tools/benchmark.sh target/debug/rampage "$(brew --prefix ghidra)/libexec" \
   tests/fixtures/bin/hello-x64.elf x86_64  tests/fixtures/bin/hello-arm64.elf aarch64
 ```
 
-`recall` is matched/reference starts; `precision` is matched/rampage starts. Extra starts are now counted against
+`recall` is matched/reference starts; `precision` is matched/rampage starts. Extra starts count against
 precision, including thunks excluded from the reference. Empty denominators are reported as `null`/`N/A`, not
 zero. The reference records the installed Ghidra version. These policies must match before comparisons across
 versions or corpora are interpreted.
 
 ### Earlier function-start measurements (Ghidra 12.1.4, fixtures in `tests/fixtures/bin`)
 
-This table originated in `a74b679` (2026-10-11); the ARM/Thumb counts were updated in `b4c5b3f` (2026-10-13).
-It is not one synchronized current-build run. Later discovery changes are reflected in the separately recorded
-CFG/call benchmark below; counts and misses from this earlier table must not be read as current limitations.
+Measured at `a74b679`, with the ARM/Thumb counts from `b4c5b3f`; the rows are not one synchronized run of a
+single build. Discovery changes after these commits are reflected in the separately recorded CFG/call benchmark
+below, so the counts and misses in this table must not be read as current limitations.
 
 | binary            | arch     | ghidra | rampage | matched | recall |
 |-------------------|----------|-------:|--------:|--------:|-------:|
@@ -104,8 +106,8 @@ CFG/call benchmark below; counts and misses from this earlier table must not be 
 | hello-riscv64.elf | riscv64  |      8 |       8 |       8 | 100.0% |
 
 The larger PE sample matched every Ghidra function in these measurements. The 83–98% cases are small fixtures
-where a single miss is a large percentage; startup/stub entries were among the gaps at that stage. The later
-CFG table records all six Ghidra starts matched for both hello-x64-dyn.elf and hello-arm64.elf. Discovery
+where a single miss is a large percentage; startup/stub entries were among the misses in this measurement. The
+CFG table below records all six Ghidra starts matched for both hello-x64-dyn.elf and hello-arm64.elf. Discovery
 agreement remains separate from the embedded decompiler's integration accuracy.
 
 ## Basic blocks, CFG edges and call edges vs Ghidra
@@ -142,24 +144,28 @@ tools/cfg-benchmark.py target/release/rampage "$(brew --prefix ghidra)/libexec" 
 
 ### Results
 
-Ghidra 12.1.4 (headless, default analysers, OpenJDK 21.0.12.1); rampage 0.1.0 at `207c45c`; macOS 27.0.1 arm64.
-Ghidra's analysis takes 4–23 s per fixture, about 2.5 min for all 18 fixtures, so all of them are covered. A second
-run at `af40350` (regenerated signature databases), with Ghidra's exports cached, gave the same numbers. The x86-64
-rows (hello-x64.exe, eval-ref-x86_64, musl-static-x86_64, hello-go-x64) were re-measured with x86 switch tables
-resolved, from the same cached exports; the other x86-64 rows did not change. The hello-x64.exe, ARM, Thumb, MIPS,
-PPC and RISC-V rows were re-measured the same way after the get-PC, import-thunk and undecodable-start fixes.
-Adding noreturn analysis changed only the hello-x64.exe and hello-go-x64 rows (re-measured the same way). Every
-row below was re-measured at `7c03e5c`, from the same cached exports, after switch resolution started
-forgetting facts at joins ahead of the comparison and stopped accepting 16-bit `movsxd` and non-contiguous masks;
-no row changed. They were re-measured again at `41e1224`, from the same cached exports, after the noreturn review
-fixes (conditional calls and returns, resumable traps, incremental inference, case-sensitive names, more get-PC
-idioms); no row changed. Re-measured again, from the same cached exports, after the address a load reads stopped
-counting as a code pointer: only the hello-arm.elf (10 to 8 rampage functions) and hello-thumb.elf (44 to 43) rows
-changed. Inferring noreturn through mutual tail calls then changed no row. Resolving switches whose facts are set up
-in an earlier block (measured against `77d6709` from the same cached exports) changed only the hello-x64.exe,
-eval-ref-x86_64 and musl-static-x86_64 rows; every other fixture's functions, blocks and switches are identical.
-The cross-block update was recorded in `b01f074` (2026-10-13). No new measurements are added here for later
-working-tree changes, including inverse/scheduled AArch64 guards or nonconstant native SSA spill recovery.
+Ghidra 12.1.4 (headless, default analysers, OpenJDK 21.0.12.1) on macOS 27.0.1 arm64. Ghidra's analysis takes
+4–23 s per fixture, about 2.5 min for all 18 fixtures, so all of them are covered. The base run used rampage 0.1.0
+at `207c45c`. Every later measurement reuses the same cached Ghidra exports and re-measures only the rampage side:
+
+- `af40350` (regenerated signature databases): same numbers.
+- x86 switch tables resolved: hello-x64.exe, eval-ref-x86_64, musl-static-x86_64 and hello-go-x64 re-measured; the
+  other x86-64 rows are unchanged.
+- get-PC, import-thunk and undecodable-start handling: hello-x64.exe, ARM, Thumb, MIPS, PPC and RISC-V re-measured.
+- noreturn analysis: only the hello-x64.exe and hello-go-x64 rows change.
+- `7c03e5c` (switch resolution forgets facts at joins ahead of the comparison and rejects 16-bit `movsxd` and
+  non-contiguous masks): every row re-measured, none changes.
+- `41e1224` (noreturn handling of conditional calls and returns, resumable traps, incremental inference,
+  case-sensitive names, more get-PC idioms): every row re-measured, none changes.
+- the address a load reads is not a code pointer: only hello-arm.elf (10 to 8 rampage functions) and
+  hello-thumb.elf (44 to 43) change.
+- noreturn inference through mutual tail calls: no row changes.
+- switches whose facts are set up in an earlier block, measured against `77d6709` and recorded in `b01f074`: only
+  hello-x64.exe, eval-ref-x86_64 and musl-static-x86_64 change; every other fixture's functions, blocks and switches
+  are identical.
+
+The tables below reflect `b01f074`. They do not cover later changes, including inverse/scheduled AArch64 guards
+or nonconstant native SSA spill recovery.
 
 Function and block agreement:
 
@@ -244,7 +250,7 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
   read-only data. This covers absolute
   `jmp [rax*8+0x1001a68]` (eval-ref-x86_64 `0x100e148`) and relative
   `lea rcx,[table]; movsxd rax,[rcx+rax*4]; add rax,rcx; jmp rax` (hello-x64.exe `0x1400170f4`, bounded by
-  `and eax, 3`). Ghidra-only blocks fell from 239 to 44 in hello-x64.exe, 328 to 8 in eval-ref-x86_64, 82 to 4 in
+  `and eax, 3`). Resolving these cuts Ghidra-only blocks from 239 to 44 in hello-x64.exe, 328 to 8 in eval-ref-x86_64, 82 to 4 in
   musl-static-x86_64 and 1245 to 330 in Go. Most of what remains is the jump itself: as on AArch64, Ghidra starts a
   block at its `switchD` label, which also accounts for the lower raw edge precision.
 
@@ -256,13 +262,13 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
   preserves across calls, so hello-x64.exe `0x140001aca` finds the table base loaded into `r15` before its loop. A
   bound holds only on the fall-through of the `ja` that proved it, and two paths keep a bound only from the same
   comparison. A table found this way adds case edges that may join the paths it was proven on, so discovery explores
-  the function again assuming it and drops it for good unless the larger graph still proves the same table. That
-  took Ghidra-only blocks from 44 to 34 in hello-x64.exe, 8 to 4 in eval-ref-x86_64 and 4 to 0 in
-  musl-static-x86_64; chain Jaccard and chain edges now agree completely on all three, and no other fixture changed.
+  the function again assuming it and drops it for good unless the larger graph still proves the same table. This
+  cuts Ghidra-only blocks from 44 to 34 in hello-x64.exe, 8 to 4 in eval-ref-x86_64 and 4 to 0 in
+  musl-static-x86_64; chain Jaccard and chain edges agree completely on all three, and no other fixture changes.
   hello-x64.exe discovery takes about 24 ms instead of 18 (the extra exploration), hello-go-x64 57 instead of 53. The
   same dataflow carries AArch64 facts. PIC i386 tables (`call __x86.get_pc_thunk.bx` or `call 1f; 1: pop ebx`,
   `add ebx, GOT`, `mov eax, [ebx + eax*4 + off]; add eax, ebx; jmp eax`) are recognized too, but no benchmark
-  fixture exercises them; compiled acceptance remains separate work.
+  fixture exercises them and they have no compiled acceptance fixture.
 - **AArch64 jump tables (resolved in the measured cases).** The recorded fixtures use an unsigned bound from
   `cmp` followed by `b.hi`/`b.hs` and read-only table data. The straight-line recognizer forgets facts at joins;
   cross-block recovery retains only facts agreed on by every incoming path and revalidates added case edges.
@@ -277,9 +283,9 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
   returns: one in its curated list (`exit`, `abort`, `__stack_chk_fail`, `_CxxThrowException`, Rust
   `core::panicking::*`, Go `runtime.throw`/`runtime.gopanic`/`runtime.panic*`, ...), called directly, through a
   PLT/IAT stub or through an import slot, or one inferred because every path through it ends in such a call or a
-  trap. Before, rampage fell through after every call. Go's rampage-only edges drop from 1536 to 206 (edge
-  precision 95.3% to 99.3%), and hello-x64.exe loses its 7 fall-throughs after `exit`, `abort` and the MinGW error
-  reporter `0x140001d20` (`0x1400013f7`, `0x1400013fc`, `0x140001cdd`). Go edge recall falls from 98.0% to 96.9%:
+  trap. Compared with falling through after every call, this cuts Go's rampage-only edges from 1536 to 206 (edge
+  precision 95.3% to 99.3%) and removes hello-x64.exe's 7 fall-throughs after `exit`, `abort` and the MinGW error
+  reporter `0x140001d20` (`0x1400013f7`, `0x1400013fc`, `0x140001cdd`). Go edge recall drops from 98.0% to 96.9%:
   330 edges Ghidra keeps after calls that never return, such as `runtime.gopanic`, `runtime.panicshift`,
   `runtime.panicunsafeslicelen` and the dead code after `runtime.fatalthrow` in `runtime.fatal` (`0x444054`).
   Ghidra lists most of these callees as non-returning itself but does not end every such block. Go's
@@ -308,11 +314,11 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
   inside code; a formed address into code may be one, as may the word an ARM or AArch64 PC-relative literal load
   reads from read-only memory (`ldr r0, =func`). An address a function forms and also loads from is data, as
   `_start`'s `adr r3` to its own pool shows. hello-arm.elf `sub_20338` and `sub_2033c` (`_start`'s literals, which
-  happen to decode) are no longer functions, nor is one rampage-only start in hello-thumb.elf.
+  happen to decode) are not functions, nor is one former rampage-only start in hello-thumb.elf.
 - **Tail jumps to import thunks (resolved).** PE `jmp [slot]` thunks that follow padding or another thunk are
   functions, so `jmp 0x140028d50` (`fflush`) at hello-x64.exe `0x140001447` is a tail call rather than a block of
-  its only caller. ELF PLT and Mach-O stubs were already functions. Unreferenced thunks are now listed too, which
-  is why rampage's hello-x64.exe function count rose; Ghidra's export leaves thunks out.
+  its only caller. ELF PLT and Mach-O stubs are functions as well. Unreferenced thunks are listed too, which raises
+  rampage's hello-x64.exe function count; Ghidra's export leaves thunks out.
 - **Ghidra's label splits (not a CFG difference).** `BasicBlockModel` starts a block at every labelled
   instruction. On RISC-V the `.Lpcrel_hi*` local symbols split straight-line code, so raw block Jaccard is 57.9% and
   chain Jaccard is 100%.
@@ -327,14 +333,14 @@ These come from inspecting the per-function reports (`--out`) and the disassembl
   - On Thumb, Ghidra leaves the reachable `udf` trap block out after `bgt` (hello-thumb `0x204fa`, `0x207aa`);
     rampage keeps it.
 
-### Analysis follow-ups found by this benchmark
+### Analysis cases outside these measurements
 
-The working implementation now accepts inverse AArch64 `b.ls`/`b.lo` bounds on the taken edge and scheduled
-immediate comparisons across audited NZCV/index-preserving instructions and agreeing joins. Native SSA locates
-the actual flag-consuming branch to recover the default. These increments have bounded regressions, but the
-recorded benchmark fixtures do not exercise them, and no new measurements are claimed here.
+rampage also accepts inverse AArch64 `b.ls`/`b.lo` bounds on the taken edge and scheduled immediate comparisons
+across audited NZCV/index-preserving instructions and agreeing joins. Native SSA locates the actual
+flag-consuming branch to recover the default. These cases have bounded regression coverage, but the recorded
+benchmark fixtures do not exercise them, and no measurements are claimed for them.
 
-Remaining acceptance includes `BC.cond`/other comparison forms, broader compiled scheduling cases and a
+Acceptance does not yet cover `BC.cond` or other comparison forms, broader compiled scheduling cases or a
 compiled PIC i386 table fixture. See [Deep ARM64 analysis](arm64-development.md) for the proof boundaries.
 
 ## Decompilation
@@ -348,7 +354,7 @@ targets, and time/memory use. Function-start recall alone does not establish dec
 
 `tools/decompile-benchmark.sh RAMPAGE GHIDRA IMAGE FUNCTION` runs a bounded single-function reference probe and
 reports image identity, engine/compiler selection, normalized text equality and warning lines in emitted C.
-It explicitly reports that mappings/types/options are not yet matched; equality is diagnostic rather than a
+It explicitly reports that mappings, types and options are not matched; equality is diagnostic rather than a
 semantic score. On `hello-x64-dyn.elf`/`main`, Ghidra 12.1.4 produced 77 bytes and rampage produced 79 bytes, both
 without emitted warning lines. The differing display names/signatures require matched-setting comparison before
 an accuracy conclusion is drawn.
@@ -356,13 +362,13 @@ an accuracy conclusion is drawn.
 The versioned integration corpus runs with
 `python3 tools/decompiler_corpus.py target/debug/rampage --manifest tests/data/decompiler-corpus.json --isolated`.
 Its four controlled cases passed 15 selected assertions (x64/ARM64 greeting calls, BE8 instructions and Windows
-x64 arguments). That pass is bounded integration coverage, not a general decompilation accuracy percentage.
-This is the previously recorded integration result, not a rerun during this documentation review. See the
+x64 arguments). That pass is bounded integration coverage, not a general decompilation accuracy percentage, and it is a
+recorded result, not a rerun against the current tree. See the
 [corpus runner reference](decompiler-corpus.md) for identity scope, assertion denominators and resource limits.
 
 ## Earlier measurements
 
-These were recorded during development and are not rerun on each release.
+These are recorded measurements and are not rerun for each release.
 
 - **Decoder comparisons.** Words sampled across every encoding: A32 matched `llvm-mc` on 97.95%, 16-bit Thumb on
   100% and 32-bit Thumb on 97.49%. AArch64 matched every instruction sampled from Chrome's arm64 code and 99.85%

@@ -2,9 +2,9 @@
 
 Part of the [accuracy benchmarks](../benchmarks.md).
 
-## Phase 9 debugger acceptance (2026-10-29 to 2026-11-05)
+## Phase 9 debugger acceptance
 
-Phase 9 has no scorecard row: the agent-level debugger task was not added (see the design's deviations). Its
+Phase 9 has no scorecard row because there is no agent-level debugger task (see the design's deviations). Its
 acceptance is the [acceptance record](../plans/2026-10-29-debugger-control.md#acceptance-record) in the debugger
 design.
 

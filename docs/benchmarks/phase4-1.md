@@ -35,7 +35,7 @@ Only MSP430 and AVR8 decompile (they have reviewed C models); the other fourteen
 | Hexagon-v2 | `Hexagon:LE:32:default` | 2 | 2/2 | 0/2 | 1/2 | 0/2 | `processor_helper_required` | refused |
 
 Limits: the Ghidra oracle is seeded function creation; Ghidra autonomous auto-analysis was not run, so
-autonomous discovery recall versus Ghidra per processor remains unmeasured (and is listed as such in the parity
+autonomous discovery recall versus Ghidra per processor is unmeasured (and is listed as such in the parity
 report). Fixtures are hand-assembled byte ledgers of two functions each; no cross-compilers were available, so
 this is not compiled-code coverage. The decompile column is one bounded attempt at the first truth entry,
 not a C correctness verdict. Fixture paths and SHA-256 digests are recorded per row.
@@ -54,5 +54,5 @@ tests with nine ignored. These checks overlap and are not summed into independen
 
 All sixteen roadmap families have audited resource closures. Only MSP430, AVR8 and 6502 have this native
 window/discovery checkpoint; the additional thirteen have independent Java oracle records, not native
-acceptance. Ordinary `Project` fallback, architecture/width integration and ABI-checked decompilation remain
-pending. **Phase 4.1 is not complete**, and no earlier live/N, recall or efficiency gate is changed.
+acceptance. Ordinary `Project` fallback, architecture/width integration and ABI-checked decompilation are not
+done. **Phase 4.1 is not complete**, and this checkpoint changes no live/N, recall or efficiency gate.

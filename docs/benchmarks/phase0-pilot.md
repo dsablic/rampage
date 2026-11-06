@@ -2,7 +2,7 @@
 
 Part of the [accuracy benchmarks](../benchmarks.md).
 
-## Raw-window workflow acceptance (2026-10-16)
+## Raw-window workflow acceptance
 
 | Workload | Before | Reviewed raw-window slice |
 | --- | --- | --- |
@@ -13,7 +13,7 @@ The firmware query corroborated decoder parameters through static instructions. 
 assertions; row counts are not instruction-accuracy or execution measurements. No commercial bytes, addresses
 or payloads are included here. Broader parity metrics belong to the Phase 0 scorecard, not this acceptance check.
 
-## Parity scorecard pilot (2026-10-17)
+## Parity scorecard pilot
 
 Local working-tree baseline based on `6fcdae2`; generated artifacts and the evaluator digest/dirty state are
 recorded in `target/parity/phase0-20261017-matrix/scorecard.json`, not bundled binaries. These are pilot measurements,
@@ -33,10 +33,10 @@ not completed Phase 0 acceptance or a comparison with an IDA/Ghidra agent.
 | Owned Thumb graph reference | Ghidra 12.1.4: 4 common functions, 12 shared raw CFG edges (13/14 totals) |
 | Thumb chain-normalized CFG / calls | 13/13 edges and 3/3 source-instruction call pairs match |
 
-The initial `--suite parity` command failed with unsupported `--suite`; the pilot now emits combined JSON.
-Selected failed runs retain evidence: local clang lacked the requested linker; a bad Zig Thumb CPU spelling
-was corrected; the original strip path rejected MIPS section type `0x7000002a`, now handled with mapped-byte
-refusal checks. The nine-profile matrix records three available, three unavailable and three failed selections;
+The pilot emits combined JSON; an initial `--suite parity` invocation failed with unsupported `--suite`.
+Selected failed runs retain evidence: local clang lacked the requested linker; one run used a bad Zig Thumb CPU
+spelling, since corrected; the original strip path rejected MIPS section type `0x7000002a`, which mapped-byte
+refusal checks handle. The nine-profile matrix records three available, three unavailable and three failed selections;
 missing GCC/strip/linker support and a PE linker argument remain visible rather than counting as coverage.
 Cross-program library ID, broad graph/health coverage and model comparisons remain unmeasured in this pilot.
 The health sample's 39 calls totalled about 275 ms on one local run; initialization/cache state is not controlled,
@@ -67,8 +67,8 @@ the verified profiles and Lua, with both manifest digests and the Lua graph bind
 | Lua call-site pairs / call-graph edges | 4373 / 2890 shared; one rampage-only item in each metric |
 
 Matched-twin naming is best-case same-build evaluation. Graph agreement is limited to common functions and
-does not establish correctness. Explicit contiguous DWARF truth now checks all retained ranges in both PE
+does not establish correctness. Explicit contiguous DWARF truth checks all retained ranges in both PE
 and compressed Go Mach-O twins; unsupported range-list functions and unavailable names remain omitted.
 The 14-profile matrix has 8 scored, 5 unavailable and 1 failed profile. Native C++/exceptions, Rust and the
-basic Mach-O build still lack supported truth; Linux C++ lacks a local target runtime; genuine GCC is absent.
+basic Mach-O build lack supported truth; Linux C++ lacks a local target runtime; genuine GCC is absent.
 Extra candidates are relative to the retained truth, not independently confirmed false function starts.

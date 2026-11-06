@@ -21,8 +21,8 @@ recognition gain or 80% acceptance. Correct candidates remain unqualified; no na
 
 Separate O1 calibration has two positive/two negative samples: threshold **0.75**, margin **0.15**, one correct
 and zero incorrect eligible observations. That is calibration, not held-out success or a false-positive guarantee.
-The first zero-gain run remains frozen. A mapped-layout bug fix excluded nonallocated metadata at address zero
-from pointer ranges; the second run **reuses the same heldout**, not a fresh blind restart. Weights, grids, source
+Two runs are recorded. The first, zero-gain run stays frozen. The second excludes nonallocated metadata at
+address zero from pointer ranges (a mapped-layout fix) and **reuses the same heldout**, not a fresh blind restart. Weights, grids, source
 and compiler flags were unchanged between runs. Reference O2, calibration O1 and heldout Os variance was fixed
 before scoring. Predictions were frozen before held-out gold was opened. The two correct tops are code-novel
 against prior cohorts by the recorded masked instruction-identity check, not qualified or semantic novelty gains.
@@ -30,26 +30,27 @@ against prior cohorts by the recorded masked instruction-identity check, not qua
 An additive controlled repeat with a captured existing host collector returned 0 in 1.2279 s: collector and all
 nine inputs stayed unchanged, and outputs reproduced run two's 2 correct/2 incorrect tops and zero qualified names.
 It used the **same seen holdout**, not a blind restart; source snapshots do not attest the captured binary's build
-source, and the earlier missing collector digest remains explicitly unattested.
+source, and the missing collector digest of the earlier runs stays explicitly unattested.
 The historical API source witness has no retained matching snapshot, so independent source verification is
 unavailable; the receipt-time and later byte-pinned API witnesses are separate, not compiled-source attestation.
 
 A separate actual native ELF Project API check used memory-only instances, opened no gold and left source/target
 annotation revisions unchanged. Exact candidates retain priority; fuzzy scores are similarities, not identity
 probabilities. The source corpus is owned, with no commercial payload, target execution or hardware/plugin claim.
-Earlier 138 signature tests and three focused API tests passed before later concurrent FID additions; post-fix
-attempts initially encountered those FID compile errors. The [final implementation validation](phase2-validation-2026-10-18.json)
-records the subsequent passing signature/API libraries, configured FID host workflow, API/CLI/MCP integration,
+138 signature tests and three focused API tests passed before concurrent FID additions, which then broke
+compilation of the post-fix attempts. The [final implementation validation](phase2-validation-2026-10-18.json)
+records the passing signature/API libraries, configured FID host workflow, API/CLI/MCP integration,
 pack/paging regressions and Clippy. **The bounded Phase 2 implementation is complete; the recall acceptance
-target remains unmet.** Historical candidate-stage validation fields remain in the measured JSON rather than being
-retroactively changed. The committed 2.1 section below is unchanged.
+target is not met.** Candidate-stage validation fields stay in the measured JSON as measured, not retroactively
+changed. The 2.1 sections below are not revised.
 
 ## Phase 2.1 bounded SDK/Rust data delivery
 
 The [SDK/Rust delivery evidence](phase2-1-sdk-delivery-2026-10-18.json) accompanies three reviewed
-database/index pairs. **Bounded 2.1 delivery is complete** after gzip/index/lazy-loading tests and independent
-publication audit; this is not release/CI acceptance or completion of all Phase 2. The original author rows, raw failures and
-earlier 87/80/31-case publications remain unchanged; a separate metadata block records the prepared assets.
+database/index pairs. **Bounded 2.1 delivery is complete**: gzip/index/lazy-loading tests and an independent
+publication audit passed. This is not release/CI acceptance or completion of all Phase 2. The original author rows,
+raw failures and the 87/80/31-case sections below are not revised; a separate metadata block records the prepared
+assets.
 
 | Architecture | Masked entries | Callee keys | Profiles | Revalidated cases | Compressed bytes |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -60,7 +61,7 @@ earlier 87/80/31-case publications remain unchanged; a separate metadata block r
 
 The three reloaded exports have **zero owned/full wrong or spurious names across 81 freshly revalidated cases**.
 Together with 14 unchanged historical Thumb cases, **95 cases are accounted for, not 95 freshly rerun**.
-The x64/AArch64/i386 raw recall gates still fail in 16/13/5 cases respectively. Low recall remains visible and
+The x64/AArch64/i386 raw recall gates fail in 16/13/5 cases respectively. Low recall remains visible and
 does not block this bounded 2.1 delivery; no full Phase 2 recall acceptance is claimed.
 
 | Added native profile | Raw owned correct / truth | Curated owned correct / truth |
@@ -76,8 +77,8 @@ does not block this bounded 2.1 delivery; no full Phase 2 recall acceptance is c
 
 All four original Rust databases/cases are included. The raw std 1.87 wrong answer is retained; generic atomic
 training-reference conflict rejection and raw exact-fallback withholding remove unsafe answers from the final
-union. There is no per-name blacklist, target-gold-driven matching or deletion from owned gold. All earlier
-profile records remain unchanged, including x64's 32 historical and two portable LLVM/glibc records.
+union. There is no per-name blacklist, target-gold-driven matching or deletion from owned gold. All previously
+recorded profile records are unchanged, including x64's 32 historical and two portable LLVM/glibc records.
 
 SDK O2 and Rust O1 describe harnesses, not native library optimization. Zig compiler runtime is distinct from
 the existing LLVM eight-C-unit profile. Generated Zig-cache native archives are byte-pinned, not published
@@ -105,21 +106,20 @@ no further LLVM/ABI repairs are part of this delivery.
 Legal texts are copied byte-for-byte; only the two Rust library notice HTML files retain declared upstream
 whitespace exceptions. No native archive, binary or private code data is bundled.
 
-Phase 2.2 import-format and 2.3 fuzzy work are active in parallel; finish 2.2 then 2.3 before Phases 3–6.
-The independent live Phase 1 gate remains open. The sections below describe their frozen historical checkpoints.
+The independent live Phase 1 gate is not met. The sections below are earlier, frozen Phase 2.1 checkpoints:
+their asset counts and cohort sizes are those of each checkpoint, not of the delivered corpus above.
 
 ## Phase 2.1 portable supplement — finite LLVM and glibc source profiles
 
 The [reviewed portable supplement](phase2-1-portable-delivery-2026-10-18.json) passed parent asset tests,
 pack integration, Clippy and independent provenance reconciliation—not release/CI acceptance. It preserves retained
-measurements;
-this documentation update runs no new benchmark. The current x64 pair contains **7,575 masked entries,
+measurements and runs no new benchmark. At this checkpoint the x64 pair contains **7,575 masked entries,
 670 callee keys and 34 recorded profiles** in 487,527 compressed bytes. Other architectures are unchanged.
-The current delivery cohort is **87 cases: x64 33 + AArch64 26 + i386 14 + Thumb 14**.
+The delivery cohort is **87 cases: x64 33 + AArch64 26 + i386 14 + Thumb 14**.
 
 All 33 retained x64 v3 cases have zero wrong/spurious names against full producer-sized twin truth, with
-precision 1.0. **Ten cases still fail the 80% owned-recall gate**: six LZ4, two OpenSSL and two zstd cases.
-The aggregate therefore still fails overall; precision-clean delivery is not complete Phase 2 acceptance.
+precision 1.0. **Ten cases fail the 80% owned-recall gate**: six LZ4, two OpenSSL and two zstd cases.
+The aggregate therefore fails overall; precision-clean delivery is not complete Phase 2 acceptance.
 
 | Portable source profile | Original per-profile owned result | v3 aggregate owned result |
 | --- | ---: | ---: |
@@ -134,24 +134,24 @@ Archive, source, harness, dependency and tool identities are pinned in the suppl
 
 The explicit `--producer-alias-sets` v3 policy admits verified exact native ELF producer aliases for full-target
 grading and unique-strong/weak-alias reference groups, preserving original and selected-definition callee contexts.
-Raw proposals are retained verbatim and original owned gold stays strict; strict behavior remains the default. The new
+Raw proposals are retained verbatim and original owned gold stays strict; strict behavior remains the default. The
 glibc 1/1 follows producer facts, not a silent regrade of the frozen strict refusal or v1 glibc 0/1 result.
 All 32 historical profile records remain unchanged; nine signature keys were added and 58 conservatively retired
 by source-context curation. Generic matching, hash schemes, thresholds and PE/PDB alias policy are unchanged.
 Alias metadata does not authenticate a publisher or establish runtime object identity.
 
-The historical 80-case core and 31-case Windows sections below remain frozen. Broader SDK/runtime delivery and
-the remaining Rust/asset validation gate keep **Phase 2.1 open**. The independent live Phase 1 gate is unchanged;
-the requested order remains completion of 2.1, then 2.2 import formats, 2.3 fuzzy matching, and Phases 3–6.
+The 80-case core and 31-case Windows sections below stay frozen. At this checkpoint **Phase 2.1 is open**,
+pending broader SDK/runtime delivery and the Rust/asset validation gate. The independent live Phase 1 gate is
+unchanged.
 
 ## Phase 2.1 Windows supplement — explicit PDB truth and a declared CRT subset
 
 The [frozen Windows supplement](phase2-1-windows-delivery-2026-10-18.json) extends x64 delivery to
 31 mixed ELF/PE cases, all with zero wrong/spurious named proposals after reloading the final exported gzip.
-The current x64 asset has **7,624 masked entries, 670 callee keys and 32 recorded profiles** in 487,601 compressed
-bytes. Together with the unchanged other architectures, the current delivery cohort contains 85 cases.
+At this checkpoint the x64 asset has **7,624 masked entries, 670 callee keys and 32 recorded profiles** in 487,601
+compressed bytes. Together with the unchanged other architectures, the delivery cohort contains 85 cases.
 
-Windows zlib remains 54/62 and LZ4 80/104 for both requested harness optimizations; LZ4's recall failure remains
+Windows zlib is 54/62 and LZ4 80/104 for both requested harness optimizations; LZ4's recall failure stays
 a failure. The added MinGW profile is exactly nine GLOBAL procedures from the declared `pesect.c` unit: 9/9 correct,
 zero wrong/spurious, with the selected archive member/object hash checked against the collector's one-object receipt.
 This is not whole-CRT coverage or coverage of imported Windows DLL implementations. The header identity is
@@ -162,15 +162,15 @@ Both PE reference and target PDBs are explicit, hash-bound and image-identity ch
 receive no PDB names. Every nonlegacy database has a validated case association. The exact frozen musl input is
 the only x64 legacy exception; its original source provenance is unavailable, so the report deliberately does
 **not** claim completely attested historical training provenance. All case reference inputs are checked separately.
-Previous publications below remain frozen. Phase 2.1 still awaits remaining SDK/runtime corpus delivery; the live
-Phase 1 gate, Phase 2 recall failures and queued Phases 3–6 are unchanged.
+The sections below stay frozen. At this checkpoint Phase 2.1 awaits the remaining SDK/runtime corpus delivery;
+the live Phase 1 gate and Phase 2 recall failures are unchanged.
 
 ## Phase 2.1 delivery slice — four-architecture default corpus
 
 The [frozen delivery evidence](phase2-1-delivery-2026-10-18.json) records 92 raw attempts and
-80 final ELF aggregate cases. The new default assets are data-only compressed databases with per-architecture
-provenance indexes. **2.1 remains open for remaining SDK/runtime and Windows bundle delivery.** The 80% recall
-target remains a Phase 2 acceptance target; a recorded recall failure is not relabeled as a pass.
+80 final ELF aggregate cases. The default assets at this checkpoint are data-only compressed databases with
+per-architecture provenance indexes. **At this checkpoint 2.1 is open for the remaining SDK/runtime and Windows
+bundle delivery.** The 80% recall target is a Phase 2 acceptance target; a recorded recall failure is not relabeled as a pass.
 
 | Default architecture | Masked entries | Callee keys | Build profiles | Compressed bytes |
 | --- | ---: | ---: | ---: | ---: |
@@ -179,7 +179,7 @@ target remains a Phase 2 acceptance target; a recorded recall failure is not rel
 | i386 | 2,082 | 90 | 14 | 114,556 |
 | ARM/Thumb | 2,117 | 0 | 14 | 112,076 |
 
-These are index-key counts, not unique-function counts or version-identification results. Current promoted profiles
+These are index-key counts, not unique-function counts or version-identification results. Promoted profiles
 cover nine public-library families across the matrix; the x64/AArch64 profiles include reduced OpenSSL and HTTP-only
 curl builds. The frozen musl starter files remain unchanged, with their missing historical archive identity explicit.
 Requested O1/O2 variants can have identical stripped code/databases and do not establish optimizer diversity.
@@ -190,12 +190,12 @@ precision claim. Per-library and aggregate recall failures remain in the machine
 
 Unfiltered x64 unions exposed cross-library false names, including Lua's `pairscont` being called
 `ZSTD_defaultCLevel`. Full training-reference conflict checks remove those collisions without exporting reference
-answers. The hardened per-profile AArch64 OpenSSL run still has two wrong names through raw exact fallbacks;
+answers. The hardened per-profile AArch64 OpenSSL run has two wrong names through raw exact fallbacks;
 those raw results remain frozen. The final corpus withholds raw exact fallback answers across all profiles,
 preserving masked/callee-qualified answers and leaving generic matching schemes and user database priority unchanged.
 It removes 21, 198, 23 and 70 exact answer keys from the respective x64, AArch64, i386 and Thumb candidates.
 
-One new zstd attempt had collector executable hash drift during a local rebuild. Its raw verdict is retained but
+One zstd attempt had collector executable hash drift during a local rebuild. Its raw verdict is retained but
 invalidated; the replacement uses frozen tools. Pre-hardening configured-script attempts are also retained and not
 used for promotion. The final validation uses a global held-out image split and complete atomic reference batches.
 
@@ -207,17 +207,18 @@ The first attempt to pass a gzip directly as a user database failed because that
 recorded rather than omitted. Full API library tests passed with two test threads after a separate 120-second timeout.
 
 Windows x64 producer validation separately measures zlib at 54/62 and LZ4 at 80/104 for both requested optimizations,
-all zero wrong/spurious. These rows do not yet claim Windows profiles in the promoted indexes. No target programs,
+all zero wrong/spurious. These rows do not claim Windows profiles in the promoted indexes. No target programs,
 commercial inputs, release tags or CI dispatches are involved. The independent live Phase 1 gate remains unchanged.
 See the [corpus reference](../signature-corpus.md) for ownership, curation and reproducibility limits.
 
 ## Phase 2.1 parallel slice — SQLite, aggregate precision and Thumb discovery
 
-**Source slices:** corpus/diagnostics `5f5a7e4`, EHABI discovery `1b67d7c` (2026-10-18).
+**Source slices:** corpus/diagnostics `5f5a7e4`, EHABI discovery `1b67d7c`.
 The [pinned evidence](phase2-1-parallel-2026-10-18.json) binds the existing raw reports and their
 embedded collector/helper/executable hashes. Read-only hashing of the committed collector sources matches
 those embedded source hashes; this is not an independent rebuild or attestation of every executable dependency.
-**Phase 2.1 remains open; no default database is promoted.** Earlier publications remain unchanged.
+**This slice does not complete Phase 2.1 and promotes no default database.** It revises no other published
+measurement.
 
 | Owned-library profile, O1 | Correct / truth | Missed | Wrong / spurious | 80% recall gate |
 | --- | --- | --- | --- | --- |
@@ -258,7 +259,7 @@ and alias-set reconciliation are outside this full-twin gold scope.
 
 ### Paired discovery evidence and limits
 
-The full pre-EHABI Thumb trace has 100/104 owned target starts unavailable. An earlier, pre-final-review EHABI
+The full pre-EHABI Thumb trace has 100/104 owned target starts unavailable. A pre-final-review EHABI
 matrix has 0/104 unavailable; the final reviewed 73/104 report omits the matrix, so that earlier diagnostic is not
 silently represented as a final-review full trace. Start recovery does not establish correct complete boundaries
 or guarantee a name: the final recall still fails.
@@ -271,13 +272,13 @@ measurement after rebuild/reconnect, not an exact-source binary attestation. Met
 not complete boundary proof. No target execution or live model task is claimed.
 
 The remaining roster/version/optimization/Windows matrix, failing recall profiles, broader aggregate evaluation
-and reviewed bundle promotion remain open. This publication performs no new builds, tests or model runs and
-does not earn Phase 1 live sign-off or start Phase 2.2.
+and reviewed bundle promotion are not covered by this slice. This report performs no new builds, tests or
+model runs and does not earn Phase 1 live sign-off.
 
 ## Phase 2.1 pilot — library corpus and compressed databases
 
 **Implementation slice:** `198c024`; [pinned measurements](phase2-1-pilot-2026-10-18.json).
-**Phase 2.1 remains open.** These are generated, source-known public-function experiments, not live agent
+**This pilot does not complete Phase 2.1.** These are generated, source-known public-function experiments, not live agent
 tasks, version attribution or completion of the roadmap library/version/architecture matrix.
 
 | Library/build | x64 correct / truth | AArch64 correct / truth | Gate |
@@ -297,18 +298,18 @@ builds distinct harnesses and verifies stripped load-image equivalence. Truth co
 ELF definitions only; local, hidden and weak coverage is excluded. Reference-only non-library bodies retain
 negative collision evidence but cannot become exported names. Scoring reloads the actual gzip artifact.
 
-Early diagnostic runs exposed a report-key mismatch, linker GC despite whole-archive extraction, and hidden
-globals localized at link time. GC-enabled linked-subset results have different denominators and are not
+Diagnostic runs before the pinned run had a report-key mismatch, linker GC despite whole-archive extraction,
+and hidden globals localized at link time. GC-enabled linked-subset results have different denominators and are not
 silently regraded as full-library results. The pinned run disables GC, refuses missing public definitions and
 retains both LZ4 failures. Additional versions, libraries, optimization profiles, i386/Thumb/Windows coverage,
-aggregate-DB evaluation and bundle promotion remain open.
+aggregate-DB evaluation and bundle promotion are not covered by this pilot.
 
 The existing musl recognition data is unchanged. Compressed starter assets total **16,539 bytes**, versus
 29,338 JSON bytes, with parsed per-architecture caches and metadata-only pack listing. User overlay precedence
 is unchanged; corpus union instead preserves ambiguity. Changed-crate suites, MCP regression, scoped Clippy,
-15 Python tests, Ruff/ty and independent reviews passed. An initial run without canonical `TMPDIR` failed five
-cache/capture path tests; those five and the full suite passed with the established environment and no related
-production change. Earlier Phase 0/1 measurements and live Phase 1 sign-off remain unchanged.
+15 Python tests, Ruff/ty and independent reviews passed. Five cache/capture path tests fail without the canonical
+`TMPDIR`; with it, those five and the full suite passed, with no related production change. This pilot does not
+revise the Phase 0/1 measurements or live Phase 1 sign-off.
 
 See [signature corpus pipeline](../signature-corpus.md) for reproduction. The runner never executes target code
 or downloads sources; only public-source inputs belong in this corpus.

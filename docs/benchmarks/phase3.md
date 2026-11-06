@@ -10,10 +10,10 @@ diagnostics and limitations: **3,842 → 2,195 serialized bytes, saving 1,647 by
 3,259 → 1,878 bytes. These are byte measurements, not provider-token estimates or the planned 50% target.
 
 One unchanged canonical helper question used the same `github-copilot/gpt-6.1-sol`, `default` route and answered
-`{"return_value":22}` correctly, with zero model/tool errors. That OpenCode route is retired; these numbers are
-history, not comparable with the [head-to-head agent runs](agent-h2h-2026-11-05.md):
+`{"return_value":22}` correctly, with zero model/tool errors. rampage no longer ships that OpenCode route,
+and these numbers are not comparable with the [head-to-head agent runs](agent-h2h-2026-11-05.md):
 
-| Metric | Frozen helper baseline | Current first attempt |
+| Metric | Frozen helper baseline | Phase 3.3 first attempt |
 | --- | ---: | ---: |
 | MCP calls | 5 | 5 |
 | Input tokens | 23,904 | 21,518 |
@@ -26,7 +26,7 @@ history, not comparable with the [head-to-head agent runs](agent-h2h-2026-11-05.
 accepted token-efficiency evidence; calls did not fall. The model used no compact view or new batch tool,
 so neither feature receives causal credit. No retry, task/question change, patch-task regrade, provider/auth
 change or target execution occurred. The other 19 tasks remain unmeasured. Phase 1 live/N and Phase 2 recall
-gates are unchanged, and full Phase 3.3 acceptance remains open.
+gates are unchanged, and full Phase 3.3 acceptance is not met.
 
 ## Phase 3.2 owned patch/export round trip
 
@@ -43,7 +43,7 @@ All 815 source files / 20,406,057 bytes remained unchanged through build and exe
 frozen read-only before measurement. Provider calls are zero and tokens null. **Target instructions were never
 executed.** This is one owned static x86-64 experiment, not AArch64 MCP coverage, Phase 0 regrading, live/N,
 Phase 2 recall, or Phase 3.3 token/call acceptance. Separate core tests cover an explicitly generated static AArch64
-fixture; the existing dynamically linked AArch64 greeting remains unsupported and was not relabelled.
+fixture; the dynamically linked AArch64 greeting is unsupported and is not relabelled.
 
 ## Phase 3.1 owned search comparison
 

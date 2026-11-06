@@ -4,7 +4,7 @@ Part of the [accuracy benchmarks](../benchmarks.md).
 
 ## Phase 1.6 — checked PDB and nested DWARF type import
 
-**Run:** 2026-10-18, committed implementation/collector `02e6173`. The
+**Measured at:** committed implementation/collector `02e6173`. The
 [measurement](phase1-6-2026-10-18.json) preserves the first live attempt. **Live Phase 1 sign-off is
 not earned:** the model stopped after preview/paging, before apply or retyping.
 
@@ -43,15 +43,15 @@ control retains C function linkage while supplying CodeView C++ unique names. Ex
 their exact TypeIndex relationships. Source-name preservation, signed enum wire forms, array occupied versus
 allocation extents and unknown-versus-absent bounds/strides have independent producer regressions.
 
-API and the other six changed-crate suites passed in named runs after correcting the explicit Win32 convention
-declarator; scoped all-target Clippy, actual MCP fixtures, collector tests and independent reviews passed.
+API and the other six changed-crate suites passed in named runs, with the explicit Win32 convention declarator
+corrected; scoped all-target Clippy, actual MCP fixtures, collector tests and independent reviews passed.
 This is not full-workspace/release acceptance. Static investigation revalidation preserved 892 C bytes and six
 descriptors with warnings on a third-party ARM64 plugin image, without annotation changes. An original firmware window
 returned eight decoder observations without execution or new device/full-map claims.
 
 **Remaining phase-end gate:** obtain a genuine live completion of checked import → analyst retype → verified
 central-struct fields, record successful N, and report independent agreement. This failed first attempt stays
-frozen; controlled test success is not substituted for it. Earlier publications remain unchanged.
+frozen; controlled test success is not substituted for it. No other published measurement is revised.
 
 ```sh
 tests/fixtures/debug-types/build.sh target/phase1-6
@@ -60,7 +60,7 @@ cargo run --locked -j 2 -p rampage-eval --example debug_type_import -- target/ph
 
 ## Phase 1.5 — bounded unlocked type propagation
 
-**Run:** 2026-10-18, committed source `321ea28`. The
+**Measured at:** committed source `321ea28`. The
 [measurement](phase1-5-2026-10-18.json) preserves the first live result, source/executable/fixture
 identities, bounded catalog evidence, and the failed agent outcome.
 
@@ -87,8 +87,8 @@ The complete compact inventory contains 48 tools; the raw 77061-byte catalog exc
 and hash remain explicitly unavailable. The agent's offered allowlist contained 30 tools.
 
 Native/API tests demonstrate both parameter directions; worker tests cover hint replay, bootstrap, return
-evidence, global value/address distinctions and analyst precedence. Native field tokens now
-retain real emission spans/addresses instead of disappearing from token output. Unknown, joined, hidden,
+evidence, global value/address distinctions and analyst precedence. Native field tokens
+retain real emission spans/addresses in token output. Unknown, joined, hidden,
 variadic and unsupported mappings remain explicit. Some multi-hop contexts and generic-pointer refinement
 combinations remain unsupported; optional inference cannot suppress otherwise valid ordinary C.
 
@@ -99,16 +99,16 @@ shared-client changes and outside-context rejection are covered. Fatal worker/so
 not converted into partial success. External-spec selection without stored hints is handled separately from
 strict fingerprint errors; no worker-to-inline fallback is introduced.
 
-Target-model import prototypes cover portable `memcpy`, explicitly selected POSIX `recv`, corrected Windows
+Target-model import prototypes cover portable `memcpy`, explicitly selected POSIX `recv`, Windows
 `recv` and x86/x64 `CreateFileW`, with native-parser width/convention tests. Default/ELF is not Linux proof.
-A third-party ARM64 image revalidation still returned 892 C bytes and six descriptors, preserving warnings and
+A third-party ARM64 image revalidation returned 892 C bytes and six descriptors, preserving warnings and
 leaving annotations unchanged.
 
-API, decompiler, evaluator, MCP and UI suites passed in the broad run. That run reached an outdated worker
-redaction-test expectation after adding a new error category; the corrected **full worker suite** then passed.
+API, decompiler, evaluator, MCP and UI suites passed in the broad run. The **full worker suite** passed
+separately, with its redaction-test expectation updated for a new error category.
 Scoped all-target Clippy, collector regressions and independent reviews passed. These are changed-crate checks,
 not full-workspace/release acceptance. The live task grades direct pointer propagation only, not the broader
-return/multi-hop test coverage or blind recovery. Earlier published measurements remain unchanged.
+return/multi-hop test coverage or blind recovery. No other published measurement is revised.
 
 ```sh
 cargo run --locked -j 2 -p rampage-eval --example type_propagation -- tests/data/type-propagation-x64.snapshot.json
@@ -116,7 +116,7 @@ cargo run --locked -j 2 -p rampage-eval --example type_propagation -- tests/data
 
 ## Phase 1.4 — native and tracked function-frame evidence
 
-**Run:** 2026-10-17, committed source `8fdfb2b`. The
+**Measured at:** committed source `8fdfb2b`. The
 [measurement](phase1-4-2026-10-17.json) retains exact source/executable/fixture/report identities.
 
 | Measurement | Before | After |
@@ -150,7 +150,7 @@ All seven changed-crate suites, scoped all-target Clippy, frame/worker/MCP tests
 passed, with independent reviews. A third-party ARM64 image query returned six native variables, six tracker
 slots and six register-evidence rows, preserving its recovery warnings and making no annotation changes.
 Limits: recovered inventory and static candidates, not a complete frame-size bound, ABI proof or runtime capture.
-Earlier publications, including the failed Phase 1.2 summary contract, remain unchanged.
+No other published measurement is revised, including the failed Phase 1.2 summary contract.
 
 ```sh
 cargo run --locked -j 2 -p rampage-eval --example function_frame -- tests/data/function-frame-arm64.snapshot.json
@@ -158,7 +158,7 @@ cargo run --locked -j 2 -p rampage-eval --example function_frame -- tests/data/f
 
 ## Phase 1.3 — typed data ranges and instruction operands
 
-**Run:** 2026-10-17, committed collector/implementation `24ba0dd`. The
+**Measured at:** committed collector/implementation `24ba0dd`. The
 [measurement](phase1-3-2026-10-17.json) binds the source, executable, fixture and original raw report.
 
 | Measurement | Before | After |
@@ -192,7 +192,7 @@ unproved layouts.
 
 All seven changed-crate suites, scoped all-target Clippy, 11 grader regressions and fresh-context reviews passed.
 Limits: supported decoder-native instruction operands, bounded data windows, no arbitrary decompiler-token
-rewriting, pointer traversal or producer-layout inference. Earlier accepted measurements remain unchanged.
+rewriting, pointer traversal or producer-layout inference. No other published measurement is revised.
 
 ```sh
 cargo run --locked -j 2 -p rampage-eval --example typed_data -- tests/data/typed-data-x64.snapshot.json
@@ -200,7 +200,7 @@ cargo run --locked -j 2 -p rampage-eval --example typed_data -- tests/data/typed
 
 ## Phase 1.2 — project type library and native layout inspection
 
-**Run:** 2026-10-17, collector sources committed at `e01d0bd`, with documentation and machine-local files still
+**Measured at:** collector sources committed at `e01d0bd`, with documentation and machine-local files
 dirty/untracked. The [measurement](phase1-2-2026-10-17.json) retains exact source, executable, fixture
 and raw-report hashes, numeric execution bounds and complete compact catalog evidence.
 
@@ -223,19 +223,19 @@ The two evaluator tool errors are deliberate missing-scratch checks, not transpo
 Source-built Clang 23.1.3 x64/x86 fixtures provide `sizeof`/`offsetof` tables inspected through MCP without target
 execution. They distinguish 32-/64-bit record sizes, nested packing and restored natural alignment. Additional
 compiler IR shows hidden return storage and Windows indirect aggregate arguments; native/worker/MCP tests ensure
-callback inspection reports the declared C signature instead. New enum construction uses the selected C `int`
-width rather than the earlier 8-byte default exposed during implementation.
+callback inspection reports the declared C signature instead. Enum construction uses the selected C `int`
+width, not an 8-byte default.
 
 API, decompiler, worker, MCP, evaluator and UI suites, scoped all-target Clippy, grader regressions and independent
 reviews passed. Ordinary oversized comments/long histories remain undoable; blocked legacy undo still displays
-other clients' refreshed edits. A third-party ARM64 image query found that read-only inspection incorrectly tried
-to create a writer lock beside a read-only image. A subsequent detached-read fix preserved bounds and returned
-the native 4-byte integer layout without creating annotations or lock files; the live measurement
-remains bound to its original source revision.
+other clients' refreshed edits. On a third-party ARM64 image, read-only inspection at the measured revision
+tried to create a writer lock beside a read-only image. With detached reads, the query preserves bounds and
+returns the native 4-byte integer layout without creating annotations or lock files; the live measurement
+stays bound to its original source revision.
 
 Limits: bounded type-only C/header preparation and explicit minimal ABI profiles, not arbitrary preprocessing,
 a full SDK or blind producer-layout recovery. Bitfields and widened/unsigned C enums outside signed target `int`
-remain unsupported. Phase 0 and Phase 1.1 evidence stays frozen; Phase 1 acceptance still needs its later milestones.
+remain unsupported. Phase 0 and Phase 1.1 evidence stays frozen; Phase 1 acceptance needs the later milestones.
 
 ```sh
 cargo run --locked -j 2 -p rampage-eval --example type_library -- tests/data/local-variables-x64.snapshot.json
@@ -243,12 +243,12 @@ cargo run --locked -j 2 -p rampage-eval --example type_library -- tests/data/loc
 
 ## Phase 1.1 — storage-keyed local and parameter typing
 
-**Run:** 2026-10-17, collector sources committed at `1a75371` (based on `0551311`), with documentation and
-machine-local files still dirty/untracked. The
+**Measured at:** collector sources committed at `1a75371` (based on `0551311`), with documentation and
+machine-local files dirty/untracked. The
 [measurement](phase1-1-2026-10-17.json) records fixture/report hashes and measured example executable
 SHA-256 `9700168ede705d14cb7e83f3ae7367710596e1dcf9648f3ca62e4a2a1b5500bf`; this is not a clean-worktree rebuild.
 The collector embeds its source hash and hashes its own running executable. The published source hash matches
-the committed example; later dependency-feature rebuilds can produce different executables.
+the committed example; dependency-feature rebuilds can produce different executables.
 
 | Measurement | Before | After |
 | --- | --- | --- |
@@ -263,11 +263,11 @@ The live model was `github-copilot/gpt-6.1-sol`, variant `default`: 37054 report
 reasoning tokens, 24.232 s task wall time, no model/tool errors. The evaluator independently checked actual
 local storage/type/name, refreshed C, MCP annotations and the persisted log; the model's summary alone cannot
 pass. This is a paired owned fixture with a user-supplied struct, not blind layout inference or whole-program RE.
-The initial collector used the ordinary-file log suffix for a snapshot; it was corrected to use validated capture
-identity and the complete task rerun. Another successful probe added self-recorded provenance. The final run
-also retains complete compact catalog names before transcript truncation; its snapshots confirm the initially
-disabled Types tools and their presence after enabling. That committed-source run is published; the three
-earlier probes were not regraded or merged into its totals. The 12-turn/20-call execution bounds are retained.
+The published run is the committed-source run. Its collector uses validated capture identity for the snapshot
+log (a collector that used the ordinary-file log suffix was replaced and the complete task rerun) and records
+its own provenance. The run retains complete compact catalog names before transcript truncation; its snapshots
+show the Types tools disabled at first and present after enabling. Three earlier probes are not regraded or
+merged into its totals. The 12-turn/20-call execution bounds are retained.
 
 Owned native tests cover x64/AArch64 register parameters, addressable x64 stack locals, register reuse selectors,
 replacement/clearing and refusal without partial renames. Invalid declarations, keywords, stale/ambiguous storage
@@ -275,13 +275,14 @@ and oversized refreshed results leave annotations unchanged. Sequential renames 
 same replay batch; native swaps, fresh-engine replay and final-name collision refusal have regression coverage.
 A third-party ARM64 image revalidation returned
 six variable descriptors (three editable, three explicitly unsupported); no annotations were changed.
-The Phase 0 publication stays frozen; the current local-rename inventory probe now expects the implemented tool.
+The Phase 0 publication stays frozen; the local-rename inventory probe expects the implemented tool.
 Limits: single whole mappings and same-size types; no project type library, cross-call propagation or UI editor.
 Changed-crate API, decompiler, worker, MCP, evaluator and UI suites and scoped all-target Clippy passed;
-existing opt-in tests remain skipped. This is not full-workspace/release acceptance.
+opt-in tests were skipped. This is not full-workspace/release acceptance.
 
-The run above used the since-retired OpenCode adapter. The example now uses the in-process Anthropic transport
-(`ANTHROPIC_API_KEY`) with its pinned model, so a repeat is a new measurement, not comparable with the one above:
+The run above used the OpenCode adapter, which rampage no longer ships. The example uses the in-process
+Anthropic transport (`ANTHROPIC_API_KEY`) with its pinned model, so a repeat is a new measurement, not
+comparable with the one above:
 
 ```sh
 cargo run --locked -j 2 -p rampage-eval --example local_typing -- tests/data/local-variables-x64.snapshot.json
