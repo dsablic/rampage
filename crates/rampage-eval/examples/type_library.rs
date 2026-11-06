@@ -135,6 +135,7 @@ fn task(digest: &str) -> ParityTask {
             sha256: digest.into(),
             source: "tests/fixtures/src/local-variables.c".into(),
             build: "crates/rampage-eval/examples/type_library.rs".into(),
+            companions: Vec::new(),
         },
         truth_reference: "User-supplied declarations; target x64 native layout and identity-scoped log".into(),
         required_capabilities: ["declare_types", "delete_type", "list_types", "get_type"]
@@ -153,6 +154,7 @@ fn task(digest: &str) -> ParityTask {
                 ("enum_kind".into(), json!("enum")),
                 ("scratch_deleted".into(), json!(true)),
             ]),
+            hex_integers: false,
         },
     }
 }

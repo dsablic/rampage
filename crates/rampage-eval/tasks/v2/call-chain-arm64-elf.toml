@@ -1,0 +1,27 @@
+version = 1
+id = "call-chain-arm64-elf"
+kind = "analysis"
+question = """
+The program reaches a network peer through the imported connect routine. Give the chain of the program's own
+functions from main to the function that calls connect, as entry addresses in call order, starting with main and
+ending with the function that contains the call to connect. Return the list as chain.
+"""
+truth_reference = """
+src/beacon.c: main -> run -> send_beacon -> open_channel -> dial -> connect; addresses from the twin's symbols, each bl checked with llvm-objdump; no other function calls connect@plt; derive-truth.py.
+"""
+required_capabilities = ["xrefs", "imports"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "beacon-arm64-elf"
+path = "tests/fixtures/bench-v2/bin/beacon-arm64.elf"
+sha256 = "896a4edade36ac035d32434a20d846694d0f29200c3fa736a8de220abd9b4566"
+source = "tests/fixtures/bench-v2/src/beacon.c"
+build = "tests/fixtures/bench-v2/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+chain = [16844760, 16844812, 16844992, 16845076, 16845140]

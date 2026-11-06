@@ -1,0 +1,28 @@
+version = 1
+id = "key-derivation-arm64-macho"
+kind = "analysis"
+question = """
+This program encrypts a message with a stream cipher. Find the function that derives the key passed to the cipher's
+key-setup routine. Return that function's entry address as function, and the 32-bit constant it XORs into each key
+word it produces as xor_constant.
+"""
+truth_reference = """
+src/vault.c: main passes derive_key's output to stream_init; derive_key XORs 0x5EC12E7A; _derive_key = 0x1000005cc from the twin's symbols; derive-truth.py.
+"""
+required_capabilities = ["decompile", "xrefs"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "vault-arm64-macho"
+path = "tests/fixtures/bench-v2/bin/vault-arm64.macho"
+sha256 = "ac1122fff0970c94da4e1f08ac62dda403e5d44c9014e88ee96248e1b987d09c"
+source = "tests/fixtures/bench-v2/src/vault.c"
+build = "tests/fixtures/bench-v2/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+function = 4294968780
+xor_constant = 1589718650

@@ -1,0 +1,29 @@
+version = 1
+id = "crc-parameters-mips-elf"
+kind = "analysis"
+question = """
+The function at 0x204a0 computes a 32-bit cyclic redundancy check over a buffer. Return the generator polynomial in
+the bit order the code applies it as polynomial, the CRC register's initial value as init, and the value XORed into
+the register before it is returned as final_xor.
+"""
+truth_reference = """
+src/checksum.c frame_check: reflected polynomial 0x82F63B78, init 0x0BADC0DE, final XOR 0xFFFFFFFF; a host build's output for "123456789" matches a reference CRC with these parameters (harness run); frame_check = 0x204a0 from the twin's symbols; derive-truth.py.
+"""
+required_capabilities = ["decompile"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "checksum-mips-elf"
+path = "tests/fixtures/bench-v2/bin/checksum-mips.elf"
+sha256 = "127732e87cd6144f9599a5acb86f0381f616e300182c6e9c83fcfdfb4476e1ad"
+source = "tests/fixtures/bench-v2/src/checksum.c"
+build = "tests/fixtures/bench-v2/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+polynomial = 2197175160
+init = 195936478
+final_xor = 4294967295

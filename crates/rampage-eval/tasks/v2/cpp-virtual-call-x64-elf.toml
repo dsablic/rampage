@@ -1,0 +1,28 @@
+version = 1
+id = "cpp-virtual-call-x64-elf"
+kind = "analysis"
+question = """
+This stripped x86-64 Linux executable was compiled from C++ with RTTI. The function at 0x100d060 makes exactly one
+virtual call through the vtable of the object its first argument points to. Which function does that call reach
+when the object's dynamic type is the class whose RTTI name is Slider? Return the reached function's entry address
+as target.
+"""
+truth_reference = """
+draw (_Z4drawPK4Nodei, 0x100d060) calls *0x10(%rax) (llvm-objdump of the twin); Slider's vtable slot at that offset holds _ZNK6Slider6renderEi = 0x100cfb0 (twin symbols and vtable bytes); derive-truth.py.
+"""
+required_capabilities = ["rtti", "vtables", "disassemble"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "widgets-x64-elf"
+path = "tests/fixtures/bench-v2/bin/widgets-x64.elf"
+sha256 = "f2d53c9c1d87d1c59395309608a4abaced0e785d2e4b9ca9e25657816c6f3be2"
+source = "tests/fixtures/bench-v2/src/widgets.cpp"
+build = "tests/fixtures/bench-v2/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+target = 16830384

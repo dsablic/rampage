@@ -1,0 +1,5 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     'twins/codec-arm64.macho'
+relocations:     []
+...

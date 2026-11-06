@@ -215,3 +215,191 @@ fn a_rescored_report_keeps_the_measured_provenance_and_lists_changed_runs() {
     assert_eq!(changed[0]["before"]["failure"], "runner_error");
     assert_eq!(changed[0]["after"]["outcome"], "answer_matches");
 }
+
+const NEUTRAL_V2: &str = include_str!("../tasks/h2h/neutral-v2.toml");
+
+fn suite_v2() -> Vec<rampage_eval::parity_tasks::ParityTask> {
+    load_tasks(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tasks/v2")).unwrap()
+}
+
+#[test]
+fn suite_v2_covers_its_manifests_with_categories_scoring_and_neutral_prompts() {
+    let suite = NeutralSuite::from_toml(NEUTRAL_V2).unwrap();
+    let tasks = suite_v2();
+    assert_eq!(tasks.len(), 15);
+    suite.check_against(&tasks, &servers()).unwrap();
+    assert_eq!(suite.system, NeutralSuite::from_toml(NEUTRAL).unwrap().system, "same system prompt as v1");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for task in &tasks {
+        assert_eq!(task.kind, TaskKind::Analysis, "{}", task.id);
+        let neutral = &suite.tasks[&task.id];
+        let category = neutral.category.as_deref().unwrap_or_default();
+        assert!(
+            ["cpp", "typing", "investigation", "scale", "firmware", "diffing"].contains(&category),
+            "{}: {category}",
+            task.id
+        );
+        assert!(neutral.scoring.as_deref().is_some_and(|text| !text.trim().is_empty()), "{}", task.id);
+        assert_eq!(neutral.question.trim(), task.question.trim(), "{}: the manifest holds the asked wording", task.id);
+        let companions: Vec<(String, String)> = task
+            .fixture
+            .companions
+            .iter()
+            .map(|companion| (companion.name.clone(), format!("/tmp/work/{}", companion.name)))
+            .collect();
+        let prompt = suite.prompt_with(task, "/tmp/work/fixture.bin", &companions).to_lowercase();
+        // Neither server's tool names or concepts: rampage's, then REA's.
+        for word in [
+            "rampage",
+            "enable_tools",
+            "class_evidence",
+            "language_metadata",
+            "find_main",
+            "xrefs_to",
+            "rea ",
+            "ghidra",
+            "procedure",
+            "open_binary",
+            "inspect_",
+        ] {
+            assert!(!prompt.contains(word), "{}: {word}", task.id);
+        }
+        for (_, path) in &companions {
+            assert!(prompt.contains(&format!("\"{path}\"")), "{}", task.id);
+        }
+        // Owned fixtures are committed; the scale fixture is built into target/ by its script.
+        let fixture = root.join(&task.fixture.path);
+        if !task.fixture.path.starts_with("target") {
+            let bytes = std::fs::read(&fixture).unwrap();
+            assert_eq!(
+                rampage_arch::hex::bytes(&<sha2::Sha256 as sha2::Digest>::digest(&bytes)),
+                task.fixture.sha256,
+                "{}",
+                task.id
+            );
+        }
+        if category == "scale" {
+            assert!(neutral.timeout_s.is_some_and(|timeout| timeout >= 1800), "{}", task.id);
+        }
+    }
+}
+
+#[test]
+fn canonical_prompts_are_unchanged_by_companion_support() {
+    let suite = NeutralSuite::from_toml(NEUTRAL).unwrap();
+    let task = &canonical()[0];
+    let prompt = suite.prompt(task, "/tmp/work/fixture.bin");
+    assert!(prompt.starts_with(
+        "Analyze the binary at \"/tmp/work/fixture.bin\". Use only the tools of the connected MCP server; there is \
+         no other way to read the file.\n\n"
+    ));
+}
+
+#[test]
+fn tuple_sets_and_hex_integers_score_strictly_with_partial_credit_for_sets() {
+    let task = |answer: &str| {
+        rampage_eval::parity_tasks::ParityTask::from_toml(&format!(
+            r#"
+version = 1
+id = "t"
+kind = "analysis"
+question = "q"
+truth_reference = "r"
+required_capabilities = ["x"]
+capability_status = "unknown"
+capability_evidence = "e"
+[fixture]
+id = "f"
+path = "a/b"
+sha256 = "{}"
+source = "a/c"
+build = "a/d"
+{answer}"#,
+            "0".repeat(64)
+        ))
+        .unwrap()
+    };
+    let pairs =
+        task("[answer]\nkind = \"tuple_set\"\nfield = \"fields\"\nhex_integers = true\nvalues = [[8, 1], [16, 8]]");
+    assert!(pairs.answer.matches(&json!({"fields": [[16, 8], ["0x8", 1]]})));
+    assert!(!pairs.answer.matches(&json!({"fields": [[16, 8]]})));
+    assert!(!pairs.answer.matches(&json!({"fields": [[16, 8], [8, 1], [8, 1]]})), "duplicates");
+    assert!(!pairs.answer.matches(&json!({"fields": [[16, 8], [8, 1]], "extra": 1})));
+    assert_eq!(pairs.answer.partial(&json!({"fields": [[16, 8], [24, 4]]})), Some(1.0 / 3.0));
+    assert_eq!(pairs.answer.partial(&json!({"fields": [[16, 8], [16, 8]]})), Some(0.0));
+    assert_eq!(pairs.answer.partial(&json!("nonsense")), Some(0.0));
+    let edges = task("[answer]\nkind = \"tuple_set\"\nfield = \"edges\"\nvalues = [[\"A\", \"B\"]]");
+    assert!(edges.answer.matches(&json!({"edges": [["A", "B"]]})));
+    assert!(!edges.answer.matches(&json!({"edges": [["B", "A"]]})), "tuples are ordered");
+    let exact =
+        task("[answer]\nkind = \"exact\"\nhex_integers = true\n[answer.fields]\nchain = [4096, 8192]\nname = \"x\"");
+    assert!(exact.answer.matches(&json!({"chain": ["0x1000", 8192], "name": "x"})));
+    assert!(exact.answer.matches(&json!({"chain": ["0X1000", "0x2000"], "name": "x"})));
+    assert!(!exact.answer.matches(&json!({"chain": [8192, 4096], "name": "x"})), "ordered");
+    assert!(!exact.answer.matches(&json!({"chain": ["4096", 8192], "name": "x"})), "decimal strings are not integers");
+    assert_eq!(exact.answer.partial(&json!({})), None);
+    let strict = task("[answer]\nkind = \"exact\"\n[answer.fields]\nvalue = 16");
+    assert!(!strict.answer.matches(&json!({"value": "0x10"})), "hex strings need hex_integers");
+    let names = task("[answer]\nkind = \"string_set\"\nfield = \"names\"\nvalues = [\"a\", \"b\", \"c\"]");
+    assert_eq!(names.answer.partial(&json!({"names": ["a", "b", "d"]})), Some(0.5));
+    assert!(
+        rampage_eval::parity_tasks::ParityTask::from_toml(&format!(
+            "version = 1\nid = \"t\"\nkind = \"analysis\"\nquestion = \"q\"\ntruth_reference = \"r\"\n\
+         required_capabilities = [\"x\"]\ncapability_status = \"unknown\"\ncapability_evidence = \"e\"\n\
+         [fixture]\nid = \"f\"\npath = \"a/b\"\nsha256 = \"{0}\"\nsource = \"a/c\"\nbuild = \"a/d\"\n\
+         [[fixture.companions]]\nname = \"../x\"\npath = \"a/e\"\nsha256 = \"{0}\"\n\
+         [answer]\nkind = \"exact\"\n[answer.fields]\nv = 1",
+            "0".repeat(64)
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn rows_carry_category_and_partial_credit_into_the_summary() {
+    let suite = NeutralSuite::from_toml(NEUTRAL_V2).unwrap();
+    let tasks = suite_v2();
+    let task = tasks.iter().find(|task| task.id == "cpp-hierarchy-x64-elf").unwrap();
+    let answer = r#"{"edges": [["Node", "Widget"], ["Widget", "Button"], ["Widget", "Slider"]]}"#;
+    let partial = score(task, &suite, "rea", 1, 0, &result(answer, "ok")).unwrap();
+    assert_eq!(partial.category, "cpp");
+    assert_eq!(partial.outcome, TaskOutcome::AnswerMismatch);
+    assert_eq!(partial.partial, Some(0.5));
+    let timeout = score(task, &suite, "rampage", 1, 1, &result("", "timeout")).unwrap();
+    assert_eq!(timeout.partial, Some(0.0));
+    let summary = summarize(&[partial, timeout]);
+    assert_eq!(summary["categories"]["cpp"]["rea"]["partial_credit_mean"], 0.5);
+    assert_eq!(summary["limits_hit"][0]["server"], "rampage");
+    let tables = markdown_tables(&summary);
+    assert!(tables.contains("| cpp | rea | 0/1 | 0/1 | 0.500 |"), "{tables}");
+    assert!(tables.contains("- cpp-hierarchy-x64-elf rampage r1: timeout"), "{tables}");
+}
+
+#[test]
+fn a_status_ok_extra_field_counts_only_in_the_lenient_variant() {
+    let suite = NeutralSuite::from_toml(NEUTRAL_V2).unwrap();
+    let tasks = suite_v2();
+    let task = tasks.iter().find(|task| task.id == "option-bit-x64-elf").unwrap();
+    let slip = score(task, &suite, "rea", 1, 0, &result(r#"{"status":"ok","option":"--snapshot"}"#, "ok")).unwrap();
+    assert_eq!(slip.outcome, TaskOutcome::AnswerMismatch);
+    assert!(slip.lenient);
+    let wrong = score(task, &suite, "rea", 2, 0, &result(r#"{"status":"ok","option":"--archive"}"#, "ok")).unwrap();
+    assert!(!wrong.lenient);
+    let other = score(task, &suite, "rea", 3, 0, &result(r#"{"note":"x","option":"--snapshot"}"#, "ok")).unwrap();
+    assert!(!other.lenient, "only the status field is forgiven");
+    let right = score(task, &suite, "rampage", 1, 0, &result(r#"{"option":"--snapshot"}"#, "ok")).unwrap();
+    assert!(right.lenient);
+    let summary = summarize(&[slip, wrong, other, right]);
+    assert_eq!(summary["servers"]["rea"]["analysis"]["correct"], 0);
+    assert_eq!(summary["servers"]["rea"]["analysis"]["correct_lenient"], 1);
+}
+
+#[test]
+fn recorded_rows_read_back_unchanged_for_reruns() {
+    let suite = NeutralSuite::from_toml(NEUTRAL_V2).unwrap();
+    let tasks = suite_v2();
+    let row = score(&tasks[0], &suite, "rea", 2, 1, &result("{\"chain\": []}", "ok")).unwrap();
+    let line = serde_json::to_string(&row).unwrap();
+    let back: rampage_eval::agent_bench::RunRow = serde_json::from_str(&line).unwrap();
+    assert_eq!(serde_json::to_string(&back).unwrap(), line);
+}

@@ -1,0 +1,27 @@
+version = 1
+id = "cpp-field-layout-arm64-macho"
+kind = "analysis"
+question = """
+This stripped arm64 macOS executable was compiled from C++ with RTTI. For the class whose RTTI name is Packet, give
+every non-static data member the class declares as an [offset, size] pair, both in bytes, with the offset counted
+from the start of the object. Leave out the vtable pointer. Return the pairs in an array named fields.
+"""
+truth_reference = """
+DW_TAG_member offsets and type sizes of class Packet in twins/packet-arm64.macho.dSYM; derive-truth.py.
+"""
+required_capabilities = ["rtti", "type_recovery"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v2; the agent runs measure it."
+
+[fixture]
+id = "packet-arm64-macho"
+path = "tests/fixtures/bench-v2/bin/packet-arm64.macho"
+sha256 = "bb5b56faa04a1cfddf52e27ff488af2c58b2fc43d927e8829e1a5c18ccbb5638"
+source = "tests/fixtures/bench-v2/src/packet.cpp"
+build = "tests/fixtures/bench-v2/build.sh"
+
+[answer]
+kind = "tuple_set"
+hex_integers = true
+field = "fields"
+values = [[8, 1], [10, 2], [12, 4], [16, 8], [24, 8], [32, 1], [36, 4]]
