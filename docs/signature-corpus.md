@@ -5,8 +5,8 @@ compatible builds; a match does not identify a library version, authenticate sou
 
 ## Shipped artifacts
 
-**Bounded 2.1 delivery is complete** after gzip/index/lazy-loading tests and independent publication audit, not
-release/CI or full Phase 2 acceptance. The counts below describe the three reviewed current pairs and unchanged Thumb.
+The default databases passed gzip, index and lazy-loading tests and an independent publication audit. They do not
+meet the 80% matched-version recall target. The counts below describe the three reviewed current pairs and unchanged Thumb.
 
 | Architecture | Masked signature entries | Callee keys | Recorded build profiles |
 | --- | ---: | ---: | ---: |
@@ -70,8 +70,8 @@ profiles are included despite low recall; the original std 1.87 one-wrong result
 Generic source-reference conflict rejection and exact-fallback withholding remove unsafe answers, not per-name
 blacklists or gold deletion. PE truth uses checked PDB procedure ranges, not guessed PUBLIC-name sizes.
 This is bounded corpus evidence, not a universal precision guarantee.
-Per-library and aggregate recall failures remain recorded. The 80% matched-version recall target belongs to Phase 2
-acceptance; low recall does not block bounded 2.1 data delivery or replace the precision checks for default artifacts.
+Per-library and aggregate recall failures remain recorded. Low recall against the 80% matched-version target does
+not block shipping precision-checked databases, and does not replace the precision checks for default artifacts.
 
 Strict canonical-name behavior remains the default. Explicit `--producer-alias-sets` enables the revalidated aggregates'
 `elf-producer-alias-sets-v3` policy: full-target grading accepts only verified exact native ELF same-range aliases;
@@ -204,6 +204,6 @@ Generated native programs, PDBs, archives and runtime captures are evaluation in
 reviewed hash/name databases and their provenance data belong in the default signature assets. Existing raw attempts
 and frozen baseline reports are not overwritten by a new consumer replay or a later acceptance decision.
 
-The bounded 2.1 data pass is complete; broader SDK
-coverage and full Phase 2 acceptance are not claimed. Phase 2.2 import-format and 2.3 fuzzy work are active in
-parallel; finish 2.2 then 2.3 before Phases 3–6. The independent live Phase 1 gate remains unchanged and open.
+Broader SDK coverage and the recall target are not claimed. User-supplied
+[PAT and FunctionID inputs](signature-imports.md) and [fuzzy candidates](fuzzy-signatures.md) are documented
+separately.

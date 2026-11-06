@@ -1,9 +1,30 @@
-# Feature reference
+# Feature overview
 
-rampage provides static binary analysis through a CLI, MCP server and desktop UI, and opt-in live debugging of
-operator-started stubs through MCP. Findings are evidence for an
-investigation, not proof of behavior, recovered original source or parity with another reverse engineering tool.
-See the [CLI reference](cli-reference.md) for commands and [MCP reference](mcp.md) for tool names.
+rampage provides static binary analysis through an MCP server, a CLI and a desktop UI that share one API, and
+opt-in live debugging of operator-started stubs through MCP. Findings are evidence for an investigation, not proof
+of behavior, recovered original source or parity with another reverse engineering tool.
+
+This page is an overview: each area below says what rampage does and its main limits, and links to the reference
+with the detail. Tool names are in the [MCP reference](mcp.md) and commands in the [CLI reference](cli-reference.md).
+Areas marked *experimental* are outside the [stability policy](stability.md).
+
+| Area | What it covers | Section |
+| --- | --- | --- |
+| Formats and decoding | ELF, PE, Mach-O, raw windows, snapshots; x86, Arm, Capstone and Sleigh decoders | [Formats and instruction decoding](#formats-and-instruction-decoding) |
+| Analysis | Function discovery, names, CFGs, cross-references, Go and C++ metadata | [Function discovery, names and references](#function-discovery-names-and-references) |
+| Decompilation and typing | Embedded Ghidra decompiler, local variables, type library, data and operand types, propagation, DWARF/PDB import | [Decompilation and persistent types](#decompilation-and-persistent-types) |
+| Triage and detection | Hashes, entropy, hardening, packer/compiler detection, YARA, capa, capabilities, crypto constants | [Triage and detection](#triage-and-detection) |
+| Agent ergonomics | Compact views and atomic annotation batches | [Tool views and annotation batching](#tool-views-and-annotation-batching) |
+| Findings ledger | Findings, unknowns and questions with evidence, kept in the annotation log | [Investigation ledger](#investigation-ledger) |
+| Patching | Assembler subset, checked patches, export to a new file | [Checked patches and assembly](#checked-patches-and-assembly) |
+| Search | Bytes, text, regex, immediates, instructions, references | [Search](#search) |
+| Library identification | Bundled signatures, PAT and FunctionID inputs, fuzzy candidates | [Library identification](#library-identification) |
+| Guided reports | Triage, main, network, persistence, string decoding, build diffing | [Guided reports and batch analysis](#guided-reports-and-batch-analysis) |
+| File formats | ZIP inventory, Go and Rust build info, PyInstaller, WebAssembly, PE resources, .NET | [Archive metadata](#archive-metadata) and the sections after it |
+| Debugging | GDB remote stubs; `debugserver` and Windows stubs are *experimental* | [Debugging](#debugging) |
+| Heuristic flywheel | Agent-proposed signatures gated on held-out truth (*experimental*) | [Heuristic flywheel](#heuristic-flywheel) |
+| Desktop UI | Listings, graphs, decompilation and shared annotations (*experimental*) | [Desktop UI](#desktop-ui) |
+| Measurements | Evaluation harness, benchmarks, crates | [Measurements and development](#measurements-and-development) |
 
 The [parity scorecard](parity-scorecard.md) combines static evaluations, fixed-model MCP task outcomes,
 reported token usage/timing and explicit baseline-completeness checks. Limits: a measured baseline does not
@@ -228,7 +249,7 @@ Bundled databases use deterministic gzip and lazy per-architecture decoding; pac
 The [offline corpus pipeline](signature-corpus.md) builds public-library profiles with ownership-filtered truth,
 frozen tool/input receipts and collision-preserving export. Reviewed precision-safe exports are promoted explicitly;
 raw recall/precision failures, unsupported profiles and unrun coverage remain visible. The default corpus does not
-identify arbitrary library versions or satisfy the full Phase 2 recall target.
+identify arbitrary library versions, and its recall is below the 80% matched-version target.
 
 [User-supplied PAT inputs](signature-imports.md) match validated byte patterns, CRC windows and tails without
 converting them to native hashes. Genuine schema-6 FID databases use the separate explicitly configured trusted
@@ -390,6 +411,32 @@ linked names consume that budget. Names have a 1,024-byte cap, UTF-8-safe trunca
 of filtering and pagination. `declared_known` distinguishes an observed zero from an unread declaration count;
 `declared: 0` is only a placeholder when that flag is false. A recovered declaration can survive a later header
 failure, but such a header still yields no decoded rows. `contains` matches resource or linked File/AssemblyRef names.
+
+## Debugging
+
+The MCP `debug` group exists only on a server started with an allowed `--debug-endpoint`. It connects to a GDB
+remote stub the operator started (gdbserver, QEMU, OpenOCD and similar), reads registers, memory, modules and
+memory maps, writes snapshots, controls execution in all-stop mode with breakpoints and watchpoints, and binds the
+session to a static project so breakpoints take function names and stops are reported in the project's terms.
+Memory and register writes need `--debug-writes`, and kill needs `--debug-kill`. rampage never launches or
+attaches to a process. Live acceptance has run against QEMU (Cortex-M3). Apple's `debugserver` and Windows targets
+through `gdbserver.exe` or `lldb-server` are *experimental*: implemented and tested against protocol transcripts,
+not yet live-verified. See [debug sessions](debug-control.md). The read-only [LLDB query bridge](lldb-query.md)
+and [runtime snapshots](runtime-snapshots.md) are separate.
+
+## Heuristic flywheel
+
+*Experimental.* A server started with `--corpus` serves only the `improve` group, through which an agent proposes
+library-signature rows from a training split; candidates must pass a fast gate and a held-out gate before
+promotion, and promoted rows leave as `.rpack` data packs. Limits: libid is the only family, and against the
+deterministic signature generator the agent has not yet promoted a row. See [the flywheel](flywheel.md).
+
+## Desktop UI
+
+*Experimental.* An egui client over the same API: docked functions, strings, imports and exports, a disassembly
+listing with clickable references, hex, graph, cross-references, triage, Ghidra pseudocode, shared annotations,
+project workspaces and an optional assistant that sends questions and tool results to Anthropic's API. See the
+[desktop UI reference](desktop-ui.md).
 
 ## Measurements and development
 

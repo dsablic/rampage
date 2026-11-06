@@ -50,7 +50,7 @@ coverage or evidence that the live reference lane has exercised them.
 ## Explicit local invocation
 
 Required tools are already-installed Clang with the fixture's record/vtable dump format, an ELF-capable linker and
-objcopy, Python 3.10+, Bash and a SHA-256 utility. Comparison additionally requires explicit Rampage CLI and
+objcopy, Python 3.10+, Bash and a SHA-256 utility. Comparison additionally requires explicit rampage CLI and
 protocol-4 worker executables, installed Ghidra 12.1.4 and JDK 21. The tools do not install dependencies, Rust,
 Ghidra, a JDK or any target runtime. Ghidra must supply matching bundled processor/specification bytes.
 

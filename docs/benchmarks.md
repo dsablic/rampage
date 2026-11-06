@@ -35,7 +35,7 @@ SHA-256 `7248d6e31c3394fb44ffcafc1181a67114822637247ce82c793866ee99deacc4`. The 
 | Function starts vs retained symbol/DWARF truth | 5346 matched, 0 missed, 234 extra candidates |
 | Lua CFG agreement vs Ghidra 12.1.4 | 890 common functions; raw edge precision 0.9834, recall 0.9849 |
 | Lua chain-normalized CFG | 17183 shared edges; precision 0.9974, recall 1.0 |
-| Lua call graph / call-site pairs | 2890 / 4373 shared; one Rampage-only item in each metric |
+| Lua call graph / call-site pairs | 2890 / 4373 shared; one rampage-only item in each metric |
 | Matched-twin library naming, Lua plus linked runtime | 849/892 names, 0 wrong/spurious; recall 0.9518 |
 | Argument counts across five compiler builds | 180 correct, 15 wrong out of 195 functions |
 | Eligible void/value-return agreement | 164 correct, 6 missed; precision 1.0, recall 0.9647 |
@@ -47,7 +47,7 @@ SHA-256 `7248d6e31c3394fb44ffcafc1181a67114822637247ce82c793866ee99deacc4`. The 
 | Actual MCP/model activity | 38 MCP tool calls, 49 model turns; 0 tool errors or model-transport errors |
 | Reported provider usage | 286183 input, 4347 output, 1555 reasoning tokens; cache read/write both 0 |
 | Task / end-to-end wall time | 208.045 s / 224.913 s |
-| Ghidra MCP task comparison | Unavailable in configured project; Rampage-only task baseline |
+| Ghidra MCP task comparison | Unavailable in configured project; rampage-only task baseline |
 | Phase 0 evidence completeness | 22/22 checks met; `phase0_complete=true` |
 
 The fixed model was `github-copilot/gpt-6.1-sol`, variant `default`, through the explicitly labeled OpenCode

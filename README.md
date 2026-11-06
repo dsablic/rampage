@@ -1,148 +1,187 @@
 # rampage
 
-An open-source Rust reverse engineering toolkit with AI agents as first-class clients: a scriptable CLI, an MCP server
-and a desktop UI share the same analysis API. The long-term goal is a general-purpose IDA Pro alternative.
+rampage is a reverse-engineering tool built for AI agents. Its product is an
+[MCP](https://modelcontextprotocol.io) server: an agent such as Claude Code connects to it and loads, disassembles,
+decompiles, searches, types and annotates binaries through tools whose results are compact, paged and
+evidence-linked. A CLI and a desktop UI use the same analysis API.
 
-## Status and scope
+It is for agents doing reverse engineering, and for the people who run them: malware and firmware analysts,
+vulnerability researchers, and anyone who wants a model to answer questions about a binary without driving a
+GUI disassembler through a bridge.
 
-This is an early toolkit, not a claim of IDA/Ghidra parity. It provides recursive-descent function discovery,
-cross-references, saved annotations, triage and embedded Ghidra decompilation to C. Reports retain evidence,
-confidence and limitations; producing C is not proof of correct recovery.
+Why it matters:
 
-- Native executable analysis: ELF, PE and Mach-O, including universal slices and selected embedded images.
-- Instruction decoding: x86/x86-64, AArch64, ARM/Thumb and several additional architectures.
-- Investigation: library identification, heuristic/rule scans, guided workflows, a durable findings ledger and
-  bounded multi-slice analysis.
-- Toolchain and container metadata: Go build info and cargo-auditable dependencies, PE resources and load config,
-  PyInstaller archives and WebAssembly modules.
-- Managed code: .NET metadata, method/property signatures, attributes and paged CIL disassembly;
-  CIL remains separate from native analysis.
-- Debugging (opt-in, MCP only): GDB remote stubs, macOS `debugserver` and Windows RSP stubs (the last two not
-  yet live-verified); all-stop control, breakpoints, project correlation, and writes or kill behind operator flags.
+- **Built for model context.** Every tool has a size cap, pages large results with explicit cursors and totals,
+  and says what it left out. Tools are grouped, so a session starts with a short tool list and enables more on
+  demand.
+- **Native and self-contained.** Loaders, decoders and analysis are written in Rust. Decompilation uses Ghidra's
+  decompiler, embedded with its processor specifications: no Java, no Ghidra install, no project import step.
+- **Evidence over assertion.** Results carry their evidence, confidence and limitations. Annotations and an
+  investigation ledger persist beside the binary and replay in every client.
+- **Heuristics as data.** Library signatures, detection rules, capa and YARA rules and crypto constants are data
+  packs, which can be added, exported and checked without rebuilding rampage.
 
-Use rampage for files, captures and processes you own or have permission to inspect. Static analysis never
-executes the target or bypasses protections. The opt-in `debug` tools control a GDB remote stub or `debugserver`
-that the operator started and allowed; rampage never launches or attaches to a process. The LLDB query bridge
-reads an existing authorized stopped LLDB session. Native decompiler supervision is not an OS sandbox.
-See the [feature reference](docs/features.md) for architecture coverage and limits, and
-[the parity roadmap](docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md) for planned work.
+rampage is Apache-2.0. The [changelog](CHANGELOG.md) describes the first public release and the
+[stability policy](docs/stability.md) what it promises. Use rampage on files and processes you own or are allowed
+to inspect.
 
-[Development and cleanup](docs/development.md) describes the smaller build profiles, validation and worktree lifecycle.
+## Evidence: agent head-to-head
 
-## Supported hosts
+One model (`claude-sonnet-5-5` through Claude Code) answered the same tasks through one MCP server at a time:
+rampage, or REA's MCP server (`morluto/rea` 6.8.0) over headless Ghidra 12.2. Suite v2 has 15 harder tasks
+(stripped C++, typing, multi-step investigation, a 49.2 MB stripped Go binary, raw firmware, build diffing),
+each run 3 times per server and scored by machine against truth derived independently of both servers.
 
-- **macOS on Apple silicon (ARM64):** the primary development host. Hosted CI builds and tests the whole workspace,
-  including the desktop UI snapshots.
-- **Linux x86-64 (Ubuntu 24.04):** the core analysis crates have passed hosted CI. The CI job that builds and tests
-  the whole workspace on Linux is new in this preview. UI snapshot tests are macOS-only, and the desktop UI is
-  untested on Linux.
-- **Windows:** not supported as a host. The analysis API uses Unix-only file APIs, and supervised decompilation and
-  component plugins need 64-bit Linux or macOS. PE binaries can still be analysed, and Windows targets debugged
-  through an RSP stub, from a macOS or Linux host.
-- Other hosts, such as Intel macOS and Linux ARM64, are untested.
+| Suite v2 (2026-11-05) | rampage | REA (Ghidra) |
+| --- | --: | --: |
+| Correct, strict, all 15 tasks | 44/45 | 38/43 |
+| Correct, core only (C++, typing, investigation; the fairer view) | 29/30 | 25/28 |
+| Server tool calls per run, median | 3 | 6 |
+| Wall time per run outside the scale tasks, median | 12.5 s | 27.0 s |
+| Reported model cost over the scored runs | $3.63 | $5.57 |
 
-## Rust quickstart
+On these owned tasks with one model, rampage is modestly ahead on accuracy and clearly ahead on tool calls, time
+and tokens. The tasks were written by the rampage project and lean towards what it was built for; REA ran without
+Rizin, so part of its catalog could not run; 15 tasks × 3 runs is small. REA's denominator is 43 because two of
+its runs fell back to another model and are excluded. Read the [suite v2 report](docs/benchmarks/agent-h2h-v2-2026-11-05.md)
+for the corrections made after a fairness review, the failure analysis and rampage's own ranked gaps, and the
+[first head-to-head run](docs/benchmarks/agent-h2h-2026-11-05.md) for 20 simpler tasks, where both servers were
+near 100%.
 
-Build with a Rust toolchain supporting edition 2024, a native C/C++ compiler and zlib development files.
-The decompiler engine and processor specifications are bundled; no external Ghidra installation is required.
-Replace `sample.elf` and `main` with an authorized binary and a function it contains.
+## Quickstart
 
-```sh
-cargo build --release -p rampage-cli -p rampage-worker
-./target/release/rampage binary inspect sample.elf
-./target/release/rampage workflow run triage-report sample.elf
-./target/release/rampage function decompile sample.elf --at main --isolated
-```
+### Build and install
 
-Keep `rampage-worker` beside the CLI for supervised native decompilation. `--isolated` requires worker execution;
-batch decompilations and workflow previews also require it. See the
-[decompiler reference](crates/rampage-decompiler/README.md) for recovery
-diagnostics and resource/platform limits. `tools/install.sh [ROOT] [--ui]` installs the worker and CLI together,
-optionally with the desktop client. The examples below assume `rampage` is on `PATH`.
-
-## Primary commands
+You need a Rust toolchain with edition 2024 (`rust-toolchain.toml` selects stable), a C/C++ compiler and zlib
+development files. There are no prebuilt binaries yet.
 
 ```sh
-rampage binary triage sample.elf --json
-rampage binary audit sample.elf --entries --at main --json
-rampage function list sample.elf --name main
-rampage function disassemble sample.elf --at main --count 20
-rampage function decompile sample.elf --at main --exact-entry --isolated --json
-rampage function xrefs sample.elf --to main
-rampage string list sample.elf --contains greeting
-rampage binary analyze module.dylib --all-architectures --workflow triage-report --function exported_entry --json
-rampage managed inspect sample.dll --list types
-rampage managed disassemble sample.dll --il 'Example.Program::Main' --at IL_0000
-rampage server serve
+git clone https://github.com/dsablic/rampage.git
+cd rampage
+tools/install.sh            # builds and installs rampage and rampage-worker into ~/.local/bin
 ```
 
-The noun/verb hierarchy is the primary CLI. Existing flat spellings such as `info`, `funcs`, `decompile`,
-`analyze`, `dotnet`, `report` and `mcp` remain accepted for compatibility; MCP tool names are unchanged.
-Use `rampage --help` or a group's `--help` to discover routes. The
-[CLI reference](docs/cli-reference.md) maps every route to its compatibility spelling and documents flags,
-addresses, managed-code paging and annotation persistence. See [CLI batch analysis](docs/cli-analysis.md)
-for multi-architecture task selection, failure reporting and output budgets.
+`tools/install.sh ROOT` installs into `ROOT/bin` instead, and `--ui` adds the desktop client. Keep
+`rampage-worker` beside `rampage`: decompilation runs in that supervised worker process. The rest of this page
+assumes `rampage` is on `PATH`.
 
-`--exact-entry` opts into bounded local host context over the full mapped image, without whole-program discovery;
-it is an analyst assertion, not proof of a function boundary. Default decompilation semantics remain unchanged.
-
-## Clients and documentation
-
-Run the desktop client with:
+### Connect Claude Code
 
 ```sh
-cargo run --release -p rampage-ui -- sample.elf
+claude mcp add rampage -- rampage server serve
 ```
 
-The UI offers listings, graphs, decompilation and shared annotations. **Open for exact-entry…** defers global
-analysis and opens a separate explicit-Run window; **Project workspace…** retains up to eight modules with
-qualified navigation and separate local Save, manifest-only Preview and reviewed Open actions. Ordinary open and
-Pseudocode behavior remain unchanged. Its optional Assistant tab sends questions
-and model-read code/tool results to Anthropic's API; use it only with permission to disclose that material.
-Local analysis and MCP serving do not require an API key. See the client references before connecting an AI model.
+Add `--scope user` to make it available in every project. Then ask Claude about a binary, for example:
 
-| Reference | Contents |
-| --- | --- |
-| [Features](docs/features.md) | Formats, decoders, analysis capabilities, limits and reported measurements |
-| [CLI](docs/cli-reference.md) | Command catalog, compatibility map, global flags and shared annotations |
-| [MCP](docs/mcp.md) | Setup, tool groups, paging/tokens, edits and client data-disclosure boundaries |
-| [Data packs](docs/data-packs.md) | Manifest/schema, precedence, validation and constant databases |
-| [Desktop UI](docs/desktop-ui.md) | Views, keys, embedded images, assistant consent and offscreen checks |
+> Using rampage, look at tests/fixtures/bench-v2/bin/vault-arm64.macho. It encrypts a message with a stream
+> cipher. Which function derives the cipher's key, and what constant does it XOR into each key word?
 
-Additional focused guides:
+### Connect another MCP client
 
-- [Debug sessions](docs/debug-control.md): operator-allowed GDB remote stubs, `debugserver` and Windows stubs;
-  execution control, project correlation, and writes or kill behind operator flags.
-- [Runtime snapshots](docs/runtime-snapshots.md) and the [read-only LLDB query bridge](docs/lldb-query.md).
-- [Exact-entry analysis](docs/entry-analysis.md): opt-in decompilation, independent entry diagnostics and limits.
-- [Desktop exact-entry](docs/exact-entry-ui.md): deferred opening, validation, explicit Run and cooperative Cancel.
-- [Project workspaces](docs/project-workspaces.md): retained modules, qualified addresses and reviewed local manifests.
-- [Module references](docs/module-references.md): bounded loaded-PE declarations, coverage and explicit navigation.
-- [Historical inventory cache](docs/function-inventory-cache.md): explicit cached/unverified candidate browsing.
-- [Owned worker observations](docs/worker-observations.md): host milestones, cleanup ownership and owned measurements.
-- [Debugger workspace](docs/debugger-workspace.md): explicit local inspection, Prepare/Compare/Save/Open and privacy.
-- [Debug signature import](docs/debug-signatures.md) and [ARM64 semantics validation](docs/arm64-development.md).
-- [Library signature inputs](docs/signature-imports.md): native/PAT databases and explicitly configured FID import.
-- [Fuzzy library candidates](docs/fuzzy-signatures.md): secondary similarity evidence without automatic naming.
-- [Search](docs/search.md): bounded byte/text/regex, instruction and reference queries with native function context.
-- [Checked patches/export](docs/patching.md) and [bounded assembly](docs/assembly.md): annotation-backed effective
-  views, create-new export and static owned-fixture verification without target execution.
-- [Compact views and annotation batches](docs/tool-views.md): complete evidence-aware responses and one-step
-  checked annotation transactions, without a parallel patch/history path.
-- [Explicit Sleigh decoding](docs/sleigh-decoding.md): bounded processor-profile windows, raw p-code and
-  conservative seeded discovery; not ordinary-project or C-ABI admission.
-- [Benchmarks](docs/benchmarks.md) and the [decompiler integration corpus](docs/decompiler-corpus.md).
-- [Plugins and extension points](docs/plugins.md): experimental explicit triage components and builtin registries.
-- [Plugin security boundaries](docs/plugin-security.md): admission, resource limits, claim provenance and exclusions.
+rampage speaks MCP over stdio. Most clients take a JSON `mcpServers` entry:
 
-The [development reference](docs/features.md#measurements-and-development) covers measurements, fixture rebuilding
-and decoder-table generation. Existing benchmark measurements are sample-specific, not general accuracy or
-latency guarantees.
+```json
+{
+  "mcpServers": {
+    "rampage": {
+      "command": "rampage",
+      "args": ["server", "serve"]
+    }
+  }
+}
+```
 
-## Contributing and security
+Use the absolute path to `rampage` if the client does not inherit your `PATH`. For a client that does not refresh
+its tool list when tools change, add `"--all-tools"` to `args` so every group is listed from the start.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for building, testing and how a feature lands. Report vulnerabilities
-privately as described in [SECURITY.md](SECURITY.md), not in public issues.
+The [getting-started tutorial](docs/getting-started.md) walks through a first investigation on a committed
+fixture, tool call by tool call.
+
+### Use the CLI
+
+The CLI exposes the same analysis for scripts and quick looks:
+
+```sh
+rampage binary triage tests/fixtures/bin/hello-x64.elf
+rampage function list tests/fixtures/bin/hello-x64.elf --name main
+rampage function disassemble tests/fixtures/bin/hello-x64.elf --at main --count 20
+rampage function decompile tests/fixtures/bin/hello-x64.elf --at main
+rampage workflow run triage-report tests/fixtures/bin/hello-x64.elf
+```
+
+Add `--json` for machine-readable output. `rampage --help` lists every command; the
+[CLI reference](docs/cli-reference.md) has the full catalog.
+
+## Capabilities
+
+Areas marked *experimental* may change in any release; see the [stability policy](docs/stability.md).
+
+- **Analysis:** recursive-descent function discovery, control-flow graphs, cross-references, strings, imports
+  and exports; stripped Go function names from the pclntab; C++ class names and base classes from RTTI and
+  vtables; Objective-C classes, methods and properties; guided reports (`triage_report`, `find_main`,
+  `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`).
+- **Decompilation:** C from the embedded Ghidra decompiler, with address-linked tokens and recovery diagnostics,
+  run in a supervised worker with time, memory and output limits.
+- **Typing:** rename and retype locals and parameters by storage, a project type library with C declarations and
+  bundled libc/POSIX/Win32 basics, types on data and operands, stack frames, type propagation across calls, and
+  checked DWARF and PDB type import.
+- **Search and patching:** byte, text, regex, immediate, instruction and reference search; an assembler for an
+  x86/x64/AArch64 subset; checked byte patches kept in the annotation log and exported to a new file.
+- **Formats:** ELF, PE and Mach-O (including universal binaries and embedded images), .NET metadata and CIL, Go
+  build info, cargo-auditable data, PE resources and load config, PyInstaller archives, WebAssembly module
+  summaries, ZIP inventory, embedded-file carving and raw firmware windows.
+- **Processors:** x86 and x86-64; AArch64, ARM and Thumb from Arm's machine-readable specification; MIPS,
+  PowerPC, RISC-V, SPARC, s390x and m68k through Capstone; sixteen more families (MSP430, AVR8, 8051, Z80,
+  Xtensa, eBPF, LoongArch and others) as Raw Projects through Ghidra's Sleigh. Profiles other than MSP430 and AVR8
+  are *experimental* and disassemble without decompiling.
+- **Library identification and detection:** FLIRT/FunctionID-style signatures with bundled databases, user PAT
+  and Ghidra FID input, fuzzy candidates, packer/compiler detection, YARA, a capa subset, capability tags and
+  crypto constants, all extendable with data packs.
+- **Debugging:** connect to an operator-started GDB remote stub (gdbserver, QEMU, OpenOCD), read state, control
+  execution, set breakpoints by function name, and bind the session to a static project. Memory and register
+  writes and kill need explicit operator flags. Apple `debugserver` and Windows-target stubs are *experimental*
+  and not yet live-verified. rampage never launches or attaches to a process itself.
+- **Findings ledger:** `record_finding` and `list_findings` keep what an agent established, what it does not know
+  and its open questions, with evidence and confidence, in the annotation log beside the binary.
+- **Heuristic flywheel** (*experimental*): an agent proposes library signatures through a restricted MCP server,
+  gated against held-out ground truth, and promoted rows ship as `.rpack` data packs. See
+  [the flywheel](docs/flywheel.md) for what it has and has not shown.
+- **Desktop UI** (*experimental*): listings, graphs, decompilation and shared annotations in one window.
+
+The [feature overview](docs/features.md) and [MCP reference](docs/mcp.md) describe each area and its limits.
+
+## Platforms and known limits
+
+### Supported hosts
+
+- **macOS on Apple silicon:** tested; the primary development host.
+- **Linux x64:** building and testing in CI; first release pending.
+- **Windows:** not supported as a host in 1.0; planned for 1.x. Windows PE binaries can be analysed, and Windows
+  targets debugged through an RSP stub, from a macOS or Linux host.
+
+### Known limits
+
+- Decompilation produces C; it does not prove the recovered program is correct. Results report their recovery
+  issues.
+- Worker supervision bounds time, memory and output; it is not an OS sandbox. Analyse untrusted files in a VM or
+  container if you need isolation.
+- rampage itself uploads nothing, but an AI client sends tool results (strings, disassembly, decompiled code) to
+  its model provider. Make sure you may disclose that material; see
+  [data disclosure](docs/mcp.md#authorization-and-data-disclosure).
+- Bundled library signatures match the library builds they were made from, not every version.
+- Not yet built: DEX/JVM, Intel HEX/SREC and multi-region firmware maps, object-file relocation, Swift metadata,
+  C++ layout recovery beyond RTTI evidence, and incremental analysis for very large binaries.
+- The benchmarks above use one model and one client; they are not general accuracy guarantees.
+
+The [comparison with Ghidra, IDA and REA](docs/comparison.md) lists what rampage does not do, and
+[the roadmap](docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md) lists what is planned.
+
+## Documentation and project
+
+- [Documentation index](docs/index.md): tutorials, how-to guides, references and explanations.
+- [Changelog](CHANGELOG.md) and [stability policy](docs/stability.md).
+- [Contributing](CONTRIBUTING.md) and [security policy](SECURITY.md). Report vulnerabilities privately, not in
+  public issues.
 
 ## License
 

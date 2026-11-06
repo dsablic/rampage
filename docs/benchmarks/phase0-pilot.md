@@ -61,10 +61,10 @@ the verified profiles and Lua, with both manifest digests and the Lua graph bind
 | Owned x64 PE starts | 4 DWARF starts found, no misses or extra candidates |
 | Lua AArch64 ELF function starts | 892 correct, no misses, 6 extra; precision 0.9933 |
 | Lua matched-twin naming, including static runtime | 849 correct, 43 missed, no wrong/spurious names; recall 0.9518 |
-| Lua/Ghidra 12.1.4 function coverage | 890 common, 8 Rampage-only, none Ghidra-only |
-| Lua raw CFG edges | 16947 shared; totals 17233 / 17207 (Rampage / Ghidra) |
+| Lua/Ghidra 12.1.4 function coverage | 890 common, 8 rampage-only, none Ghidra-only |
+| Lua raw CFG edges | 16947 shared; totals 17233 / 17207 (rampage / Ghidra) |
 | Lua chain-normalized CFG edges | 17183 shared; totals 17228 / 17183 |
-| Lua call-site pairs / call-graph edges | 4373 / 2890 shared; one Rampage-only item in each metric |
+| Lua call-site pairs / call-graph edges | 4373 / 2890 shared; one rampage-only item in each metric |
 
 Matched-twin naming is best-case same-build evaluation. Graph agreement is limited to common functions and
 does not establish correctness. Explicit contiguous DWARF truth now checks all retained ranges in both PE

@@ -54,7 +54,8 @@ an entry.
 
 ### Published processor set
 
-All sixteen selected families are admitted. Each row's code-space facts and byte order are checked against the
+All sixteen selected families are admitted. Profiles other than MSP430 (`default`) and AVR8 (`gcc`), the two with
+reviewed C models, are *experimental* (see the [stability policy](stability.md)). Each row's code-space facts and byte order are checked against the
 verified native translator before any decoder is used. Recall is measured on owned fixtures through the ordinary
 Project path (`rampage-eval processor-roster`, [benchmarks](benchmarks/phase4-1.md)): each fixture has two truth functions;
 "manual" seeds every truth entry, "caller" seeds only the base entry.
@@ -100,7 +101,7 @@ never served from the code mapping. Every other profile refuses with "no reviewe
 Raw Projects also refuse immediate/constant code search (no typed operands), patch V1, capture identity and
 backing-source proofs. Annotations are memory-only, even when a persistent log is supplied. The sixteen
 architectures have no legacy pointer width (`pointer_size()` is `None`) and no native/Capstone decoder.
-Multi-region maps, MMIO, HEX/SREC and vector seeding remain Phase 4.2 work.
+Multi-region maps, MMIO, HEX/SREC and vector seeding are not supported yet.
 
 ## Window and discovery contract
 

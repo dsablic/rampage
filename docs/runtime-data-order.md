@@ -1,6 +1,6 @@
 # Runtime data order and ARM64 evidence
 
-Architecture byte order and a stopped process's runtime DATA byte order are different evidence. Rampage keeps
+Architecture byte order and a stopped process's runtime DATA byte order are different evidence. rampage keeps
 them separate: a raw debugger observation may retain unknown DATA order, while a snapshot must declare how
 captured data words are interpreted. An architecture default cannot fill that gap.
 
@@ -21,7 +21,7 @@ These references establish the inspected implementation, not a claim about every
 
 Apple's [Apple silicon porting guide][apple-porting] states that both Apple silicon and Intel-based Macs use
 little-endian data. That is platform guidance for porting applications, not the missing stop-bound SDK fact.
-Rampage does not convert it into affirmative runtime DATA evidence for an individual capture.
+rampage does not convert it into affirmative runtime DATA evidence for an individual capture.
 
 ## ARM64 is not ARM32 CPSR.E
 

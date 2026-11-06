@@ -1,10 +1,22 @@
 # The flywheel fast loop
 
 The flywheel lets an AI agent improve rampage's heuristics through rampage's own MCP server, gated on held-out
-ground truth. It covers library-identification (libid) signatures. Milestone 1 built the loop; milestone 2 made
-a deterministic signature generator the bar the agent must clear, added a novel-only metric and rows that
-generalise, and ships promotions out as `.rpack` archives and into the bundled databases. The design is in
-[the fast-loop plan](plans/2026-11-05-flywheel-fast-loop.md); the guardrails are in
+ground truth. It covers library-identification (libid) signatures. A deterministic signature generator (the
+*arm*) is the bar the agent must clear; a novel-only metric checks that a gain survives code changes; and
+promotions leave as `.rpack` archives or go into the bundled databases after the gate runs again.
+
+The flywheel is *experimental*. What it has shown so far, on a 360-binary corpus of zlib, LZ4 and cJSON
+([fast-loop plan](plans/2026-11-05-flywheel-fast-loop.md), M1 and M2 records):
+
+- Without the arm, an unattended agent promoted four candidates in four rounds for $0.45: held-out F1 rose from
+  0.1306 to 0.1743 (+368 true positives, no new false positive). 365 of the 368 gains were functions unchanged
+  between library versions.
+- The deterministic arm alone adds 7,114 held-out true positives. Gated against it, the agent ran six rounds for
+  $1.28 and promoted nothing: every candidate passed the fast gate and moved held-out F1 by zero.
+- So for libid the arm captures the recognisable gain, and the loop is infrastructure for families that have no
+  deterministic generator. The plan recommends compiler and tool identification next.
+
+The design is in [the fast-loop plan](plans/2026-11-05-flywheel-fast-loop.md); the guardrails are in
 [the flywheel strategy](plans/2026-10-12-heuristic-self-improvement-flywheel.md).
 
 Everything the loop writes lives under `target/flywheel/`:
@@ -76,7 +88,7 @@ over, never a unit that shares the measured code with training.
 | Tool ID | Whole tools and packers |
 | Function-start discovery | Compilers or architectures |
 
-Never split per program when programs share the measured code; the first M1 corpus did, and 98% of its held-out
+Never split per program when programs share the measured code; the first corpus did, and 98% of its held-out
 functions were in training under the same name and configuration.
 
 **What is scored.** The gated slices score the target libraries' own functions, plus every false name: a wrong
@@ -124,10 +136,10 @@ against the bundled databases, and reports bundled-only and bundled-plus-arm met
 for novel and recognised held-out functions.
 
 **The arm is the default baseline.** A corpus server gates every candidate against the bundled databases plus the
-arm plus the promoted rows (`rampage mcp --corpus DIR --flywheel-baseline arm`, the default). A candidate's rows are
+arm plus the promoted rows (`rampage server serve --corpus DIR --flywheel-baseline arm`, the default). A candidate's rows are
 merged with the arm's into one database, so a row repeating an arm body under another name makes both ambiguous
 instead of overriding it. Against the arm the held-out gate also requires a novel-body gain (below), because the
-arm already names the recognised functions. `--flywheel-baseline bundled` restores M1's bundled-only comparison
+arm already names the recognised functions. `--flywheel-baseline bundled` restores the bundled-only comparison
 for diagnostics; it is never the comparison for a promotion that is meant to show the agent adds value.
 `corpus_failures` lists only what the baseline still misses, and names the baseline in its header.
 
@@ -329,11 +341,11 @@ committed, rebuild rampage so the compiled-in databases carry it.
 `not_a_function`) with 1 to 8 evidence items. Records are appended to `observations.jsonl` with the binary's
 SHA-256; binaries over 256 MiB are refused.
 
-It is served only in ordinary sessions, which opt in with `rampage mcp --observations DIR` or
+It is served only in ordinary sessions, which opt in with `rampage server serve --observations DIR` or
 `RAMPAGE_OBSERVATIONS`; a corpus server does not serve it. A store inside a flywheel directory refuses files from
 that directory.
 
 The store is a directory of its own rather than the binary's annotation sidecar, for two reasons. The sidecar is
 the analyst's record: every client replays it, under its reader's limits. Observations are unreviewed labels, and
-the corpus must collect them across binaries. Recording one changes nothing else. In M1 the corpus does not yet
+the corpus must collect them across binaries. Recording one changes nothing else. The corpus does not yet
 read them.

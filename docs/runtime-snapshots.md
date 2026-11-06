@@ -1,6 +1,6 @@
 # Analyze a captured runtime image
 
-Use snapshots for programs you own or have permission to inspect. Rampage does not launch processes,
+Use snapshots for programs you own or have permission to inspect. rampage does not launch processes,
 attach debuggers, bypass protections or modify the captured application.
 
 Snapshots come from the LLDB exporter below or from the MCP `debug_snapshot` tool, which captures a stopped target

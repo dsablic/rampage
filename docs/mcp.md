@@ -1,18 +1,58 @@
 # MCP reference
 
-`rampage server serve` (compatibility `rampage mcp`) serves the
-[Model Context Protocol](https://modelcontextprotocol.io) over stdin/stdout. CLI routing does not rename MCP
-tools. No API key is needed for local MCP serving; an external AI client controls its model/provider connection.
+`rampage server serve` (compatibility spelling `rampage mcp`) serves the
+[Model Context Protocol](https://modelcontextprotocol.io) over stdin/stdout. The MCP server is rampage's main
+interface: every capability is an MCP tool first, and the CLI and desktop UI share the same API. No API key is
+needed for local serving; the AI client controls its own model and provider connection.
 
-With the built CLI on `PATH`, Claude Code configuration is:
+This page is organised from overview to detail:
+
+- [Connect a client](#connect-a-client) and [server options](#server-options).
+- [Tool groups](#tool-groups): the catalog of every tool, by group.
+- [Flywheel (improve)](#flywheel-improve): the restricted server for the experimental flywheel.
+- [Inputs, paging and decompiler tokens](#inputs-paging-and-decompiler-tokens): addresses, size caps, paging and
+  per-tool notes.
+- [Raw projects](#raw-projects): headerless code through Sleigh processor profiles.
+- [Edits and session state](#edits-and-session-state): annotations, undo, batches and the findings ledger.
+- [Authorization and data disclosure](#authorization-and-data-disclosure).
+
+For a guided first session, see [getting started](getting-started.md).
+
+## Connect a client
+
+With the built CLI on `PATH`, add rampage to Claude Code:
 
 ```sh
 claude mcp add rampage -- rampage server serve
-claude mcp add rampage -- rampage server serve --all-tools
 ```
 
-The second form is for clients that do not refresh their tool list. An explicit path to the installed CLI
-can replace `rampage`; install the worker beside it for supervised native decompilation.
+`--scope user` makes it available in every project. For other clients, a JSON `mcpServers` entry:
+
+```json
+{
+  "mcpServers": {
+    "rampage": {
+      "command": "rampage",
+      "args": ["server", "serve"]
+    }
+  }
+}
+```
+
+An absolute path to the installed CLI can replace `rampage`. Install `rampage-worker` beside it for supervised
+native decompilation. For clients that do not refresh their tool list, add `--all-tools`
+(`claude mcp add rampage -- rampage server serve --all-tools`).
+
+## Server options
+
+| Option | Effect |
+| --- | --- |
+| `--all-tools` | List every tool group at startup instead of `core` alone. `RAMPAGE_MCP_TOOLS=all` or a list such as `detection,types` also selects startup groups. |
+| `--pack DIR` | Load a [data pack](data-packs.md); repeatable. `RAMPAGE_PACKS` adds more. |
+| `--debug-endpoint ENDPOINT` | Allow the `debug` tools to connect to an operator-started stub; repeatable. See [debug control](debug-control.md#consent). |
+| `--debug-writes`, `--debug-kill` | Also allow target memory and register writes, and kill. |
+| `--observations DIR` | Serve `report_observation`, recording into DIR (*experimental*). |
+| `--corpus DIR` and the `--flywheel-*`, `--gate`, `--require-novel-gain` options | Serve only the `improve` group over a flywheel corpus (*experimental*); see [the flywheel](flywheel.md). |
 
 ## Tool groups
 
@@ -20,10 +60,9 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 that answer common first questions, such as `language_metadata` and `class_evidence` for class names and
 hierarchies, are in `core` so that a client deferring schemas still sees their names.
 
-Claude Code shows a model only the first 4,096 characters of the server instructions. The instructions therefore
-open with the essentials (how to enable groups, one line per group naming its key tools, the first calls, the debug
-consent and endpoints) and mark the start of the details; tests in `crates/rampage-mcp/src/lib.rs` keep the
-essentials at least 300 characters short of the cut. Put new detail after that mark or in a tool description.
+A default session lists 41 tools: the 40 in `core` plus `enable_tools`. Enabling every group lists 84. The
+`debug` group adds 14 tools (16 with `--debug-writes`), `--observations` adds `report_observation`, and a
+`--corpus` server lists `enable_tools` and the 4 `improve` tools only.
 
 - `core`: `triage`, `binary_info`, `list_functions`, `disassemble`, `decompile`, `function_graph`,
   `assemble`, `patch_bytes`, `revert_patch`, `list_patches`, `export_patched`,
@@ -61,9 +100,14 @@ started with an allowed debug endpoint, and its write tools and `kill` argument 
 The `improve` group exists only on a server started with `--corpus DIR`, which then serves `enable_tools` and the
 improve group alone; see [the flywheel](#flywheel-improve).
 
+For contributors: Claude Code shows a model only the first 4,096 characters of the server instructions. The
+instructions therefore open with the essentials (how to enable groups, one line per group naming its key tools, the first calls, the debug
+consent and endpoints) and mark the start of the details; tests in `crates/rampage-mcp/src/lib.rs` keep the
+essentials at least 300 characters short of the cut. Put new detail after that mark or in a tool description.
+
 ## Flywheel (improve)
 
-`rampage mcp --corpus target/flywheel/corpus/<version>` starts a server for the flywheel ([how-to](flywheel.md)),
+`rampage server serve --corpus target/flywheel/corpus/<version>` starts a server for the flywheel ([how-to](flywheel.md)),
 through which an agent improves rampage's library-identification signatures on a prebuilt corpus.
 
 **What the server exposes.** It serves `enable_tools` and the `improve` group, and nothing else: no analysis tool,
@@ -109,7 +153,7 @@ without group gating, plus the interactive `show_address`; it does not offer fil
 
 The [parity scorecard](parity-scorecard.md) records static metrics and task definitions separately from
 live MCP/model results. Limits: contract checks and scripted transport tests are not AI task-success measurements.
-Head-to-head agent runs drive an agent CLI against `rampage mcp` (or another server) through
+Head-to-head agent runs drive an agent CLI against `rampage server serve` (or another server) through
 `tools/agent-bench/claude-runner.py`, with only that server's tools allowed; see the
 [parity scorecard](parity-scorecard.md#head-to-head-agent-runs). They do not execute analyzed programs.
 The local stripped Lua workload was also inspected through `triage_report`: static toolchain/string evidence

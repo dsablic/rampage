@@ -1,6 +1,7 @@
 # Desktop UI reference
 
-The desktop client is an egui app over the same API as the CLI and MCP server.
+The desktop client is an egui app over the same API as the CLI and MCP server. It is *experimental*: its views,
+keys and local files may change in any release (see the [stability policy](stability.md)).
 
 ```sh
 cargo run --release -p rampage-ui -- sample.elf

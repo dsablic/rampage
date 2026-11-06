@@ -1,6 +1,6 @@
 # Deep ARM64 analysis
 
-Rampage's ARM64 track separates instruction semantics, compiler conventions, SSA/data-flow analysis and
+rampage's ARM64 track separates instruction semantics, compiler conventions, SSA/data-flow analysis and
 presentation. Supported operations produce explicit effects. Unsupported operations remain barriers instead
 of silently preserving stale register or memory state.
 

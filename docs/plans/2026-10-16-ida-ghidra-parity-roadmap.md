@@ -25,20 +25,38 @@ Consequences for every milestone below:
 
 ## Where we are
 
-### Status (2026-11-05)
+### Status (2026-11-06)
 
-Taken from `todo.md` and the plans; the 2026-10-16 assessment below is kept as written.
+Taken from `todo.md`, the plans and the published benchmarks; the 2026-10-16 assessment below is kept as written.
 
 - **Phases 0–3 and 4.1:** implemented. Open gates: the live Phase 1 reconstruction (call bound N), the Phase 2
   library-recall target, and the Phase 3.3 live token/call improvement.
 - **Phase 4.2–4.4:** 4.2 has only the single-image Raw slice; 4.3 is open; 4.4 has a partial WebAssembly
   module summary (`wasm_module`) and no DEX/JVM.
-- **Phases 5–8:** not started.
-- **Phase 9:** design approved 2026-10-29. 9.1–9.4 done; 9.5 (macOS `debugserver`) and 9.6a (Windows through RSP
-  stubs) implemented, live acceptance pending. See the
+- **Phases 5–8:** not started as phases. Suite v2 follow-ups added Mach-O chained-fixup RTTI (Phase 5) and linear
+  exact-text search with a resume cursor (Phase 6); the rest of the follow-ups are open in `todo.md`.
+- **Phase 9:** design approved 2026-10-29. 9.1–9.4 done with live QEMU acceptance; 9.5 (macOS `debugserver`) and
+  9.6a (Windows through RSP stubs) implemented, live acceptance pending. See the
   [design's phase table](2026-10-29-debugger-control.md#phased-delivery).
-- **Outside the phase order:** the REA gap-closing wave (2026-10-29) added the `formats` tool group and the
-  findings ledger.
+- **Outside the phase order:**
+  - The REA gap-closing wave (2026-10-29) added the `formats` tool group and the findings ledger.
+  - The flywheel fast loop ([plan](2026-11-05-flywheel-fast-loop.md)) built the `improve` group, a deterministic
+    signature arm, `.rpack` export/import and `rampage-eval bundle`. M1's agent promoted four candidates (+368
+    held-out TP, 0 FP; 365 of them on code unchanged between versions). In M2, gated against the arm (+7,114
+    held-out TP on its own), the agent promoted nothing in six rounds. The plan recommends compiler/tool
+    identification as the next family.
+
+**Head-to-head with REA over headless Ghidra** (one model, `claude-sonnet-5-5` through Claude Code):
+
+- [Suite v1](../benchmarks/agent-h2h-2026-11-05.md), 20 canonical tasks × 3: 50/51 analysis runs correct
+  against REA's 49/51, with a median of 2 server calls per run against 4.
+- [Suite v2](../benchmarks/agent-h2h-v2-2026-11-05.md), 15 harder tasks × 3: 44/45 correct (strict) against
+  38/43; core only (C++, typing, investigation) 29/30 against 25/28. Median server calls per run 3 against 6.
+  The tasks lean towards what rampage was built around, and REA ran without Rizin; the core-only view is the
+  fairer one. The report ranks rampage's own gaps (search budgets at scale, raw-image ergonomics, argument
+  handling); `todo.md` tracks what is fixed and open.
+
+This is measured progress against the goal below for one model and one client, not a general parity claim.
 
 Gaps from the list below that are closed or narrowed: 1 (Phase 1 implemented; live sign-off open), 2 (Phase 2.1
 corpus databases; recall target unmet), 3 (Phases 3.1 and 3.2), 4 (sixteen Sleigh families open as Raw Projects
@@ -300,7 +318,8 @@ Order by what the agent-task suite shows as failures; default order:
 **Acceptance:** per-item scorecard rows (e.g. vtable call resolution rate on the C++ corpus, ObjC selector
 resolution rate on Mach-O fixtures).
 
-*Status (2026-11-05): not started.*
+*Status (2026-11-06):* not started as a phase. Mach-O chained-fixup RTTI was added after suite v2 showed
+`class_evidence` returning nothing on a default-linked arm64 Mach-O.
 
 ---
 
@@ -320,7 +339,9 @@ runs incrementally after annotation edits instead of from scratch.
 **Acceptance:** scorecard rows for the large binaries; full-workspace test gate completes within its time
 budget (fix the currently recorded timeout).
 
-*Status (2026-11-05): not started.*
+*Status (2026-11-06):* not started as a phase. Suite v2's 49.2 MB Go binary opened and analysed in 12.9 s (one
+run); exact-text search now runs in linear time with a resume cursor, while reference search and wildcard byte
+patterns still stop on their work budget at that size (`todo.md`).
 
 ---
 

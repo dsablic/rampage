@@ -1,6 +1,6 @@
 # Debug sessions with GDB remote stubs
 
-Rampage's MCP server can connect to a GDB Remote Serial Protocol stub that an operator has already started:
+rampage's MCP server can connect to a GDB Remote Serial Protocol stub that an operator has already started:
 `gdbserver` on Linux or Android, QEMU's `-s`/`-gdb` stub, OpenOCD, probe-rs, Apple's `debugserver` on macOS (see
 [macOS and debugserver](#macos-and-debugserver)), MinGW-w64 `gdbserver.exe` or `lldb-server` on Windows (see
 [Windows](#windows-gdbserver-and-lldb-server)) and similar. An agent can then read
@@ -9,9 +9,9 @@ that every runtime and analysis tool opens, and control its execution: continue,
 set breakpoints and watchpoints. With a project bound to the target, it can also place breakpoints by function name
 or static address, see stops and register values in the project's terms, and step over calls or out of functions.
 
-These are steps 9.1 (inspection), 9.2 (execution control), 9.3 (static correlation), 9.4 (target writes and
-kill), 9.5 (debugserver) and 9.6a (Windows through RSP stubs, [not yet live-verified](#what-is-not-live-verified))
-of the [debugger design](plans/2026-10-29-debugger-control.md). Rampage never launches or attaches to a
+GDB remote stubs are live-verified against QEMU (Cortex-M3). The macOS `debugserver` and Windows paths are
+*experimental*: they are tested against protocol transcripts but [not yet live-verified](#what-is-not-live-verified).
+The design is in the [debugger design](plans/2026-10-29-debugger-control.md). rampage never launches or attaches to a
 process, delivers a signal or enters non-stop mode, and the protocol client keeps every such packet off the wire.
 It writes registers or memory, or kills a target, only when a tool asks for it and the operator started it with
 `--debug-writes` or `--debug-kill`; see [Writes and kill](#writes-and-kill).
@@ -107,7 +107,7 @@ request at a time.
   effort; failures are reported) and sends `D` (detach). A running target is interrupted first and waited for up
   to 3 s (1 s when the connection ends); if it never stops, rampage closes the socket without detaching and the
   session is `lost`. **Detaching lets the target run**: a program under gdbserver continues, and a QEMU guest
-  started frozen with `-S` starts executing. Rampage kills a target only on `debug_disconnect` with `kill: true`
+  started frozen with `-S` starts executing. rampage kills a target only on `debug_disconnect` with `kill: true`
   (see [Kill](#kill)). When the connection ends, every session starts detaching at once and the server waits at
   most 2.5 s in all.
 - If the stub refuses `D` (`E nn`), `debug_disconnect` reports `detached: false` and `closed: false`; the session
@@ -156,7 +156,7 @@ with `stale_epoch` when the session is at another one.
 
 ### Running, stopped and epochs
 
-Rampage drives the stub in all-stop mode: every thread resumes together and stops together.
+rampage drives the stub in all-stop mode: every thread resumes together and stops together.
 
 - `debug_continue` resumes every thread with `vCont;c`, or `c` when the stub's `vCont?` reply does not offer `c`.
   It never delivers a signal: a target stopped by a fault usually faults again at the same pc when continued.
@@ -190,7 +190,7 @@ Rampage drives the stub in all-stop mode: every thread resumes together and stop
   take the caller's `epoch` and fail with `stale_epoch`, which names the current epoch and state, when they differ.
   Reads take it optionally. An agent therefore never steps or sets breakpoints on a picture of the target that is
   out of date.
-- Rampage asks the stub for its stop reply (`?`) only once, when connecting. QEMU takes `?` for a new debugger
+- rampage asks the stub for its stop reply (`?`) only once, when connecting. QEMU takes `?` for a new debugger
   connecting and removes every breakpoint and watchpoint it holds, so asking again would silently drop the
   session's. While stopped, `debug_status` reports the session's own record of the stop and re-reads only the
   threads, which also shows the connection is alive. In all-stop mode a stopped target does not stop again until
@@ -235,7 +235,7 @@ Rampage drives the stub in all-stop mode: every thread resumes together and stop
 - `address` is a runtime address. With a [bound project](#binding-a-project), `static_address` (an address as the
   project tools show it) or `function` (a name) places it instead; see [placing breakpoints](#placing-breakpoints).
 - An empty reply means the stub does not support that kind (`unsupported`); an `E nn` reply means it refused this
-  one (`target_error`). Rampage never emulates a software breakpoint by writing an instruction into memory. On a
+  one (`target_error`). rampage never emulates a software breakpoint by writing an instruction into memory. On a
   stub without `Z0`, try `hardware`.
 - A session holds at most 64 entries. Setting the same kind, address and size twice is refused.
 - Watchpoints take `length`, 1..=4096 bytes; the stub may support fewer.
@@ -333,7 +333,7 @@ sent them. Architecture defaults are never used in place of evidence.
 
 ### Memory
 
-Reads are split into chunks that fit the stub's packet size. Rampage uses binary `x` reads when the stub
+Reads are split into chunks that fit the stub's packet size. rampage uses binary `x` reads when the stub
 advertises `binary-upload+`, and hex `m` reads otherwise.
 
 - A short reply or an error reply is reported on its chunk. Nothing is filled in.
@@ -423,7 +423,7 @@ address minus the file's header address, or minus its first section's address: e
 header bytes) verifies each candidate and keeps the first that matches. A caller's `slide` overrides the computed
 one, and the difference is reported.
 
-**Verification.** Rampage compares windows of up to 32 bytes of the file with target memory at the slide: the entry
+**Verification.** rampage compares windows of up to 32 bytes of the file with target memory at the slide: the entry
 point, the start, middle and end of every executable segment's file bytes (at most 8 segments) and up to 16
 function entries spread over the image. It reports `matched` (at least one window read and none differs; unreadable
 windows are counted in `detail`), `mismatched` (any window differs), `unreadable` (none could be read),
@@ -537,7 +537,7 @@ used, and its `outcome`: `stepped`, `returned`, `stopped_elsewhere` (another sto
 `cancelled`. The request stops at the first step that is not `stepped` or `returned`. The last 32 steps are listed
 (`steps_omitted` counts the rest), no step starts after 60 s, and the final stop comes with its locations.
 
-Arrival at the return address is checked against the frame and thread. Rampage records the thread and the stack
+Arrival at the return address is checked against the frame and thread. rampage records the thread and the stack
 pointer when it places the temporary breakpoint, and at the hit requires the same thread and a stack pointer at least
 the call's (over) or the entry's (out; above it by the popped return address on x86). A recursive inner frame
 reaching the same address has a lower stack pointer and is reported as `inner_frame`; another thread as
@@ -559,7 +559,7 @@ a tool call and its outcome rather than a data store.
 
 ## Writes and kill
 
-Step 9.4. Everything here needs the operator's flag (see [Consent](#consent)), and nothing here happens unless a
+Everything here needs the operator's flag (see [Consent](#consent)), and nothing here happens unless a
 tool is called for it. Writes and kill are destructive and not idempotent; their MCP annotations say so.
 
 ### Memory
@@ -641,7 +641,7 @@ QEMU in system mode exits the emulator when killed through its stub (it answers 
 
 ## macOS and debugserver
 
-Step 9.5. Apple's `debugserver` speaks the GDB remote protocol with LLDB's extensions. Rampage still launches and
+*Experimental: not yet live-verified.* Apple's `debugserver` speaks the GDB remote protocol with LLDB's extensions. rampage still launches and
 attaches nothing: the operator starts debugserver on a program or a pid (see [Setup](#setup)) and lists its endpoint.
 
 ### Prerequisites
@@ -681,7 +681,7 @@ no-ack mode it ends every packet with the checksum `#00`, which rampage's framer
 
 ### Reading debugserver's registers
 
-Rampage never sends debugserver `g` or `G`. debugserver since LLVM 21 has neither; older ones send their raw
+rampage never sends debugserver `g` or `G`. debugserver since LLVM 21 has neither; older ones send their raw
 register context, which has padding (4 bytes after `cpsr` on arm64) that the register offsets they state leave
 out, so a `g` reply would be read 4 bytes off from the vector registers on. Registers are read with `p`, and the
 stop reply's expedited registers (debugserver sends the general registers with every stop) stand in for the stopped
@@ -690,7 +690,7 @@ twice at one stop costs one round of `p`. `debug_write_register` uses `P` only; 
 not written with `G`.
 
 debugserver's `target.xml` (and `qRegisterInfo`) states each register's `offset`, with no gaps, and declares views
-of other registers (`w0` of `x0`, `s0` of `v0`) with `value_regnums` (`container-regs`). Rampage leaves views out
+of other registers (`w0` of `x0`, `s0` of `v0`) with `value_regnums` (`container-regs`). rampage leaves views out
 (read their container). A register wider than 4096 bits (an SME `ZA` array) is left out without moving the others.
 Registers keep debugserver's names, so arm64 x29 and x30 are `fp` and `lr`; the alternative name (`alt_name`) and
 the role (`generic`: `pc`, `sp`, `fp`, `ra`, `flags`) are in the layout, and step out and `debug_evidence` look for
@@ -741,7 +741,7 @@ nothing is stripped, since the width is unknown. `debug_connect` reports the mas
 
 debugserver reports stops as Mach exceptions: `metype` (the exception type), `mecount` and `medata` (its code
 words), all hex, with the signal debugserver maps it to (`T91` for `EXC_BAD_ACCESS`, `T05` for `EXC_BREAKPOINT`).
-Rampage types them in the stop reply's reasons and in the stop event's `exception`:
+rampage types them in the stop reply's reasons and in the stop event's `exception`:
 
 | Type | `name` | Typed fields |
 |---|---|---|
@@ -774,7 +774,7 @@ fault a `signal`.
 debugserver supports `vCont` (`vCont;c;C;s;S`), so continues and steps use `vCont;c` and `vCont;s:<thread>`.
 
 - Software breakpoints on arm64 must take kind 4: debugserver writes as many bytes of its `brk #0` as the kind says,
-  so another kind would plant a broken instruction. Rampage's AArch64 default and only accepted size is 4.
+  so another kind would plant a broken instruction. rampage's AArch64 default and only accepted size is 4.
 - debugserver's hardware breakpoints take kind 2 or 4.
 - Watchpoints: debugserver widens what it is asked to watch to what the hardware can (DNBArchImplARM64): a range of
   up to 8 bytes within one aligned doubleword, else a power-of-two-sized aligned range as a mask, or the request
@@ -785,9 +785,10 @@ debugserver supports `vCont` (`vCont;c;C;s;S`), so continues and steps use `vCon
 
 ## Windows (gdbserver and lldb-server)
 
-Step 9.6a, the RSP-stub route of the [Windows design](plans/2026-11-05-debugger-windows.md). Two stubs serve
+*Experimental: not yet live-verified.* This is the RSP-stub route of the
+[Windows design](plans/2026-11-05-debugger-windows.md). Two stubs serve
 Windows user-mode processes over the same protocol: GDB's `gdbserver` built for Windows (MinGW-w64, as MSYS2 and
-other MinGW distributions build it) and LLVM's `lldb-server`. Rampage still launches and attaches nothing: the
+other MinGW distributions build it) and LLVM's `lldb-server`. rampage still launches and attaches nothing: the
 operator starts the stub on the Windows host and lists its endpoint. Everything below follows the stubs' sources
 (GDB's `gdbserver/win32-low.cc`, `gdbserver/win32-i386-low.cc`, `gdbserver/server.cc`, `gdb/nat/windows-nat.c`;
 LLVM's `NativeProcessWindows.cpp`, `NativeThreadWindows.cpp`, `GDBRemoteCommunicationServerLLGS.cpp`), read at
@@ -924,7 +925,7 @@ stop event's `exception` (and the stop reply's reasons) with `"system": "windows
 | any other, at its second chance | 143 (GDB's unknown signal); at its first chance it is passed to the program without a stop |
 
 It reports the exception itself only as `qXfer:siginfo:read`: the thread's `EXCEPTION_RECORD` (152 bytes, or the
-80-byte `EXCEPTION_RECORD32` of a 32-bit process; `windows_thread_info::xfer_siginfo`). Rampage reads it after every
+80-byte `EXCEPTION_RECORD32` of a 32-bit process; `windows_thread_info::xfer_siginfo`). rampage reads it after every
 stop with a signal, except the SIGTRAP of a single step, selecting the stopped thread first; a refusal leaves the
 stop without an `exception`.
 
@@ -946,7 +947,7 @@ Classification:
   the pc past it (`debug_write_register`, with `--debug-writes`) is the way out.
 - **Steps.** A single step (`EXCEPTION_SINGLE_STEP`; lldb-server's `reason:trace`) is a `step`. A hardware
   breakpoint hit is also `EXCEPTION_SINGLE_STEP` and matches its table entry by pc after a continue.
-- **Faults** are `signal` stops carrying the exception. Rampage resumes without a signal, so gdbserver continues the
+- **Faults** are `signal` stops carrying the exception. rampage resumes without a signal, so gdbserver continues the
   exception as handled: a faulting instruction runs again and faults again, and the program's own exception handlers
   do not see it.
 - **DLL loads.** After startup gdbserver stops for each DLL load or unload with signal 0 and `library`
@@ -958,7 +959,7 @@ Classification:
 ### Execution on Windows
 
 - **`vCont`.** gdbserver answers `vCont?` with `vCont;c;C;t;s;S` (`server.cc`; single steps through the trap flag),
-  lldb-server with `vCont;c;C;s;S;t`. Rampage uses `vCont;c` and `vCont;s:<thread>`.
+  lldb-server with `vCont;c;C;s;S;t`. rampage uses `vCont;c` and `vCont;s:<thread>`.
 - **Breakpoints.** Software breakpoints are kind 1 (`int3`) on x86 and x86-64. gdbserver inserts `Z0` by writing the
   int3 itself, `Z1` hardware breakpoints and `Z2` (write) and `Z4` (access) watchpoints in the debug registers
   (`win32-i386-low.cc`, `i386_supports_z_point_type`); it has no read watchpoints, so `Z3` is answered as
@@ -983,7 +984,7 @@ Classification:
     interrupt may never arrive: `debug_interrupt` waits 3 s and the target keeps running. For GUI programs, start
     gdbserver with `--attach` (the Ctrl-Break to a process that is not a group leader fails, and the fallback runs)
     or use lldb-server.
-  - Rampage reports such a stop as `interrupted` when it arrives after its interrupt in a thread it had not listed:
+  - rampage reports such a stop as `interrupted` when it arrives after its interrupt in a thread it had not listed:
     SIGINT, lldb-server's SIGSTOP, or an unmatched SIGTRAP. The event's `thread` is that new thread, and `warnings`
     say so.
   - Until the target runs again, reads and steps without `thread` (`debug_registers`, `debug_read_memory`,
@@ -994,11 +995,11 @@ Classification:
     `win32_process_target::resume`), so rampage parks that thread: continues send `vCont;c:<thread>;...` naming
     every other listed thread, and the break-in thread stays suspended. It exists only to trap, so the program does
     not miss it. Steps name their own thread as always. A disconnect detaches with it still suspended; the system
-    then resumes it, and `DbgUiRemoteBreakin`'s exception handler absorbs the int3. Rampage sends that per-thread
+    then resumes it, and `DbgUiRemoteBreakin`'s exception handler absorbs the int3. rampage sends that per-thread
     form only to gdbserver on Windows; the client refuses it on any other session. If the other threads cannot be
     named in one packet, or there are none, the continue is refused and says so; writing the break-in thread's pc
     past the int3 (`--debug-writes`) or disconnecting are then the ways out.
-- **`?`.** Rampage sends `?` only while connecting. gdbserver answers with the last event and makes its thread the
+- **`?`.** rampage sends `?` only while connecting. gdbserver answers with the last event and makes its thread the
   current one, with no other effect (`server.cc`, `handle_status`); a launched process reports its loader breakpoint
   (SIGTRAP, pc after it, not moved back: `maybe_adjust_pc` waits for the initial stop to pass).
 
@@ -1006,7 +1007,7 @@ Classification:
 
 - **WoW64 under 64-bit gdbserver** is supported: gdbserver describes the process as `i386` (32-bit registers),
   lists the 32-bit DLLs from `SysWOW64`, reports a 32-bit TIB (the 64-bit one plus 0x2000, `child_add_thread`) and an
-  `EXCEPTION_RECORD32`. Rampage binds 32-bit PE images (`PE32`, `HIGHLOW` relocations), finds the executable through
+  `EXCEPTION_RECORD32`. rampage binds 32-bit PE images (`PE32`, `HIGHLOW` relocations), finds the executable through
   the 32-bit PEB (TEB+0x30, PEB+0x8), and steps out by `[esp]`. A 32-bit gdbserver on a 32-bit process looks the
   same. gdbserver skips the 64-bit loader breakpoint of a WoW64 process and reports an int3 in 64-bit code, such as
   `DebugBreakProcess`'s break-in, as SIGINT with the record's code changed to `DBG_CONTROL_C` (`handle_exception`):
@@ -1014,7 +1015,7 @@ Classification:
 - **WoW64 under lldb-server** (`NativeRegisterContextWindows_WoW64.cpp`) should bind the same way but is not
   covered by the fake stub's transcripts.
 - **arm64 Windows.** Both stubs have arm64 code: gdbserver's `win32-aarch64-low.cc` (new in GDB, `brk #0xf000`,
-  `Z1`, `Z2`, `Z4`) and lldb-server's `NativeRegisterContextWindows_arm64.cpp`. Rampage's AArch64 support applies
+  `Z1`, `Z2`, `Z4`) and lldb-server's `NativeRegisterContextWindows_arm64.cpp`. rampage's AArch64 support applies
   (kind 4 breakpoints; the byte order only when lldb-server states `endian:little`), but nothing arm64-Windows-specific
   was built or tested.
 
@@ -1028,7 +1029,7 @@ preferred one).
 
 ### What is not live-verified
 
-No Windows host was available for 9.6a. The fake stub's transcripts (`rampage_debug::fake::windows`) were built from
+No Windows host was available when this path was built. The fake stub's transcripts (`rampage_debug::fake::windows`) were built from
 the sources named above, not recorded, and these were taken from the sources without being observed:
 
 - gdbserver's `<osabi>Windows</osabi>` and the `i386:x86-64` description; lldb-server's triple and `ostype`;
@@ -1075,7 +1076,7 @@ The [live acceptance](plans/2026-10-29-debugger-control.md#windows-stubs) checks
 | `qMemoryRegionInfo` queries per module listing | 512 |
 | Windows modules whose PE headers are read | 64 |
 
-## What 9.1 to 9.6a do not do
+## What the debug tools do not do
 
 - No launch or attach. Register and memory writes and kill only with the operator's flags and a tool call.
 - No signal delivery on resume: never `C`, `S` or `vCont;C`/`vCont;S`. A pending signal is discarded.
@@ -1085,7 +1086,7 @@ The [live acceptance](plans/2026-10-29-debugger-control.md#windows-stubs) checks
 - No source-level stepping and no frame unwinding: step out works only from a function's first instruction.
 - No relocation of runtime bytes to file bytes beyond the slide, and no binding of snapshots.
 - No Windows debugging through DbgEng, no kernel targets and no minidumps; Windows user-mode processes only through
-  an RSP stub (9.6a), not yet live-verified. LLDB's extensions are used only to add information (see
+  an RSP stub, not yet live-verified. LLDB's extensions are used only to add information (see
   [macOS and debugserver](#macos-and-debugserver)); nothing requires them.
 - No expression evaluation and no monitor commands (`qRcmd`).
 - Runtime bytes stay local. They are never published anywhere except the snapshot file you name.

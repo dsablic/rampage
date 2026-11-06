@@ -1,12 +1,16 @@
 # To do
 
-## Status (2026-11-05)
+## Status (2026-11-06)
 
 - Parity roadmap: Phases 0–3 and 4.1 implemented; live Phase 1 sign-off, the Phase 2 recall target and the
   Phase 3.3 live improvement gate are open. Phase 4.2 is next in roadmap order.
 - Debugger (Phase 9): 9.1–9.4 done; 9.5 (macOS `debugserver`) and 9.6a (Windows through RSP stubs) implemented,
   live acceptance pending. See `docs/plans/2026-10-29-debugger-control.md`.
 - REA gap-closing wave 1 (2026-10-29): `formats` tools and the findings ledger done; log compaction open.
+- Head-to-head with REA: suite v1 and suite v2 published (`docs/benchmarks/`); follow-ups below. Suite v3
+  (tasks where Ghidra is strong) and a second model or client are not run yet.
+- Flywheel fast loop: M1 and M2 done (`docs/plans/2026-11-05-flywheel-fast-loop.md`); for libid the deterministic
+  arm captures the recognisable gain, and the next family is compiler/tool identification.
 
 This file holds open items. Done sections, including every completed parity phase, are archived verbatim in
 [docs/plans/todo-archive.md](docs/plans/todo-archive.md); each section below that lost done items links to them.
