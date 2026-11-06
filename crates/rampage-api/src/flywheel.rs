@@ -25,7 +25,7 @@ use std::sync::OnceLock;
 
 pub use candidate::{Candidate, MAX_PATTERN_BYTES, MAX_ROWS, Row, RowSource, format_pattern, parse_pattern};
 pub use corpus::{Corpus, CorpusBinary, CorpusManifest, Split, SplitConfig};
-pub use engine::{Counts, Engine, Layer, Loaded, Outcome, SliceMetrics, TruthFunction};
+pub use engine::{Counts, Engine, Gains, Layer, Loaded, Outcome, Overlap, SliceMetrics, TruthFunction};
 pub use evaluation::{ChangedCase, GateCheck, GateConfig, GateResult, SliceDelta, SplitEvaluation, evaluate_split};
 pub use failures::{FailureGroup, FailureSet};
 pub use improve::{FAMILY, Improve, ImproveOptions, ImproveTool, improve_tools};
@@ -196,6 +196,32 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), FlywheelErro
     ));
     std::fs::write(&temporary, bytes).map_err(|error| FlywheelError::io(&temporary, error))?;
     std::fs::rename(&temporary, path).map_err(|error| FlywheelError::io(path, error))
+}
+
+/// An exclusive advisory lock on a file, held across processes until dropped.
+pub(crate) struct FileLock(std::fs::File);
+
+impl FileLock {
+    /// Waits for the exclusive lock on `path`, creating the file (and its directory) when missing.
+    pub(crate) fn acquire(path: &Path) -> Result<FileLock, FlywheelError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| FlywheelError::io(parent, error))?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .map_err(|error| FlywheelError::io(path, error))?;
+        file.lock().map_err(|error| FlywheelError::io(path, error))?;
+        Ok(FileLock(file))
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
 }
 
 /// Milliseconds since the Unix epoch.

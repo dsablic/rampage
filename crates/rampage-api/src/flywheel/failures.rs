@@ -22,7 +22,8 @@ pub struct FailureGroup {
     pub case: String,
     pub arch: String,
     pub length: usize,
-    /// Whether a row can hold the body: at most `MAX_PATTERN_BYTES` long.
+    /// Whether a row can hold the body: at least the gate's minimum pattern length and at most
+    /// `MAX_PATTERN_BYTES`.
     pub proposable: bool,
     /// How often each outcome occurred across the group's binaries.
     pub missed: usize,
@@ -79,8 +80,9 @@ struct Building {
 }
 
 impl FailureSet {
-    /// The training split's failures under `layers` (the current promoted state over the bundled databases).
-    pub fn compute(engine: &Engine, layers: &[Layer]) -> Result<FailureSet, FlywheelError> {
+    /// The training split's failures under `layers` (the current promoted state over the bundled databases), for
+    /// the target libraries' functions and false names: runtime functions are not gated, so they are not listed.
+    pub fn compute(engine: &Engine, layers: &[Layer], min_bytes: usize) -> Result<FailureSet, FlywheelError> {
         let indices = engine.corpus.indices(Split::Train);
         let proposals = engine.propose(&indices, layers)?;
         let mut groups: BTreeMap<(String, String), Building> = BTreeMap::new();
@@ -92,7 +94,9 @@ impl FailureSet {
             let names = proposals.names.get(&index).unwrap_or(&empty);
             let target = loaded.binary.target();
             for (address, outcome) in loaded.outcomes(names) {
-                if outcome == Outcome::Correct {
+                if outcome == Outcome::Correct
+                    || loaded.truth.get(&address).is_some_and(|truth| truth.origin == super::engine::RUNTIME)
+                {
                     continue;
                 }
                 if !loaded.discovered(address) {
@@ -142,7 +146,7 @@ impl FailureSet {
                     case: format!("f{}", &sha256_text(&format!("{}\0{pattern}", group.arch))[..15]),
                     arch: group.arch,
                     length: group.pattern.len(),
-                    proposable: group.pattern.len() <= crate::flywheel::MAX_PATTERN_BYTES,
+                    proposable: (min_bytes..=crate::flywheel::MAX_PATTERN_BYTES).contains(&group.pattern.len()),
                     missed: count(Outcome::Missed),
                     wrong: count(Outcome::Wrong),
                     spurious: count(Outcome::Spurious),

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::FlywheelError;
 use super::corpus::Split;
-use super::engine::{Counts, Engine, Layer, Outcome, SliceMetrics, round, slice_counts};
+use super::engine::{Counts, Engine, Layer, Outcome, SliceMetrics, gated_slice, round, slice_counts};
 
 /// One slice's change from the reference to the candidate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -93,10 +93,11 @@ impl SplitEvaluation {
             .collect()
     }
 
-    /// Each slice's F1 change, unrounded, for the gate.
+    /// Each gated slice's F1 change, unrounded, for the gate.
     fn f1_changes(&self) -> BTreeMap<&str, f64> {
         self.candidate
             .iter()
+            .filter(|(slice, _)| gated_slice(slice))
             .map(|(slice, after)| {
                 let before = self.reference.get(slice).copied().unwrap_or_default();
                 (slice.as_str(), after.f1() - before.f1())
@@ -104,7 +105,8 @@ impl SplitEvaluation {
             .collect()
     }
 
-    fn overall(&self) -> (Counts, Counts) {
+    /// The gated scope's counts before and after: target-library functions, plus every false name.
+    pub fn overall(&self) -> (Counts, Counts) {
         (self.reference.get("all").copied().unwrap_or_default(), self.candidate.get("all").copied().unwrap_or_default())
     }
 }
@@ -184,21 +186,28 @@ fn effect(was: Option<Outcome>, now: Option<Outcome>) -> &'static str {
     }
 }
 
-/// The promotion gate. Every rule is checked on its split's counts, unrounded; the defaults are conservative:
-/// a held-out F1 gain of at least 0.001 overall, no slice losing any F1, and not one false positive more.
+/// The promotion gate. Every rule is checked on its split's gated counts (target-library functions, plus every
+/// false name), unrounded. The defaults are conservative: a held-out F1 gain of at least 0.001, not one false
+/// positive more on the held-out split, the full training split or the negatives, no gated slice losing any F1,
+/// and rows of at least 32 bytes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct GateConfig {
     /// The held-out split's overall F1 must rise by at least this much (and by more than nothing).
     pub min_f1_gain: f64,
-    /// No slice, on either split, may lose more F1 than this.
+    /// No gated slice, on any split, may lose more F1 than this.
     pub max_slice_f1_drop: f64,
     /// The held-out split's false positives (wrong and spurious names) may rise by at most this many.
     pub max_fp_increase: u64,
-    /// The fast slice's false positives may rise by at most this many.
-    pub max_fast_fp_increase: u64,
-    /// Held-out evaluations one server may run (cached results excepted), bounding how much a proposer can
-    /// learn about the held-out split from its metrics.
+    /// The full training split's false positives may rise by at most this many.
+    pub max_train_fp_increase: u64,
+    /// Names the candidate may add on the negative binaries, where every target name is false.
+    pub max_negative_matches: u64,
+    /// The shortest pattern a row may have, in bytes: short bodies (accessors, thunks) collide across code that
+    /// merely looks alike.
+    pub min_pattern_bytes: usize,
+    /// Held-out evaluations per corpus (across every server and run, cached results excepted), bounding how much
+    /// a proposer can learn about the held-out split from its metrics.
     pub max_heldout_evaluations: usize,
 }
 
@@ -208,8 +217,10 @@ impl Default for GateConfig {
             min_f1_gain: 0.001,
             max_slice_f1_drop: 0.0,
             max_fp_increase: 0,
-            max_fast_fp_increase: 0,
-            max_heldout_evaluations: 12,
+            max_train_fp_increase: 0,
+            max_negative_matches: 0,
+            min_pattern_bytes: 32,
+            max_heldout_evaluations: 20,
         }
     }
 }
@@ -231,24 +242,52 @@ impl GateConfig {
         serde_json::to_string(self).unwrap_or_default()
     }
 
-    /// The fast gate: rejects a candidate that adds false positives or costs any slice F1 on the fast slice.
-    pub fn fast(&self, evaluation: &SplitEvaluation) -> GateResult {
-        let (before, after) = evaluation.overall();
-        let fp_rise = after.fp() as i64 - before.fp() as i64;
-        let mut checks = vec![GateCheck::new(
-            "fast_fp_increase",
-            fp_rise <= self.max_fast_fp_increase as i64,
-            format!("false positives {fp_rise:+} on the fast slice (at most +{})", self.max_fast_fp_increase),
-        )];
-        checks.push(self.slice_check("fast_slice_regression", evaluation));
-        GateResult::new("fast", checks, self.failing_slices(evaluation))
+    /// The fast gate, on training data and negatives only: no new false positives on the full training split,
+    /// no new name on the negatives, and no gated slice losing F1 on the fast slice or the training split.
+    pub fn fast(&self, fast: &SplitEvaluation, train: &SplitEvaluation, negative: &SplitEvaluation) -> GateResult {
+        let rise = |evaluation: &SplitEvaluation| {
+            let (before, after) = evaluation.overall();
+            after.fp() as i64 - before.fp() as i64
+        };
+        let (train_rise, negative_rise) = (rise(train), rise(negative));
+        let mut failing = self.failing_slices(fast);
+        failing.extend(self.failing_slices(train).into_iter().map(|slice| format!("train {slice}")));
+        let checks = vec![
+            GateCheck::new(
+                "train_fp_increase",
+                train_rise <= self.max_train_fp_increase as i64,
+                format!(
+                    "false positives {train_rise:+} on the training split (at most +{})",
+                    self.max_train_fp_increase
+                ),
+            ),
+            GateCheck::new(
+                "negative_matches",
+                negative_rise <= self.max_negative_matches as i64,
+                format!(
+                    "{negative_rise:+} names on the negative binaries, where every target name is false (at most +{})",
+                    self.max_negative_matches
+                ),
+            ),
+            GateCheck::new(
+                "train_slice_regression",
+                failing.is_empty(),
+                if failing.is_empty() {
+                    format!("no gated training slice loses more than {} F1", self.max_slice_f1_drop)
+                } else {
+                    format!("{} gated training slices lose more than {} F1", failing.len(), self.max_slice_f1_drop)
+                },
+            ),
+        ];
+        GateResult::new("fast", checks, failing)
     }
 
-    /// The held-out gate: the overall F1 gain, no slice regression, and the false-positive bound.
+    /// The held-out gate: the overall F1 gain, no new false positive, and no gated slice regression.
     pub fn heldout(&self, evaluation: &SplitEvaluation) -> GateResult {
         let (before, after) = evaluation.overall();
         let gain = after.f1() - before.f1();
         let fp_rise = after.fp() as i64 - before.fp() as i64;
+        let failing = self.failing_slices(evaluation);
         let checks = vec![
             GateCheck::new(
                 "heldout_f1_gain",
@@ -260,9 +299,14 @@ impl GateConfig {
                 fp_rise <= self.max_fp_increase as i64,
                 format!("false positives {fp_rise:+} (at most +{})", self.max_fp_increase),
             ),
-            self.slice_check("heldout_slice_regression", evaluation),
+            // Which slices regress would tell a proposer where held-out code lies: the verdict alone is given.
+            GateCheck::new(
+                "heldout_slice_regression",
+                failing.is_empty(),
+                format!("no gated slice may lose more than {} F1", self.max_slice_f1_drop),
+            ),
         ];
-        GateResult::new("heldout", checks, self.failing_slices(evaluation))
+        GateResult::new("heldout", checks, failing)
     }
 
     fn failing_slices(&self, evaluation: &SplitEvaluation) -> Vec<String> {
@@ -272,16 +316,6 @@ impl GateConfig {
             .filter(|(_, change)| *change + 1e-12 < -self.max_slice_f1_drop)
             .map(|(slice, _)| slice.to_owned())
             .collect()
-    }
-
-    fn slice_check(&self, rule: &'static str, evaluation: &SplitEvaluation) -> GateCheck {
-        let failing = self.failing_slices(evaluation);
-        let detail = if failing.is_empty() {
-            format!("no slice loses more than {} F1", self.max_slice_f1_drop)
-        } else {
-            format!("{} slices lose more than {} F1", failing.len(), self.max_slice_f1_drop)
-        };
-        GateCheck::new(rule, failing.is_empty(), detail)
     }
 }
 
@@ -378,12 +412,29 @@ mod tests {
     }
 
     #[test]
-    fn the_fast_gate_rejects_new_false_positives_but_passes_no_change() {
+    fn the_fast_gate_rejects_new_false_positives_on_training_and_any_name_on_negatives() {
         let gate = GateConfig::default();
         let base = counts(100, 0, 50, 0);
-        assert!(gate.fast(&evaluation(base, base, base, base)).passed);
+        let same = evaluation(base, base, base, base);
+        assert!(gate.fast(&same, &same, &same).passed);
         let spurious = counts(100, 0, 50, 1);
-        assert!(!gate.fast(&evaluation(base, spurious, base, spurious)).passed);
+        let noisy = evaluation(base, spurious, base, spurious);
+        let result = gate.fast(&same, &noisy, &same);
+        assert!(!result.checks.iter().find(|check| check.rule == "train_fp_increase").unwrap().passed);
+        let result = gate.fast(&same, &same, &noisy);
+        assert!(!result.passed);
+        assert!(!result.checks.iter().find(|check| check.rule == "negative_matches").unwrap().passed);
+    }
+
+    #[test]
+    fn origin_slices_are_reported_but_never_gated() {
+        let gate = GateConfig { min_f1_gain: 0.0, ..GateConfig::default() };
+        let base = counts(500, 0, 500, 0);
+        let better = counts(510, 0, 490, 0);
+        let mut evaluation = evaluation(base, better, base, better);
+        evaluation.reference.insert("origin:runtime".to_owned(), counts(100, 0, 0, 0));
+        evaluation.candidate.insert("origin:runtime".to_owned(), counts(90, 0, 10, 0));
+        assert!(gate.heldout(&evaluation).passed, "a runtime slice losing F1 is not a gated regression");
     }
 
     #[test]

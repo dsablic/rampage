@@ -16,6 +16,9 @@ use super::corpus::{Corpus, CorpusBinary};
 use super::{FlywheelError, Paths, hex, write_atomic};
 use crate::{Packs, Project};
 
+/// The origin of truth functions no target library object defines: libc and the compiler runtime.
+pub const RUNTIME: &str = "runtime";
+
 /// Bumped when the cached truth or baseline format or meaning changes, so old entries are not reused.
 const CACHE_FORMAT: &str = "flywheel-cache-v1";
 
@@ -437,7 +440,7 @@ fn derive_truth(
         }
         let origin = match &library {
             Some(library) if aliases.iter().any(|alias| library.contains(*alias)) => entry.library.clone(),
-            _ => "runtime".to_owned(),
+            _ => RUNTIME.to_owned(),
         };
         truth.insert(address, TruthFunction { name: symbol.name.clone(), origin });
     }
@@ -527,15 +530,167 @@ pub fn round(value: f64) -> f64 {
 }
 
 /// Each slice's counts over a set of binaries.
+///
+/// The gated slices (`all`, `arch:`, `compiler:`, `opt:`, `program_library:`, `cell:`) score the target
+/// libraries' own functions: runtime functions (libc, compiler runtime) are the same build in every program and
+/// would reward recognising it again. A wrong name on a runtime function still counts there as a false positive,
+/// and so does every name where the truth has no function. `origin:<library>`, `origin:runtime` and `origin:none`
+/// (names where the truth has no function) report every outcome by where the function comes from; they are
+/// never gated.
 pub fn slice_counts(engine: &Engine, outcomes: &BTreeMap<usize, BTreeMap<u64, Outcome>>) -> BTreeMap<String, Counts> {
     let mut slices: BTreeMap<String, Counts> = BTreeMap::new();
     for (&index, outcomes) in outcomes {
         let keys = engine.binary(index).slices();
-        for outcome in outcomes.values() {
-            for key in &keys {
-                slices.entry(key.clone()).or_default().add(*outcome);
+        let loaded = engine.get(index).ok();
+        for (address, outcome) in outcomes {
+            let origin = loaded.as_ref().and_then(|loaded| loaded.truth.get(address)).map(|truth| truth.origin.clone());
+            let origin_key = format!("origin:{}", origin.as_deref().unwrap_or("none"));
+            slices.entry(origin_key).or_default().add(*outcome);
+            let gated = match origin.as_deref() {
+                Some(RUNTIME) if *outcome == Outcome::Wrong => Some(Outcome::Spurious),
+                Some(RUNTIME) => None,
+                _ => Some(*outcome),
+            };
+            if let Some(gated) = gated {
+                for key in &keys {
+                    slices.entry(key.clone()).or_default().add(gated);
+                }
             }
         }
     }
     slices
 }
+
+/// Whether a slice is gated: the `origin:` slices only report.
+pub fn gated_slice(slice: &str) -> bool {
+    !slice.starts_with("origin:")
+}
+
+/// How many held-out library bodies (masked, as a signature would see them) also occur in training.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Overlap {
+    /// Held-out functions of the target libraries whose bodies pass the confidence gate.
+    pub heldout_bodies: usize,
+    /// Of those, the ones whose masked body some training library function also has.
+    pub in_training: usize,
+    pub fraction: f64,
+    /// The corpus's `split.max_heldout_overlap`: above it, servers warn.
+    pub limit: f64,
+    /// The corpus's `split.refuse_heldout_overlap`: above it, servers refuse the corpus.
+    pub refused_above: f64,
+}
+
+impl Overlap {
+    /// The loud warning a share above the limit deserves, if it is above.
+    pub fn warning(&self) -> Option<String> {
+        (self.fraction > self.limit).then(|| {
+            format!(
+                "WARNING: {} of {} held-out library bodies ({:.1}%) also occur in training (limit {:.0}%): most \
+                 held-out gains can only be recognition of code unchanged between versions, not generalisation",
+                self.in_training,
+                self.heldout_bodies,
+                self.fraction * 100.0,
+                self.limit * 100.0
+            )
+        })
+    }
+}
+
+impl Engine {
+    /// The held-out split's library bodies that training already holds: a high share means the split measures
+    /// recognition of the same code, not generalisation.
+    pub fn heldout_overlap(&self) -> Result<Overlap, FlywheelError> {
+        let bodies = |split: super::corpus::Split| -> Result<Vec<(String, String)>, FlywheelError> {
+            let indices = self.corpus.indices(split);
+            let lists = self.parallel(&indices, |index| {
+                let loaded = self.get(index)?;
+                let target = loaded.binary.target();
+                let mut keys = Vec::new();
+                for (address, truth) in &loaded.truth {
+                    if truth.origin == RUNTIME {
+                        continue;
+                    }
+                    let Some(body) = loaded.body(*address) else { continue };
+                    if let Some(masked) = rampage_signatures::masked_body_in(&target, &loaded.image, body, *address) {
+                        keys.push((self.binary(index).arch.clone(), super::candidate::format_pattern(&masked)));
+                    }
+                }
+                Ok(keys)
+            })?;
+            Ok(lists.into_iter().flatten().collect())
+        };
+        let training: BTreeSet<(String, String)> = bodies(super::corpus::Split::Train)?.into_iter().collect();
+        let heldout = bodies(super::corpus::Split::Heldout)?;
+        let in_training = heldout.iter().filter(|key| training.contains(*key)).count();
+        Ok(Overlap {
+            heldout_bodies: heldout.len(),
+            in_training,
+            fraction: if heldout.is_empty() { 0.0 } else { in_training as f64 / heldout.len() as f64 },
+            limit: self.corpus.manifest.split.max_heldout_overlap,
+            refused_above: self.corpus.manifest.split.refuse_heldout_overlap,
+        })
+    }
+
+    /// The training split's masked library bodies, by architecture and pattern.
+    fn training_bodies(&self) -> Result<BTreeSet<(String, String)>, FlywheelError> {
+        let indices = self.corpus.indices(super::corpus::Split::Train);
+        let lists = self.parallel(&indices, |index| {
+            let loaded = self.get(index)?;
+            let target = loaded.binary.target();
+            let mut keys = Vec::new();
+            for (address, truth) in &loaded.truth {
+                if truth.origin == RUNTIME {
+                    continue;
+                }
+                let Some(body) = loaded.body(*address) else { continue };
+                if let Some(masked) = rampage_signatures::masked_body_in(&target, &loaded.image, body, *address) {
+                    keys.push((self.binary(index).arch.clone(), super::candidate::format_pattern(&masked)));
+                }
+            }
+            Ok(keys)
+        })?;
+        Ok(lists.into_iter().flatten().collect())
+    }
+
+    /// The held-out library functions `layers` newly name correctly (against the bundled baseline), split into
+    /// those whose masked body training also holds (recognition of unchanged code) and the novel ones
+    /// (generalisation). For the operator's reports only: it reads held-out truth.
+    pub fn heldout_gains(&self, layers: &[Layer]) -> Result<Gains, FlywheelError> {
+        let training = self.training_bodies()?;
+        let indices = self.corpus.indices(super::corpus::Split::Heldout);
+        let proposals = self.propose(&indices, layers)?;
+        let mut gains = Gains::default();
+        for &index in &indices {
+            let loaded = self.get(index)?;
+            let target = loaded.binary.target();
+            for (address, name) in &proposals.names[&index] {
+                let Some(truth) = loaded.truth.get(address) else { continue };
+                if truth.origin == RUNTIME || &truth.name != name || loaded.baseline.get(address) == Some(name) {
+                    continue;
+                }
+                let seen = loaded
+                    .body(*address)
+                    .and_then(|body| rampage_signatures::masked_body_in(&target, &loaded.image, body, *address));
+                let key =
+                    seen.map(|masked| (self.binary(index).arch.clone(), super::candidate::format_pattern(&masked)));
+                if key.is_some_and(|key| training.contains(&key)) {
+                    gains.seen_in_training += 1;
+                } else {
+                    gains.novel += 1;
+                    gains.novel_names.insert(name.clone());
+                }
+            }
+        }
+        Ok(gains)
+    }
+}
+
+/// Held-out gains split by whether training already held the body.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Gains {
+    pub seen_in_training: usize,
+    pub novel: usize,
+    pub novel_names: BTreeSet<String>,
+}
+
+impl Engine {}

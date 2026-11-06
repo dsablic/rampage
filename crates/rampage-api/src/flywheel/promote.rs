@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::candidate::{Row, RowSource, layer, rows_hash, write_pack};
 use super::engine::{Layer, SliceMetrics};
 use super::evaluation::{GateConfig, GateResult, SliceDelta};
-use super::{FlywheelError, Paths, read_bounded, sha256_text, write_atomic};
+use super::{FileLock, FlywheelError, Paths, read_bounded, sha256_text, write_atomic};
 
 /// The provenance file beside the promoted pack's manifest.
 pub const ENTRIES_FILE: &str = "entries.json";
@@ -53,7 +53,47 @@ pub struct PromotedSet {
     pub entries: Vec<PromotedEntry>,
 }
 
+/// The lock every writer of a family's promoted pack holds, across processes.
+pub fn lock(paths: &Paths, family: &str) -> Result<FileLock, FlywheelError> {
+    FileLock::acquire(&paths.root().join("promoted").join(format!(".{family}.lock")))
+}
+
+/// The licence the promoted pack's manifest declares, or `NOASSERTION`.
+fn existing_license(paths: &Paths, family: &str) -> String {
+    let manifest = paths.promoted(family).join(crate::packs::MANIFEST_FILE);
+    std::fs::read_to_string(&manifest)
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok())
+        .and_then(|table| table.get("license").and_then(|value| value.as_str()).map(str::to_owned))
+        .unwrap_or_else(|| "NOASSERTION".to_owned())
+}
+
 impl PromotedSet {
+    /// Loads `entries.json` and, holding the lock, regenerates the pack from it when the pack does not carry its
+    /// rows' hash: `entries.json` is written last, so after an interrupted write it is the record to trust.
+    pub fn load_repaired(paths: &Paths, family: &str, license: &str) -> Result<PromotedSet, FlywheelError> {
+        let _lock = lock(paths, family)?;
+        let set = PromotedSet::load(paths, family)?;
+        if !set.entries.is_empty() && !set.pack_matches(paths) {
+            set.save(paths, license)?;
+        }
+        Ok(set)
+    }
+
+    /// Whether the pack's manifest names this set's rows hash in its version and every architecture's database
+    /// is present.
+    fn pack_matches(&self, paths: &Paths) -> bool {
+        let directory = paths.promoted(&self.family);
+        let manifest = directory.join(crate::packs::MANIFEST_FILE);
+        let arches: std::collections::BTreeSet<String> = self.rows().into_iter().map(|row| row.arch).collect();
+        std::fs::read_to_string(manifest).is_ok_and(|text| text.contains(&self.pack_version()))
+            && arches.iter().all(|arch| directory.join("sigs").join(format!("{arch}.json")).is_file())
+    }
+
+    fn pack_version(&self) -> String {
+        format!("0.{}.0+{}", self.entries.len(), &self.hash()[..12])
+    }
+
     pub fn load(paths: &Paths, family: &str) -> Result<PromotedSet, FlywheelError> {
         let path = paths.promoted(family).join(ENTRIES_FILE);
         if !path.is_file() {
@@ -73,7 +113,7 @@ impl PromotedSet {
         rows_hash(&self.rows())
     }
 
-    /// Writes the provenance file and regenerates the pack from it.
+    /// Regenerates the pack, then writes the provenance file last. Callers hold [`lock`].
     pub fn save(&self, paths: &Paths, license: &str) -> Result<(), FlywheelError> {
         let directory = paths.promoted(&self.family);
         let rows = self.rows();
@@ -85,7 +125,7 @@ impl PromotedSet {
         write_pack(
             &directory,
             &format!("flywheel-promoted-{}", self.family),
-            &format!("0.{}.0", self.entries.len()),
+            &self.pack_version(),
             license,
             "rampage flywheel promotions (see entries.json for each entry's corpus, gate result and revert id)",
             &description,
@@ -107,14 +147,12 @@ pub fn revert_id(candidate_hash: &str, corpus_version: &str, baseline_hash: &str
 }
 
 /// Removes the entry `id` from the promoted pack of `family`, regenerating the pack (under its existing licence
-/// declaration), and returns it.
+/// declaration), and returns it. Only the latest promotion can be reverted: every later one was gated against
+/// the state that included it, so removing an earlier one would leave unverified promotions behind. Revert the
+/// later ones first.
 pub fn revert(paths: &Paths, family: &str, id: &str) -> Result<PromotedEntry, FlywheelError> {
-    let manifest = paths.promoted(family).join(crate::packs::MANIFEST_FILE);
-    let license = std::fs::read_to_string(&manifest)
-        .ok()
-        .and_then(|text| text.parse::<toml::Table>().ok())
-        .and_then(|table| table.get("license").and_then(|value| value.as_str()).map(str::to_owned))
-        .unwrap_or_else(|| "NOASSERTION".to_owned());
+    let _lock = lock(paths, family)?;
+    let license = existing_license(paths, family);
     let mut set = PromotedSet::load(paths, family)?;
     let Some(position) = set.entries.iter().position(|entry| entry.revert_id == id) else {
         let known: Vec<&str> = set.entries.iter().map(|entry| entry.revert_id.as_str()).collect();
@@ -123,6 +161,14 @@ pub fn revert(paths: &Paths, family: &str, id: &str) -> Result<PromotedEntry, Fl
             if known.is_empty() { "none".to_owned() } else { known.join(", ") }
         )));
     };
+    if position + 1 != set.entries.len() {
+        let later: Vec<&str> = set.entries[position + 1..].iter().rev().map(|entry| entry.revert_id.as_str()).collect();
+        return Err(FlywheelError::Refused(format!(
+            "{id} is not the latest promotion: later promotions were gated against the state that includes it. \
+             Revert {} first (latest first); nothing was changed",
+            later.join(", ")
+        )));
+    }
     let entry = set.entries.remove(position);
     set.save(paths, &license)?;
     Ok(entry)
@@ -219,6 +265,16 @@ mod tests {
         let loaded = PromotedSet::load(&paths, "libid").unwrap();
         assert_eq!(loaded, set, "entries.json round-trips with every provenance field");
         assert!(crate::Packs::check(&paths.promoted("libid")).error.is_none(), "the promoted pack loads");
+
+        let out_of_order = revert(&paths, "libid", "rv-first").unwrap_err();
+        assert_eq!(out_of_order.kind(), "refused", "{out_of_order}");
+        assert!(out_of_order.message().contains("Revert rv-second first"), "{out_of_order}");
+        assert_eq!(PromotedSet::load(&paths, "libid").unwrap(), set, "a refused revert changes nothing");
+
+        // A pack that lost its rows (an interrupted write) is regenerated from entries.json.
+        std::fs::remove_file(paths.promoted("libid").join("sigs/x86_64.json")).unwrap();
+        PromotedSet::load_repaired(&paths, "libid", "Zlib").unwrap();
+        assert!(paths.promoted("libid").join("sigs/x86_64.json").is_file());
 
         let removed = revert(&paths, "libid", "rv-second").unwrap();
         assert_eq!(removed.candidate_id, "c-deflate");

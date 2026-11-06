@@ -64,8 +64,9 @@ impl Row {
         Ok(line)
     }
 
-    /// Checks the row's fields and that its pattern carries enough fixed content to ever answer.
-    pub fn validate(&self, arches: &BTreeSet<String>) -> Result<(), FlywheelError> {
+    /// Checks the row's fields, that its pattern is at least `min_bytes` long, and that it carries enough fixed
+    /// content to ever answer.
+    pub fn validate(&self, arches: &BTreeSet<String>, min_bytes: usize) -> Result<(), FlywheelError> {
         let invalid = |message: String| Err(FlywheelError::Invalid(message));
         if !arches.contains(&self.arch) {
             let known: Vec<&str> = arches.iter().map(String::as_str).collect();
@@ -93,6 +94,12 @@ impl Row {
         let bytes = parse_pattern(&self.pattern).map_err(FlywheelError::Invalid)?;
         if bytes.len() > MAX_PATTERN_BYTES {
             return invalid(format!("pattern is {} bytes; at most {MAX_PATTERN_BYTES}", bytes.len()));
+        }
+        if bytes.len() < min_bytes {
+            return invalid(format!(
+                "pattern is {} bytes; the gate needs at least {min_bytes}: shorter bodies collide with unrelated code",
+                bytes.len()
+            ));
         }
         let arch: Arch = self.arch.parse().map_err(FlywheelError::Invalid)?;
         let line = self.pat_line()?;
@@ -289,7 +296,7 @@ mod tests {
         let mut pattern: Vec<Option<u8>> = body.iter().map(|&byte| Some(byte)).collect();
         pattern[5..9].fill(None);
         let row = row(&format_pattern(&pattern));
-        row.validate(&arches()).unwrap();
+        row.validate(&arches(), 0).unwrap();
         let databases = databases(std::slice::from_ref(&row)).unwrap();
         let database = &databases["x86_64"];
         let target = rampage_arch::Target {
@@ -314,13 +321,15 @@ mod tests {
     #[test]
     fn rows_are_schema_checked() {
         let good = "554889e5b834120000005dc3";
-        assert!(row(good).validate(&arches()).is_ok());
-        assert!(Row { arch: "mips".to_owned(), ..row(good) }.validate(&arches()).is_err());
-        assert!(Row { name: "two words".to_owned(), ..row(good) }.validate(&arches()).is_err());
-        assert!(Row { name: "?".to_owned(), ..row(good) }.validate(&arches()).is_err());
-        assert!(Row { library: Some("zlib 1".to_owned()), ..row(good) }.validate(&arches()).is_err());
-        assert!(row("55 .. .. .. .. .. .. .. .. .. c3").validate(&arches()).is_err(), "too few fixed bytes");
-        assert!(row(&"90".repeat(MAX_PATTERN_BYTES + 1)).validate(&arches()).is_err());
+        assert!(row(good).validate(&arches(), 0).is_ok());
+        assert!(Row { arch: "mips".to_owned(), ..row(good) }.validate(&arches(), 0).is_err());
+        assert!(Row { name: "two words".to_owned(), ..row(good) }.validate(&arches(), 0).is_err());
+        assert!(Row { name: "?".to_owned(), ..row(good) }.validate(&arches(), 0).is_err());
+        assert!(Row { library: Some("zlib 1".to_owned()), ..row(good) }.validate(&arches(), 0).is_err());
+        assert!(row("55 .. .. .. .. .. .. .. .. .. c3").validate(&arches(), 0).is_err(), "too few fixed bytes");
+        assert!(row(&"90".repeat(MAX_PATTERN_BYTES + 1)).validate(&arches(), 0).is_err());
+        let error = row(good).validate(&arches(), 32).unwrap_err();
+        assert!(error.message().contains("at least 32"), "{error}");
     }
 
     #[test]

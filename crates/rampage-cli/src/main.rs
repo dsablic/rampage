@@ -6,7 +6,7 @@ mod report;
 mod report_plugin;
 
 use std::io::{self, BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -700,12 +700,20 @@ fn flywheel_context(flywheel: args::FlywheelArgs) -> Result<Flywheel, String> {
         }
         None => None,
     };
+    // A corpus server serves the improve group alone, without report_observation.
+    if improve.is_some() {
+        return Ok((improve, None));
+    }
     let directory = flywheel
         .observations
         .clone()
-        .or_else(|| std::env::var_os(OBSERVATIONS_VARIABLE).filter(|value| !value.is_empty()).map(PathBuf::from))
-        .or_else(|| improve.as_ref().map(|improve| improve.paths().observations()));
-    Ok((improve, directory.map(|directory| Arc::new(ObservationStore::new(directory)))))
+        .or_else(|| std::env::var_os(OBSERVATIONS_VARIABLE).filter(|value| !value.is_empty()).map(PathBuf::from));
+    let store = directory.map(|directory| {
+        // A store inside a flywheel directory never reads that directory's corpus or caches.
+        let flywheel = directory.parent().filter(|parent| parent.join("corpus").is_dir()).map(Path::to_path_buf);
+        Arc::new(ObservationStore::new(directory).refusing(flywheel.into_iter().collect()))
+    });
+    Ok((None, store))
 }
 
 fn serve_mcp(

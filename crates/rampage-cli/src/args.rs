@@ -598,9 +598,9 @@ pub(crate) struct McpArgs {
 /// The flywheel's opt-in tools (docs/flywheel.md).
 #[derive(Args)]
 pub(crate) struct FlywheelArgs {
-    /// Serve the improve group over this built flywheel corpus (target/flywheel/corpus/<version>): training
-    /// failures, candidate signature rows, the fast and held-out gates, and promotion. Without it there is no
-    /// improve group. Also serves report_observation, recording into the flywheel's observations/ directory
+    /// Serve only the improve group, over this built flywheel corpus (target/flywheel/corpus/<version>):
+    /// training failures, candidate signature rows, the fast and held-out gates, and promotion. No analysis tool
+    /// is served and no other group can be enabled, so a proposer cannot read the corpus's binaries
     #[arg(long, value_name = "DIR")]
     pub(crate) corpus: Option<PathBuf>,
     /// The flywheel working directory (default: two levels above a corpus in a corpus/ directory)
@@ -617,8 +617,8 @@ pub(crate) struct FlywheelArgs {
     #[arg(long, value_name = "RUN", requires = "corpus")]
     pub(crate) flywheel_run: Option<String>,
     /// Serve report_observation, recording evidence-backed observations into DIR (opt-in;
-    /// RAMPAGE_OBSERVATIONS does the same). With --corpus it defaults to the flywheel's observations/
-    #[arg(long, value_name = "DIR")]
+    /// RAMPAGE_OBSERVATIONS does the same). A DIR inside a flywheel directory refuses that directory's files
+    #[arg(long, value_name = "DIR", conflicts_with = "corpus")]
     pub(crate) observations: Option<PathBuf>,
 }
 

@@ -12,11 +12,11 @@ use serde_json::{Value, json};
 
 use super::candidate::{CANDIDATE_FILE, Candidate, Row, RowSource, format_pattern, layer, parse_pattern, write_pack};
 use super::corpus::{Corpus, Split};
-use super::engine::{Engine, Layer, SliceMetrics, bundled_hash, pattern_matches};
+use super::engine::{Engine, Layer, Overlap, SliceMetrics, bundled_hash, pattern_matches};
 use super::evaluation::{GateConfig, GateResult, SplitEvaluation, evaluate_split};
 use super::failures::{FailureGroup, FailureSet, TRUTH_SOURCE};
 use super::promote::{PromotedEntry, PromotedSet, promoted_layer, revert_id};
-use super::{FlywheelError, Paths, build_id, now_ms, read_bounded, sha256_text, write_atomic};
+use super::{FileLock, FlywheelError, Paths, build_id, now_ms, read_bounded, sha256_text, write_atomic};
 use crate::rows::{FittedPage, item_budget};
 
 /// The heuristic family the loop improves.
@@ -51,22 +51,27 @@ pub struct Improve {
     state: Mutex<State>,
     /// Serializes candidate and promoted-pack writes.
     writes: Mutex<()>,
+    /// The held-out split's overlap with training, checked when the context opened.
+    overlap: Overlap,
 }
 
 #[derive(Default)]
 struct State {
     /// The training failures, keyed by the promoted rows' hash they were computed under.
     failures: Option<(String, Arc<FailureSet>)>,
-    heldout_runs: usize,
 }
 
-/// A candidate's cached gate results, keyed by (candidate hash, corpus version, baseline hash).
+/// A candidate's cached gate results, keyed by (candidate hash, corpus identity, baseline hash).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EvaluationRecord {
     candidate_hash: String,
     corpus_version: String,
+    corpus_identity: String,
     baseline_hash: String,
     fast: StageRecord,
+    /// The fast stage's checks on the full training split and the negatives.
+    train: SplitEvaluation,
+    negative: SplitEvaluation,
     #[serde(default)]
     heldout: Option<StageRecord>,
 }
@@ -75,6 +80,12 @@ struct EvaluationRecord {
 struct StageRecord {
     evaluation: SplitEvaluation,
     gate: GateResult,
+}
+
+/// Held-out evaluations used for one corpus, across every server.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct Budget {
+    used: usize,
 }
 
 impl Improve {
@@ -99,13 +110,65 @@ impl Improve {
                 "run id {run:?} must be plain path segments of A-Z a-z 0-9 - _ ."
             )));
         }
+        let engine = Engine::new(corpus, paths, options.workers);
+        // A held-out split that training already covers would measure recognition, not generalisation.
+        let overlap = engine.heldout_overlap()?;
+        if overlap.fraction > overlap.refused_above {
+            return Err(FlywheelError::Corpus(format!(
+                "{} of {} held-out library bodies ({:.1}%) also occur in training, above {:.0}%: the held-out split \
+                 is essentially the training build again; rebuild the corpus with a stricter hold-out",
+                overlap.in_training,
+                overlap.heldout_bodies,
+                overlap.fraction * 100.0,
+                overlap.refused_above * 100.0
+            )));
+        }
+        if let Some(warning) = overlap.warning() {
+            eprintln!("rampage flywheel: {warning}");
+        }
+        PromotedSet::load_repaired(&engine.paths, FAMILY, &engine.corpus.license())?;
         Ok(Improve {
-            engine: Engine::new(corpus, paths, options.workers),
+            engine,
             gate: options.gate,
             run: options.run,
             state: Mutex::new(State::default()),
             writes: Mutex::new(()),
+            overlap,
         })
+    }
+
+    /// The held-out split's overlap with training, as checked when the context opened.
+    pub fn overlap(&self) -> &Overlap {
+        &self.overlap
+    }
+
+    fn budget_path(&self) -> PathBuf {
+        self.paths().evaluations(FAMILY).join(self.corpus().key()).join("heldout-budget.json")
+    }
+
+    /// Held-out evaluations left for this corpus.
+    pub fn heldout_left(&self) -> usize {
+        let used = std::fs::read_to_string(self.budget_path())
+            .ok()
+            .and_then(|text| serde_json::from_str::<Budget>(&text).ok())
+            .map_or(0, |budget| budget.used);
+        self.gate.max_heldout_evaluations.saturating_sub(used)
+    }
+
+    /// Takes one held-out evaluation from the corpus's persistent budget, or refuses when none is left.
+    fn spend_heldout(&self) -> Result<(), FlywheelError> {
+        let path = self.budget_path();
+        let _lock = FileLock::acquire(&path.with_extension("lock"))?;
+        let mut budget: Budget =
+            std::fs::read_to_string(&path).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+        if budget.used >= self.gate.max_heldout_evaluations {
+            return Err(FlywheelError::Refused(format!(
+                "this corpus's {} held-out evaluations are used up; nothing was run",
+                self.gate.max_heldout_evaluations
+            )));
+        }
+        budget.used += 1;
+        write_atomic(&path, serde_json::to_string(&budget).map_err(FlywheelError::json)?.as_bytes())
     }
 
     pub fn engine(&self) -> &Engine {
@@ -149,7 +212,7 @@ impl Improve {
             return Ok(Arc::clone(failures));
         }
         let current: Vec<Layer> = promoted_layer(promoted)?.into_iter().collect();
-        let failures = Arc::new(FailureSet::compute(&self.engine, &current)?);
+        let failures = Arc::new(FailureSet::compute(&self.engine, &current, self.gate.min_pattern_bytes)?);
         self.lock().failures = Some((key, Arc::clone(&failures)));
         Ok(failures)
     }
@@ -277,8 +340,13 @@ impl Improve {
             "undiscovered": failures.undiscovered,
             "below_gate": failures.below_gate,
             "groups_total": failures.groups.len(),
-            "hint": "Each group is one masked body missed or misnamed across training binaries. Propose a row with \
-                     its `case` and the function's name; avoid groups with several truth_names.",
+            "min_pattern_bytes": self.gate.min_pattern_bytes,
+            "heldout_overlap": self.overlap,
+            "warning": self.overlap.warning(),
+            "hint": "Each group is one masked body of a target library (training versions) missed or misnamed \
+                     across training binaries; runtime functions are not gated and not listed. The held-out split \
+                     is the libraries' newer versions: rows that only recognise the training build gain nothing. \
+                     Propose rows from `case` with the function's name; avoid groups with several truth_names.",
         });
         let budget = item_budget(&header).map_err(|error| FlywheelError::Invalid(error.to_string()))?;
         let page = FittedPage::of(items, input.offset, Some(limit), budget)
@@ -350,7 +418,7 @@ impl Improve {
                 *slot = None;
             }
             let row = Row { arch, name: row.name, library: row.library, pattern: format_pattern(&bytes), source };
-            row.validate(&arches).map_err(|error| at(error.message().to_owned()))?;
+            row.validate(&arches, self.gate.min_pattern_bytes).map_err(|error| at(error.message().to_owned()))?;
             rows.push(row);
         }
         let _guard = self.writes.lock().unwrap_or_else(PoisonError::into_inner);
@@ -440,7 +508,13 @@ impl Improve {
     }
 
     fn record_path(&self, key: &str) -> PathBuf {
-        self.paths().evaluations(FAMILY).join(format!("{key}.json"))
+        self.paths().evaluations(FAMILY).join(self.corpus().key()).join(format!("{key}.json"))
+    }
+
+    /// The key of a candidate's gate results: its rows, the corpus identity (version, split and binary hashes) and
+    /// the baseline.
+    fn record_key(&self, candidate_hash: &str, baseline_hash: &str) -> String {
+        sha256_text(&format!("{candidate_hash}\0{}\0{baseline_hash}", self.corpus().identity()))
     }
 
     fn load_record(&self, key: &str) -> Option<EvaluationRecord> {
@@ -454,7 +528,7 @@ impl Improve {
         let promoted = self.promoted()?;
         let candidate_hash = candidate.hash();
         let baseline_hash = self.baseline_hash(&promoted);
-        let key = sha256_text(&format!("{candidate_hash}\0{}\0{baseline_hash}", self.corpus().version()));
+        let key = self.record_key(&candidate_hash, &baseline_hash);
         let cached = self.load_record(&key);
         if let Some(record) = &cached
             && (!heldout || record.heldout.is_some() || !record.fast.gate.passed)
@@ -466,31 +540,29 @@ impl Improve {
         let mut merged = promoted.rows();
         merged.extend(candidate.rows.iter().cloned());
         let layers: Vec<Layer> = layer("candidate", &merged)?.into_iter().collect();
-        let fast = match cached {
-            Some(record) => record.fast,
+        let mut record = match cached {
+            Some(record) => record,
             None => {
-                let evaluation = evaluate_split(&self.engine, Split::Fast, &layers, &reference)?;
-                StageRecord { gate: self.gate.fast(&evaluation), evaluation }
+                let fast = evaluate_split(&self.engine, Split::Fast, &layers, &reference)?;
+                let mut train = evaluate_split(&self.engine, Split::Train, &layers, &reference)?;
+                let negative = evaluate_split(&self.engine, Split::Negative, &layers, &reference)?;
+                let gate = self.gate.fast(&fast, &train, &negative);
+                // The fast slice's cases are kept; the training split only contributes its counts.
+                train.cases.clear();
+                EvaluationRecord {
+                    candidate_hash,
+                    corpus_version: self.corpus().version().to_owned(),
+                    corpus_identity: self.corpus().identity().to_owned(),
+                    baseline_hash,
+                    fast: StageRecord { evaluation: fast, gate },
+                    train,
+                    negative,
+                    heldout: None,
+                }
             }
-        };
-        let mut record = EvaluationRecord {
-            candidate_hash,
-            corpus_version: self.corpus().version().to_owned(),
-            baseline_hash,
-            fast,
-            heldout: None,
         };
         if heldout && record.fast.gate.passed {
-            {
-                let mut state = self.lock();
-                if state.heldout_runs >= self.gate.max_heldout_evaluations {
-                    return Err(FlywheelError::Refused(format!(
-                        "this server has run its {} held-out evaluations; nothing was run",
-                        self.gate.max_heldout_evaluations
-                    )));
-                }
-                state.heldout_runs += 1;
-            }
+            self.spend_heldout()?;
             // An error could name a held-out binary: the detail goes to the operator's log, not the proposer.
             let evaluation = evaluate_split(&self.engine, Split::Heldout, &layers, &reference).map_err(|error| {
                 eprintln!("rampage flywheel: held-out evaluation failed: {error}");
@@ -534,7 +606,7 @@ impl Improve {
             None => json!({ "status": "not_run", "reason": "call again with stage \"heldout\"" }),
         };
         let promotable = record.heldout.as_ref().is_some_and(|stage| stage.gate.passed);
-        let left = self.gate.max_heldout_evaluations.saturating_sub(self.lock().heldout_runs);
+        let left = self.heldout_left();
         let mut header = json!({
             "candidate": candidate.id,
             "candidate_hash": record.candidate_hash,
@@ -543,7 +615,7 @@ impl Improve {
             "cached": cached,
             "promotable": promotable,
             "heldout_evaluations_left": left,
-            "fast": fast_summary(fast),
+            "fast": fast_summary(&record),
             "heldout": heldout_value,
         });
         self.event(
@@ -564,7 +636,9 @@ impl Improve {
             }),
         );
         let limit = input.cases_limit.unwrap_or(DEFAULT_CASES).clamp(1, MAX_CASES);
-        let cases = fast.evaluation.cases.clone();
+        // Fast-slice cases first, then every name the candidate gives on the negatives.
+        let mut cases = fast.evaluation.cases.clone();
+        cases.extend(record.negative.cases.iter().cloned());
         let budget = item_budget(&header).map_err(|error| FlywheelError::Invalid(error.to_string()))?;
         let page = FittedPage::of(cases, input.cases_offset, Some(limit), budget)
             .map_err(|error| FlywheelError::Invalid(error.to_string()))?;
@@ -584,19 +658,20 @@ impl Improve {
         }
         let input: Input = parse(input)?;
         let _guard = self.writes.lock().unwrap_or_else(PoisonError::into_inner);
+        let _lock = super::promote::lock(self.paths(), FAMILY)?;
         let candidate = self.load_candidate(&input.candidate)?;
         let mut promoted = self.promoted()?;
         let candidate_hash = candidate.hash();
         let baseline_hash = self.baseline_hash(&promoted);
-        let key = sha256_text(&format!("{candidate_hash}\0{}\0{baseline_hash}", self.corpus().version()));
+        let key = self.record_key(&candidate_hash, &baseline_hash);
         let record = self.load_record(&key);
         let heldout = record.as_ref().and_then(|record| record.heldout.as_ref());
         let Some(heldout) = heldout.filter(|stage| stage.gate.passed) else {
             let why = match heldout {
                 Some(_) => "its held-out gate failed",
                 None => {
-                    "it has no held-out result for its current rows, this corpus version and the current \
-                         baseline (promotions since change the baseline)"
+                    "it has no held-out result for its current rows, this corpus and the current baseline \
+                         (promotions since change the baseline)"
                 }
             };
             self.event(
@@ -652,7 +727,7 @@ impl Improve {
             "candidate_hash": candidate_hash,
             "rows": candidate.rows.len(),
             "pack": self.paths().promoted(FAMILY),
-            "heldout_delta": entry.heldout_deltas.get("all"),
+            "heldout_delta": overall_delta(&heldout.evaluation),
             "revert": format!("rampage-eval flywheel-revert {revert}"),
             "note": "Later candidates are gated against this promotion; their earlier gate results are stale.",
         }))
@@ -677,7 +752,8 @@ fn bounded(group: &FailureGroup) -> FailureGroup {
     group
 }
 
-/// Slices along one dimension (arch, compiler, opt, library) and overall: cells are left to the gate.
+/// Slices along one dimension (arch, compiler, opt, program library, origin) and overall: cells are left to the
+/// gate.
 fn dimension_slices<T: Clone>(map: &BTreeMap<String, T>) -> BTreeMap<String, T> {
     map.iter()
         .filter(|(slice, _)| !slice.starts_with("cell:"))
@@ -685,7 +761,14 @@ fn dimension_slices<T: Clone>(map: &BTreeMap<String, T>) -> BTreeMap<String, T> 
         .collect()
 }
 
-fn fast_summary(stage: &StageRecord) -> Value {
+/// The gated scope's change: true positives, false positives, false negatives and F1.
+fn overall_delta(evaluation: &SplitEvaluation) -> Value {
+    let delta = evaluation.deltas().remove("all");
+    json!(delta)
+}
+
+fn fast_summary(record: &EvaluationRecord) -> Value {
+    let stage = &record.fast;
     let evaluation = &stage.evaluation;
     let reference = evaluation.reference_metrics();
     let candidate = evaluation.metrics();
@@ -694,32 +777,35 @@ fn fast_summary(stage: &StageRecord) -> Value {
         "checks": stage.gate.checks,
         "failing_slices": stage.gate.failing_slices,
         "binaries": evaluation.binaries,
-        "reidentified": evaluation.reidentified,
-        "elapsed_ms": evaluation.elapsed_ms,
+        "reidentified": evaluation.reidentified + record.train.reidentified + record.negative.reidentified,
+        "elapsed_ms": evaluation.elapsed_ms + record.train.elapsed_ms + record.negative.elapsed_ms,
         "overall": { "before": reference.get("all"), "after": candidate.get("all") },
         "deltas": dimension_slices(&evaluation.deltas()),
         "fixed": evaluation.fixed,
         "broken": evaluation.broken,
+        "train": { "binaries": record.train.binaries, "delta": overall_delta(&record.train) },
+        "negatives": { "binaries": record.negative.binaries, "new_names": record.negative.cases.len() },
     })
 }
 
-/// The held-out result: metrics and gate verdicts only, never a case, binary or name.
+/// The held-out result: the verdict and the overall delta only. Per-slice deltas and counts of fixed or broken
+/// functions would tell a proposer which held-out code its rows touch.
 fn heldout_summary(stage: &StageRecord) -> Value {
-    let evaluation = &stage.evaluation;
-    let reference = evaluation.reference_metrics();
-    let candidate = evaluation.metrics();
+    let checks: Vec<Value> = stage
+        .gate
+        .checks
+        .iter()
+        .map(|check| {
+            let detail = matches!(check.rule.as_str(), "heldout_f1_gain" | "heldout_fp_increase");
+            json!({ "rule": check.rule, "passed": check.passed, "detail": detail.then_some(&check.detail) })
+        })
+        .collect();
     json!({
         "status": "run",
         "passed": stage.gate.passed,
-        "checks": stage.gate.checks,
-        "failing_slices": stage.gate.failing_slices.len(),
-        "binaries": evaluation.binaries,
-        "reidentified": evaluation.reidentified,
-        "elapsed_ms": evaluation.elapsed_ms,
-        "overall": { "before": reference.get("all"), "after": candidate.get("all") },
-        "deltas": dimension_slices(&evaluation.deltas()),
-        "fixed": evaluation.fixed,
-        "broken": evaluation.broken,
+        "checks": checks,
+        "overall_delta": overall_delta(&stage.evaluation),
+        "elapsed_ms": stage.evaluation.elapsed_ms,
     })
 }
 
@@ -747,10 +833,11 @@ pub fn improve_tools() -> Vec<ImproveTool> {
                 binaries are never shown), grouped by masked body: each group is one function body (same \
                 architecture, length and fixed bytes) that the bundled and promoted signatures miss, name wrongly \
                 or name spuriously, with its truth names (from the symbolized twin), occurrences, configurations \
-                (arch/compiler/opt), libraries, an example binary/address and `masked_bytes` (hex, `..` for \
-                position-dependent bytes). Sorted by occurrences. Filters: arch, compiler, opt, library, origin \
-                (a library or `runtime`), outcome (missed, wrong, spurious), name_contains, min_occurrences. Paged \
-                with offset/limit (default 20, at most 200) and fitted to the result size.",
+                (arch/compiler/opt), program libraries, an example binary/address and `masked_bytes` (hex, `..` \
+                for position-dependent bytes). Only target-library functions and false names are listed. Sorted by \
+                occurrences. Filters: arch, compiler, opt, library (the program's), origin, outcome (missed, wrong, \
+                spurious), name_contains, min_occurrences. Paged with offset/limit (default 20, at most 200) and \
+                fitted to the result size.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -777,7 +864,7 @@ pub fn improve_tools() -> Vec<ImproveTool> {
                 and an optional library tag, stored as a PAT record: give `case` (a corpus_failures group: its \
                 masked_bytes become the pattern) or `pattern` (hex, `..` wildcards) with `arch`; `wildcards` adds \
                 wildcard byte offsets. A body matches only at the pattern's exact length. Rows are schema-checked \
-                (enough fixed bytes to ever answer). Omit `candidate` to start a new one. Returns the candidate id \
+                (at least the gate's minimum length, 32 bytes by default, and enough fixed bytes to ever answer). Omit `candidate` to start a new one. Returns the candidate id \
                 and hash and, per row, a training-split preview: how many training functions it matches and \
                 whether their truth is this name.",
             input_schema: json!({
@@ -811,12 +898,15 @@ pub fn improve_tools() -> Vec<ImproveTool> {
         ImproveTool {
             name: "evaluate_candidate",
             description: "Gate a candidate, merged with the promoted rows, against the current state (bundled and \
-                promoted signatures). stage \"fast\" (default) evaluates the fast slice of the training split: \
-                per-slice metric deltas, the gate checks (no new false positives, no slice losing F1) and the \
-                changed cases, paged with cases_offset/cases_limit. stage \"heldout\" runs the fast gate and, if it \
-                passes, the held-out gate (overall F1 gain of at least the minimum, no new false positives, no \
-                slice regression): held-out METRICS only, never cases. Results are cached by (candidate hash, \
-                corpus version, baseline hash); held-out runs per server are limited.",
+                promoted signatures). Only the target libraries' own functions are scored; any false name counts. \
+                stage \"fast\" (default) runs on training data and negatives: no new false positive on the full \
+                training split, no name at all on the negative binaries (unrelated code), no gated slice losing F1; \
+                it returns the fast slice's per-slice deltas and its changed cases plus every name given on the \
+                negatives, paged with cases_offset/cases_limit. stage \"heldout\" runs the fast gate and, if it \
+                passes, the held-out gate on the libraries' newer versions (overall F1 gain of at least the minimum, \
+                no new false positive, no slice regression): pass/fail and the overall delta only. Results are \
+                cached by (candidate hash, corpus identity, baseline hash); held-out evaluations per corpus are \
+                limited across all servers.",
             input_schema: json!({
                 "type": "object",
                 "properties": {

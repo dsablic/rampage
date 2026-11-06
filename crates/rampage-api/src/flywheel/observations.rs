@@ -26,6 +26,8 @@ const MAX_EVIDENCE: usize = 8;
 const MAX_DETAIL_CHARS: usize = 1024;
 const MAX_NOTE_CHARS: usize = 2048;
 const MAX_NAME_CHARS: usize = 255;
+/// The largest binary an observation hashes.
+const MAX_HASHED_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,11 +98,19 @@ struct Record<'a> {
 pub struct ObservationStore {
     directory: PathBuf,
     lock: Mutex<()>,
+    /// Directories whose files are never read: a flywheel corpus's binaries.
+    refused: Vec<PathBuf>,
 }
 
 impl ObservationStore {
     pub fn new(directory: PathBuf) -> ObservationStore {
-        ObservationStore { directory, lock: Mutex::new(()) }
+        ObservationStore { directory, lock: Mutex::new(()), refused: Vec::new() }
+    }
+
+    /// This store refusing observations about files under any of `roots`.
+    pub fn refusing(self, roots: Vec<PathBuf>) -> ObservationStore {
+        let refused = roots.into_iter().map(|root| root.canonicalize().unwrap_or(root)).collect();
+        ObservationStore { refused, ..self }
     }
 
     pub fn directory(&self) -> &Path {
@@ -153,6 +163,20 @@ impl ObservationStore {
             std::fs::metadata(path).map_err(|error| FlywheelError::Invalid(format!("{}: {error}", path.display())))?;
         if !metadata.is_file() {
             return invalid(format!("{} is not a regular file", path.display()));
+        }
+        if metadata.len() > MAX_HASHED_BYTES {
+            return invalid(format!(
+                "{} is larger than the {MAX_HASHED_BYTES} bytes an observation hashes",
+                path.display()
+            ));
+        }
+        let canonical =
+            path.canonicalize().map_err(|error| FlywheelError::Invalid(format!("{}: {error}", path.display())))?;
+        if self.refused.iter().any(|root| canonical.starts_with(root)) {
+            return Err(FlywheelError::Refused(format!(
+                "{} is inside the flywheel corpus; observations about corpus binaries are refused",
+                path.display()
+            )));
         }
         let binary = json!({ "path": input.path, "sha256": sha256_file(path)?, "size": metadata.len() });
         let address = format!("{address:#x}");
@@ -301,6 +325,11 @@ mod tests {
             assert_eq!(error.kind(), "invalid_argument", "{input}");
         }
         assert_eq!(std::fs::read_to_string(store.file()).unwrap().lines().count(), 1, "refusals record nothing");
+
+        let parent = binary.parent().unwrap().to_owned();
+        let refusing = ObservationStore::new(directory.clone()).refusing(vec![parent]);
+        let input = json!({ "path": binary, "kind": "function_start", "address": "0x401000", "evidence": evidence });
+        assert_eq!(refusing.record(input).unwrap_err().kind(), "refused", "corpus paths are refused");
         let _ = std::fs::remove_dir_all(&directory);
     }
 }
