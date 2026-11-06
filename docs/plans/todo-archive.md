@@ -1240,8 +1240,8 @@ Checked items below describe bounded, tested capabilities; sections marked parti
   9.5 (macOS debugserver) is implemented against LLVM-sourced transcripts, but its live acceptance
   (`RAMPAGE_DEBUGSERVER_LIVE=1`, `test(debug_debugserver_live::)`) has not run: it needs
   `sudo DevToolsSecurity -enable` on the test machine. 9.6 (Windows): Option A of
-  `docs/plans/2026-11-05-debugger-windows.md` was approved in `0f1eacf`, and 9.6a (RSP stubs) is implemented
-  (`25bfed6`); its live acceptance (`RAMPAGE_WINDOWS_LIVE=1`) needs a Windows host. The LLDB workspace window itself
+  `docs/plans/2026-11-05-debugger-windows.md` was approved 2026-11-05 (`c3f9669`), and 9.6a (RSP stubs) is implemented
+  (`c3f9669`); its live acceptance (`RAMPAGE_WINDOWS_LIVE=1`) needs a Windows host. The LLDB workspace window itself
   stays read-only: launch, attach, resume, step, breakpoints, expressions and target writes are not part of it.
 
 ### Deferred exact-entry UI and reviewed static workspaces

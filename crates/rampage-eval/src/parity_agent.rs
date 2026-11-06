@@ -103,7 +103,8 @@ impl AgentConfig {
             max_tool_calls: 60,
             max_tokens: 4096,
             max_record_bytes: 32_768,
-            max_retained_bytes: 512_000,
+            // Catalogs get half: the default and all-group rampage catalogs with their tool `_meta` (262 KB).
+            max_retained_bytes: 640_000,
             max_conversation_bytes: 1_000_000,
         }
     }

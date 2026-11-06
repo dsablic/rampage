@@ -54,7 +54,9 @@ fn neutral_prompts_name_no_rampage_tool_or_concept() {
     let suite = NeutralSuite::from_toml(NEUTRAL).unwrap();
     for task in canonical() {
         let prompt = suite.prompt(&task, "/tmp/work/fixture.bin");
-        for word in ["rampage", "enable_tools", "enableable", "groups", "find_main", "class_evidence"] {
+        for word in
+            ["rampage", "enable_tools", "enableable", "groups", "find_main", "class_evidence", "language_metadata"]
+        {
             assert!(!prompt.to_lowercase().contains(word), "{}: {word}", task.id);
         }
         assert!(prompt.contains("\"/tmp/work/fixture.bin\""));

@@ -110,7 +110,7 @@ recorded in the project's findings ledger with the debug session as evidence.
 | 9.3 | **Done 2026-11-05** (`b111cea`; live QEMU Cortex-M3 acceptance passes). Static correlation: binding, slides, symbolic breakpoints, step-over via rampage decoders, stop-location enrichment. | Medium. |
 | 9.4 | **Done 2026-11-05** (`4b2190d`; live QEMU RAM, register and flash writes and kill pass). Writes behind `--debug-writes`; kill behind `--debug-kill`. | Higher; reviewed separately. |
 | 9.5 | **Implemented 2026-11-05** (`6a184b3`); live debugserver acceptance pending (needs DevToolsSecurity enabled). macOS `debugserver` acceptance (RSP plus LLDB extensions); evaluate driving LLDB's SB API through the existing bridge for crash/core files. | Platform-dependent. |
-| 9.6 | **9.6a implemented 2026-11-05** (`ad68ed5`..`25bfed6`); live acceptance pending (no Windows host). Windows: separate short design (dbgeng vs. a GDB stub such as a Windows gdbserver); Option A (RSP stub) approved 2026-11-05: [`2026-11-05-debugger-windows.md`](2026-11-05-debugger-windows.md). 9.6a covers user-mode processes through `gdbserver.exe` and `lldb-server`; Option B (DbgEng) is deferred. | Platform-dependent. |
+| 9.6 | **9.6a implemented 2026-11-05** (`c3f9669`); live acceptance pending (no Windows host). Windows: separate short design (dbgeng vs. a GDB stub such as a Windows gdbserver); Option A (RSP stub) approved 2026-11-05: [`2026-11-05-debugger-windows.md`](2026-11-05-debugger-windows.md). 9.6a covers user-mode processes through `gdbserver.exe` and `lldb-server`; Option B (DbgEng) is deferred. | Platform-dependent. |
 
 Each step follows the wave cadence: implementation, fresh-context review, fixes, full suite, then MCP-level acceptance.
 

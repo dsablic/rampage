@@ -16,7 +16,9 @@ can replace `rampage`; install the worker beside it for supervised native decomp
 
 ## Tool groups
 
-By default the server lists `core` plus `enable_tools`, keeping the initial tool list short.
+By default the server lists `core` plus `enable_tools`, keeping the initial tool list short. Read-only inspectors
+that answer common first questions, such as `language_metadata` and `class_evidence` for class names and
+hierarchies, are in `core` so that a client deferring schemas still sees their names.
 
 - `core`: `triage`, `binary_info`, `list_functions`, `disassemble`, `decompile`, `function_graph`,
   `assemble`, `patch_bytes`, `revert_patch`, `list_patches`, `export_patched`,
@@ -24,13 +26,12 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
   `annotate_batch`, `batch`, `check_names`, `undo`, `redo`, `discard_undo`, `list_annotations`, `record_finding`,
   `list_findings`, `triage_report`,
   `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`, `inspect_data`,
-  `decode_file_range`, `inspect_raw_code`, `inspect_sleigh`.
+  `decode_file_range`, `inspect_raw_code`, `inspect_sleigh`, `language_metadata`, `class_evidence`.
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
   `capa_detect`, `find_crypto`, `list_packs`.
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_debug_layouts`,
-  `import_pdb_names`, `class_evidence`, `language_metadata`, `edit_variable`, `declare_types`, `list_types`, `get_type`, `delete_type`,
-  `apply_data_type`, `read_data`, `apply_enum`, `apply_offset`, `function_frame`, `propagate_types`,
-  `import_debug_types`.
+  `import_pdb_names`, `edit_variable`, `declare_types`, `list_types`, `get_type`, `delete_type`, `apply_data_type`,
+  `read_data`, `apply_enum`, `apply_offset`, `function_frame`, `propagate_types`, `import_debug_types`.
 - `runtime`: `observe_pointer`, `compare_pointer_observations`, `compare_runtime_bytes`, `observe_indirect_branch`,
   `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `entry_diagnostics`, `inspect_jump_table`.
@@ -123,7 +124,8 @@ List queries use `offset`/`limit`, generally defaulting to 100 entries and cappe
 filters with `name_contains`; strings/imports/exports filter with `contains`. Disassembly counts are capped at
 1000. Large ordinary binary-tool results can be truncated after 60,000 UTF-8 bytes with an added text marker;
 workflow reports shrink to remain valid JSON and retain limitations. Page or narrow a query rather than
-assuming a large response is complete.
+assuming a large response is complete. Every tool declares `_meta["anthropic/maxResultSizeChars"]` = 61,024 (the
+60,000-byte cap plus room for the marker), so Claude Code shows such a page whole instead of a 50,000-character preview.
 
 `decompile` returns C and address-linked semantic tokens alongside structured recovery evidence. Token byte
 spans index the rendered C; flow-only records can be spanless. Storage offsets are qualified by address space,

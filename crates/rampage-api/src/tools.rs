@@ -13,6 +13,12 @@ use std::sync::Arc;
 /// Results longer than this are cut, so that one large answer cannot crowd out the conversation. Workflow reports
 /// and import receipts fit themselves below it instead, preserving valid JSON and whole-operation status.
 pub(crate) const MAX_RESULT_CHARS: usize = 60_000;
+/// What a result cut at [`MAX_RESULT_CHARS`] ends with.
+const TRUNCATION_MARKER: &str = "... (truncated: ask for a narrower range, a smaller count, or a page)";
+/// The longest result text a tool is fitted to: [`MAX_RESULT_CHARS`] and room for [`TRUNCATION_MARKER`]. MCP tools
+/// declare it so that clients with a smaller default (Claude Code keeps 50,000 characters) show a full page whole.
+pub const RESULT_LIMIT_CHARS: usize = MAX_RESULT_CHARS + 1024;
+const _: () = assert!(TRUNCATION_MARKER.len() <= RESULT_LIMIT_CHARS - MAX_RESULT_CHARS);
 const MAX_SLEIGH_REQUEST_BYTES: usize = 1024 * 1024;
 const DEFAULT_PAGE: usize = 100;
 const MAX_PDB_DETAIL_BYTES: usize = 4096;
@@ -111,7 +117,9 @@ impl Group {
             Group::Core => {
                 "Layout, functions, disassembly, decompilation, xrefs, search, strings, imports, exports, \
                  annotations with undo/redo and batches, the findings ledger, assembly and checked byte patches, \
-                 raw/Sleigh decode inspection, and the guided workflows (triage_report, find_main, network_surface, \
+                 raw/Sleigh decode inspection, class metadata (language_metadata: demangled names, Objective-C \
+                 classes with superclasses, methods and properties; class_evidence: C++ vtables/RTTI), and the \
+                 guided workflows (triage_report, find_main, network_surface, \
                  persistence_surface, string_decoding, diff_builds)."
             }
             Group::Detection => {
@@ -120,8 +128,7 @@ impl Group {
             }
             Group::Types => {
                 "Project type libraries, C headers, signatures, type declarations and globals, \
-                 reviewed checked DWARF/PDB type and signature import, \
-                 demangled names and Itanium vtable/RTTI evidence, and explicit identity-matched PDB names."
+                 reviewed checked DWARF/PDB type and signature import, and explicit identity-matched PDB names."
             }
             Group::Runtime => {
                 "Memory snapshot evidence: captured pointer slots, pointer comparisons across captures, runtime \
@@ -2190,14 +2197,14 @@ pub fn tools() -> Vec<Tool> {
             decompile_tool,
         ),
         tool(
-            Group::Types,
+            Group::Core,
             "language_metadata",
             "Demangled symbols, named Itanium vtables/RTTI, Objective-C selector strings and Objective-C classes and \
              categories (superclasses, methods with implementations, ivars, properties, protocols), with limits.",
             |project, _: Nothing| Ok(rampage_analysis::language::metadata(&project.binary)),
         ),
         tool(
-            Group::Types,
+            Group::Core,
             "class_evidence",
             "Bounded named Itanium vtable/RTTI evidence with validated code slots; not inferred C++ layouts.",
             |project, _: Nothing| Ok(rampage_analysis::classes::recover(&project.binary)),
@@ -3318,7 +3325,7 @@ fn dispatch(
             if text.len() > MAX_RESULT_CHARS && tool.effect != Effect::Annotations && name != "import_debug_layouts" {
                 let cut = (0..=MAX_RESULT_CHARS).rev().find(|&index| text.is_char_boundary(index)).unwrap_or(0);
                 text.truncate(cut);
-                text.push_str("... (truncated: ask for a narrower range, a smaller count, or a page)");
+                text.push_str(TRUNCATION_MARKER);
             }
             (text, false)
         }
