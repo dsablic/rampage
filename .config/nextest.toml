@@ -1,4 +1,4 @@
-# Local nextest settings. CI's Linux workspace job uses the default profile; `cargo test` ignores this file.
+# nextest settings, used locally and by both CI workspace jobs (default profile). `cargo test` ignores this file.
 #
 # The default profile skips the heaviest roster/propagation/Go-decompilation tests, which are about a third of the
 # suite's CPU time; `cargo nextest run --profile full` (or `--ignore-default-filter`) runs everything. Run the full
