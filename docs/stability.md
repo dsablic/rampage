@@ -1,6 +1,6 @@
 # Stability policy
 
-**Status:** draft for maintainer review; it takes effect with the 1.0.0 release.
+Takes effect with the first public release (1.0.0 or its release candidates).
 
 This page says which parts of rampage you can build on across releases, which parts may change, and how changes
 are announced. rampage's product is its MCP server, so the policy is written around what an agent, a client
@@ -24,12 +24,12 @@ These are covered by the rules in [What counts as breaking](#what-counts-as-brea
 
 | Surface | What is stable |
 | --- | --- |
-| MCP tools | Tool names, their group, argument names and meanings, and result field names and meanings, for every tool in the groups `core`, `detection`, `types`, `runtime`, `diagnostics`, `dotnet`, `carve` and `formats`, plus `enable_tools`. The [tool-group list](mcp.md#tool-groups) is the catalog. The core `debug` tools (GDB remote stubs) are stable; see the experimental paths below. |
+| MCP tools | Tool names, their group, argument names and meanings, and result field names and meanings, for every tool in the groups `core`, `detection`, `types`, `runtime`, `diagnostics`, `dotnet`, `carve`, `formats` and `debug`, plus `enable_tools`. The [tool-group list](mcp.md#tool-groups) is the catalog. The `debug` group (GDB remote stubs) is stable; see the experimental paths below. |
 | CLI | Command names (the noun/verb routes and the compatibility spellings), flag names and meanings, and exit status zero on success. `--json` output field names follow the same rules as MCP result fields. |
-| Annotation log | The `.rampage` and `.rampage-image` sidecar logs: their location beside the binary, the JSON Lines record format and the image identity lines. A log written by a 1.x release opens in every later 1.x release. |
-| Runtime snapshots | The `rampage-snapshot-v1` format, as described in [runtime snapshots](runtime-snapshots.md#snapshot-format). |
-| Pack archives | The `.rpack` format, `format_version` 1, as described in [data packs](data-packs.md#export-and-import). |
-| Data packs | The `rampage-pack.toml` manifest and the content formats it names: signature JSON (hash schemes 1 and 2), PeID `userdb.txt`, YARA, capa rules and constant tables. See [data packs](data-packs.md). |
+| Annotation log | The `.rampage` and `.rampage-image` sidecar logs, and the capture-identity logs kept for memory snapshots: their location, the JSON Lines record format, the image identity lines and log format 1 (see [annotation log format](#annotation-log-format)). The project type library, debug-type and debug-signature imports and the findings ledger are stored in this log and covered by it; there is no separate export format. |
+| Runtime snapshots | The `rampage-snapshot-v1` format, as described in [runtime snapshots](runtime-snapshots.md#snapshot-format). A v1 reader refuses fields it does not know, so v1 never gains a field: a new field means `rampage-snapshot-v2`. |
+| Pack archives | The `.rpack` format, `format_version` 1, as described in [data packs](data-packs.md#export-and-import). A reader accepts every archive of a format version it supports whose `min_rampage_version` it meets; there is no upper bound. Archives exported by 0.1.x keep loading. |
+| Data packs | The `rampage-pack.toml` manifest (`format_version` 1) and the content formats it names: signature JSON (hash schemes 1 and 2), PeID `userdb.txt`, YARA, capa rules and constant tables (`format_version` 1). See [data packs](data-packs.md#format-versions). |
 
 ## Experimental
 
@@ -46,6 +46,8 @@ These may change or disappear in any minor release. Each is marked as experiment
 - **`rampage-eval`:** the evaluation and benchmark harness, its commands and its report formats.
 - **Component plugins:** the WebAssembly triage-component host (`--component`) and its WIT interface, which are
   versioned separately (`0.0.1`); see [plugins](plugins.md).
+- **Local caches and UI files:** the desktop UI's project-workspace manifests, the historical function-inventory
+  cache and derived analysis caches. They can be rebuilt or saved again, and a release may refuse an older one.
 - **The Rust crates as libraries.** rampage is used through MCP, the CLI and its file formats. The crates'
   public Rust APIs are internal and may change in any release.
 
@@ -75,10 +77,48 @@ For file formats:
 
 - A 1.x release reads every file a 1.0 or later 1.x release wrote: annotation logs, snapshots, `.rpack` archives
   and data packs.
-- A new record kind in the annotation log is skipped by older readers rather than refused. This already holds:
-  every reader skips edits of fields it does not know.
+- Within a format version, a later release adds information only in ways earlier readers skip, as listed for
+  each format below and in [data packs](data-packs.md#format-versions). Earlier readers warn where they can.
 - A format change an older reader cannot skip gets a new version marker (`rampage-snapshot-v2`, `.rpack`
   `format_version` 2, a new signature hash scheme), and the new release keeps reading the old version.
+
+### Annotation log format
+
+The log is JSON Lines. Identity lines (`{"image": "<sha256>", "format": 1}`) carry the log format; a log without
+one, such as every log 0.1.x wrote, is format 1.
+
+- **Forward, within format 1:** every reader skips edits of a field it does not know (a later release's new kind
+  of annotation goes in as an edit of a new field) and ignores keys it does not know on lone edits and identity
+  lines. New line kinds, and new keys on batch headers and batch members, are not skipped by every reader (a
+  checked read refuses them), so they need format 2.
+- **Newer format:** a reader refuses a log that declares a format newer than it reads, naming it, before applying
+  any edit; it appends nothing to it. Readers before 1.0 predate the marker and cannot detect a format-2 log.
+- **Backward:** every 1.x release opens every format-1 log, including those 0.1.x wrote. Committed logs in
+  `tests/fixtures/annotation-logs/`, written by rampage's own writers (names, comments, a batch, ledger entries,
+  a type-library declaration and a data type), pin this.
+
+## How the stable surface is checked
+
+Snapshots under `tests/contract/` pin the stable surface, and tests compare it with the live build:
+
+- `mcp-tools.json`: every tool's name, group and arguments (type and whether required), from `tools/list` on a
+  server with every group, a debug server with `--debug-writes` and `--debug-kill`, and a corpus server (the
+  `improve` tools, marked experimental).
+- `mcp-results-core.json` and `mcp-results-debug.json`: the result field paths every core tool and every debug tool
+  returns on committed fixtures (debug against the scripted fake stub). Result fields are observed, not derived
+  from types, so a field that a fixture does not produce is not pinned. The result fields of the other stable
+  groups follow the same rules but are not snapshot-checked yet; review changes to them by hand.
+- `cli-commands.json`: every CLI route, the compatibility spellings included, with its flags and positionals.
+- `cli-json.json`: the `--json` field paths of the main commands on committed fixtures.
+
+Each difference is classified. A new tool, command, optional argument, flag or result field, or a widened argument
+type, is additive: record it with `RAMPAGE_UPDATE_CONTRACT=1 cargo nextest run --workspace -E 'test(/contract/)'`
+and commit the snapshot. A removed or renamed tool, command, argument, flag or field, a newly required argument, a
+narrowed type or a tool moved to another group is breaking: the test fails, and the update command refuses it.
+Keep the old name working as a deprecated alias, or, for a major release, record the break with
+`RAMPAGE_UPDATE_CONTRACT=breaking`. Committed fixtures pin the file formats in the same way: the annotation logs
+above, the `compat-v1` data pack and its 0.1.0 `.rpack` archive in `tests/fixtures/packs/`, and the
+`rampage-snapshot-v1` files in `tests/data/`.
 
 ## Deprecation
 

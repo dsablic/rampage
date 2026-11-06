@@ -1,0 +1,12 @@
+{"image":"dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742","format":1}
+{"field":"name","address":"0x1001910","value":"compat_main","previous":null}
+{"field":"comment","address":"0x1001910","value":"entry logic, pinned by the format fixture","previous":null}
+{"batch":"3723-18e57613a4c5f680-0","edits":3}
+{"field":"name","address":"0x1001900","value":"compat_add","previous":null,"batch":"3723-18e57613a4c5f680-0"}
+{"field":"comment","address":"0x1001900","value":"adds two ints","previous":null,"batch":"3723-18e57613a4c5f680-0"}
+{"field":"name","address":"0x10018d6","value":"compat_start_c","previous":null,"batch":"3723-18e57613a4c5f680-0"}
+{"field":"finding","address":"0x1","value":"{\"kind\":\"finding\",\"status\":\"open\",\"text\":\"compat_main calls compat_add\",\"address\":\"0x1001910\",\"evidence\":[{\"tool\":\"xrefs\",\"detail\":\"compat_add from compat_main\"}],\"confidence\":\"high\",\"image\":\"dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742\"}","previous":null}
+{"field":"finding","address":"0x2","value":"{\"kind\":\"question\",\"status\":\"open\",\"text\":\"what does _start pass to _start_c?\"}","previous":null}
+{"field":"finding","address":"0x2","value":"{\"kind\":\"question\",\"status\":\"resolved\",\"text\":\"what does _start pass to _start_c?\",\"resolution\":\"the stack pointer\"}","previous":"{\"kind\":\"question\",\"status\":\"open\",\"text\":\"what does _start pass to _start_c?\"}"}
+{"field":"typelibrary","address":"0x0","value":"[{\"names\":[\"CompatPair\"],\"declarations\":\"struct CompatPair { int4 left; int4 right; };\",\"packing\":null,\"source\":null}]","previous":null}
+{"field":"datatype","address":"0x100019a","value":"{\"type_name\":null,\"count\":1,\"byte_length\":24,\"encoding\":\"ascii\"}","previous":null}

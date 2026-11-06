@@ -1,0 +1,17 @@
+name = "compat-v1"
+version = "1.0.0"
+license = "CC0-1.0"
+source = "rampage test fixture: a pack in the format rampage 0.1.0 reads and writes"
+description = "Pins the data pack and .rpack formats: every later build must load it."
+
+[[contents]]
+kind = "yara"
+path = "pe.yar"
+
+[[contents]]
+kind = "constants"
+path = "constants.json"
+
+[[contents]]
+kind = "peid"
+path = "userdb.txt"

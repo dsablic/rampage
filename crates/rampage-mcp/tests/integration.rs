@@ -5,6 +5,9 @@ mod archive;
 mod arm_exidx;
 mod assembly;
 mod build_info;
+mod contract;
+#[path = "../../../tests/contract/support.rs"]
+mod contract_support;
 mod debug_control;
 mod debug_layouts;
 mod debug_types;

@@ -61,7 +61,7 @@ const YARA_RULE: &str = "rule pack_pe_header : format { strings: $mz = \"MZ\" co
 const PEID: &str = "[Pack DOS Header]\nsignature = 4D 5A 78 00 01 00 00 00 04\nep_only = false\n";
 
 fn statuses(pack: &PackInfo) -> Vec<(&str, ContentStatus)> {
-    pack.contents.iter().map(|content| (content.kind, content.status)).collect()
+    pack.contents.iter().map(|content| (content.kind.as_str(), content.status)).collect()
 }
 
 #[test]
@@ -248,13 +248,19 @@ fn rejected(name: &str, contents: &str) -> String {
 
 #[test]
 fn manifests_are_validated_strictly() {
-    let error = rejected("kind", &manifest("kind", "[[contents]]\nkind = \"plugins\"\npath = \"db.json\"\n"));
-    assert!(error.contains("unknown variant"), "{error}");
-    let peid = "[[contents]]\nkind = \"peid\"\npath = \"db.json\"\n";
-    let error = rejected("field", &manifest("field", &format!("homepage = \"x\"\n{peid}")));
-    assert!(error.contains("unknown field"), "{error}");
-    let error = rejected("content-field", &manifest("content-field", &format!("{peid}run = 1\n")));
-    assert!(error.contains("unknown field"), "{error}");
+    // Within format 1, a later kind is unsupported and later fields are ignored with warnings; a later major fails.
+    let later = Scratch::new("later");
+    later.write("db.txt", PEID);
+    let peid = "[[contents]]\nkind = \"peid\"\npath = \"db.txt\"\n";
+    let text = format!("homepage = \"x\"\n{peid}run = 1\n[[contents]]\nkind = \"plugins\"\npath = \"db.txt\"\n");
+    later.write("rampage-pack.toml", &manifest("later", &text));
+    let info = Packs::check(&later.0);
+    assert!(info.error.is_none(), "{info:?}");
+    assert_eq!(statuses(&info), [("peid", ContentStatus::Loaded), ("plugins", ContentStatus::Unsupported)]);
+    let warnings = info.warnings.join("\n");
+    assert!(warnings.contains("ignored: homepage") && warnings.contains("ignored: run"), "{warnings}");
+    let error = rejected("major", &format!("format_version = 2\n{}", manifest("major", peid)));
+    assert!(error.contains("format_version 2 is newer than this rampage reads (1)"), "{error}");
     let error = rejected("dotdot", &manifest("dotdot", "[[contents]]\nkind = \"peid\"\npath = \"../db.json\"\n"));
     assert!(error.contains("without `.`, `..` or a root"), "{error}");
     let error = rejected("absolute", &manifest("absolute", "[[contents]]\nkind = \"peid\"\npath = \"/etc/passwd\"\n"));

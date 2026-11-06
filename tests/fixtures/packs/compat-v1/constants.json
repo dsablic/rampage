@@ -1,0 +1,3 @@
+{ "constants": [
+  { "name": "Compat fixture table", "algorithm": "CompatFixture", "kind": "hash", "bytes": "3a 91 c4 5e 07 d2 6b f8 19 a7 e3 52 8c 4d b0 76 2f e9 13 c8 5a 64 0d bb 71 9e 26 f3 48 d5 a0 37" }
+] }

@@ -14,9 +14,13 @@
 //! whole pattern) is how much of the head must match. Every constant passes the bundled ones' information guards
 //! (see [`ConstantSignature::validate`]), names are unique and distinct from the bundled names, and sizes are
 //! capped. Any invalid constant rejects the whole file, naming it.
+//!
+//! The file may declare `format_version` (absent means 1). This build reads format 1 and refuses a higher one. Within
+//! format 1 a later rampage may add fields and constant kinds: fields this build does not know are ignored and a
+//! constant of a kind it does not know is skipped, each with a warning ([`UserConstants::warnings`]).
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::Deserialize;
 
@@ -29,19 +33,25 @@ pub const MAX_USER_CONSTANT_BYTES: usize = 4096;
 const MAX_NAME_CHARS: usize = 128;
 const MAX_ALGORITHM_CHARS: usize = 64;
 const MAX_SOURCE_CHARS: usize = 512;
+/// The constants-file format this build reads; a file without `format_version` is format 1.
+pub const CONSTANTS_FORMAT_VERSION: u64 = 1;
+/// Warnings named for one file; the rest are counted.
+const MAX_WARNINGS: usize = 8;
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct File {
+    #[serde(default)]
+    format_version: Option<u64>,
     constants: Vec<Entry>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Entry {
     name: String,
     algorithm: String,
-    kind: Kind,
+    kind: String,
     #[serde(default)]
     source: Option<String>,
     #[serde(default)]
@@ -54,6 +64,8 @@ struct Entry {
     endian: Option<Order>,
     #[serde(default)]
     min_len: Option<usize>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -75,6 +87,7 @@ enum Order {
 #[derive(Debug, Clone, Default)]
 pub struct UserConstants {
     signatures: Vec<ConstantSignature>,
+    warnings: Vec<String>,
 }
 
 impl UserConstants {
@@ -82,6 +95,18 @@ impl UserConstants {
     /// name none.
     pub fn parse(text: &str, origin: &str) -> Result<Self, String> {
         let file: File = serde_json::from_str(text).map_err(|error| format!("invalid constants JSON: {error}"))?;
+        let version = file.format_version.unwrap_or(CONSTANTS_FORMAT_VERSION);
+        if version > CONSTANTS_FORMAT_VERSION {
+            return Err(format!(
+                "constants format_version {version} is newer than this rampage reads ({CONSTANTS_FORMAT_VERSION}); \
+                 use a newer rampage"
+            ));
+        }
+        let mut warnings = Vec::new();
+        if !file.unknown.is_empty() {
+            let keys: Vec<&str> = file.unknown.keys().map(String::as_str).collect();
+            warnings.push(format!("fields this rampage does not know were ignored: {}", keys.join(", ")));
+        }
         if file.constants.is_empty() {
             return Err("`constants` is empty".to_owned());
         }
@@ -93,7 +118,15 @@ impl UserConstants {
         let mut signatures = Vec::with_capacity(file.constants.len());
         for (index, entry) in file.constants.into_iter().enumerate() {
             let label = format!("constant {index} ({:?})", entry.name.chars().take(MAX_NAME_CHARS).collect::<String>());
-            let signature = signature(entry, origin).map_err(|reason| format!("{label}: {reason}"))?;
+            if !entry.unknown.is_empty() {
+                let keys: Vec<&str> = entry.unknown.keys().map(String::as_str).collect();
+                warnings.push(format!("{label}: fields this rampage does not know were ignored: {}", keys.join(", ")));
+            }
+            let Ok(kind) = serde_json::from_value::<Kind>(serde_json::Value::String(entry.kind.clone())) else {
+                warnings.push(format!("{label}: kind {:?} is not one this rampage knows; skipped", entry.kind));
+                continue;
+            };
+            let signature = signature(entry, kind, origin).map_err(|reason| format!("{label}: {reason}"))?;
             if bundled.contains(&*signature.what) {
                 return Err(format!("{label}: the name is taken by a bundled constant"));
             }
@@ -103,7 +136,20 @@ impl UserConstants {
             signature.validate().map_err(|error| format!("{label}: {}", error.reason))?;
             signatures.push(signature);
         }
-        Ok(Self { signatures })
+        if signatures.is_empty() {
+            return Err("no constant of a kind this rampage knows".to_owned());
+        }
+        if warnings.len() > MAX_WARNINGS {
+            let more = warnings.len() - MAX_WARNINGS;
+            warnings.truncate(MAX_WARNINGS);
+            warnings.push(format!("and {more} more"));
+        }
+        Ok(Self { signatures, warnings })
+    }
+
+    /// What the file holds that this build ignored or skipped: unknown fields and constants of unknown kinds.
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
     }
 
     pub fn signatures(&self) -> &[ConstantSignature] {
@@ -132,7 +178,7 @@ fn text_field(name: &str, value: String, max: usize) -> Result<String, String> {
     Ok(value)
 }
 
-fn signature(entry: Entry, origin: &str) -> Result<ConstantSignature, String> {
+fn signature(entry: Entry, kind: Kind, origin: &str) -> Result<ConstantSignature, String> {
     let what = text_field("name", entry.name, MAX_NAME_CHARS)?;
     let algorithm = text_field("algorithm", entry.algorithm, MAX_ALGORITHM_CHARS)?;
     let source = match entry.source {
@@ -161,7 +207,7 @@ fn signature(entry: Entry, origin: &str) -> Result<ConstantSignature, String> {
     let min_len = entry.min_len.unwrap_or(len);
     Ok(ConstantSignature {
         algorithm: Cow::Owned(algorithm),
-        kind: entry.kind,
+        kind,
         what: Cow::Owned(what),
         source: Cow::Owned(source),
         pattern,
@@ -298,9 +344,8 @@ mod tests {
         let cases = [
             (acme(", \"u32\": [1]"), "exactly one of"),
             (acme(", \"endian\": \"big\""), "`endian` applies only"),
-            (acme(", \"colour\": 1"), "unknown field"),
             (acme(", \"min_len\": 64"), "exceeds the pattern's 32 bytes"),
-            (acme("").replace("block_cipher", "rot13"), "unknown variant `rot13`"),
+            (acme("").replace("block_cipher", "rot13"), "no constant of a kind this rampage knows"),
             (acme("").replace("6b 2f", "6g 2f"), "not hex"),
             (acme("").replace("6b 2f", "6b 2"), "odd number"),
             (acme("").replace("Acme S-box", " "), "`name` is empty"),
@@ -328,6 +373,30 @@ mod tests {
         let huge = format!("\"{}\"", "ab".repeat(MAX_USER_CONSTANT_BYTES + 1));
         let error = parse(&acme("").replace(&format!("\"{ACME_SBOX}\""), &huge)).unwrap_err();
         assert!(error.contains("more than 4096 bytes"), "{error}");
+    }
+
+    #[test]
+    fn later_fields_and_kinds_are_skipped_with_warnings_and_a_newer_format_is_refused() {
+        let plain = parse(&acme("")).unwrap();
+        assert!(plain.warnings().is_empty());
+        let versioned = UserConstants::parse(&format!("{{\"format_version\": 1, \"constants\": [{}]}}", acme("")), "p");
+        assert!(versioned.unwrap().warnings().is_empty());
+
+        let later = acme(", \"colour\": 1").replace("Acme S-box", "Acme later");
+        let rot13 = acme("").replace("block_cipher", "rot13").replace("Acme S-box", "Acme rot13");
+        let text = format!("{{\"constants\": [{}, {later}, {rot13}], \"origin\": \"x\"}}", acme(""));
+        let user = UserConstants::parse(&text, "p").unwrap();
+        assert_eq!(user.len(), 2);
+        let warnings = user.warnings().join("\n");
+        assert!(warnings.contains("ignored: origin"), "{warnings}");
+        assert!(
+            warnings.contains("constant 1 (\"Acme later\"): fields this rampage does not know were ignored: colour")
+        );
+        assert!(warnings.contains("constant 2 (\"Acme rot13\"): kind \"rot13\" is not one this rampage knows"));
+
+        let newer = UserConstants::parse(&format!("{{\"format_version\": 2, \"constants\": [{}]}}", acme("")), "p");
+        let error = newer.unwrap_err();
+        assert!(error.contains("format_version 2 is newer than this rampage reads (1)"), "{error}");
     }
 
     #[test]

@@ -5,6 +5,9 @@ mod hierarchy;
 mod report;
 mod report_plugin;
 
+#[cfg(test)]
+mod contract_tests;
+
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -72,7 +75,7 @@ enum PacksCommand {
     /// Validate one pack directory and report each content's status; fails when anything does not load
     Check(DirectoryArgs),
     /// Write a pack directory (for example the flywheel's promoted pack) to one portable .rpack archive: its files
-    /// in the existing pack formats and a manifest with the rampage version range, families, a content hash and
+    /// in the existing pack formats and a manifest with the format version, the minimum rampage version, families, a content hash and
     /// each promoted entry's provenance, revert id and gate results
     Export {
         /// The pack directory
@@ -81,7 +84,7 @@ enum PacksCommand {
         #[arg(short, long, value_name = "FILE")]
         output: PathBuf,
     },
-    /// Check an .rpack archive (format, rampage version range, file hashes, content hash, entries) and install its
+    /// Check an .rpack archive (format version, minimum rampage version, file hashes, content hash, entries) and install its
     /// pack as a directory, loaded there first; nothing is added unless every check passes. Load it with --pack
     Import {
         /// The .rpack archive

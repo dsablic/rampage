@@ -220,7 +220,7 @@ fn mixed_typed_batch_is_one_undo_step_with_shared_refresh_reopen_and_clear() {
         assert!(first.field_map(field).contains_key(&address));
     }
     let bytes = std::fs::read_to_string(&log.0).unwrap();
-    assert!(bytes.starts_with(&format!("{{\"image\":\"{}\"}}\n", "ab".repeat(32))));
+    assert!(bytes.starts_with(&format!("{{\"image\":\"{}\",\"format\":1}}\n", "ab".repeat(32))));
     assert_eq!(Annotations::open_for_image(log.0.clone(), Some([0xcd; 32])).unwrap().warnings().len(), 1);
     first.refresh().unwrap();
     std::fs::write(&log.0, b"").unwrap();

@@ -5,6 +5,9 @@ mod analyze;
 mod archive;
 mod assembly;
 mod cli;
+mod contract;
+#[path = "../../../tests/contract/support.rs"]
+mod contract_support;
 mod debug_layouts;
 mod debugger;
 mod decompiler_abi;
@@ -12,6 +15,7 @@ mod decompiler_diagnostics;
 mod detection;
 mod entry_scope;
 mod ergonomics;
+mod format_compat;
 mod hierarchy;
 mod inspect_sleigh;
 mod packs;

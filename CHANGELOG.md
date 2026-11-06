@@ -72,6 +72,19 @@ started; the [roadmap](docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md) and g
   attaches to a process.
 - A read-only bridge to a stopped LLDB session, and runtime snapshot analysis.
 
+### File formats and compatibility
+
+- The annotation log's identity lines carry `"format": 1`; a reader refuses a log that declares a newer format
+  instead of misreading it. Logs 0.1.x wrote are format 1 and keep opening.
+- `.rpack` archives declare `min_rampage_version` instead of a rampage version range, and readers accept every
+  archive of a format version they support. Archives 0.1.x exported keep importing; 0.1.x builds refuse new
+  archives as having an unknown field.
+- `rampage-pack.toml` and constants files take an optional `format_version` (absent means 1). Fields a reader
+  does not know are ignored with a warning, a content kind it does not know is reported as unsupported, and a
+  newer major is refused.
+- Snapshot tests in `tests/contract/` pin the MCP tool schemas and result fields and the CLI commands, flags and
+  `--json` fields; see [how the stable surface is checked](docs/stability.md#how-the-stable-surface-is-checked).
+
 ### Experimental
 
 These ship in 1.0.0 but are outside the stability promise:

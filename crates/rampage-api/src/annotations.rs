@@ -8,7 +8,8 @@
 //! that knows its image's SHA-256 logs it in an identity line (`{"image": "<hex>"}`) before the first edit it makes
 //! on that image, and every edit is attributed to the identity line before it, or, in a log begun before identity
 //! lines existed, to the first one. [`Annotations::warnings`] says when some edits were made on another image, or
-//! when none can be attributed yet.
+//! when none can be attributed yet. Identity lines also carry the log format ([`ANNOTATION_LOG_FORMAT`]); a reader
+//! refuses a log that declares a newer one rather than misread it.
 //!
 //! Every reader caps unread raw bytes at 16 MiB, each line (including a newline-free tail) at 2 MiB, and records
 //! at 8192 before serde. Complete records require exactly one syntactically valid JSON object and no trailing tokens.
@@ -768,7 +769,7 @@ struct BatchMember<'a> {
 }
 
 /// Enough of a log line to tell a batch header (both), a batch's edit (`batch` only), an identity line (`image`)
-/// and a lone edit (none).
+/// and a lone edit (none), and the log format a line declares.
 #[derive(Deserialize)]
 struct LineKind {
     #[serde(default)]
@@ -777,13 +778,41 @@ struct LineKind {
     edits: Option<usize>,
     #[serde(default)]
     image: Option<String>,
+    #[serde(default)]
+    format: Option<u64>,
 }
 
-/// The line logged before the edits a writer makes on one image: that image's SHA-256, in hex. Readers that predate
-/// it skip it, as it is not an edit.
+/// The annotation log format this build writes and reads. Identity lines carry it as `format`; a log without one
+/// is format 1. Within format 1, readers skip what they do not know: unknown fields of a lone edit or identity line,
+/// lines of an unknown kind (unless the log is read checked), and edits of an unknown field. A change that older
+/// 1.x readers would misread instead of skip needs format 2, which a writer declares on an identity line before its
+/// first format-2 record, and which this build refuses to read or append to.
+pub const ANNOTATION_LOG_FORMAT: u64 = 1;
+
+/// The line logged before the edits a writer makes on one image: that image's SHA-256, in hex, and the log format.
+/// Readers that predate identity lines skip it, as it is not an edit; readers that predate `format` ignore it.
 #[derive(Serialize)]
 struct ImageLine<'a> {
     image: &'a str,
+    format: u64,
+}
+
+impl<'a> ImageLine<'a> {
+    fn new(image: &'a str) -> Self {
+        Self { image, format: ANNOTATION_LOG_FORMAT }
+    }
+}
+
+/// Refuses a log line that declares a log format newer than this build reads.
+fn check_log_format(path: &std::path::Path, format: Option<u64>) -> Result<(), String> {
+    match format {
+        Some(format) if format > ANNOTATION_LOG_FORMAT => Err(format!(
+            "the annotation log {} is in format {format}, written by a newer rampage; this rampage reads format \
+             {ANNOTATION_LOG_FORMAT}. Open it with a newer rampage; nothing was read or changed",
+            path.display()
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// An id no other batch in the log is likely to share: this process's, the time's, and a count.
@@ -951,6 +980,9 @@ fn log_load(path: &std::path::Path) -> Result<LogLoad, String> {
     let mut load = LogLoad::default();
     load.add_bytes(&bytes);
     for line in bytes.split_inclusive(|&byte| byte == b'\n') {
+        if let Ok(kind) = serde_json::from_slice::<LineKind>(line) {
+            check_log_format(path, kind.format)?;
+        }
         if let Ok(edit) = serde_json::from_slice::<Edit>(line) {
             load.add_edit(&edit);
         }
@@ -967,7 +999,7 @@ fn encode_append(image: Option<&str>, edits: &[Edit]) -> Result<Vec<u8>, String>
         Ok(())
     };
     if let Some(image) = image {
-        push(serde_json::to_vec(&ImageLine { image }))?;
+        push(serde_json::to_vec(&ImageLine::new(image)))?;
     }
     if let [edit] = edits {
         push(serde_json::to_vec(edit))?;
@@ -1849,7 +1881,7 @@ impl Annotations {
         let new_image = log.new_image();
         let mut encoded = CheckedLogBuffer::default();
         if let Some(image) = &new_image {
-            encoded.line(&ImageLine { image })?;
+            encoded.line(&ImageLine::new(image))?;
         }
         if let [edit] = edits {
             encoded.line(edit)?;
@@ -2677,6 +2709,12 @@ fn read_new_edits(log: &mut Log, checked: bool) -> Result<(bool, Vec<Edit>), Str
         lines.push((start, line));
         start += line.len();
     }
+    // A line declaring a newer format refuses the whole read before anything is applied.
+    for (_, line) in &lines {
+        if let Ok(kind) = serde_json::from_slice::<LineKind>(line) {
+            check_log_format(&path, kind.format)?;
+        }
+    }
     let mut edits = Vec::new();
     let mut read = complete;
     let mut index = 0;
@@ -2708,7 +2746,7 @@ fn read_new_edits(log: &mut Log, checked: bool) -> Result<(bool, Vec<Edit>), Str
                     return Err("orphan patch batch member; no patch was applied".into());
                 }
             }
-            Ok(LineKind { batch: None, edits: None, image: Some(image) }) => {
+            Ok(LineKind { batch: None, edits: None, image: Some(image), .. }) => {
                 if checked && image.len() > 128 {
                     return Err(CHECKED_ERROR.to_owned());
                 }
@@ -3938,7 +3976,7 @@ mod tests {
         same.set(Field::Name, 0x30, Some("c".into())).unwrap();
         let log = std::fs::read_to_string(&path).unwrap();
         assert_eq!(log.matches("\"image\"").count(), 1, "{log}");
-        assert!(log.starts_with(&format!("{{\"image\":\"{}\"}}\n", "aa".repeat(32))), "{log}");
+        assert!(log.starts_with(&format!("{{\"image\":\"{}\",\"format\":1}}\n", "aa".repeat(32))), "{log}");
         assert!(open_on(&path, 0xaa).warnings().is_empty());
         // A reader that predates identity lines still replays every edit.
         let old: Vec<Edit> = log.lines().filter_map(|line| serde_json::from_str(line).ok()).collect();

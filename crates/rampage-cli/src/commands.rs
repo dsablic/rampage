@@ -2961,15 +2961,15 @@ pub fn packs_export(out: &mut impl Write, directory: &Path, output: &Path, optio
     }
     writeln!(
         out,
-        "exported {} {} to {} ({} files, {} entries, families {}; rampage {} up to {}; content sha256 {})",
+        "exported {} {} to {} ({} files, {} entries, families {}; format {}, rampage {} or later; content sha256 {})",
         manifest.pack.name,
         manifest.pack.version,
         output.display(),
         manifest.files.len(),
         manifest.entries.len(),
         manifest.families.join(", "),
-        manifest.rampage_version.min,
-        manifest.rampage_version.max_exclusive,
+        manifest.format_version,
+        manifest.min_rampage_version.as_deref().unwrap_or("any"),
         manifest.content_sha256
     )?;
     Ok(())
@@ -2990,7 +2990,7 @@ pub fn packs_import(out: &mut impl Write, archive: &Path, into: Option<&Path>, o
     let manifest = &report.manifest;
     writeln!(
         out,
-        "imported {} {} into {} ({} files, {} entries; hashes, version range and entries checked, content sha256 {}); \
+        "imported {} {} into {} ({} files, {} entries; format, hashes and entries checked, content sha256 {}); \
          load it with {}",
         manifest.pack.name,
         manifest.pack.version,
@@ -3000,6 +3000,9 @@ pub fn packs_import(out: &mut impl Write, archive: &Path, into: Option<&Path>, o
         manifest.content_sha256,
         report.load_with
     )?;
+    for warning in &report.warnings {
+        writeln!(out, "  warning: {warning}")?;
+    }
     for entry in &manifest.entries {
         writeln!(
             out,
@@ -3064,6 +3067,9 @@ fn render_pack(out: &mut impl Write, pack: &PackInfo) -> Result<()> {
         let arch = content.arch.as_deref().map(|arch| format!(" [{arch}]")).unwrap_or_default();
         let status = label(&content.status);
         writeln!(out, "  {status}: {} {}{arch}: {}", content.kind, content.path, content.detail)?;
+    }
+    for warning in &pack.warnings {
+        writeln!(out, "  warning: {warning}")?;
     }
     Ok(())
 }

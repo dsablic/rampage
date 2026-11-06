@@ -1,0 +1,7944 @@
+{
+  "routes": {
+    "rampage": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--version": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "-V": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage analyze": {
+      "arguments": {
+        "--all-architectures": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--decompile-timeout-ms": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--function": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--no-decompile": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--other": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--other-image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--other-image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--workflow": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage annotate-batch": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<2>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage annotation": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage annotation apply-batch": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<2>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage annotation check-names": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<2>": {
+          "type": "value",
+          "repeated": true,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage annotation comment": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--clear": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<2>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<3>": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage annotation list": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage annotation list-findings": {
+      "arguments": {
+        "--address": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--contains": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--function": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--kind": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--status": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage annotation record-finding": {
+      "arguments": {
+        "--address": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--confidence": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--evidence": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--function": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--id": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--kind": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--resolution": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--status": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--text": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage annotation rename": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--clear": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<2>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<3>": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage annotations": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage assemble": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--source": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage audit": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--entries": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--include-discovery": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage batch": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--entries": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--entries-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage binary analyze": {
+      "arguments": {
+        "--all-architectures": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--decompile-timeout-ms": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--function": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--no-decompile": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--other": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--other-image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--other-image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--workflow": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary archive-inventory": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--contains": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary assemble": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--source": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary audit": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--entries": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--include-discovery": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary build-info": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary capabilities": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary carve": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--max-candidates": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary decode": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--codec": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--dictionary-fill": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--expected-output-size": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--initial-write-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--length": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--preview-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--preview-size": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--timeout-ms": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary detect": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--peid": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary export-patched": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--destination": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--expected-revision": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--source-sha256": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary inspect": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--view": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary inspect-data": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--size": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--view": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--word-size": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary inspect-raw": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--request": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary inspect-sleigh": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--request-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary inventory": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary list-exports": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--contains": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary list-imports": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--contains": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary list-patches": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary patch-bytes": {
+      "arguments": {
+        "--allow-data": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--expected-revision": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--original-hex": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--replacement-hex": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--source-sha256": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary pe-load-config": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary pe-resources": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--type": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary pyinstaller-archive": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary revert-patch": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--expected-revision": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--source-sha256": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary scan-capa": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--rules": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary scan-yara": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--rules": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary search": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--query": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--query-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary triage": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary wasm-module": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--list": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage capa": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--rules": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage capabilities": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage carve": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--max-candidates": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage check-names": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<2>": {
+          "type": "value",
+          "repeated": true,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage comment": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--clear": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<2>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<3>": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage compare": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--reference": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage compare-pointers": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--other": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--other-at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage compare-runtime": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--module": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--original": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--original-image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--original-image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--range": {
+          "type": "value",
+          "repeated": true,
+          "required": true
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage correlate": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--module": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--original": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage debug-types": {
+      "arguments": {
+        "--apply": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage decode-file": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--codec": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--dictionary-fill": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--expected-output-size": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--initial-write-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--length": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--preview-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--preview-size": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--timeout-ms": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage decompile": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--compiler": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--exact-entry": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--isolated": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--view": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage detect": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--peid": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage disasm": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--count": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--view": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage dotnet": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--contains": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--il": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--list": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--parent-token": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage export-cfg": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage export-patched": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--destination": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--expected-revision": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--source-sha256": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage exports": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--contains": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage funcs": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--name": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--symbols-only": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage function": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage function batch": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--entries": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--entries-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage function build-signatures": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--fuzzy-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--output": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage function compare": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--reference": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage function decompile": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--compiler": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--exact-entry": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--isolated": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--view": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage function disassemble": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--count": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--view": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage function graph": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--view": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage function identify": {
+      "arguments": {
+        "--apply": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--db": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--fuzzy-db": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--fuzzy-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--no-bundled": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage function inspect-table": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--count": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--relative-base": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage function list": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--name": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--symbols-only": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage function pseudocode": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--structured": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage function summarize": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--view": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage function xrefs": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--from": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--to": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage graph": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--view": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage identify": {
+      "arguments": {
+        "--apply": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--db": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--fuzzy-db": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--fuzzy-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--no-bundled": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage imports": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--contains": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage info": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--view": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage inspect-data": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--size": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--view": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--word-size": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage inspect-raw": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--request": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage inspect-sleigh": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--request-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage inventory": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage jump-table": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--count": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--relative-base": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage language": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage language inspect": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage list-patches": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage managed": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage managed disassemble": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--contains": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--il": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--list": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--parent-token": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage managed inspect": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--contains": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--il": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--list": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--parent-token": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage mcp": {
+      "arguments": {
+        "--all-tools": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--corpus": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--debug-endpoint": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--debug-kill": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--debug-writes": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--flywheel-baseline": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--flywheel-dir": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--flywheel-run": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--flywheel-workers": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--gate": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--observations": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--require-novel-gain": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage metadata": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage observe-indirect-branch": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--start": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage observe-pointer": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage pack": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage pack check": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage pack diff": {
+      "arguments": {
+        "--against": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage pack export": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--output": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "-o": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage pack import": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--into": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage pack list": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage packs": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage packs check": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage packs diff": {
+      "arguments": {
+        "--against": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage packs export": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--output": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "-o": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage packs import": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--into": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage packs list": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage patch-bytes": {
+      "arguments": {
+        "--allow-data": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--expected-revision": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--original-hex": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--replacement-hex": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--source-sha256": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage pseudocode": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--structured": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage query-debugger": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--request": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--socket": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--timeout-ms": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage rename": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--clear": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<2>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<3>": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage report": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--component": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--component-worker": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--no-decompile": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--other": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--other-image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--other-image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--prepare-analysis": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<2>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage revert-patch": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--expected-revision": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--source-sha256": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage runtime": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage runtime branch": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage runtime branch inspect": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--start": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage runtime bytes": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage runtime bytes compare": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--module": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--original": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--original-image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--original-image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--range": {
+          "type": "value",
+          "repeated": true,
+          "required": true
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage runtime debugger": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage runtime debugger query": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--request": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--socket": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--timeout-ms": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage runtime module": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage runtime module correlate": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--module": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--original": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage runtime pointer": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage runtime pointer compare": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--other": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--other-at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage runtime pointer observe": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage search": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--query": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--query-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage server": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage server serve": {
+      "arguments": {
+        "--all-tools": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--corpus": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--debug-endpoint": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--debug-kill": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--debug-writes": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--flywheel-baseline": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--flywheel-dir": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--flywheel-run": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--flywheel-workers": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--gate": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--observations": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--require-novel-gain": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage signatures": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--fuzzy-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--output": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage string": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage string list": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--contains": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--min-len": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage strings": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--contains": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--min-len": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage summarize": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--view": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage triage": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage type": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage type import-debug": {
+      "arguments": {
+        "--apply": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage type import-debug-layouts": {
+      "arguments": {
+        "--apply": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--review-sha256": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage type import-pdb-names": {
+      "arguments": {
+        "--apply": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--pdb": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage workflow": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": true
+    },
+    "rampage workflow run": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--component": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--component-worker": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--no-decompile": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--other": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--other-image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--other-image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--prepare-analysis": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "<2>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage xrefs": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--from": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--to": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage yara": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--rules": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    }
+  }
+}

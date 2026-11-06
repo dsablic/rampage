@@ -4,16 +4,23 @@
 //! An archive is one gzip member holding one JSON document: a manifest and the pack's files, each as text, in the
 //! existing pack formats (`rampage-pack.toml`, the signature databases its contents name, and a flywheel pack's
 //! `entries.json`). The manifest records:
-//! - the archive format and version, and the rampage versions that can load it (`min` inclusive, `max_exclusive`);
+//! - the archive format and its version, and the oldest rampage that reads everything the archive uses;
 //! - the pack's own declarations (name, version, licence, source, description);
 //! - the heuristic families it holds (`libid`, ...), each file's SHA-256 and size, and a content hash over all of
 //!   it;
 //! - per entry of a flywheel pack: its revert id, family, candidate hash, row count, corpus version and split, what
 //!   it was gated against, both gate verdicts and the held-out delta.
 //!
-//! Import refuses an archive whose format, version range, file list, file hashes, content hash or entry list does
-//! not check out, then writes the pack to a staging directory, loads it as `--pack` would, and only then moves it
-//! into place. Nothing in an archive is executed: it is data, like any pack.
+//! Import refuses an archive whose format, version, file list, file hashes, content hash or entry list does not
+//! check out, then writes the pack to a staging directory, loads it as `--pack` would, and only then moves it into
+//! place. Nothing in an archive is executed: it is data, like any pack.
+//!
+//! Versions: a reader accepts every archive whose `format_version` it supports (this build: 1) and whose
+//! `min_rampage_version` it meets, whichever rampage wrote it. Within format 1 a later rampage may add manifest
+//! fields; a reader ignores those it does not know, with a warning, and the content hash still covers them. A change
+//! an older reader cannot ignore takes `format_version` 2, which this build refuses with a version error. Archives
+//! written before 1.0 carry a `rampage_version` range instead of `min_rampage_version`; the range is ignored and
+//! they keep loading.
 //!
 //! The hashes are integrity checks, not a signature: they catch damage and inconsistent edits, but anyone can
 //! rewrite an archive and recompute them. For a flywheel pack, import also checks that its signature databases are
@@ -33,8 +40,12 @@ use crate::packs::{ContentStatus, MANIFEST_FILE, Packs};
 
 /// The `format` every archive manifest carries.
 pub const ARCHIVE_FORMAT: &str = "rampage-pack-archive";
-/// The archive format version this build writes and reads.
+/// The archive format version this build writes, and the newest it reads.
 pub const ARCHIVE_FORMAT_VERSION: u32 = 1;
+/// The `min_rampage_version` this build writes: the version line whose reader follows the policy above. Preview
+/// builds released before it refuse such archives as having an unknown field. Raise it only when an export starts
+/// relying on something older 1.x readers would silently ignore.
+pub const ARCHIVE_MIN_RAMPAGE_VERSION: &str = "0.1.0";
 /// The usual file extension.
 pub const ARCHIVE_EXTENSION: &str = "rpack";
 const MAX_COMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
@@ -55,7 +66,7 @@ pub enum PackArchiveError {
     /// A hash does not match: the archive was changed after export, or damaged.
     #[error("integrity: {0}")]
     Integrity(String),
-    /// This rampage is outside the archive's version range.
+    /// The archive needs a newer rampage: a newer format version, or a higher minimum rampage version.
     #[error("version: {0}")]
     Version(String),
     /// The destination is not usable.
@@ -69,27 +80,12 @@ fn io(path: &Path, error: impl std::fmt::Display) -> PackArchiveError {
     PackArchiveError::Io(format!("{}: {error}", path.display()))
 }
 
-/// The rampage versions an archive loads in: `min` inclusive, `max_exclusive` exclusive, both `MAJOR.MINOR.PATCH`.
+/// The rampage versions an archive written before 1.0 declared it loads in. Kept so its content hash checks out;
+/// readers ignore it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct VersionRange {
     pub min: String,
     pub max_exclusive: String,
-}
-
-impl VersionRange {
-    /// The range a build exports: from its own version up to its next breaking version (the next minor while the
-    /// major is 0, else the next major).
-    pub fn for_version(version: &str) -> Result<VersionRange, PackArchiveError> {
-        let (major, minor, patch) = parse_version(version)?;
-        let max = if major == 0 { format!("0.{}.0", minor + 1) } else { format!("{}.0.0", major + 1) };
-        Ok(VersionRange { min: format!("{major}.{minor}.{patch}"), max_exclusive: max })
-    }
-
-    pub fn contains(&self, version: &str) -> Result<bool, PackArchiveError> {
-        let version = parse_version(version)?;
-        Ok(parse_version(&self.min)? <= version && version < parse_version(&self.max_exclusive)?)
-    }
 }
 
 /// `MAJOR.MINOR.PATCH`, ignoring a pre-release or build suffix after `-` or `+`.
@@ -106,7 +102,6 @@ fn parse_version(text: &str) -> Result<(u64, u64, u64), PackArchiveError> {
 
 /// The pack's own declarations, as its `rampage-pack.toml` makes them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ArchivePack {
     pub name: String,
     pub version: String,
@@ -117,7 +112,6 @@ pub struct ArchivePack {
 
 /// One file of the archive.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ArchiveFile {
     /// Relative to the pack directory, `/`-separated.
     pub path: String,
@@ -127,7 +121,6 @@ pub struct ArchiveFile {
 
 /// One promoted entry of a flywheel pack, as the manifest summarises it; `entries.json` holds the full record.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ArchiveEntry {
     /// The revert id: the entry's provenance id, which `rampage-eval bundle --remove` takes.
     pub id: String,
@@ -153,17 +146,22 @@ pub struct ArchiveEntry {
 
 /// An archive's manifest.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ArchiveManifest {
     pub format: String,
     pub format_version: u32,
-    pub rampage_version: VersionRange,
+    /// The oldest rampage that reads everything the archive uses; absent in archives written before 1.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_rampage_version: Option<String>,
+    /// Archives written before 1.0 only: the version range they declared. Ignored, but covered by their hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rampage_version: Option<VersionRange>,
     /// The rampage that wrote it.
     pub exported_by: String,
     pub pack: ArchivePack,
     /// The heuristic families the pack holds: the flywheel families of its entries, else its content kinds.
     pub families: Vec<String>,
-    /// The SHA-256 over the version range, pack declarations, families, file list and entries.
+    /// The SHA-256 over every manifest field except itself and `exported_by`, including fields a reader does not
+    /// know (see [`ArchiveManifest::compute_hash`]).
     pub content_sha256: String,
     pub files: Vec<ArchiveFile>,
     #[serde(default)]
@@ -171,23 +169,73 @@ pub struct ArchiveManifest {
 }
 
 impl ArchiveManifest {
-    /// The content hash of everything the manifest asserts except the hash itself and who wrote it.
+    /// The content hash of everything the manifest asserts except the hash itself and who wrote it: the SHA-256 of
+    /// the manifest's JSON without `content_sha256` and `exported_by`, with every object's keys sorted.
     pub fn compute_hash(&self) -> String {
+        let value = serde_json::to_value(self).unwrap_or_default();
+        canonical_hash(&value)
+    }
+
+    /// The hash archives written before 1.0 carry: over the fields that version knew, in its order.
+    fn legacy_hash(&self) -> Option<String> {
         let covered = serde_json::json!({
             "format": self.format,
             "format_version": self.format_version,
-            "rampage_version": self.rampage_version,
+            "rampage_version": self.rampage_version.as_ref()?,
             "pack": self.pack,
             "families": self.families,
             "files": self.files,
             "entries": self.entries,
         });
-        hex(&Sha256::digest(covered.to_string().as_bytes()))
+        Some(hex(&Sha256::digest(covered.to_string().as_bytes())))
+    }
+}
+
+/// The SHA-256 of a manifest's JSON `value` without `content_sha256` and `exported_by`, keys sorted at every level.
+fn canonical_hash(value: &serde_json::Value) -> String {
+    fn sorted(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(object) => {
+                let mut keys: Vec<&String> = object.keys().collect();
+                keys.sort();
+                serde_json::Value::Object(keys.into_iter().map(|key| (key.clone(), sorted(&object[key]))).collect())
+            }
+            serde_json::Value::Array(items) => serde_json::Value::Array(items.iter().map(sorted).collect()),
+            other => other.clone(),
+        }
+    }
+    let mut covered = value.clone();
+    if let Some(object) = covered.as_object_mut() {
+        object.remove("content_sha256");
+        object.remove("exported_by");
+    }
+    hex(&Sha256::digest(sorted(&covered).to_string().as_bytes()))
+}
+
+/// The field paths of `raw` that `known` (the same JSON read into this build's types and written back) lacks:
+/// fields of a later format-1 archive.
+fn unknown_fields(raw: &serde_json::Value, known: &serde_json::Value, prefix: &str, out: &mut Vec<String>) {
+    match (raw, known) {
+        (serde_json::Value::Object(raw), serde_json::Value::Object(known)) => {
+            for (key, value) in raw {
+                let path = if prefix.is_empty() { key.clone() } else { format!("{prefix}.{key}") };
+                match known.get(key) {
+                    Some(known) => unknown_fields(value, known, &path, out),
+                    None if !value.is_null() => out.push(path),
+                    None => {}
+                }
+            }
+        }
+        (serde_json::Value::Array(raw), serde_json::Value::Array(known)) => {
+            for (index, (raw, known)) in raw.iter().zip(known).enumerate() {
+                unknown_fields(raw, known, &format!("{prefix}[{index}]"), out);
+            }
+        }
+        _ => {}
     }
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Wire {
     manifest: ArchiveManifest,
     files: BTreeMap<String, String>,
@@ -198,6 +246,8 @@ struct Wire {
 pub struct Archive {
     pub manifest: ArchiveManifest,
     pub files: BTreeMap<String, String>,
+    /// What a reader ignored: manifest fields of a later format-1 archive.
+    pub warnings: Vec<String>,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -307,7 +357,8 @@ pub fn build(directory: &Path, version: &str) -> Result<Archive, PackArchiveErro
     let mut manifest = ArchiveManifest {
         format: ARCHIVE_FORMAT.to_owned(),
         format_version: ARCHIVE_FORMAT_VERSION,
-        rampage_version: VersionRange::for_version(version)?,
+        min_rampage_version: Some(ARCHIVE_MIN_RAMPAGE_VERSION.to_owned()),
+        rampage_version: None,
         exported_by: format!("rampage {version}"),
         pack: ArchivePack {
             name: manifest.name,
@@ -322,7 +373,7 @@ pub fn build(directory: &Path, version: &str) -> Result<Archive, PackArchiveErro
         entries,
     };
     manifest.content_sha256 = manifest.compute_hash();
-    Ok(Archive { manifest, files })
+    Ok(Archive { manifest, files, warnings: Vec::new() })
 }
 
 impl Archive {
@@ -350,23 +401,45 @@ impl Archive {
         if json.len() as u64 > MAX_JSON_BYTES {
             return Err(PackArchiveError::Format(format!("expands past {MAX_JSON_BYTES} bytes")));
         }
-        let wire: Wire = serde_json::from_slice(&json)
-            .map_err(|error| PackArchiveError::Format(format!("not a pack archive: {error}")))?;
-        let archive = Archive { manifest: wire.manifest, files: wire.files };
-        archive.check(version)?;
+        let not_an_archive =
+            |error: serde_json::Error| PackArchiveError::Format(format!("not a pack archive: {error}"));
+        let raw: serde_json::Value = serde_json::from_slice(&json).map_err(not_an_archive)?;
+        // The format and its version first: a later format may not parse as this one.
+        let manifest = &raw["manifest"];
+        if let Some(format) = manifest.get("format").and_then(serde_json::Value::as_str)
+            && format != ARCHIVE_FORMAT
+        {
+            return Err(PackArchiveError::Format(format!("format {format:?} is not {ARCHIVE_FORMAT}")));
+        }
+        match manifest.get("format_version").and_then(serde_json::Value::as_u64) {
+            Some(0) => return Err(PackArchiveError::Format("format version 0 does not exist".to_owned())),
+            Some(newer) if newer > u64::from(ARCHIVE_FORMAT_VERSION) => {
+                return Err(PackArchiveError::Version(format!(
+                    "the archive is in format version {newer}, written by a newer rampage; this rampage reads \
+                     format version {ARCHIVE_FORMAT_VERSION}. Import it with a newer rampage"
+                )));
+            }
+            _ => {}
+        }
+        let wire: Wire = serde_json::from_value(raw.clone()).map_err(not_an_archive)?;
+        let mut unknown = Vec::new();
+        let known = serde_json::to_value(&wire).map_err(|error| PackArchiveError::Format(error.to_string()))?;
+        unknown_fields(&raw, &known, "", &mut unknown);
+        let warnings = if unknown.is_empty() {
+            Vec::new()
+        } else {
+            vec![format!("archive fields this rampage does not know were ignored: {}", unknown.join(", "))]
+        };
+        let archive = Archive { manifest: wire.manifest, files: wire.files, warnings };
+        archive.check(&raw["manifest"], version)?;
         Ok(archive)
     }
 
-    fn check(&self, version: &str) -> Result<(), PackArchiveError> {
+    /// Checks the archive, whose manifest was read from `raw`, for rampage `version`.
+    fn check(&self, raw: &serde_json::Value, version: &str) -> Result<(), PackArchiveError> {
         let manifest = &self.manifest;
         if manifest.format != ARCHIVE_FORMAT {
             return Err(PackArchiveError::Format(format!("format {:?} is not {ARCHIVE_FORMAT}", manifest.format)));
-        }
-        if manifest.format_version != ARCHIVE_FORMAT_VERSION {
-            return Err(PackArchiveError::Format(format!(
-                "format version {} (this rampage reads {ARCHIVE_FORMAT_VERSION})",
-                manifest.format_version
-            )));
         }
         if manifest.files.len() > MAX_FILES || manifest.files.is_empty() {
             return Err(PackArchiveError::Format(format!("an archive holds 1 to {MAX_FILES} files")));
@@ -402,7 +475,9 @@ impl Archive {
                 )));
             }
         }
-        if manifest.compute_hash() != manifest.content_sha256 {
+        if canonical_hash(raw) != manifest.content_sha256
+            && manifest.legacy_hash().as_deref() != Some(manifest.content_sha256.as_str())
+        {
             return Err(PackArchiveError::Integrity("the content hash differs from the manifest's".to_owned()));
         }
         let declared: toml::Table = self.files[MANIFEST_FILE]
@@ -470,10 +545,11 @@ impl Archive {
             }
             None => {}
         }
-        if !manifest.rampage_version.contains(version)? {
+        if let Some(minimum) = &manifest.min_rampage_version
+            && parse_version(version)? < parse_version(minimum)?
+        {
             return Err(PackArchiveError::Version(format!(
-                "this rampage is {version}; the archive loads in {} up to (not including) {}",
-                manifest.rampage_version.min, manifest.rampage_version.max_exclusive
+                "this rampage is {version}; the archive needs rampage {minimum} or later"
             )));
         }
         Ok(())
@@ -519,6 +595,9 @@ pub struct ImportReport {
     pub manifest: ArchiveManifest,
     /// Load with `--pack <directory>` or `RAMPAGE_PACKS`.
     pub load_with: String,
+    /// What this rampage ignored in the archive: manifest fields of a later format-1 archive.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Checks the archive at `archive` and installs its pack as the directory `destination`, which must not exist or
@@ -572,6 +651,7 @@ pub fn import(archive: &Path, destination: &Path, version: &str) -> Result<Impor
         directory: destination.to_owned(),
         load_with: format!("--pack {}", destination.display()),
         manifest: archive.manifest,
+        warnings: archive.warnings,
     })
 }
 
@@ -641,15 +721,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_ranges_follow_the_next_breaking_version() {
-        let range = VersionRange::for_version("0.1.0").unwrap();
-        assert_eq!(range, VersionRange { min: "0.1.0".to_owned(), max_exclusive: "0.2.0".to_owned() });
-        assert!(range.contains("0.1.7").unwrap());
-        assert!(!range.contains("0.2.0").unwrap());
-        assert!(!range.contains("0.0.9").unwrap());
-        assert_eq!(VersionRange::for_version("2.3.4").unwrap().max_exclusive, "3.0.0");
-        assert!(range.contains("0.1.1-dev+abc").unwrap());
-        assert!(VersionRange::for_version("1.2").is_err());
+    fn versions_parse_without_their_suffix() {
+        assert_eq!(parse_version("1.0.0-rc.1").unwrap(), (1, 0, 0));
+        assert_eq!(parse_version("0.1.1-dev+abc").unwrap(), (0, 1, 1));
+        assert!(parse_version("1.2").is_err());
     }
 
     use crate::flywheel::{GateCheck, GateConfig, Paths, PromotedEntry, RowSource};
@@ -718,9 +793,75 @@ mod tests {
         let mut wire: Wire = serde_json::from_slice(&json).unwrap();
         change(&mut wire);
         let tampered = archive.with_extension("tampered.rpack");
-        let archive = Archive { manifest: wire.manifest, files: wire.files };
+        let archive = Archive { manifest: wire.manifest, files: wire.files, warnings: Vec::new() };
         std::fs::write(&tampered, archive.to_bytes().unwrap()).unwrap();
         tampered
+    }
+
+    /// `archive` with its JSON changed by `change`, written beside it as `name`.
+    fn rewrite_raw(archive: &Path, name: &str, change: impl FnOnce(&mut serde_json::Value)) -> PathBuf {
+        let bytes = std::fs::read(archive).unwrap();
+        let mut json = Vec::new();
+        flate2::read::GzDecoder::new(&bytes[..]).read_to_end(&mut json).unwrap();
+        let mut raw: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        change(&mut raw);
+        let mut encoder = flate2::GzBuilder::new().write(Vec::new(), flate2::Compression::best());
+        encoder.write_all(raw.to_string().as_bytes()).unwrap();
+        let rewritten = archive.with_file_name(name);
+        std::fs::write(&rewritten, encoder.finish().unwrap()).unwrap();
+        rewritten
+    }
+
+    #[test]
+    fn readers_accept_every_archive_of_their_format_major() {
+        let (root, pack) = promoted_pack("versions");
+        let archive = root.join("libid.rpack");
+        let manifest = export(&pack, &archive, "0.1.0").unwrap();
+        assert_eq!((manifest.format_version, manifest.min_rampage_version.as_deref()), (1, Some("0.1.0")));
+        assert_eq!(manifest.rampage_version, None);
+        // No upper bound: an archive one build wrote reads in every later one, and in earlier ones that meet the
+        // minimum.
+        for version in ["0.1.0", "0.9.3", "1.0.0-rc.1", "1.4.2", "7.0.0"] {
+            assert!(read(&archive, version).is_ok(), "{version}");
+        }
+        let later = root.join("later.rpack");
+        export(&pack, &later, "1.7.0").unwrap();
+        assert!(read(&later, "1.0.0").is_ok());
+
+        // A later format-1 archive with fields this build does not know loads, with a warning; the content hash
+        // covers the new fields, so they cannot be changed undetected.
+        let extended = rewrite_raw(&archive, "extended.rpack", |raw| {
+            raw["manifest"]["signed_by"] = serde_json::json!("someone");
+            raw["manifest"]["files"][0]["mode"] = serde_json::json!(420);
+            let manifest = raw["manifest"].clone();
+            raw["manifest"]["content_sha256"] = serde_json::json!(canonical_hash(&manifest));
+        });
+        let read_back = read(&extended, "1.0.0").unwrap();
+        assert_eq!(read_back.warnings.len(), 1, "{:?}", read_back.warnings);
+        assert!(read_back.warnings[0].contains("manifest.signed_by") && read_back.warnings[0].contains("mode"));
+        let forged = rewrite_raw(&extended, "forged.rpack", |raw| raw["manifest"]["signed_by"] = "else".into());
+        assert!(matches!(read(&forged, "1.0.0").unwrap_err(), PackArchiveError::Integrity(_)));
+        let report = import(&extended, &root.join("extended-pack"), "1.0.0").unwrap();
+        assert_eq!(report.warnings, read_back.warnings);
+
+        // A future format major is refused as needing a newer rampage, before its contents are parsed.
+        let future = rewrite_raw(&archive, "future.rpack", |raw| {
+            raw["manifest"]["format_version"] = 2.into();
+            raw["manifest"]["files"] = serde_json::json!({"a different": "shape"});
+        });
+        let error = read(&future, "1.0.0").unwrap_err();
+        assert!(matches!(error, PackArchiveError::Version(_)), "{error}");
+        assert!(error.to_string().contains("format version 2"), "{error}");
+        // So is an archive that needs a later rampage.
+        let demanding = rewrite_raw(&archive, "demanding.rpack", |raw| {
+            raw["manifest"]["min_rampage_version"] = "1.3.0".into();
+            let manifest = raw["manifest"].clone();
+            raw["manifest"]["content_sha256"] = serde_json::json!(canonical_hash(&manifest));
+        });
+        let error = read(&demanding, "1.2.9").unwrap_err();
+        assert!(matches!(error, PackArchiveError::Version(_)) && error.to_string().contains("1.3.0"), "{error}");
+        assert!(read(&demanding, "1.3.0").is_ok());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -736,10 +877,6 @@ mod tests {
         assert!(manifest.entries.iter().all(|entry| entry.gate_passed && entry.baseline.is_some()));
         let paths: Vec<&str> = manifest.files.iter().map(|file| file.path.as_str()).collect();
         assert_eq!(paths, ["entries.json", "rampage-pack.toml", "sigs/x86_64.json"]);
-        assert_eq!(
-            manifest.rampage_version,
-            VersionRange { min: "0.1.0".to_owned(), max_exclusive: "0.2.0".to_owned() }
-        );
 
         // A clean import reproduces the pack byte for byte, and it loads as a pack.
         let installed = root.join("clean").join("imported");
@@ -779,8 +916,8 @@ mod tests {
         });
         let error = read(&rehashed, "0.1.0").unwrap_err();
         assert!(error.to_string().contains("content hash"), "{error}");
-        let widened = rewrite(&archive, |wire| wire.manifest.rampage_version.max_exclusive = "9.0.0".to_owned());
-        assert!(matches!(read(&widened, "0.5.0").unwrap_err(), PackArchiveError::Integrity(_)));
+        let lowered = rewrite(&archive, |wire| wire.manifest.min_rampage_version = Some("0.0.1".to_owned()));
+        assert!(matches!(read(&lowered, "0.5.0").unwrap_err(), PackArchiveError::Integrity(_)));
         let dropped = rewrite(&archive, |wire| {
             wire.manifest.entries.pop();
             wire.manifest.content_sha256 = wire.manifest.compute_hash();
@@ -825,12 +962,6 @@ mod tests {
         assert!(import(&changed, &nowhere, "0.1.0").is_err());
         assert!(!nowhere.exists(), "a refused import writes nothing");
 
-        // An honest archive for another rampage is refused by its version range.
-        let other = root.join("other.rpack");
-        export(&pack, &other, "0.3.1").unwrap();
-        let error = read(&other, "0.1.0").unwrap_err();
-        assert!(matches!(error, PackArchiveError::Version(_)), "{error}");
-        assert!(read(&other, "0.3.9").is_ok());
         let _ = std::fs::remove_dir_all(&root);
     }
 

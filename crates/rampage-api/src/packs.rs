@@ -3,8 +3,13 @@
 //! under which licence and from where. A pack is data only: nothing is downloaded or executed. Every path stays
 //! inside the pack directory, every file is read once, with a size cap and within running budgets per pack and for
 //! all packs together, and a content that fails to load is reported without keeping the others from loading.
+//!
+//! The manifest may declare `format_version` (absent means 1). This build reads format 1 and rejects a pack that
+//! declares a higher one. Within format 1 a later rampage may add manifest fields and content kinds: fields this
+//! build does not know are ignored with a warning, and a content of a kind it does not know is reported as
+//! unsupported while the pack's other contents load.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
@@ -42,10 +47,13 @@ const MAX_PEID_WARNINGS: usize = 3;
 const MIB: u64 = 1024 * 1024;
 /// Packs loaded in one process; directories past these are reported, not read.
 const MAX_PACKS: usize = 64;
+/// The `rampage-pack.toml` format this build reads; a manifest without `format_version` is format 1.
+pub const PACK_FORMAT_VERSION: u64 = 1;
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Manifest {
+    #[serde(default)]
+    format_version: Option<u64>,
     name: String,
     version: String,
     /// An SPDX licence expression.
@@ -54,20 +62,30 @@ struct Manifest {
     source: String,
     description: String,
     contents: Vec<Entry>,
+    /// Fields of a later format-1 manifest, ignored with a warning.
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Entry {
-    kind: Kind,
+    kind: String,
     path: String,
     /// For signatures: the architecture the database must be built for.
     #[serde(default)]
     arch: Option<String>,
+    #[serde(flatten)]
+    unknown: BTreeMap<String, toml::Value>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
+impl Entry {
+    /// The content's kind, or `None` for a kind of a later format-1 manifest.
+    fn kind(&self) -> Option<Kind> {
+        Kind::parse(&self.kind)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Signatures,
     Peid,
@@ -77,6 +95,12 @@ enum Kind {
 }
 
 impl Kind {
+    fn parse(text: &str) -> Option<Kind> {
+        [Kind::Signatures, Kind::Peid, Kind::Yara, Kind::Capa, Kind::Constants]
+            .into_iter()
+            .find(|kind| kind.label() == text)
+    }
+
     fn label(self) -> &'static str {
         match self {
             Kind::Signatures => "signatures",
@@ -102,6 +126,9 @@ pub struct PackInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub contents: Vec<ContentInfo>,
+    /// What the manifest holds that this build ignored: fields of a later format-1 manifest.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -118,8 +145,8 @@ pub struct PackManifest {
 #[derive(Debug, Clone, Serialize)]
 pub struct ContentInfo {
     /// `signatures`, `peid`, `yara`, `capa` or `constants`; the built-in pack also lists `detect`, its
-    /// producing-tool database.
-    pub kind: &'static str,
+    /// producing-tool database. A kind this build does not know is listed as written, `unsupported`.
+    pub kind: String,
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arch: Option<String>,
@@ -211,9 +238,14 @@ impl Packs {
         self.loaded().iter().cloned().chain(std::iter::once(builtin())).collect()
     }
 
-    /// One line for each rejected pack and each content that failed or is unsupported.
+    /// One line for each rejected pack, each content that failed or is unsupported, and each manifest warning.
     pub fn problems(&self) -> Vec<String> {
-        self.problems_where(|_| true)
+        let mut problems = self.problems_where(|_| true);
+        for pack in self.loaded() {
+            let directory = pack.directory.as_deref().unwrap_or(Path::new("")).display();
+            problems.extend(pack.warnings.iter().map(|warning| format!("pack {directory}: {warning}")));
+        }
+        problems
     }
 
     /// The problems that bear on `kind` contents (`signatures`, `peid`, `yara`, `capa` or `constants`): each
@@ -294,6 +326,7 @@ impl Loaded {
                     manifest: None,
                     error,
                     contents: vec![],
+                    warnings: vec![],
                 });
                 continue;
             }
@@ -309,16 +342,44 @@ impl Loaded {
 
     fn add(&mut self, directory: &Path, names: &mut HashSet<String>, loading: &mut Loading) {
         let given = Some(directory.to_owned());
-        let mut info = PackInfo { directory: given, builtin: false, manifest: None, error: None, contents: Vec::new() };
+        let mut info = PackInfo {
+            directory: given,
+            builtin: false,
+            manifest: None,
+            error: None,
+            contents: Vec::new(),
+            warnings: Vec::new(),
+        };
         match open_manifest(directory, names, loading) {
             Err(error) => info.error = Some(error),
             Ok((root, manifest)) => {
+                if !manifest.unknown.is_empty() {
+                    let keys: Vec<&str> = manifest.unknown.keys().map(String::as_str).collect();
+                    info.warnings.push(format!(
+                        "{MANIFEST_FILE} fields this rampage does not know were ignored: {}",
+                        keys.join(", ")
+                    ));
+                }
                 for entry in &manifest.contents {
-                    let (status, detail) = match self.load_content(&root, &manifest.name, entry, loading) {
-                        Ok(detail) => (ContentStatus::Loaded, detail),
-                        Err(problem) => problem,
+                    if !entry.unknown.is_empty() {
+                        let keys: Vec<&str> = entry.unknown.keys().map(String::as_str).collect();
+                        info.warnings.push(format!(
+                            "content {:?}: fields this rampage does not know were ignored: {}",
+                            entry.path,
+                            keys.join(", ")
+                        ));
+                    }
+                    let (status, detail) = match entry.kind() {
+                        None => (
+                            ContentStatus::Unsupported,
+                            format!("content kind {:?} is not one this rampage knows; use a newer rampage", entry.kind),
+                        ),
+                        Some(kind) => match self.load_content(&root, &manifest.name, kind, entry, loading) {
+                            Ok(detail) => (ContentStatus::Loaded, detail),
+                            Err(problem) => problem,
+                        },
                     };
-                    let (kind, path, arch) = (entry.kind.label(), entry.path.clone(), entry.arch.clone());
+                    let (kind, path, arch) = (entry.kind.clone(), entry.path.clone(), entry.arch.clone());
                     info.contents.push(ContentInfo { kind, path, arch, status, detail });
                 }
                 info.manifest = Some(PackManifest {
@@ -338,12 +399,13 @@ impl Loaded {
         &mut self,
         root: &Path,
         pack: &str,
+        kind: Kind,
         entry: &Entry,
         loading: &mut Loading,
     ) -> Result<String, (ContentStatus, String)> {
         let error = |text: String| (ContentStatus::Error, text);
         let path = contained(root, &entry.path).map_err(error)?;
-        match entry.kind {
+        match kind {
             Kind::Signatures => {
                 let planned = loading.plan(path, MAX_SIGNATURE_DB_BYTES, "signature database").map_err(error)?;
                 let text = read_planned(root, &planned, "signature database").map_err(error)?;
@@ -415,7 +477,10 @@ impl Loaded {
                     }
                 }
                 loading.keep_constants(constants.len()).map_err(error)?;
-                let detail = format!("{} crypto and compression constants", constants.len());
+                let mut detail = format!("{} crypto and compression constants", constants.len());
+                if !constants.warnings().is_empty() {
+                    detail.push_str(&format!("; warnings: {}", constants.warnings().join("; ")));
+                }
                 self.constants.push((pack.to_owned(), constants));
                 Ok(detail)
             }
@@ -569,6 +634,13 @@ fn open_manifest(
     let planned = loading.plan(contained(&root, MANIFEST_FILE)?, MAX_PACK_MANIFEST_BYTES, "pack manifest")?;
     let text = read_planned(&root, &planned, "pack manifest")?;
     let manifest: Manifest = toml::from_str(&text).map_err(|error| format!("invalid {MANIFEST_FILE}: {error}"))?;
+    let version = manifest.format_version.unwrap_or(PACK_FORMAT_VERSION);
+    if version > PACK_FORMAT_VERSION {
+        return Err(format!(
+            "{MANIFEST_FILE} format_version {version} is newer than this rampage reads ({PACK_FORMAT_VERSION}); \
+             use a newer rampage"
+        ));
+    }
     validate(&manifest)?;
     if manifest.name == USER_RULES_NAMESPACE {
         return Err(format!(
@@ -616,15 +688,16 @@ fn validate(manifest: &Manifest) -> Result<(), String> {
                 entry.path
             ));
         }
-        match (&entry.arch, entry.kind) {
-            (Some(arch), Kind::Signatures) => {
+        match (&entry.arch, entry.kind()) {
+            (Some(arch), Some(Kind::Signatures)) => {
                 arch.parse::<Arch>().map_err(|error| format!("content {:?}: {error}", entry.path))?;
             }
-            (Some(_), kind) => {
+            (Some(_), Some(kind)) => {
                 let kind = kind.label();
                 return Err(format!("content {:?}: `arch` applies only to signatures, not {kind}", entry.path));
             }
-            (None, _) => {}
+            // A later kind's `arch` is its own business; the content is reported as unsupported.
+            (Some(_), None) | (None, _) => {}
         }
     }
     Ok(())
@@ -761,8 +834,8 @@ fn read_rule_files(
 
 /// The databases bundled in rampage, described as a pack.
 fn builtin() -> PackInfo {
-    let loaded = |kind, path: String, arch: Option<String>, detail| ContentInfo {
-        kind,
+    let loaded = |kind: &str, path: String, arch: Option<String>, detail| ContentInfo {
+        kind: kind.to_owned(),
         path,
         arch,
         status: ContentStatus::Loaded,
@@ -787,7 +860,7 @@ fn builtin() -> PackInfo {
             }
             Ok(None) => None,
             Err(error) => Some(ContentInfo {
-                kind: "signatures",
+                kind: "signatures".to_owned(),
                 path: format!("bundled:index-{arch}"),
                 arch: Some(arch.to_string()),
                 status: ContentStatus::Error,
@@ -817,6 +890,7 @@ fn builtin() -> PackInfo {
         }),
         error: None,
         contents,
+        warnings: Vec::new(),
     }
 }
 

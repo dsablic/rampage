@@ -65,7 +65,7 @@ fn fixtures() -> PathBuf {
 }
 
 /// A synthetic corpus in a fresh directory (`<root>/corpus/<version>`).
-struct Synthetic {
+pub(crate) struct Synthetic {
     root: PathBuf,
     corpus: PathBuf,
 }
@@ -76,7 +76,7 @@ impl Drop for Synthetic {
     }
 }
 
-fn synthetic(name: &str) -> Synthetic {
+pub(crate) fn synthetic(name: &str) -> Synthetic {
     let root = std::env::temp_dir().join(format!("rampage-flywheel-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let corpus = root.join("corpus").join("synthetic-1");
@@ -139,7 +139,7 @@ fn improve_in(synthetic: &Synthetic, run: Option<&str>, gate: GateConfig, baseli
     Arc::new(Improve::open(options).unwrap())
 }
 
-fn improve(synthetic: &Synthetic, run: Option<&str>) -> Arc<Improve> {
+pub(crate) fn improve(synthetic: &Synthetic, run: Option<&str>) -> Arc<Improve> {
     improve_with(synthetic, run, GateConfig::default())
 }
 

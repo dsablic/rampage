@@ -1,0 +1,3175 @@
+{
+  "tools": {
+    "analysis_diagnostics": {
+      "group": "diagnostics",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "include_discovery": {
+          "type": "boolean",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        }
+      }
+    },
+    "annotate_batch": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "entries": {
+          "type": "array",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        }
+      }
+    },
+    "apply_data_type": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "byte_length": {
+          "type": "integer|null",
+          "required": false
+        },
+        "clear": {
+          "type": "boolean",
+          "required": false
+        },
+        "count": {
+          "type": "integer|null",
+          "required": false
+        },
+        "encoding": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "type_name": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "apply_enum": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "clear": {
+          "type": "boolean",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "operand": {
+          "type": "integer",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "type_name": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "apply_offset": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "clear": {
+          "type": "boolean",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "operand": {
+          "type": "integer",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "type_name": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "archive_inventory": {
+      "group": "carve",
+      "arguments": {
+        "contains": {
+          "type": "null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "assemble": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "source": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "batch": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "entries": {
+          "type": "array",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "binary_info": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        },
+        "view": {
+          "type": "string",
+          "required": false
+        }
+      }
+    },
+    "build_info": {
+      "group": "formats",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "build_signatures": {
+      "group": "detection",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "fuzzy_request": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "output": {
+          "type": "string",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "capa_detect": {
+      "group": "detection",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "rules_dir": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "capabilities": {
+      "group": "detection",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        }
+      }
+    },
+    "carve": {
+      "group": "carve",
+      "arguments": {
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "check_names": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "names": {
+          "type": "array",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "class_evidence": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "compare_pointer_observations": {
+      "group": "runtime",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "other": {
+          "type": "string",
+          "required": true
+        },
+        "other_at": {
+          "type": "string",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "compare_runtime_bytes": {
+      "group": "runtime",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "module": {
+          "type": "string",
+          "required": true
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "original": {
+          "type": "string",
+          "required": true
+        },
+        "original_image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "original_image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "ranges": {
+          "type": "array",
+          "required": true
+        }
+      }
+    },
+    "corpus_failures": {
+      "group": "improve",
+      "arguments": {
+        "arch": {
+          "type": "string",
+          "required": false
+        },
+        "compiler": {
+          "type": "string",
+          "required": false
+        },
+        "include_bytes": {
+          "type": "boolean",
+          "required": false
+        },
+        "library": {
+          "type": "string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer",
+          "required": false
+        },
+        "min_occurrences": {
+          "type": "integer",
+          "required": false
+        },
+        "name_contains": {
+          "type": "string",
+          "required": false
+        },
+        "offset": {
+          "type": "integer",
+          "required": false
+        },
+        "opt": {
+          "type": "string",
+          "required": false
+        },
+        "origin": {
+          "type": "string",
+          "required": false
+        },
+        "outcome": {
+          "type": "string",
+          "required": false
+        },
+        "proposable": {
+          "type": "boolean",
+          "required": false
+        },
+        "variants": {
+          "type": "boolean",
+          "required": false
+        }
+      },
+      "experimental": true
+    },
+    "debug_bind": {
+      "group": "debug",
+      "arguments": {
+        "module": {
+          "type": "null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "session": {
+          "type": "string",
+          "required": true
+        },
+        "slide": {
+          "type": "integer|null|string",
+          "required": false
+        }
+      }
+    },
+    "debug_breakpoints": {
+      "group": "debug",
+      "arguments": {
+        "action": {
+          "type": "string",
+          "required": true
+        },
+        "address": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "epoch": {
+          "type": "integer|null",
+          "required": false
+        },
+        "function": {
+          "type": "null|string",
+          "required": false
+        },
+        "id": {
+          "type": "integer|null",
+          "required": false
+        },
+        "kind": {
+          "type": "null|string",
+          "required": false
+        },
+        "length": {
+          "type": "integer|null",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "null|string",
+          "required": false
+        },
+        "session": {
+          "type": "string",
+          "required": true
+        },
+        "size": {
+          "type": "integer|null",
+          "required": false
+        },
+        "static_address": {
+          "type": "integer|null|string",
+          "required": false
+        }
+      }
+    },
+    "debug_connect": {
+      "group": "debug",
+      "arguments": {
+        "endpoint": {
+          "type": "null|string",
+          "required": false
+        },
+        "module": {
+          "type": "null|string",
+          "required": false
+        },
+        "path": {
+          "type": "null|string",
+          "required": false
+        },
+        "slide": {
+          "type": "integer|null|string",
+          "required": false
+        }
+      }
+    },
+    "debug_continue": {
+      "group": "debug",
+      "arguments": {
+        "epoch": {
+          "type": "integer",
+          "required": true
+        },
+        "session": {
+          "type": "string",
+          "required": true
+        },
+        "timeout_ms": {
+          "type": "integer|null",
+          "required": false
+        }
+      }
+    },
+    "debug_disconnect": {
+      "group": "debug",
+      "arguments": {
+        "kill": {
+          "type": "boolean|null",
+          "required": false
+        },
+        "session": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "debug_evidence": {
+      "group": "debug",
+      "arguments": {
+        "epoch": {
+          "type": "integer|null",
+          "required": false
+        },
+        "memory": {
+          "type": "array|null",
+          "required": false
+        },
+        "names": {
+          "type": "array|null",
+          "required": false
+        },
+        "session": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "debug_interrupt": {
+      "group": "debug",
+      "arguments": {
+        "session": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "debug_modules": {
+      "group": "debug",
+      "arguments": {
+        "epoch": {
+          "type": "integer|null",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "session": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "debug_read_memory": {
+      "group": "debug",
+      "arguments": {
+        "address": {
+          "type": "integer|string",
+          "required": true
+        },
+        "epoch": {
+          "type": "integer|null",
+          "required": false
+        },
+        "length": {
+          "type": "integer",
+          "required": true
+        },
+        "session": {
+          "type": "string",
+          "required": true
+        },
+        "thread": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "debug_registers": {
+      "group": "debug",
+      "arguments": {
+        "annotate": {
+          "type": "boolean|null",
+          "required": false
+        },
+        "epoch": {
+          "type": "integer|null",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "names": {
+          "type": "array|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "session": {
+          "type": "string",
+          "required": true
+        },
+        "thread": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "debug_snapshot": {
+      "group": "debug",
+      "arguments": {
+        "epoch": {
+          "type": "integer|null",
+          "required": false
+        },
+        "output": {
+          "type": "string",
+          "required": true
+        },
+        "ranges": {
+          "type": "array",
+          "required": true
+        },
+        "session": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "debug_status": {
+      "group": "debug",
+      "arguments": {
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "session": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "debug_step": {
+      "group": "debug",
+      "arguments": {
+        "count": {
+          "type": "integer|null",
+          "required": false
+        },
+        "epoch": {
+          "type": "integer",
+          "required": true
+        },
+        "out": {
+          "type": "boolean|null",
+          "required": false
+        },
+        "over": {
+          "type": "boolean|null",
+          "required": false
+        },
+        "session": {
+          "type": "string",
+          "required": true
+        },
+        "thread": {
+          "type": "null|string",
+          "required": false
+        },
+        "timeout_ms": {
+          "type": "integer|null",
+          "required": false
+        }
+      }
+    },
+    "debug_wait": {
+      "group": "debug",
+      "arguments": {
+        "session": {
+          "type": "string",
+          "required": true
+        },
+        "timeout_ms": {
+          "type": "integer|null",
+          "required": false
+        }
+      }
+    },
+    "debug_write_memory": {
+      "group": "debug",
+      "arguments": {
+        "address": {
+          "type": "integer|string",
+          "required": true
+        },
+        "bytes": {
+          "type": "string",
+          "required": true
+        },
+        "epoch": {
+          "type": "integer",
+          "required": true
+        },
+        "expect": {
+          "type": "null|string",
+          "required": false
+        },
+        "session": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "debug_write_register": {
+      "group": "debug",
+      "arguments": {
+        "epoch": {
+          "type": "integer",
+          "required": true
+        },
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "session": {
+          "type": "string",
+          "required": true
+        },
+        "thread": {
+          "type": "null|string",
+          "required": false
+        },
+        "value": {
+          "type": "integer|string",
+          "required": true
+        }
+      }
+    },
+    "declare_types": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "declarations": {
+          "type": "null|string",
+          "required": false
+        },
+        "header": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "packing": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "profiles": {
+          "type": "array",
+          "required": false
+        },
+        "replace": {
+          "type": "boolean",
+          "required": false
+        }
+      }
+    },
+    "decode_file_range": {
+      "group": "core",
+      "arguments": {
+        "codec": {
+          "type": "string",
+          "required": true
+        },
+        "dictionary_fill": {
+          "type": "integer|null",
+          "required": false
+        },
+        "expected_output_size": {
+          "type": "integer|string",
+          "required": true
+        },
+        "initial_write_offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "length": {
+          "type": "integer|string",
+          "required": true
+        },
+        "offset": {
+          "type": "integer|string",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "preview_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "preview_size": {
+          "type": "integer|null",
+          "required": false
+        },
+        "timeout_ms": {
+          "type": "integer|null",
+          "required": false
+        }
+      }
+    },
+    "decompile": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "exact_entry": {
+          "type": "boolean",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        },
+        "view": {
+          "type": "string",
+          "required": false
+        }
+      }
+    },
+    "delete_type": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "definition_group": {
+          "type": "boolean",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "detect_tools": {
+      "group": "detection",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "peid": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "diff_builds": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "max_per_section": {
+          "type": "integer|null",
+          "required": false
+        },
+        "other": {
+          "type": "string",
+          "required": true
+        },
+        "other_image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "other_image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "disassemble": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "null|string",
+          "required": false
+        },
+        "count": {
+          "type": "integer|null",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        },
+        "view": {
+          "type": "string",
+          "required": false
+        }
+      }
+    },
+    "discard_undo": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "force": {
+          "type": "boolean",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "dotnet_il": {
+      "group": "dotnet",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "method": {
+          "type": "string",
+          "required": true
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "dotnet_metadata": {
+      "group": "dotnet",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "contains": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "list": {
+          "type": "string",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "parent_token": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "edit_variable": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "clear_name": {
+          "type": "boolean",
+          "required": false
+        },
+        "clear_type": {
+          "type": "boolean",
+          "required": false
+        },
+        "data_type": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "name": {
+          "type": "null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "storage": {
+          "type": "null|object",
+          "required": false
+        },
+        "variable": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "enable_tools": {
+      "group": "meta",
+      "arguments": {
+        "groups": {
+          "type": "array",
+          "required": false
+        }
+      }
+    },
+    "entry_diagnostics": {
+      "group": "diagnostics",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        }
+      }
+    },
+    "evaluate_candidate": {
+      "group": "improve",
+      "arguments": {
+        "candidate": {
+          "type": "string",
+          "required": true
+        },
+        "cases_limit": {
+          "type": "integer",
+          "required": false
+        },
+        "cases_offset": {
+          "type": "integer",
+          "required": false
+        },
+        "stage": {
+          "type": "string",
+          "required": false
+        }
+      },
+      "experimental": true
+    },
+    "export_patched": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "destination": {
+          "type": "string",
+          "required": true
+        },
+        "expected_revision": {
+          "type": "string",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "source_sha256": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "find_crypto": {
+      "group": "detection",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "max_per_section": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "find_main": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "decompile": {
+          "type": "boolean|null",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "max_per_section": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "function_frame": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "include_tracker": {
+          "type": "boolean|null",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "function_graph": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        },
+        "view": {
+          "type": "string",
+          "required": false
+        }
+      }
+    },
+    "function_summary": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "block_offset": {
+          "type": "integer",
+          "required": false
+        },
+        "callee_offset": {
+          "type": "integer",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "reference_offset": {
+          "type": "integer",
+          "required": false
+        },
+        "view": {
+          "type": "string",
+          "required": false
+        }
+      }
+    },
+    "get_type": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "identify_functions": {
+      "group": "detection",
+      "arguments": {
+        "apply": {
+          "type": "boolean",
+          "required": false
+        },
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "database": {
+          "type": "null|string",
+          "required": false
+        },
+        "fuzzy_database": {
+          "type": "null|string",
+          "required": false
+        },
+        "fuzzy_request": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "no_bundled": {
+          "type": "boolean",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "import_debug_layouts": {
+      "group": "types",
+      "arguments": {
+        "apply": {
+          "type": "boolean",
+          "required": false
+        },
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "review_sha256": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "import_debug_signatures": {
+      "group": "types",
+      "arguments": {
+        "apply": {
+          "type": "boolean",
+          "required": false
+        },
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "import_debug_types": {
+      "group": "types",
+      "arguments": {
+        "apply": {
+          "type": "boolean",
+          "required": false
+        },
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "pdb": {
+          "type": "null|string",
+          "required": false
+        },
+        "review_sha256": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "import_pdb_names": {
+      "group": "types",
+      "arguments": {
+        "apply": {
+          "type": "boolean",
+          "required": false
+        },
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "pdb": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "inspect_data": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "size": {
+          "type": "integer|null",
+          "required": false
+        },
+        "view": {
+          "type": "string",
+          "required": false
+        },
+        "word_size": {
+          "type": "integer|null",
+          "required": false
+        }
+      }
+    },
+    "inspect_jump_table": {
+      "group": "diagnostics",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "count": {
+          "type": "integer",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "relative_base": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "inspect_raw_code": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "string",
+          "required": true
+        },
+        "base_address": {
+          "type": "integer|string",
+          "required": true
+        },
+        "code_byte_order": {
+          "type": "string",
+          "required": true
+        },
+        "data_byte_order": {
+          "type": "string",
+          "required": true
+        },
+        "instruction_limit": {
+          "type": "integer",
+          "required": false
+        },
+        "length": {
+          "type": "integer|string",
+          "required": true
+        },
+        "mode": {
+          "type": "string",
+          "required": true
+        },
+        "offset": {
+          "type": "integer|string",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "inspect_sleigh": {
+      "group": "core",
+      "arguments": {
+        "base_address": {
+          "type": "integer|string",
+          "required": true
+        },
+        "decode_attempt_limit": {
+          "type": "integer",
+          "required": false
+        },
+        "discover": {
+          "type": "boolean",
+          "required": false
+        },
+        "handle_open_limit": {
+          "type": "integer",
+          "required": false
+        },
+        "include_pcode": {
+          "type": "boolean",
+          "required": false
+        },
+        "instruction_limit": {
+          "type": "integer",
+          "required": false
+        },
+        "length": {
+          "type": "integer|string",
+          "required": true
+        },
+        "listing_limit": {
+          "type": "integer",
+          "required": false
+        },
+        "listing_offset": {
+          "type": "integer",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|string",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "profile": {
+          "type": "string",
+          "required": true
+        },
+        "seeds": {
+          "type": "array",
+          "required": false
+        },
+        "stop_limit": {
+          "type": "integer",
+          "required": false
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "required": false
+        }
+      }
+    },
+    "language_metadata": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "list_annotations": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        }
+      }
+    },
+    "list_exports": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "contains": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "list_findings": {
+      "group": "core",
+      "arguments": {
+        "address": {
+          "type": "null|string",
+          "required": false
+        },
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "contains": {
+          "type": "null|string",
+          "required": false
+        },
+        "function": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "kind": {
+          "type": "null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "status": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "list_functions": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "name_contains": {
+          "type": "null|string",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        }
+      }
+    },
+    "list_imports": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "contains": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "list_packs": {
+      "group": "detection",
+      "arguments": {}
+    },
+    "list_patches": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "list_strings": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "contains": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "min_len": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "list_types": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "contains": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "network_surface": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "max_per_section": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "observe_indirect_branch": {
+      "group": "runtime",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "start": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "observe_pointer": {
+      "group": "runtime",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "patch_bytes": {
+      "group": "core",
+      "arguments": {
+        "allow_data": {
+          "type": "boolean",
+          "required": true
+        },
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "expected_revision": {
+          "type": "string",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "original_hex": {
+          "type": "string",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "replacement_hex": {
+          "type": "string",
+          "required": true
+        },
+        "source_sha256": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "pe_load_config": {
+      "group": "formats",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "pe_resources": {
+      "group": "formats",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "type": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "persistence_surface": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "max_per_section": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "promote_candidate": {
+      "group": "improve",
+      "arguments": {
+        "candidate": {
+          "type": "string",
+          "required": true
+        }
+      },
+      "experimental": true
+    },
+    "propagate_types": {
+      "group": "types",
+      "arguments": {
+        "apply": {
+          "type": "boolean",
+          "required": false
+        },
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "max_candidates": {
+          "type": "integer|null",
+          "required": false
+        },
+        "max_functions": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "propose_heuristic": {
+      "group": "improve",
+      "arguments": {
+        "candidate": {
+          "type": "string",
+          "required": false
+        },
+        "rows": {
+          "type": "array",
+          "required": true
+        }
+      },
+      "experimental": true
+    },
+    "pyinstaller_archive": {
+      "group": "formats",
+      "arguments": {
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "query_debugger": {
+      "group": "runtime",
+      "arguments": {
+        "request": {
+          "type": "object",
+          "required": true
+        },
+        "socket": {
+          "type": "string",
+          "required": true
+        },
+        "timeout_ms": {
+          "type": "integer|null",
+          "required": false
+        }
+      }
+    },
+    "read_data": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "size": {
+          "type": "integer|null",
+          "required": false
+        }
+      }
+    },
+    "record_finding": {
+      "group": "core",
+      "arguments": {
+        "address": {
+          "type": "null|string",
+          "required": false
+        },
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "confidence": {
+          "type": "null|string",
+          "required": false
+        },
+        "evidence": {
+          "type": "array|null",
+          "required": false
+        },
+        "function": {
+          "type": "null|string",
+          "required": false
+        },
+        "id": {
+          "type": "integer|null",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "kind": {
+          "type": "null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "resolution": {
+          "type": "null|string",
+          "required": false
+        },
+        "status": {
+          "type": "null|string",
+          "required": false
+        },
+        "text": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "redo": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        }
+      }
+    },
+    "rename": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "clear": {
+          "type": "boolean",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "name": {
+          "type": "null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        }
+      }
+    },
+    "revert_patch": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "expected_revision": {
+          "type": "string",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "source_sha256": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "search": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "budget": {
+          "type": "object",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "include_context": {
+          "type": "boolean",
+          "required": false
+        },
+        "limit": {
+          "type": "integer",
+          "required": false
+        },
+        "mode": {
+          "type": "object",
+          "required": true
+        },
+        "offset": {
+          "type": "integer",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "range": {
+          "type": "null|object",
+          "required": false
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        }
+      }
+    },
+    "set_comment": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "clear": {
+          "type": "boolean",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        },
+        "text": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "set_global": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "clear": {
+          "type": "boolean",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "text": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "set_signature": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "clear": {
+          "type": "boolean",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "text": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "set_types": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "clear": {
+          "type": "boolean",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "text": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "string_decoding": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "max_per_section": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "triage": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "triage_report": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "max_per_section": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "undo": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        }
+      }
+    },
+    "wasm_module": {
+      "group": "formats",
+      "arguments": {
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "list": {
+          "type": "null|string",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "xrefs": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "from": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false
+        },
+        "to": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
+    "yara_scan": {
+      "group": "detection",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "rules": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    }
+  }
+}
