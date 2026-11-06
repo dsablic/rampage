@@ -68,7 +68,7 @@ else
 fi
 (
     cd "$out"
-    if command -v sha256sum > /dev/null; then
+    if sha256sum --version 2> /dev/null | grep GNU > /dev/null; then
         sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
     else
         shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"

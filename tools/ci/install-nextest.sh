@@ -23,7 +23,7 @@ archive=cargo-nextest-$version-$platform.tar.gz
 curl --fail --silent --show-error --location --retry 2 --max-time 120 \
     "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$version/$archive" \
     --output "$scratch/$archive"
-if command -v sha256sum > /dev/null; then
+if sha256sum --version 2> /dev/null | grep GNU > /dev/null; then
     printf '%s  %s\n' "$checksum" "$scratch/$archive" | sha256sum --check --strict
 else
     printf '%s  %s\n' "$checksum" "$scratch/$archive" | shasum -a 256 --check

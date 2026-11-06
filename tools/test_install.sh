@@ -174,7 +174,7 @@ cleaned() {
 sha256_file() {
     (
         cd "$(dirname "$1")"
-        if command -v sha256sum > /dev/null; then
+        if sha256sum --version 2> /dev/null | grep GNU > /dev/null; then
             sha256sum "$(basename "$1")" > "$(basename "$1").sha256"
         else
             shasum -a 256 "$(basename "$1")" > "$(basename "$1").sha256"

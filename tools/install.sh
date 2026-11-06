@@ -183,7 +183,7 @@ if [ -n "$archive" ]; then
     if [ -f "$archive.sha256" ]; then
         (
             cd "$(dirname "$archive")"
-            if command -v sha256sum > /dev/null; then
+            if sha256sum --version 2> /dev/null | grep GNU > /dev/null; then
                 sha256sum --check --strict "$(basename "$archive").sha256"
             else
                 shasum -a 256 --check "$(basename "$archive").sha256"
