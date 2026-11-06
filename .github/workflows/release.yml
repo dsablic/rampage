@@ -94,11 +94,13 @@ jobs:
             exit 1
           fi
           linux='{"target":"x86_64-unknown-linux-gnu","os":"ubuntu-24.04"}'
+          # A native ARM64 runner, so the decompiler's C++ and the smoke test need no cross toolchain.
+          linux_arm64='{"target":"aarch64-unknown-linux-gnu","os":"ubuntu-24.04-arm"}'
           macos='{"target":"aarch64-apple-darwin","os":"macos-15"}'
           if [ "$EVENT" = push ] || [ "$MACOS" != false ]; then
-            matrix="[$linux,$macos]"
+            matrix="[$linux,$linux_arm64,$macos]"
           else
-            matrix="[$linux]"
+            matrix="[$linux,$linux_arm64]"
           fi
           {
             echo "version=$version"
