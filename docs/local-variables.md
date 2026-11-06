@@ -37,7 +37,7 @@ One edit atomically logs its name/type changes. `undo`, `redo`, shared-log refre
 invalid edits or oversized responses leave the log unchanged. Annotation collection values are omitted from
 the edit receipt; `list_annotations` includes `local_names` and `local_types` for inspection.
 
-Limits: initially one whole processor/register or stack mapping; dynamic, internal, joined, partial, ambiguous
+Limits: only one whole processor/register or stack mapping is supported; dynamic, internal, joined, partial, ambiguous
 or stale selectors are refused. Retypes preserve native mapping size; inline array/function-pointer declarators
 are unsupported. Analyst types change interpretation, not producer-layout truth. Named types can come from the
 [project type library](type-library.md); automatic cross-call propagation is separate.

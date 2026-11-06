@@ -26,12 +26,12 @@ compilation stays on (cargo's default; it applies to workspace crates only): aft
 
 Third-party dependencies and `rampage-decompiler` (including its embedded Ghidra C++) build at `opt-level = 2` in
 the development/test profiles; workspace crates stay unoptimized so edits rebuild quickly. Tests decompile heavily,
-so this cut workspace test execution roughly threefold; it costs a one-time dependency rebuild.
+so this makes workspace test execution roughly three times faster, for a one-time dependency rebuild.
 
 Prefer [`cargo-nextest`](https://nexte.st) (`brew install cargo-nextest`) for local runs. `cargo test` executes the
-test binaries one at a time, and the `rampage-api` library binary alone took about 400 s; nextest runs every test
-in its own process across all binaries in parallel. Measured on a 10-core M1 Max (2026-10-21), workspace test
-execution was about 734 s with `cargo test` at `opt-level = 0`, 170 s with nextest, and 92 s with nextest plus the
+test binaries one at a time, and the `rampage-api` library binary alone takes about 400 s; nextest runs every test
+in its own process across all binaries in parallel. Measured on a 10-core M1 Max, workspace test
+execution took about 734 s with `cargo test` at `opt-level = 0`, 170 s with nextest, and 92 s with nextest plus the
 optimized dependencies.
 
 The default nextest profile in `.config/nextest.toml` skips 23 of the heaviest tests (roster matrices, type
@@ -49,7 +49,7 @@ several files use are declared once in `integration.rs` and imported with `use c
 file loaded as a module twice. A file that must stay a crate root (such as `rampage-analysis/tests/classes.rs`, which
 compiles a `src` file with `crate::` paths) keeps its own `[[test]]` entry.
 
-Select a former test target by its module path:
+Select one test file's tests by its module path:
 
 ```sh
 cargo nextest run -p rampage-api -E 'test(/^pdb::/)'
@@ -103,9 +103,9 @@ All Rust jobs use [sccache](https://github.com/mozilla/sccache) with the GitHub 
 sccache `RUSTC_WRAPPER` as its C/C++ wrapper, so the embedded Ghidra decompiler's 92 C++ files are cached as well;
 each job prints `sccache --show-stats` at the end.
 
-**Triggers.** Manual runs (`workflow_dispatch`) and `v*` tags work now. `push` to `main` and `pull_request` are
-declared, but every job checks `github.event.repository.private == false` for those events, so they start running
-only once the repository is public (macOS minutes on a private repository cost ten times Linux minutes). Making the
+**Triggers.** Manual runs (`workflow_dispatch`) and `v*` tags always run. `push` to `main` and `pull_request` are
+declared, but every job checks `github.event.repository.private == false` for those events, so they run only while
+the repository is public (macOS minutes on a private repository cost ten times Linux minutes). Making the
 repository public needs no workflow change.
 
 **Manual runs.** Every input defaults to off:
@@ -132,10 +132,10 @@ RAMPAGE_LLDB_LIVE=1 python3 -m pytest tools/test_lldb_live.py
 Manual runs on one ref share a concurrency group, so a new dispatch cancels the previous run on that ref,
 including a release dry run started through it.
 
-Measured on GitHub's 2-vCPU private-repository Ubuntu runners (2026-11-06; single samples, and test execution
-varied by about 30% between runs of the same commit):
+Measured on GitHub's 2-vCPU private-repository Ubuntu runners (single samples; test execution varied by about 30%
+between runs of the same commit), the current jobs against the same work split into separate uncached jobs:
 
-| Linux | Before (separate jobs, no cache) | After, cold cache | After, warm cache |
+| Linux | Separate jobs, no cache | Current jobs, cold cache | Current jobs, warm cache |
 | --- | --- | --- | --- |
 | Workflow wall clock | 48.1 min | 65.8 min | 26.5 min |
 | Clippy | 12.1 min (serial, before the build) | 17.2 min (parallel job) | 7.3 min (parallel job) |
@@ -145,7 +145,7 @@ varied by about 30% between runs of the same commit):
 | Layout and component oracles | 12.5 + 9.4 min in two extra jobs, each rebuilding | 10.3 min | 2.4 min |
 
 A cold cache costs extra time because sccache uploads every object; the decompiler's C/C++ objects and dependency
-crates then hit at 100%. Workspace test executables still compile and link on every run (sccache cannot cache
+crates then hit at 100%. Workspace test executables compile and link on every run (sccache cannot cache
 binaries), which is most of the remaining build time.
 
 ## Release procedure
@@ -164,7 +164,7 @@ starts the worker from its own directory), `LICENSE`, `NOTICE`, `THIRD-PARTY-NOT
   smoke-tests the archives and uploads them as workflow artefacts for 14 days, and never creates a release. Pass
   `-f macos=false` to build Linux only. `gh workflow run release.yml --ref vX.Y.Z -f dry_run=false` rebuilds an
   existing tag and attaches a draft to it; a non-dry run on a ref that is not a tag stops before building.
-- `release.yml` must be on the default branch before `gh workflow run release.yml` works; until then, use CI's
+- `gh workflow run release.yml` works only once `release.yml` is on the default branch; otherwise use CI's
   `release_dry_run` input.
 
 Install a downloaded archive with the installer, which verifies the checksum when the `.sha256` file sits next to
@@ -209,8 +209,8 @@ cargo clean
 ```
 
 Cargo names each executable `<name>-<hash>` and starts a new hash whenever the build configuration changes
-(toolchain, profile, dependency versions, `-p` feature unification) without deleting the old copy; on 2026-10-23
-superseded test executables were 52 GB of a 69 GB target directory. `tools/prune-target.py` keeps the three newest
+(toolchain, profile, dependency versions, `-p` feature unification) without deleting the old copy; in one measured
+workspace, stale test executables took 52 GB of a 69 GB target directory. `tools/prune-target.py` keeps the three newest
 executables per target, deletes executables and incremental caches untouched for a week, and refuses to run while
 a build holds the target lock or a test binary from the target directory is running. Cargo relinks anything it
 deleted that is still current. The package-specific `cargo clean` removes that package's generated artifacts; the

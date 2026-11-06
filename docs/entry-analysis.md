@@ -23,7 +23,7 @@ rampage decompile sample.elf --at main --exact-entry --isolated --json
 ```
 
 `--at` accepts an existing name, a `0x` hexadecimal or decimal address, or `sub_<hex>`. It refers to the selected
-image's virtual address, not a file offset. Existing architecture and embedded-image selectors still apply.
+image's virtual address, not a file offset. The architecture and embedded-image selectors apply.
 For audits, `--at` requires `--entries`; `--entries` conflicts with `--include-discovery`.
 
 Shared tools, including MCP, expose:
@@ -38,9 +38,9 @@ For example, the tool arguments are `{"at":"main","exact_entry":true}` or
 the MCP client's tool configuration. Tool results have a 60,000-byte encoded JSON budget. Decompilation is not
 paged: an oversized result is refused with a suggestion to use the CLI or API, not silently shortened.
 
-Without the new opt-in, `function decompile`, flat `decompile`, the `decompile` tool and `Project::decompile`
-retain their containing-function and whole-program-context behavior. `binary audit` without `--entries` retains
-its region-sampling behavior. The ordinary desktop Pseudocode tab still uses the legacy decompilation path;
+Without the opt-in, `function decompile`, flat `decompile`, the `decompile` tool and `Project::decompile`
+use containing-function and whole-program-context behavior. `binary audit` without `--entries` samples
+regions. The ordinary desktop Pseudocode tab uses the legacy decompilation path;
 opening an address there alone is not an exact-entry request. The separate
 [desktop exact-entry window](exact-entry-ui.md) supports deferred opening, explicit validation and Run without
 global analysis. Its context-menu actions open those controls rather than executing automatically.
@@ -78,7 +78,7 @@ There is no fallback to a containing function or to legacy whole-program analysi
 
 Exact-entry decompilation accepts little-endian x86, x86-64 and AArch64 only. AArch64 addresses must be four-byte
 aligned; x86 addresses must fit 32 bits. ARM/A32, Thumb, big-endian inputs and other architectures are refused.
-This narrower contract does not reduce the existing legacy decoder/decompiler architecture coverage.
+This narrower contract does not narrow the architectures the legacy decoder/decompiler path supports.
 
 The requested entry must have available, backed executable code and must not be an import slot or overlap a
 known data-symbol extent. Each request creates a fresh native engine, or a fresh supervised worker request,
@@ -136,7 +136,7 @@ types, not inferred Go results or callee prototypes, and does not consult the wh
 | Walked / queued blocks | 256 each |
 | Retained symbols plus imports / distinct direct targets / stub aliases | 256 for each budget |
 
-Existing declaration syntax and checked-layout validation can impose stricter limits. In particular, checked
+Declaration syntax and checked-layout validation can impose stricter limits. In particular, checked
 layouts also restrict image metadata to 8,192 symbols, exports and starts each, 1,024 imports/slots each,
 256 segments and 1 MiB of names, with 4,095 bytes per name. These are admission/work caps, not completeness claims.
 
@@ -243,7 +243,7 @@ cannot fit is refused.
 ## Acceptance boundary
 
 Local owned CLI/API/worker acceptance includes native/worker parity, both CLI spellings, source-oracle cases and
-v1/v2 checked declaration replay. Ordinary workspace tests passed in bounded package slices. The documented caps
+v1/v2 checked declaration replay; ordinary workspace tests run in bounded package slices. The documented caps
 are not performance, whole-program quality or arbitrary-binary acceptance claims. See the separately scoped
-[entry measurements](entry-measurements.md); earlier measurements and controlled fixtures do not establish a
-new exact-entry latency guarantee.
+[entry measurements](entry-measurements.md); neither those measurements nor controlled fixtures establish an
+exact-entry latency guarantee.

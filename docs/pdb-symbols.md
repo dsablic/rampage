@@ -14,7 +14,7 @@ annotations are refreshed under the shared log lock before application.
 Eligibility requires an already-discovered function entry and an unused name valid for the annotation identifier
 contract. Ambiguous or invalid names reject the import rather than being sanitized into different names. Names
 at undiscovered entries or already-named addresses are preserved; metadata does not invent discovery evidence.
-The preview can include names not eligible for application. A dedicated UI import action remains separate.
+The preview can include names not eligible for application. There is no dedicated UI import action.
 
 The standalone reader reports relative virtual addresses. Image-matched results and the project preview report
 checked `ImageBase + RVA` virtual addresses, each in readable, executable, file-backed code.
@@ -32,15 +32,15 @@ One capped owned input supplies both PDB parsing and SHA-256. Checked applicatio
 provenance/bytes and the original mapped image's backing identity and selected-image digest; it never adopts newly
 parsed names as consent. Different/reloaded projects and observable source or PDB changes reject before import.
 Concurrent labels and conflicts can shrink the approved set; clearing an originally preserved label/conflict cannot
-enlarge it. Successful changes retain the existing atomic batch and same-process undo behavior.
+enlarge it. Successful changes use the same atomic batch and same-process undo behavior.
 
 Checked apply stages refreshed annotation state under the shared log lock. Validation failure leaves its cached
 annotations, read cursor and undo/redo state unchanged while preserving external edits already committed to disk;
 ordinary refresh can still observe those edits later. This is not rollback of durable or partially appended writes.
 
-This separate checked API is the consent foundation for a future UI; existing path-based API/CLI/MCP imports retain
-their fresh-preview/recomputed-eligibility contract. Checked operation requires available original backing identity,
-currently supported on macOS/Linux. Hashes and metadata checks do not authenticate a PDB, create an atomic filesystem
+This checked API is the consent mechanism intended for a UI, which does not exist yet; the path-based API/CLI/MCP
+imports keep their fresh-preview/recomputed-eligibility contract. Checked operation requires available original
+backing identity, supported on macOS/Linux. Hashes and metadata checks do not authenticate a PDB, create an atomic filesystem
 snapshot, eliminate races after validation, or make all existing mmap readers safe against concurrent truncation.
 
 ## Shared tool and MCP
@@ -81,7 +81,7 @@ The shared JSON request requires a UTF-8 PDB path; an unrepresentable native pat
 with the same bounded failure receipt. This does not restrict the native PE operand's path encoding.
 
 Global architecture and embedded-image selectors apply only to the PE operand. Existing annotation logs are
-opened normally; this is distinct from automatic PDB discovery, which remains disabled. Names persist in the
+opened normally; this is distinct from automatic PDB discovery, which is disabled. Names persist in the
 annotation log, but undo history is process-local: another API/MCP/UI instance cannot undo the exited CLI's import.
 The CLI has no separate undo verb. Imports made through a persistent API/MCP project have one undo step in that
 project's process; reopening the same annotation log restores values, not prior undo history.

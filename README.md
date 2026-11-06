@@ -32,7 +32,7 @@ rampage, or REA's MCP server (`morluto/rea` 6.8.0) over headless Ghidra 12.2. Su
 (stripped C++, typing, multi-step investigation, a 49.2 MB stripped Go binary, raw firmware, build diffing),
 each run 3 times per server and scored by machine against truth derived independently of both servers.
 
-| Suite v2 (2026-11-05) | rampage | REA (Ghidra) |
+| Suite v2 | rampage | REA (Ghidra) |
 | --- | --: | --: |
 | Correct, strict, all 15 tasks | 44/45 | 38/43 |
 | Correct, core only (C++, typing, investigation; the fairer view) | 29/30 | 25/28 |
@@ -44,7 +44,7 @@ On these tasks with one model, rampage is modestly ahead on accuracy and clearly
 and tokens. The tasks were written by the rampage project and lean towards what it was built for; REA ran without
 Rizin, so part of its catalog could not run; 15 tasks × 3 runs is small. REA's denominator is 43 because two of
 its runs fell back to another model and are excluded. Read the [suite v2 report](docs/benchmarks/agent-h2h-v2-2026-11-05.md)
-for the corrections made after a fairness review, the failure analysis and rampage's own ranked gaps, and the
+for its fairness corrections to scoring, the failure analysis and rampage's own ranked gaps, and the
 [first head-to-head run](docs/benchmarks/agent-h2h-2026-11-05.md) for 20 simpler tasks, where both servers were
 near 100%.
 

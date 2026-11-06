@@ -39,7 +39,7 @@ fail a successful request if the supervisor cannot establish successful group cl
 permission-error path for an already-exited group leader. An otherwise valid JSON response does not waive cleanup.
 
 Embedding processes must retain default SIGCHLD handling and exclusive wait ownership. Even a non-reaping custom
-SIGCHLD handler is currently rejected; it is not classified as safe from its address or observed behavior.
+SIGCHLD handler is rejected; it is not classified as safe from its address or observed behavior.
 Applications requiring custom handlers or independent child reapers are outside this supervisor's supported
 embedding contract. Optional measurements do not relax these restrictions.
 
@@ -69,7 +69,8 @@ cooperative; an outer finite test timeout bounded the pilot. No stall occurred, 
 
 The journal contained 215 records and 43,124 bytes, with all 18 attempts completed and none failed or unrun.
 This validates normal completion and per-attempt admission, not an actual outer-timeout durability experiment.
-Earlier buffered-writer runs also passed but are not timing comparisons: instrumentation and lifecycle changed.
+Runs with a buffered journal writer also pass but are not timing comparisons: their instrumentation and lifecycle
+differ.
 
 Input SHA-256 identifiers:
 
@@ -81,7 +82,7 @@ Input SHA-256 identifiers:
 
 ### Additional startup probe
 
-An additional startup-reproduction probe used the already-built pre-plugin harness in three fresh processes.
+A startup-reproduction probe used an already-built harness from before plugin support, in three fresh processes.
 All 54 planned native/isolated attempts passed without retries; the largest driver times per process were
 295.173, 293.604 and 294.340 ms. Each process completed in 4.70 seconds or less. OS/spec caches were uncontrolled,
 and the harness was not rebuilt for this probe. Its SHA-256 was
@@ -90,9 +91,9 @@ No stall reproduced, so this probe supplies neither a cause nor an optimization 
 
 ### Incremental journal and input admission
 
-The corrected opt-in test requires an explicit new output file in private external scratch and an available
+The opt-in test requires an explicit new output file in private external scratch and an available
 `shasum` tool. It opens the output with private mode and `create_new` before input setup, hashing or native work.
-The format is **JSON Lines**, schema `rampage-owned-entry-journal-v2`, not the earlier aggregate JSON object.
+The format is **JSON Lines**, schema `rampage-owned-entry-journal-v2`, not a single aggregate JSON object.
 Every complete line is independently parseable. Each checkpoint flushes and calls `sync_data`; native work is
 not started before its attempt-start checkpoint succeeds. Output is capped at 1 MiB total and 16 KiB per encoded
 record plus its newline. A journal I/O/limit failure stops the experiment rather than silently buffering onward.
@@ -133,18 +134,18 @@ checks do not make concurrent external modification atomic or authenticate worke
 exact-entry API call. Per-attempt byte/identity verification and out-of-band journal/result-hash/oracle work are
 outside those segments. `open_settings_us` and `operation_us` retain the separate durations. Durable `host_phase`
 callbacks execute inside the API call and count toward its budget; supervisor offsets remain supervisor-relative.
-This instrumentation changes measurement overhead, so the earlier table is not a baseline for journal costs.
+This instrumentation adds measurement overhead, so the table above is not a baseline for journal costs.
 
 Only allowlisted categories such as `api_unavailable`, `fixture_backing_changed` and `digest_spawn` are persisted
 for errors. API unavailable errors are deliberately coarse: the harness does not parse message text to infer a
 worker timeout or crash. No raw error messages, stderr, private paths, code, omission strings or arbitrary
 context strings are written. Supervisor fields are the typed numeric/enum observations, not diagnostic text.
-Matching settings, independent source oracles and complete output/token/structure parity checks are unchanged.
+Matching settings, independent source oracles and complete output/token/structure parity checks still apply.
 There is no retry, fallback, production profiler or automatic attach.
 
 ### Invocation
 
-After final worker review closes, create a private external directory and select a **new** `.jsonl` filename.
+Create a private external directory and select a **new** `.jsonl` filename.
 From the repository root, with the native toolchain, `shasum` and `timeout` available:
 
 ```sh

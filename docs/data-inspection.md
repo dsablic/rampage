@@ -4,7 +4,7 @@
 bytes and candidate words without function discovery, annotation sidecar access, or edits.
 The CLI and MCP use the lightweight retained-binary API, not a Project's eager stub/thunk naming indexes.
 Native metadata opening also skips optional Go/Objective-C symbol-recovery scans; normal loading retains them.
-An existing Project also exposes `inspect_data` as a convenience wrapper.
+A Project also exposes `inspect_data` as a convenience wrapper.
 
 ## Requests
 

@@ -55,7 +55,7 @@ background in the ordinary desktop app.
 | **Cancel query** | Invalidate pending authority; the execution lease remains held until execution returns |
 
 Paging uses the applied query, not subsequent draft edits, and is not an atomic snapshot across pages. Editing
-fields invalidates paging and navigation until another explicit Apply. The current bounded metadata API cannot
+fields invalidates paging and navigation until another explicit Apply. The bounded metadata API cannot
 be interrupted mid-call: cancellation discards its late result rather than guaranteeing an immediate halt.
 Closing the window also invalidates authority; it does not release an executing query's lease early.
 

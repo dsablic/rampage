@@ -183,11 +183,11 @@ arguments, marks the required ones, and suggests the likely intended name for a 
 loaded a schema can correct the call at once; at most 8 unknown names are listed, the rest counted. Debug tools
 refuse unknown arguments through their own parsing, without the argument list. The CLI builds its own inputs.
 
-`entry_diagnostics` can report ARM ELF32 EHABI candidates using its existing `function_starts` origin. These
+`entry_diagnostics` can report ARM ELF32 EHABI candidates under its `function_starts` origin. These
 are metadata assertions, not verified boundaries; `CantUnwind` and coalesced interiors are not expanded. See
 [ARM unwind candidates](arm-unwind-starts.md).
 
-`identify_functions` retains JSON database inputs and its read-only default. Its default detail window is 100
+`identify_functions` takes JSON database inputs and is read-only by default. Its default detail window is 100
 rows (`limit` 1–256); `offset` continues matches first, then warnings. `matched`/`applied` are whole-result totals:
 pages never select writes. Complete JSON stays within 60000 bytes; an oversized row refuses before any rename.
 Builtin signatures are cached per architecture; `list_packs` reads count indexes without decoding every bundle.
@@ -249,10 +249,10 @@ references and callees are returned as whole-row pages: `graph.blocks_offset`/`b
 `offset`) and `callees_offset`/`callees_next_offset`, continued with the
 `block_offset`, `reference_offset` and `callee_offset` arguments, and a `fitted` receipt lists any optional
 analysis omitted to fit. Graph edges keep indexing blocks by their position in the whole function. `view=full`
-still refuses when oversized.
+refuses when oversized.
 
 A byte or text `search` charges one unit of match work per candidate start for exact text, so the default
-budget covers a 50 MB image; byte patterns with wildcards still charge their length per start. When a budget or
+budget covers a 50 MB image; byte patterns with wildcards charge their length per start. When a budget or
 cancellation stops a byte/text scan, the report gives `resume_at` (search again with `range.start` there),
 the first 32 `unscanned_ranges` with `unscanned_range_count` and `unscanned_bytes`, and the page a `scan_resume`
 hint. A regex stopped by its text-run limit gives no `resume_at`, since resuming would meet the same run.
@@ -394,8 +394,8 @@ checked edit allows: 16 MiB, 8,192 lines and 65,536 JSON separators read; 8,192 
 replayed; and, in a session that reads its log checked, 8 MiB of cached annotations and undo history and 1,024
 undo steps. The remaining quarter stays for names, comments and other edits, so a full ledger never makes the log
 unreadable. Separately, every edit refuses a write that would leave the log past the limits its readers enforce
-(see [persistence](cli-reference.md#persistence-and-shared-edits)). There is no compaction yet, so a log at its
-limits can only be read.
+(see [persistence](cli-reference.md#persistence-and-shared-edits)). There is no compaction, so a log at its limits
+can only be read.
 
 `list_findings` filters by `kind`, `status`, `address`, `function` and `contains`, pages with `offset`/`limit`
 (default 50, at most 100, and at most 48 KB of JSON), and reports open/resolved/rejected counts per kind over the
@@ -403,9 +403,9 @@ whole ledger. Entries recorded on another build of the binary are kept and flagg
 entry a new `address` or `function` re-records it on this build. Entries with neither record no build and are
 never flagged. Raw Projects do not offer the ledger, as their annotations are not persisted.
 
-Builds that predate the ledger skip its log lines when the log holds only ordinary edits, but refuse to open a
-log that also holds checked edits (patches, type hints, data or operand types, type libraries or debug layouts)
-and ledger entries. Builds from this one on skip edits of fields they do not know in both cases.
+Builds without the ledger skip its log lines when the log holds only ordinary edits, but refuse to open a log
+that also holds checked edits (patches, type hints, data or operand types, type libraries or debug layouts) and
+ledger entries. Builds with the ledger skip edits of fields they do not know in both cases.
 
 `undo`/`redo` revert/reapply one session step, including a whole batch. When another client's edit blocks undo,
 `discard_undo` drops the blocked step from session history, leaving its edits in effect and the log unchanged,

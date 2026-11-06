@@ -37,10 +37,10 @@ quiescent while mapped data is being read.
 
 ## Measured scope
 
-On the owned generated 2,301-function ELF, three fresh-Project full reopens had a median of **93.86 ms** with
-discovery and **22.41 ms** with the usable cache (2,048 historical rows). The selected predeclared 2x threshold
-passed at **4.19x**. Full cached reopen includes loading, dependency hashing, private reading, preflight and parsing.
+On the owned generated 2,301-function ELF, the median of three fresh-Project full reopens is **93.86 ms** with
+discovery and **22.41 ms** with the usable cache (2,048 historical rows): **4.19x**, above the predeclared 2x
+threshold. Full cached reopen includes loading, dependency hashing, private reading, preflight and parsing.
 
-The two-function control was **slower** with a cache: median **0.294 ms** fresh versus **1.083 ms** cached.
-Filesystem/spec caches were uncontrolled; RSS was unavailable. These results are fixture-specific, not a claim
-that caching helps small inputs or improves analysis/decompilation. No target fixture was executed.
+The two-function control is **slower** with a cache: median **0.294 ms** fresh versus **1.083 ms** cached.
+Filesystem/spec caches are uncontrolled; RSS is unavailable. These results are fixture-specific, not a claim
+that caching helps small inputs or improves analysis/decompilation. No target fixture is executed.

@@ -13,7 +13,7 @@ The flat `analyze` spelling remains accepted for compatibility. The primary CLI 
 If only one slice is needed, use the global `--arch` selector instead of `--all-architectures`. The latter
 enumerates supported declared architectures, including a slice whose contents fail to load; healthy selected
 slices are analyzed independently. Duplicate architecture declarations are ambiguous and require an explicit
-thin-image offset. Unsupported CPU families are not inferred. Embedded images use the existing `--image-offset`
+thin-image offset. Unsupported CPU families are not inferred. Embedded images use the `--image-offset`
 and optional `--image-length` flags; a selected universal slice must still have valid bounds, alignment and
 Mach-O headers. Other slice bodies are not considered validated by selecting one.
 
@@ -36,7 +36,7 @@ emitting the report; never treat the exit code alone as a recovery-quality score
 
 Explicit decompilations and workflow previews require a supervised sibling `rampage-worker` or the explicit
 `RAMPAGE_WORKER` executable. Worker failures do not fall back in process. `--decompile-timeout-ms` sets each
-supervised request's deadline (default 30,000, range 1–600,000 ms). Workflows have their existing work/output
+supervised request's deadline (default 30,000, range 1–600,000 ms). Workflows have their own work/output
 budgets, not a hard wall-clock deadline.
 
 Serialized task envelopes are capped at four MiB and the complete compact JSON report, including its final

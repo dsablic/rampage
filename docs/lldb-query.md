@@ -107,7 +107,7 @@ module-address observations remain available under these guards. An unknown DATA
 inspection, but it cannot authorize snapshot export. Neither `SBTarget.GetByteOrder()` nor
 `SBProcess.GetByteOrder()` supplies the missing runtime DATA fact. There is no assumption override, privileged
 register read or target-expression fallback. See [runtime data order](runtime-data-order.md) for the pinned
-SDK/architecture evidence, historical correction and acceptance boundary; the
+SDK/architecture evidence, the status of older ARM64 export measurements and the acceptance boundary; the
 [snapshot guide](runtime-snapshots.md#export-from-lldb) describes the supported x86-64/ARM32 export workflow.
 
 ## Module-qualified address observations
@@ -131,5 +131,5 @@ These are non-atomic qualified observations, not proven cross-module flow or obj
 requires explicit UUID, address and token replacement and never navigates automatically. A separate explicit
 [matching-static-image action](desktop-ui.md#local-debugger-observations) validates local context before navigation;
 the [debugger workspace guide](debugger-workspace.md) covers structured inspection and client-local capture over
-these unchanged operations. Neither navigation nor capture strengthens the protocol's identity, atomicity or flow
+these same operations. Neither navigation nor capture strengthens the protocol's identity, atomicity or flow
 guarantees.

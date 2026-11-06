@@ -1,7 +1,7 @@
 # Bounded C++ virtual corpus
 
 This reference describes the owned six-method comparison lane, its fixture oracle and its JSON evidence. It is
-separate from the [checked layout-import contract](debug-layout-import.md). The recorded local acceptance below
+separate from the [checked layout-import contract](debug-layout-import.md). The local acceptance recorded below
 covers both owned variants against installed Ghidra 12.1.4. It is not speed parity, general semantic equivalence or
 general C++ decompilation acceptance.
 
@@ -43,7 +43,7 @@ artificial-member graph, same-CU identities and method proof. Reused method name
 The fixture set also contains `missing-alignment`, `lookalikes`, `inherited` and `signatures` groups, plus
 symbols-only ELF controls. These exercise absent explicit alignment, ordinary callback/pointer-chain fields,
 inheritance/secondary tables/this-adjusting thunks, const object pointers, references, by-value calls and virtual
-destructors. The initial comparison selects none of these negative groups; their report status is `not_selected`.
+destructors. The comparison selects none of these negative groups; their report status is `not_selected`.
 Production compiled-loader acceptance covers these refusal cases separately. Their existence is not comparison
 coverage or evidence that the live reference lane has exercised them.
 
@@ -96,9 +96,7 @@ adapter additionally bounds each inner decompile to 1–30 seconds. `--output` c
 to overwrite one; without it, the runner prints JSON to stdout. Wrapper provenance also uses stdout, so an explicit
 report file keeps the JSON separate. Exit status is zero only when the report's whole-lane success gate passes.
 
-No GitHub Actions dispatch is part of this lane. Automatic CI builds are limited to pushes of version tags such as
-`v1.2.3` or `v1.2.3-rc.1`; manual dispatch remains available. Ordinary branch pushes and pull requests do not build.
-This local lane creates no release tag and dispatches no workflow.
+This lane is local only: it is not part of GitHub Actions CI, creates no release tag and dispatches no workflow.
 
 ## Controlled backend protocol
 
@@ -221,7 +219,7 @@ locations. Those checks do not authenticate replacement executables or create a 
 
 The x86-64 ELF fixtures were produced by Apple Clang 21.0.0 (`clang-2100.3.34.2`). The actual reference backend was
 Ghidra 12.1.4 with OpenJDK 21.0.12.1. Native binaries use the bounded development profile; no release API, UI or
-whole-workspace performance build was made. Both variants completed in one externally capped local gate in
+whole-workspace performance build was made. Both variants complete in one externally capped local gate in
 37.3 seconds including fixture generation. Neither ELF target was executed.
 
 | Variant | Admitted | Native oracle | Ghidra oracle | Settings/storage | CLI reopen | Validated agreement |
@@ -248,7 +246,7 @@ duplicate checked/raw views; the last is supplemental review content, not 18 eng
 was silently discarded to earn the case results.
 
 Selected identities from the accepted runs are retained below. CLI-copy bytes matched the original CLI hash.
-Raw exports, local paths, application projects and generated binaries were removed rather than committed.
+Raw exports, local paths, application projects and generated binaries are not committed.
 
 ```text
 cli_sha256=afbba29856d4ae461a07a60b85f26eb32bff4d36cc88d2e4c9817daeb00ff53a

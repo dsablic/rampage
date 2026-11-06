@@ -19,7 +19,7 @@ by the native decompiler using that target's data organization; analyst declarat
 }
 ```
 
-Definitions are project-wide rather than associated with one instruction address. Existing address-bound
+Definitions are project-wide rather than associated with one instruction address. Address-bound
 `set_types` annotations remain readable. `edit_variable`, signatures and globals can refer to library names.
 Library definitions are self-contained; existing legacy/native names are inspectable but are not silently
 adopted or replaced by the library tools.

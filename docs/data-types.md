@@ -13,7 +13,7 @@ Named layouts come from the selected native target and the [project type library
 ## Data ranges
 
 An element type and count specify the range's footprint. Named arrays of structs feed native globals and typed
-views; existing `set_global` declarations remain available for manually named globals. Conflicting bindings
+views; `set_global` declarations remain available for manually named globals. Conflicting bindings
 are refused rather than silently replacing user work.
 
 String encoding is explicit: `utf8`, `utf16_le`, `utf16_be`, or `ascii`. Byte lengths are not character counts.

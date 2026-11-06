@@ -36,10 +36,10 @@ Language/compiler admission is explicit. Sibling resources retained to close an 
 file's dependencies are not automatically selectable profiles. Unknown ABI facts remain unknown: in particular,
 the reviewed 6502 compiler metadata supplies no C integer/pointer organization, so host widths are not substituted.
 
-The native library has closed selections for all sixteen resource-admitted roadmap families. The additional
-thirteen profiles were compared against 104 independent Java oracle rows; lengths, mnemonics and raw p-code
-matched. CR16 conditional recovery was improved without changing its comparator or original failure record.
-Hexagon still reports a helper-required gate: matching raw fixture p-code is not general packet support.
+The native library has closed selections for all sixteen resource-admitted processor families. Thirteen of these
+profiles (all but the three in the frozen MCP measurement) are compared against 104 independent Java oracle rows;
+lengths, mnemonics and raw p-code match. CR16 conditional recovery keeps its original comparator and failure
+record. Hexagon reports a helper-required gate: matching raw fixture p-code is not general packet support.
 These finite fixtures do not establish full-ISA, C-ABI or ordinary-project acceptance.
 
 ## Ordinary Raw Projects
@@ -80,8 +80,8 @@ Project path (`rampage-eval processor-roster`, [benchmarks](benchmarks/phase4-1.
 | `Hexagon:LE:32:default` | LE | 2/2 / 1/2 | 0/2 / 0/2 | processor helper required | no |
 
 Totals: manual 32/32 entries and 23/32 exact extents; caller-only 27/32 entries and 20/32 exact extents. Every
-miss is attributed to a decode gate. Limits: fixtures are hand-assembled byte ledgers (no cross-compilers were
-available); the Ghidra oracle is seeded function creation, and Ghidra's autonomous auto-analysis recall per
+miss is attributed to a decode gate. Limits: fixtures are hand-assembled byte ledgers, not cross-compiler
+output; the Ghidra oracle is seeded function creation, and Ghidra's autonomous auto-analysis recall per
 processor is not measured. Hexagon is admitted only with its declared parallel-instruction helper, whose gate is
 reported on every instruction.
 
@@ -101,7 +101,7 @@ never served from the code mapping. Every other profile refuses with "no reviewe
 Raw Projects also refuse immediate/constant code search (no typed operands), patch V1, capture identity and
 backing-source proofs. Annotations are memory-only, even when a persistent log is supplied. The sixteen
 architectures have no legacy pointer width (`pointer_size()` is `None`) and no native/Capstone decoder.
-Multi-region maps, MMIO, HEX/SREC and vector seeding are not supported yet.
+Multi-region maps, MMIO, HEX/SREC and vector seeding are not supported.
 
 ## Window and discovery contract
 
@@ -127,7 +127,7 @@ document excludes the CLI's positional file path. Numeric addresses and hexadeci
 coordinates, not resolvable symbols. Unknown fields and arbitrary profile/specification paths reject.
 
 The tool schema enumerates the closed registry directly: sixteen selected processor-family profiles and
-four existing x86/AArch64 profiles. It does not enumerate every sibling language in the bundled `.ldefs`.
+four x86/AArch64 profiles. It does not enumerate every sibling language in the bundled `.ldefs`.
 Examples include `TI_MSP430:LE:16:default`, `avr8:LE:16:default`, `6502:LE:16:default`,
 `SuperH:BE:32:SH-2`, `CR16C:LE:16:default` and `Loongarch:LE:64:lp64d`. Arbitrary profile/spec paths reject.
 
@@ -141,15 +141,16 @@ The owned sixteen-profile discovery matrix retains all 32 manual functions in ea
 Supplying all entries measures retention, not autonomous entry discovery. Computed calls and context,
 delay-slot, user-operation and helper gates explain remaining misses; they are not omitted from the matrix.
 Hexagon helper-gated entries remain valid instructions/functions but do not establish packet or CFG support.
-Transport tests verify the shared interface; the earlier frozen MCP experiment remains a separate three-profile
-measurement rather than being retroactively expanded to this roster.
+Transport tests verify the shared interface; the frozen three-profile MCP measurement is separate and does not
+cover this roster.
 
 Explicit windows select an original regular-file range, a bundled language profile and an internal-byte
 base address. There is no executable-header inference, extraction or automatic publication of decoded data.
-Seeded discovery is opt-in and uses the existing recursive-descent engine within that window.
+Seeded discovery is opt-in and uses the ordinary recursive-descent engine within that window.
 This explicit-window path is not an ordinary `Project` decoder fallback. It does not relabel raw bytes as
 ELF/snapshot images or substitute an existing architecture identity for an unsupported processor. Ordinary
-image loading, consistent listing/search routing and ABI-checked decompilation require their own integration.
+loading, consistent listing/search routing and ABI-checked decompilation come from
+[Raw Projects](#ordinary-raw-projects), not from this path.
 
 Listing pagination does not reset analysis work or change its seeds. Decode attempts, native decoder
 creation, retained instruction addresses and output are separately bounded. Factory failures, exhausted

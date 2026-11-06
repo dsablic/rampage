@@ -69,7 +69,7 @@ remains unknown in the query protocol, so this capture composition refuses it; r
 The standalone [LLDB snapshot exporter](runtime-snapshots.md#export-from-lldb) also refuses ARM64, arm64e and
 aarch64 capture before thread selection, mapping, memory reads or output writes. Its SBTarget/SBProcess byte-order
 getters derive object ArchSpec order, not independent runtime DATA order. Loading existing manually supplied ARM64
-snapshots remains unchanged, without automatic invalidation of old captures. Standalone ARM32/x86-64 capture has
+snapshots still works, and old captures are not invalidated automatically. Standalone ARM32/x86-64 capture has
 its separate documented contract; this workspace adds no server, CLI or MCP capture operation.
 
 With the original static image still open:
@@ -189,33 +189,31 @@ annotation interfaces; opening does not execute a target or import proven types/
 
 ## Acceptance boundary
 
-API/UI capture tests use owned fixture images and controlled LLDB protocol responses. Local acceptance includes
+API/UI capture tests use owned fixture images and controlled LLDB protocol responses. Local acceptance covers
 23 capture API integration cases, the ordinary UI suite and unchanged offscreen snapshots, including actual
-App-control Prepare and explicit Save/Open failure paths. The debug workspace suites passed in bounded package
-slices, and all-target Clippy passed. A new live end-to-end workspace Prepare/Compare/Save/Open gate is not yet
-earned. The opt-in owned x86-64 live test compiled and LLDB loaded its Mach-O, but Apple LLDB
-`2103.0.34.103` could not launch it on the local arm64 host: `Bad CPU type in executable`. The failure occurred
-before UI/bridge observations, so it is not a live workspace pass. No Rosetta installation, ASLR disabling or
-ARM64 data-order assumption was used to bypass that blocker.
+App-control Prepare and explicit Save/Open failure paths. The debug workspace suites pass in bounded package
+slices, and all-target Clippy passes. There is no live end-to-end workspace Prepare/Compare/Save/Open
+acceptance. The opt-in owned x86-64 live test compiles and LLDB loads its Mach-O, but Apple LLDB
+`2103.0.34.103` cannot launch it on the local arm64 host: `Bad CPU type in executable`. The failure occurs
+before UI/bridge observations, so it is not a live workspace pass. Rosetta is not installed, ASLR is not disabled
+and no ARM64 data-order assumption is made to bypass that blocker.
 
 The opt-in runner compiles only its owned plain-C fixture and uses real offscreen App controls; its Rust test is
 ignored by default. Successful completion must check 15 bridge operations, unchanged stopped identity and explicit
-publication/opening. Earlier controlled live query-bridge and standalone-exporter gates cover those separate
-interfaces, not this new composition. No latency, arbitrary-host or broader-architecture acceptance is implied.
+publication/opening. The controlled live query-bridge and standalone-exporter gates cover those separate
+interfaces, not this composition. No latency, arbitrary-host or broader-architecture acceptance is implied.
 
-A separate opt-in native ARM64 inspection gate passed one test in 8.11 seconds using Apple LLDB `2103.0.34.103`,
-and its final frozen-source rerun passed in 6.71 seconds. These durations include test/transport overhead.
-Both runs kept ASLR enabled, using an owned plain-C fixture and real offscreen App controls.
-They exercised six protocol operations:
-Describe, Modules, Threads, Registers, Memory and Resolve, followed by a separate explicit static Go to click.
-Runtime DATA order remained unknown, Prepare stayed disabled, and there was no capture, Save, Open or implicit
-navigation. The original Project, editor and stopped identity were preserved. The first attempt failed because
-the test's `sp` selector also matched a disassembly token; register assertions were then scoped to the
-**Read-only debugger** window before the new-source gate passed. This was not an unchanged retry.
+A separate opt-in native ARM64 inspection gate passes one test in 8.11 seconds using Apple LLDB `2103.0.34.103`;
+a rerun on frozen source passes in 6.71 seconds. These durations include test/transport overhead. Both runs keep
+ASLR enabled and use an owned plain-C fixture and real offscreen App controls. They exercise six protocol
+operations: Describe, Modules, Threads, Registers, Memory and Resolve, followed by a separate explicit static Go to
+click. Runtime DATA order remains unknown, Prepare stays disabled, and there is no capture, Save, Open or implicit
+navigation. The original Project, editor and stopped identity are preserved. The test's register assertions are
+scoped to the **Read-only debugger** window, because an unscoped `sp` selector also matches a disassembly token.
 
-The standalone native exporter-refusal module also passed four tests in 1.53 seconds, including two owned ARM64
+The standalone native exporter-refusal module passes four tests in 1.53 seconds, including two owned ARM64
 negative-fixture gates and helpers. Those refusals allow no memory read, publication or stopped-state change.
-These results earn native ARM64 read-only inspection and exporter-refusal acceptance, not ARM64 capture support.
-The full x86-64 workspace capture gate remains blocked by `Bad CPU type in executable`, with Rosetta unavailable
-and no installation attempted. ARM64 capture remains unavailable; neither gate relaxes the runtime DATA-order
-boundary or establishes live end-to-end Prepare/Compare/Save/Open acceptance.
+These results establish native ARM64 read-only inspection and exporter refusal, not ARM64 capture support.
+The full x86-64 workspace capture gate remains blocked by `Bad CPU type in executable`, with Rosetta unavailable.
+ARM64 capture remains unavailable; neither gate relaxes the runtime DATA-order boundary or establishes live
+end-to-end Prepare/Compare/Save/Open acceptance.

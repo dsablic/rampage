@@ -30,8 +30,8 @@ code for the actual reconstruction/instructions, and full when detailed native s
 ## Atomic annotation operations
 
 Core MCP `batch` and CLI `function batch` compose typed `rename`, `comment`, `signature`, `types` and
-`global` operations in the existing annotation transaction/history path. Existing `annotate_batch` retains
-its names/comments contract.
+`global` operations in the annotation transaction/history path. `annotate_batch` keeps its names/comments-only
+contract.
 
 ```json
 {
@@ -52,9 +52,9 @@ valid prefix. Signature/type/global strings use the individual public declaratio
 checked-import encodings are not accepted through ordinary batches. Response-budget preflight runs before
 append, including no-op batches.
 
-Patch/export operations and raw internal annotation fields are not batch operations. Their separately
-reviewed admission paths cannot be bypassed by this interface. Undo/redo uses the existing one-step batch
-history; it is not a separate persistence ledger.
+Patch/export operations and raw internal annotation fields are not batch operations, and this interface
+cannot bypass their own admission paths. Undo/redo treats a batch as one history step; it is not a separate
+persistence ledger.
 
 Opaque batch transitions have no invented post-hoc attribution witness. A bound assistant retains the
 committed outcome but ends conservatively if it cannot attribute the transition to its expected state.

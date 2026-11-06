@@ -37,7 +37,7 @@ GUI buttons run background jobs with one workspace-file execution lease until ac
 **Cancel workspace operation**, review close or bank replacement. The task strip shows backend phases, module
 counts and elapsed time, not percentages. Cancellation is cooperative, not a forced syscall interruption. Save
 never automatically Previews or Opens; committed or uncertain publication receipts remain visible even after a
-stale/cancelled result. Small adoption metadata checks remain on the UI thread, as does existing annotation-refresh
+stale/cancelled result. Small adoption metadata checks remain on the UI thread, as does annotation-refresh
 polling; synchronous programmatic methods and inline `App::blocking` are separate compatibility/test paths. See
 [project workspaces](project-workspaces.md) for limits, privacy, annotation-directory context and private
 no-overwrite publication.
@@ -144,6 +144,6 @@ UPDATE_SNAPSHOTS=1 cargo test -p rampage-ui --test integration -- snapshots::
 ```
 
 Review refreshed images rather than treating an update as a correctness check. Analysis jobs run in the background;
-previously reported Chrome framework samples (about 190,000 functions and 930,000 strings) rendered frames in
-a few milliseconds. This sample-specific result is not a frame-time guarantee. See
+on the reported Chrome framework samples (about 190,000 functions and 930,000 strings), frames render in a few
+milliseconds. This sample-specific result is not a frame-time guarantee. See
 [reported discovery timings and benchmark limits](benchmarks.md#earlier-measurements).

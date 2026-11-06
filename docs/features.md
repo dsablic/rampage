@@ -112,8 +112,8 @@ and dependency-checked undo/redo. Embedded DWARF scalar/pointer signatures can b
 without replacing analyst signatures. Named Itanium and MSVC vtables provide bounded class evidence, including
 the C++ class name, not inferred object layouts. For stripped binaries, Itanium and MSVC RTTI scanning recovers
 class names and base-class edges, following Mach-O chained rebases and accepting chained binds to the C++
-runtime's typeinfo vtables, as arm64 images linked with the default chained fixups store them. See [debug signature import](debug-signatures.md). MCP serves this evidence as
-`class_evidence`, and demangled names with Objective-C classes, superclasses, methods and properties as
+runtime's typeinfo vtables, as arm64 images linked with the default chained fixups store them (see
+[debug signature import](debug-signatures.md)). MCP serves this evidence as `class_evidence`, and demangled names with Objective-C classes, superclasses, methods and properties as
 `language_metadata`; both are core tools, listed without enabling a group.
 
 Types-group [`edit_variable`](local-variables.md) persists local/parameter names and types by native storage
@@ -149,8 +149,8 @@ facts; it does not import debug layouts or persist assertions across engine rebu
 class layouts remain unsupported by this bridge.
 The separate [checked DWARF layout import](debug-layout-import.md) can persist verified flat-struct pointer declarations
 and dependent signatures as one non-overwriting batch, replaying assertions on reopen in native and worker engines.
-Its initial scope is small x86-64 ELF C metadata with explicit struct alignment and verified bundled specifications;
-it does not widen the existing scalar-only CLI/MCP importer or infer stripped-binary class layouts. Explicit reviewed
+Its scope is small x86-64 ELF C metadata with explicit struct alignment and verified bundled specifications;
+it does not widen the scalar-only CLI/MCP importer or infer stripped-binary class layouts. Explicit reviewed
 CLI/MCP and UI actions bind approval to the complete preview fingerprint before atomic application. A bounded C++
 extension projects producer-described base-free, non-polymorphic records and exact mutable `this` methods; it does
 not infer vptr storage, inheritance or virtual-call targets.
@@ -196,7 +196,7 @@ are in [MCP edits](mcp.md#edits-and-session-state).
 
 ## Checked patches and assembly
 
-Static ELF64 x86-64/AArch64 patches use the existing annotation log, original identity/preimage checks,
+Static ELF64 x86-64/AArch64 patches use the annotation log, original identity/preimage checks,
 reviewed revisions and immutable effective projects. Listing, analysis and decompilation consume the same
 effective bytes. Export publishes only a new file; source files and debugger/capture memory remain unchanged.
 Unsupported profiles and incompatible image-sealed metadata reject rather than weakening evidence gates.
@@ -213,7 +213,7 @@ and explicit budgets rather than complete negative answers. Exact text is matche
 budget, so a default search covers a 50 MB image, and a stopped byte/text scan says where to resume and which
 ranges it left unscanned. See [search reference](search.md).
 
-Search is static and read-only. Native preparation/scanning is bounded and cancellable after the existing
+Search is static and read-only. Native preparation/scanning is bounded and cancellable after the
 non-interruptible analysis/cache initialization. Unmapped overlays, virtual gaps and zero-fill are not
 invented byte content. Instruction evidence uses production decoding, retained modes and bounded semantic
 lookahead, not arbitrary byte sweeps.
@@ -307,7 +307,7 @@ and [runtime snapshots](runtime-snapshots.md) are separate.
 *Experimental.* A server started with `--corpus` serves only the `improve` group, through which an agent proposes
 library-signature rows from a training split; candidates must pass a fast gate and a held-out gate before
 promotion, and promoted rows leave as `.rpack` data packs. Limits: libid is the only family, and against the
-deterministic signature generator the agent has not yet promoted a row. See [the flywheel](flywheel.md).
+deterministic signature generator the agent has promoted no row. See [the flywheel](flywheel.md).
 
 ## Desktop UI
 
@@ -321,7 +321,7 @@ project workspaces and an optional assistant that sends questions and tool resul
 The `rampage-eval` harness scores library identification on stripped reference copies and on different programs
 linking the same library, and function discovery against symbol starts, with no-wrong-name gates and committed
 recall floors. The [benchmarks](benchmarks.md) hold the head-to-head agent runs, the static comparisons with
-Ghidra and earlier measurements of decoders, recall and discovery speed, each with its method and limits.
+Ghidra and measurements of decoders, recall and discovery speed, each with its method and limits.
 
 | Crate | Purpose |
 | --- | --- |

@@ -8,8 +8,8 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 The first public release, as a release candidate for 1.0.0: the stable surface in the
 [stability policy](docs/stability.md) is frozen unless the candidate turns up a problem, and 1.0.0 follows once it
-runs without unplanned contract-snapshot changes. It summarises what rampage does rather than listing every change since the project
-started; the [roadmap](docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md) and git history have the detail.
+runs without unplanned contract-snapshot changes. It summarises what rampage does; the
+[roadmap](docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md) and git history have the detail.
 
 ### MCP server
 
@@ -107,8 +107,8 @@ These ship in 1.0.0 but are outside the stability promise:
 
 [Known limits](docs/known-limits.md) lists them in full. In short:
 
-- Hosts: macOS on Apple silicon is tested; Intel macOS is untested. Linux x64 builds and tests in CI; first
-  release pending. Windows is not supported as a host.
+- Hosts: macOS on Apple silicon is tested; Intel macOS is untested. Linux x64 builds and tests in CI, and this is
+  its first release. Windows is not supported as a host.
 - Without `rampage-worker` installed, decompilation runs in-process. Decompiled C is not proof of correct
   recovery, and worker supervision is not an OS sandbox.
 - Bundled signatures recognise the library builds they were made from, not every version of a library.

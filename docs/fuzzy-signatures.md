@@ -55,7 +55,7 @@ analyst annotations, imports and exact proposals.
 
 Requests contain 1–64 distinct numeric addresses and request 1–16 candidates per function. The query cohort
 must differ from reference and calibration cohorts. Exact matches, existing names, feature rejections and
-undiscovered entries are reported separately from candidate evidence. Fuzzy requests cannot currently be
+undiscovered entries are reported separately from candidate evidence. Fuzzy requests cannot be
 combined with `no_bundled` / `--no-bundled`.
 
 MCP paging includes exact matches, warnings and fuzzy suggestions while preserving whole-result totals.

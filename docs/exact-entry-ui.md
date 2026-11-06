@@ -28,9 +28,9 @@ declaration; it does not bypass mapping, architecture, alignment or known-data c
 policy fallback and no snapping to a containing function.
 
 Only **Run** submits a request. Navigation, tab selection and reopening the window do not run it. **Start global
-analysis** is a separate action for the active module; it is not needed for exact-entry execution. Ordinary file
-open and ordinary Pseudocode automatic behavior remain unchanged outside deferred mode. The new controls do not
-change CLI or MCP decompilation flags or tool names.
+analysis** is a separate action for the active module; it is not needed for exact-entry execution. Outside
+deferred mode, ordinary file open and automatic Pseudocode behave as usual. These controls do not change CLI or
+MCP decompilation flags or tool names.
 
 ## Progress, cancellation and stale results
 

@@ -9,9 +9,9 @@ CLI/MCP return only the receipt and a requested preview; the full content stays 
 The internal `Decoder` interface accepts bytes, options and a cooperative cancellation callback. A provider
 returns decoded bytes, consumed input bytes and work steps. The host supplies file access, source checks,
 hashing, resource ceilings and previews. There is no dynamic provider loading, public plugin SDK or new
-permission granted to the existing triage-report WASM ABI.
+permission granted to the triage-report WASM ABI.
 
-The first built-in provider is `lzss-4k`:
+The built-in provider is `lzss-4k`:
 
 | Property | Interpretation |
 | --- | --- |
@@ -44,7 +44,7 @@ There is deliberately no output-file argument, automatic extraction, native load
 
 | Argument | Meaning |
 | --- | --- |
-| `--codec` | Required, currently `lzss-4k` |
+| `--codec` | Required; `lzss-4k` is the only codec |
 | `--offset`, `--length` | Required original-file range |
 | `--expected-output-size` | Required analyst-supplied stopping size, not a discovered boundary |
 | `--initial-write-offset` | Dictionary write position in 0 through 4095, default 4078 |
@@ -83,7 +83,7 @@ Decoded offsets are a distinct coordinate space: they are not original-file offs
 
 The built-in Rust decoder cooperates with cancellation and allocation/work budgets; this is not a sandbox
 for untrusted third-party provider code. Source reading and hash computation are not forcibly timed out.
-File-range access currently requires Unix regular-file checks; other platforms refuse that operation.
+File-range access requires Unix regular-file checks; other platforms refuse that operation.
 Final symlinks, special files, out-of-range reads and observable descriptor/path changes are rejected.
 Metadata is revalidated around reading/decoding, but file reads are not atomic with concurrent modification.
 

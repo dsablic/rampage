@@ -66,41 +66,41 @@ to obtain it, and unavailable evidence is not promoted into a known value.
 
 ## Acceptance boundary
 
-**Current confirmation: source/mock only for the corrected ARM64 contract.** The centrally reported controlled
-Python run passed 554 tests in 4.63 seconds; scoped Ruff and ty checks also passed. These are not live SDK results.
-No compiler, runtime or SDK acceptance run was performed for this documentation update.
+**The ARM64 refusal contract is confirmed by source and mock tests only.** The controlled Python run passes
+554 tests in 4.63 seconds, with scoped Ruff and ty checks. These are not live SDK results, and no compiler, runtime
+or SDK acceptance run covers this page.
 
 The refusal regression covers ARM64 variants, default/explicit/all-thread selection, architecture byte orders
 and differing CPSR values. It checks refusal before thread/register selection, mapping reads, memory reads and
 file publication, with unchanged process/stop/register context. Bridge regressions retain unknown ARM64 DATA
 order despite matching target/process defaults and readable CPSR, while allowing guarded raw inspection.
 
-The controlled native ARM64 exporter-refusal gate passed both owned fixture cases as part of its four-test module
+The controlled native ARM64 exporter-refusal gate passes both owned fixture cases as part of its four-test module
 in 1.53 seconds. It checks refusal before memory/file work and preservation of stopped context. Bridge/exporter
-mock regressions passed 554 tests, with scoped Ruff, formatting and type checks.
+mock regressions pass 554 tests, with scoped Ruff, formatting and type checks.
 
-The native ARM64 UI inspection gate passed one real-LLDB case in 8.11 seconds: six protocol operations cover
+The native ARM64 UI inspection gate passes one real-LLDB case in 8.11 seconds: six protocol operations cover
 session/modules/threads/registers/raw memory/module-address resolution and separate explicit static navigation.
 DATA order stays unknown, Prepare remains disabled, and no capture is published. Source, annotations, an unsaved
-editor and stopped identity remain intact. Register assertions were first corrected to target the debugger window
-rather than colliding with disassembly labels; the new-source gate then passed. This is not ARM64 capture acceptance.
+editor and stopped identity remain intact. Its register assertions target the debugger window, not disassembly
+labels. This is not ARM64 capture acceptance.
 
-The earlier x86-64 live workspace gate was blocked before UI/bridge observations by `Bad CPU type in executable`
-on the ARM64 host; Rosetta was not installed to bypass it. That is neither a live workspace pass nor evidence
-against native ARM64 inspection. Prepare/Compare/Save/Open acceptance remains a separate gate.
+The x86-64 live workspace gate cannot run on the ARM64 host: it stops before UI/bridge observations with
+`Bad CPU type in executable`, and Rosetta is not installed to bypass it. That is neither a live workspace pass nor
+evidence against native ARM64 inspection. Prepare/Compare/Save/Open acceptance remains a separate gate.
 
-### Historical measurements and the superseded claim
+### Older ARM64 export measurements
 
 The controlled stopped-process record at `35508ff` used Apple LLDB `2103.0.34.103` with ASLR enabled. It captured
 executable bytes, 82 module records and 34 selected-thread registers; the function lifted completely and its
-UUID/header slide correlated with the original image address. Leaving ASLR enabled avoided the earlier launch
-stall. These observations remain historical measurements, not a current export recipe.
+UUID/header slide correlated with the original image address. With ASLR disabled, the launch stalled. These
+observations are measurements of that commit, not an export recipe.
 
-Earlier owned ARM64 export tests verified byte contents and identity under the then-assumed data order.
-Subsequent review **superseded that data-order claim**: it was based on target architecture order, not affirmative
-runtime DATA evidence. The old measurements are not erased, but those tests did not validate the new early-refusal
-contract, did not observe E0E and do not authorize ARM64 export now. Architecture decoding, synthetic snapshot
-analysis and native instruction-oracle acceptance remain separate from this debugger DATA-order contract.
+Owned ARM64 export tests at that point verified byte contents and identity under an assumed data order. That
+**data-order claim does not hold**: it rests on target architecture order, not affirmative runtime DATA evidence.
+The measurements stand, but those tests do not validate the early-refusal contract, did not observe E0E and do not
+authorize ARM64 export. Architecture decoding, synthetic snapshot analysis and native instruction-oracle acceptance
+remain separate from this debugger DATA-order contract.
 
 [sbtarget]:
 https://github.com/swiftlang/llvm-project/blob/1b669c3f63758879bb0c517a589abdea4c6efbeb/lldb/source/API/SBTarget.cpp

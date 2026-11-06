@@ -1,8 +1,8 @@
 # Parity scorecard
 
-`rampage-eval run --suite parity` wraps the existing static slice evaluator and the owned checkable task set
+`rampage-eval run --suite parity` wraps the static slice evaluator and the owned checkable task set
 in one JSON report. Supply `--manifest` for a generated static corpus and `--corpus-inventory` to retain its
-build/availability evidence. Defaults use the existing committed evaluation manifest and task definitions.
+build/availability evidence. Defaults use the committed evaluation manifest and task definitions.
 Repeat `--manifest` to combine corpora in one report; duplicate slice names are refused before evaluation,
 and `static_manifests` records every manifest's path and digest.
 
@@ -34,7 +34,7 @@ call denominators but retained as raw disagreements. Limits: caller-supplied pro
 no automatic rebasing occurs, and agreement with Ghidra does not establish correctness.
 
 Opt-in live tasks require `--agent-model MODEL_ID`; select tasks with repeatable `--agent-task ID` and bound
-them with `--agent-max-tasks` (default one). The existing Anthropic transport reads its key from the local
+them with `--agent-max-tasks` (default one). The in-process Anthropic transport reads its key from the local
 environment, never from a command-line argument or report. No provider means unrun/null metrics and a nonzero
 exit for the requested live measurement. The runner uses actual MCP JSON-RPC discovery/calls against an
 in-memory server, isolates fixture copies and restricts read-only inspection. Requested/returned models,
@@ -42,26 +42,26 @@ provider usage, errors and truncation are retained. Limits: scripted-model tests
 success.
 
 Each discovered catalog snapshot is retained up to the discovery bound (1,000,000 serialized bytes, beyond which
-discovery fails rather than truncating), not the 32,768-byte default per-record bound that still applies to tool
+discovery fails rather than truncating), not the 32,768-byte default per-record bound that applies to tool
 inputs/outputs and model turns. Catalogs draw from the same total retained budget (default 512,000 bytes) but
 together may use at most half of it (256,000 by default), so repeated `enable_tools` refreshes cannot starve later
 tool outputs and model turns; a catalog cut by that share is still marked `truncated`. Every discovery records the
 SHA-256 of its complete snapshot in `catalog_sha256`. A refresh identical to an earlier discovery is not stored
 again: `catalog_repeat_of` names that discovery's index, and the repeat's `catalogs` entry keeps only
 `original_bytes`, with empty text marked `truncated` (readers unaware of the field therefore never mistake it for a
-complete catalog). `catalog_tool_names` stays complete for every discovery. The earlier per-record cut truncated
-every catalog: as measured at `c8f44b9`, the core catalog was 70,736 bytes and the all-group catalog 146,583 (77 tools), above even
-the 65,536-byte maximum per-record setting. With default bounds, a core-plus-all-groups run retains both
+complete catalog). `catalog_tool_names` stays complete for every discovery. Catalogs need this larger bound: at
+`c8f44b9` the core catalog measured 70,736 bytes and the all-group catalog 146,583 (77 tools), above even the
+65,536-byte maximum per-record setting, so a per-record cut would truncate every catalog. With default bounds, a core-plus-all-groups run retains both
 untruncated; a third distinct catalog (for example core plus detection, 85,410 bytes, before all groups) exceeds
-the catalogs' share, and the all-group snapshot is then retained as a labeled truncated prefix. Earlier reports,
-including the Phase 3.3 supplement, keep their truncated records and lack the two new fields.
+the catalogs' share, and the all-group snapshot is then retained as a labeled truncated prefix. Reports collected under the per-record cut,
+including the Phase 3.3 supplement, have truncated catalog records and no `catalog_sha256` or `catalog_repeat_of`.
 
 The accepted Phase 0 baseline and the Phase 1 and 3.3 live results were collected through an OpenCode JSON-intent
-adapter with `github-copilot/gpt-6.1-sol`. That adapter is retired; those results stay published as history and
-are not comparable with runs through the agent runner below (different model, client and prompts). The six live
-examples that used that adapter (`local_typing`, `function_frame`, `debug_type_import`, `type_library`,
-`type_propagation`, `typed_data`) now use the in-process Anthropic transport with a pinned `claude-sonnet-5-5`
-and need `ANTHROPIC_API_KEY`. They stay in process rather than moving to the agent runner because they rely on
+adapter with `github-copilot/gpt-6.1-sol`. rampage no longer includes that adapter, and those results are not
+comparable with runs through the agent runner below (different model, client and prompts). The six live examples
+(`local_typing`, `function_frame`, `debug_type_import`, `type_library`, `type_propagation`, `typed_data`) use the
+in-process Anthropic transport with a pinned `claude-sonnet-5-5`
+and need `ANTHROPIC_API_KEY`. They run in process rather than through the agent runner because they rely on
 the parity agent's per-argument write policy (for example, edits only on the owned fixture), which a
 `claude -p` session cannot enforce.
 
@@ -107,7 +107,7 @@ the fixture as `fixture.bin`. Raw streams stay in
 described by its `install.json`; results are in [benchmarks](benchmarks.md).
 
 A complete live run selects the full canonical task set with `--agent-max-tasks 20`, adds corpus and graph
-receipts, enables health samples, and uses `--require-complete`. Custom `--tasks` runs remain valid measurements
+receipts, enables health samples, and uses `--require-complete`. Custom `--tasks` runs are valid measurements
 but cannot substitute a different question set for the required task-definition hashes.
 The accepted result and its collector revision are recorded in [benchmarks](benchmarks.md). A publication view
 can be generated with `jq --arg source_sha256 HASH -f tools/parity-scorecard-summary.jq REPORT.json`; it omits

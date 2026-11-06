@@ -2,7 +2,7 @@
 
 ## Supported inputs
 
-Patches are annotation-log entries, not writes to the source executable. The initial profile supports
+Patches are annotation-log entries, not writes to the source executable. The supported profile is
 whole-file, little-endian, static `ET_EXEC` ELF64 images for x86-64 and AArch64. Dynamic/interpreter metadata,
 snapshots/captures, embedded/fat images, relocatable objects, ambiguous mappings, zero-fill, headers and
 loader-control metadata reject. Unsupported relocation/control encodings also reject explicitly.
@@ -21,7 +21,7 @@ The Core MCP tools are `list_patches`, `patch_bytes`, `revert_patch` and `export
 - Explicit `allow_data`.
 - `source_sha256` and `expected_revision` from the reviewed patch receipt.
 
-Revert requires `at`, `source_sha256` and `expected_revision`. The reviewed core APIs validate identity and
+Revert requires `at`, `source_sha256` and `expected_revision`. The core APIs validate identity and
 revision consent inside the authoritative annotation transaction, not merely in frontend preflight.
 
 Original bytes always refer to the original file—not an earlier replacement. Overlapping active ranges and
@@ -47,7 +47,7 @@ Writes and publication checks use authoritative state, not frozen presentation t
 native mutations reject stale byte contexts or validate an exact candidate context. Checked debug-layout
 and operand metadata is refused when incompatible; patching does not waive or rebind its proof requirements.
 
-Undo/redo use existing annotation transactions and same-process history. Cross-process logs replay checked
+Undo/redo use annotation transactions and same-process history. Cross-process logs replay checked
 state, but do not restore in-process undo history. Invalid patch records reject atomically rather than
 falling back to unpatched output. Complete log records must be exactly one JSON object; ingestion and line
 budgets apply from the first byte, including newline-free tails.

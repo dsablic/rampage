@@ -20,7 +20,7 @@ exports are refused before thread selection, mapping inspection, memory reads or
 the inspected LLDB SDK cannot affirm runtime DATA byte order. Target and process byte-order getters report
 architecture context, not that missing runtime fact. There is no `--assume` override. Use the
 [query bridge](lldb-query.md) for raw ARM64 inspection; see [runtime data order](runtime-data-order.md) for the
-evidence boundary and the superseded ARM64 export claim.
+evidence boundary and why older ARM64 export measurements do not authorize export.
 
 Select ranges explicitly. The exporter reads those ranges, refuses partial reads and existing output files,
 and limits captured bytes to 64 MiB. Requested permissions must exactly match every underlying readable mapped
@@ -184,9 +184,8 @@ Optional `modules` entries have `name`, `path`, `uuid`, `image_base` and `runtim
 entries have hexadecimal `thread_id`/`value` and a register `name`. Both lists are limited to 4,096 entries;
 module UUIDs and per-thread register names must be unique. The LLDB adapter exports those fields from the
 stopped target without evaluating expressions or executing target code, on supported export architectures.
-Earlier owned ARM64 export tests verified byte contents and identity under the then-assumed data order, with
-ASLR enabled; subsequent review **superseded that data-order claim**. Those historical measurements do not
-validate the current refusal contract. See [runtime data order](runtime-data-order.md#acceptance-boundary)
+Older owned ARM64 export tests verified byte contents and identity under an assumed data order, with ASLR
+enabled; that **data-order claim does not hold**, and those measurements do not validate the refusal contract. See [runtime data order](runtime-data-order.md#acceptance-boundary)
 for the separate source/mock and live acceptance boundaries.
 
 `rampage runtime module correlate capture.json --original module.dylib --module <uuid> --at 0x1010` checks the UUID

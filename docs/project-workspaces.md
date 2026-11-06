@@ -2,8 +2,8 @@
 
 A desktop **Project workspace** retains up to eight explicitly selected modules. Its local manifest records
 sources, identity, image selectors, decompiler option selection and qualified navigation; it is not an analysis
-cache, source archive, dependency resolver or debugger connection. These controls are API/UI only: no workspace
-CLI commands or MCP tools are added.
+cache, source archive, dependency resolver or debugger connection. These controls are API/UI only: there are no
+workspace CLI commands or MCP tools.
 
 ## Retained modules and qualified navigation
 
@@ -63,7 +63,7 @@ leaves the entire old bank, all editors and all navigation histories intact. Cha
 preview invalidate the review, even when switching away and back.
 
 Every restored module starts deferred. Loading eight modules does not automatically launch eight global
-analyses. **Start global analysis** remains an explicit per-module action with the existing analysis costs;
+analyses. **Start global analysis** is an explicit per-module action with its usual analysis costs;
 this is not a global runtime budget guarantee.
 
 ## Background file operations and cancellation
@@ -98,7 +98,7 @@ intervening edits, including change-and-change-back. These process-local guards 
 The review/job binding also checks module instances, navigation, settings and editor state; cancellation or a
 stale binding discards Preview/Open candidates without replacing the old bank.
 
-The public synchronous `App` capture/Save/Preview/Open methods remain for programmatic compatibility. GUI buttons
+The public synchronous `App` capture/Save/Preview/Open methods serve programmatic callers. GUI buttons
 use the background `begin_workspace_*` path; `App::blocking` intentionally executes jobs inline for tests. This
 does not move every filesystem access out of painting: ordinary annotation-refresh polling remains, and metadata
 checks can still perform filesystem operations. No general frame-time or all-I/O-asynchronous guarantee follows.
@@ -127,7 +127,7 @@ Specification compatibility is validated when the native engine actually uses th
 | Checked snapshot structural work | 65,536 units |
 
 The checked snapshot raw profile is enforced before copying or serde deserialization, in addition to semantic
-snapshot validation. Legacy snapshot loading is unchanged and can admit documents outside this profile; workspace
+snapshot validation. Legacy snapshot loading does not apply this profile and can admit documents outside it; workspace
 Save refuses those documents rather than publishing a workspace it cannot restore. Input sources must be bounded
 regular files, not symlinks, directories or devices. Descriptor and pathname checks do not make concurrent mapped
 reads atomic: keep sources quiescent.

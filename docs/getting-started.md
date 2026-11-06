@@ -29,7 +29,9 @@ tools/install.sh
 `tools/install.sh` builds release binaries and installs `rampage` and `rampage-worker` into `~/.local/bin` (pass a
 directory to install somewhere else). It compiles Ghidra's C++ decompiler and optimises the whole release build,
 and starts from scratch each time it runs, so expect roughly 10 to 30 minutes depending on
-the machine: on a 10-core M1 Max that other jobs kept busy, it took 23 minutes with the installer's former two-job limit, so expect less now that it uses Cargo's default job count. `tools/install.sh --uninstall` removes what it installed.
+the machine. On a 10-core M1 Max that other jobs kept busy, a build limited to two parallel jobs took 23 minutes;
+the installer uses Cargo's default job count, so it is usually faster. `tools/install.sh --uninstall` removes what
+it installed.
 
 Keep the two executables side by side: decompilation runs in the supervised worker. If `rampage` cannot find
 `rampage-worker`, it decompiles in-process instead, and the MCP server warns about it when it starts.

@@ -84,7 +84,7 @@ databases that need the separate consumer.
 `Project::query_fid_signatures` uses an explicitly configured `FidHostAdapter` and Ghidra 12.1.4 static
 analysis. The target executable is never launched. The host installation and JVM are trusted executable
 code, not a sandbox. The adapter binds exported features to the exact input SHA-256 and requires native
-discovery extents and confidence gates to agree. Its initial query profile supports standalone x86/x86-64
+discovery extents and confidence gates to agree. Its query profile supports standalone x86/x86-64
 ELF images without debug/external-debug metadata; unsupported profiles return an error.
 
 Matching checks both FID hashes, both sizes, language/version/compiler identity, thunk/confidence gates

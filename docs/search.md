@@ -24,7 +24,7 @@ rampage search FILE --query-json '{"mode":{"kind":"bytes","pattern":"48 8B ??"}}
 ```
 
 Request files and inline JSON are capped at 1 MiB. File loading uses checked regular-file descriptors and
-source revalidation; it is currently Unix-only. Inline JSON remains available on other platforms.
+source revalidation; it is Unix-only. Inline JSON remains available on other platforms.
 Transport ranges and address-reference selectors accept numeric VAs, address strings or resolvable names.
 Immediates remain numeric typed values, never symbol lookups.
 

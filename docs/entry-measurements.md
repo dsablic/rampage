@@ -6,19 +6,19 @@ The three-format inline-only run completed **18/18 attempts**, with no failures 
 on Darwin 27.0.0 arm64 using Python 3.13.14 and debug-profile CLI binaries. Both modes passed their independent
 source oracles. Results are local baselines, not a speedup or startup-stall fix.
 
-The first, mixed-backend pilot is retained as a failed pilot: **6 inline ELF attempts passed, 1 isolated exact attempt
-failed with `unsupported_separate_group_descendant`, and 29 attempts were not run**. Rust workers deliberately own a
-separate process group; the corpus guardian cannot supervise that ownership model. This is a measurement-supervision
-limitation, not evidence of an exact-entry feature failure. No process-group authority or signalling policy was relaxed.
-The pilot's inline ELF wall medians were 0.2658 seconds exact and 0.2485 seconds legacy; its first inline cold attempt
-took 1.838 seconds. These partial pilot observations establish no speedup and do not substitute for three-format
-results.
-The inline-only run used a separate output file, not replacement or retry of the pilot's failed samples.
-Raw reports stayed in owned external scratch and are removed after retaining these sanitized observations.
+A mixed-backend pilot failed: **6 inline ELF attempts passed, 1 isolated exact attempt failed with
+`unsupported_separate_group_descendant`, and 29 attempts were not run**. Rust workers own a separate process group by
+design, and the corpus guardian cannot supervise that ownership model. This is a measurement-supervision limitation,
+not evidence of an exact-entry feature failure; the guardian's process-group authority and signalling policy are not
+relaxed to work around it. The pilot's inline ELF wall medians were 0.2658 seconds exact and 0.2485 seconds legacy;
+its first inline cold attempt took 1.838 seconds. These partial pilot observations establish no speedup and do not
+substitute for three-format results. The inline-only run is a separate measurement with its own output file, not a
+replacement or retry of the pilot's failed samples. Raw reports are not retained; only the sanitized observations
+below are.
 
-Isolated worker wall time and RSS are **UNAVAILABLE under this gate**. Existing Rust worker parity acceptance is a
-separate gate and does not supply missing performance measurements. The parent's separate live SDK launch was blocked
-by `Bad CPU type`; no Rosetta installation or architecture-check weakening was attempted. Static Mach-O decompilation
+Isolated worker wall time and RSS are **UNAVAILABLE under this gate**. Rust worker parity acceptance is a separate
+gate and does not supply missing performance measurements. A separate live SDK launch on the measurement host failed
+with `Bad CPU type`; Rosetta was not installed and architecture checks were not weakened. Static Mach-O decompilation
 does not establish live SDK execution acceptance.
 
 A separate [owned exact-entry API pilot](worker-observations.md) records native/isolated full-image measurements
@@ -36,7 +36,7 @@ It never executes the target fixtures and does not require Rosetta for the x86-6
 | hello-x64.macho | _main | gcc | puts with the owned greeting literal; return 5 |
 | hello-arm64.elf, optional | main | default | puts with the owned greeting literal; return 5 |
 
-Both modes use the same explicit compiler override and otherwise unchanged CLI native defaults. Fresh copies of the
+Both modes use the same explicit compiler override and otherwise default CLI native settings. Fresh copies of the
 fixture files have no annotation sidecars. The report includes fixture, source, CLI, worker, runner and supervisor
 SHA-256 digests, the compiler requested for each format, observed language IDs, and a canonical manifest fingerprint.
 The observed language ID must equal the canonical architecture/compiler ID for the case. Before copying, preflight
@@ -84,7 +84,7 @@ the measurement lane has a shared 120-second execution budget. Remaining attempt
 Bounded process cleanup and input copying add overhead; this is not a hard real-time whole-script deadline.
 Stdout capture is capped at 1 MiB and stderr at 64 KiB per child, with cumulative limits rather than rolling tails.
 
-The existing corpus guardian supervises pre-exec and execution, holds its directly owned process-group leader unreaped
+The corpus guardian supervises pre-exec and execution, holds its directly owned process-group leader unreaped
 through final group cleanup, and never signals PIDs inferred from process listings.
 Separate-group descendants are unsupported, reported when observed and never signalled by guessed
 ownership. The runner is single-threaded and POSIX-only. Cancellation unwinds supervision and temporary-file cleanup.

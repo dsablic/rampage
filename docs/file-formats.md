@@ -108,9 +108,9 @@ Enum constants have separate bounds of 100,000 Constant rows, 100,000 owner/fiel
 constants and 4 MiB of work/text, with bounded diagnostics. Incomplete or over-limit Constant tables yield no
 constant evidence because an unread suffix could contain duplicate parents. External assemblies are not loaded.
 
-Boxed custom-attribute values retain serialized types in their existing rendered strings, such as `box(int32, 42)`
+Boxed custom-attribute values retain serialized types in their rendered strings, such as `box(int32, 42)`
 and `box(int32[], null)`; named arguments keep their declared `object`/`object[]` type. Boxed strings, types and
-verified local enums share the existing depth/node/text/image-work budgets, including failed type/name lookups.
+verified local enums share the depth/node/text/image-work budgets, including failed type/name lookups.
 Direct jagged constructor types, unknown/external or assembly-qualified enum resolution, bare `0xFF` object tags
 and repeated object tags are unsupported. A failure in named arguments retains only fully charged valid fixed values.
 
@@ -124,8 +124,8 @@ even when the assembly name appears to match the local image. Invalid/conflictin
 or incomplete identity evidence disable the whole serialized-name index rather than proving partial uniqueness.
 Direct numeric enum decoding and constant evidence remain independent when their own evidence and budgets suffice.
 Initial nesting scans cap readable rows at 100,000 and reserve eight shared-work units per attempt before reads or
-insertion; escape expansion and failed name lookup also consume the existing decoding budgets. Within-limit ordinary
-ILAsm nested-type display is unchanged.
+insertion; escape expansion and failed name lookup also consume the decoding budgets. Within these limits,
+ordinary ILAsm nested-type display is unaffected.
 
 Resource inventory distinguishes embedded-directory locations, external File/AssemblyRef links, unsupported
 ExportedType links and malformed/dangling references. An embedded `readable_location` reports only a checked,

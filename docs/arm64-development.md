@@ -35,14 +35,14 @@ No IDA comparison is recorded.
 
 The controlled stopped-process capture recorded at `35508ff` used Apple LLDB `2103.0.34.103` with ASLR enabled.
 The exporter captured executable bytes, 82 module records and 34 selected-thread registers; the captured
-function lifted completely and its UUID/header slide mapped back to the original image address. Those historical
-byte/identity measurements remain recorded, but their SDK runtime DATA-order acceptance premise is superseded:
-SBTarget/SBProcess byte-order getters derive object ArchSpec order, not independent runtime DATA-order evidence.
-The standalone exporter now refuses ARM64/arm64e/aarch64 before thread/map/read/write work. Loading existing manual
-ARM64 snapshots remains unchanged and old documents are not automatically invalidated. See the
+function lifted completely and its UUID/header slide mapped back to the original image address. Those
+byte/identity measurements do not establish runtime DATA order: SBTarget/SBProcess byte-order getters derive
+object ArchSpec order, not independent runtime DATA-order evidence. The standalone exporter therefore refuses
+ARM64/arm64e/aarch64 before thread/map/read/write work. Manual ARM64 snapshots still load, and existing snapshot
+documents are not automatically invalidated. See the
 [runtime data-order review](runtime-data-order.md) for the source-proof boundary.
 The opt-in regression runs with `RAMPAGE_LLDB_LIVE=1 python3 -m pytest tools/test_lldb_live.py` after building
-the CLI; its ARM64 capture expectation is now refusal, not a rerun of the historical exporter success.
+the CLI; it expects the ARM64 capture to be refused.
 Broader debugger/platform acceptance and derived-analysis cache persistence remain separate gates;
 see [Runtime snapshots](runtime-snapshots.md) for capture, identity and annotation persistence behavior.
 
@@ -138,13 +138,12 @@ and dominated by its first block) and all cases leave only for one follow block,
 goes straight to the follow block is an empty case. The bound check stays an ordinary `if`: its out-of-range arm
 holds the default and the other arm the dispatch block and the `switch`. Fall-through between cases, case code
 shared with other cases or the default (including compiler tail-merging), cases outside the function and tables
-that disagree with the CFG are rejected with a limitation, leaving the labeled `switch` form. The recorded
-`musl-static-aarch64.elf` check in `e2d0490` found none of its three resolved switch functions structured:
-`printf_core` exceeded the SSA definition limit, `pop_arg` tail-merged its case stores, and `sysconf` had nested
-loops in a case and early returns joining a shared return block. This is historical fixture evidence, not a
-rerun of the current working tree.
+that disagree with the CFG are rejected with a limitation, leaving the labeled `switch` form. In a
+`musl-static-aarch64.elf` check at commit `e2d0490`, none of the three resolved switch functions is structured:
+`printf_core` exceeds the SSA definition limit, `pop_arg` tail-merges its case stores, and `sysconf` has nested
+loops in a case and early returns joining a shared return block. That result applies to `e2d0490` only.
 
-The next gates are more scalar/FP/SIMD semantics, alias-aware memory analysis, broader control-flow structuring,
+Not covered: further scalar/FP/SIMD semantics, alias-aware memory analysis, broader control-flow structuring,
 typed arguments/returns, dispatch recovery beyond bounded switch tables and live runtime integration. PAC,
 exceptions, TLS, varargs, platform-specific ABI differences and protection wrappers must not be treated as solved
 by integer SSA.

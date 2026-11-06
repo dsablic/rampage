@@ -5,8 +5,9 @@ compatible builds; a match does not identify a library version, authenticate sou
 
 ## Shipped artifacts
 
-The default databases passed gzip, index and lazy-loading tests and an independent publication audit. They do not
-meet the 80% matched-version recall target. The counts below describe the three reviewed current pairs and unchanged Thumb.
+The default databases pass gzip, index and lazy-loading tests and an independent publication audit. They do not
+meet the 80% matched-version recall target. The x86-64, AArch64 and i386 counts below are revalidated; the Thumb
+database is not rerun.
 
 | Architecture | Masked signature entries | Callee keys | Recorded build profiles |
 | --- | ---: | ---: | ---: |
@@ -16,7 +17,7 @@ meet the 80% matched-version recall target. The counts below describe the three 
 | ARM/Thumb | 2,117 | 0 | 14 |
 
 Counts describe index keys, not unique recognized functions. The ARM profiles are Thumb builds. The x64/AArch64
-indexes include the frozen musl starter inputs; their original source archive identity was not recorded and is
+indexes include the frozen musl starter inputs; their original source archive identity is unrecorded and
 explicitly unavailable. The other profiles record archive digests, compiler identity, requested optimization,
 license declarations, recipe fingerprints and an aggregate measurement witness.
 
@@ -30,17 +31,17 @@ The promoted Linux profiles cover zlib, LZ4, Lua, SQLite, zstd, mbedTLS and libp
 the reduced OpenSSL and HTTP-only curl profiles. Several libraries have second versions. x64 also includes the
 validated Windows zlib/LZ4 builds and exactly nine GLOBAL functions from MinGW's `pesect.c`; this is not whole-CRT
 or Windows DLL implementation coverage. The observed MinGW header identity is 15.0.0 alpha, not an attested release
-commit. Broader SDK/runtime coverage remains separately tracked.
+commit. Broader SDK/runtime coverage is not included.
 
-The two added x64 profiles are LLVM compiler-rt 22.1.8's eight original generic C units and glibc 2.40's original
+Two portable x64 profiles cover LLVM compiler-rt 22.1.8's eight original generic C units and glibc 2.40's original
 `strverscmp.c` translation unit. Their source archive pins, exact compiler/header/harness identities, finite alias
 configuration and dependency receipts are recorded in the
 [portable supplement](benchmarks/phase2-1-portable-delivery-2026-10-18.json) and the
 [`corpus-x86_64.index.json` provenance index](../crates/rampage-signatures/data/corpus-x86_64.index.json).
-That portable checkpoint preserved all 32 historical records while adding nine and retiring 58 signature keys
-through conservative source-callee-context curation. The current SDK/Rust update preserves all 34 of those records
-exactly, plus all 27 prior AArch64 and 14 prior i386 records. It adds installed musl and Zig compiler runtime on x64,
-Zig compiler runtime on AArch64/i386, and Rust std/core 1.87.0 and 1.99.0 on x64. See the
+The portable supplement keeps all 32 earlier x64 records while adding nine and retiring 58 signature keys through
+conservative source-callee-context curation. The SDK/Rust delivery keeps all 34 resulting x64 records exactly, plus
+all 27 AArch64 and 14 i386 records, and adds installed musl and Zig compiler runtime on x64, Zig compiler runtime
+on AArch64/i386, and Rust std/core 1.87.0 and 1.99.0 on x64. See the
 [SDK/Rust delivery evidence](benchmarks/phase2-1-sdk-delivery-2026-10-18.json) for current hashes and raw/curated rows.
 
 For installed SDK profiles, index `archive_sha256` fields identify generated native Zig-cache archives, **not
@@ -60,26 +61,27 @@ is unavailable, so their inclusion does not earn a complete historical training-
 
 Promoted corpora withhold raw exact fallback answers. Such keys can accidentally coincide across different linked
 layouts, even when their masked bodies are already ambiguous. Masked and callee-qualified answers remain available;
-the generic matcher, hash schemes, and explicitly supplied user databases are unchanged. Withholding creates
+withholding does not affect the generic matcher, hash schemes or explicitly supplied user databases. Withholding creates
 persistent tombstones for known keys. Composition that introduces new keys requires applying the curation policy again.
 
-Current delivery accounts for **95 cases: 39 x64 + 27 AArch64 + 15 i386 freshly revalidated, and 14 historical Thumb**.
-The 81 revalidated cases have zero owned/full wrong or spurious names after reloading the exact three exports;
-Thumb is unchanged, not rerun. Raw recall gates still fail in 16 x64, 13 AArch64 and five i386 cases. All four Rust
-profiles are included despite low recall; the original std 1.87 one-wrong result remains in the raw evidence.
+The shipped corpus accounts for **95 cases: 39 x64 + 27 AArch64 + 15 i386 revalidated, and 14 Thumb not rerun**.
+The 81 revalidated cases have zero owned/full wrong or spurious names after reloading the exact three exports.
+Raw recall gates fail in 16 x64, 13 AArch64 and five i386 cases. All four Rust
+profiles are included despite low recall; the raw evidence retains std 1.87's original one-wrong result.
 Generic source-reference conflict rejection and exact-fallback withholding remove unsafe answers, not per-name
 blacklists or gold deletion. PE truth uses checked PDB procedure ranges, not guessed PUBLIC-name sizes.
 This is bounded corpus evidence, not a universal precision guarantee.
 Per-library and aggregate recall failures remain recorded. Low recall against the 80% matched-version target does
 not block shipping precision-checked databases, and does not replace the precision checks for default artifacts.
 
-Strict canonical-name behavior remains the default. Explicit `--producer-alias-sets` enables the revalidated aggregates'
+Strict canonical-name behavior is the default. Explicit `--producer-alias-sets` enables the revalidated aggregates'
 `elf-producer-alias-sets-v3` policy: full-target grading accepts only verified exact native ELF same-range aliases;
 reference admission requires a unique default-visible strong definition with only weak default-visible aliases.
 Original source-canonical and selected-definition callee contexts remain separate from answer labels. Original
-strict owned gold and raw proposals are preserved; PE/PDB alias handling, generic matching, hash schemes and
-thresholds are unchanged. Alias metadata is neither publisher authentication nor runtime object identity.
-The earlier strict alias refusal and v1 glibc 0/1 remain frozen; v3's actual 1/1 is separate producer-backed evidence.
+strict owned gold and raw proposals are preserved; the policy does not change PE/PDB alias handling, generic
+matching, hash schemes or thresholds. Alias metadata is neither publisher authentication nor runtime object identity.
+The strict policy's alias refusal and the v1 policy's glibc 0/1 remain frozen records; v3's actual 1/1 is separate
+producer-backed evidence.
 
 Requested O1/O2 variants can produce identical signature databases and stripped images. Those cases remain separate
 measurements but do not establish independent optimizer diversity. Bare compiler flags are not evidence of a
@@ -137,10 +139,10 @@ the two Rust library HTML notices preserve declared upstream trailing-whitespace
 Eight technical refusals stay quarantined in the
 [SDK disposition](benchmarks/phase2-1-sdk-disposition-2026-10-18.json): AArch64 musl, x64/AArch64 libc++, libc++abi
 and libunwind, and Thumb compiler runtime. Their native relocation/capture limits are not recall failures or shipped
-coverage. Earlier provisional C++ results and all raw failed attempts remain separate; no further LLVM repairs are
-part of this bounded delivery.
+coverage. Provisional C++ results and all raw failed attempts are kept separately; the delivery attempts no further
+LLVM repairs.
 
-The existing `tools/gen-signatures.sh` wrapper accepts the same corpus arguments. `ZIG`, `RAMPAGE_EVAL` and
+The `tools/gen-signatures.sh` wrapper accepts the same corpus arguments. `ZIG`, `RAMPAGE_EVAL` and
 `RAMPAGE_SIGNATURE_CORPUS` select existing producer executables; `--only`, `--target` and `--optimization` are
 repeatable. A native tool build is available with:
 
@@ -156,7 +158,7 @@ tools/gen-signatures.sh --list
 | `db.json`, `db.json.gz` | The same ordered database as JSON and deterministic gzip |
 | `truth.json` | Original library-owned truth, not a newly filtered denominator |
 
-The original gate still requires at least 80% recall and zero wrong/spurious names. Failed gates retain their
+The original gate requires at least 80% recall and zero wrong/spurious names. Failed gates retain their
 measurements as `measured_failed` and return failure; unsupported targets are not successful coverage.
 
 SQLite's public-domain amalgamation profile disables thread safety and extension loading. Its license-containing
@@ -192,17 +194,17 @@ digests are admitted as separately disclosed legacy inputs without original case
 The builder's optional `--diagnostic-limit` (0–512, default 0) emits bounded, address-sorted symbol/discovery evidence.
 It preserves actual gates, ambiguity tombstones and missing-callee evidence, counts omitted rows, and keeps supplied
 reference labels separate from final target proposals. Diagnostics do not change matches or establish execution,
-complete function boundaries or semantic identity. Old case reports lacking the shared-validator source hash are
+complete function boundaries or semantic identity. Case reports lacking the shared-validator source hash are
 not accepted as current aggregate evidence.
 
-The no-argument starter generator still rebuilds musl JSON/gzip/count inputs. It does not rebuild the composed default
+The no-argument starter generator rebuilds musl JSON/gzip/count inputs. It does not rebuild the composed default
 corpora; deliberately changing those frozen legacy inputs requires a separately reviewed baseline update.
 Ordinary user/pack database inputs remain JSON. FLIRT/FIDBF import, near-miss matching and authorization to publish
 signatures derived from private binaries are outside this corpus pipeline.
 
 Generated native programs, PDBs, archives and runtime captures are evaluation inputs, not bundled outputs. Only
-reviewed hash/name databases and their provenance data belong in the default signature assets. Existing raw attempts
-and frozen baseline reports are not overwritten by a new consumer replay or a later acceptance decision.
+reviewed hash/name databases and their provenance data belong in the default signature assets. Raw attempts and
+frozen baseline reports are never overwritten by a new consumer replay or acceptance decision.
 
 Broader SDK coverage and the recall target are not claimed. User-supplied
 [PAT and FunctionID inputs](signature-imports.md) and [fuzzy candidates](fuzzy-signatures.md) are documented

@@ -7,7 +7,7 @@ and UI actions use the same checked core, separately from the scalar-only `impor
 
 ## Supported evidence
 
-The initial consumer is x86-64 little-endian ELF64 with bundled `x86:LE:64:default:gcc` specifications. The C path
+The supported consumer is x86-64 little-endian ELF64 with bundled `x86:LE:64:default:gcc` specifications. The C path
 supports C89, C, C99, C11 and C17 compilation units. Complete fixed prototypes require at least one flat-struct
 pointer parameter. Results are void or supported scalar/scalar-pointer types, not struct-pointer results. Members
 are supported exact-width scalars or ordinary scalar/void pointers.

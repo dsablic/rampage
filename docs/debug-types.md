@@ -39,8 +39,8 @@ Existing analyst definitions and signatures are preserved. Reopening and native/
 library/proof consistency and image/target identity before dependent interpretations. Undo/redo operates on the
 complete batch; unrelated proof groups are not silently cascaded away.
 
-The older `import_pdb_names` remains names-only. The older `import_debug_layouts` retains its narrower checked
-flat/projection workflow; it is not relaxed merely because the project-library importer supports more shapes.
+`import_pdb_names` imports names only. `import_debug_layouts` keeps its narrower checked flat/projection
+workflow; it is not relaxed because the project-library importer supports more shapes.
 
 Limits: bounded static producer records and native counterpart checks, not source authentication, full SDK or
 arbitrary C++ class recovery, runtime object proof, symbol-server access, or executable-byte changes.

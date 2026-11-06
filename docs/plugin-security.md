@@ -8,7 +8,7 @@ See [plugins and extension points](plugins.md) for commands, source admission an
 
 The plugin host pins Wasmtime **49.0.3**, including the upstream security fixes in that supported release.
 Review [upstream advisories](https://github.com/bytecodealliance/wasmtime/security/advisories) when changing the
-pin. The older Wasmtime dependency used by YARA is separate; this does not upgrade or audit that entire path.
+pin. The older Wasmtime dependency used by YARA is separate; this pin does not upgrade or audit that path.
 The restricted grammar and process boundary are defense in depth, not a substitute for runtime security updates.
 
 Treat the component and everything it says as untrusted. Treat the CLI/API host, selected native worker,
@@ -130,9 +130,9 @@ supervised timeout and process memory controls cover compilation. The runtime re
 parent-side protocol work and response admission, but it is not a hard interruption guarantee for every host
 operation. File opening and native preparation precede that runtime request budget.
 
-These are experimental rejection ceilings, not promised latency or throughput. The earlier 10-million-fuel
-policy rejected the actual Rust triage guest; the current 50-million ceiling permits the exercised component
-cases. That observation does not guarantee arbitrary admitted inputs finish within fuel or time limits.
+These are experimental rejection ceilings, not promised latency or throughput. A 10-million fuel ceiling rejects
+the actual Rust triage guest; the 50-million ceiling permits the exercised component cases. This does not
+guarantee that arbitrary admitted inputs finish within fuel or time limits.
 
 ## Supervision and platform limitations
 
@@ -161,31 +161,31 @@ data with the host provenance envelope; downstream consumers must preserve the p
 avoid treating guest text as instructions. Rendering buffers the complete admitted report before writing,
 including the compact JSON newline in the final byte cap. It does not truncate JSON or execute next steps.
 
-Only triage composition has been migrated into this experimental lane. The other builtin workflows, MCP/UI
-registries and data packs retain their existing behavior. This boundary is not a stable public plugin SDK,
-general component compatibility promise or completed security review of the broader plugin roadmap.
+Only triage composition runs in this experimental lane. The other builtin workflows, MCP/UI registries and data
+packs do not use it. This boundary is not a stable public plugin SDK, a general component compatibility promise
+or a completed security review of a broader plugin system.
 
 ## Local acceptance scope
 
-On the ARM64 macOS host, ten compiled cases matched the unchanged builtin report body: normal/stripped owned
+On an ARM64 macOS host, ten compiled cases match the builtin report body: normal/stripped owned
 network-client ELF, owned MinGW PE and normal/stripped thin x86-64 Mach-O, each at section limits 1 and 25.
 These cases use fresh checked source admission. Native oracles also check multi-page chained slots, decoy
-exclusion, exports, backing, starts and constructor names. Target binaries were never executed.
+exclusion, exports, backing, starts and constructor names. Target binaries are never executed.
 
-Separate compiled probes exercised forbidden imports, a wrong interface version, malformed and oversized output,
+Separate compiled probes exercise forbidden imports, a wrong interface version, malformed and oversized output,
 fuel exhaustion in both exports, execution epochs, denied memory growth, pre-cancellation and sequential recovery.
-The genuine guest also composed an empty inventory through its actual exports, and the CLI route retained the
+The genuine guest also composes an empty inventory through its actual exports, and the CLI route retains the
 host provenance envelope. Native guest tests cover additional classification, managed-token and ingestion cases.
 
-Subsequent cancellation-only checkpoint probes parked an actual Wasm activation at both call boundaries,
-cancelled, and asserted successful reaping/cleanup plus real-permit retention through the post-cleanup callback.
-Observer-panic recovery and cancellation from that final callback were also exercised. The activation may be
+Cancellation-only checkpoint probes park an actual Wasm activation at both call boundaries, cancel, and assert
+successful reaping/cleanup plus real-permit retention through the post-cleanup callback. They also exercise
+observer-panic recovery and cancellation from that final callback. The activation may be
 canonical allocation rather than the probe's source-language loop. This opt-in v2 diagnostic never resumes;
-ordinary execution remains v1. Parked/observer time is governed by the outer operation budget, not a 500 ms
-hard-return promise; trusted parent callbacks cannot be forcibly interrupted. This original checkpoint gate
-established healthy cleanup, not the separate quarantine transition below.
+ordinary execution uses v1. Parked/observer time is governed by the outer operation budget, not a 500 ms
+hard-return promise; trusted parent callbacks cannot be forcibly interrupted. The checkpoint probes
+establish healthy cleanup, not the separate quarantine transition below.
 
-Mandatory parent-owned cleanup proof now controls reopening independently of diagnostic collection. A request
+Mandatory parent-owned cleanup proof controls reopening independently of diagnostic collection. A request
 without a spawned child, or with confirmed direct-root reap and owned-group cleanup, releases admission when
 its real permit drops. Uncertain or missing proof quarantines future plugin requests in that process, including
 unwind paths. Safe cleanup during observer panic still permits ordinary recovery. The proof callback runs after
@@ -194,9 +194,9 @@ resume operation, or application-protocol field. An application error cannot ass
 
 Quarantine transitions have local production-state-machine tests; supervisor fault injection separately checks
 uncertain proof with retained cleanup authority. This is composed coverage, not a genuine live-worker ownership
-loss drill. That drill is deliberately unearned: losing authority and then guessing a PID for test cleanup would
+loss drill. There is deliberately no such drill: losing authority and then guessing a PID for test cleanup would
 violate the boundary. There is no in-process reset; inspect unresolved resources before restarting.
 
 This does not establish cancellation inside compilation, uninstrumented cancellation latency, every native
-producer's memory bounds, or Linux runtime acceptance. The Linux CI gate is configured but has not been
-dispatched in ordinary development. No privileged tracing or target execution was used.
+producer's memory bounds, or Linux runtime acceptance. A Linux CI gate is configured but does not
+run in ordinary development. The checks use no privileged tracing or target execution.

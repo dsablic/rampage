@@ -19,7 +19,7 @@ rampage --json binary inspect-raw input.bin --request "$request"
 Limits: 4096 input bytes, 256 instructions, x86/x64/ARM/AArch64 and little-endian code/data only; ARM requires
 `arm` or `thumb`, other architectures `native`. Invalid/incomplete instructions remain unconsumed. ARM literal
 reads use complete words in the supplied suffix; backward literals and prior IT context outside the window
-remain unknown. JSON is bounded and complete or refused. File access uses the existing Unix regular-file
+remain unknown. JSON is bounded and complete or refused. File access uses the Unix regular-file
 checks; reads are non-atomic. Decoded bytes can use the internal borrowed-buffer API, but this MCP operation
 does not implicitly decode input or turn decoded offsets into source-file offsets.
 

@@ -3,10 +3,9 @@
 rampage has an experimental, explicitly selected WebAssembly component host for `triage-report`. The Rust guest
 composes the report from bounded immutable primitive facts: it classifies strings, groups and ranks findings,
 writes summaries and limitations, and selects next steps. It does not call the builtin report through a host
-callback. Without `--component`, the builtin workflow remains the default and is unchanged.
+callback. Without `--component`, the builtin workflow runs; it is the default.
 
-This is one executable-extension lane, not a stable public plugin SDK or completion of the broader plugin
-roadmap. Read the [plugin security boundaries](plugin-security.md) before selecting a component or worker.
+This is one executable-extension lane, not a stable public plugin SDK or a general plugin system. Read the [plugin security boundaries](plugin-security.md) before selecting a component or worker.
 
 ## Extension surfaces
 
@@ -16,11 +15,11 @@ roadmap. Read the [plugin security boundaries](plugin-security.md) before select
 | Shared builtin workflow and tool registries | Implemented; statically linked Rust modules |
 | Explicit component host and WIT boundary | Experimental triage interface `0.0.1`, JSON schema `1` |
 | Component capability and resource controls | Import-free ABI, bounded admission and separate supervised worker |
-| Separately loadable workflow composition | `triage-report` Rust guest; builtin still supported |
+| Separately loadable workflow composition | `triage-report` Rust guest; builtin also available |
 | Stable public plugin SDK, discovery and general registry integration | Not provided |
 
 Components are not discovered by scanning directories and do not register MCP tools or UI workflows. Other
-workflows and primitive tools remain statically linked. Data packs retain their existing data-only behavior.
+workflows and primitive tools remain statically linked. Data packs stay data-only.
 
 ## Source installation
 
@@ -33,14 +32,14 @@ matching `rampage-plugin-worker`:
 bash tools/install.sh "$HOME/.local" --plugins
 ```
 
-An already-installed executable UI is rebuilt even without `--ui`, preserving the existing upgrade behavior.
-An existing regular plugin-worker file is also rebuilt without `--plugins`, so upgrading the CLI does not
-deliberately leave that optional worker on an older source version. Unexpected selected destination symlinks
+An already-installed executable UI is rebuilt even without `--ui`. An existing regular plugin-worker file is
+also rebuilt without `--plugins`, so upgrading the CLI does not leave that optional worker on an older source
+version. Unexpected selected destination symlinks
 or non-regular files are refused, not followed or deleted. A fresh default install does not build the plugin
 worker. Neither option installs guests, discovers components, nor enables component execution by default.
-Selecting a component remains a separate explicit runtime action.
+Selecting a component is a separate explicit runtime action.
 
-Builds use two Cargo jobs and the existing release profile; they still require the normal Rust/native build
+Builds use two Cargo jobs and the release profile; they still require the normal Rust/native build
 prerequisites and may use Cargo's usual caches and network access. No prebuilt release is downloaded by the
 installer. All selected builds finish in a new private directory under `ROOT/bin` before publication begins.
 Regular installed executables are explicitly moved into staging backups before exclusive publication of each
@@ -103,7 +102,7 @@ opaque backed data, not recovered unwind evidence. Names, chain visits, export p
 stub names are charged before native construction; renamed files do not supply identity authority.
 
 The API can prepare an already-loaded, admitted native project, including native PE, without going through
-that fresh-load profile. Managed CLR preparation is still refused. The source is limited to 16 MiB and the
+that fresh-load profile. Managed CLR preparation is refused. The source is limited to 16 MiB and the
 complete serialized fact set to 1 MiB. Configured data packs, unavailable bundled signature databases, excessive
 facts and changed source/names/configuration reject preparation; they do not produce silently partial inputs.
 
@@ -143,7 +142,7 @@ starts, only parent-owned proof that no child spawned or that both root reap and
 permits reopening admission. Missing or uncertain proof quarantines this process, including on unwind; the
 current error keeps its primary classification, and later calls return `plugin_quarantined`. Worker packets and
 optional metrics cannot clear this state. There is no in-process reset: inspect unresolved resources before
-restarting the embedding process. `PluginError::Quarantined` is a new variant for experimental Rust API callers.
+restarting the embedding process. The experimental Rust API reports this as `PluginError::Quarantined`.
 
 The WIT package is `rampage:workflow@0.0.1`, world `triage-plugin`, with exactly one exported interface:
 
@@ -182,10 +181,10 @@ ThinLTO and one codegen unit. Componentization uses pinned `wit-component`, not 
 
 The supplied command receives `RAMPAGE_TRIAGE_COMPONENT`, `RAMPAGE_RUNTIME_PROBE_COMPONENT` and
 `RAMPAGE_PLUGIN_WORKER`. Component files exist only for that command and are removed on wrapper exit. The
-runtime-probe guest exercises runtime controls; it is not another migrated user workflow. A native guest oracle
+runtime-probe guest exercises runtime controls; it is not a user workflow. A native guest oracle
 is not evidence of component execution. These local checks are not a general accuracy or performance guarantee.
 
-The example includes compiled-component parity against the unchanged builtin on normal/stripped ELF, native PE
+The example includes compiled-component parity against the builtin on normal/stripped ELF, native PE
 and normal/stripped thin x86-64 Mach-O at section limits 1 and 25, plus a renamed owned DLL. The PE wrapper needs
 Clang and Rust's LLVM linker; it compiles but never executes target binaries. This does not establish full
 format coverage or close the broader security review.
@@ -194,7 +193,7 @@ The hidden `run_component_checkpointed` API is a cancellation-only diagnostic. I
 can park an actual Wasm activation at the selected `run`/`output` call boundary, then report cleanup measurements
 while the real admission permit remains held. The observer must cancel; there is no acknowledgment or resume
 path. Canonical allocation may be the active Wasm, not the guest's Rust loop. This is not an inside-compilation
-witness or a latency benchmark, and ordinary execution retains private-control v1 behavior.
+witness or a latency benchmark, and ordinary execution uses private-control v1.
 
 ## Builtin workflow registry
 
@@ -219,8 +218,8 @@ From that one entry:
   assistant pick it up;
 - `rampage workflow run` accepts it, with its summary in `--help`, and checks `--other` against `compares`.
 
-The flat `report` spelling remains accepted for compatibility. The noun/verb routing shares its argument
-definitions and execution action; MCP workflow names and the workflow registry are unchanged.
+The flat `report` spelling is also accepted. It shares argument definitions and execution with the noun/verb
+routing; MCP workflow names and the workflow registry do not depend on the CLI spelling.
 
 To add one: write the module under `workflows/`, implement `Workflow` next to the code (the existing ones each
 keep theirs above their `impl Project` block), and add it to `WORKFLOWS`. Name it in its tool group's description
@@ -238,7 +237,7 @@ registry. Each tool belongs to one `Group`; MCP serves the core group and enable
 `tools::group_of` lets reports name the group of a suggested tool. Primitive tools are listed there directly;
 workflows contribute theirs through the workflow registry above.
 
-## Not registries (yet)
+## Not registries
 
 - Detectors: `detect_tools`, `identify_functions`, `yara_scan`, `capa_detect`, `capabilities` and `find_crypto`'s
   constants each take different inputs (a PeID file, rule text or a rule directory, a signature database, nothing)

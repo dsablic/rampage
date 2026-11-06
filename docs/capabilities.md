@@ -44,8 +44,8 @@ substrings or bounded registry paths. None of these rules establishes an API's a
 
 These are intentionally narrow metadata rules. DNS plus networking does not attribute command-and-control;
 encryption plus file access alone does not imply ransomware. Registry paths use case-insensitive, key-bounded
-matching. Existing broader rules retain their IDs and thresholds, so their presence should not be confused with
-the stronger corroboration required by this table.
+matching. The broader legacy rules keep their own IDs and thresholds; a legacy hit is not the stronger corroboration
+required by this table.
 Run/RunOnce corroboration requires the exact key after an optional recognized user/machine hive prefix; it does
 not accept a subkey or a `Runtime` prefix collision. Credential paths allow descendants of their protected keys
 after an optional recognized machine-hive prefix. VM/sandbox detection here is import/string-based, not CPUID

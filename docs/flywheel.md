@@ -5,7 +5,7 @@ ground truth. It covers library-identification (libid) signatures. A determinist
 *arm*) is the bar the agent must clear; a novel-only metric checks that a gain survives code changes; and
 promotions leave as `.rpack` archives or go into the bundled databases after the gate runs again.
 
-The flywheel is *experimental*. What it has shown so far, on a 360-binary corpus of zlib, LZ4 and cJSON
+The flywheel is *experimental*. Results on a 360-binary corpus of zlib, LZ4 and cJSON
 ([fast-loop plan](plans/2026-11-05-flywheel-fast-loop.md), M1 and M2 records):
 
 - Without the arm, an unattended agent promoted four candidates in four rounds for $0.45: held-out F1 rose from
@@ -13,8 +13,8 @@ The flywheel is *experimental*. What it has shown so far, on a 360-binary corpus
   between library versions.
 - The deterministic arm alone adds 7,114 held-out true positives. Gated against it, the agent ran six rounds for
   $1.28 and promoted nothing: every candidate passed the fast gate and moved held-out F1 by zero.
-- So for libid the arm captures the recognisable gain, and the loop is infrastructure for families that have no
-  deterministic generator. The plan recommends compiler and tool identification next.
+- For libid, then, the arm captures the recognisable gain, and the loop is infrastructure for families that have
+  no deterministic generator. The plan names compiler and tool identification as the next families.
 
 The design is in [the fast-loop plan](plans/2026-11-05-flywheel-fast-loop.md); the guardrails are in
 [the flywheel strategy](plans/2026-10-12-heuristic-self-improvement-flywheel.md).
@@ -88,8 +88,8 @@ over, never a unit that shares the measured code with training.
 | Tool ID | Whole tools and packers |
 | Function-start discovery | Compilers or architectures |
 
-Never split per program when programs share the measured code; the first corpus did, and 98% of its held-out
-functions were in training under the same name and configuration.
+Never split per program when programs share the measured code: a per-program split of this kind put 98% of its
+held-out functions in training under the same name and configuration.
 
 **What is scored.** The gated slices score the target libraries' own functions, plus every false name: a wrong
 name on a runtime function, or a name where the truth has none. Runtime functions are the same build in every
@@ -139,7 +139,7 @@ for novel and recognised held-out functions.
 arm plus the promoted rows (`rampage server serve --corpus DIR --flywheel-baseline arm`, the default). A candidate's rows are
 merged with the arm's into one database, so a row repeating an arm body under another name makes both ambiguous
 instead of overriding it. Against the arm the held-out gate also requires a novel-body gain (below), because the
-arm already names the recognised functions. `--flywheel-baseline bundled` restores the bundled-only comparison
+arm already names the recognised functions. `--flywheel-baseline bundled` selects the bundled-only comparison
 for diagnostics; it is never the comparison for a promotion that is meant to show the agent adds value.
 `corpus_failures` lists only what the baseline still misses, and names the baseline in its header.
 
@@ -347,5 +347,4 @@ that directory.
 
 The store is a directory of its own rather than the binary's annotation sidecar, for two reasons. The sidecar is
 the analyst's record: every client replays it, under its reader's limits. Observations are unreviewed labels, and
-the corpus must collect them across binaries. Recording one changes nothing else. The corpus does not yet
-read them.
+the corpus must collect them across binaries. Recording one changes nothing else. The corpus does not read them.

@@ -10,7 +10,7 @@ set breakpoints and watchpoints. With a project bound to the target, it can also
 or static address, see stops and register values in the project's terms, and step over calls or out of functions.
 
 GDB remote stubs are live-verified against QEMU (Cortex-M3). The macOS `debugserver` and Windows paths are
-*experimental*: they are tested against protocol transcripts but [not yet live-verified](#what-is-not-live-verified).
+*experimental*: they are tested against protocol transcripts but [not live-verified](#what-is-not-live-verified).
 The design is in the [debugger design](plans/2026-10-29-debugger-control.md). rampage never launches or attaches to a
 process, delivers a signal or enters non-stop mode, and the protocol client keeps every such packet off the wire.
 It writes registers or memory, or kills a target, only when a tool asks for it and the operator started it with
@@ -641,7 +641,7 @@ QEMU in system mode exits the emulator when killed through its stub (it answers 
 
 ## macOS and debugserver
 
-*Experimental: not yet live-verified.* Apple's `debugserver` speaks the GDB remote protocol with LLDB's extensions. rampage still launches and
+*Experimental: not live-verified.* Apple's `debugserver` speaks the GDB remote protocol with LLDB's extensions. rampage launches and
 attaches nothing: the operator starts debugserver on a program or a pid (see [Setup](#setup)) and lists its endpoint.
 
 ### Prerequisites
@@ -781,18 +781,19 @@ debugserver supports `vCont` (`vCont;c;C;s;S`), so continues and steps use `vCon
   split across two watchpoint registers. A hit can therefore come from an access next to the requested range; the
   stop's `watch.accessed` says where. Ranges it cannot cover are refused (`E09`, reported as `target_error`).
   Prefer 1, 2, 4 or 8 bytes, aligned.
-- These follow debugserver's source; the live acceptance below checks them on a real target.
+- These follow debugserver's source and are not live-verified; the live acceptance (see [Acceptance](#acceptance))
+  checks them on a real target.
 
 ## Windows (gdbserver and lldb-server)
 
-*Experimental: not yet live-verified.* This is the RSP-stub route of the
+*Experimental: not live-verified.* This is the RSP-stub route of the
 [Windows design](plans/2026-11-05-debugger-windows.md). Two stubs serve
 Windows user-mode processes over the same protocol: GDB's `gdbserver` built for Windows (MinGW-w64, as MSYS2 and
-other MinGW distributions build it) and LLVM's `lldb-server`. rampage still launches and attaches nothing: the
+other MinGW distributions build it) and LLVM's `lldb-server`. rampage launches and attaches nothing: the
 operator starts the stub on the Windows host and lists its endpoint. Everything below follows the stubs' sources
 (GDB's `gdbserver/win32-low.cc`, `gdbserver/win32-i386-low.cc`, `gdbserver/server.cc`, `gdb/nat/windows-nat.c`;
-LLVM's `NativeProcessWindows.cpp`, `NativeThreadWindows.cpp`, `GDBRemoteCommunicationServerLLGS.cpp`), read at
-their main branches in November 2026; no Windows host was available, so none of it has run against a real stub yet.
+LLVM's `NativeProcessWindows.cpp`, `NativeThreadWindows.cpp`, `GDBRemoteCommunicationServerLLGS.cpp`), as read on
+their main branches. None of it has run against a real stub on a Windows host.
 
 ### Setup on the Windows host
 
@@ -1017,7 +1018,7 @@ Classification:
 - **arm64 Windows.** Both stubs have arm64 code: gdbserver's `win32-aarch64-low.cc` (new in GDB, `brk #0xf000`,
   `Z1`, `Z2`, `Z4`) and lldb-server's `NativeRegisterContextWindows_arm64.cpp`. rampage's AArch64 support applies
   (kind 4 breakpoints; the byte order only when lldb-server states `endian:little`), but nothing arm64-Windows-specific
-  was built or tested.
+  is implemented or tested.
 
 ### Snapshots of Windows targets
 
@@ -1029,8 +1030,8 @@ preferred one).
 
 ### What is not live-verified
 
-No Windows host was available when this path was built. The fake stub's transcripts (`rampage_debug::fake::windows`) were built from
-the sources named above, not recorded, and these were taken from the sources without being observed:
+The Windows path has not run on a Windows host. The fake stub's transcripts (`rampage_debug::fake::windows`) are written from
+the sources named above, not recorded, and these details come from the sources without having been observed:
 
 - gdbserver's `<osabi>Windows</osabi>` and the `i386:x86-64` description; lldb-server's triple and `ostype`;
 - the module list forms and addresses, the executable's absence under gdbserver, and the TIB and PEB offsets;
@@ -1039,7 +1040,8 @@ the sources named above, not recorded, and these were taken from the sources wit
 - that the loader writes the runtime base into a moved image's `ImageBase` (rampage leaves the field out either
   way).
 
-The [live acceptance](plans/2026-10-29-debugger-control.md#windows-stubs) checks these against a real stub on a Windows host.
+The [live acceptance](plans/2026-10-29-debugger-control.md#windows-stubs) describes how these are checked against a real stub on a
+Windows host.
 
 ## Limits
 
@@ -1086,7 +1088,7 @@ The [live acceptance](plans/2026-10-29-debugger-control.md#windows-stubs) checks
 - No source-level stepping and no frame unwinding: step out works only from a function's first instruction.
 - No relocation of runtime bytes to file bytes beyond the slide, and no binding of snapshots.
 - No Windows debugging through DbgEng, no kernel targets and no minidumps; Windows user-mode processes only through
-  an RSP stub, not yet live-verified. LLDB's extensions are used only to add information (see
+  an RSP stub, not live-verified. LLDB's extensions are used only to add information (see
   [macOS and debugserver](#macos-and-debugserver)); nothing requires them.
 - No expression evaluation and no monitor commands (`qRcmd`).
 - Runtime bytes stay local. They are never published anywhere except the snapshot file you name.

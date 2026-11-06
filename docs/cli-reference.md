@@ -1,6 +1,6 @@
 # CLI reference
 
-The primary CLI uses noun/verb routes. Existing flat spellings remain accepted as hidden compatibility
+The primary CLI uses noun/verb routes. Flat spellings are accepted as hidden compatibility
 commands; routing does not change analysis behavior, output, annotations or MCP tool names. Use
 `rampage --help`, `rampage <noun> --help` or `rampage <noun> <verb> --help` for the parser's full option list.
 
@@ -51,7 +51,7 @@ Request files require the checked Unix descriptor reader; inline JSON is availab
 See [search modes, Unicode, budgets and continuation](search.md).
 
 See [CLI batch analysis](cli-analysis.md) for `analyze` task selection, limits, worker requirements and exit
-behavior. Its flat examples remain compatible:
+behavior. The flat `analyze` spelling takes the same options:
 
 ```sh
 rampage binary analyze module.dylib --all-architectures --workflow triage-report \
@@ -79,7 +79,7 @@ rampage binary analyze module.dylib --all-architectures --workflow triage-report
 
 Noun labels do not narrow the queries: disassembly is not function-bounded, and xrefs can name data or an
 instruction. `compare` compares function starts, not decompiled semantics. The hidden `export-cfg FILE`
-benchmark action remains accepted; see [benchmarks](benchmarks.md) rather than treating it as an interactive query.
+command is a benchmark action, not an interactive query; see [benchmarks](benchmarks.md).
 
 `decompile --compiler ID` overrides the format-selected Ghidra compiler ID (`golang` for go1.18+ binaries). Sessions select a sibling worker
 when present; `--isolated` requires supervision explicitly. See the
@@ -89,7 +89,7 @@ stdout; identification defaults to the bundled starter database. See
 [library identification](features.md#library-identification).
 `identify --db` accepts bounded `.pat`, native `.json`, native `.gz`, or extensionless JSON inputs.
 `--fuzzy-db FILE --fuzzy-request FILE` adds read-only suggestions without increasing exact matched/applied counts;
-it cannot currently combine with `--no-bundled`. `build-signatures --fuzzy-request FILE` builds the separate
+it cannot be combined with `--no-bundled`. `build-signatures --fuzzy-request FILE` builds the separate
 fuzzy format. See [signature inputs](signature-imports.md) and [fuzzy requests and limits](fuzzy-signatures.md).
 FID import/query uses the explicitly configured trusted-host Rust API; the generic CLI does not launch Ghidra.
 `inspect-table --relative-base ADDRESS` selects signed-relative32 rather than absolute64 entries.
@@ -164,7 +164,7 @@ Each edit records its replaced value; undo is another edit, leaving a full histo
 most 16 MiB and 8,192 lines. A log that holds or held checked state (patches, type hints, data or operand types,
 type libraries, debug types or layouts), or that a checked client writes, is read checked on every open, which
 also allows at most 65,536 JSON separators and 8,192 records and 8 MiB of edit text to replay. An edit that would
-take the log past the limits that apply to it is refused, so the log stays readable. There is no compaction yet:
+take the log past the limits that apply to it is refused, so the log stays readable. There is no compaction:
 a log at its limits can still be read, but takes no more edits, including undo. Ledger writes stop earlier, at
 three quarters (see [the ledger's limits](mcp.md#edits-and-session-state)). A batch is stored under a header and
 replayed only once all its edits are present. Typed edits participate in dependency-checked undo/redo.
@@ -172,7 +172,7 @@ MCP and UI provide undo/redo; the CLI has no separate undo verb. See
 [MCP undo behavior](mcp.md#edits-and-session-state).
 
 An image-identity line records SHA-256. When a binary is rebuilt/replaced, old edits still apply by address but
-produce identity-mismatch warnings in binary warnings and `list_annotations`. Logs predating identity lines
+produce identity-mismatch warnings in binary warnings and `list_annotations`. Logs without identity lines
 carry a note until the next edit. Replace an open binary by renaming a new file over it rather than truncating
 in place: binaries are memory-mapped while open.
 
