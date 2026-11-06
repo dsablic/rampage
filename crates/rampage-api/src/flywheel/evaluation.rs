@@ -397,6 +397,32 @@ impl GateResult {
     fn new(stage: &str, checks: Vec<GateCheck>, failing_slices: Vec<String>) -> GateResult {
         GateResult { stage: stage.to_owned(), passed: checks.iter().all(|check| check.passed), checks, failing_slices }
     }
+
+    /// Adds a rule's verdict; the stage passes only if every rule does.
+    pub fn add(&mut self, check: GateCheck) {
+        self.passed &= check.passed;
+        self.checks.push(check);
+    }
+}
+
+impl GateConfig {
+    /// The false-positive rules on the state a promotion deploys: the bundled databases, the promoted rows and the
+    /// candidate, without the deterministic arm. Gated against the arm, a candidate row whose pattern also matches a
+    /// body an arm row names under another name makes that body ambiguous (a lost name) rather than wrongly named;
+    /// the arm is never deployed, so the promoted row alone would name it wrongly. `rises` are (rule, false
+    /// positives added, at most) for each split measured.
+    pub fn deployed(&self, rises: &[(&str, i64, u64)]) -> Vec<GateCheck> {
+        rises
+            .iter()
+            .map(|&(rule, rise, most)| {
+                GateCheck::new(
+                    rule,
+                    rise <= most as i64,
+                    format!("false positives {rise:+} without the arm, as the promotion deploys (at most +{most})"),
+                )
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

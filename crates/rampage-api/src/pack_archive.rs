@@ -14,6 +14,12 @@
 //! Import refuses an archive whose format, version range, file list, file hashes, content hash or entry list does
 //! not check out, then writes the pack to a staging directory, loads it as `--pack` would, and only then moves it
 //! into place. Nothing in an archive is executed: it is data, like any pack.
+//!
+//! The hashes are integrity checks, not a signature: they catch damage and inconsistent edits, but anyone can
+//! rewrite an archive and recompute them. For a flywheel pack, import also checks that its signature databases are
+//! exactly what its entries' rows produce and that each entry's rows have its candidate hash, so the data is the
+//! data its provenance describes. Whether that provenance is true is settled only by rerunning the gate
+//! (`rampage-eval bundle`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -22,7 +28,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::flywheel::{ENTRIES_FILE, GateResult, PromotedSet, Row, SliceDelta};
+use crate::flywheel::{ENTRIES_FILE, GateResult, PromotedSet, Row, SliceDelta, databases, rows_hash};
 use crate::packs::{ContentStatus, MANIFEST_FILE, Packs};
 
 /// The `format` every archive manifest carries.
@@ -375,6 +381,15 @@ impl Archive {
         if !listed.contains(MANIFEST_FILE) {
             return Err(PackArchiveError::Format(format!("no {MANIFEST_FILE}")));
         }
+        // The name becomes a directory name on import: a plain identifier only.
+        let name = &manifest.pack.name;
+        if name.is_empty()
+            || name.len() > 64
+            || name.starts_with('.')
+            || !name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+        {
+            return Err(PackArchiveError::Format(format!("pack name {name:?} is not a plain identifier")));
+        }
         for file in &manifest.files {
             if !safe_path(&file.path) {
                 return Err(PackArchiveError::Format(format!("path {:?} leaves the pack directory", file.path)));
@@ -390,6 +405,22 @@ impl Archive {
         if manifest.compute_hash() != manifest.content_sha256 {
             return Err(PackArchiveError::Integrity("the content hash differs from the manifest's".to_owned()));
         }
+        let declared: toml::Table = self.files[MANIFEST_FILE]
+            .parse()
+            .map_err(|error| PackArchiveError::Format(format!("{MANIFEST_FILE}: {error}")))?;
+        let field = |key: &str| declared.get(key).and_then(|value| value.as_str()).unwrap_or_default().to_owned();
+        let carried = ArchivePack {
+            name: field("name"),
+            version: field("version"),
+            license: field("license"),
+            source: field("source"),
+            description: field("description"),
+        };
+        if carried != manifest.pack {
+            return Err(PackArchiveError::Integrity(format!(
+                "the manifest's pack declarations differ from the carried {MANIFEST_FILE}"
+            )));
+        }
         match self.files.get(ENTRIES_FILE) {
             Some(text) => {
                 let set: PromotedSet = serde_json::from_str(text)
@@ -404,6 +435,34 @@ impl Archive {
                         "entry {} has no passing gate result",
                         bad.revert_id
                     )));
+                }
+                if let Some(bad) = set.entries.iter().find(|entry| rows_hash(&entry.rows) != entry.candidate_hash) {
+                    return Err(PackArchiveError::Integrity(format!(
+                        "entry {}'s rows do not have its candidate hash",
+                        bad.revert_id
+                    )));
+                }
+                if manifest.families.iter().any(|family| *family != set.family) {
+                    return Err(PackArchiveError::Integrity(format!("the families differ from {ENTRIES_FILE}'s")));
+                }
+                // The signature databases must be exactly what the entries' rows produce.
+                let expected = databases(&set.rows()).map_err(|error| PackArchiveError::Format(error.to_string()))?;
+                let mut expected: BTreeMap<String, String> = expected
+                    .into_iter()
+                    .map(|(arch, database)| (format!("sigs/{arch}.json"), database.to_json()))
+                    .collect();
+                for (path, text) in &self.files {
+                    if path == MANIFEST_FILE || path == ENTRIES_FILE {
+                        continue;
+                    }
+                    if expected.remove(path).as_deref() != Some(text.as_str()) {
+                        return Err(PackArchiveError::Integrity(format!(
+                            "{path} is not what the entries' rows produce"
+                        )));
+                    }
+                }
+                if let Some(path) = expected.keys().next() {
+                    return Err(PackArchiveError::Integrity(format!("{path} is missing for the entries' rows")));
                 }
             }
             None if !manifest.entries.is_empty() => {
@@ -736,6 +795,32 @@ mod tests {
             wire.manifest.content_sha256 = wire.manifest.compute_hash();
         });
         assert!(matches!(read(&escaping, "0.1.0").unwrap_err(), PackArchiveError::Format(_)));
+        // A pack name that would place an import outside the working directory.
+        let traversing = rewrite(&archive, |wire| {
+            wire.manifest.pack.name = "../../outside".to_owned();
+            wire.manifest.content_sha256 = wire.manifest.compute_hash();
+        });
+        let error = read(&traversing, "0.1.0").unwrap_err();
+        assert!(error.to_string().contains("plain identifier"), "{error}");
+        // Declarations that differ from the carried rampage-pack.toml.
+        let renamed = rewrite(&archive, |wire| {
+            wire.manifest.pack.name = "other-name".to_owned();
+            wire.manifest.content_sha256 = wire.manifest.compute_hash();
+        });
+        assert!(read(&renamed, "0.1.0").unwrap_err().to_string().contains("pack declarations"));
+        // A database rewritten with every hash recomputed: its rows no longer match the entries' provenance.
+        let swapped = rewrite(&archive, |wire| {
+            let other = entry("rv-other", "uncompress", "554889e5b836120000005dc3");
+            let database = crate::flywheel::databases(&other.rows).unwrap().remove("x86_64").unwrap();
+            let text = database.to_json();
+            let file = wire.manifest.files.iter_mut().find(|file| file.path == "sigs/x86_64.json").unwrap();
+            file.sha256 = sha256(&text);
+            file.bytes = text.len();
+            wire.files.insert("sigs/x86_64.json".to_owned(), text);
+            wire.manifest.content_sha256 = wire.manifest.compute_hash();
+        });
+        let error = read(&swapped, "0.1.0").unwrap_err();
+        assert!(error.to_string().contains("not what the entries' rows produce"), "{error}");
         let nowhere = root.join("tampered-install");
         assert!(import(&changed, &nowhere, "0.1.0").is_err());
         assert!(!nowhere.exists(), "a refused import writes nothing");

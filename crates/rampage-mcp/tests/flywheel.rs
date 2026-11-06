@@ -450,6 +450,22 @@ async fn against_the_arm_only_a_novel_gain_passes_and_the_verdict_stays_opaque()
         json_of(&call(&client, "evaluate_candidate", json!({"candidate": candidate, "stage": "heldout"})).await);
     assert_eq!(gated["heldout"]["passed"], false, "{gated}");
 
+    // The same body under another name only makes the arm's row ambiguous here, but deployed without the arm it
+    // would name ml_mix wrongly: the deployed-state rule refuses it.
+    let rows = json!({"rows": [{"pattern": copy.pattern, "arch": "x86_64", "name": "ml_misnamed"}]});
+    let proposal = json_of(&call(&client, "propose_heuristic", rows).await);
+    let candidate = proposal["candidate"].as_str().unwrap();
+    let fast = json_of(&call(&client, "evaluate_candidate", json!({"candidate": candidate})).await);
+    let deployed = fast["fast"]["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["rule"] == "deployed_train_fp_increase")
+        .unwrap()
+        .clone();
+    assert_eq!(deployed["passed"], false, "{fast}");
+    assert_eq!(fast["fast"]["passed"], false);
+
     // A row for a novel held-out body (scripted from held-out bytes, as only an operator could) passes, with the
     // novel rule among the checks and still only the verdict and the overall delta.
     let (_, pattern) = heldout_body(&improve, "v2-a", "ml_extra");

@@ -2990,7 +2990,8 @@ pub fn packs_import(out: &mut impl Write, archive: &Path, into: Option<&Path>, o
     let manifest = &report.manifest;
     writeln!(
         out,
-        "imported {} {} into {} ({} files, {} entries, content sha256 {} verified); load it with {}",
+        "imported {} {} into {} ({} files, {} entries; hashes, version range and entries checked, content sha256 {}); \
+         load it with {}",
         manifest.pack.name,
         manifest.pack.version,
         report.directory.display(),

@@ -85,17 +85,25 @@ pub fn directory(engine: &Engine, min_bytes: usize) -> PathBuf {
 pub fn load_or_generate(engine: &Engine, min_bytes: usize) -> Result<Arm, FlywheelError> {
     let directory = directory(engine, min_bytes);
     let path = directory.join(ARM_FILE);
-    if path.is_file() {
-        let text = read_bounded(&path, MAX_ARM_BYTES)?;
-        if let Ok(arm) = serde_json::from_str::<Arm>(&text)
-            && arm.corpus_identity == engine.corpus.identity()
-            && arm.build_id == build_id()
-            && arm.min_pattern_bytes == min_bytes
-        {
-            return Ok(arm);
+    let saved = || -> Result<Option<Arm>, FlywheelError> {
+        if !path.is_file() {
+            return Ok(None);
         }
+        let text = read_bounded(&path, MAX_ARM_BYTES)?;
+        Ok(serde_json::from_str::<Arm>(&text).ok().filter(|arm| {
+            arm.corpus_identity == engine.corpus.identity()
+                && arm.build_id == build_id()
+                && arm.min_pattern_bytes == min_bytes
+        }))
+    };
+    if let Some(arm) = saved()? {
+        return Ok(arm);
     }
+    // Another server may have generated it while this one waited for the lock.
     let _lock = super::FileLock::acquire(&directory.with_extension("lock"))?;
+    if let Some(arm) = saved()? {
+        return Ok(arm);
+    }
     let arm = generate(engine, min_bytes)?;
     write_pack(
         &directory,

@@ -93,6 +93,10 @@ pub struct Improve {
     baseline: Baseline,
     /// The deterministic arm, when it is the baseline.
     arm: Option<Arm>,
+    /// The arm's rows hash (`none` without the arm), computed once.
+    arm_hash: String,
+    /// The arm's rows as matching sees them, for previews.
+    arm_matchers: BTreeSet<(String, Vec<Option<u8>>)>,
     state: Mutex<State>,
     /// The training split's library bodies, for variants and merged rows.
     training: OnceLock<Result<Arc<TrainingIndex>, String>>,
@@ -291,12 +295,20 @@ impl Improve {
             eprintln!("rampage flywheel: {warning}");
         }
         PromotedSet::load_repaired(&engine.paths, FAMILY, &engine.corpus.license())?;
+        let arm_hash = arm.as_ref().map_or_else(|| "none".to_owned(), Arm::hash);
+        let arm_matchers = arm
+            .iter()
+            .flat_map(|arm| arm.rows.iter())
+            .filter_map(|row| Some((row.arch.clone(), row.matcher().ok()?)))
+            .collect();
         Ok(Improve {
             engine,
             gate: options.gate,
             run: options.run,
             baseline: options.baseline,
             arm,
+            arm_hash,
+            arm_matchers,
             state: Mutex::new(State::default()),
             training: OnceLock::new(),
             writes: Mutex::new(()),
@@ -378,7 +390,7 @@ impl Improve {
 
     /// A key for the reference rows without hashing them all again: the arm's hash and the promoted rows' hash.
     fn reference_key(&self, promoted: &PromotedSet) -> String {
-        format!("{}:{}", self.arm.as_ref().map_or_else(|| "none".to_owned(), Arm::hash), promoted.hash())
+        format!("{}:{}", self.arm_hash, promoted.hash())
     }
 
     fn training(&self) -> Result<Arc<TrainingIndex>, FlywheelError> {
@@ -407,7 +419,7 @@ impl Improve {
         parts.push(promoted.hash());
         parts.push(self.gate.fingerprint());
         parts.push(format!("baseline={}", self.baseline.name()));
-        parts.push(format!("arm={}", self.arm.as_ref().map_or_else(|| "none".to_owned(), Arm::hash)));
+        parts.push(format!("arm={}", self.arm_hash));
         parts.push(format!("novel={}", self.novel_gain_required()));
         sha256_text(&parts.join("\0"))
     }
@@ -564,7 +576,7 @@ impl Improve {
             "truth_source": TRUTH_SOURCE,
             "undiscovered": failures.undiscovered,
             "below_gate": failures.below_gate,
-            "groups_total": failures.groups.len(),
+            "groups_total": groups.len(),
             "min_pattern_bytes": self.gate.min_pattern_bytes,
             "baseline": self.baseline_description(),
             "require_novel_gain": self.novel_gain_required(),
@@ -673,8 +685,11 @@ impl Improve {
                         None => {
                             let training = self.training()?;
                             let body = &training.bodies[case];
-                            let binary = body.binaries.first().map(|&binary| self.engine.binary(binary).id.clone());
-                            RowSource { case: case.clone(), binary: binary.unwrap_or_default(), address: String::new() }
+                            RowSource {
+                                case: case.clone(),
+                                binary: self.engine.binary(body.example.0).id.clone(),
+                                address: format!("{:#x}", body.example.1),
+                            }
                         }
                     };
                     (arch, bytes, Some(source))
@@ -821,8 +836,7 @@ impl Improve {
             "length": pattern.len(),
             "pattern_bytes": parse_pattern(&row.pattern).map(|bytes| bytes.len()).unwrap_or(0),
             "wildcards": pattern.iter().filter(|byte| byte.is_none()).count(),
-            "baseline_has_row": self.arm.as_ref().is_some_and(|arm| arm.rows.iter().any(|other| other.arch == row.arch
-                && other.matcher().ok().as_ref() == Some(&pattern))),
+            "baseline_has_row": self.arm_matchers.contains(&(row.arch.clone(), pattern.clone())),
             "pat": row.pat_line()?,
             "train_preview": {
                 "matches": matches,
@@ -878,13 +892,36 @@ impl Improve {
             let after = self.engine.propose_delta(&indices, &layers, &before, &delta)?;
             compare(&self.engine, split, &before, &after)
         };
+        // Against the arm, the false-positive rules are also checked on the state a promotion deploys: the
+        // promoted rows and the candidate's, without the arm (see `GateConfig::deployed`).
+        let deployed_key = format!("{baseline_hash}:deployed");
+        let deployed_reference: Vec<Layer> = layer("deployed", &promoted.rows())?.into_iter().collect();
+        let mut deployed_rows = promoted.rows();
+        deployed_rows.extend(candidate.rows.iter().cloned());
+        let deployed_layers: Vec<Layer> = layer("deployed candidate", &deployed_rows)?.into_iter().collect();
+        let deployed_rise = |split: Split| -> Result<i64, FlywheelError> {
+            let before = self.reference_proposals(&deployed_key, split, &deployed_reference)?;
+            let indices = self.corpus().indices(split);
+            let after = self.engine.propose_delta(&indices, &deployed_layers, &before, &delta)?;
+            let (before, after) = compare(&self.engine, split, &before, &after)?.overall();
+            Ok(after.fp() as i64 - before.fp() as i64)
+        };
         let mut record = match cached {
             Some(record) => record,
             None => {
                 let fast = split(Split::Fast)?;
                 let mut train = split(Split::Train)?;
                 let negative = split(Split::Negative)?;
-                let gate = self.gate.fast(&fast, &train, &negative);
+                let mut gate = self.gate.fast(&fast, &train, &negative);
+                if self.arm.is_some() {
+                    let rises = [
+                        ("deployed_train_fp_increase", deployed_rise(Split::Train)?, self.gate.max_train_fp_increase),
+                        ("deployed_negative_matches", deployed_rise(Split::Negative)?, self.gate.max_negative_matches),
+                    ];
+                    for check in self.gate.deployed(&rises) {
+                        gate.add(check);
+                    }
+                }
                 // The fast slice's cases are kept; the training split only contributes its counts.
                 train.cases.clear();
                 EvaluationRecord {
@@ -909,7 +946,18 @@ impl Improve {
                 )
             })?;
             debug_assert!(evaluation.cases.is_empty());
-            let gate = self.gate.heldout(&evaluation, self.novel_gain_required());
+            let mut gate = self.gate.heldout(&evaluation, self.novel_gain_required());
+            if self.arm.is_some() {
+                let rise = deployed_rise(Split::Heldout).map_err(|error| {
+                    eprintln!("rampage flywheel: held-out evaluation failed: {error}");
+                    FlywheelError::Corpus(
+                        "the held-out evaluation failed; the operator's server log has the detail".to_owned(),
+                    )
+                })?;
+                for check in self.gate.deployed(&[("heldout_deployed_fp_increase", rise, self.gate.max_fp_increase)]) {
+                    gate.add(check);
+                }
+            }
             record.heldout = Some(StageRecord { gate, evaluation });
         }
         let text = serde_json::to_string(&record).map_err(FlywheelError::json)?;
@@ -1072,7 +1120,7 @@ impl Improve {
             proposer_run: candidate.run.clone().or_else(|| self.run.clone()),
             promoted_unix_ms: now_ms(),
             baseline: Some(match &self.arm {
-                Some(arm) => format!("arm:{}", &arm.hash()[..12]),
+                Some(_) => format!("arm:{}", &self.arm_hash[..12]),
                 None => self.baseline.name().to_owned(),
             }),
             require_novel_gain: Some(self.novel_gain_required()),

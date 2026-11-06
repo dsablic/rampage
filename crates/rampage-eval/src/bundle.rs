@@ -143,6 +143,8 @@ pub struct Regenerated {
     pub changes: Vec<Change>,
     pub before: Vec<SignatureDb>,
     pub after: Vec<SignatureDb>,
+    /// The architectures whose database changed.
+    pub changed: std::collections::BTreeSet<String>,
 }
 
 fn read_bytes(path: &Path) -> Result<Vec<u8>, String> {
@@ -154,6 +156,7 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>, String> {
 pub fn regenerate(repo: &Path, before: &BundledSource, after: &BundledSource) -> Result<Regenerated, String> {
     let mut changes = Vec::new();
     let (mut databases_before, mut databases) = (Vec::new(), Vec::new());
+    let mut changed = std::collections::BTreeSet::new();
     for arch in ARCHES {
         let gz_path = repo.join(DATA).join(format!("corpus-{arch}.json.gz"));
         let index_path = repo.join(DATA).join(format!("corpus-{arch}.index.json"));
@@ -180,6 +183,7 @@ pub fn regenerate(repo: &Path, before: &BundledSource, after: &BundledSource) ->
             continue;
         }
         database.set_patterns(wanted).map_err(|error| format!("{arch}: {error}"))?;
+        changed.insert(arch.to_owned());
         let new_gz = database.to_gzip().map_err(|error| format!("{arch}: {error}"))?;
         let digest = {
             use sha2::Digest;
@@ -239,7 +243,7 @@ pub fn regenerate(repo: &Path, before: &BundledSource, after: &BundledSource) ->
         let on_disk = read_bytes(&repo.join(SOURCE))?;
         changes.push(Change { path: SOURCE.to_owned(), before: on_disk, after: source_after.into_bytes() });
     }
-    Ok(Regenerated { changes, before: databases_before, after: databases })
+    Ok(Regenerated { changes, before: databases_before, after: databases, changed })
 }
 
 /// Reads the bundled source.
@@ -316,7 +320,12 @@ fn evaluate(engine: &Engine, regenerated: &Regenerated) -> Result<BTreeMap<Split
     for split in [Split::Fast, Split::Train, Split::Negative, Split::Heldout] {
         let indices = engine.corpus.indices(split);
         let before = engine.propose_in(&indices, &[], Some(&regenerated.before)).map_err(|error| error.to_string())?;
-        let after = engine.propose_in(&indices, &[], Some(&regenerated.after)).map_err(|error| error.to_string())?;
+        // Only binaries of an architecture whose database changed can be named differently.
+        let changed: Vec<usize> =
+            indices.iter().copied().filter(|&index| regenerated.changed.contains(&engine.binary(index).arch)).collect();
+        let mut after = before.clone();
+        let renamed = engine.propose_in(&changed, &[], Some(&regenerated.after)).map_err(|error| error.to_string())?;
+        after.names.extend(renamed.names);
         evaluations.insert(split, compare(engine, split, &before, &after).map_err(|error| error.to_string())?);
     }
     Ok(evaluations)
@@ -367,8 +376,24 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
     };
 
     // Measure first with the regenerated databases; the source records the result only once it passes.
-    let trial = regenerate(&repo, &before, &after)?;
-    let evaluations = evaluate(&engine, &trial)?;
+    let mut regenerated = regenerate(&repo, &before, &after)?;
+    let files: Vec<String> = regenerated.changes.iter().map(|change| change.path.clone()).collect();
+    // The patch is `git diff` of these files: an uncommitted edit already in one would end up in it.
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["status", "--porcelain", "--"])
+        .args(&files)
+        .output()
+        .map_err(|error| format!("git status: {error}"))?;
+    if !status.status.success() || !status.stdout.is_empty() {
+        return Err(format!(
+            "{} has uncommitted changes in the files a bundle rewrites; commit or restore them first:\n{}",
+            repo.display(),
+            String::from_utf8_lossy(&status.stdout)
+        ));
+    }
+    let evaluations = evaluate(&engine, &regenerated)?;
     let fast = gate.fast(&evaluations[&Split::Fast], &evaluations[&Split::Train], &evaluations[&Split::Negative]);
     let heldout_eval = &evaluations[&Split::Heldout];
     let (verdict, checks): (bool, Vec<Value>) = if action == "add" {
@@ -394,7 +419,10 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
             entry.bundled_heldout_delta = heldout_all.clone();
         }
     }
-    let regenerated = regenerate(&repo, &before, &after)?;
+    // The source now records the bundle's delta; the assets are unchanged by it.
+    if let Some(change) = regenerated.changes.iter_mut().find(|change| change.path == SOURCE) {
+        change.after = after.text()?.into_bytes();
+    }
 
     let label = args.label.clone().unwrap_or_else(|| {
         format!(
@@ -405,27 +433,29 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
     let out_dir = paths.root().join("bundle").join(&label);
     std::fs::create_dir_all(&out_dir).map_err(|error| format!("{}: {error}", out_dir.display()))?;
     if verdict {
-        for change in &regenerated.changes {
-            let path = repo.join(&change.path);
-            std::fs::write(&path, &change.after).map_err(|error| format!("{}: {error}", path.display()))?;
-        }
-        let files: Vec<&str> = regenerated.changes.iter().map(|change| change.path.as_str()).collect();
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&repo)
-            .args(["diff", "--binary", "--"])
-            .args(&files)
-            .output()
-            .map_err(|error| format!("git diff: {error}"));
-        if args.patch_only || output.is_err() {
+        // Any failure between the first write and the patch restores every file.
+        let written = (|| -> Result<Vec<u8>, String> {
+            for change in &regenerated.changes {
+                let path = repo.join(&change.path);
+                std::fs::write(&path, &change.after).map_err(|error| format!("{}: {error}", path.display()))?;
+            }
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(["diff", "--binary", "--"])
+                .args(&files)
+                .output()
+                .map_err(|error| format!("git diff: {error}"))?;
+            if !output.status.success() {
+                return Err(format!("git diff failed: {}", String::from_utf8_lossy(&output.stderr)));
+            }
+            std::fs::write(out_dir.join("change.patch"), &output.stdout).map_err(|error| error.to_string())?;
+            Ok(output.stdout)
+        })();
+        if args.patch_only || written.is_err() {
             restore(&repo, &regenerated.changes)?;
         }
-        let output = output?;
-        if !output.status.success() {
-            restore(&repo, &regenerated.changes)?;
-            return Err(format!("git diff failed: {}", String::from_utf8_lossy(&output.stderr)));
-        }
-        std::fs::write(out_dir.join("change.patch"), &output.stdout).map_err(|error| error.to_string())?;
+        written?;
     }
     let summary = json!({
         "schema_version": 1,
@@ -550,20 +580,25 @@ mod tests {
             }
         }
         std::fs::copy(workspace().join(SOURCE), repo.join(SOURCE)).unwrap();
-        let git = |args: &[&str]| {
-            let status = Command::new("git")
-                .arg("-C")
-                .arg(&repo)
-                .args(["-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false"])
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(status.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&status.stderr));
-        };
-        git(&["init", "-q"]);
-        git(&["add", "."]);
-        git(&["commit", "-q", "-m", "assets"]);
+        git(&repo, &["init", "-q"]);
+        commit(&repo, "assets");
         repo
+    }
+
+    fn git(repo: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&status.stderr));
+    }
+
+    fn commit(repo: &Path, message: &str) {
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-q", "-m", message]);
     }
 
     fn passed(stage: &str) -> GateResult {
@@ -791,6 +826,11 @@ mod tests {
         assert_eq!(source.entries.len(), 1);
         assert!(source.entries[0].bundled_heldout_delta.as_ref().is_some_and(|delta| delta.tp > 0));
         assert_ne!(decoded(&gz), original);
+
+        // An uncommitted bundle blocks the next one: its patch would carry both.
+        let dirty = run(args(None, Some("rv-synthetic".to_owned()), "dirty", false)).unwrap_err();
+        assert!(dirty.contains("uncommitted changes"), "{dirty}");
+        commit(&repo, "bundle rv-synthetic");
 
         // --remove takes it out by provenance id and restores the database.
         run(args(None, Some("rv-synthetic".to_owned()), "remove", false)).unwrap();

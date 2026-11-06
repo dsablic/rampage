@@ -26,8 +26,8 @@ use std::sync::OnceLock;
 
 pub use arm::{ARM_FILE, Arm, ArmStats};
 pub use candidate::{
-    Candidate, MAX_MODULE_BYTES, MAX_PATTERN_BYTES, MAX_ROWS, Row, RowSource, format_pattern, layer, parse_pattern,
-    rows_hash, write_pack,
+    Candidate, MAX_MODULE_BYTES, MAX_PATTERN_BYTES, MAX_ROWS, Row, RowSource, databases, format_pattern, layer,
+    parse_pattern, rows_hash, write_pack,
 };
 pub use corpus::{Corpus, CorpusBinary, CorpusManifest, Split, SplitConfig};
 pub use engine::{
