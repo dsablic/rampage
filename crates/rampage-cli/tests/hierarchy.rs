@@ -1445,7 +1445,11 @@ fn debug_write_and_kill_flags_need_an_endpoint_and_a_clear_value() {
     // With an endpoint the flags are accepted: the server starts and ends only because stdin is empty.
     let output = serve(&["mcp", "--debug-endpoint", "127.0.0.1:1", "--debug-writes", "--debug-kill"], &[]);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("initialize") && !stderr.contains("debug"), "{stderr}");
+    // The flags were not refused. (A missing-worker warning may still name a `target/debug` path.)
+    assert!(
+        stderr.contains("initialize") && !stderr.contains("--debug-") && !stderr.contains("RAMPAGE_DEBUG_"),
+        "{stderr}"
+    );
 }
 
 #[test]

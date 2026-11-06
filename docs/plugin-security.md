@@ -198,5 +198,5 @@ loss drill. There is deliberately no such drill: losing authority and then guess
 violate the boundary. There is no in-process reset; inspect unresolved resources before restarting.
 
 This does not establish cancellation inside compilation, uninstrumented cancellation latency, every native
-producer's memory bounds, or Linux runtime acceptance. A Linux CI gate is configured but does not
-run in ordinary development. The checks use no privileged tracing or target execution.
+producer's memory bounds, or Linux runtime acceptance beyond these checks, which the Linux CI job runs on every CI
+run. The checks use no privileged tracing or target execution.
