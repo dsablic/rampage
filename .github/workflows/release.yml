@@ -170,4 +170,7 @@ jobs:
         run: |
           ls -l dist
           cat dist/*.sha256 > dist/SHA256SUMS
-          gh release create "$TAG" --draft --verify-tag --title "rampage $TAG" --generate-notes dist/*
+          # A SemVer pre-release tag (vX.Y.Z-rc.1, -beta.2 and so on) is marked as a GitHub prerelease.
+          prerelease=()
+          case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$TAG" --draft "${prerelease[@]}" --verify-tag --title "rampage $TAG" --generate-notes dist/*

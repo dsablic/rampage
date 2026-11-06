@@ -159,7 +159,8 @@ starts the worker from its own directory), `LICENSE`, `NOTICE`, `THIRD-PARTY-NOT
 `rampage server serve --help` and `rampage-ui --version` from the unpacked archive.
 
 - A pushed `v*` tag that matches the workspace version builds every target and creates a **draft** release with
-  the archives, their `.sha256` files and a combined `SHA256SUMS`. Nothing is published automatically.
+  the archives, their `.sha256` files and a combined `SHA256SUMS`. A tag with a pre-release suffix (`-rc.1`,
+  `-beta.2`) makes the draft a GitHub prerelease. Nothing is published automatically.
 - `gh workflow run release.yml --ref BRANCH` (or CI's `release_dry_run` input) is a dry run: it builds, packages and
   smoke-tests the archives and uploads them as workflow artefacts for 14 days, and never creates a release. Pass
   `-f macos=false` to build Linux only. `gh workflow run release.yml --ref vX.Y.Z -f dry_run=false` rebuilds an
