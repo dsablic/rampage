@@ -194,11 +194,17 @@ mod tests {
     #[test]
     fn musl_sized_member_set_keeps_exact_path_completeness() {
         let objects: Vec<_> = (0..1053).map(|index| PathBuf::from(format!("owned/{index}.o"))).collect();
-        let rows: Vec<_> = objects.iter().enumerate().map(|(index, path)| serde_json::json!({
-            "archive_path":"libc.a", "archive_sha256":"a".repeat(64),
-            "member_ordinal":index, "original_name":format!("{index}.o"),
-            "object_path":path, "object_sha256":"b".repeat(64), "size":16,
-        })).collect();
+        let rows: Vec<_> = objects
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                serde_json::json!({
+                    "archive_path":"libc.a", "archive_sha256":"a".repeat(64),
+                    "member_ordinal":index, "original_name":format!("{index}.o"),
+                    "object_path":path, "object_sha256":"b".repeat(64), "size":16,
+                })
+            })
+            .collect();
         let bytes = serde_json::to_vec(&rows).unwrap();
         assert_eq!(receipt_rows(&bytes, &objects).unwrap().len(), objects.len());
         assert!(receipt_rows(&bytes, &objects[..objects.len() - 1]).is_err());

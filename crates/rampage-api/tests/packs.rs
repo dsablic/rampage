@@ -95,16 +95,8 @@ fn builtin_listing_uses_unique_catalog_assets_and_index_counts() {
 #[test]
 fn bundled_corpus_never_relabels_surviving_musl_fixture_answers() {
     for (arch, json, target) in [
-        (
-            Arch::X86_64,
-            include_str!("../../rampage-signatures/data/musl-x86_64.json"),
-            "musl-static-x86_64.elf",
-        ),
-        (
-            Arch::Aarch64,
-            include_str!("../../rampage-signatures/data/musl-aarch64.json"),
-            "musl-static-aarch64.elf",
-        ),
+        (Arch::X86_64, include_str!("../../rampage-signatures/data/musl-x86_64.json"), "musl-static-x86_64.elf"),
+        (Arch::Aarch64, include_str!("../../rampage-signatures/data/musl-aarch64.json"), "musl-static-aarch64.elf"),
     ] {
         let baseline = rampage_signatures::SignatureDb::from_json(json).unwrap();
         assert_eq!(baseline.arch(), arch);

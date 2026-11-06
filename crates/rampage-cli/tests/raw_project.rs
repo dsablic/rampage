@@ -72,10 +72,15 @@ fn raw_json_lists_and_disassembles_seeded_functions_without_writing_files() {
     assert!(addresses.contains(&"0x4400"), "{functions}");
     assert!(addresses.contains(&"0x4410"), "{functions}");
 
-    let lines = json_output(
-        rampage(&["function", "disassemble"], &fixture.binary())
-            .args(["--at", "0x4400", "--count", "4", "--json", "--raw-json", &raw]),
-    );
+    let lines = json_output(rampage(&["function", "disassemble"], &fixture.binary()).args([
+        "--at",
+        "0x4400",
+        "--count",
+        "4",
+        "--json",
+        "--raw-json",
+        &raw,
+    ]));
     let lines = lines.as_array().unwrap();
     assert_eq!(lines[0]["address"], "0x4400", "{lines:?}");
     assert!(lines[0]["text"].as_str().unwrap().to_lowercase().contains("call"), "{lines:?}");

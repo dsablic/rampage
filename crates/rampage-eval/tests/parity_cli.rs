@@ -117,7 +117,8 @@ fn empty_static_baselines_are_not_vacuous_passes() {
     let scratch = Scratch::new();
     let path = scratch.0.join("empty.json");
     std::fs::write(&path, "{\"slices\":{}}").unwrap();
-    let output = eval().args(["run", "--suite", "parity", "--skip-processor-roster", "--manifest"]).arg(path).output().unwrap();
+    let output =
+        eval().args(["run", "--suite", "parity", "--skip-processor-roster", "--manifest"]).arg(path).output().unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("nonempty"));
@@ -158,7 +159,8 @@ fn empty_type_truth_retains_zero_coverage_without_reporting_measured_health() {
         .to_string(),
     )
     .unwrap();
-    let output = eval().args(["run", "--suite", "parity", "--skip-processor-roster", "--manifest"]).arg(path).output().unwrap();
+    let output =
+        eval().args(["run", "--suite", "parity", "--skip-processor-roster", "--manifest"]).arg(path).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["decompiler_health"]["status"], "not_run");

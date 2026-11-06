@@ -43,42 +43,92 @@ List rampage's tool groups (name, one-line description, tool count and names, wh
 with `groups`, e.g. [\"detection\"] or [\"all\"]. Enabling adds the group's tools to the tool list and sends \
 notifications/tools/list_changed. Without `groups` nothing changes.";
 
-const INSTRUCTIONS_INTRO: &str = "\
-rampage analyzes PE, ELF and Mach-O binaries for x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC, \
-RISC-V, SPARC, s390x and m68k. Native-image tools take the binary's file path and reuse cached project analysis \
-when needed. Standalone file inspectors and decoders use explicit sources without that project cache. \
-Addresses are hex strings like \"0x401000\". Wherever a tool \
-takes an address (except comparison slots/ranges and branch observation windows) you may also pass a symbol, \
-export or import name (an import name finds its stub) or a sub_<hex> name.
+/// How many characters of the server instructions Claude Code shows a model; it cuts the rest. Everything an agent
+/// needs to start (the groups with their key tools, the first calls, the debug consent) comes before this mark.
+pub const INSTRUCTIONS_SHOWN_CHARS: usize = 4096;
 
-Tools come in groups. The server lists the groups it was started with, by default only core, plus enable_tools: \
-call it without arguments to see every group with its tools, or with {\"groups\": [\"detection\"]} (or [\"all\"]) \
-to add groups, after which the tool list changes (notifications/tools/list_changed). Calling a tool of a group that \
-is not enabled fails with the group to enable and runs nothing. Clients that do not refresh their tool list can \
-start the server with `rampage mcp --all-tools`, or set RAMPAGE_MCP_TOOLS to all or to a comma-separated list of \
-groups. The groups:";
+const INSTRUCTIONS_INTRO: &str = "\
+rampage reverse-engineers PE, ELF and Mach-O binaries (x86, x86-64, AArch64, ARM/Thumb, MIPS, PowerPC, RISC-V, \
+SPARC, s390x, m68k). Binary tools take the file's `path`. Addresses are hex strings like \"0x401000\"; most tools \
+also accept a symbol, export or import name (an import name finds its stub) or a sub_<hex> name.
+
+Tools come in groups. Only core is listed at first, plus enable_tools: call it with {\"groups\": [\"types\"]} (or \
+[\"all\"]) to add groups (the tool list then changes), or without arguments for every group's full description and \
+tools. A tool of a group that is not enabled fails, naming the group, and runs nothing. Clients that do not refresh \
+their tool list can start `rampage mcp --all-tools` or set RAMPAGE_MCP_TOOLS (all, or a comma-separated list). \
+Groups and the tools that answer each question:";
+
+/// One line per group naming its key tools and the questions they answer, in the order of [`Group::ALL`]. The
+/// group's full description is in `enable_tools`' listing.
+fn group_summary(group: Group) -> &'static str {
+    match group {
+        Group::Core => {
+            "triage_report (start here), list_functions, decompile, disassemble, xrefs, search, list_strings, \
+             list_imports; classes: language_metadata (Objective-C classes and superclasses, demangled names), \
+             class_evidence (C++ vtables/RTTI); notes: rename, annotate_batch, record_finding, undo; patch_bytes; \
+             workflows find_main, network_surface, persistence_surface, string_decoding, diff_builds."
+        }
+        Group::Detection => {
+            "packer/compiler and library code: detect_tools, identify_functions (signatures), capabilities, \
+             find_crypto, yara_scan and capa_detect (your rules)."
+        }
+        Group::Types => {
+            "structs, signatures, debug info: declare_types (C), get_type, set_signature, set_types, \
+             edit_variable and function_frame (locals), apply_data_type, import_debug_types (DWARF/PDB), \
+             import_pdb_names."
+        }
+        Group::Runtime => {
+            "memory snapshots: observe_pointer, compare_runtime_bytes, observe_indirect_branch; query_debugger \
+             (an existing LLDB session)."
+        }
+        Group::Diagnostics => "decode trouble: analysis_diagnostics, entry_diagnostics, inspect_jump_table.",
+        Group::DotNet => ".NET: dotnet_metadata (types, methods, P/Invokes), dotnet_il (CIL).",
+        Group::Carve => "files inside files: carve (embedded executables), archive_inventory (ZIP listing).",
+        Group::Formats => {
+            "build_info (Go modules, Rust dependencies), pe_resources, pe_load_config, pyinstaller_archive, \
+             wasm_module."
+        }
+        Group::Debug => {
+            "a live target via GDB remote stub: debug_connect, debug_registers, debug_read_memory, \
+             debug_breakpoints, debug_continue, debug_step, debug_snapshot, debug_disconnect."
+        }
+    }
+}
+
+const INSTRUCTIONS_START: &str = "\
+Start with triage_report: a bounded overview ending with next tool calls, each naming its `group` to enable \
+first. For one question: list_functions (name_contains), decompile (C), xrefs. Record findings with rename, \
+annotate_batch and record_finding; they persist beside the binary. Workflow findings are evidence, not verdicts.";
+
+const INSTRUCTIONS_DEBUG_START: &str = "\
+Debug: the tools drive a live process through a GDB remote stub the operator started; rampage launches and \
+attaches to nothing. Breakpoints, continue and step change its state; debug_disconnect detaches and lets it run. \
+{consent} Endpoints: {endpoints}.";
+
+const INSTRUCTIONS_DETAILS: &str = "\
+Details for each area follow. The full text of every tool is in its description.";
 
 const INSTRUCTIONS_USAGE: &str = "\
-Core: start with triage_report: one bounded overview (layout, triage hints, producing toolchain, capability tags, \
-imports, notable strings, library functions) that ends with concrete next tool calls, each naming its `group`; enable \
-that group first when it is not enabled. The other guided workflows compose the primitives the same way: find_main \
-(the program's own entry logic), network_surface, persistence_surface (autostart locations, service and registry \
-APIs), string_decoding (candidate byte-decoding loops with their call sites and encoded-looking data) and diff_builds; \
-find_crypto (algorithm constants and crypto APIs with the code that uses them) is in detection. Every workflow finding \
-carries its evidence, source tool and confidence, and every report states its limitations: treat findings as evidence, \
-not verdicts. For a single question use triage or binary_info, then list_functions (filter with name_contains, page \
-with offset/limit), then decompile a function to C to understand it (the best starting point; falls back to \
-function_summary, a structural CFG/reference summary, where no decompiler specification is available), or disassemble \
-or function_graph it, and follow references with xrefs. list_imports and list_strings are good starting points for \
-finding behavior; language_metadata (Objective-C classes and superclasses, demangled names) and class_evidence (C++ \
-vtables/RTTI) answer class questions. Record findings with rename and set_comment, or many at once with \
-annotate_batch (all or nothing; check_names pre-flights candidate names): they persist beside the binary and every \
-client of the same binary, including the rampage UI, picks them up. record_finding keeps a ledger there of what \
-you established, still don't know or want answered, with supporting tool calls and a status, so a later session \
-or another agent can resume from list_findings. undo and redo revert or reapply one step, which may be a whole \
-batch; when another client's edit blocks undoing a step, discard_undo drops it from the undo history (its edits \
-stay) so earlier steps can be undone; it refuses a step undo could still revert unless force is true, since the \
-user's UI may share that history. Memory snapshots and bundle directories use the same tools. inspect_raw_code \
+Core: native-image tools reuse cached project analysis when needed; standalone file inspectors and decoders use \
+explicit sources without that project cache. A symbol or name is accepted wherever a tool takes an address except \
+comparison slots/ranges and branch observation windows. Enabling a group sends notifications/tools/list_changed. \
+triage_report's overview covers layout, triage hints, the producing toolchain, capability tags, imports, notable \
+strings and library functions. The other guided workflows compose the primitives the same way: find_main (the program's own entry \
+logic), network_surface, persistence_surface (autostart locations, service and registry APIs), string_decoding \
+(candidate byte-decoding loops with their call sites and encoded-looking data) and diff_builds; find_crypto \
+(algorithm constants and crypto APIs with the code that uses them) is in detection. Every workflow finding carries \
+its evidence, source tool and confidence, and every report states its limitations. triage and binary_info answer \
+quick layout questions; list_functions pages with offset/limit; decompile (to C) is the best starting point to \
+understand a function and falls back to function_summary, a structural CFG/reference summary, where no decompiler \
+specification is available; or disassemble or function_graph it. list_imports and list_strings are good starting \
+points for finding behavior. Record findings with rename and set_comment, or many at once with annotate_batch (all \
+or nothing; check_names pre-flights candidate names). Annotations persist beside the \
+binary and every client of the same binary, including the rampage UI, picks them up. record_finding keeps a ledger \
+there of what you established, still don't know or want answered, with supporting tool calls and a status, so a \
+later session or another agent can resume from list_findings. undo and redo revert or reapply one step, which may be \
+a whole batch; when another client's edit blocks undoing a step, discard_undo drops it from the undo history (its \
+edits stay) so earlier steps can be undone; it refuses a step undo could still revert unless force is true, since \
+the user's UI may share that history. Memory snapshots and bundle directories use the same tools. inspect_raw_code \
 provides bounded linear decoding of original-file windows with an explicitly asserted \
 architecture/mode/orders/base, without native-image admission or target following. inspect_data provides bounded \
 native bytes/word candidates without discovery or sidecars; names resolve only through retained metadata. \
@@ -87,9 +137,9 @@ Its transient decoded preview uses decoded offsets, not source offsets or load a
 successful decoding do not authenticate content or prove stream boundaries. Tools whose schema has a `raw` \
 object open that explicit file range as a headerless Raw project with a closed profile instead of a native image \
 (never with arch/image_offset/image_length; null means absent). `raw` fields: profile (one of the Raw profiles \
-listed below), offset and length (original-file bytes, length up to 128 KiB), base_address, optional entry and up to \
-8192 seeds (internal code-space byte coordinates, even for word-addressed processors; hex strings or integers). \
-The mapping is an analyst assertion; annotations are memory-only for this server and interpretation.
+listed at the end), offset and length (original-file bytes, length up to 128 KiB), base_address, optional entry and \
+up to 8192 seeds (internal code-space byte coordinates, even for word-addressed processors; hex strings or \
+integers). The mapping is an analyst assertion; annotations are memory-only for this server and interpretation.
 
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \
@@ -134,8 +184,7 @@ decompresses nothing. Pass an executable candidate's offset as image_offset to a
 with annotations kept apart from the outer file's.";
 
 const INSTRUCTIONS_DEBUG: &str = "\
-Debug: the operator allowed GDB remote stubs at these endpoints: {endpoints}. debug_connect opens a session (the \
-stub must already be running; rampage launches and attaches to nothing), then debug_status, debug_registers, \
+Debug: debug_connect opens a session (the stub must already be running), then debug_status, debug_registers, \
 debug_read_memory and debug_modules inspect the stopped target and debug_snapshot writes a rampage-snapshot-v1 file \
 the other tools can open. debug_bind (or debug_connect with path) binds a binary to a runtime module with a verified \
 slide; then breakpoints take a static_address or function name, stops report locations (function, offset, \
@@ -143,28 +192,32 @@ show_address), debug_registers annotate: true says what values point at, and deb
 for record_finding. Execution control is all-stop: debug_breakpoints sets hardware or software breakpoints and \
 watchpoints, debug_continue resumes without delivering a signal and waits for the stop, debug_wait waits again, \
 debug_interrupt stops a running target, debug_step single-steps, steps over calls (over) or out of a function from \
-its entry (out). Each stop is a new epoch; \
-pass the epoch you last saw to execution tools (stale_epoch otherwise) and optionally to reads. debug_disconnect \
-removes breakpoints and detaches, which lets the target run. {consent} Runtime bytes stay local.";
+its entry (out). Each stop is a new epoch; pass the epoch you last saw to execution tools (stale_epoch otherwise) \
+and optionally to reads. debug_disconnect removes breakpoints before it detaches. Runtime bytes stay local.";
 
 const DEBUG_READ_ONLY: &str = "Nothing writes registers or memory or kills: the operator did not allow it.";
 
 const DEBUG_WRITES: &str = "The operator allowed writes (--debug-writes): debug_write_memory and \
-debug_write_register write a stopped target at your epoch, reading the old bytes first (pass expect to refuse a \
-stale view) and reading back (verified: false when the target dropped the write, as flash often does). Write only \
-when the task needs it; rampage never writes on its own.";
+debug_write_register; write only when the task needs it.";
 
-const DEBUG_KILL: &str = "The operator allowed killing (--debug-kill): debug_disconnect with kill: true removes \
-breakpoints and kills the target instead of detaching.";
+const DEBUG_KILL: &str = "The operator allowed killing (--debug-kill): debug_disconnect with kill: true.";
 
+const DEBUG_WRITES_DETAIL: &str = "The write tools write a stopped target at your epoch, reading the old bytes first \
+(pass expect to refuse a stale view) and reading back (verified: false when the target dropped the write, as flash \
+often does); rampage never writes on its own.";
+
+const DEBUG_KILL_DETAIL: &str = "debug_disconnect with kill: true removes breakpoints and kills the target instead \
+of detaching.";
+
+/// The server instructions: what an agent needs to start, within the first [`INSTRUCTIONS_SHOWN_CHARS`], then the
+/// details for clients that read the whole text.
 fn instructions(packs: &Packs, debug: Option<&DebugRegistry>) -> String {
     let groups: String = available_groups(debug.is_some())
         .iter()
-        .map(|group| format!("\n- {}: {}", group.name(), group.description()))
+        .map(|group| format!("\n- {}: {}", group.name(), group_summary(*group)))
         .collect();
-    let mut text = format!("{INSTRUCTIONS_INTRO}{groups}\n\n{INSTRUCTIONS_USAGE}");
+    let mut text = format!("{INSTRUCTIONS_INTRO}{groups}\n\n{INSTRUCTIONS_START}");
     if let Some(registry) = debug {
-        text.push_str("\n\n");
         let consent = registry.consent();
         let allowed: Vec<&str> = [(consent.writes, DEBUG_WRITES), (consent.kill, DEBUG_KILL)]
             .iter()
@@ -172,22 +225,41 @@ fn instructions(packs: &Packs, debug: Option<&DebugRegistry>) -> String {
             .map(|(_, text)| *text)
             .collect();
         let consent = if allowed.is_empty() { DEBUG_READ_ONLY.to_owned() } else { allowed.join(" ") };
+        text.push_str("\n\n");
         text.push_str(
-            &INSTRUCTIONS_DEBUG.replace("{endpoints}", &registry.endpoints().join(", ")).replace("{consent}", &consent),
+            &INSTRUCTIONS_DEBUG_START
+                .replace("{consent}", &consent)
+                .replace("{endpoints}", &registry.endpoints().join(", ")),
         );
     }
-    let profiles: Vec<_> = rampage_loaders::RawProfile::ALL.iter().map(|profile| profile.language_id()).collect();
-    text.push_str(&format!("\n\nRaw profiles: {}.", profiles.join(", ")));
     // Only a server given packs loads them here; the problem count must be known before any tool runs.
     if packs.configured() {
         let problems = packs.problems().len();
         text.push_str(&format!(
-            "\n\nData packs: {} loaded, {problems} problems (packs rejected or contents that did not load). \
-             Detection results that consult packs (identify_functions, detect_tools, yara_scan, capa_detect) list \
-             the problems bearing on them in `warnings`; list_packs (detection) shows each pack's status.",
+            "\n\nData packs: {} loaded, {problems} problems; list_packs (detection) shows each pack's status.",
             packs.loaded().iter().filter(|pack| pack.error.is_none()).count()
         ));
     }
+    text.push_str(&format!("\n\n{INSTRUCTIONS_DETAILS}\n\n{INSTRUCTIONS_USAGE}"));
+    if let Some(registry) = debug {
+        text.push_str(&format!("\n\n{INSTRUCTIONS_DEBUG}"));
+        let consent = registry.consent();
+        for (on, detail) in [(consent.writes, DEBUG_WRITES_DETAIL), (consent.kill, DEBUG_KILL_DETAIL)] {
+            if on {
+                text.push(' ');
+                text.push_str(detail);
+            }
+        }
+    }
+    if packs.configured() {
+        text.push_str(
+            "\n\nData pack problems are packs rejected or contents that did not load. Detection results that \
+             consult packs (identify_functions, detect_tools, yara_scan, capa_detect) list the problems bearing on \
+             them in `warnings`.",
+        );
+    }
+    let profiles: Vec<_> = rampage_loaders::RawProfile::ALL.iter().map(|profile| profile.language_id()).collect();
+    text.push_str(&format!("\n\nRaw profiles: {}.", profiles.join(", ")));
     text
 }
 
@@ -863,5 +935,111 @@ mod tests {
             Ok(BTreeSet::from([Group::Core, Group::Detection, Group::Types]))
         );
         assert!(initial_groups(false, Some("core,bogus")).unwrap_err().contains("unknown tool group `bogus`"));
+    }
+
+    /// The tools an agent must find in the shown part of the instructions to know which group answers what.
+    const KEY_TOOLS: [(Group, &[&str]); 9] = [
+        (
+            Group::Core,
+            &[
+                "triage_report",
+                "list_functions",
+                "decompile",
+                "xrefs",
+                "language_metadata",
+                "class_evidence",
+                "annotate_batch",
+                "record_finding",
+                "find_main",
+            ],
+        ),
+        (Group::Detection, &["detect_tools", "identify_functions", "find_crypto", "yara_scan", "capa_detect"]),
+        (Group::Types, &["declare_types", "get_type", "set_signature", "edit_variable", "import_debug_types"]),
+        (Group::Runtime, &["observe_pointer", "compare_runtime_bytes", "query_debugger"]),
+        (Group::Diagnostics, &["analysis_diagnostics", "entry_diagnostics", "inspect_jump_table"]),
+        (Group::DotNet, &["dotnet_metadata", "dotnet_il"]),
+        (Group::Carve, &["carve", "archive_inventory"]),
+        (Group::Formats, &["build_info", "pe_resources", "pe_load_config", "pyinstaller_archive", "wasm_module"]),
+        (
+            Group::Debug,
+            &["debug_connect", "debug_read_memory", "debug_breakpoints", "debug_continue", "debug_disconnect"],
+        ),
+    ];
+
+    /// Every configuration whose instructions differ, with a name for the size report. The enabled groups do not
+    /// change the text, so a server with all groups, or one serving Raw projects, reads the default's.
+    fn configurations() -> Vec<(&'static str, Packs, Option<DebugRegistry>)> {
+        let debug = |writes, kill| {
+            // Two endpoints, longer than a typical one, so the debug paragraph is not measured at its smallest.
+            let endpoints = ["192.168.100.200:12345".to_owned(), "unix:/var/run/rampage/target-debug.sock".to_owned()];
+            Some(DebugRegistry::new(&endpoints).unwrap().with_consent(DebugConsent { writes, kill }))
+        };
+        let packs = || Packs::lazy(&[std::env::temp_dir().join("rampage-no-such-pack-directory")]);
+        vec![
+            ("default", Packs::default(), None),
+            ("packs", packs(), None),
+            ("debug", Packs::default(), debug(false, false)),
+            ("debug writes", Packs::default(), debug(true, false)),
+            ("debug kill", Packs::default(), debug(false, true)),
+            ("debug writes kill packs", packs(), debug(true, true)),
+        ]
+    }
+
+    /// Claude Code shows a model only the first [`INSTRUCTIONS_SHOWN_CHARS`] of the instructions, so that part
+    /// names every group with its key tools, the first calls, and the debug consent and endpoints.
+    #[test]
+    fn the_shown_part_of_the_instructions_carries_every_group_and_its_key_tools() {
+        for (name, packs, debug) in configurations() {
+            let text = instructions(&packs, debug.as_ref());
+            let shown: String = text.chars().take(INSTRUCTIONS_SHOWN_CHARS).collect();
+            let registry = DebugRegistry::new(&["127.0.0.1:2345".to_owned()]).unwrap();
+            let server = RampageServer::default().with_debug(registry);
+            for (group, tools) in KEY_TOOLS {
+                if group == Group::Debug && debug.is_none() {
+                    assert!(!text.contains("- debug: ") && !text.contains("debug_connect"), "{name}");
+                    continue;
+                }
+                assert!(shown.contains(&format!("\n- {}: ", group.name())), "{name}: {group:?}");
+                for tool in tools {
+                    assert!(server.catalog().any(|entry| entry == (group, *tool)), "{tool} is not served in {group:?}");
+                    assert!(shown.contains(tool), "{name}: {tool} is past the shown part");
+                }
+            }
+            for text in ["enable_tools", "--all-tools", "RAMPAGE_MCP_TOOLS", "Objective-C", "C++ vtables/RTTI"] {
+                assert!(shown.contains(text), "{name}: {text}");
+            }
+            if let Some(registry) = &debug {
+                let consent = registry.consent();
+                assert!(shown.contains("launches and attaches to nothing"), "{name}");
+                assert_eq!(shown.contains(DEBUG_READ_ONLY), !consent.writes && !consent.kill, "{name}");
+                assert_eq!(shown.contains(DEBUG_WRITES), consent.writes, "{name}");
+                assert_eq!(shown.contains(DEBUG_KILL), consent.kill, "{name}");
+                for endpoint in registry.endpoints() {
+                    assert!(shown.contains(endpoint.as_str()), "{name}: {endpoint}");
+                }
+            }
+            if packs.configured() {
+                assert!(shown.contains("Data packs: "), "{name}");
+            }
+        }
+    }
+
+    /// The part before the details stays well inside the shown characters, so a new sentence there fails here
+    /// rather than silently pushing the last group or the debug consent past the cut. Run with --no-capture for
+    /// the sizes.
+    #[test]
+    fn the_essential_part_of_the_instructions_leaves_a_margin_before_the_cut() {
+        const MARGIN: usize = 300;
+        for (name, packs, debug) in configurations() {
+            let text = instructions(&packs, debug.as_ref());
+            let essentials = text.find(INSTRUCTIONS_DETAILS).expect("the details are marked");
+            let essentials = text[..essentials].chars().count();
+            println!("{name}: {essentials} essential characters of {} in all", text.chars().count());
+            assert!(
+                essentials + MARGIN <= INSTRUCTIONS_SHOWN_CHARS,
+                "{name}: {essentials} essential characters leave less than {MARGIN} before the \
+                 {INSTRUCTIONS_SHOWN_CHARS}-character cut; move detail after INSTRUCTIONS_DETAILS"
+            );
+        }
     }
 }
