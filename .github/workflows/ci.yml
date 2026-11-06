@@ -6,6 +6,11 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
   workflow_dispatch:
+    inputs:
+      macos:
+        description: Run the macOS job (its runner minutes cost 10x Linux on a private repo)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -80,6 +85,7 @@ jobs:
 
   macos:
     name: macOS ARM64 workspace, UI and accuracy
+    if: github.event_name != 'workflow_dispatch' || inputs.macos
     runs-on: macos-15
     timeout-minutes: 60
     steps:
