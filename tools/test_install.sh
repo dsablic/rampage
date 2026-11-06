@@ -3,7 +3,7 @@ set -euo pipefail
 
 # All commands under test see only fixture roots and fake Cargo; no packages are compiled or executed.
 repository="$(cd "$(dirname "$0")/.." && pwd)"
-fixture="$(mktemp -d "${TMPDIR:-/private/var/tmp}/rampage-install-test.XXXXXXXX")"
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/rampage-install-test.XXXXXXXX")"
 trap 'rm -rf "$fixture"' EXIT
 real_mv="$(command -v mv)"
 real_ln="$(command -v ln)"
