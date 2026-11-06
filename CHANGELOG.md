@@ -4,9 +4,11 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
-## 1.0.0 (unreleased)
+## 1.0.0-rc.1 (unreleased)
 
-The first public release. It summarises what rampage does rather than listing every change since the project
+The first public release, as a release candidate for 1.0.0: the stable surface in the
+[stability policy](docs/stability.md) is frozen unless the candidate turns up a problem, and 1.0.0 follows once it
+runs without unplanned contract-snapshot changes. It summarises what rampage does rather than listing every change since the project
 started; the [roadmap](docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md) and git history have the detail.
 
 ### MCP server

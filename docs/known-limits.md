@@ -12,8 +12,8 @@ these against other tools, and the [stability policy](stability.md) says which a
 | Linux x64 (Ubuntu 24.04) | Supported: CI builds and tests the whole workspace; the desktop UI is untested there. |
 | Windows | Not supported as a host in 1.0; planned for 1.x. |
 
-There are no prebuilt binaries yet; see [getting started](getting-started.md#what-you-need) for the build
-prerequisites.
+Prebuilt archives cover macOS on Apple silicon and Linux x64 only; other hosts build from source, see
+[getting started](getting-started.md#what-you-need) for the prerequisites.
 
 ## Decompilation and safety
 

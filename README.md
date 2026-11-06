@@ -52,7 +52,10 @@ near 100%.
 
 ### Build and install
 
-There are no prebuilt binaries yet, so you build from source. You need:
+Each [GitHub release](https://github.com/dsablic/rampage/releases) has prebuilt archives for macOS on Apple silicon
+(`aarch64-apple-darwin`) and Linux x64 (`x86_64-unknown-linux-gnu`), each with a `.sha256` file. Download both into one
+directory and run `tools/install.sh --archive rampage-<version>-<target>.tar.gz` from a checkout; it verifies the
+checksum before installing. To build from source instead, you need:
 
 - a Rust toolchain through [rustup](https://rustup.rs) (`rust-toolchain.toml` selects stable, edition 2024);
 - a C/C++ compiler and zlib development files, for the embedded decompiler:

@@ -12,8 +12,8 @@ Fixes are coordinated in the private advisory before disclosure.
 
 ## Supported versions
 
-rampage is a 0.1 preview. Only the latest commit on `main` and the most recent 0.1 preview release receive fixes;
-there are no backports to older commits.
+rampage is at its first release candidate, 1.0.0-rc.1. Only the latest commit on `main` and the most recent release
+or release candidate receive fixes; there are no backports to older commits.
 
 ## Scope
 
