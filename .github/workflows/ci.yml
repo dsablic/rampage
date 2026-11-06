@@ -1,14 +1,33 @@
 name: CI
 
+# Triggers. Push to main and pull requests are declared now but only run once the repository is public: every job
+# checks `github.event.repository.private == false` for those events, because macOS minutes on a private repository
+# cost ten times Linux minutes. Version tags and manual runs work today. See "Continuous integration" in
+# docs/development.md.
 on:
   push:
+    branches:
+      - main
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
+  pull_request:
   workflow_dispatch:
     inputs:
       macos:
         description: Run the macOS job (its runner minutes cost 10x Linux on a private repo)
+        type: boolean
+        default: false
+      full:
+        description: Run every test (nextest `full` profile) instead of the default profile
+        type: boolean
+        default: false
+      live:
+        description: Also run the live QEMU debugger acceptance on Linux
+        type: boolean
+        default: false
+      release_dry_run:
+        description: Also build, package and smoke-test release archives (never creates a release)
         type: boolean
         default: false
 
@@ -26,7 +45,6 @@ defaults:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
-  CARGO_BUILD_JOBS: "2"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_HTTP_TIMEOUT: "60"
@@ -34,12 +52,22 @@ env:
   RUST_TEST_THREADS: "1"
   RUST_BACKTRACE: "1"
   TZ: UTC
+  NEXTEST_PROFILE: ${{ inputs.full && 'full' || 'default' }}
+  # sccache caches Rust dependency crates and, because cc-rs adopts a sccache RUSTC_WRAPPER as its C/C++ wrapper,
+  # every object of the embedded Ghidra decompiler. Entries are content-addressed in the GitHub Actions cache.
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
 
 jobs:
   hygiene:
-    name: Formatting and secrets (HEAD + history)
+    name: Formatting, script regressions and secrets
+    if: >-
+      github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') ||
+      github.event.repository.private == false
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -83,11 +111,11 @@ jobs:
           time bash tools/ci/test-scan-secrets.sh "$scratch/gitleaks"
           time bash tools/ci/scan-secrets.sh "$scratch/gitleaks"
 
-  macos:
-    name: macOS ARM64 workspace, UI and accuracy
-    if: github.event_name != 'workflow_dispatch' || inputs.macos
-    runs-on: macos-15
-    timeout-minutes: 60
+  clippy:
+    name: Linux x86-64 warnings-denied Clippy
+    needs: hygiene
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -96,6 +124,108 @@ jobs:
         with:
           toolchain: stable
           components: clippy
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Require the decompiler's C/C++ toolchain and zlib
+        timeout-minutes: 5
+        run: bash tools/ci/apt-install.sh build-essential zlib1g-dev
+      - name: Warnings-denied workspace Clippy
+        timeout-minutes: 35
+        run: time cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Compiler cache statistics
+        if: always()
+        run: sccache --show-stats
+
+  linux:
+    name: Linux x86-64 workspace tests and gates
+    needs: hygiene
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+          targets: wasm32-unknown-unknown
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Require the decompiler's C/C++ toolchain, zlib and fixture tools
+        timeout-minutes: 5
+        env:
+          LIVE: ${{ inputs.live }}
+        run: |
+          packages=(build-essential clang zlib1g-dev binutils)
+          if [ "$LIVE" = true ]; then packages+=(qemu-system-arm); fi
+          bash tools/ci/apt-install.sh "${packages[@]}"
+          rustc --version --verbose
+          cc --version
+          clang --version
+          objcopy --version
+      - name: Install checksum-pinned cargo-nextest
+        timeout-minutes: 3
+        run: bash tools/ci/install-nextest.sh
+      - name: Build CLI and its required supervised sibling worker
+        timeout-minutes: 30
+        run: |
+          time cargo build --locked -p rampage-cli -p rampage-worker
+          test -x "$PWD/target/debug/rampage"
+          test -x "$PWD/target/debug/rampage-worker"
+      - name: Workspace tests (nextest)
+        timeout-minutes: 40
+        run: time cargo nextest run --locked --workspace --profile "$NEXTEST_PROFILE"
+      - name: Owned x86-64 ELF layout constants and field-use oracle
+        timeout-minutes: 5
+        run: time bash tools/ci/layout-oracle.sh
+      - name: Owned DWARF and C++ record layout acceptance
+        timeout-minutes: 5
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          export RUST_SYSROOT="$(rustc --print sysroot)"
+          export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
+          DEBUG_LAYOUT_CPP=1 OBJCOPY=objcopy bash tools/ci/debug-layout-oracle.sh --check \
+            cargo test --locked -p rampage-loaders --test integration -- debug_layouts:: --include-ignored
+          OBJCOPY=objcopy bash tools/ci/debug-cpp-layout-oracle.sh --check \
+            cargo test --locked -p rampage-loaders --test integration -- debug_cpp_layouts:: --include-ignored
+      - name: Owned import-free components and hostile resource probes
+        timeout-minutes: 10
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          bash tools/ci/plugin-triage-oracle.sh --check \
+            cargo test --locked -p rampage-plugin \
+              --test integration -- component:: resource_controls:: cancellation:: --ignored
+      - name: Live QEMU debugger acceptance
+        if: inputs.live
+        timeout-minutes: 10
+        env:
+          RAMPAGE_QEMU_LIVE: "1"
+        run: cargo nextest run --locked -p rampage-api --run-ignored only -E 'test(/^debug_qemu::/)'
+      - name: Compiler cache statistics
+        if: always()
+        run: sccache --show-stats
+
+  macos:
+    name: macOS ARM64 workspace, UI and accuracy
+    needs: hygiene
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.macos) || startsWith(github.ref, 'refs/tags/') ||
+      (github.event_name != 'workflow_dispatch' && github.event.repository.private == false)
+    runs-on: macos-15
+    timeout-minutes: 75
+    env:
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: clippy, llvm-tools-preview
+          targets: wasm32-unknown-unknown
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Require native ARM64 compiler and macOS SDK
         timeout-minutes: 2
         run: |
@@ -108,12 +238,9 @@ jobs:
       - name: Installer publication regressions with BSD tools
         timeout-minutes: 2
         run: bash tools/test_install.sh
-      - name: Require LLVM fixture tools
+      - name: Install checksum-pinned cargo-nextest
         timeout-minutes: 3
-        run: rustup component add llvm-tools-preview
-      - name: Require the owned component guest target
-        timeout-minutes: 3
-        run: rustup target add wasm32-unknown-unknown
+        run: bash tools/ci/install-nextest.sh
       - name: Warnings-denied workspace Clippy
         timeout-minutes: 30
         run: time cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -123,9 +250,6 @@ jobs:
           time cargo build --locked -p rampage-cli -p rampage-worker
           test -x "$PWD/target/debug/rampage"
           test -x "$PWD/target/debug/rampage-worker"
-      - name: Existing 13-slice accuracy gate and evaluation CLI regressions
-        timeout-minutes: 10
-        run: time cargo test --locked -p rampage-eval
       - name: Controlled supervised decompiler assertions and recovery gates
         timeout-minutes: 3
         env:
@@ -133,9 +257,9 @@ jobs:
         run: |
           python3 tools/decompiler_corpus.py "$PWD/target/debug/rampage" \
             --manifest tests/data/decompiler-corpus.json --isolated --timeout 30
-      - name: Workspace tests including offscreen UI snapshots
-        timeout-minutes: 20
-        run: time cargo test --locked --workspace --exclude rampage-eval
+      - name: Workspace tests including offscreen UI snapshots and the accuracy gate (nextest)
+        timeout-minutes: 30
+        run: time cargo nextest run --locked --workspace --profile "$NEXTEST_PROFILE"
       - name: Owned PE declared module references
         timeout-minutes: 3
         env:
@@ -195,115 +319,25 @@ jobs:
           export RAMPAGE_TEST_CLI="$PWD/target/debug/rampage"
           test -x "$RAMPAGE_TEST_CLI"
           time cargo test --locked -p rampage-worker --test integration -- cli:: --ignored
+      - name: Compiler cache statistics
+        if: always()
+        run: sccache --show-stats
 
-  linux-core:
-    name: Linux core subset (no UI or YARA/Wasmtime)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-        with:
-          toolchain: stable
-          components: clippy
-      - name: Require C/C++ fixture compilers
-        timeout-minutes: 2
-        run: |
-          rustc --version --verbose
-          cargo --version
-          cc --version
-          clang --version
-          clang++ --version
-          objcopy --version
-      - name: Warnings-denied core Clippy and tests
-        timeout-minutes: 20
-        run: bash tools/ci/linux-core.sh
-
-  linux-workspace:
-    name: Linux x86-64 workspace tests and Clippy
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-        with:
-          toolchain: stable
-          components: clippy
-      - name: Require the decompiler's C/C++ toolchain, zlib and fixture tools
-        timeout-minutes: 5
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends build-essential clang zlib1g-dev binutils
-          rustc --version --verbose
-          cargo --version
-          cc --version
-          c++ --version
-          clang --version
-          objcopy --version
-      - name: Require LLVM fixture tools
-        timeout-minutes: 3
-        run: rustup component add llvm-tools-preview
-      - name: Require the owned component guest target
-        timeout-minutes: 3
-        run: rustup target add wasm32-unknown-unknown
-      - name: Install checksum-pinned cargo-nextest
-        timeout-minutes: 3
-        run: |
-          scratch=$(mktemp -d "$RUNNER_TEMP/rampage-nextest.XXXXXX")
-          trap 'rm -rf "$scratch"' EXIT
-          archive=cargo-nextest-0.9.150-x86_64-unknown-linux-gnu.tar.gz
-          curl --fail --silent --show-error --location --retry 2 --max-time 120 \
-            "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.150/$archive" \
-            --output "$scratch/$archive"
-          checksum=b0959bc64232974224cf9fb22c915845398c0e8668fa7831eb5b43fb1eef781f
-          printf '%s  %s\n' "$checksum" "$scratch/$archive" | sha256sum --check --strict
-          tar -xzf "$scratch/$archive" -C "$HOME/.cargo/bin" cargo-nextest
-          cargo nextest --version
-      - name: Warnings-denied workspace Clippy
-        timeout-minutes: 40
-        run: time cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Build CLI and its required supervised sibling worker
-        timeout-minutes: 15
-        run: |
-          time cargo build --locked -p rampage-cli -p rampage-worker
-          test -x "$PWD/target/debug/rampage"
-          test -x "$PWD/target/debug/rampage-worker"
-      - name: Workspace tests (nextest default profile)
-        timeout-minutes: 30
-        run: time cargo nextest run --locked --workspace
-
-  linux-components:
-    name: Linux component runtime (separate from the core subset)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-        with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
-      - name: Component runtime and schema regressions
-        timeout-minutes: 20
-        run: cargo test --locked -p rampage-plugin-contract -p rampage-plugin --lib
-      - name: Owned import-free components and hostile resource probes
-        timeout-minutes: 5
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: |
-          bash tools/ci/plugin-triage-oracle.sh --check \
-            cargo test --locked -p rampage-plugin \
-              --test integration -- component:: resource_controls:: cancellation:: --ignored
+  release-dry-run:
+    name: Release dry run
+    if: github.event_name == 'workflow_dispatch' && inputs.release_dry_run
+    uses: ./.github/workflows/release.yml
+    # A called workflow may not request more than its caller grants; the draft-release job (which needs write) is
+    # skipped because dry_run is forced on.
+    permissions:
+      contents: write
+    with:
+      dry_run: true
+      macos: ${{ inputs.macos }}
 
 # Step/job timeouts bound CI execution, not individual analysis time or memory.
-# macOS runs the ordinary debug workspace suite once, plus the selected compiled-fixture and isolated gates above.
-# Linux additionally compiles x86-64 ELF layout constants/field-use oracles and runs the selected ignored layout gates.
-# Linux x86-64 runs the whole workspace under nextest's default profile (the heaviest tests are filtered out; see
-# .config/nextest.toml) and warnings-denied Clippy. No job caches build output; each run builds from scratch.
+# Both workspace jobs run nextest's default profile (the 23 heaviest tests are filtered out; see
+# .config/nextest.toml); a manual run with `full` runs every test. The Linux job also runs the owned x86-64 ELF,
+# DWARF, C++ layout and component oracles that the former linux-core and linux-components jobs ran.
 # Ignored million-point context and Chrome performance tests are not CI coverage.
 # Metal-backed UI snapshots must pass on macOS; they are compiled out on other hosts, with no headless Linux UI claims.

@@ -2,7 +2,8 @@ name: Release
 
 # A `v*` tag push builds every target and creates a DRAFT GitHub release; a maintainer publishes it by hand.
 # A manual run is a dry run by default: it builds, packages, smoke-tests and uploads the archives as workflow
-# artefacts without creating a release. See "Release procedure" in docs/development.md.
+# artefacts without creating a release. CI's `release_dry_run` input calls this workflow with dry_run forced on, which
+# also works before this file reaches the default branch. See "Release procedure" in docs/development.md.
 
 on:
   push:
@@ -21,6 +22,14 @@ on:
         default: ""
       macos:
         description: Include aarch64-apple-darwin (its runner minutes cost 10x Linux on a private repo)
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      dry_run:
+        type: boolean
+        default: true
+      macos:
         type: boolean
         default: true
 
