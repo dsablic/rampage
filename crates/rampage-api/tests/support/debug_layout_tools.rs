@@ -81,7 +81,11 @@ pub fn expected_functions(project: &Project) -> BTreeSet<u64> {
 
 fn image_identity(record: &Value) -> Option<&str> {
     let image = record.get("image")?;
-    assert_eq!(record.as_object().unwrap().len(), 1, "identity line has exactly one key");
+    let keys: BTreeSet<&str> = record.as_object().unwrap().keys().map(String::as_str).collect();
+    assert!(
+        keys == BTreeSet::from(["image"]) || keys == BTreeSet::from(["format", "image"]),
+        "identity line holds only the image and its log format: {keys:?}"
+    );
     let image = image.as_str().expect("image identity is a string");
     assert_eq!(image.len(), 64);
     assert!(image.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));

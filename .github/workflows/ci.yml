@@ -165,15 +165,13 @@ jobs:
       - name: Install checksum-pinned cargo-nextest
         timeout-minutes: 3
         run: bash tools/ci/install-nextest.sh
-      - name: Build CLI and its required supervised sibling worker
-        timeout-minutes: 30
-        run: |
-          time cargo build --locked -p rampage-cli -p rampage-worker
-          test -x "$PWD/target/debug/rampage"
-          test -x "$PWD/target/debug/rampage-worker"
       - name: Workspace tests (nextest)
         timeout-minutes: 40
-        run: time cargo nextest run --locked --workspace --profile "$NEXTEST_PROFILE"
+        run: |
+          time cargo nextest run --locked --workspace --profile "$NEXTEST_PROFILE"
+          # The workspace test build also builds the CLI and worker binaries, with the same features.
+          test -x "$PWD/target/debug/rampage"
+          test -x "$PWD/target/debug/rampage-worker"
       - name: Owned x86-64 ELF layout constants and field-use oracle
         timeout-minutes: 5
         run: time bash tools/ci/layout-oracle.sh
@@ -185,17 +183,16 @@ jobs:
           export RUST_SYSROOT="$(rustc --print sysroot)"
           export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
           DEBUG_LAYOUT_CPP=1 OBJCOPY=objcopy bash tools/ci/debug-layout-oracle.sh --check \
-            cargo test --locked -p rampage-loaders --test integration -- debug_layouts:: --include-ignored
+            cargo nextest run --locked --workspace --run-ignored all -E '(package(rampage-loaders)) & binary(integration) & test(/(debug_layouts)::/)'
           OBJCOPY=objcopy bash tools/ci/debug-cpp-layout-oracle.sh --check \
-            cargo test --locked -p rampage-loaders --test integration -- debug_cpp_layouts:: --include-ignored
+            cargo nextest run --locked --workspace --run-ignored all -E '(package(rampage-loaders)) & binary(integration) & test(/(debug_cpp_layouts)::/)'
       - name: Owned import-free components and hostile resource probes
         timeout-minutes: 10
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           bash tools/ci/plugin-triage-oracle.sh --check \
-            cargo test --locked -p rampage-plugin \
-              --test integration -- component:: resource_controls:: cancellation:: --ignored
+            cargo nextest run --locked --workspace --run-ignored only -E '(package(rampage-plugin)) & binary(integration) & test(/(component|resource_controls|cancellation)::/)'
       - name: Live QEMU debugger acceptance
         if: inputs.live
         timeout-minutes: 10
@@ -214,8 +211,6 @@ jobs:
       (github.event_name != 'workflow_dispatch' && github.event.repository.private == false)
     runs-on: macos-15
     timeout-minutes: 75
-    env:
-      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -244,10 +239,11 @@ jobs:
       - name: Warnings-denied workspace Clippy
         timeout-minutes: 30
         run: time cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Build CLI and its required supervised sibling worker
-        timeout-minutes: 15
+      - name: Workspace tests including offscreen UI snapshots and the accuracy gate (nextest)
+        timeout-minutes: 30
         run: |
-          time cargo build --locked -p rampage-cli -p rampage-worker
+          time cargo nextest run --locked --workspace --profile "$NEXTEST_PROFILE"
+          # The workspace test build also builds the CLI and worker binaries, with the same features.
           test -x "$PWD/target/debug/rampage"
           test -x "$PWD/target/debug/rampage-worker"
       - name: Controlled supervised decompiler assertions and recovery gates
@@ -257,9 +253,6 @@ jobs:
         run: |
           python3 tools/decompiler_corpus.py "$PWD/target/debug/rampage" \
             --manifest tests/data/decompiler-corpus.json --isolated --timeout 30
-      - name: Workspace tests including offscreen UI snapshots and the accuracy gate (nextest)
-        timeout-minutes: 30
-        run: time cargo nextest run --locked --workspace --profile "$NEXTEST_PROFILE"
       - name: Owned PE declared module references
         timeout-minutes: 3
         env:
@@ -268,7 +261,7 @@ jobs:
           export RUST_SYSROOT="$(rustc --print sysroot)"
           export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
           bash tools/ci/module-linkage-oracle.sh --check \
-            cargo test --locked -p rampage-api -p rampage-ui --test integration -- module_references:: --include-ignored
+            cargo nextest run --locked --workspace --run-ignored all -E '(package(rampage-api) | package(rampage-ui)) & binary(integration) & test(/(module_references)::/)'
       - name: Owned component workflow and resource boundaries
         timeout-minutes: 5
         env:
@@ -276,11 +269,10 @@ jobs:
         run: |
           cargo test --locked --manifest-path plugins/triage-report/Cargo.toml --target-dir target
           bash tools/ci/plugin-triage-oracle.sh --check \
-            cargo test --locked -p rampage-plugin \
-              --test integration -- component:: resource_controls:: cancellation:: --ignored
+            cargo nextest run --locked --workspace --run-ignored only -E '(package(rampage-plugin)) & binary(integration) & test(/(component|resource_controls|cancellation)::/)'
           bash tools/ci/plugin-triage-oracle.sh --check \
             bash tools/ci/module-linkage-oracle.sh --check \
-              cargo test --locked -p rampage-api -p rampage-cli --test integration -- plugin_triage:: --include-ignored
+              cargo nextest run --locked --workspace --run-ignored all -E '(package(rampage-api) | package(rampage-cli)) & binary(integration) & test(/(plugin_triage)::/)'
       - name: Owned DWARF reviewed import surfaces and worker acceptance
         timeout-minutes: 5
         env:
@@ -290,10 +282,7 @@ jobs:
           export RUST_SYSROOT="$(rustc --print sysroot)"
           export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
           bash tools/ci/debug-layout-oracle.sh --check \
-            cargo test --locked -p rampage-loaders -p rampage-api -p rampage-worker \
-            -p rampage-cli -p rampage-mcp -p rampage-ui \
-            --test integration -- debug_layouts:: debug_layout_import:: debug_layout_acceptance:: \
-            debug_layout_review:: debug_layout_tools:: debug_layout:: --include-ignored
+            cargo nextest run --locked --workspace --run-ignored all -E '(package(rampage-loaders) | package(rampage-api) | package(rampage-worker) | package(rampage-cli) | package(rampage-mcp) | package(rampage-ui)) & binary(integration) & test(/(debug_layouts|debug_layout_import|debug_layout_acceptance|debug_layout_review|debug_layout_tools|debug_layout)::/)'
       - name: Owned bounded C++ record and this-method acceptance
         timeout-minutes: 5
         env:
@@ -302,8 +291,7 @@ jobs:
           export RUST_SYSROOT="$(rustc --print sysroot)"
           export RUST_HOST="$(rustc --version --verbose | sed -n 's/^host: //p')"
           bash tools/ci/debug-cpp-layout-oracle.sh --check \
-            cargo test --locked -p rampage-loaders -p rampage-api -p rampage-worker \
-            --test integration -- debug_cpp_layouts:: debug_cpp_layout_acceptance:: --include-ignored
+            cargo nextest run --locked --workspace --run-ignored all -E '(package(rampage-loaders) | package(rampage-api) | package(rampage-worker)) & binary(integration) & test(/(debug_cpp_layouts|debug_cpp_layout_acceptance)::/)'
       - name: Owned opaque-vptr and exact source-slot acceptance
         timeout-minutes: 5
         env:
@@ -315,10 +303,10 @@ jobs:
       - name: Opt-in native compiled fixture and isolated CLI acceptance
         timeout-minutes: 5
         run: |
-          time cargo test --locked -p rampage-api --test integration -- compiled_arm64:: --ignored
+          time cargo nextest run --locked --workspace --run-ignored only -E '(package(rampage-api)) & binary(integration) & test(/(compiled_arm64)::/)'
           export RAMPAGE_TEST_CLI="$PWD/target/debug/rampage"
           test -x "$RAMPAGE_TEST_CLI"
-          time cargo test --locked -p rampage-worker --test integration -- cli:: --ignored
+          time cargo nextest run --locked --workspace --run-ignored only -E '(package(rampage-worker)) & binary(integration) & test(/(cli)::/)'
       - name: Compiler cache statistics
         if: always()
         run: sccache --show-stats
