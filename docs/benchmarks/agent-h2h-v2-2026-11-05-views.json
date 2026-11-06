@@ -1,0 +1,289 @@
+{
+ "rules": "Derived views of a suite-v2 head-to-head report, from its published JSON only (no transcripts, no model calls).\n\nThe harness report scores the latest run of every (task, server, repetition). The fairness review asked for\nviews that differ from it in which run counts:\n\n- headline: the first run of each slot, except where the task itself changed after the full pass (the scale\n  fixture was rebuilt, the diff question reworded): there the first run under the new definition counts. A run\n  stopped from outside before any answer (an outside kill, the client's usage limit, a safeguard model fallback)\n  is an infrastructure failure: it counts for neither server, and its once-only rerun counts instead when there\n  is one.\n- core: the headline restricted to the C++, typing and investigation categories.\n- original_pass: the first full pass as first published (old scale fixture, old diff wording, every run as\n  measured, infrastructure failures counted as failures).\n- lenient: each view again, counting a correct answer with an extra \"status\":\"ok\" field as correct.\n- scale_timing: agent wall time with and without the longest single tool call (REA's Ghidra import).",
+ "headline": {
+  "rampage": {
+   "correct": 44,
+   "correct_lenient": 45,
+   "runs": 45,
+   "infrastructure_failures_excluded": 0
+  },
+  "rea": {
+   "correct": 38,
+   "correct_lenient": 39,
+   "runs": 43,
+   "infrastructure_failures_excluded": 2
+  }
+ },
+ "headline_by_category": {
+  "cpp": {
+   "rampage": {
+    "correct": 11,
+    "correct_lenient": 12,
+    "runs": 12,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 10,
+    "correct_lenient": 11,
+    "runs": 11,
+    "infrastructure_failures_excluded": 1
+   }
+  },
+  "diffing": {
+   "rampage": {
+    "correct": 3,
+    "correct_lenient": 3,
+    "runs": 3,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 3,
+    "correct_lenient": 3,
+    "runs": 3,
+    "infrastructure_failures_excluded": 0
+   }
+  },
+  "firmware": {
+   "rampage": {
+    "correct": 3,
+    "correct_lenient": 3,
+    "runs": 3,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 1,
+    "correct_lenient": 1,
+    "runs": 3,
+    "infrastructure_failures_excluded": 0
+   }
+  },
+  "investigation": {
+   "rampage": {
+    "correct": 12,
+    "correct_lenient": 12,
+    "runs": 12,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 11,
+    "correct_lenient": 11,
+    "runs": 12,
+    "infrastructure_failures_excluded": 0
+   }
+  },
+  "scale": {
+   "rampage": {
+    "correct": 9,
+    "correct_lenient": 9,
+    "runs": 9,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 9,
+    "correct_lenient": 9,
+    "runs": 9,
+    "infrastructure_failures_excluded": 0
+   }
+  },
+  "typing": {
+   "rampage": {
+    "correct": 6,
+    "correct_lenient": 6,
+    "runs": 6,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 4,
+    "correct_lenient": 4,
+    "runs": 5,
+    "infrastructure_failures_excluded": 1
+   }
+  }
+ },
+ "core": {
+  "rampage": {
+   "correct": 29,
+   "correct_lenient": 30,
+   "runs": 30,
+   "infrastructure_failures_excluded": 0
+  },
+  "rea": {
+   "correct": 25,
+   "correct_lenient": 26,
+   "runs": 28,
+   "infrastructure_failures_excluded": 2
+  }
+ },
+ "outside_core": {
+  "rampage": {
+   "correct": 15,
+   "correct_lenient": 15,
+   "runs": 15,
+   "infrastructure_failures_excluded": 0
+  },
+  "rea": {
+   "correct": 13,
+   "correct_lenient": 13,
+   "runs": 15,
+   "infrastructure_failures_excluded": 0
+  }
+ },
+ "original_pass_as_published": {
+  "rampage": {
+   "correct": 43,
+   "correct_lenient": 44,
+   "runs": 45,
+   "infrastructure_failures_excluded": 0
+  },
+  "rea": {
+   "correct": 34,
+   "correct_lenient": 35,
+   "runs": 45,
+   "infrastructure_failures_excluded": 0
+  }
+ },
+ "original_pass_infrastructure_excluded": {
+  "rampage": {
+   "correct": 43,
+   "correct_lenient": 44,
+   "runs": 45,
+   "infrastructure_failures_excluded": 0
+  },
+  "rea": {
+   "correct": 34,
+   "correct_lenient": 35,
+   "runs": 43,
+   "infrastructure_failures_excluded": 2
+  }
+ },
+ "headline_runs": [
+  "call-chain-arm64-elf:rampage:1:answer_matches",
+  "call-chain-arm64-elf:rampage:2:answer_matches",
+  "call-chain-arm64-elf:rampage:3:answer_matches",
+  "call-chain-arm64-elf:rea:1:answer_matches",
+  "call-chain-arm64-elf:rea:2:answer_matches",
+  "call-chain-arm64-elf:rea:3:answer_matches",
+  "cpp-field-layout-arm64-macho:rampage:1:answer_matches",
+  "cpp-field-layout-arm64-macho:rampage:2:answer_matches",
+  "cpp-field-layout-arm64-macho:rampage:3:answer_matches",
+  "cpp-field-layout-arm64-macho:rea:1:answer_matches",
+  "cpp-field-layout-arm64-macho:rea:2:answer_matches",
+  "cpp-field-layout-arm64-macho:rea:3:answer_matches",
+  "cpp-hierarchy-x64-elf:rampage:1:answer_matches",
+  "cpp-hierarchy-x64-elf:rampage:2:answer_matches",
+  "cpp-hierarchy-x64-elf:rampage:3:answer_matches",
+  "cpp-hierarchy-x64-elf:rea:1:answer_matches",
+  "cpp-hierarchy-x64-elf:rea:2:answer_matches",
+  "cpp-hierarchy-x64-elf:rea:3:answer_matches",
+  "cpp-virtual-call-x64-elf:rampage:1:answer_matches",
+  "cpp-virtual-call-x64-elf:rampage:2:answer_matches",
+  "cpp-virtual-call-x64-elf:rampage:3:answer_matches",
+  "cpp-virtual-call-x64-elf:rea:1:answer_matches",
+  "cpp-virtual-call-x64-elf:rea:2:failed",
+  "cpp-virtual-call-x64-elf:rea:3:answer_matches",
+  "cpp-vtable-slots-norrti-arm64-macho:rampage:1:answer_matches",
+  "cpp-vtable-slots-norrti-arm64-macho:rampage:2:answer_matches",
+  "cpp-vtable-slots-norrti-arm64-macho:rampage:3:answer_mismatch",
+  "cpp-vtable-slots-norrti-arm64-macho:rea:1:answer_mismatch",
+  "cpp-vtable-slots-norrti-arm64-macho:rea:2:answer_matches",
+  "cpp-vtable-slots-norrti-arm64-macho:rea:3:answer_matches",
+  "crc-parameters-mips-elf:rampage:1:answer_matches",
+  "crc-parameters-mips-elf:rampage:2:answer_matches",
+  "crc-parameters-mips-elf:rampage:3:answer_matches",
+  "crc-parameters-mips-elf:rea:1:answer_matches",
+  "crc-parameters-mips-elf:rea:2:answer_matches",
+  "crc-parameters-mips-elf:rea:3:answer_matches",
+  "firmware-reset-cm3-raw:rampage:1:answer_matches",
+  "firmware-reset-cm3-raw:rampage:2:answer_matches",
+  "firmware-reset-cm3-raw:rampage:3:answer_matches",
+  "firmware-reset-cm3-raw:rea:1:answer_mismatch",
+  "firmware-reset-cm3-raw:rea:2:answer_mismatch",
+  "firmware-reset-cm3-raw:rea:3:answer_matches",
+  "key-derivation-arm64-macho:rampage:1:answer_matches",
+  "key-derivation-arm64-macho:rampage:2:answer_matches",
+  "key-derivation-arm64-macho:rampage:3:answer_matches",
+  "key-derivation-arm64-macho:rea:1:answer_matches",
+  "key-derivation-arm64-macho:rea:2:answer_matches",
+  "key-derivation-arm64-macho:rea:3:answer_matches",
+  "library-diff-x64-so:rampage:1:answer_matches",
+  "library-diff-x64-so:rampage:2:answer_matches",
+  "library-diff-x64-so:rampage:3:answer_matches",
+  "library-diff-x64-so:rea:1:answer_matches",
+  "library-diff-x64-so:rea:2:answer_matches",
+  "library-diff-x64-so:rea:3:answer_matches",
+  "option-bit-x64-elf:rampage:1:answer_matches",
+  "option-bit-x64-elf:rampage:2:answer_matches",
+  "option-bit-x64-elf:rampage:3:answer_matches",
+  "option-bit-x64-elf:rea:1:answer_matches",
+  "option-bit-x64-elf:rea:2:answer_matches",
+  "option-bit-x64-elf:rea:3:answer_mismatch",
+  "pointer-chain-arm64-elf:rampage:1:answer_matches",
+  "pointer-chain-arm64-elf:rampage:2:answer_matches",
+  "pointer-chain-arm64-elf:rampage:3:answer_matches",
+  "pointer-chain-arm64-elf:rea:1:failed",
+  "pointer-chain-arm64-elf:rea:2:answer_matches",
+  "pointer-chain-arm64-elf:rea:3:answer_mismatch",
+  "record-table-x64-elf:rampage:1:answer_matches",
+  "record-table-x64-elf:rampage:2:answer_matches",
+  "record-table-x64-elf:rampage:3:answer_matches",
+  "record-table-x64-elf:rea:1:answer_matches",
+  "record-table-x64-elf:rea:2:answer_matches",
+  "record-table-x64-elf:rea:3:answer_matches",
+  "scale-callees-x64-elf:rampage:1:answer_matches",
+  "scale-callees-x64-elf:rampage:2:answer_matches",
+  "scale-callees-x64-elf:rampage:3:answer_matches",
+  "scale-callees-x64-elf:rea:1:answer_matches",
+  "scale-callees-x64-elf:rea:2:answer_matches",
+  "scale-callees-x64-elf:rea:3:answer_matches",
+  "scale-caller-count-x64-elf:rampage:1:answer_matches",
+  "scale-caller-count-x64-elf:rampage:2:answer_matches",
+  "scale-caller-count-x64-elf:rampage:3:answer_matches",
+  "scale-caller-count-x64-elf:rea:1:answer_matches",
+  "scale-caller-count-x64-elf:rea:2:answer_matches",
+  "scale-caller-count-x64-elf:rea:3:answer_matches",
+  "scale-string-function-x64-elf:rampage:1:answer_matches",
+  "scale-string-function-x64-elf:rampage:2:answer_matches",
+  "scale-string-function-x64-elf:rampage:3:answer_matches",
+  "scale-string-function-x64-elf:rea:1:answer_matches",
+  "scale-string-function-x64-elf:rea:2:answer_matches",
+  "scale-string-function-x64-elf:rea:3:answer_matches"
+ ],
+ "scale_timing": {
+  "rampage": {
+   "runs": 9,
+   "wall_s": {
+    "median": 18.7,
+    "min": 13.1,
+    "max": 32.2
+   },
+   "longest_tool_call_s": {
+    "median": 4.5,
+    "min": 2.1,
+    "max": 13.8
+   },
+   "wall_s_without_longest_call": {
+    "median": 15.8,
+    "min": 8.6,
+    "max": 22.4
+   }
+  },
+  "rea": {
+   "runs": 9,
+   "wall_s": {
+    "median": 821.8,
+    "min": 727.7,
+    "max": 2029.2
+   },
+   "longest_tool_call_s": {
+    "median": 800.5,
+    "min": 708.5,
+    "max": 1987.2
+   },
+   "wall_s_without_longest_call": {
+    "median": 26.1,
+    "min": 15.9,
+    "max": 66.4
+   }
+  }
+ }
+}

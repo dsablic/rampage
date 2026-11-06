@@ -237,12 +237,37 @@
       "rea_command": "rea decompile FILE --procedure main.main --provider ghidra",
       "rea_ghidra_startup_timeout_ms": 3600000,
       "rea_ghidra_headless_maxmem": "16G"
+    },
+    "scale_open_time_go1234": {
+      "file_sha256": "20bb4db28668ff330655c1667972a15bdc08feb881c4550194cea8277a544aa9",
+      "file_bytes": 49197208,
+      "rampage": [
+        {
+          "seconds": 12.9,
+          "exit": 0,
+          "stdout_bytes": 6885797,
+          "error": null
+        }
+      ],
+      "rea": [
+        {
+          "seconds": 2355.4,
+          "exit": 0,
+          "stdout_bytes": 5500,
+          "error": null
+        }
+      ],
+      "rampage_command": "rampage --json function list FILE",
+      "rea_command": "rea decompile FILE --procedure main.main --provider ghidra",
+      "rea_ghidra_startup_timeout_ms": 3600000,
+      "rea_ghidra_headless_maxmem": "16G"
     }
   },
   "summary": {
     "tasks": [
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -312,6 +337,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -380,6 +406,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": 1.0,
         "partial_credit_runs": 3,
@@ -448,6 +475,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": 1.0,
         "partial_credit_runs": 3,
@@ -516,6 +544,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": 1.0,
         "partial_credit_runs": 3,
@@ -584,6 +613,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": 1.0,
         "partial_credit_runs": 3,
@@ -652,6 +682,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -720,6 +751,7 @@
       },
       {
         "correct": 2,
+        "correct_lenient": 2,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -790,6 +822,7 @@
       },
       {
         "correct": 2,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -860,6 +893,7 @@
       },
       {
         "correct": 2,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -930,6 +964,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -998,6 +1033,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -1066,6 +1102,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -1134,6 +1171,7 @@
       },
       {
         "correct": 1,
+        "correct_lenient": 1,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -1204,6 +1242,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -1272,6 +1311,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -1341,14 +1381,15 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": 1.0,
         "partial_credit_runs": 3,
         "limits_hit": 0,
         "tool_calls": {
-          "median": 3,
-          "min": 3,
-          "max": 5
+          "median": 1,
+          "min": 1,
+          "max": 3
         },
         "tool_errors": {
           "median": 0,
@@ -1356,51 +1397,51 @@
           "max": 0
         },
         "turns": {
-          "median": 5,
-          "min": 5,
-          "max": 7
+          "median": 3,
+          "min": 3,
+          "max": 5
         },
         "input_tokens": {
-          "median": 10,
-          "min": 10,
+          "median": 8,
+          "min": 8,
           "max": 10
         },
         "output_tokens": {
-          "median": 739,
-          "min": 587,
-          "max": 984
+          "median": 338,
+          "min": 329,
+          "max": 620
         },
         "cache_read_tokens": {
-          "median": 17123,
-          "min": 17123,
-          "max": 17123
+          "median": 9991,
+          "min": 9010,
+          "max": 17150
         },
         "cache_write_tokens": {
-          "median": 10456,
-          "min": 10363,
-          "max": 27175
+          "median": 7159,
+          "min": 6178,
+          "max": 10400
         },
         "wall_ms": {
-          "median": 11646,
-          "min": 9605,
-          "max": 14665
+          "median": 8764,
+          "min": 7977,
+          "max": 13138
         },
         "failures": {},
         "answer_extraction": {
           "exact": 3
         },
         "totals": {
-          "tool_calls": 11,
+          "tool_calls": 5,
           "tool_errors": 0,
           "truncated_results": 0,
           "tool_search_calls": 3,
           "rejected_calls": 0,
-          "input_tokens": 30,
-          "output_tokens": 2310,
-          "cache_read_tokens": 51369,
-          "cache_write_tokens": 47994,
-          "wall_ms": 35916,
-          "cost_usd": 0.2202729
+          "input_tokens": 26,
+          "output_tokens": 1287,
+          "cache_read_tokens": 36151,
+          "cache_write_tokens": 23737,
+          "wall_ms": 29879,
+          "cost_usd": 0.11148510000000002
         },
         "task_id": "library-diff-x64-so",
         "server": "rampage",
@@ -1408,69 +1449,69 @@
         "category": "diffing"
       },
       {
-        "correct": 2,
+        "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
-        "partial_credit_mean": 0.917,
+        "partial_credit_mean": 1.0,
         "partial_credit_runs": 3,
         "limits_hit": 0,
         "tool_calls": {
-          "median": 12,
-          "min": 9,
-          "max": 24
+          "median": 24,
+          "min": 20,
+          "max": 29
         },
         "tool_errors": {
           "median": 2,
-          "min": 0,
-          "max": 3
+          "min": 1,
+          "max": 2
         },
         "turns": {
-          "median": 17,
-          "min": 14,
-          "max": 28
+          "median": 29,
+          "min": 23,
+          "max": 33
         },
         "input_tokens": {
           "median": 30,
-          "min": 28,
-          "max": 30
+          "min": 22,
+          "max": 32
         },
         "output_tokens": {
-          "median": 2119,
-          "min": 1865,
-          "max": 2758
+          "median": 2886,
+          "min": 2277,
+          "max": 3240
         },
         "cache_read_tokens": {
-          "median": 175850,
-          "min": 162903,
-          "max": 232819
+          "median": 223521,
+          "min": 141014,
+          "max": 246035
         },
         "cache_write_tokens": {
-          "median": 39798,
-          "min": 36693,
-          "max": 52069
+          "median": 54001,
+          "min": 48178,
+          "max": 64659
         },
         "wall_ms": {
-          "median": 46203,
-          "min": 41858,
-          "max": 53789
+          "median": 101753,
+          "min": 89888,
+          "max": 153526
         },
-        "failures": {
-          "wrong_answer": 1
-        },
+        "failures": {},
         "answer_extraction": {
-          "exact": 3
+          "exact": 2,
+          "trailing": 1
         },
         "totals": {
-          "tool_calls": 45,
+          "tool_calls": 73,
           "tool_errors": 5,
-          "truncated_results": 0,
-          "tool_search_calls": 11,
+          "truncated_results": 4,
+          "tool_search_calls": 9,
           "rejected_calls": 0,
-          "input_tokens": 88,
-          "output_tokens": 6742,
-          "cache_read_tokens": 571572,
-          "cache_write_tokens": 128560,
-          "wall_ms": 141850,
-          "cost_usd": 0.6389932
+          "input_tokens": 84,
+          "output_tokens": 8403,
+          "cache_read_tokens": 610570,
+          "cache_write_tokens": 166838,
+          "wall_ms": 345167,
+          "cost_usd": 0.8126070000000001
         },
         "task_id": "library-diff-x64-so",
         "server": "rea",
@@ -1479,6 +1520,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -1548,6 +1590,7 @@
       },
       {
         "correct": 2,
+        "correct_lenient": 2,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -1618,6 +1661,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -1686,6 +1730,7 @@
       },
       {
         "correct": 1,
+        "correct_lenient": 1,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -1758,6 +1803,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -1826,6 +1872,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -1895,6 +1942,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": 1.0,
         "partial_credit_runs": 3,
@@ -1907,7 +1955,7 @@
         "tool_errors": {
           "median": 1,
           "min": 1,
-          "max": 2
+          "max": 1
         },
         "turns": {
           "median": 5,
@@ -1917,27 +1965,27 @@
         "input_tokens": {
           "median": 12,
           "min": 12,
-          "max": 14
+          "max": 12
         },
         "output_tokens": {
-          "median": 774,
-          "min": 743,
-          "max": 1180
+          "median": 1056,
+          "min": 815,
+          "max": 1109
         },
         "cache_read_tokens": {
-          "median": 28070,
-          "min": 28008,
-          "max": 81586
+          "median": 47404,
+          "min": 24818,
+          "max": 50389
         },
         "cache_write_tokens": {
-          "median": 35373,
-          "min": 33374,
-          "max": 35456
+          "median": 45781,
+          "min": 12666,
+          "max": 52423
         },
         "wall_ms": {
-          "median": 28694,
-          "min": 16117,
-          "max": 29060
+          "median": 23641,
+          "min": 14062,
+          "max": 32176
         },
         "failures": {},
         "answer_extraction": {
@@ -1945,16 +1993,16 @@
         },
         "totals": {
           "tool_calls": 10,
-          "tool_errors": 4,
+          "tool_errors": 3,
           "truncated_results": 0,
           "tool_search_calls": 3,
           "rejected_calls": 0,
-          "input_tokens": 38,
-          "output_tokens": 2697,
-          "cache_read_tokens": 137664,
-          "cache_write_tokens": 104203,
-          "wall_ms": 73871,
-          "cost_usd": 0.4576244
+          "input_tokens": 36,
+          "output_tokens": 2980,
+          "cache_read_tokens": 122611,
+          "cache_write_tokens": 110870,
+          "wall_ms": 69879,
+          "cost_usd": 0.4856131
         },
         "task_id": "scale-callees-x64-elf",
         "server": "rampage",
@@ -1963,66 +2011,68 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": 1.0,
         "partial_credit_runs": 3,
         "limits_hit": 0,
         "tool_calls": {
-          "median": 62,
-          "min": 49,
-          "max": 64
+          "median": 14,
+          "min": 13,
+          "max": 14
         },
         "tool_errors": {
-          "median": 6,
-          "min": 4,
-          "max": 7
+          "median": 0,
+          "min": 0,
+          "max": 0
         },
         "turns": {
-          "median": 67,
-          "min": 56,
-          "max": 71
+          "median": 17,
+          "min": 15,
+          "max": 17
         },
         "input_tokens": {
-          "median": 84,
-          "min": 72,
-          "max": 92
+          "median": 16,
+          "min": 12,
+          "max": 16
         },
         "output_tokens": {
-          "median": 25360,
-          "min": 21790,
-          "max": 26590
+          "median": 1384,
+          "min": 1179,
+          "max": 1386
         },
         "cache_read_tokens": {
-          "median": 1956442,
-          "min": 1146068,
-          "max": 2114459
+          "median": 49376,
+          "min": 37678,
+          "max": 49681
         },
         "cache_write_tokens": {
-          "median": 138105,
-          "min": 111408,
-          "max": 140147
+          "median": 29375,
+          "min": 29017,
+          "max": 36480
         },
         "wall_ms": {
-          "median": 2638879,
-          "min": 1489046,
-          "max": 2743513
+          "median": 1583666,
+          "min": 821761,
+          "max": 1615855
         },
         "failures": {},
         "answer_extraction": {
-          "exact": 3
+          "exact": 1,
+          "trailing": 2
         },
         "totals": {
-          "tool_calls": 175,
-          "tool_errors": 17,
-          "truncated_results": 1,
-          "tool_search_calls": 16,
+          "tool_calls": 41,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 5,
           "rejected_calls": 0,
-          "input_tokens": 248,
-          "output_tokens": 73740,
-          "cache_read_tokens": 5216969,
-          "cache_write_tokens": 389660,
-          "wall_ms": 6871438,
-          "cost_usd": 2.818232900000001
+          "input_tokens": 44,
+          "output_tokens": 3949,
+          "cache_read_tokens": 136735,
+          "cache_write_tokens": 94872,
+          "wall_ms": 4021282,
+          "cost_usd": 0.43273950000000005
         },
         "task_id": "scale-callees-x64-elf",
         "server": "rea",
@@ -2031,6 +2081,7 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -2038,7 +2089,7 @@
         "tool_calls": {
           "median": 2,
           "min": 2,
-          "max": 4
+          "max": 2
         },
         "tool_errors": {
           "median": 0,
@@ -2048,49 +2099,49 @@
         "turns": {
           "median": 4,
           "min": 4,
-          "max": 6
+          "max": 4
         },
         "input_tokens": {
           "median": 10,
           "min": 10,
-          "max": 12
+          "max": 10
         },
         "output_tokens": {
-          "median": 519,
-          "min": 514,
-          "max": 785
+          "median": 508,
+          "min": 503,
+          "max": 523
         },
         "cache_read_tokens": {
-          "median": 17570,
-          "min": 17570,
-          "max": 25864
+          "median": 17571,
+          "min": 17571,
+          "max": 17571
         },
         "cache_write_tokens": {
-          "median": 7313,
-          "min": 7313,
-          "max": 8570
+          "median": 7220,
+          "min": 7220,
+          "max": 7220
         },
         "wall_ms": {
-          "median": 10637,
-          "min": 10613,
-          "max": 13300
+          "median": 14611,
+          "min": 13097,
+          "max": 18667
         },
         "failures": {},
         "answer_extraction": {
           "exact": 3
         },
         "totals": {
-          "tool_calls": 8,
+          "tool_calls": 6,
           "tool_errors": 0,
           "truncated_results": 0,
           "tool_search_calls": 3,
           "rejected_calls": 0,
-          "input_tokens": 32,
-          "output_tokens": 1818,
-          "cache_read_tokens": 61004,
-          "cache_write_tokens": 23196,
-          "wall_ms": 34550,
-          "cost_usd": 0.11712840000000002
+          "input_tokens": 30,
+          "output_tokens": 1534,
+          "cache_read_tokens": 52713,
+          "cache_write_tokens": 21660,
+          "wall_ms": 46375,
+          "cost_usd": 0.1073113
         },
         "task_id": "scale-caller-count-x64-elf",
         "server": "rampage",
@@ -2098,78 +2149,8 @@
         "category": "scale"
       },
       {
-        "correct": 0,
-        "runs": 3,
-        "partial_credit_mean": null,
-        "partial_credit_runs": 0,
-        "limits_hit": 0,
-        "tool_calls": {
-          "median": 24,
-          "min": 10,
-          "max": 29
-        },
-        "tool_errors": {
-          "median": 2,
-          "min": 0,
-          "max": 3
-        },
-        "turns": {
-          "median": 26,
-          "min": 14,
-          "max": 31
-        },
-        "input_tokens": {
-          "median": 30,
-          "min": 28,
-          "max": 36
-        },
-        "output_tokens": {
-          "median": 3264,
-          "min": 1784,
-          "max": 4347
-        },
-        "cache_read_tokens": {
-          "median": 294770,
-          "min": 181393,
-          "max": 452263
-        },
-        "cache_write_tokens": {
-          "median": 53183,
-          "min": 21536,
-          "max": 62597
-        },
-        "wall_ms": {
-          "median": 1368960,
-          "min": 1265697,
-          "max": 2277258
-        },
-        "failures": {
-          "unknown": 1,
-          "wrong_answer": 2
-        },
-        "answer_extraction": {
-          "exact": 3
-        },
-        "totals": {
-          "tool_calls": 63,
-          "tool_errors": 5,
-          "truncated_results": 3,
-          "tool_search_calls": 5,
-          "rejected_calls": 0,
-          "input_tokens": 94,
-          "output_tokens": 9395,
-          "cache_read_tokens": 928426,
-          "cache_write_tokens": 137316,
-          "wall_ms": 4911915,
-          "cost_usd": 0.7362446
-        },
-        "task_id": "scale-caller-count-x64-elf",
-        "server": "rea",
-        "kind": "analysis",
-        "category": "scale"
-      },
-      {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
@@ -2177,7 +2158,7 @@
         "tool_calls": {
           "median": 4,
           "min": 4,
-          "max": 6
+          "max": 4
         },
         "tool_errors": {
           "median": 0,
@@ -2187,49 +2168,118 @@
         "turns": {
           "median": 6,
           "min": 6,
-          "max": 8
+          "max": 6
         },
         "input_tokens": {
-          "median": 14,
-          "min": 14,
-          "max": 18
+          "median": 12,
+          "min": 12,
+          "max": 12
         },
         "output_tokens": {
-          "median": 1481,
-          "min": 1138,
-          "max": 1618
+          "median": 463,
+          "min": 456,
+          "max": 515
         },
         "cache_read_tokens": {
-          "median": 45000,
-          "min": 44970,
-          "max": 70470
+          "median": 48412,
+          "min": 47454,
+          "max": 50832
         },
         "cache_write_tokens": {
-          "median": 12253,
-          "min": 11437,
-          "max": 12394
+          "median": 19171,
+          "min": 18828,
+          "max": 23631
         },
         "wall_ms": {
-          "median": 22461,
-          "min": 20428,
-          "max": 24129
+          "median": 732423,
+          "min": 727690,
+          "max": 1950857
         },
         "failures": {},
         "answer_extraction": {
           "exact": 3
         },
         "totals": {
-          "tool_calls": 14,
+          "tool_calls": 12,
           "tool_errors": 0,
           "truncated_results": 0,
           "tool_search_calls": 3,
           "rejected_calls": 0,
-          "input_tokens": 46,
-          "output_tokens": 4237,
-          "cache_read_tokens": 160440,
-          "cache_write_tokens": 36084,
-          "wall_ms": 67018,
-          "cost_usd": 0.20284200000000002
+          "input_tokens": 36,
+          "output_tokens": 1434,
+          "cache_read_tokens": 146698,
+          "cache_write_tokens": 61630,
+          "wall_ms": 3410970,
+          "cost_usd": 0.2756018
+        },
+        "task_id": "scale-caller-count-x64-elf",
+        "server": "rea",
+        "kind": "analysis",
+        "category": "scale"
+      },
+      {
+        "correct": 3,
+        "correct_lenient": 3,
+        "runs": 3,
+        "partial_credit_mean": null,
+        "partial_credit_runs": 0,
+        "limits_hit": 0,
+        "tool_calls": {
+          "median": 5,
+          "min": 5,
+          "max": 6
+        },
+        "tool_errors": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "turns": {
+          "median": 7,
+          "min": 7,
+          "max": 8
+        },
+        "input_tokens": {
+          "median": 16,
+          "min": 16,
+          "max": 18
+        },
+        "output_tokens": {
+          "median": 1037,
+          "min": 1025,
+          "max": 1159
+        },
+        "cache_read_tokens": {
+          "median": 59019,
+          "min": 58982,
+          "max": 72276
+        },
+        "cache_write_tokens": {
+          "median": 12391,
+          "min": 12348,
+          "max": 12573
+        },
+        "wall_ms": {
+          "median": 20063,
+          "min": 17844,
+          "max": 30421
+        },
+        "failures": {},
+        "answer_extraction": {
+          "exact": 3
+        },
+        "totals": {
+          "tool_calls": 16,
+          "tool_errors": 0,
+          "truncated_results": 0,
+          "tool_search_calls": 3,
+          "rejected_calls": 0,
+          "input_tokens": 50,
+          "output_tokens": 3221,
+          "cache_read_tokens": 190277,
+          "cache_write_tokens": 37312,
+          "wall_ms": 68328,
+          "cost_usd": 0.2005857
         },
         "task_id": "scale-string-function-x64-elf",
         "server": "rampage",
@@ -2238,14 +2288,15 @@
       },
       {
         "correct": 3,
+        "correct_lenient": 3,
         "runs": 3,
         "partial_credit_mean": null,
         "partial_credit_runs": 0,
         "limits_hit": 0,
         "tool_calls": {
-          "median": 13,
-          "min": 13,
-          "max": 18
+          "median": 6,
+          "min": 6,
+          "max": 6
         },
         "tool_errors": {
           "median": 0,
@@ -2253,51 +2304,51 @@
           "max": 0
         },
         "turns": {
-          "median": 18,
-          "min": 18,
-          "max": 21
+          "median": 9,
+          "min": 9,
+          "max": 9
         },
         "input_tokens": {
-          "median": 40,
-          "min": 38,
-          "max": 42
+          "median": 20,
+          "min": 20,
+          "max": 20
         },
         "output_tokens": {
-          "median": 3771,
-          "min": 3766,
-          "max": 5254
+          "median": 1190,
+          "min": 1039,
+          "max": 1205
         },
         "cache_read_tokens": {
-          "median": 333624,
-          "min": 304078,
-          "max": 437269
+          "median": 86984,
+          "min": 86442,
+          "max": 93366
         },
         "cache_write_tokens": {
-          "median": 35624,
-          "min": 35443,
-          "max": 44519
+          "median": 18127,
+          "min": 18115,
+          "max": 19996
         },
         "wall_ms": {
-          "median": 2158364,
-          "min": 1278231,
-          "max": 2263885
+          "median": 738438,
+          "min": 734144,
+          "max": 2029196
         },
         "failures": {},
         "answer_extraction": {
           "exact": 3
         },
         "totals": {
-          "tool_calls": 44,
+          "tool_calls": 18,
           "tool_errors": 0,
-          "truncated_results": 0,
-          "tool_search_calls": 10,
+          "truncated_results": 3,
+          "tool_search_calls": 6,
           "rejected_calls": 0,
-          "input_tokens": 120,
-          "output_tokens": 12791,
-          "cache_read_tokens": 1074971,
-          "cache_write_tokens": 115586,
-          "wall_ms": 5700480,
-          "cost_usd": 0.6979911000000001
+          "input_tokens": 60,
+          "output_tokens": 3434,
+          "cache_read_tokens": 266792,
+          "cache_write_tokens": 56238,
+          "wall_ms": 3501778,
+          "cost_usd": 0.2860912
         },
         "task_id": "scale-string-function-x64-elf",
         "server": "rea",
@@ -2309,6 +2360,7 @@
       "rampage": {
         "analysis": {
           "correct": 44,
+          "correct_lenient": 45,
           "runs": 45,
           "partial_credit_mean": 1.0,
           "partial_credit_runs": 12,
@@ -2324,7 +2376,7 @@
             "max": 9
           },
           "turns": {
-            "median": 6,
+            "median": 5,
             "min": 3,
             "max": 14
           },
@@ -2339,19 +2391,19 @@
             "max": 2564
           },
           "cache_read_tokens": {
-            "median": 29539,
-            "min": 9479,
+            "median": 29552,
+            "min": 9010,
             "max": 189675
           },
           "cache_write_tokens": {
-            "median": 15518,
-            "min": 7313,
+            "median": 13009,
+            "min": 6178,
             "max": 57488
           },
           "wall_ms": {
-            "median": 12907,
+            "median": 13097,
             "min": 5849,
-            "max": 31087
+            "max": 32176
           },
           "failures": {
             "wrong_answer": 1
@@ -2361,21 +2413,22 @@
             "trailing": 2
           },
           "totals": {
-            "tool_calls": 196,
-            "tool_errors": 41,
+            "tool_calls": 190,
+            "tool_errors": 40,
             "truncated_results": 0,
             "tool_search_calls": 48,
             "rejected_calls": 0,
-            "input_tokens": 564,
-            "output_tokens": 41826,
-            "cache_read_tokens": 1745208,
-            "cache_write_tokens": 782281,
-            "wall_ms": 665456,
-            "cost_usd": 3.7230328000000004
+            "input_tokens": 560,
+            "output_tokens": 39786,
+            "cache_read_tokens": 1736483,
+            "cache_write_tokens": 764383,
+            "wall_ms": 668562,
+            "cost_usd": 3.630160300000001
           }
         },
         "capability_probes": {
           "correct": 0,
+          "correct_lenient": 0,
           "runs": 0,
           "partial_credit_mean": null,
           "partial_credit_runs": 0,
@@ -2407,76 +2460,77 @@
       },
       "rea": {
         "analysis": {
-          "correct": 34,
+          "correct": 38,
+          "correct_lenient": 39,
           "runs": 45,
-          "partial_credit_mean": 0.979,
+          "partial_credit_mean": 1.0,
           "partial_credit_runs": 12,
           "limits_hit": 0,
           "tool_calls": {
-            "median": 8,
+            "median": 6,
             "min": 2,
-            "max": 64
+            "max": 29
           },
           "tool_errors": {
             "median": 0,
             "min": 0,
-            "max": 7
+            "max": 4
           },
           "turns": {
-            "median": 10,
+            "median": 9,
             "min": 4,
-            "max": 71
+            "max": 33
           },
           "input_tokens": {
             "median": 16,
             "min": 8,
-            "max": 92
+            "max": 38
           },
           "output_tokens": {
-            "median": 1824,
+            "median": 1099,
             "min": 406,
-            "max": 26590
+            "max": 5002
           },
           "cache_read_tokens": {
-            "median": 62987,
+            "median": 56444,
             "min": 15750,
-            "max": 2114459
+            "max": 384169
           },
           "cache_write_tokens": {
-            "median": 21536,
+            "median": 19886,
             "min": 9919,
-            "max": 140147
+            "max": 64659
           },
           "wall_ms": {
-            "median": 44072,
+            "median": 44413,
             "min": 17106,
-            "max": 2743513
+            "max": 2029196
           },
           "failures": {
             "runner_error": 2,
-            "unknown": 1,
-            "wrong_answer": 8
+            "wrong_answer": 5
           },
           "answer_extraction": {
-            "exact": 40,
-            "trailing": 3
+            "exact": 37,
+            "trailing": 6
           },
           "totals": {
-            "tool_calls": 565,
-            "tool_errors": 52,
-            "truncated_results": 8,
-            "tool_search_calls": 83,
+            "tool_calls": 382,
+            "tool_errors": 30,
+            "truncated_results": 11,
+            "tool_search_calls": 64,
             "rejected_calls": 0,
-            "input_tokens": 1070,
-            "output_tokens": 157283,
-            "cache_read_tokens": 10396005,
-            "cache_write_tokens": 1495816,
-            "wall_ms": 18772020,
-            "cost_usd": 8.654264300000003
+            "input_tokens": 744,
+            "output_tokens": 71835,
+            "cache_read_tokens": 3764862,
+            "cache_write_tokens": 1104272,
+            "wall_ms": 12425534,
+            "cost_usd": 5.569842
           }
         },
         "capability_probes": {
           "correct": 0,
+          "correct_lenient": 0,
           "runs": 0,
           "partial_credit_mean": null,
           "partial_credit_runs": 0,
@@ -2511,6 +2565,7 @@
       "cpp": {
         "rampage": {
           "correct": 11,
+          "correct_lenient": 12,
           "runs": 12,
           "partial_credit_mean": 1.0,
           "partial_credit_runs": 6,
@@ -2577,6 +2632,7 @@
         },
         "rea": {
           "correct": 10,
+          "correct_lenient": 11,
           "runs": 12,
           "partial_credit_mean": 1.0,
           "partial_credit_runs": 6,
@@ -2646,14 +2702,15 @@
       "diffing": {
         "rampage": {
           "correct": 3,
+          "correct_lenient": 3,
           "runs": 3,
           "partial_credit_mean": 1.0,
           "partial_credit_runs": 3,
           "limits_hit": 0,
           "tool_calls": {
-            "median": 3,
-            "min": 3,
-            "max": 5
+            "median": 1,
+            "min": 1,
+            "max": 3
           },
           "tool_errors": {
             "median": 0,
@@ -2661,123 +2718,124 @@
             "max": 0
           },
           "turns": {
-            "median": 5,
-            "min": 5,
-            "max": 7
+            "median": 3,
+            "min": 3,
+            "max": 5
           },
           "input_tokens": {
-            "median": 10,
-            "min": 10,
+            "median": 8,
+            "min": 8,
             "max": 10
           },
           "output_tokens": {
-            "median": 739,
-            "min": 587,
-            "max": 984
+            "median": 338,
+            "min": 329,
+            "max": 620
           },
           "cache_read_tokens": {
-            "median": 17123,
-            "min": 17123,
-            "max": 17123
+            "median": 9991,
+            "min": 9010,
+            "max": 17150
           },
           "cache_write_tokens": {
-            "median": 10456,
-            "min": 10363,
-            "max": 27175
+            "median": 7159,
+            "min": 6178,
+            "max": 10400
           },
           "wall_ms": {
-            "median": 11646,
-            "min": 9605,
-            "max": 14665
+            "median": 8764,
+            "min": 7977,
+            "max": 13138
           },
           "failures": {},
           "answer_extraction": {
             "exact": 3
           },
           "totals": {
-            "tool_calls": 11,
+            "tool_calls": 5,
             "tool_errors": 0,
             "truncated_results": 0,
             "tool_search_calls": 3,
             "rejected_calls": 0,
-            "input_tokens": 30,
-            "output_tokens": 2310,
-            "cache_read_tokens": 51369,
-            "cache_write_tokens": 47994,
-            "wall_ms": 35916,
-            "cost_usd": 0.2202729
+            "input_tokens": 26,
+            "output_tokens": 1287,
+            "cache_read_tokens": 36151,
+            "cache_write_tokens": 23737,
+            "wall_ms": 29879,
+            "cost_usd": 0.11148510000000002
           }
         },
         "rea": {
-          "correct": 2,
+          "correct": 3,
+          "correct_lenient": 3,
           "runs": 3,
-          "partial_credit_mean": 0.917,
+          "partial_credit_mean": 1.0,
           "partial_credit_runs": 3,
           "limits_hit": 0,
           "tool_calls": {
-            "median": 12,
-            "min": 9,
-            "max": 24
+            "median": 24,
+            "min": 20,
+            "max": 29
           },
           "tool_errors": {
             "median": 2,
-            "min": 0,
-            "max": 3
+            "min": 1,
+            "max": 2
           },
           "turns": {
-            "median": 17,
-            "min": 14,
-            "max": 28
+            "median": 29,
+            "min": 23,
+            "max": 33
           },
           "input_tokens": {
             "median": 30,
-            "min": 28,
-            "max": 30
+            "min": 22,
+            "max": 32
           },
           "output_tokens": {
-            "median": 2119,
-            "min": 1865,
-            "max": 2758
+            "median": 2886,
+            "min": 2277,
+            "max": 3240
           },
           "cache_read_tokens": {
-            "median": 175850,
-            "min": 162903,
-            "max": 232819
+            "median": 223521,
+            "min": 141014,
+            "max": 246035
           },
           "cache_write_tokens": {
-            "median": 39798,
-            "min": 36693,
-            "max": 52069
+            "median": 54001,
+            "min": 48178,
+            "max": 64659
           },
           "wall_ms": {
-            "median": 46203,
-            "min": 41858,
-            "max": 53789
+            "median": 101753,
+            "min": 89888,
+            "max": 153526
           },
-          "failures": {
-            "wrong_answer": 1
-          },
+          "failures": {},
           "answer_extraction": {
-            "exact": 3
+            "exact": 2,
+            "trailing": 1
           },
           "totals": {
-            "tool_calls": 45,
+            "tool_calls": 73,
             "tool_errors": 5,
-            "truncated_results": 0,
-            "tool_search_calls": 11,
+            "truncated_results": 4,
+            "tool_search_calls": 9,
             "rejected_calls": 0,
-            "input_tokens": 88,
-            "output_tokens": 6742,
-            "cache_read_tokens": 571572,
-            "cache_write_tokens": 128560,
-            "wall_ms": 141850,
-            "cost_usd": 0.6389932
+            "input_tokens": 84,
+            "output_tokens": 8403,
+            "cache_read_tokens": 610570,
+            "cache_write_tokens": 166838,
+            "wall_ms": 345167,
+            "cost_usd": 0.8126070000000001
           }
         }
       },
       "firmware": {
         "rampage": {
           "correct": 3,
+          "correct_lenient": 3,
           "runs": 3,
           "partial_credit_mean": null,
           "partial_credit_runs": 0,
@@ -2842,6 +2900,7 @@
         },
         "rea": {
           "correct": 1,
+          "correct_lenient": 1,
           "runs": 3,
           "partial_credit_mean": null,
           "partial_credit_runs": 0,
@@ -2910,6 +2969,7 @@
       "investigation": {
         "rampage": {
           "correct": 12,
+          "correct_lenient": 12,
           "runs": 12,
           "partial_credit_mean": null,
           "partial_credit_runs": 0,
@@ -2975,6 +3035,7 @@
         },
         "rea": {
           "correct": 11,
+          "correct_lenient": 11,
           "runs": 12,
           "partial_credit_mean": null,
           "partial_credit_runs": 0,
@@ -3044,22 +3105,23 @@
       "scale": {
         "rampage": {
           "correct": 9,
+          "correct_lenient": 9,
           "runs": 9,
           "partial_credit_mean": 1.0,
           "partial_credit_runs": 3,
           "limits_hit": 0,
           "tool_calls": {
-            "median": 4,
+            "median": 3,
             "min": 2,
             "max": 6
           },
           "tool_errors": {
             "median": 0,
             "min": 0,
-            "max": 2
+            "max": 1
           },
           "turns": {
-            "median": 6,
+            "median": 5,
             "min": 4,
             "max": 8
           },
@@ -3069,24 +3131,24 @@
             "max": 18
           },
           "output_tokens": {
-            "median": 785,
-            "min": 514,
-            "max": 1618
+            "median": 1025,
+            "min": 503,
+            "max": 1159
           },
           "cache_read_tokens": {
-            "median": 28070,
-            "min": 17570,
-            "max": 81586
+            "median": 47404,
+            "min": 17571,
+            "max": 72276
           },
           "cache_write_tokens": {
-            "median": 12253,
-            "min": 7313,
-            "max": 35456
+            "median": 12391,
+            "min": 7220,
+            "max": 52423
           },
           "wall_ms": {
-            "median": 20428,
-            "min": 10613,
-            "max": 29060
+            "median": 18667,
+            "min": 13097,
+            "max": 32176
           },
           "failures": {},
           "answer_extraction": {
@@ -3094,89 +3156,89 @@
           },
           "totals": {
             "tool_calls": 32,
-            "tool_errors": 4,
+            "tool_errors": 3,
             "truncated_results": 0,
             "tool_search_calls": 9,
             "rejected_calls": 0,
             "input_tokens": 116,
-            "output_tokens": 8752,
-            "cache_read_tokens": 359108,
-            "cache_write_tokens": 163483,
-            "wall_ms": 175439,
-            "cost_usd": 0.7775948
+            "output_tokens": 7735,
+            "cache_read_tokens": 365601,
+            "cache_write_tokens": 169842,
+            "wall_ms": 184582,
+            "cost_usd": 0.7935101
           }
         },
         "rea": {
-          "correct": 6,
+          "correct": 9,
+          "correct_lenient": 9,
           "runs": 9,
           "partial_credit_mean": 1.0,
           "partial_credit_runs": 3,
           "limits_hit": 0,
           "tool_calls": {
-            "median": 24,
-            "min": 10,
-            "max": 64
+            "median": 6,
+            "min": 4,
+            "max": 14
           },
           "tool_errors": {
-            "median": 2,
+            "median": 0,
             "min": 0,
-            "max": 7
+            "max": 0
           },
           "turns": {
-            "median": 26,
-            "min": 14,
-            "max": 71
+            "median": 9,
+            "min": 6,
+            "max": 17
           },
           "input_tokens": {
-            "median": 40,
-            "min": 28,
-            "max": 92
+            "median": 16,
+            "min": 12,
+            "max": 20
           },
           "output_tokens": {
-            "median": 4347,
-            "min": 1784,
-            "max": 26590
+            "median": 1179,
+            "min": 456,
+            "max": 1386
           },
           "cache_read_tokens": {
-            "median": 437269,
-            "min": 181393,
-            "max": 2114459
+            "median": 49681,
+            "min": 37678,
+            "max": 93366
           },
           "cache_write_tokens": {
-            "median": 53183,
-            "min": 21536,
-            "max": 140147
+            "median": 19996,
+            "min": 18115,
+            "max": 36480
           },
           "wall_ms": {
-            "median": 2158364,
-            "min": 1265697,
-            "max": 2743513
+            "median": 821761,
+            "min": 727690,
+            "max": 2029196
           },
-          "failures": {
-            "unknown": 1,
-            "wrong_answer": 2
-          },
+          "failures": {},
           "answer_extraction": {
-            "exact": 9
+            "exact": 7,
+            "trailing": 2
           },
           "totals": {
-            "tool_calls": 282,
-            "tool_errors": 22,
-            "truncated_results": 4,
-            "tool_search_calls": 31,
+            "tool_calls": 71,
+            "tool_errors": 0,
+            "truncated_results": 3,
+            "tool_search_calls": 14,
             "rejected_calls": 0,
-            "input_tokens": 462,
-            "output_tokens": 95926,
-            "cache_read_tokens": 7220366,
-            "cache_write_tokens": 642562,
-            "wall_ms": 17483833,
-            "cost_usd": 4.2524686
+            "input_tokens": 140,
+            "output_tokens": 8817,
+            "cache_read_tokens": 550225,
+            "cache_write_tokens": 212740,
+            "wall_ms": 10934030,
+            "cost_usd": 0.9944325
           }
         }
       },
       "typing": {
         "rampage": {
           "correct": 6,
+          "correct_lenient": 6,
           "runs": 6,
           "partial_credit_mean": null,
           "partial_credit_runs": 0,
@@ -3241,6 +3303,7 @@
         },
         "rea": {
           "correct": 4,
+          "correct_lenient": 4,
           "runs": 6,
           "partial_credit_mean": null,
           "partial_credit_runs": 0,
@@ -3321,6 +3384,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 8,
       "tool_errors": 0,
@@ -3355,6 +3419,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 5,
       "tool_errors": 1,
@@ -3389,6 +3454,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 8,
       "tool_errors": 2,
@@ -3423,6 +3489,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 5,
       "tool_errors": 0,
@@ -3457,6 +3524,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 1,
       "tool_errors": 0,
@@ -3491,6 +3559,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 11,
       "tool_errors": 0,
@@ -3525,6 +3594,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 4,
       "tool_errors": 1,
@@ -3559,6 +3629,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 12,
       "tool_errors": 2,
@@ -3593,6 +3664,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 1,
@@ -3627,6 +3699,7 @@
       "outcome": "answer_mismatch",
       "failure": "wrong_answer",
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 7,
       "tool_errors": 0,
@@ -3661,6 +3734,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 1,
       "tool_errors": 0,
@@ -3695,6 +3769,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 2,
       "tool_errors": 0,
@@ -3729,6 +3804,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 12,
       "tool_errors": 9,
@@ -3763,6 +3839,7 @@
       "outcome": "answer_mismatch",
       "failure": "wrong_answer",
       "partial": null,
+      "lenient": false,
       "extraction": "exact",
       "tool_calls": 6,
       "tool_errors": 2,
@@ -3797,6 +3874,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 0,
@@ -3831,6 +3909,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 6,
       "tool_errors": 0,
@@ -3865,22 +3944,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
-      "tool_calls": 3,
+      "tool_calls": 1,
       "tool_errors": 0,
       "truncated_results": 0,
       "tool_search_calls": 1,
       "rejected_calls": 0,
       "position": 0,
-      "turns": 5,
+      "turns": 3,
       "usage": {
-        "input": 10,
-        "output": 587,
-        "cache_read": 17123,
-        "cache_write": 10363
+        "input": 8,
+        "output": 338,
+        "cache_read": 9010,
+        "cache_write": 7159
       },
-      "cost_usd": 0.049054299999999995,
-      "wall_ms": 9605,
+      "cost_usd": 0.032933000000000004,
+      "wall_ms": 7977,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -3899,22 +3979,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 24,
       "tool_errors": 2,
-      "truncated_results": 0,
-      "tool_search_calls": 3,
+      "truncated_results": 2,
+      "tool_search_calls": 4,
       "rejected_calls": 0,
       "position": 1,
-      "turns": 28,
+      "turns": 29,
       "usage": {
-        "input": 28,
-        "output": 2758,
-        "cache_read": 232819,
-        "cache_write": 52069
+        "input": 32,
+        "output": 2886,
+        "cache_read": 223521,
+        "cache_write": 54001
       },
-      "cost_usd": 0.25919390000000003,
-      "wall_ms": 53789,
+      "cost_usd": 0.2672801,
+      "wall_ms": 101753,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -3933,6 +4014,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 8,
       "tool_errors": 2,
@@ -3967,6 +4049,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 13,
       "tool_errors": 4,
@@ -4001,6 +4084,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 1,
       "tool_errors": 0,
@@ -4035,6 +4119,7 @@
       "outcome": "failed",
       "failure": "runner_error",
       "partial": null,
+      "lenient": false,
       "extraction": null,
       "tool_calls": 7,
       "tool_errors": 0,
@@ -4069,6 +4154,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 5,
       "tool_errors": 0,
@@ -4103,6 +4189,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 4,
       "tool_errors": 0,
@@ -4137,6 +4224,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 1,
@@ -4147,12 +4235,12 @@
       "turns": 5,
       "usage": {
         "input": 12,
-        "output": 743,
-        "cache_read": 28008,
-        "cache_write": 35373
+        "output": 1056,
+        "cache_read": 50389,
+        "cache_write": 52423
       },
-      "cost_usd": 0.15174680000000002,
-      "wall_ms": 29060,
+      "cost_usd": 0.2253149,
+      "wall_ms": 32176,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -4171,22 +4259,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
-      "extraction": "exact",
-      "tool_calls": 62,
-      "tool_errors": 4,
-      "truncated_results": 1,
-      "tool_search_calls": 4,
+      "lenient": true,
+      "extraction": "trailing",
+      "tool_calls": 14,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
       "rejected_calls": 0,
       "position": 1,
-      "turns": 67,
+      "turns": 17,
       "usage": {
-        "input": 84,
-        "output": 26590,
-        "cache_read": 2114459,
-        "cache_write": 140147
+        "input": 16,
+        "output": 1386,
+        "cache_read": 49681,
+        "cache_write": 29375
       },
-      "cost_usd": 1.0381019000000002,
-      "wall_ms": 1489046,
+      "cost_usd": 0.1363601,
+      "wall_ms": 1615855,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -4205,56 +4294,58 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 508,
+        "cache_read": 17571,
+        "cache_write": 7220
+      },
+      "cost_usd": 0.0357371,
+      "wall_ms": 18667,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      }
+    },
+    {
+      "task_id": "scale-caller-count-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 4,
       "tool_errors": 0,
       "truncated_results": 0,
       "tool_search_calls": 1,
       "rejected_calls": 0,
-      "position": 0,
+      "position": 1,
       "turns": 6,
       "usage": {
         "input": 12,
-        "output": 785,
-        "cache_read": 25864,
-        "cache_write": 8570
+        "output": 515,
+        "cache_read": 50832,
+        "cache_write": 23631
       },
-      "cost_usd": 0.04474040000000001,
-      "wall_ms": 13300,
-      "runner_exit": "ok",
-      "runner_error": null,
-      "runner": {
-        "name": "claude-code",
-        "version": "2.1.318",
-        "model": "claude-sonnet-5-5",
-        "isolation": "setting-sources-none"
-      }
-    },
-    {
-      "task_id": "scale-caller-count-x64-elf",
-      "kind": "analysis",
-      "category": "scale",
-      "server": "rea",
-      "repetition": 1,
-      "outcome": "unknown",
-      "failure": "unknown",
-      "partial": null,
-      "extraction": "exact",
-      "tool_calls": 10,
-      "tool_errors": 3,
-      "truncated_results": 1,
-      "tool_search_calls": 3,
-      "rejected_calls": 0,
-      "position": 1,
-      "turns": 14,
-      "usage": {
-        "input": 28,
-        "output": 1784,
-        "cache_read": 181393,
-        "cache_write": 21536
-      },
-      "cost_usd": 0.12217929999999998,
-      "wall_ms": 2277258,
+      "cost_usd": 0.1047812,
+      "wall_ms": 727690,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -4273,22 +4364,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
-      "tool_calls": 4,
+      "tool_calls": 6,
       "tool_errors": 0,
       "truncated_results": 0,
       "tool_search_calls": 1,
       "rejected_calls": 0,
       "position": 0,
-      "turns": 6,
+      "turns": 8,
       "usage": {
-        "input": 14,
-        "output": 1618,
-        "cache_read": 44970,
-        "cache_write": 12253
+        "input": 18,
+        "output": 1159,
+        "cache_read": 72276,
+        "cache_write": 12573
       },
-      "cost_usd": 0.069717,
-      "wall_ms": 22461,
+      "cost_usd": 0.0691456,
+      "wall_ms": 30421,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -4307,22 +4399,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
-      "tool_calls": 13,
+      "tool_calls": 6,
       "tool_errors": 0,
-      "truncated_results": 0,
-      "tool_search_calls": 4,
+      "truncated_results": 1,
+      "tool_search_calls": 2,
       "rejected_calls": 0,
       "position": 1,
-      "turns": 18,
+      "turns": 9,
       "usage": {
-        "input": 38,
-        "output": 3771,
-        "cache_read": 304078,
-        "cache_write": 35443
+        "input": 20,
+        "output": 1190,
+        "cache_read": 93366,
+        "cache_write": 19996
       },
-      "cost_usd": 0.2099658,
-      "wall_ms": 2263885,
+      "cost_usd": 0.1012606,
+      "wall_ms": 2029196,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -4341,6 +4434,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 6,
       "tool_errors": 1,
@@ -4375,6 +4469,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 7,
       "tool_errors": 0,
@@ -4409,6 +4504,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 9,
       "tool_errors": 0,
@@ -4443,6 +4539,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 11,
       "tool_errors": 4,
@@ -4477,6 +4574,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 12,
       "tool_errors": 1,
@@ -4511,6 +4609,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 1,
       "tool_errors": 0,
@@ -4545,6 +4644,7 @@
       "outcome": "failed",
       "failure": "runner_error",
       "partial": null,
+      "lenient": false,
       "extraction": null,
       "tool_calls": 16,
       "tool_errors": 3,
@@ -4579,6 +4679,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 4,
       "tool_errors": 1,
@@ -4613,6 +4714,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 0,
@@ -4647,6 +4749,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 0,
@@ -4681,6 +4784,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 0,
@@ -4715,6 +4819,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 1,
       "tool_errors": 0,
@@ -4749,6 +4854,7 @@
       "outcome": "answer_mismatch",
       "failure": "wrong_answer",
       "partial": null,
+      "lenient": false,
       "extraction": "exact",
       "tool_calls": 6,
       "tool_errors": 2,
@@ -4783,6 +4889,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 6,
       "tool_errors": 4,
@@ -4817,6 +4924,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 6,
       "tool_errors": 0,
@@ -4851,6 +4959,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 0,
@@ -4882,25 +4991,26 @@
       "category": "diffing",
       "server": "rea",
       "repetition": 2,
-      "outcome": "answer_mismatch",
-      "failure": "wrong_answer",
-      "partial": 0.75,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
-      "tool_calls": 9,
-      "tool_errors": 0,
+      "tool_calls": 20,
+      "tool_errors": 2,
       "truncated_results": 0,
-      "tool_search_calls": 4,
+      "tool_search_calls": 2,
       "rejected_calls": 0,
       "position": 0,
-      "turns": 14,
+      "turns": 23,
       "usage": {
-        "input": 30,
-        "output": 1865,
-        "cache_read": 162903,
-        "cache_write": 36693
+        "input": 22,
+        "output": 2277,
+        "cache_read": 141014,
+        "cache_write": 48178
       },
-      "cost_usd": 0.18177230000000005,
-      "wall_ms": 46203,
+      "cost_usd": 0.2296274,
+      "wall_ms": 89888,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -4919,22 +5029,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
-      "tool_calls": 5,
+      "tool_calls": 3,
       "tool_errors": 0,
       "truncated_results": 0,
       "tool_search_calls": 1,
       "rejected_calls": 0,
       "position": 1,
-      "turns": 7,
+      "turns": 5,
       "usage": {
         "input": 10,
-        "output": 984,
-        "cache_read": 17123,
-        "cache_write": 27175
+        "output": 620,
+        "cache_read": 17150,
+        "cache_write": 10400
       },
-      "cost_usd": 0.1202723,
-      "wall_ms": 11646,
+      "cost_usd": 0.049535,
+      "wall_ms": 13138,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -4953,6 +5064,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 17,
       "tool_errors": 4,
@@ -4987,6 +5099,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "trailing",
       "tool_calls": 5,
       "tool_errors": 0,
@@ -5021,6 +5134,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 7,
       "tool_errors": 0,
@@ -5055,6 +5169,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 0,
@@ -5089,6 +5204,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "trailing",
       "tool_calls": 6,
       "tool_errors": 0,
@@ -5123,6 +5239,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 0,
@@ -5157,22 +5274,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
-      "extraction": "exact",
-      "tool_calls": 49,
-      "tool_errors": 6,
+      "lenient": true,
+      "extraction": "trailing",
+      "tool_calls": 14,
+      "tool_errors": 0,
       "truncated_results": 0,
-      "tool_search_calls": 6,
+      "tool_search_calls": 2,
       "rejected_calls": 0,
       "position": 0,
-      "turns": 56,
+      "turns": 17,
       "usage": {
-        "input": 72,
-        "output": 21790,
-        "cache_read": 1146068,
-        "cache_write": 111408
+        "input": 16,
+        "output": 1384,
+        "cache_read": 49376,
+        "cache_write": 29017
       },
-      "cost_usd": 0.7782828000000002,
-      "wall_ms": 2638879,
+      "cost_usd": 0.1348776,
+      "wall_ms": 1583666,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -5191,6 +5309,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 4,
       "tool_errors": 1,
@@ -5200,13 +5319,13 @@
       "position": 1,
       "turns": 6,
       "usage": {
-        "input": 14,
-        "output": 1180,
-        "cache_read": 81586,
-        "cache_write": 33374
+        "input": 12,
+        "output": 1109,
+        "cache_read": 47404,
+        "cache_write": 45781
       },
-      "cost_usd": 0.1534826,
-      "wall_ms": 16117,
+      "cost_usd": 0.19897840000000003,
+      "wall_ms": 23641,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -5222,25 +5341,26 @@
       "category": "scale",
       "server": "rea",
       "repetition": 2,
-      "outcome": "answer_mismatch",
-      "failure": "wrong_answer",
+      "outcome": "answer_matches",
+      "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
-      "tool_calls": 24,
+      "tool_calls": 4,
       "tool_errors": 0,
-      "truncated_results": 1,
+      "truncated_results": 0,
       "tool_search_calls": 1,
       "rejected_calls": 0,
       "position": 0,
-      "turns": 26,
+      "turns": 6,
       "usage": {
-        "input": 30,
-        "output": 3264,
-        "cache_read": 294770,
-        "cache_write": 53183
+        "input": 12,
+        "output": 463,
+        "cache_read": 48412,
+        "cache_write": 19171
       },
-      "cost_usd": 0.274909,
-      "wall_ms": 1265697,
+      "cost_usd": 0.0861792,
+      "wall_ms": 1950857,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -5259,6 +5379,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 2,
       "tool_errors": 0,
@@ -5269,12 +5390,12 @@
       "turns": 4,
       "usage": {
         "input": 10,
-        "output": 519,
-        "cache_read": 17570,
-        "cache_write": 7313
+        "output": 523,
+        "cache_read": 17571,
+        "cache_write": 7220
       },
-      "cost_usd": 0.036219,
-      "wall_ms": 10637,
+      "cost_usd": 0.035887100000000005,
+      "wall_ms": 13097,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -5293,22 +5414,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
-      "tool_calls": 13,
+      "tool_calls": 6,
       "tool_errors": 0,
-      "truncated_results": 0,
-      "tool_search_calls": 4,
+      "truncated_results": 1,
+      "tool_search_calls": 2,
       "rejected_calls": 0,
       "position": 0,
-      "turns": 18,
+      "turns": 9,
       "usage": {
-        "input": 40,
-        "output": 3766,
-        "cache_read": 333624,
-        "cache_write": 35624
+        "input": 20,
+        "output": 1205,
+        "cache_read": 86984,
+        "cache_write": 18115
       },
-      "cost_usd": 0.2135984,
-      "wall_ms": 1278231,
+      "cost_usd": 0.0932484,
+      "wall_ms": 738438,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -5327,22 +5449,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
-      "tool_calls": 4,
+      "tool_calls": 5,
       "tool_errors": 0,
       "truncated_results": 0,
       "tool_search_calls": 1,
       "rejected_calls": 0,
       "position": 1,
-      "turns": 6,
+      "turns": 7,
       "usage": {
-        "input": 14,
-        "output": 1481,
-        "cache_read": 45000,
-        "cache_write": 11437
+        "input": 16,
+        "output": 1037,
+        "cache_read": 58982,
+        "cache_write": 12391
       },
-      "cost_usd": 0.065086,
-      "wall_ms": 20428,
+      "cost_usd": 0.0658642,
+      "wall_ms": 20063,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -5361,6 +5484,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "trailing",
       "tool_calls": 7,
       "tool_errors": 0,
@@ -5395,6 +5519,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 5,
       "tool_errors": 1,
@@ -5429,6 +5554,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 11,
       "tool_errors": 3,
@@ -5463,6 +5589,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 9,
       "tool_errors": 0,
@@ -5497,6 +5624,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 1,
       "tool_errors": 0,
@@ -5531,6 +5659,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 12,
       "tool_errors": 1,
@@ -5565,6 +5694,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 0,
@@ -5599,6 +5729,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 8,
       "tool_errors": 1,
@@ -5633,6 +5764,7 @@
       "outcome": "answer_mismatch",
       "failure": "wrong_answer",
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 4,
       "tool_errors": 1,
@@ -5667,6 +5799,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 0,
@@ -5701,6 +5834,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 1,
       "tool_errors": 0,
@@ -5735,6 +5869,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 2,
       "tool_errors": 0,
@@ -5769,6 +5904,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 9,
       "tool_errors": 7,
@@ -5803,6 +5939,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 6,
       "tool_errors": 2,
@@ -5837,6 +5974,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 0,
@@ -5871,6 +6009,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "trailing",
       "tool_calls": 6,
       "tool_errors": 0,
@@ -5905,22 +6044,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
-      "tool_calls": 3,
+      "tool_calls": 1,
       "tool_errors": 0,
       "truncated_results": 0,
       "tool_search_calls": 1,
       "rejected_calls": 0,
       "position": 0,
-      "turns": 5,
+      "turns": 3,
       "usage": {
-        "input": 10,
-        "output": 739,
-        "cache_read": 17123,
-        "cache_write": 10456
+        "input": 8,
+        "output": 329,
+        "cache_read": 9991,
+        "cache_write": 6178
       },
-      "cost_usd": 0.05094629999999999,
-      "wall_ms": 14665,
+      "cost_usd": 0.029017100000000004,
+      "wall_ms": 8764,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -5939,22 +6079,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
-      "extraction": "exact",
-      "tool_calls": 12,
-      "tool_errors": 3,
-      "truncated_results": 0,
-      "tool_search_calls": 4,
+      "lenient": true,
+      "extraction": "trailing",
+      "tool_calls": 29,
+      "tool_errors": 1,
+      "truncated_results": 2,
+      "tool_search_calls": 3,
       "rejected_calls": 0,
       "position": 1,
-      "turns": 17,
+      "turns": 33,
       "usage": {
         "input": 30,
-        "output": 2119,
-        "cache_read": 175850,
-        "cache_write": 39798
+        "output": 3240,
+        "cache_read": 246035,
+        "cache_write": 64659
       },
-      "cost_usd": 0.198027,
-      "wall_ms": 41858,
+      "cost_usd": 0.3156995,
+      "wall_ms": 153526,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -5973,6 +6114,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 7,
       "tool_errors": 2,
@@ -6007,6 +6149,7 @@
       "outcome": "answer_mismatch",
       "failure": "wrong_answer",
       "partial": null,
+      "lenient": false,
       "extraction": "exact",
       "tool_calls": 8,
       "tool_errors": 0,
@@ -6041,6 +6184,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 0,
@@ -6075,6 +6219,7 @@
       "outcome": "answer_mismatch",
       "failure": "wrong_answer",
       "partial": null,
+      "lenient": false,
       "extraction": "trailing",
       "tool_calls": 6,
       "tool_errors": 0,
@@ -6109,6 +6254,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
       "tool_errors": 0,
@@ -6143,6 +6289,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 4,
       "tool_errors": 0,
@@ -6177,9 +6324,10 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 3,
-      "tool_errors": 2,
+      "tool_errors": 1,
       "truncated_results": 0,
       "tool_search_calls": 1,
       "rejected_calls": 0,
@@ -6187,12 +6335,12 @@
       "turns": 5,
       "usage": {
         "input": 12,
-        "output": 774,
-        "cache_read": 28070,
-        "cache_write": 35456
+        "output": 815,
+        "cache_read": 24818,
+        "cache_write": 12666
       },
-      "cost_usd": 0.152395,
-      "wall_ms": 28694,
+      "cost_usd": 0.0613198,
+      "wall_ms": 14062,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -6211,22 +6359,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": 1.0,
+      "lenient": true,
       "extraction": "exact",
-      "tool_calls": 64,
-      "tool_errors": 7,
+      "tool_calls": 13,
+      "tool_errors": 0,
       "truncated_results": 0,
-      "tool_search_calls": 6,
+      "tool_search_calls": 1,
       "rejected_calls": 0,
       "position": 1,
-      "turns": 71,
+      "turns": 15,
       "usage": {
-        "input": 92,
-        "output": 25360,
-        "cache_read": 1956442,
-        "cache_write": 138105
+        "input": 12,
+        "output": 1179,
+        "cache_read": 37678,
+        "cache_write": 36480
       },
-      "cost_usd": 1.0018482000000002,
-      "wall_ms": 2743513,
+      "cost_usd": 0.1615018,
+      "wall_ms": 821761,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -6245,6 +6394,7 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
       "tool_calls": 2,
       "tool_errors": 0,
@@ -6255,12 +6405,12 @@
       "turns": 4,
       "usage": {
         "input": 10,
-        "output": 514,
-        "cache_read": 17570,
-        "cache_write": 7313
+        "output": 503,
+        "cache_read": 17571,
+        "cache_write": 7220
       },
-      "cost_usd": 0.036169,
-      "wall_ms": 10613,
+      "cost_usd": 0.0356871,
+      "wall_ms": 14611,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -6276,25 +6426,26 @@
       "category": "scale",
       "server": "rea",
       "repetition": 3,
-      "outcome": "answer_mismatch",
-      "failure": "wrong_answer",
+      "outcome": "answer_matches",
+      "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
-      "tool_calls": 29,
-      "tool_errors": 2,
-      "truncated_results": 1,
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
       "tool_search_calls": 1,
       "rejected_calls": 0,
       "position": 1,
-      "turns": 31,
+      "turns": 6,
       "usage": {
-        "input": 36,
-        "output": 4347,
-        "cache_read": 452263,
-        "cache_write": 62597
+        "input": 12,
+        "output": 456,
+        "cache_read": 47454,
+        "cache_write": 18828
       },
-      "cost_usd": 0.3391563,
-      "wall_ms": 1368960,
+      "cost_usd": 0.0846414,
+      "wall_ms": 732423,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -6313,22 +6464,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
-      "tool_calls": 6,
+      "tool_calls": 5,
       "tool_errors": 0,
       "truncated_results": 0,
       "tool_search_calls": 1,
       "rejected_calls": 0,
       "position": 0,
-      "turns": 8,
+      "turns": 7,
       "usage": {
-        "input": 18,
-        "output": 1138,
-        "cache_read": 70470,
-        "cache_write": 12394
+        "input": 16,
+        "output": 1025,
+        "cache_read": 59019,
+        "cache_write": 12348
       },
-      "cost_usd": 0.068039,
-      "wall_ms": 24129,
+      "cost_usd": 0.06557589999999999,
+      "wall_ms": 17844,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -6347,22 +6499,23 @@
       "outcome": "answer_matches",
       "failure": null,
       "partial": null,
+      "lenient": true,
       "extraction": "exact",
-      "tool_calls": 18,
+      "tool_calls": 6,
       "tool_errors": 0,
-      "truncated_results": 0,
+      "truncated_results": 1,
       "tool_search_calls": 2,
       "rejected_calls": 0,
       "position": 1,
-      "turns": 21,
+      "turns": 9,
       "usage": {
-        "input": 42,
-        "output": 5254,
-        "cache_read": 437269,
-        "cache_write": 44519
+        "input": 20,
+        "output": 1039,
+        "cache_read": 86442,
+        "cache_write": 18127
       },
-      "cost_usd": 0.27442690000000003,
-      "wall_ms": 2158364,
+      "cost_usd": 0.0915822,
+      "wall_ms": 734144,
       "runner_exit": "ok",
       "runner_error": null,
       "runner": {
@@ -6373,105 +6526,476 @@
       }
     }
   ],
-  "rerun": {
-    "reason": "Ran while Ghidra JVMs left over from earlier REA scale runs (before the runner reaped an MCP server's descendants, commit 39dfe46) were still alive: 13:42-15:01 and 14:07-15:01 (about 7 GB resident each), and run 30's own detached JVM until 15:28:53, 11 s into this run. Rerun regardless of outcome.",
-    "runs": [
-      "scale-caller-count-x64-elf:rampage:1",
-      "scale-caller-count-x64-elf:rea:1",
-      "scale-string-function-x64-elf:rampage:1",
-      "scale-string-function-x64-elf:rea:1",
-      "call-chain-arm64-elf:rea:2"
-    ],
-    "commit": "546b266775e53ec068cd86b45d26d68e36871b33",
-    "versions": {
-      "rampage": {
-        "binary_sha256": "8eec24446ab8c6779f48ba201d4cc6bec179fa0280f6fd5fa73b13f0d5b96d65",
-        "worker_beside_binary": true,
-        "commit": "546b266775e53ec068cd86b45d26d68e36871b33",
-        "worktree_dirty": false,
-        "groups": "default (core plus enable_tools)"
-      },
-      "rea": {
-        "install": {
-          "source": "https://github.com/morluto/rea",
-          "commit": "970969cb53f788976e64eae387076fcea104b603",
-          "commit_date": "2026-11-05T15:14:04+08:00",
-          "package_version": "6.8.0",
-          "why_not_npm_release": "rea-agents 6.8.0 (latest npm release) admits only Ghidra 12.1.x; main admits 12.x (>=12.1), so the pinned main commit is built from source for Ghidra 12.2",
-          "node": "v24.22.1",
-          "npm": "11.19.1",
-          "install_command": "HUSKY=0 npm ci --ignore-scripts --no-audit --no-fund --cache ../npm-cache --userconfig /dev/null",
-          "build_command": "npm run build:cached (turbo: metadata:check, compile, artifacts:skills)",
-          "lockfile_sha256": "3b3f017c523a8ca17c205f818b1f2fe8d8660fecfd36b1cd625ec2509fa28be6",
-          "lockfile_packages": 963,
-          "lockfile_all_registry_npmjs_with_integrity": true,
-          "installed_packages": 730,
-          "runtime_dependencies": {
-            "@babel/parser": "8.0.4",
-            "@babel/types": "8.0.4",
-            "@bufbuild/protobuf": "2.16.0",
-            "@clack/prompts": "1.7.0",
-            "@electron/asar": "4.2.0",
-            "@jridgewell/trace-mapping": "0.3.31",
-            "@lydell/node-pty": "1.1.0",
-            "@modelcontextprotocol/client": "2.3.1",
-            "@modelcontextprotocol/server": "2.3.1",
-            "@msgpack/msgpack": "3.1.3",
-            "@xmldom/xmldom": "0.9.12",
-            "@xterm/addon-serialize": "0.14.0",
-            "@xterm/headless": "6.0.0",
-            "@zip.js/zip.js": "2.15.0",
-            "ajv": "8.20.0",
-            "ajv-formats": "3.0.1",
-            "canonicalize": "3.0.0",
-            "cborg": "6.1.3",
-            "cross-spawn": "7.0.6",
-            "diff": "9.0.0",
-            "evmole": "0.9.3",
-            "har-schema": "2.0.0",
-            "ignore": "7.0.6",
-            "incur": "0.6.1",
-            "isomorphic-git": "1.38.7",
-            "jsonc-parser": "3.3.1",
-            "lossless-json": "4.3.1",
-            "openpgp": "6.3.2",
-            "parse5": "8.0.1",
-            "pino": "10.4.0",
-            "playwright-core": "1.64.1",
-            "plist": "5.0.0",
-            "saxes": "6.0.0",
-            "semver": "7.8.5",
-            "smol-toml": "1.9.0",
-            "stream-chain": "4.2.6",
-            "stream-json": "3.7.0",
-            "tokenx": "1.3.0",
-            "write-file-atomic": "7.0.0",
-            "ws": "8.21.0",
-            "yaml": "2.9.0",
-            "zod": "4.6.6"
-          },
-          "skipped_install_scripts": [
-            "esbuild",
-            "frida",
-            "fsevents",
-            "vitepress/node_modules/esbuild"
-          ],
-          "skipped_prepare_script": "scripts/prepare.mjs (release-please patch for development, husky git hooks)",
-          "doctor": "rea doctor --provider ghidra --json: healthy; ghidra-version 12.2 compatible 12.x (>=12.1)",
-          "ghidra_smoke": "rea decompile --procedure main hello-x64.elf --provider ghidra: returned pseudocode in 11 s",
-          "reinstalled": "2026-11-05 for suite v2: same commit, same lockfile hash, same commands (the v1 install lived in a removed worktree); doctor healthy, 730 packages installed"
+  "rerun": [
+    {
+      "reason": "Ran while Ghidra JVMs left over from earlier REA scale runs (before the runner reaped an MCP server's descendants, commit 39dfe46) were still alive: 13:42-15:01 and 14:07-15:01 (about 7 GB resident each), and run 30's own detached JVM until 15:28:53, 11 s into this run. Rerun regardless of outcome.",
+      "runs": [
+        "scale-caller-count-x64-elf:rampage:1",
+        "scale-caller-count-x64-elf:rea:1",
+        "scale-string-function-x64-elf:rampage:1",
+        "scale-string-function-x64-elf:rea:1",
+        "call-chain-arm64-elf:rea:2"
+      ],
+      "commit": "546b266775e53ec068cd86b45d26d68e36871b33",
+      "versions": {
+        "rampage": {
+          "binary_sha256": "8eec24446ab8c6779f48ba201d4cc6bec179fa0280f6fd5fa73b13f0d5b96d65",
+          "worker_beside_binary": true,
+          "commit": "546b266775e53ec068cd86b45d26d68e36871b33",
+          "worktree_dirty": false,
+          "groups": "default (core plus enable_tools)"
         },
-        "node": "v24.22.1",
-        "ghidra": "12.2 PUBLIC",
-        "java_home": "/opt/homebrew/opt/openjdk@25/libexec/openjdk.jdk/Contents/Home",
-        "provider": "ghidra",
-        "tool_families": "default (complete catalog)",
-        "ghidra_startup_timeout_ms": 3600000,
-        "ghidra_headless_maxmem": "16G"
-      }
+        "rea": {
+          "install": {
+            "source": "https://github.com/morluto/rea",
+            "commit": "970969cb53f788976e64eae387076fcea104b603",
+            "commit_date": "2026-11-05T15:14:04+08:00",
+            "package_version": "6.8.0",
+            "why_not_npm_release": "rea-agents 6.8.0 (latest npm release) admits only Ghidra 12.1.x; main admits 12.x (>=12.1), so the pinned main commit is built from source for Ghidra 12.2",
+            "node": "v24.22.1",
+            "npm": "11.19.1",
+            "install_command": "HUSKY=0 npm ci --ignore-scripts --no-audit --no-fund --cache ../npm-cache --userconfig /dev/null",
+            "build_command": "npm run build:cached (turbo: metadata:check, compile, artifacts:skills)",
+            "lockfile_sha256": "3b3f017c523a8ca17c205f818b1f2fe8d8660fecfd36b1cd625ec2509fa28be6",
+            "lockfile_packages": 963,
+            "lockfile_all_registry_npmjs_with_integrity": true,
+            "installed_packages": 730,
+            "runtime_dependencies": {
+              "@babel/parser": "8.0.4",
+              "@babel/types": "8.0.4",
+              "@bufbuild/protobuf": "2.16.0",
+              "@clack/prompts": "1.7.0",
+              "@electron/asar": "4.2.0",
+              "@jridgewell/trace-mapping": "0.3.31",
+              "@lydell/node-pty": "1.1.0",
+              "@modelcontextprotocol/client": "2.3.1",
+              "@modelcontextprotocol/server": "2.3.1",
+              "@msgpack/msgpack": "3.1.3",
+              "@xmldom/xmldom": "0.9.12",
+              "@xterm/addon-serialize": "0.14.0",
+              "@xterm/headless": "6.0.0",
+              "@zip.js/zip.js": "2.15.0",
+              "ajv": "8.20.0",
+              "ajv-formats": "3.0.1",
+              "canonicalize": "3.0.0",
+              "cborg": "6.1.3",
+              "cross-spawn": "7.0.6",
+              "diff": "9.0.0",
+              "evmole": "0.9.3",
+              "har-schema": "2.0.0",
+              "ignore": "7.0.6",
+              "incur": "0.6.1",
+              "isomorphic-git": "1.38.7",
+              "jsonc-parser": "3.3.1",
+              "lossless-json": "4.3.1",
+              "openpgp": "6.3.2",
+              "parse5": "8.0.1",
+              "pino": "10.4.0",
+              "playwright-core": "1.64.1",
+              "plist": "5.0.0",
+              "saxes": "6.0.0",
+              "semver": "7.8.5",
+              "smol-toml": "1.9.0",
+              "stream-chain": "4.2.6",
+              "stream-json": "3.7.0",
+              "tokenx": "1.3.0",
+              "write-file-atomic": "7.0.0",
+              "ws": "8.21.0",
+              "yaml": "2.9.0",
+              "zod": "4.6.6"
+            },
+            "skipped_install_scripts": [
+              "esbuild",
+              "frida",
+              "fsevents",
+              "vitepress/node_modules/esbuild"
+            ],
+            "skipped_prepare_script": "scripts/prepare.mjs (release-please patch for development, husky git hooks)",
+            "doctor": "rea doctor --provider ghidra --json: healthy; ghidra-version 12.2 compatible 12.x (>=12.1)",
+            "ghidra_smoke": "rea decompile --procedure main hello-x64.elf --provider ghidra: returned pseudocode in 11 s",
+            "reinstalled": "2026-11-05 for suite v2: same commit, same lockfile hash, same commands (the v1 install lived in a removed worktree); doctor healthy, 730 packages installed"
+          },
+          "node": "v24.22.1",
+          "ghidra": "12.2 PUBLIC",
+          "java_home": "/opt/homebrew/opt/openjdk@25/libexec/openjdk.jdk/Contents/Home",
+          "provider": "ghidra",
+          "tool_families": "default (complete catalog)",
+          "ghidra_startup_timeout_ms": 3600000,
+          "ghidra_headless_maxmem": "16G"
+        }
+      },
+      "run_unix_ms": 1793906273312
     },
-    "run_unix_ms": 1793906273312
-  },
+    {
+      "reason": "Fairness review: the question was reworded from 'changed in behaviour' (which also fits calc_scaled_sum, a caller of the changed calc_scale) to 'own code changed, ignoring relocated displacements'; all runs of the task rerun for both servers, decided after the full pass.",
+      "runs": [
+        "library-diff-x64-so:rampage:1",
+        "library-diff-x64-so:rea:1",
+        "library-diff-x64-so:rampage:2",
+        "library-diff-x64-so:rea:2",
+        "library-diff-x64-so:rampage:3",
+        "library-diff-x64-so:rea:3"
+      ],
+      "neutral_suite_sha256": "ffa8c50fd140b708adb64f856caa367d24656a17ac8e7794a79b2a89977831e7",
+      "task_definition_sha256": {
+        "call-chain-arm64-elf": "561b160007ba9980beb85c7bd072da9f56d8d499c10a0a7088651f861e157ee8",
+        "cpp-field-layout-arm64-macho": "255dc3e21ef21c2deca7870c9fd6dfe5966c26c204461ff85d9685b7d23e76b8",
+        "cpp-hierarchy-x64-elf": "c3ee61370a50fd7a3f4890cc2c1c43e042357224db8237529bedf3a46e461d4c",
+        "cpp-virtual-call-x64-elf": "f1b6ffd76968662cd4c67073e1a3b7853f6411145d2d6cf6d1d279f4dead1c2f",
+        "cpp-vtable-slots-norrti-arm64-macho": "bd925c3bd0a865ff5b13dc29c86c7b42a617f19057ff54c5170d6665635f4190",
+        "crc-parameters-mips-elf": "8b7f30691cd99010d7780953be1a143df6cd29d2e630ca712d5859236e2e5f0c",
+        "firmware-reset-cm3-raw": "1884084c8c81477134fc793d49c2a61f0afadd590cee87006eab12805834f3c1",
+        "key-derivation-arm64-macho": "80b0dbde04865518ce92f5d5b6de25d5b15e5a96fdb9422bf568a62b64e7d6c1",
+        "library-diff-x64-so": "4bac302ca56bc01c72cc4cf10fe1aec07a35bc91ff99f451b0b6758e5541cf25",
+        "option-bit-x64-elf": "b9e7a11c507e8cfb31a3493037421dd48b967508362404aeb250d98e5350a6ec",
+        "pointer-chain-arm64-elf": "7faf7eccae1ce1f3627d06dbd3c390a7cb4a127ea68d4676f03d9ca4f5a29ec5",
+        "record-table-x64-elf": "09ddd139728ce13f1e24823ddc75b65e2a5a245ec674414b50f208d4e6f7f499",
+        "scale-callees-x64-elf": "5dd7294111ae0f12963b3cc2feb30b7022c74b36ba976e13f0ff5e6cbe19f850",
+        "scale-caller-count-x64-elf": "db8ccd11cee20e879b4268882dd94f0d8f65fc58e6b93c4ec76c030dadd651ea",
+        "scale-string-function-x64-elf": "e6ce918bab95387b19ea40924b4830b7ca2de1461d0e8aa563ec732b2adc480e"
+      },
+      "commit": "17975fd7e3876f5d13b7c5c72e862d285f600d1f",
+      "versions": {
+        "rampage": {
+          "binary_sha256": "8eec24446ab8c6779f48ba201d4cc6bec179fa0280f6fd5fa73b13f0d5b96d65",
+          "worker_beside_binary": true,
+          "commit": "17975fd7e3876f5d13b7c5c72e862d285f600d1f",
+          "worktree_dirty": false,
+          "groups": "default (core plus enable_tools)"
+        },
+        "rea": {
+          "install": {
+            "source": "https://github.com/morluto/rea",
+            "commit": "970969cb53f788976e64eae387076fcea104b603",
+            "commit_date": "2026-11-05T15:14:04+08:00",
+            "package_version": "6.8.0",
+            "why_not_npm_release": "rea-agents 6.8.0 (latest npm release) admits only Ghidra 12.1.x; main admits 12.x (>=12.1), so the pinned main commit is built from source for Ghidra 12.2",
+            "node": "v24.22.1",
+            "npm": "11.19.1",
+            "install_command": "HUSKY=0 npm ci --ignore-scripts --no-audit --no-fund --cache ../npm-cache --userconfig /dev/null",
+            "build_command": "npm run build:cached (turbo: metadata:check, compile, artifacts:skills)",
+            "lockfile_sha256": "3b3f017c523a8ca17c205f818b1f2fe8d8660fecfd36b1cd625ec2509fa28be6",
+            "lockfile_packages": 963,
+            "lockfile_all_registry_npmjs_with_integrity": true,
+            "installed_packages": 730,
+            "runtime_dependencies": {
+              "@babel/parser": "8.0.4",
+              "@babel/types": "8.0.4",
+              "@bufbuild/protobuf": "2.16.0",
+              "@clack/prompts": "1.7.0",
+              "@electron/asar": "4.2.0",
+              "@jridgewell/trace-mapping": "0.3.31",
+              "@lydell/node-pty": "1.1.0",
+              "@modelcontextprotocol/client": "2.3.1",
+              "@modelcontextprotocol/server": "2.3.1",
+              "@msgpack/msgpack": "3.1.3",
+              "@xmldom/xmldom": "0.9.12",
+              "@xterm/addon-serialize": "0.14.0",
+              "@xterm/headless": "6.0.0",
+              "@zip.js/zip.js": "2.15.0",
+              "ajv": "8.20.0",
+              "ajv-formats": "3.0.1",
+              "canonicalize": "3.0.0",
+              "cborg": "6.1.3",
+              "cross-spawn": "7.0.6",
+              "diff": "9.0.0",
+              "evmole": "0.9.3",
+              "har-schema": "2.0.0",
+              "ignore": "7.0.6",
+              "incur": "0.6.1",
+              "isomorphic-git": "1.38.7",
+              "jsonc-parser": "3.3.1",
+              "lossless-json": "4.3.1",
+              "openpgp": "6.3.2",
+              "parse5": "8.0.1",
+              "pino": "10.4.0",
+              "playwright-core": "1.64.1",
+              "plist": "5.0.0",
+              "saxes": "6.0.0",
+              "semver": "7.8.5",
+              "smol-toml": "1.9.0",
+              "stream-chain": "4.2.6",
+              "stream-json": "3.7.0",
+              "tokenx": "1.3.0",
+              "write-file-atomic": "7.0.0",
+              "ws": "8.21.0",
+              "yaml": "2.9.0",
+              "zod": "4.6.6"
+            },
+            "skipped_install_scripts": [
+              "esbuild",
+              "frida",
+              "fsevents",
+              "vitepress/node_modules/esbuild"
+            ],
+            "skipped_prepare_script": "scripts/prepare.mjs (release-please patch for development, husky git hooks)",
+            "doctor": "rea doctor --provider ghidra --json: healthy; ghidra-version 12.2 compatible 12.x (>=12.1)",
+            "ghidra_smoke": "rea decompile --procedure main hello-x64.elf --provider ghidra: returned pseudocode in 11 s",
+            "reinstalled": "2026-11-05 for suite v2: same commit, same lockfile hash, same commands (the v1 install lived in a removed worktree); doctor healthy, 730 packages installed"
+          },
+          "node": "v24.22.1",
+          "ghidra": "12.2 PUBLIC",
+          "java_home": "/opt/homebrew/opt/openjdk@25/libexec/openjdk.jdk/Contents/Home",
+          "provider": "ghidra",
+          "tool_families": "default (complete catalog)",
+          "ghidra_startup_timeout_ms": 3600000,
+          "ghidra_headless_maxmem": "16G"
+        }
+      },
+      "run_unix_ms": 1793911699045
+    },
+    {
+      "reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass.",
+      "runs": [
+        "scale-callees-x64-elf:rampage:1",
+        "scale-callees-x64-elf:rampage:2",
+        "scale-callees-x64-elf:rampage:3",
+        "scale-callees-x64-elf:rea:1",
+        "scale-callees-x64-elf:rea:2",
+        "scale-callees-x64-elf:rea:3",
+        "scale-caller-count-x64-elf:rampage:1",
+        "scale-caller-count-x64-elf:rampage:2",
+        "scale-caller-count-x64-elf:rampage:3",
+        "scale-caller-count-x64-elf:rea:1",
+        "scale-caller-count-x64-elf:rea:2",
+        "scale-caller-count-x64-elf:rea:3",
+        "scale-string-function-x64-elf:rampage:1",
+        "scale-string-function-x64-elf:rampage:2",
+        "scale-string-function-x64-elf:rampage:3",
+        "scale-string-function-x64-elf:rea:1",
+        "scale-string-function-x64-elf:rea:2",
+        "scale-string-function-x64-elf:rea:3"
+      ],
+      "neutral_suite_sha256": "ffa8c50fd140b708adb64f856caa367d24656a17ac8e7794a79b2a89977831e7",
+      "task_definition_sha256": {
+        "call-chain-arm64-elf": "561b160007ba9980beb85c7bd072da9f56d8d499c10a0a7088651f861e157ee8",
+        "cpp-field-layout-arm64-macho": "255dc3e21ef21c2deca7870c9fd6dfe5966c26c204461ff85d9685b7d23e76b8",
+        "cpp-hierarchy-x64-elf": "c3ee61370a50fd7a3f4890cc2c1c43e042357224db8237529bedf3a46e461d4c",
+        "cpp-virtual-call-x64-elf": "f1b6ffd76968662cd4c67073e1a3b7853f6411145d2d6cf6d1d279f4dead1c2f",
+        "cpp-vtable-slots-norrti-arm64-macho": "bd925c3bd0a865ff5b13dc29c86c7b42a617f19057ff54c5170d6665635f4190",
+        "crc-parameters-mips-elf": "8b7f30691cd99010d7780953be1a143df6cd29d2e630ca712d5859236e2e5f0c",
+        "firmware-reset-cm3-raw": "1884084c8c81477134fc793d49c2a61f0afadd590cee87006eab12805834f3c1",
+        "key-derivation-arm64-macho": "80b0dbde04865518ce92f5d5b6de25d5b15e5a96fdb9422bf568a62b64e7d6c1",
+        "library-diff-x64-so": "4bac302ca56bc01c72cc4cf10fe1aec07a35bc91ff99f451b0b6758e5541cf25",
+        "option-bit-x64-elf": "b9e7a11c507e8cfb31a3493037421dd48b967508362404aeb250d98e5350a6ec",
+        "pointer-chain-arm64-elf": "7faf7eccae1ce1f3627d06dbd3c390a7cb4a127ea68d4676f03d9ca4f5a29ec5",
+        "record-table-x64-elf": "09ddd139728ce13f1e24823ddc75b65e2a5a245ec674414b50f208d4e6f7f499",
+        "scale-callees-x64-elf": "5dd7294111ae0f12963b3cc2feb30b7022c74b36ba976e13f0ff5e6cbe19f850",
+        "scale-caller-count-x64-elf": "db8ccd11cee20e879b4268882dd94f0d8f65fc58e6b93c4ec76c030dadd651ea",
+        "scale-string-function-x64-elf": "e6ce918bab95387b19ea40924b4830b7ca2de1461d0e8aa563ec732b2adc480e"
+      },
+      "commit": "17975fd7e3876f5d13b7c5c72e862d285f600d1f",
+      "versions": {
+        "rampage": {
+          "binary_sha256": "8eec24446ab8c6779f48ba201d4cc6bec179fa0280f6fd5fa73b13f0d5b96d65",
+          "worker_beside_binary": true,
+          "commit": "17975fd7e3876f5d13b7c5c72e862d285f600d1f",
+          "worktree_dirty": false,
+          "groups": "default (core plus enable_tools)"
+        },
+        "rea": {
+          "install": {
+            "source": "https://github.com/morluto/rea",
+            "commit": "970969cb53f788976e64eae387076fcea104b603",
+            "commit_date": "2026-11-05T15:14:04+08:00",
+            "package_version": "6.8.0",
+            "why_not_npm_release": "rea-agents 6.8.0 (latest npm release) admits only Ghidra 12.1.x; main admits 12.x (>=12.1), so the pinned main commit is built from source for Ghidra 12.2",
+            "node": "v24.22.1",
+            "npm": "11.19.1",
+            "install_command": "HUSKY=0 npm ci --ignore-scripts --no-audit --no-fund --cache ../npm-cache --userconfig /dev/null",
+            "build_command": "npm run build:cached (turbo: metadata:check, compile, artifacts:skills)",
+            "lockfile_sha256": "3b3f017c523a8ca17c205f818b1f2fe8d8660fecfd36b1cd625ec2509fa28be6",
+            "lockfile_packages": 963,
+            "lockfile_all_registry_npmjs_with_integrity": true,
+            "installed_packages": 730,
+            "runtime_dependencies": {
+              "@babel/parser": "8.0.4",
+              "@babel/types": "8.0.4",
+              "@bufbuild/protobuf": "2.16.0",
+              "@clack/prompts": "1.7.0",
+              "@electron/asar": "4.2.0",
+              "@jridgewell/trace-mapping": "0.3.31",
+              "@lydell/node-pty": "1.1.0",
+              "@modelcontextprotocol/client": "2.3.1",
+              "@modelcontextprotocol/server": "2.3.1",
+              "@msgpack/msgpack": "3.1.3",
+              "@xmldom/xmldom": "0.9.12",
+              "@xterm/addon-serialize": "0.14.0",
+              "@xterm/headless": "6.0.0",
+              "@zip.js/zip.js": "2.15.0",
+              "ajv": "8.20.0",
+              "ajv-formats": "3.0.1",
+              "canonicalize": "3.0.0",
+              "cborg": "6.1.3",
+              "cross-spawn": "7.0.6",
+              "diff": "9.0.0",
+              "evmole": "0.9.3",
+              "har-schema": "2.0.0",
+              "ignore": "7.0.6",
+              "incur": "0.6.1",
+              "isomorphic-git": "1.38.7",
+              "jsonc-parser": "3.3.1",
+              "lossless-json": "4.3.1",
+              "openpgp": "6.3.2",
+              "parse5": "8.0.1",
+              "pino": "10.4.0",
+              "playwright-core": "1.64.1",
+              "plist": "5.0.0",
+              "saxes": "6.0.0",
+              "semver": "7.8.5",
+              "smol-toml": "1.9.0",
+              "stream-chain": "4.2.6",
+              "stream-json": "3.7.0",
+              "tokenx": "1.3.0",
+              "write-file-atomic": "7.0.0",
+              "ws": "8.21.0",
+              "yaml": "2.9.0",
+              "zod": "4.6.6"
+            },
+            "skipped_install_scripts": [
+              "esbuild",
+              "frida",
+              "fsevents",
+              "vitepress/node_modules/esbuild"
+            ],
+            "skipped_prepare_script": "scripts/prepare.mjs (release-please patch for development, husky git hooks)",
+            "doctor": "rea doctor --provider ghidra --json: healthy; ghidra-version 12.2 compatible 12.x (>=12.1)",
+            "ghidra_smoke": "rea decompile --procedure main hello-x64.elf --provider ghidra: returned pseudocode in 11 s",
+            "reinstalled": "2026-11-05 for suite v2: same commit, same lockfile hash, same commands (the v1 install lived in a removed worktree); doctor healthy, 730 packages installed"
+          },
+          "node": "v24.22.1",
+          "ghidra": "12.2 PUBLIC",
+          "java_home": "/opt/homebrew/opt/openjdk@25/libexec/openjdk.jdk/Contents/Home",
+          "provider": "ghidra",
+          "tool_families": "default (complete catalog)",
+          "ghidra_startup_timeout_ms": 3600000,
+          "ghidra_headless_maxmem": "16G"
+        }
+      },
+      "run_unix_ms": 1793922800321
+    },
+    {
+      "reason": "Rule: a run stopped from outside before any answer is rerun once, whatever the server. scale-caller-count rea r1: the MCP connection closed at 22:43:31 (1,581 s into REA's first Ghidra wait) and claude exited 143 (an outside SIGTERM). The other eight: the client's account usage limit ('You've hit your 5-hour limit'), a synthetic message instead of a model turn, from 00:53 on 2026-11-06.",
+      "runs": [
+        "scale-caller-count-x64-elf:rea:1",
+        "scale-string-function-x64-elf:rea:2",
+        "scale-string-function-x64-elf:rampage:2",
+        "scale-callees-x64-elf:rampage:3",
+        "scale-callees-x64-elf:rea:3",
+        "scale-caller-count-x64-elf:rampage:3",
+        "scale-caller-count-x64-elf:rea:3",
+        "scale-string-function-x64-elf:rampage:3",
+        "scale-string-function-x64-elf:rea:3"
+      ],
+      "neutral_suite_sha256": "ffa8c50fd140b708adb64f856caa367d24656a17ac8e7794a79b2a89977831e7",
+      "task_definition_sha256": {
+        "call-chain-arm64-elf": "561b160007ba9980beb85c7bd072da9f56d8d499c10a0a7088651f861e157ee8",
+        "cpp-field-layout-arm64-macho": "255dc3e21ef21c2deca7870c9fd6dfe5966c26c204461ff85d9685b7d23e76b8",
+        "cpp-hierarchy-x64-elf": "c3ee61370a50fd7a3f4890cc2c1c43e042357224db8237529bedf3a46e461d4c",
+        "cpp-virtual-call-x64-elf": "f1b6ffd76968662cd4c67073e1a3b7853f6411145d2d6cf6d1d279f4dead1c2f",
+        "cpp-vtable-slots-norrti-arm64-macho": "bd925c3bd0a865ff5b13dc29c86c7b42a617f19057ff54c5170d6665635f4190",
+        "crc-parameters-mips-elf": "8b7f30691cd99010d7780953be1a143df6cd29d2e630ca712d5859236e2e5f0c",
+        "firmware-reset-cm3-raw": "1884084c8c81477134fc793d49c2a61f0afadd590cee87006eab12805834f3c1",
+        "key-derivation-arm64-macho": "80b0dbde04865518ce92f5d5b6de25d5b15e5a96fdb9422bf568a62b64e7d6c1",
+        "library-diff-x64-so": "4bac302ca56bc01c72cc4cf10fe1aec07a35bc91ff99f451b0b6758e5541cf25",
+        "option-bit-x64-elf": "b9e7a11c507e8cfb31a3493037421dd48b967508362404aeb250d98e5350a6ec",
+        "pointer-chain-arm64-elf": "7faf7eccae1ce1f3627d06dbd3c390a7cb4a127ea68d4676f03d9ca4f5a29ec5",
+        "record-table-x64-elf": "09ddd139728ce13f1e24823ddc75b65e2a5a245ec674414b50f208d4e6f7f499",
+        "scale-callees-x64-elf": "5dd7294111ae0f12963b3cc2feb30b7022c74b36ba976e13f0ff5e6cbe19f850",
+        "scale-caller-count-x64-elf": "db8ccd11cee20e879b4268882dd94f0d8f65fc58e6b93c4ec76c030dadd651ea",
+        "scale-string-function-x64-elf": "e6ce918bab95387b19ea40924b4830b7ca2de1461d0e8aa563ec732b2adc480e"
+      },
+      "commit": "17975fd7e3876f5d13b7c5c72e862d285f600d1f",
+      "versions": {
+        "rampage": {
+          "binary_sha256": "8eec24446ab8c6779f48ba201d4cc6bec179fa0280f6fd5fa73b13f0d5b96d65",
+          "worker_beside_binary": true,
+          "commit": "17975fd7e3876f5d13b7c5c72e862d285f600d1f",
+          "worktree_dirty": false,
+          "groups": "default (core plus enable_tools)"
+        },
+        "rea": {
+          "install": {
+            "source": "https://github.com/morluto/rea",
+            "commit": "970969cb53f788976e64eae387076fcea104b603",
+            "commit_date": "2026-11-05T15:14:04+08:00",
+            "package_version": "6.8.0",
+            "why_not_npm_release": "rea-agents 6.8.0 (latest npm release) admits only Ghidra 12.1.x; main admits 12.x (>=12.1), so the pinned main commit is built from source for Ghidra 12.2",
+            "node": "v24.22.1",
+            "npm": "11.19.1",
+            "install_command": "HUSKY=0 npm ci --ignore-scripts --no-audit --no-fund --cache ../npm-cache --userconfig /dev/null",
+            "build_command": "npm run build:cached (turbo: metadata:check, compile, artifacts:skills)",
+            "lockfile_sha256": "3b3f017c523a8ca17c205f818b1f2fe8d8660fecfd36b1cd625ec2509fa28be6",
+            "lockfile_packages": 963,
+            "lockfile_all_registry_npmjs_with_integrity": true,
+            "installed_packages": 730,
+            "runtime_dependencies": {
+              "@babel/parser": "8.0.4",
+              "@babel/types": "8.0.4",
+              "@bufbuild/protobuf": "2.16.0",
+              "@clack/prompts": "1.7.0",
+              "@electron/asar": "4.2.0",
+              "@jridgewell/trace-mapping": "0.3.31",
+              "@lydell/node-pty": "1.1.0",
+              "@modelcontextprotocol/client": "2.3.1",
+              "@modelcontextprotocol/server": "2.3.1",
+              "@msgpack/msgpack": "3.1.3",
+              "@xmldom/xmldom": "0.9.12",
+              "@xterm/addon-serialize": "0.14.0",
+              "@xterm/headless": "6.0.0",
+              "@zip.js/zip.js": "2.15.0",
+              "ajv": "8.20.0",
+              "ajv-formats": "3.0.1",
+              "canonicalize": "3.0.0",
+              "cborg": "6.1.3",
+              "cross-spawn": "7.0.6",
+              "diff": "9.0.0",
+              "evmole": "0.9.3",
+              "har-schema": "2.0.0",
+              "ignore": "7.0.6",
+              "incur": "0.6.1",
+              "isomorphic-git": "1.38.7",
+              "jsonc-parser": "3.3.1",
+              "lossless-json": "4.3.1",
+              "openpgp": "6.3.2",
+              "parse5": "8.0.1",
+              "pino": "10.4.0",
+              "playwright-core": "1.64.1",
+              "plist": "5.0.0",
+              "saxes": "6.0.0",
+              "semver": "7.8.5",
+              "smol-toml": "1.9.0",
+              "stream-chain": "4.2.6",
+              "stream-json": "3.7.0",
+              "tokenx": "1.3.0",
+              "write-file-atomic": "7.0.0",
+              "ws": "8.21.0",
+              "yaml": "2.9.0",
+              "zod": "4.6.6"
+            },
+            "skipped_install_scripts": [
+              "esbuild",
+              "frida",
+              "fsevents",
+              "vitepress/node_modules/esbuild"
+            ],
+            "skipped_prepare_script": "scripts/prepare.mjs (release-please patch for development, husky git hooks)",
+            "doctor": "rea doctor --provider ghidra --json: healthy; ghidra-version 12.2 compatible 12.x (>=12.1)",
+            "ghidra_smoke": "rea decompile --procedure main hello-x64.elf --provider ghidra: returned pseudocode in 11 s",
+            "reinstalled": "2026-11-05 for suite v2: same commit, same lockfile hash, same commands (the v1 install lived in a removed worktree); doctor healthy, 730 packages installed"
+          },
+          "node": "v24.22.1",
+          "ghidra": "12.2 PUBLIC",
+          "java_home": "/opt/homebrew/opt/openjdk@25/libexec/openjdk.jdk/Contents/Home",
+          "provider": "ghidra",
+          "tool_families": "default (complete catalog)",
+          "ghidra_startup_timeout_ms": 3600000,
+          "ghidra_headless_maxmem": "16G"
+        }
+      },
+      "run_unix_ms": 1793933104704
+    }
+  ],
   "superseded_runs": [
     {
       "task_id": "scale-caller-count-x64-elf",
@@ -6647,11 +7171,1199 @@
         "isolation": "setting-sources-none"
       },
       "superseded_reason": "Ran while Ghidra JVMs left over from earlier REA scale runs (before the runner reaped an MCP server's descendants, commit 39dfe46) were still alive: 13:42-15:01 and 14:07-15:01 (about 7 GB resident each), and run 30's own detached JVM until 15:28:53, 11 s into this run. Rerun regardless of outcome."
+    },
+    {
+      "task_id": "library-diff-x64-so",
+      "kind": "analysis",
+      "category": "diffing",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": 1.0,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 5,
+      "usage": {
+        "input": 10,
+        "output": 587,
+        "cache_read": 17123,
+        "cache_write": 10363
+      },
+      "cost_usd": 0.049054299999999995,
+      "wall_ms": 9605,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the question was reworded from 'changed in behaviour' (which also fits calc_scaled_sum, a caller of the changed calc_scale) to 'own code changed, ignoring relocated displacements'; all runs of the task rerun for both servers, decided after the full pass."
+    },
+    {
+      "task_id": "library-diff-x64-so",
+      "kind": "analysis",
+      "category": "diffing",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": 1.0,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 24,
+      "tool_errors": 2,
+      "truncated_results": 0,
+      "tool_search_calls": 3,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 28,
+      "usage": {
+        "input": 28,
+        "output": 2758,
+        "cache_read": 232819,
+        "cache_write": 52069
+      },
+      "cost_usd": 0.25919390000000003,
+      "wall_ms": 53789,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the question was reworded from 'changed in behaviour' (which also fits calc_scaled_sum, a caller of the changed calc_scale) to 'own code changed, ignoring relocated displacements'; all runs of the task rerun for both servers, decided after the full pass."
+    },
+    {
+      "task_id": "library-diff-x64-so",
+      "kind": "analysis",
+      "category": "diffing",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_mismatch",
+      "failure": "wrong_answer",
+      "partial": 0.75,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 9,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 4,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 14,
+      "usage": {
+        "input": 30,
+        "output": 1865,
+        "cache_read": 162903,
+        "cache_write": 36693
+      },
+      "cost_usd": 0.18177230000000005,
+      "wall_ms": 46203,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the question was reworded from 'changed in behaviour' (which also fits calc_scaled_sum, a caller of the changed calc_scale) to 'own code changed, ignoring relocated displacements'; all runs of the task rerun for both servers, decided after the full pass."
+    },
+    {
+      "task_id": "library-diff-x64-so",
+      "kind": "analysis",
+      "category": "diffing",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": 1.0,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 5,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 7,
+      "usage": {
+        "input": 10,
+        "output": 984,
+        "cache_read": 17123,
+        "cache_write": 27175
+      },
+      "cost_usd": 0.1202723,
+      "wall_ms": 11646,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the question was reworded from 'changed in behaviour' (which also fits calc_scaled_sum, a caller of the changed calc_scale) to 'own code changed, ignoring relocated displacements'; all runs of the task rerun for both servers, decided after the full pass."
+    },
+    {
+      "task_id": "library-diff-x64-so",
+      "kind": "analysis",
+      "category": "diffing",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": 1.0,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 5,
+      "usage": {
+        "input": 10,
+        "output": 739,
+        "cache_read": 17123,
+        "cache_write": 10456
+      },
+      "cost_usd": 0.05094629999999999,
+      "wall_ms": 14665,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the question was reworded from 'changed in behaviour' (which also fits calc_scaled_sum, a caller of the changed calc_scale) to 'own code changed, ignoring relocated displacements'; all runs of the task rerun for both servers, decided after the full pass."
+    },
+    {
+      "task_id": "library-diff-x64-so",
+      "kind": "analysis",
+      "category": "diffing",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": 1.0,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 12,
+      "tool_errors": 3,
+      "truncated_results": 0,
+      "tool_search_calls": 4,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 17,
+      "usage": {
+        "input": 30,
+        "output": 2119,
+        "cache_read": 175850,
+        "cache_write": 39798
+      },
+      "cost_usd": 0.198027,
+      "wall_ms": 41858,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the question was reworded from 'changed in behaviour' (which also fits calc_scaled_sum, a caller of the changed calc_scale) to 'own code changed, ignoring relocated displacements'; all runs of the task rerun for both servers, decided after the full pass."
+    },
+    {
+      "task_id": "scale-callees-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": 1.0,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 1,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 5,
+      "usage": {
+        "input": 12,
+        "output": 743,
+        "cache_read": 28008,
+        "cache_write": 35373
+      },
+      "cost_usd": 0.15174680000000002,
+      "wall_ms": 29060,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-callees-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": 1.0,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 62,
+      "tool_errors": 4,
+      "truncated_results": 1,
+      "tool_search_calls": 4,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 67,
+      "usage": {
+        "input": 84,
+        "output": 26590,
+        "cache_read": 2114459,
+        "cache_write": 140147
+      },
+      "cost_usd": 1.0381019000000002,
+      "wall_ms": 1489046,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-caller-count-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": null,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 6,
+      "usage": {
+        "input": 12,
+        "output": 785,
+        "cache_read": 25864,
+        "cache_write": 8570
+      },
+      "cost_usd": 0.04474040000000001,
+      "wall_ms": 13300,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-caller-count-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "unknown",
+      "failure": "unknown",
+      "partial": null,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 10,
+      "tool_errors": 3,
+      "truncated_results": 1,
+      "tool_search_calls": 3,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 14,
+      "usage": {
+        "input": 28,
+        "output": 1784,
+        "cache_read": 181393,
+        "cache_write": 21536
+      },
+      "cost_usd": 0.12217929999999998,
+      "wall_ms": 2277258,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-string-function-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rampage",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": null,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 6,
+      "usage": {
+        "input": 14,
+        "output": 1618,
+        "cache_read": 44970,
+        "cache_write": 12253
+      },
+      "cost_usd": 0.069717,
+      "wall_ms": 22461,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-string-function-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": null,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 13,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 4,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 18,
+      "usage": {
+        "input": 38,
+        "output": 3771,
+        "cache_read": 304078,
+        "cache_write": 35443
+      },
+      "cost_usd": 0.2099658,
+      "wall_ms": 2263885,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-callees-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": 1.0,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 49,
+      "tool_errors": 6,
+      "truncated_results": 0,
+      "tool_search_calls": 6,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 56,
+      "usage": {
+        "input": 72,
+        "output": 21790,
+        "cache_read": 1146068,
+        "cache_write": 111408
+      },
+      "cost_usd": 0.7782828000000002,
+      "wall_ms": 2638879,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-callees-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": 1.0,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 1,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 6,
+      "usage": {
+        "input": 14,
+        "output": 1180,
+        "cache_read": 81586,
+        "cache_write": 33374
+      },
+      "cost_usd": 0.1534826,
+      "wall_ms": 16117,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-caller-count-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_mismatch",
+      "failure": "wrong_answer",
+      "partial": null,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 24,
+      "tool_errors": 0,
+      "truncated_results": 1,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 26,
+      "usage": {
+        "input": 30,
+        "output": 3264,
+        "cache_read": 294770,
+        "cache_write": 53183
+      },
+      "cost_usd": 0.274909,
+      "wall_ms": 1265697,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-caller-count-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": null,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 519,
+        "cache_read": 17570,
+        "cache_write": 7313
+      },
+      "cost_usd": 0.036219,
+      "wall_ms": 10637,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-string-function-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": null,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 13,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 4,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 18,
+      "usage": {
+        "input": 40,
+        "output": 3766,
+        "cache_read": 333624,
+        "cache_write": 35624
+      },
+      "cost_usd": 0.2135984,
+      "wall_ms": 1278231,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-string-function-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": null,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 4,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 6,
+      "usage": {
+        "input": 14,
+        "output": 1481,
+        "cache_read": 45000,
+        "cache_write": 11437
+      },
+      "cost_usd": 0.065086,
+      "wall_ms": 20428,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-callees-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": 1.0,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 3,
+      "tool_errors": 2,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 5,
+      "usage": {
+        "input": 12,
+        "output": 774,
+        "cache_read": 28070,
+        "cache_write": 35456
+      },
+      "cost_usd": 0.152395,
+      "wall_ms": 28694,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-callees-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": 1.0,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 64,
+      "tool_errors": 7,
+      "truncated_results": 0,
+      "tool_search_calls": 6,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 71,
+      "usage": {
+        "input": 92,
+        "output": 25360,
+        "cache_read": 1956442,
+        "cache_write": 138105
+      },
+      "cost_usd": 1.0018482000000002,
+      "wall_ms": 2743513,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-caller-count-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": null,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 10,
+        "output": 514,
+        "cache_read": 17570,
+        "cache_write": 7313
+      },
+      "cost_usd": 0.036169,
+      "wall_ms": 10613,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-caller-count-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_mismatch",
+      "failure": "wrong_answer",
+      "partial": null,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 29,
+      "tool_errors": 2,
+      "truncated_results": 1,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 31,
+      "usage": {
+        "input": 36,
+        "output": 4347,
+        "cache_read": 452263,
+        "cache_write": 62597
+      },
+      "cost_usd": 0.3391563,
+      "wall_ms": 1368960,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-string-function-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": null,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 6,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 8,
+      "usage": {
+        "input": 18,
+        "output": 1138,
+        "cache_read": 70470,
+        "cache_write": 12394
+      },
+      "cost_usd": 0.068039,
+      "wall_ms": 24129,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-string-function-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "answer_matches",
+      "failure": null,
+      "partial": null,
+      "lenient": false,
+      "extraction": "exact",
+      "tool_calls": 18,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 2,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 21,
+      "usage": {
+        "input": 42,
+        "output": 5254,
+        "cache_read": 437269,
+        "cache_write": 44519
+      },
+      "cost_usd": 0.27442690000000003,
+      "wall_ms": 2158364,
+      "runner_exit": "ok",
+      "runner_error": null,
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Fairness review: the scale fixture was built with go1.27.3, newer than Ghidra 12.2's Go support (1.15-1.26), so Ghidra named no functions. Rebuilt with go1.23.4 (Hugo v0.140.0's release toolchain); all scale runs rerun for both servers with a 7,200 s limit, decided after the full pass."
+    },
+    {
+      "task_id": "scale-caller-count-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 1,
+      "outcome": "failed",
+      "failure": "runner_error",
+      "partial": null,
+      "lenient": false,
+      "extraction": null,
+      "tool_calls": 2,
+      "tool_errors": 1,
+      "truncated_results": 0,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 3,
+      "usage": {
+        "input": 8,
+        "output": 79,
+        "cache_read": 16749,
+        "cache_write": 8451
+      },
+      "cost_usd": null,
+      "wall_ms": 1621967,
+      "runner_exit": "error",
+      "runner_error": "stream ended without a result event; claude exited 143",
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Rule: a run stopped from outside before any answer is rerun once, whatever the server. scale-caller-count rea r1: the MCP connection closed at 22:43:31 (1,581 s into REA's first Ghidra wait) and claude exited 143 (an outside SIGTERM). The other eight: the client's account usage limit ('You've hit your 5-hour limit'), a synthetic message instead of a model turn, from 00:53 on 2026-11-06."
+    },
+    {
+      "task_id": "scale-string-function-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 2,
+      "outcome": "failed",
+      "failure": "runner_error",
+      "partial": null,
+      "lenient": false,
+      "extraction": null,
+      "tool_calls": 2,
+      "tool_errors": 0,
+      "truncated_results": 1,
+      "tool_search_calls": 1,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 4,
+      "usage": {
+        "input": 6,
+        "output": 273,
+        "cache_read": 7505,
+        "cache_write": 8226
+      },
+      "cost_usd": 0.0363965,
+      "wall_ms": 2133132,
+      "runner_exit": "error",
+      "runner_error": "model differs from claude-sonnet-5-5: ['<synthetic>']",
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Rule: a run stopped from outside before any answer is rerun once, whatever the server. scale-caller-count rea r1: the MCP connection closed at 22:43:31 (1,581 s into REA's first Ghidra wait) and claude exited 143 (an outside SIGTERM). The other eight: the client's account usage limit ('You've hit your 5-hour limit'), a synthetic message instead of a model turn, from 00:53 on 2026-11-06."
+    },
+    {
+      "task_id": "scale-string-function-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rampage",
+      "repetition": 2,
+      "outcome": "failed",
+      "failure": "runner_error",
+      "partial": null,
+      "lenient": false,
+      "extraction": null,
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 0,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 1,
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost_usd": 0.0,
+      "wall_ms": 2477,
+      "runner_exit": "error",
+      "runner_error": "model differs from claude-sonnet-5-5: ['<synthetic>']",
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Rule: a run stopped from outside before any answer is rerun once, whatever the server. scale-caller-count rea r1: the MCP connection closed at 22:43:31 (1,581 s into REA's first Ghidra wait) and claude exited 143 (an outside SIGTERM). The other eight: the client's account usage limit ('You've hit your 5-hour limit'), a synthetic message instead of a model turn, from 00:53 on 2026-11-06."
+    },
+    {
+      "task_id": "scale-callees-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "failed",
+      "failure": "runner_error",
+      "partial": 0.0,
+      "lenient": false,
+      "extraction": null,
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 0,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 1,
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost_usd": 0.0,
+      "wall_ms": 2641,
+      "runner_exit": "error",
+      "runner_error": "model differs from claude-sonnet-5-5: ['<synthetic>']",
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Rule: a run stopped from outside before any answer is rerun once, whatever the server. scale-caller-count rea r1: the MCP connection closed at 22:43:31 (1,581 s into REA's first Ghidra wait) and claude exited 143 (an outside SIGTERM). The other eight: the client's account usage limit ('You've hit your 5-hour limit'), a synthetic message instead of a model turn, from 00:53 on 2026-11-06."
+    },
+    {
+      "task_id": "scale-callees-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "failed",
+      "failure": "runner_error",
+      "partial": 0.0,
+      "lenient": false,
+      "extraction": null,
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 0,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 1,
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost_usd": 0.0,
+      "wall_ms": 2971,
+      "runner_exit": "error",
+      "runner_error": "model differs from claude-sonnet-5-5: ['<synthetic>']",
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Rule: a run stopped from outside before any answer is rerun once, whatever the server. scale-caller-count rea r1: the MCP connection closed at 22:43:31 (1,581 s into REA's first Ghidra wait) and claude exited 143 (an outside SIGTERM). The other eight: the client's account usage limit ('You've hit your 5-hour limit'), a synthetic message instead of a model turn, from 00:53 on 2026-11-06."
+    },
+    {
+      "task_id": "scale-caller-count-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "failed",
+      "failure": "runner_error",
+      "partial": null,
+      "lenient": false,
+      "extraction": null,
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 0,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 1,
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost_usd": 0.0,
+      "wall_ms": 2624,
+      "runner_exit": "error",
+      "runner_error": "model differs from claude-sonnet-5-5: ['<synthetic>']",
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Rule: a run stopped from outside before any answer is rerun once, whatever the server. scale-caller-count rea r1: the MCP connection closed at 22:43:31 (1,581 s into REA's first Ghidra wait) and claude exited 143 (an outside SIGTERM). The other eight: the client's account usage limit ('You've hit your 5-hour limit'), a synthetic message instead of a model turn, from 00:53 on 2026-11-06."
+    },
+    {
+      "task_id": "scale-caller-count-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "failed",
+      "failure": "runner_error",
+      "partial": null,
+      "lenient": false,
+      "extraction": null,
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 0,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 1,
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost_usd": 0.0,
+      "wall_ms": 3000,
+      "runner_exit": "error",
+      "runner_error": "model differs from claude-sonnet-5-5: ['<synthetic>']",
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Rule: a run stopped from outside before any answer is rerun once, whatever the server. scale-caller-count rea r1: the MCP connection closed at 22:43:31 (1,581 s into REA's first Ghidra wait) and claude exited 143 (an outside SIGTERM). The other eight: the client's account usage limit ('You've hit your 5-hour limit'), a synthetic message instead of a model turn, from 00:53 on 2026-11-06."
+    },
+    {
+      "task_id": "scale-string-function-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rampage",
+      "repetition": 3,
+      "outcome": "failed",
+      "failure": "runner_error",
+      "partial": null,
+      "lenient": false,
+      "extraction": null,
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 0,
+      "rejected_calls": 0,
+      "position": 0,
+      "turns": 1,
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost_usd": 0.0,
+      "wall_ms": 2451,
+      "runner_exit": "error",
+      "runner_error": "model differs from claude-sonnet-5-5: ['<synthetic>']",
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Rule: a run stopped from outside before any answer is rerun once, whatever the server. scale-caller-count rea r1: the MCP connection closed at 22:43:31 (1,581 s into REA's first Ghidra wait) and claude exited 143 (an outside SIGTERM). The other eight: the client's account usage limit ('You've hit your 5-hour limit'), a synthetic message instead of a model turn, from 00:53 on 2026-11-06."
+    },
+    {
+      "task_id": "scale-string-function-x64-elf",
+      "kind": "analysis",
+      "category": "scale",
+      "server": "rea",
+      "repetition": 3,
+      "outcome": "failed",
+      "failure": "runner_error",
+      "partial": null,
+      "lenient": false,
+      "extraction": null,
+      "tool_calls": 0,
+      "tool_errors": 0,
+      "truncated_results": 0,
+      "tool_search_calls": 0,
+      "rejected_calls": 0,
+      "position": 1,
+      "turns": 1,
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cache_read": 0,
+        "cache_write": 0
+      },
+      "cost_usd": 0.0,
+      "wall_ms": 3083,
+      "runner_exit": "error",
+      "runner_error": "model differs from claude-sonnet-5-5: ['<synthetic>']",
+      "runner": {
+        "name": "claude-code",
+        "version": "2.1.318",
+        "model": "claude-sonnet-5-5",
+        "isolation": "setting-sources-none"
+      },
+      "superseded_reason": "Rule: a run stopped from outside before any answer is rerun once, whatever the server. scale-caller-count rea r1: the MCP connection closed at 22:43:31 (1,581 s into REA's first Ghidra wait) and claude exited 143 (an outside SIGTERM). The other eight: the client's account usage limit ('You've hit your 5-hour limit'), a synthetic message instead of a model turn, from 00:53 on 2026-11-06."
     }
   ],
   "rescore": {
-    "commit": "481999f9c4c9e84d43757f9b81a0039bd12f3aa7",
-    "reason": "Recompute the summary after fixing the partial-credit mean (commit above); no model calls",
+    "commit": "17975fd7e3876f5d13b7c5c72e862d285f600d1f",
+    "reason": "Fill the lenient-format field for every current run (commit 8f1378a); no model calls",
     "changed_runs": [],
     "earlier_rescore": null
   }
