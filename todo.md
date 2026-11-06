@@ -15,6 +15,24 @@
 This file holds open items. Done sections, including every completed parity phase, are archived verbatim in
 [docs/plans/todo-archive.md](docs/plans/todo-archive.md); each section below that lost done items links to them.
 
+## Linux ARM64 host support (after the repository is public)
+
+GitHub's `ubuntu-24.04-arm` runners are free only for public repositories, so this starts once the repository is
+public. Nothing known blocks it; it is untested.
+
+- [ ] Add an `ubuntu-24.04-arm` CI job mirroring the Linux x86-64 job (hygiene gate, Clippy, workspace nextest,
+  sccache), dispatchable on its own like `macos`.
+- [ ] Gate lanes that are x86-64 by design (for example the x86-64 ELF layout oracle, which builds x86-64 fixtures
+  with the host toolchain) with job conditions or `cfg`, as the macOS-only UI snapshots are; fix any test that
+  assumes an x86-64 host rather than skipping it.
+- [ ] Check supervised decompilation and the plugin host's resource limits on Linux ARM64; they are only
+  exercised on Linux x86-64 today.
+- [ ] Add `aarch64-unknown-linux-gnu` to `release.yml`'s build matrix on a native ARM64 runner, with the same
+  packaging and in-job archive check; dry-run it, then install the archive with `tools/install.sh --archive` on a
+  clean ARM64 container.
+- [ ] Update the README support table, `docs/known-limits.md`, `docs/getting-started.md` and the changelog.
+  Ship it in 1.0.0-rc.1 if it is green before that release is published, otherwise in rc.2.
+
 ## Head-to-head agent benchmark follow-ups (2026-11-05)
 
 Observations from [the rampage vs REA runs](docs/benchmarks/agent-h2h-2026-11-05.md); rampage was not tuned
