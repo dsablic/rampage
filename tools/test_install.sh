@@ -3,7 +3,7 @@ set -euo pipefail
 
 # All commands under test see only fixture roots and fake Cargo; no packages are compiled or executed.
 repository="$(cd "$(dirname "$0")/.." && pwd)"
-fixture="$(mktemp -d "${TMPDIR:-/private/var/tmp}/rampage-install-test.XXXXXXXX")"
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/rampage-install-test.XXXXXXXX")"
 trap 'rm -rf "$fixture"' EXIT
 real_mv="$(command -v mv)"
 real_ln="$(command -v ln)"
@@ -19,8 +19,8 @@ if [ "$#" -ne 6 ] || [ "$1" != install ] || [ "$2" != --path ] ||
     printf '\n' >&2
     exit 90
 fi
-if [ "$CARGO_BUILD_JOBS" != 2 ]; then
-    echo "Unexpected Cargo job count: $CARGO_BUILD_JOBS" >&2
+if [ "${CARGO_BUILD_JOBS-unset}" != "$expected_jobs" ]; then
+    echo "Unexpected Cargo job count: ${CARGO_BUILD_JOBS-unset} (expected $expected_jobs)" >&2
     exit 90
 fi
 package="${3##*/}"
@@ -143,15 +143,19 @@ start_case() {
     mkdir -p "$case_root/home/.local/bin" "$case_root/root/bin"
     install_bin="$case_root/root/bin"
     mode=normal
+    expected_jobs=unset
     printf 'victim must survive\n' > "$case_root/victim"
-    export case_root install_bin mode
+    export case_root install_bin mode expected_jobs
 }
+# Runs the installer from an unrelated directory: it must find its source tree from its own location.
 invoke() {
     status=0
+    mkdir -p "$case_root/elsewhere"
     (
-        cd "$repository"
-        HOME="$case_root/home" PATH="$fixture/hooks:$PATH" CARGO_BUILD_JOBS=99 \
-            bash tools/install.sh "$@"
+        cd "$case_root/elsewhere"
+        unset CARGO_BUILD_JOBS
+        if [ "$expected_jobs" != unset ]; then export CARGO_BUILD_JOBS="$expected_jobs"; fi
+        HOME="$case_root/home" PATH="$fixture/hooks:$PATH" bash "$repository/tools/install.sh" "$@"
     ) > "$case_root/stdout" 2> "$case_root/stderr" || status=$?
 }
 success() { [ "$status" -eq 0 ] || fail "unexpected exit $status"; }
@@ -160,6 +164,35 @@ failure() {
     if grep -F 'Installed from this source tree' "$case_root/stdout" > /dev/null; then
         fail 'false success report'
     fi
+}
+cleaned() {
+    if grep -F 'Private staging retained' "$case_root/stderr" > /dev/null; then fail 'staging retained after success'; fi
+    if [ -f "$case_root/staging.path" ]; then absent "$(cat "$case_root/staging.path")"; fi
+    for leftover in "$install_bin"/.rampage-install.*; do absent "$leftover"; done
+    contains "$case_root/stdout" '--uninstall'
+}
+sha256_file() {
+    (
+        cd "$(dirname "$1")"
+        if sha256sum --version 2> /dev/null | grep GNU > /dev/null; then
+            sha256sum "$(basename "$1")" > "$(basename "$1").sha256"
+        else
+            shasum -a 256 "$(basename "$1")" > "$(basename "$1").sha256"
+        fi
+    )
+}
+make_archive() {
+    local tree="$case_root/archive-tree/rampage-0.0.0-test"
+    local name
+    mkdir -p "$tree/bin"
+    for name in rampage rampage-worker rampage-ui; do
+        printf '#!/bin/sh\nexit 91\n# new %s\n' "$name" > "$tree/bin/$name"
+        chmod +x "$tree/bin/$name"
+    done
+    printf 'license\n' > "$tree/LICENSE"
+    archive="$case_root/rampage-0.0.0-test.tar.gz"
+    tar -czf "$archive" -C "$case_root/archive-tree" rampage-0.0.0-test
+    sha256_file "$archive"
 }
 retained() {
     contains "$case_root/stderr" 'Private staging retained'
@@ -176,8 +209,90 @@ new_binary rampage-worker
 absent "$install_bin/rampage-ui"
 absent "$install_bin/rampage-plugin-worker"
 [ "$(wc -l < "$case_root/cargo.log" | tr -d ' ')" -eq 2 ] || fail 'unexpected default packages'
-retained
-contains "$staging/.crates.toml" 'fixture metadata'
+cleaned
+
+start_case jobs_override
+expected_jobs=7
+invoke "$case_root/root"
+success
+new_binary rampage
+cleaned
+
+start_case replaced_previous_cleaned
+old_binary rampage
+old_binary rampage-worker
+invoke "$case_root/root"
+success
+new_binary rampage
+new_binary rampage-worker
+cleaned
+
+start_case archive
+make_archive
+old_binary rampage
+invoke "$case_root/root" --archive "$archive" --ui
+success
+new_binary rampage
+new_binary rampage-worker
+new_binary rampage-ui
+absent "$case_root/cargo.log"
+cleaned
+contains "$case_root/stdout" "/rampage-0.0.0-test.tar.gz (separate file publications)"
+
+start_case archive_checksum_mismatch
+make_archive
+printf 'tampered\n' >> "$archive"
+old_binary rampage
+invoke "$case_root/root" --archive "$archive"
+failure
+contains "$install_bin/rampage" 'old rampage'
+absent "$case_root/cargo.log"
+
+start_case archive_symlinked_bin
+mkdir -p "$case_root/outside" "$case_root/archive-tree/rampage-0.0.0-test"
+for name in rampage rampage-worker; do printf 'outside %s\n' "$name" > "$case_root/outside/$name"; done
+ln -s "$case_root/outside" "$case_root/archive-tree/rampage-0.0.0-test/bin"
+archive="$case_root/rampage-0.0.0-test.tar.gz"
+tar -czf "$archive" -C "$case_root/archive-tree" rampage-0.0.0-test
+sha256_file "$archive"
+invoke "$case_root/root" --archive "$archive"
+failure
+contains "$case_root/outside/rampage" 'outside rampage'
+contains "$case_root/outside/rampage-worker" 'outside rampage-worker'
+absent "$install_bin/rampage"
+contains "$case_root/stderr" 'not a regular directory'
+
+start_case archive_without_plugin_worker
+make_archive
+printf 'old plugin worker\n' > "$install_bin/rampage-plugin-worker"
+invoke "$case_root/root" --archive "$archive"
+failure
+[ "$status" -eq 2 ] || fail 'archive with an installed plugin worker status'
+contains "$install_bin/rampage-plugin-worker" 'old plugin worker'
+contains "$case_root/stderr" 'do not include rampage-plugin-worker'
+
+start_case uninstall
+for name in rampage rampage-worker rampage-ui rampage-plugin-worker; do old_binary "$name"; done
+printf 'unrelated\n' > "$install_bin/other-tool"
+invoke "$case_root/root" --uninstall
+success
+for name in rampage rampage-worker rampage-ui rampage-plugin-worker; do absent "$install_bin/$name"; done
+contains "$install_bin/other-tool" unrelated
+absent "$case_root/cargo.log"
+
+start_case uninstall_preserves_symlink
+old_binary rampage-worker
+ln -s "$case_root/victim" "$install_bin/rampage"
+invoke "$case_root/root" --uninstall
+failure
+[ -L "$install_bin/rampage" ] || fail 'uninstall removed a symlink'
+absent "$install_bin/rampage-worker"
+contains "$case_root/victim" 'victim must survive'
+
+start_case uninstall_with_build_options
+invoke "$case_root/root" --uninstall --ui
+failure
+[ "$status" -eq 2 ] || fail 'uninstall option conflict status'
 
 start_case ui
 invoke "$case_root/root" --ui

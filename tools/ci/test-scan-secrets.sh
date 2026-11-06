@@ -140,6 +140,9 @@ assert any(
 assert all(finding["Secret"] == "REDACTED" for finding in history), "Finding reports must be redacted"
 PY
   echo 'Actual Gitleaks detected the merge-only credential despite repository bypass attempts.'
+  # With the helper's own reports, the reviewed-findings list must not excuse an unlisted credential.
+  run_helper "$scanner" 1
+  echo 'The reviewed-findings exception does not excuse the unlisted merge-only credential.'
 else
   echo 'Fake-scanner merge and policy regressions passed; actual Gitleaks was not supplied.'
 fi

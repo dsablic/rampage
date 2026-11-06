@@ -177,8 +177,8 @@ The [feature overview](docs/features.md) and [MCP reference](docs/mcp.md) descri
 | Host | Status |
 | --- | --- |
 | macOS on Apple silicon | Tested; the primary development host. |
-| macOS on Intel | Untested: it should build from source, but no one has run the tests on it. |
-| Linux x64 | Builds and tests in CI; first release pending. |
+| macOS on Intel, Linux ARM64 | Untested: they should build from source, but no one has run the tests on them. |
+| Linux x64 (Ubuntu 24.04) | Supported. CI builds the whole workspace and runs its tests and Clippy; release archives are built for `x86_64-unknown-linux-gnu`. The desktop UI builds but its interface is untested there. |
 | Windows | Not supported as a host in 1.0; planned for 1.x. |
 
 On any host, rampage analyses PE, ELF and Mach-O binaries alike. Windows PE binaries can be analysed, and Windows
@@ -214,7 +214,7 @@ targets debugged through an RSP stub, from a macOS or Linux host.
 - **The server warns that no `rampage-worker` was found.** `decompile` then runs in-process. Install both
   executables with `tools/install.sh`, keep them in one directory, or set `RAMPAGE_WORKER` to the worker's path.
 - **The build is slow.** `tools/install.sh` compiles Ghidra's C++ decompiler and optimises the whole release
-  build with two jobs, from scratch on every run: expect 10 to 30 minutes. See
+  build from scratch on every run: expect 10 to 30 minutes. See
   [getting started](docs/getting-started.md#1-build-and-install) for a measured time.
 
 ## Documentation and project

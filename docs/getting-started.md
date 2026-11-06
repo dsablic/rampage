@@ -9,7 +9,7 @@ Every result shown here is real output from rampage on the fixture used, shorten
 
 - A supported host (see [supported hosts](../README.md#supported-hosts)):
   - macOS on Apple silicon: tested. Intel macOS is untested.
-  - Linux x64: builds and tests in CI; first release pending.
+  - Linux x64 (Ubuntu 24.04): supported; CI builds and tests the whole workspace.
 - A Rust toolchain through [rustup](https://rustup.rs). The repository's `rust-toolchain.toml` selects stable, with
   edition 2024.
 - A C/C++ compiler and zlib development files, for the embedded decompiler:
@@ -28,8 +28,8 @@ tools/install.sh
 
 `tools/install.sh` builds release binaries and installs `rampage` and `rampage-worker` into `~/.local/bin` (pass a
 directory to install somewhere else). It compiles Ghidra's C++ decompiler and optimises the whole release build,
-with two build jobs, and starts from scratch each time it runs, so expect roughly 10 to 30 minutes depending on
-the machine: on a 10-core M1 Max that other jobs kept busy, it took 23 minutes.
+and starts from scratch each time it runs, so expect roughly 10 to 30 minutes depending on
+the machine: on a 10-core M1 Max that other jobs kept busy, it took 23 minutes with the installer's former two-job limit, so expect less now that it uses Cargo's default job count. `tools/install.sh --uninstall` removes what it installed.
 
 Keep the two executables side by side: decompilation runs in the supervised worker. If `rampage` cannot find
 `rampage-worker`, it decompiles in-process instead, and the MCP server warns about it when it starts.

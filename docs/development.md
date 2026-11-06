@@ -36,8 +36,8 @@ optimized dependencies.
 
 The default nextest profile in `.config/nextest.toml` skips 23 of the heaviest tests (roster matrices, type
 propagation, Go decompilation), which take about a third of the suite's CPU time. Run everything with
-`cargo nextest run --profile full` before committing; `cargo test` ignores the file. CI's macOS job runs
-`cargo test`; its Linux workspace job runs the default nextest profile.
+`cargo nextest run --profile full` before committing; `cargo test` ignores the file. Both CI workspace jobs run the
+default nextest profile; a manual run with `full=true` runs everything (see [Continuous integration](#continuous-integration)).
 
 ### One integration-test binary per crate
 
@@ -86,6 +86,117 @@ cargo test --locked --release -p rampage-decompiler -p rampage-api -p rampage-wo
   darwin_narrow:: layout:: api:: smoke::
 cargo test --locked --release -p rampage-decompiler --lib
 ```
+
+## Continuous integration
+
+`.github/workflows/ci.yml` has four jobs:
+
+| Job | Runner | What it runs |
+| --- | --- | --- |
+| `hygiene` | Ubuntu 24.04 | `cargo fmt --check`, the Python tool regressions, `tools/test_install.sh`, Gitleaks over HEAD and history |
+| `clippy` | Ubuntu 24.04 | warnings-denied workspace Clippy |
+| `linux` | Ubuntu 24.04 | CLI and worker build, `cargo nextest run --workspace`, then the owned x86-64 ELF layout, DWARF/C++ layout and component oracles |
+| `macos` | macOS 15 (ARM64) | Clippy, the supervised decompiler corpus, `cargo nextest run --workspace` (including the Metal UI snapshots and the rampage-eval accuracy gate), and the macOS-only module-linkage, plugin-triage, DWARF, C++ and compiled-fixture gates |
+
+`clippy`, `linux` and `macos` wait for `hygiene`, so a formatting or secret-scan failure costs seconds, not a build.
+All Rust jobs use [sccache](https://github.com/mozilla/sccache) with the GitHub Actions cache. cc-rs adopts the
+sccache `RUSTC_WRAPPER` as its C/C++ wrapper, so the embedded Ghidra decompiler's 92 C++ files are cached as well;
+each job prints `sccache --show-stats` at the end.
+
+**Triggers.** Manual runs (`workflow_dispatch`) and `v*` tags work now. `push` to `main` and `pull_request` are
+declared, but every job checks `github.event.repository.private == false` for those events, so they start running
+only once the repository is public (macOS minutes on a private repository cost ten times Linux minutes). Making the
+repository public needs no workflow change.
+
+**Manual runs.** Every input defaults to off:
+
+```sh
+gh workflow run ci.yml --ref BRANCH                          # Linux jobs only
+gh workflow run ci.yml --ref BRANCH -f macos=true            # also macOS
+gh workflow run ci.yml --ref BRANCH -f full=true             # nextest `full` profile (all 23 heavy tests)
+gh workflow run ci.yml --ref BRANCH -f live=true             # also the live QEMU debugger suite on Linux
+gh workflow run ci.yml --ref BRANCH -f release_dry_run=true  # also build and smoke-test release archives
+gh run watch RUN_ID; gh run view RUN_ID --log-failed
+```
+
+The `full` profile and the live suites never run on push or pull requests. The other live suites need hardware CI
+does not have; run them locally:
+
+```sh
+RAMPAGE_QEMU_LIVE=1 cargo nextest run -p rampage-api --run-ignored only -E 'test(/^debug_qemu::/)'
+RAMPAGE_DEBUGSERVER_LIVE=1 cargo nextest run -p rampage-api --run-ignored only -E 'test(/^debug_debugserver_live::/)'
+RAMPAGE_WINDOWS_LIVE=1 cargo nextest run -p rampage-api --run-ignored only -E 'test(/^debug_windows_live::/)'
+RAMPAGE_LLDB_LIVE=1 python3 -m pytest tools/test_lldb_live.py
+```
+
+Manual runs on one ref share a concurrency group, so a new dispatch cancels the previous run on that ref,
+including a release dry run started through it.
+
+Measured on GitHub's 2-vCPU private-repository Ubuntu runners (2026-11-06; single samples, and test execution
+varied by about 30% between runs of the same commit):
+
+| Linux | Before (separate jobs, no cache) | After, cold cache | After, warm cache |
+| --- | --- | --- | --- |
+| Workflow wall clock | 48.1 min | 65.8 min | 26.5 min |
+| Clippy | 12.1 min (serial, before the build) | 17.2 min (parallel job) | 7.3 min (parallel job) |
+| CLI and worker build | 12.2 min | 19.1 min | 4.5 min |
+| Test build | 15.8 min | 25.9 min | 8.4 min |
+| Test execution (3,908 tests) | 7.4 min | 9.3 min | 9.7 min |
+| Layout and component oracles | 12.5 + 9.4 min in two extra jobs, each rebuilding | 10.3 min | 2.4 min |
+
+A cold cache costs extra time because sccache uploads every object; the decompiler's C/C++ objects and dependency
+crates then hit at 100%. Workspace test executables still compile and link on every run (sccache cannot cache
+binaries), which is most of the remaining build time.
+
+## Release procedure
+
+`.github/workflows/release.yml` builds `rampage`, `rampage-worker` and `rampage-ui` for `aarch64-apple-darwin` and
+`x86_64-unknown-linux-gnu` with ThinLTO and one codegen unit (set in the workflow's environment, so a local profile
+edit cannot change shipped binaries). `tools/ci/package-release.sh` packages each target as
+`rampage-VERSION-TARGET.tar.gz`: one top-level directory holding `bin/` (the programs, side by side, because the CLI
+starts the worker from its own directory), `LICENSE`, `NOTICE`, `THIRD-PARTY-NOTICES` and a README stub, plus a
+`.sha256` file. `tools/ci/check-release-archive.sh` verifies the checksum and layout, then runs `rampage --version`,
+`rampage server serve --help` and `rampage-ui --version` from the unpacked archive.
+
+- A pushed `v*` tag that matches the workspace version builds every target and creates a **draft** release with
+  the archives, their `.sha256` files and a combined `SHA256SUMS`. Nothing is published automatically.
+- `gh workflow run release.yml --ref BRANCH` (or CI's `release_dry_run` input) is a dry run: it builds, packages and
+  smoke-tests the archives and uploads them as workflow artefacts for 14 days, and never creates a release. Pass
+  `-f macos=false` to build Linux only. `gh workflow run release.yml --ref vX.Y.Z -f dry_run=false` rebuilds an
+  existing tag and attaches a draft to it; a non-dry run on a ref that is not a tag stops before building.
+- `release.yml` must be on the default branch before `gh workflow run release.yml` works; until then, use CI's
+  `release_dry_run` input.
+
+Install a downloaded archive with the installer, which verifies the checksum when the `.sha256` file sits next to
+the archive and then publishes the programs through the same guarded path as a source install:
+
+```sh
+tools/install.sh --archive rampage-0.1.0-x86_64-unknown-linux-gnu.tar.gz [ROOT] [--ui]
+tools/install.sh [ROOT] [--ui] [--plugins]   # build from this checkout instead
+tools/install.sh [ROOT] --uninstall          # remove rampage, rampage-worker, rampage-ui, rampage-plugin-worker
+```
+
+`ROOT` defaults to `~/.local` (programs go to `ROOT/bin`), and the script works from any directory. A source
+install builds with the release profile using Cargo's default job count (`CARGO_BUILD_JOBS` overrides it); a cold
+build of the CLI, worker and UI took 23 minutes on a 2-vCPU Linux CI runner. After a successful install the
+private staging directory is removed; after a failure it is kept in `ROOT/bin/.rampage-install.*` for inspection.
+
+Release archives do not include `rampage-plugin-worker`; install it from source with `--plugins`. Without the
+installer, copy the archive's `bin/` contents into one directory on `PATH`.
+
+### Release checklist
+
+1. On `main`, bump `[workspace.package] version` in `Cargo.toml`, run `cargo update --workspace`, and commit with a
+   short changelog entry.
+2. Regenerate `THIRD-PARTY-NOTICES` with `python3 -I tools/third-party-notices.py` and commit any change.
+3. Run the local gates: `cargo fmt --all --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings`
+   and `cargo nextest run --locked --workspace --profile full`.
+4. Run `gh workflow run ci.yml --ref main -f macos=true -f full=true` and wait for it to pass.
+5. Run a release dry run (`gh workflow run release.yml --ref main`), download an archive for your host with
+   `gh run download RUN_ID`, and run `tools/install.sh --archive …` into a scratch root.
+6. Tag and push: `git tag -s vX.Y.Z -m "rampage X.Y.Z" && git push origin vX.Y.Z`. The tag must equal
+   `v` plus the workspace version, or the workflow stops.
+7. Review the draft release: archive names, checksums, generated notes. Edit the notes, then publish it by hand.
 
 ## Inspect and clean build output
 

@@ -9,7 +9,7 @@ these against other tools, and the [stability policy](stability.md) says which a
 | --- | --- |
 | macOS on Apple silicon | Tested; the primary development host. |
 | macOS on Intel | Untested. It should build from source, but no one has run the test suite on it. |
-| Linux x64 | Builds and tests in CI; first release pending. |
+| Linux x64 (Ubuntu 24.04) | Supported: CI builds and tests the whole workspace; the desktop UI is untested there. |
 | Windows | Not supported as a host in 1.0; planned for 1.x. |
 
 There are no prebuilt binaries yet; see [getting started](getting-started.md#what-you-need) for the build
