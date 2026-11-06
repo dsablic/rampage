@@ -206,7 +206,7 @@ if [ -n "$archive" ]; then
     rm -rf -- ./unpack
 else
     echo "Building ${names[*]} from $source_root with the release profile (ThinLTO, one codegen unit)." >&2
-    echo 'A cold build takes about 6 minutes on a 10-core Apple silicon Mac and about 25 on a 2-core Linux machine.' >&2
+    echo 'A cold build of the CLI, worker and UI took 23 minutes on a 2-vCPU Linux CI runner; more cores finish sooner.' >&2
     cargo install --path "$source_root/crates/rampage-worker" --root . --locked
     cargo install --path "$source_root/crates/rampage-cli" --root . --locked
     if [ "$ui" = true ]; then cargo install --path "$source_root/crates/rampage-ui" --root . --locked; fi
