@@ -135,6 +135,20 @@ pub fn evaluate_split(
     compare(engine, split, &before, &after)
 }
 
+/// The held-out (development) split under `layers` against `reference`, keeping its changed cases: for the
+/// operator designing arms and rules, never for a proposer. The improve server does not call it; the final split
+/// has no such view.
+pub fn evaluate_dev_with_cases(
+    engine: &Engine,
+    layers: &[Layer],
+    reference: &[Layer],
+) -> Result<SplitEvaluation, FlywheelError> {
+    let indices = engine.corpus.indices(Split::Heldout);
+    let before = engine.propose(&indices, reference)?;
+    let after = engine.propose(&indices, layers)?;
+    compare_keeping(engine, Split::Heldout, &before, &after, true)
+}
+
 /// Scores `split` from the names a reference (`before`) and a candidate (`after`) gave its binaries. Held-out and
 /// final evaluations never keep cases.
 pub fn compare(
@@ -142,6 +156,16 @@ pub fn compare(
     split: Split,
     before: &Proposals,
     after: &Proposals,
+) -> Result<SplitEvaluation, FlywheelError> {
+    compare_keeping(engine, split, before, after, !matches!(split, Split::Heldout | Split::Final))
+}
+
+fn compare_keeping(
+    engine: &Engine,
+    split: Split,
+    before: &Proposals,
+    after: &Proposals,
+    keep_cases: bool,
 ) -> Result<SplitEvaluation, FlywheelError> {
     let indices = engine.corpus.indices(split);
     let mut reference_outcomes = BTreeMap::new();
@@ -169,7 +193,7 @@ pub fn compare(
                 "broken" => broken += 1,
                 _ => {}
             }
-            if !matches!(split, Split::Heldout | Split::Final) {
+            if keep_cases {
                 cases.push(ChangedCase {
                     binary: engine.binary(index).id.clone(),
                     address: format!("{address:#x}"),

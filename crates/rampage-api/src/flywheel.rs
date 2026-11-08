@@ -36,7 +36,7 @@ pub use engine::{
 };
 pub use evaluation::{
     ChangedCase, GateCheck, GateConfig, GateResult, NOVEL_SLICE, RECOGNISED_SLICE, SliceDelta, SplitEvaluation,
-    compare, evaluate_split,
+    compare, evaluate_dev_with_cases, evaluate_split,
 };
 pub use failures::{FailureGroup, FailureSet};
 pub use improve::{Baseline, FAMILY, Improve, ImproveOptions, ImproveTool, improve_tools};

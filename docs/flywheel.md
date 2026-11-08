@@ -216,7 +216,7 @@ rampage-eval flywheel-eval --corpus target/flywheel/corpus/<version> --split neg
     --pack target/flywheel/promoted/libid
 ```
 
-`--split` is `train`, `heldout`, `fast` or `negative`. Without `--pack`, the command measures the bundled baseline.
+`--split` is `train`, `heldout`, `fast`, `negative` or `final` ([the final split](#the-final-split)). Without `--pack`, the command measures the bundled baseline.
 With one or more packs it layers them over the bundled databases (the first pack wins) and reports deltas
 against the baseline. Each slice shows TP, FP and FN, precision, recall and F1.
 
@@ -225,8 +225,9 @@ against the baseline. Each slice shows TP, FP and FN, precision, recall and F1.
 - A name where the truth has no function is a false positive.
 - An unnamed truth function is a false negative.
 
-The training and held-out runs also print the overlap check. Changed cases are listed except for the held-out
-split, which never keeps any.
+The training and held-out runs also print the overlap check. Changed cases are listed except for the held-out and
+final splits. `--dev-cases` lists the held-out split's cases too, for the operator designing arms and rules on the
+development split. A proposer never sees them, and the final split has no such view.
 
 ## The gate
 

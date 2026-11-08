@@ -496,7 +496,24 @@ Final reads #1 (v1) and #2 (v2) on `libid-ed988c9a220e`:
     short bodies.
 - On this corpus's held-out split (with gcc zlib 1.3.1), v1 reaches 8396 TP and v2 8729, both at 280 FP.
 
+### False-positive diagnosis on the dev split (2026-11-08)
+`flywheel-eval --split heldout --dev-cases` lists the dev split's changed cases.
+- **The arms' 4 dev false positives are one case.** v1 and v2 share them. In lz4 1.10.0 at O0, `LZ4_read64` is
+  named `LZ4_read_ARCH`: the two bodies are byte-identical on 64-bit targets, and training (lz4 1.9.4) has only
+  the second. Nothing in training reveals the collision, so a per-row override built from training cannot fix it.
+- **Rejected rule: one name per binary** (drop a name matched at more than one function). Measured as a temporary
+  post-filter on train, dev and negatives (never final):
+  - it removes 8 dev false positives, the 4 above plus 4 of the bundled databases';
+  - it costs 84 dev and 86 training true positives: static binaries hold same-named duplicates;
+  - dev F1 drops from 0.724 to 0.720, so the rule was reverted.
+- **The false-positive mass is the bundled databases, not the arms:** 270 train, 276 dev and 134 negative false
+  positives with the bundled databases alone, against the arms' 4 on dev.
+
 ### Next
+- **Bundled-database false positives.** They are the larger lever (276 dev, 134 on negatives). Diagnose them on
+  dev and negatives.
+- **Caller/callee-confirmed rows** for identical bodies under different names: the only signal that separates
+  `LZ4_read64` from `LZ4_read_ARCH`.
 - **Per-row false-positive overrides.** The 4 false positives could get overrides in the style of Ghidra Function
   ID: confirm by callers/callees, or fail the entry. Then the arm passes its own gate, and the overrides become a
   small action space for the agent.

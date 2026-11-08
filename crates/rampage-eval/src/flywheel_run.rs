@@ -10,8 +10,8 @@ use std::time::Instant;
 
 use rampage_api::flywheel::{
     ARM_WILDCARDS, Arm, Corpus, Engine, FAMILY, GateConfig, Layer, NOVEL_SLICE, OperandClass, Paths, PromotedSet,
-    RECOGNISED_SLICE, Role, Split, SplitEvaluation, arm_directory, build_id, evaluate_split, layer, pack_layer,
-    promoted_layer, revert,
+    RECOGNISED_SLICE, Role, Split, SplitEvaluation, arm_directory, build_id, evaluate_dev_with_cases, evaluate_split,
+    layer, pack_layer, promoted_layer, revert,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -87,6 +87,10 @@ pub struct FlywheelEvalArgs {
     /// read is appended to the final ledger with it, and the read's number is printed, so reads stay countable.
     #[arg(long)]
     final_reason: Option<String>,
+    /// With `--split heldout`: keep its changed cases (up to `--max-cases`), for the operator designing arms and
+    /// rules on the development split. Never available for the final split.
+    #[arg(long)]
+    dev_cases: bool,
 }
 
 /// The final split's ledger: one JSON line per read, kept inside the corpus directory so every flywheel directory
@@ -294,7 +298,15 @@ pub fn eval(args: FlywheelEvalArgs) -> Result<ExitCode, String> {
     }
     let indices = engine.corpus.indices(split);
     let load = engine.load_all(&indices).map_err(|error| error.to_string())?;
-    let evaluation = evaluate_split(&engine, split, &layers, &[]).map_err(|error| error.to_string())?;
+    if args.dev_cases && split != Split::Heldout {
+        return Err("--dev-cases applies only to --split heldout, the development split".to_owned());
+    }
+    let evaluation = if args.dev_cases {
+        evaluate_dev_with_cases(&engine, &layers, &[])
+    } else {
+        evaluate_split(&engine, split, &layers, &[])
+    }
+    .map_err(|error| error.to_string())?;
     let mut output = evaluation_json(&evaluation, args.max_cases, true);
     if split == Split::Heldout || split == Split::Train {
         let overlap = engine.heldout_overlap().map_err(|error| error.to_string())?;
