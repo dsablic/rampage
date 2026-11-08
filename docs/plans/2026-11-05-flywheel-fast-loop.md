@@ -509,9 +509,40 @@ Final reads #1 (v1) and #2 (v2) on `libid-ed988c9a220e`:
 - **The false-positive mass is the bundled databases, not the arms:** 270 train, 276 dev and 134 negative false
   positives with the bundled databases alone, against the arms' 4 on dev.
 
+### Bundled-database false positives (2026-11-08)
+These are diagnosed from the cached bundled-only names joined with the truth on train, dev and negatives (never
+final). All 680 false positives are wrong names at real functions: 634 runtime and 46 library. They come from 20
+(truth, name) pairs in three families.
+- **Zig instance counters: 540 (79%).** Zig names generic instances `math.ldexp.ldexp__func_40`, with a
+  build-local counter. The bundled databases were built with zig 0.17.0 and the corpus with 0.17.1, so the same
+  body (332–1343 bytes, O0, aarch64 and x86_64) carries another counter (`__func_37`). The body match is right;
+  only the counter differs. That is nine bodies, each in 60 binaries. Each fix is a methodology call:
+  - drop the `__func_N` / `__anon_N` counter in the names identification reports and in the truth;
+  - or build the corpus with the bundled databases' zig.
+- **Short forwarders: 128.** These are argument moves plus one call or tail jump, 9–31 bytes, and they pass the
+  gate only on frame-pointer bookkeeping. `zcfree` (`mov rdi, rsi; jmp free`) is OpenSSL's
+  `ossl_digest_get_approved_nid_with_sha1`; `posix.munmap` is `inet_network`; `futimens` is `SSL_config`;
+  `compress`, `strtok` and `LZ4F_compressBegin_usingDict*` are similar.
+  - **Rejected: refuse such bodies at lookup.** A body that fails the gate once landing pads, frame bookkeeping and
+    a final direct branch are dropped would be named only by callee key. Two variants were measured:
+    - every short body: −46 FP on train and on dev and −22 on negatives, at a cost of 524 correct names on each
+      of train and dev;
+    - only bodies that branch out of themselves: −46/−46/−18 FP, at a cost of 332 correct names each, mostly
+      `__stdio_seek`, `__ofl_lock`, `sched_getaffinity` and `sprintf`.
+
+    Correct forwarders outnumber wrong ones about 7:1, so both variants were reverted.
+  - **The real fix is callee-confirmed forwarders.** The shipped databases store callee keys only for ambiguous
+    bodies (`calls`), and `entry_calls` is not saved. Naming a forwarder only when its callees match the
+    reference's needs the bundled databases regenerated with callee keys for forwarder entries.
+- **Identical bodies under other names: 12.** These are `bi_flush` / `_tr_flush_bits` (zlib, aarch64 Os), zig
+  `compiler_rt.trig.cos` / musl `__cos`, and the leaf `comma` / `cimag` (`movaps xmm0, xmm1; ret`). Bytes cannot
+  separate them.
+
 ### Next
-- **Bundled-database false positives.** They are the larger lever (276 dev, 134 on negatives). Diagnose them on
-  dev and negatives.
+- **Zig instance counters** (540 of 680 bundled false positives): decide between canonical names and a matched
+  zig, then re-measure.
+- **Callee-confirmed forwarders** in the bundled databases (128): regenerate them with callee keys for
+  forwarder entries.
 - **Caller/callee-confirmed rows** for identical bodies under different names: the only signal that separates
   `LZ4_read64` from `LZ4_read_ARCH`.
 - **Per-row false-positive overrides.** The 4 false positives could get overrides in the style of Ghidra Function
