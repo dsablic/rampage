@@ -384,6 +384,11 @@ what it was gated against, the deltas at promotion and at bundling, and its rows
 `flywheel-libid-<arch>` provenance profile; their hash entries are never changed. In a bundled database a PAT row
 names a function only when the hash entries have no answer for it, never against one.
 
+`bundle --arm` bundles the deterministic arm for the corpus as one entry (`arm-<rows hash>`, replacing an earlier
+arm entry), with the licence of the code its rows come from, through the same gate. The shipped databases carry
+arm `arm-e77075a92a73` (3218 rows from corpus `libid-ed988c9a220e`): against the bundled baseline it gains 7713
+held-out names (783 novel) for 4 false positives, and none on training or the negatives.
+
 `bundle --from <pack>` merges the selected entries (default: all) into the source, regenerates the affected
 assets and indexes, and reruns the gate on the corpus: every split identified with the regenerated databases
 against the repository's current ones, so nothing is rebuilt. The rules are the fast gate and the held-out gate

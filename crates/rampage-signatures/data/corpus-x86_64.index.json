@@ -3,10 +3,10 @@
   "arch": "x86_64",
   "scheme": 2,
   "asset": "corpus-x86_64.json.gz",
-  "gzip_sha256": "c2da13bae430747e89c829e9c73160c7fca0e49b33aad1d2bb6befe335381bff",
-  "compressed_bytes": 825951,
-  "json_bytes": 1571999,
-  "signatures": 11369,
+  "gzip_sha256": "6f61be54bc2cb52b14618dad15663df054008ebaa6655b02f1e47d84fce580ab",
+  "compressed_bytes": 996283,
+  "json_bytes": 2678559,
+  "signatures": 12898,
   "callee_keys": 822,
   "recognition": "same_build",
   "profiles": [
@@ -529,6 +529,19 @@
       "source_recipe": "case closure-rust-std-1.99.0-x64-O1-first; archive_sha256 is the binary target-component tar.xz, not a source archive; component receipt SHA-256 286dc6aafb7cb9bfc9053f2d6d6b0bddfd291be6932aa2de95d5c148a8470f0f; snapshot verifier SHA-256 068a3f59013ae90007cdd9e13cbabf8f50332f5ab810f30816a808807e690a76; owned native archive SHA-256 b6375ae12c2a2418f08b9feebce48a11bef6e9e7760f401085b6d837f60d0aa9; runtime-provenance SHA-256 5cc015d1a496a3ebeca4762043e3b498c38221450fc7d45c85140253587d868d; result SHA-256 b89d2e8c4f3e725db1e92c38e660a659709164d4eed3565224cbff48ee002e2d; commands SHA-256 b95c47c448d425f01204199265116ec8b4e3fe65ee2d41d08c9c9ae144d36c89; archive-member receipt SHA-256 a3acadb22297c01e47e10e49420313c8899d1f7b543fb6cb4b5c5408882c73e5; source/header inventory canonical compact sorted JSON SHA-256 a7f8112ead66636a3e89f23f7a3cfa1a2a7d7bb110fc53d5626ab5ea66d9009f; harness SHA-256 {\"reference\": \"799c9b6c3d33811a9072e450dfd706145309f7e91f583c70b400d42129eb0ffd\", \"target\": \"690ddec3fe14e4a73818571d14ef8624952c94e34ec269dee0df684dae3df2dd\"}; aggregate witness SHA-256 ce27ddfceb91fcc050c1ecd2ae0634cac7f449a6b49b2dfd9d34d07ee4a111c1; selected/available native members 2/2; clean recorded runtime environment and frozen native input snapshots; GC and ICF disabled; source-callee-context-v3 conflict rejection; raw exact fallback answers withheld; dependencies are not owned signature inputs; Rust metadata excluded from native code without renumbering archive ordinals; target not executed; source hashes are not source-to-binary reproduction or language-version authentication",
       "archive_sha256": "b106b0aa4565cc3525fd3161c69203a9e39044e6e6b4d618f261c3eeda14ad50",
       "archive_identity_unavailable": null
+    },
+    {
+      "id": "flywheel-libid-x86_64",
+      "library": "flywheel libid promotions",
+      "version": "1529 rows from 1 entries",
+      "target": "x86_64-linux-musl",
+      "compiler": "zig cc, Homebrew clang and Alpine gcc (flywheel corpus builds)",
+      "optimization": "O0, O2, Os and the distribution's",
+      "license": "BSD-2-Clause AND MIT AND Zlib",
+      "source": "rampage flywheel promotions; provenance in crates/rampage-signatures/data/flywheel/libid.json",
+      "source_recipe": "entries arm-e77075a92a73; corpora libid-ed988c9a220e; gated held out against the bundled baseline by rampage-eval bundle",
+      "archive_sha256": null,
+      "archive_identity_unavailable": "signature rows gated on a flywheel corpus, not a build of one source archive"
     }
   ]
 }

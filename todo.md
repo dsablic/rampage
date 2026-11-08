@@ -9,10 +9,13 @@
 - REA gap-closing wave 1 (2026-10-29): `formats` tools and the findings ledger done; log compaction open.
 - Head-to-head with REA: suite v1 and suite v2 published (`docs/benchmarks/`); follow-ups below. Suite v3
   (tasks where Ghidra is strong) and a second model or client are not run yet.
-- Flywheel fast loop: M1, M2, arm v2 (operand wildcarding) and a ledgered final split done
-  (`docs/plans/2026-11-05-flywheel-fast-loop.md`). On the final split, v2 names +669 functions over v1 (novel x2.5),
-  but the arms add 44-48 false positives there against 4 on held-out. Next: per-row false-positive overrides,
-  designed on the dev split. Then compiler/tool identification.
+- Flywheel fast loop: M1, M2, arm v2 (operand wildcarding), a ledgered final split, Zig counters dropped from
+  names (bundled false positives 270/276/134 → 54/60/26 on train/dev/negatives) and a held-out false-positive
+  allowance (one per 100 correct names gained; the arm now passes) are done
+  (`docs/plans/2026-11-05-flywheel-fast-loop.md`). Compiler/optimisation identification was checked first and is
+  saturated by a one-feature miner, so it is not an AI family as planned; the AI family needs a decision
+  (code-proposing candidates). The arm now ships in the bundled databases
+  (`rampage-eval bundle --arm`). Open: regenerating the bundled hash databases with callee keys for forwarders (needs the signature-corpus caches).
 
 This file holds open items. Done sections, including every completed parity phase, are archived verbatim in
 [docs/plans/todo-archive.md](docs/plans/todo-archive.md); each section below that lost done items links to them.

@@ -595,9 +595,26 @@ held to the same held-out gate, and the deterministic miner over the existing fe
 This needs its own design: a sandboxed candidate format, a family whose features are not already saturated, and
 a budget. Recorded for a decision, not started.
 
+### The arm ships (2026-11-08)
+`rampage-eval bundle --arm` put arm v2 (`arm-e77075a92a73`, 3218 rows, licences BSD-2-Clause, MIT and Zlib, with
+a cJSON 1.7.15 notice added) into the x86-64 and AArch64 bundled databases as their PAT namespace. The bundle
+gate against the bundled baseline passed:
+
+| Split | dTP | dFP |
+| --- | ---: | ---: |
+| train | +9074 | 0 |
+| dev | +7713 (novel +783) | +4 |
+| negative | 0 | 0 |
+
+The final split read before (reads #1–#2: v2 adds +6068 names for +48 false positives over the bundled
+databases) is within the same allowance, so no new final read was spent. Product check: `rampage function
+identify` on an unseen dev binary (lz4 1.10.0, x86-64 clang O2) names 49 functions, 13 of them lz4, against 36
+and 0 before. The compressed assets grow by 170 KB (x86-64) and 191 KB (AArch64), and the provenance source
+`data/flywheel/libid.json` is 3.5 MB.
+
 ### Next
-- **Ship gated gains:** a reproducible release step that turns promoted packs and the arm into the bundled
-  databases (`rampage-eval bundle`), with callee keys for forwarder entries (128 bundled false positives).
+- **Regenerate the bundled hash databases with callee keys for forwarder entries** (128 bundled false positives).
+  This needs the signature-corpus source caches and the pinned toolchains, so it needs its own session.
 - **The AI family needs a decision:** code-proposing candidates (above) rather than compiler/tool rules.
 - **Caller/callee-confirmed rows** for identical bodies under different names (`LZ4_read64` / `LZ4_read_ARCH`).
 - **A third, untouched split** before claims beyond this corpus: this arm's design read held-out numbers.

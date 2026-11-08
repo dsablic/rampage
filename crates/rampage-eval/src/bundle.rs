@@ -749,8 +749,8 @@ mod tests {
         let root = std::env::temp_dir().join(format!("rampage-bundle-regen-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let repo = scratch_repo(&root);
+        // Whatever the repository bundles already; the test adds one entry over it.
         let empty = load_source(&repo).unwrap();
-        assert!(empty.entries.is_empty());
         let row = Row {
             arch: "x86_64".to_owned(),
             name: "flywheel_test_function".to_owned(),
@@ -778,18 +778,23 @@ mod tests {
         let gz = repo.join(DATA).join("corpus-x86_64.json.gz");
         let index = repo.join(DATA).join("corpus-x86_64.index.json");
         let (original_json, original_index) = (decoded(&gz), std::fs::read_to_string(&index).unwrap());
+        let original_records = SignatureDb::from_gzip(&std::fs::read(&gz).unwrap()).unwrap().pat_records();
 
         let regenerated = regenerate(&repo, &empty, &added).unwrap();
         let paths: Vec<&str> = regenerated.changes.iter().map(|change| change.path.as_str()).collect();
         assert_eq!(paths.len(), 3, "the x86_64 asset, its index and the source: {paths:?}");
         let x86_64 = regenerated.after.iter().find(|database| database.arch().to_string() == "x86_64").unwrap();
-        assert_eq!(x86_64.pat_records(), 1);
+        assert_eq!(x86_64.pat_records(), original_records + 1);
         for change in &regenerated.changes {
             std::fs::write(repo.join(&change.path), &change.after).unwrap();
         }
         let metadata = BundledMetadata::parse(&std::fs::read_to_string(&index).unwrap()).unwrap();
         let database = metadata.load(&std::fs::read(&gz).unwrap()).unwrap();
-        assert_eq!(database.pat_records(), 1, "the regenerated asset loads as the bundled loader checks it");
+        assert_eq!(
+            database.pat_records(),
+            original_records + 1,
+            "the regenerated asset loads as the bundled loader checks it"
+        );
         assert!(metadata.profiles.iter().any(|profile| profile.id == "flywheel-libid-x86_64"));
         assert_eq!(load_source(&repo).unwrap(), added);
 
@@ -797,14 +802,12 @@ mod tests {
         let error = regenerate(&repo, &empty, &added).err().unwrap();
         assert!(error.contains("not exactly the rows"), "{error}");
 
-        // Removing the entry restores the database exactly and drops the profile.
+        // Removing the entry restores the database and its profiles exactly.
         let removed = regenerate(&repo, &added, &empty).unwrap();
         for change in &removed.changes {
             std::fs::write(repo.join(&change.path), &change.after).unwrap();
         }
         assert_eq!(decoded(&gz), original_json);
-        let metadata = BundledMetadata::parse(&std::fs::read_to_string(&index).unwrap()).unwrap();
-        assert!(!metadata.profiles.iter().any(|profile| profile.id.starts_with(FLYWHEEL_PROFILE_PREFIX)));
         let restored = std::fs::read_to_string(&index).unwrap();
         let original: Value = serde_json::from_str(&original_index).unwrap();
         let after: Value = serde_json::from_str(&restored).unwrap();
@@ -834,8 +837,9 @@ mod tests {
         set.save(&pack_paths, "Apache-2.0").unwrap();
         let pack = pack_paths.promoted(FAMILY);
 
-        // Merging refuses unknown entries and skips bundled ones.
+        // Merging refuses unknown entries and skips bundled ones. `empty` is what the repository bundles already.
         let empty = load_source(&repo).unwrap();
+        let bundled = empty.entries.len();
         assert!(merged(&empty, &pack, &["rv-nope".to_owned()]).is_err());
         let (once, added) = merged(&empty, &pack, &[]).unwrap();
         assert_eq!(added, ["rv-synthetic"]);
@@ -870,7 +874,7 @@ mod tests {
         let patch = std::fs::read_to_string(flywheel.join("bundle/patch/change.patch")).unwrap();
         assert!(patch.contains("GIT binary patch") && patch.contains(SOURCE), "{}", &patch[..patch.len().min(400)]);
         assert_eq!(decoded(&gz), original, "--patch-only restores the working tree");
-        assert!(load_source(&repo).unwrap().entries.is_empty());
+        assert_eq!(load_source(&repo).unwrap().entries.len(), bundled);
 
         // The patch applies cleanly to the clean tree.
         let check = Command::new("git")
@@ -885,8 +889,9 @@ mod tests {
         // Without it, the change stays in the tree, commit-ready, with the gate's delta recorded per entry.
         run(args(Some(pack.clone()), None, "apply", false)).unwrap();
         let source = load_source(&repo).unwrap();
-        assert_eq!(source.entries.len(), 1);
-        assert!(source.entries[0].bundled_heldout_delta.as_ref().is_some_and(|delta| delta.tp > 0));
+        assert_eq!(source.entries.len(), bundled + 1);
+        let synthetic = source.entries.iter().find(|entry| entry.id == "rv-synthetic").unwrap();
+        assert!(synthetic.bundled_heldout_delta.as_ref().is_some_and(|delta| delta.tp > 0));
         assert_ne!(decoded(&gz), original);
 
         // An uncommitted bundle blocks the next one: its patch would carry both.
@@ -896,7 +901,7 @@ mod tests {
 
         // --remove takes it out by provenance id and restores the database.
         run(args(None, Some("rv-synthetic".to_owned()), "remove", false)).unwrap();
-        assert!(load_source(&repo).unwrap().entries.is_empty());
+        assert_eq!(load_source(&repo).unwrap().entries.len(), bundled);
         assert_eq!(decoded(&gz), original);
         assert!(run(args(None, Some("rv-synthetic".to_owned()), "again", false)).is_err(), "nothing left to remove");
         let _ = std::fs::remove_dir_all(&root);
