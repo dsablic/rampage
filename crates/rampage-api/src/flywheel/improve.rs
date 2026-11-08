@@ -905,13 +905,17 @@ impl Improve {
         let mut deployed_rows = promoted.rows();
         deployed_rows.extend(candidate.rows.iter().cloned());
         let deployed_layers: Vec<Layer> = layer("deployed candidate", &deployed_rows)?.into_iter().collect();
-        let deployed_rise = |split: Split| -> Result<i64, FlywheelError> {
+        let deployed_evaluation = |split: Split| -> Result<SplitEvaluation, FlywheelError> {
             let before = self.reference_proposals(&deployed_key, split, &deployed_reference)?;
             let indices = self.corpus().indices(split);
             let after = self.engine.propose_delta(&indices, &deployed_layers, &before, &delta)?;
-            let (before, after) = compare(&self.engine, split, &before, &after)?.overall();
-            Ok(after.fp() as i64 - before.fp() as i64)
+            compare(&self.engine, split, &before, &after)
         };
+        let fp_rise = |evaluation: &SplitEvaluation| {
+            let (before, after) = evaluation.overall();
+            after.fp() as i64 - before.fp() as i64
+        };
+        let deployed_rise = |split: Split| -> Result<i64, FlywheelError> { Ok(fp_rise(&deployed_evaluation(split)?)) };
         let mut record = match cached {
             Some(record) => record,
             None => {
@@ -954,14 +958,15 @@ impl Improve {
             debug_assert!(evaluation.cases.is_empty());
             let mut gate = self.gate.heldout(&evaluation, self.novel_gain_required());
             if self.arm.is_some() {
-                let rise = deployed_rise(Split::Heldout).map_err(|error| {
+                let deployed = deployed_evaluation(Split::Heldout).map_err(|error| {
                     eprintln!("rampage flywheel: held-out evaluation failed: {error}");
                     FlywheelError::Corpus(
                         "the held-out evaluation failed; the operator's server log has the detail".to_owned(),
                     )
                 })?;
-                let allowance = self.gate.heldout_fp_allowance(&evaluation);
-                for check in self.gate.deployed(&[("heldout_deployed_fp_increase", rise, allowance)]) {
+                // The deployed state earns its own allowance: without the arm the candidate's gain can differ.
+                let allowance = self.gate.heldout_fp_allowance(&deployed);
+                for check in self.gate.deployed(&[("heldout_deployed_fp_increase", fp_rise(&deployed), allowance)]) {
                     gate.add(check);
                 }
             }
@@ -1404,7 +1409,8 @@ pub fn improve_tools() -> Vec<ImproveTool> {
                 it returns the fast slice's per-slice deltas and its changed cases plus every name given on the \
                 negatives, paged with cases_offset/cases_limit. stage \"heldout\" runs the fast gate and, if it \
                 passes, the held-out gate on the libraries' newer versions (overall F1 gain of at least the minimum, \
-                no new false positive, no slice regression and, when required, an F1 gain on held-out functions \
+                at most one new false positive per 100 correct names gained (none for a smaller gain), no slice \
+                regression and, when required, an F1 gain on held-out functions \
                 whose bodies training does not hold): pass/fail and the overall delta only. Results are \
                 cached by (candidate hash, corpus identity, baseline hash); held-out evaluations per corpus are \
                 limited across all servers.",

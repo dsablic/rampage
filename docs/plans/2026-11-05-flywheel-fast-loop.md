@@ -563,7 +563,8 @@ gated only as false positives.
 The same allowance applies to the deployed-state check. Training and negatives stay strict. Before this, a
 collision training cannot reveal (`LZ4_read64` / `LZ4_read_ARCH`) blocked any candidate, however large its gain.
 The arm's +7,724 dev names earn 77 extra false positives; it adds 4. **The arm now passes both gates** on corpus
-`libid-ed988c9a220e` (dev F1 +0.6065).
+`libid-ed988c9a220e` (dev F1 +0.6065). Caveat: the ratio was set after the arm failed on dev by +4, and the arm's
+own design read dev numbers, so this pass is not an outside claim; that needs the final split or a third split.
 
 ### Compiler and optimisation identification: feasibility (2026-11-08)
 This was checked before building the family, with the method that sank libid's AI arm: can a trivial
@@ -575,10 +576,13 @@ deterministic miner already solve the task?
   alignment, the first padding byte between functions, and a few idiom bytes. Extents come from the cached
   baseline discovery.
 - **Miner.** For each label, the single feature and threshold that best separates the training binaries. Each
-  library is held out in turn (train, dev and negatives, never final).
+  library is held out in turn (train, dev and negatives, never final). The Alpine gcc binaries were left out,
+  since they come at one optimisation level. Each test set is one library on one architecture: 48 binaries (two
+  versions × four programs × two compilers × three levels), one run each.
 - **Result.** Optimisation level: 100% on both architectures. Compiler: 100% on x86-64 and 67% on aarch64. The
-  winning features are prefixes of the toolchains' runtime functions (zig links its own musl build), not
-  compiler idioms.
+  rules the miner picked are one-feature thresholds such as "some function starts with `50`" (x86-64 clang) or
+  with `f2 0f 10 0d` (x86-64 O0). These read as prefixes of runtime functions (zig links its own musl build), not
+  compiler idioms; that reading was not checked function by function.
 
 So the family as planned has the same problem as libid: a closed rule language over plentiful labels is searched
 exhaustively by a miner, which leaves nothing for an AI proposer to win. A harder corpus (many compiler versions,

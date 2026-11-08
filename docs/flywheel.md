@@ -244,7 +244,7 @@ conservative:
 | `max_slice_f1_drop` | 0.0 | No gated slice (dimension or cell) may lose F1, on the fast slice, the training split or the held-out split. |
 | `min_f1_gain` | 0.001 | Held-out gate: gated F1 must rise by at least this much, and by more than zero. |
 | `max_fp_increase` | 0 | Held-out gate: false positives may rise by at most this many, plus the `tp_per_fp` allowance. Checked again on the deployed state (without the arm). |
-| `tp_per_fp` | 100 | Held-out gate: one more false positive is allowed for every this many correct names gained (net of names lost); 0 allows none. Training and negatives get no allowance. |
+| `tp_per_fp` | 100 | Held-out gate: one more false positive is allowed for every this many correct names gained (net of names lost); 0 allows none. Training and negatives get no allowance. The deployed check earns its allowance from its own gain. A gate file written for the old strict default needs `tp_per_fp = 0` to stay strict. |
 | `max_heldout_evaluations` | 20 | Held-out evaluations per corpus, counted across every server and run (cached results excepted). |
 | `require_novel_gain` | unset | Held-out gate: the `novelty:novel` slice's F1 must rise too. Unset, it is required exactly when the arm is the baseline; `--require-novel-gain true/false` on the server or the run overrides it. |
 | `min_novel_f1_gain` | 0.001 | The least novel-slice F1 gain, when one is required (and more than zero). |
@@ -387,7 +387,8 @@ names a function only when the hash entries have no answer for it, never against
 `bundle --from <pack>` merges the selected entries (default: all) into the source, regenerates the affected
 assets and indexes, and reruns the gate on the corpus: every split identified with the regenerated databases
 against the repository's current ones, so nothing is rebuilt. The rules are the fast gate and the held-out gate
-against the bundled baseline (overall gain, no new false positive, no slice regression; a novel gain only with
+against the bundled baseline (overall gain, false positives within the `tp_per_fp` allowance, no slice
+regression; a novel gain only with
 `--require-novel-gain true`), because an entry gated against an older baseline, or the arm, must pass again. An
 asset whose PAT namespace is not exactly the source's rows is refused.
 
