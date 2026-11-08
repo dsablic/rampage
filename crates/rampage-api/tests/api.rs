@@ -345,3 +345,33 @@ fn signatures_identify_functions_across_builds() {
     let result = other.apply_signatures(&database, false).unwrap();
     assert!(result.matches.iter().any(|m| m.name == "add"));
 }
+
+#[test]
+fn matches_sharing_a_canonical_name_are_all_applied() {
+    let session = Session::default();
+    let twin = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/flywheel/v1-a.twin.elf");
+    // A scratch copy: applying writes the annotations log beside the binary.
+    let directory = std::env::temp_dir().join(format!("rampage-api-canonical-apply-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let stripped = directory.join("v1-a.elf");
+    std::fs::copy(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/flywheel/v1-a.elf"), &stripped)
+        .unwrap();
+    let database = session.open(&twin, None).unwrap().build_signatures();
+    let target = session.open(&stripped, None).unwrap();
+    let preview = target.apply_signatures(&database, false).unwrap();
+    let mut matched: Vec<_> = preview.matches.iter().filter(|m| m.unnamed).collect();
+    matched.sort_by_key(|m| m.address);
+    let [first, second, ..] = matched.as_slice() else { panic!("two matches needed: {matched:?}") };
+    // Two instances of one generic Zig declaration: different bodies, names that differ only in the counter.
+    let json = database
+        .to_json()
+        .replace(&format!("\"{}\"", first.name), "\"g__func_1\"")
+        .replace(&format!("\"{}\"", second.name), "\"g__func_2\"");
+    let renamed = rampage_signatures::SignatureDb::from_json(&json).unwrap();
+    let applied = target.apply_signatures(&renamed, true).unwrap();
+    let names: Vec<_> = applied.matches.iter().filter(|m| m.name == "g__func").map(|m| m.address).collect();
+    assert_eq!(names, [first.address, second.address]);
+    assert_eq!(target.function_name(first.address), "g__func");
+    assert_eq!(target.function_name(second.address), "g__func@2");
+}

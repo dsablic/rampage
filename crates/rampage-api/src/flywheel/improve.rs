@@ -750,7 +750,9 @@ impl Improve {
             }
             let row = Row {
                 arch,
-                name: row.name,
+                // Spelled as identification reports and truth compares names, so the preview and duplicate
+                // checks agree with scoring.
+                name: rampage_signatures::canonical_name(&row.name).into_owned(),
                 library: row.library,
                 pattern: format_pattern(&bytes),
                 length: length.filter(|&length| length != bytes.len()),

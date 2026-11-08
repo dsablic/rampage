@@ -77,8 +77,11 @@ not block shipping precision-checked databases, and does not replace the precisi
 Identification reports names, and the evaluator compares them, without the build-local counters Zig numbers its
 generated declarations with: `math.ldexp.ldexp__func_40` and `c.stdlib.qsort__struct_61.wrap` are
 `math.ldexp.ldexp__func` and `c.stdlib.qsort__struct.wrap`. Zig 0.17.0 and 0.17.1 give the same instance
-different counters. Instances of one generic declaration then share a name. The databases keep the spellings
-they were built with, since their callee keys hash them.
+different counters. Instances of one generic declaration then share a name. Applying signatures names the later instances `name@2`,
+`name@3` in address order. The databases keep the spellings they were built with, since their callee keys hash
+them. A callee named by a flywheel row, which is canonical, therefore does not complete a bundled callee key built
+over a counted spelling. The collector's per-body diagnostics pass canonical proposals as callee labels in the
+same way.
 
 Strict canonical-name behavior is the default. Explicit `--producer-alias-sets` enables the revalidated aggregates'
 `elf-producer-alias-sets-v3` policy: full-target grading accepts only verified exact native ELF same-range aliases;

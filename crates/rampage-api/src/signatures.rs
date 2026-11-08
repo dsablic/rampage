@@ -121,9 +121,18 @@ impl Project {
         let mut application = SignatureApplication { matched: matches.len(), applied: 0, matches, warnings };
         preflight(&application)?;
         if apply {
+            // Several matches can share a name: instances of one generic Zig declaration, once their counters
+            // are dropped (`canonical_name`). Each later one is applied as `name@2`, `name@3`, in address order.
+            let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
             for candidate in application.matches.iter().filter(|candidate| candidate.unnamed) {
+                let count = seen.entry(candidate.name.as_str()).or_insert(0);
+                *count += 1;
+                let name = match *count {
+                    1 => candidate.name.clone(),
+                    count => format!("{}@{count}", candidate.name),
+                };
                 // Skip a name already in use elsewhere, so renaming cannot collide.
-                if self.rename_if_default(candidate.address, &candidate.name).unwrap_or(false) {
+                if self.rename_if_default(candidate.address, &name).unwrap_or(false) {
                     application.applied += 1;
                 }
             }

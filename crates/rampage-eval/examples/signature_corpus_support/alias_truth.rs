@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use object::{Object, ObjectSection, ObjectSymbol};
 use rampage_eval::{Outcome, Report, Truth, score};
 use rampage_loaders::Binary;
+use rampage_signatures::canonical_name;
 use serde::Serialize;
 
 pub const POLICY: &str = "elf-producer-alias-sets-v3";
@@ -36,6 +37,13 @@ pub struct AliasSet {
 impl AliasSet {
     pub fn contains(&self, name: &str) -> bool {
         self.alias_names.iter().any(|alias| alias.raw_name == name)
+    }
+
+    /// Whether a proposal names one of the aliases, both spelled as identification reports names
+    /// (`canonical_name`).
+    pub fn contains_proposal(&self, proposed: &str) -> bool {
+        let proposed = canonical_name(proposed);
+        self.alias_names.iter().any(|alias| canonical_name(&alias.raw_name) == proposed)
     }
 
     pub fn admits_owned(&self, name: &str, linked_artifact: bool) -> bool {
@@ -152,7 +160,7 @@ pub fn score_aliases(
         let Some(raw) = row.proposed.as_deref() else { return true };
         if row.outcome != Outcome::Wrong
             || row.truth.as_deref() != Some(set.canonical_name.as_str())
-            || !set.contains(raw)
+            || !set.contains_proposal(raw)
         {
             return true;
         }
