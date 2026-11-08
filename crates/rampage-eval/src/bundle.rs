@@ -113,13 +113,20 @@ pub struct BundledSource {
 }
 
 impl BundledSource {
-    /// The licences of the code every entry's rows were made from, `NOASSERTION` when any is unknown.
+    /// The licences of the code every entry's rows were made from, joined with `AND` (a compound expression in
+    /// parentheses), `NOASSERTION` when any is unknown.
     pub fn license(&self) -> String {
         let mut licenses = std::collections::BTreeSet::new();
         for entry in &self.entries {
-            match &entry.license {
-                Some(license) => licenses.extend(license.split(" AND ").map(str::trim).map(str::to_owned)),
-                None => return "NOASSERTION".to_owned(),
+            match entry.license.as_deref().map(str::trim) {
+                Some(license) if !license.is_empty() && license != "NOASSERTION" => {
+                    if license.contains(" OR ") || license.contains('(') || license.contains(" WITH ") {
+                        licenses.insert(format!("({license})"));
+                    } else {
+                        licenses.extend(license.split(" AND ").map(str::trim).map(str::to_owned));
+                    }
+                }
+                _ => return "NOASSERTION".to_owned(),
             }
         }
         if licenses.is_empty() {
@@ -286,6 +293,7 @@ pub fn merged(source: &BundledSource, pack: &Path, ids: &[String]) -> Result<(Bu
     if let Some(error) = &manifest.error {
         return Err(format!("{}: {error}", pack.display()));
     }
+    let license = manifest.manifest.as_ref().map(|manifest| manifest.license.clone());
     let name = manifest.manifest.map(|manifest| format!("{} {}", manifest.name, manifest.version)).unwrap_or_default();
     let entries_path = pack.join(rampage_api::flywheel::ENTRIES_FILE);
     let text =
@@ -329,7 +337,7 @@ pub fn merged(source: &BundledSource, pack: &Path, ids: &[String]) -> Result<(Bu
             promoted_heldout_delta: entry.heldout_deltas.get("all").cloned(),
             bundled_heldout_delta: None,
             bundled_unix_ms: now,
-            license: None,
+            license: license.clone(),
             rows: entry.rows.clone(),
         });
         added.push(entry.revert_id.clone());
@@ -347,6 +355,9 @@ pub fn with_arm(source: &BundledSource, engine: &Engine, gate: &GateConfig) -> R
         return Err(format!("{id} is bundled already; nothing to do"));
     }
     let mut out = source.clone();
+    for replaced in out.entries.iter().filter(|entry| entry.id.starts_with("arm-")) {
+        eprintln!("bundle: {id} replaces the bundled arm {}", replaced.id);
+    }
     out.entries.retain(|entry| !entry.id.starts_with("arm-"));
     let classes: Vec<&str> = arm.wildcards.iter().map(|class| class.name()).collect();
     out.entries.push(BundledEntry {
@@ -738,6 +749,35 @@ mod tests {
         });
         std::fs::write(corpus.join("manifest.json"), manifest.to_string()).unwrap();
         corpus
+    }
+
+    #[test]
+    fn licences_combine_with_and_and_unknown_wins() {
+        let entry = |license: Option<&str>| BundledEntry {
+            id: "e".to_owned(),
+            family: FAMILY.to_owned(),
+            candidate_hash: "h".to_owned(),
+            source_pack: String::new(),
+            corpus_version: String::new(),
+            promoted_baseline: None,
+            proposer_run: None,
+            promoted_unix_ms: 0,
+            promoted_heldout_delta: None,
+            bundled_heldout_delta: None,
+            bundled_unix_ms: 0,
+            license: license.map(str::to_owned),
+            rows: vec![],
+        };
+        let source = |licenses: &[Option<&str>]| BundledSource {
+            schema_version: 1,
+            family: FAMILY.to_owned(),
+            entries: licenses.iter().map(|license| entry(*license)).collect(),
+        };
+        assert_eq!(source(&[]).license(), "NOASSERTION");
+        assert_eq!(source(&[Some("Zlib AND MIT"), Some("MIT")]).license(), "MIT AND Zlib");
+        assert_eq!(source(&[Some("MIT OR Apache-2.0"), Some("Zlib")]).license(), "(MIT OR Apache-2.0) AND Zlib");
+        assert_eq!(source(&[Some("Zlib"), None]).license(), "NOASSERTION");
+        assert_eq!(source(&[Some("Zlib"), Some("NOASSERTION")]).license(), "NOASSERTION");
     }
 
     fn decoded(path: &Path) -> String {

@@ -374,6 +374,7 @@ rampage --pack /path/to/libid function identify stripped.elf
 
 ```sh
 rampage-eval bundle --from /path/to/libid --corpus target/flywheel/corpus/<version> [--entries rv-...]
+rampage-eval bundle --arm --corpus target/flywheel/corpus/<version>
 rampage-eval bundle --remove rv-... --corpus target/flywheel/corpus/<version>
 ```
 
@@ -382,7 +383,9 @@ bundled entry with its provenance id (the revert id it was promoted under), the 
 what it was gated against, the deltas at promotion and at bundling, and its rows. The bundled assets
 (`data/corpus-<arch>.json.gz` and `.index.json`) hold those rows as their PAT namespace, with a
 `flywheel-libid-<arch>` provenance profile; their hash entries are never changed. In a bundled database a PAT row
-names a function only when the hash entries have no answer for it, never against one.
+names a function only when the hash entries have no answer for it, never against one. A body that a PAT row
+matches under another name than the hash entries give, or that several PAT rows match, or that the PAT gate
+rejects, gets no name from that database.
 
 `bundle --arm` bundles the deterministic arm for the corpus as one entry (`arm-<rows hash>`, replacing an earlier
 arm entry), with the licence of the code its rows come from, through the same gate. The shipped databases carry
