@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rampage_arch::UnsupportedArch;
 use rampage_loaders::Binary;
-use rampage_signatures::{MaskContext, SignatureDb, canonical_functions, identify_program, named_functions};
+use rampage_signatures::{MaskContext, SignatureDb, canonical_functions, canonical_name, identify_program, named_functions};
 use serde::{Deserialize, Serialize};
 pub use toolid::{
     DetectedTool, ExpectedTool, TOOL_KINDS, ToolBinary, ToolDisagreement, ToolTruth, Toolchain, detected_tools,
@@ -244,9 +244,11 @@ impl Evaluation {
 }
 
 /// Classifies one address, or `None` when neither side names it (nothing to score).
+/// Names compare as [`canonical_name`] spells them, the way identification reports them: a Zig declaration's
+/// build-local counter is no part of the name.
 pub fn classify(proposed: Option<&str>, truth: Option<&str>) -> Option<Outcome> {
     match (proposed, truth) {
-        (Some(proposed), Some(truth)) if proposed == truth => Some(Outcome::Correct),
+        (Some(proposed), Some(truth)) if canonical_name(proposed) == canonical_name(truth) => Some(Outcome::Correct),
         (Some(_), Some(_)) => Some(Outcome::Wrong),
         (None, Some(_)) => Some(Outcome::Missed),
         (Some(_), None) => Some(Outcome::Spurious),

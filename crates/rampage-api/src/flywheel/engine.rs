@@ -8,7 +8,9 @@ use std::time::Instant;
 
 use rampage_arch::Arch;
 use rampage_loaders::Binary;
-use rampage_signatures::{MaskContext, SignatureDb, canonical_functions, identify_program_sources, named_functions};
+use rampage_signatures::{
+    MaskContext, SignatureDb, canonical_functions, canonical_name, identify_program_sources, named_functions,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -20,7 +22,7 @@ use crate::{Packs, Project};
 pub const RUNTIME: &str = "runtime";
 
 /// Bumped when the cached truth or baseline format or meaning changes, so old entries are not reused.
-const CACHE_FORMAT: &str = "flywheel-cache-v1";
+const CACHE_FORMAT: &str = "flywheel-cache-v2";
 
 /// One truth function: its name in the symbolized twin and where it comes from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,7 +293,7 @@ impl Engine {
         }
         let bodies = loaded.bodies();
         let names = identify_program_sources(&databases, &loaded.binary.target(), &loaded.image, &bodies);
-        names.into_iter().map(|(address, (_, name))| (address, name.to_owned())).collect()
+        names.into_iter().map(|(address, (_, name))| (address, name.into_owned())).collect()
     }
 
     /// The names under `layers`, where `layers` are the layers `before` was proposed under plus the rows of
@@ -465,7 +467,7 @@ pub fn bundled_hash(arch: Arch) -> String {
 }
 
 /// Every function of the symbolized twin except the program's own, each tagged with the library that defines
-/// it: the existing strip-and-compare truth (`rampage-eval truth --library <twin> --program <object>`), after
+/// it and named as [`canonical_name`] spells it: the existing strip-and-compare truth (`rampage-eval truth --library <twin> --program <object>`), after
 /// checking that every truth function's bytes are identical in the stripped binary.
 fn derive_truth(
     corpus: &Corpus,
@@ -511,7 +513,8 @@ fn derive_truth(
             Some(library) if aliases.iter().any(|alias| library.contains(*alias)) => entry.library.clone(),
             _ => RUNTIME.to_owned(),
         };
-        truth.insert(address, TruthFunction { name: symbol.name.clone(), origin });
+        // Spelled as identification reports names: without Zig's build-local declaration counters.
+        truth.insert(address, TruthFunction { name: canonical_name(&symbol.name).into_owned(), origin });
     }
     Ok(truth)
 }

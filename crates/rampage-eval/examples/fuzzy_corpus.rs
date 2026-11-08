@@ -379,7 +379,7 @@ fn exact_names(binary: &Binary, program: &Program, database: &SignatureDb) -> BT
         program.functions.iter().filter_map(|function| Some((function.address, function.body(binary)?))).collect();
     identify_program(&[database], &binary.target(), &MaskContext::from_binary(binary), &bodies)
         .into_iter()
-        .map(|(address, name)| (address, name.to_owned()))
+        .map(|(address, name)| (address, name.into_owned()))
         .collect()
 }
 

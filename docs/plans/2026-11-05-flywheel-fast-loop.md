@@ -538,9 +538,27 @@ final). All 680 false positives are wrong names at real functions: 634 runtime a
   `compiler_rt.trig.cos` / musl `__cos`, and the leaf `comma` / `cimag` (`movaps xmm0, xmm1; ret`). Bytes cannot
   separate them.
 
+### Zig counters dropped from names (2026-11-08)
+The chosen fix: `canonical_name` drops the counter from `__func_N`, `__anon_N`, `__struct_N`, `__enum_N`,
+`__union_N` and `__opaque_N` and keeps the kind. Identification reports names this way (`identify_program*`), and
+the flywheel truth and `rampage-eval`'s `classify` compare them this way. The databases keep their spellings,
+because their callee keys hash them. The flywheel cache format is now v2.
+
+Measured on corpus `libid-ed988c9a220e`, before and after the change, with the same binaries and denominators:
+
+| Split | State | FP before | FP after | TP (unchanged) |
+| --- | --- | ---: | ---: | ---: |
+| train | bundled | 270 | 54 | 989 |
+| train | bundled + arm | 270 | 54 | 10074 |
+| dev | bundled | 276 | 60 | 1005 |
+| dev | bundled + arm | 280 | 64 | 8729 |
+| negative | bundled | 134 | 26 | 0 |
+
+Dev F1 is 0.1228 → 0.1244 for bundled and 0.7244 → 0.7309 with the arm. The arm still fails its gate on the
+same +4 (`LZ4_read64`). TP and FN did not move, because the counted names were all runtime functions, which are
+gated only as false positives.
+
 ### Next
-- **Zig instance counters** (540 of 680 bundled false positives): decide between canonical names and a matched
-  zig, then re-measure.
 - **Callee-confirmed forwarders** in the bundled databases (128): regenerate them with callee keys for
   forwarder entries.
 - **Caller/callee-confirmed rows** for identical bodies under different names: the only signal that separates

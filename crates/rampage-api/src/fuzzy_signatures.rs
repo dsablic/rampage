@@ -296,7 +296,7 @@ fn exact_evidence(
         identify_program_sources(&only, &project.binary.target(), &MaskContext::from_binary(&project.binary), &bodies)
             .into_iter()
             .map(|(address, (index, name))| {
-                (address, FuzzyExactEvidence { name: name.to_owned(), source: databases[index].0.to_owned() })
+                (address, FuzzyExactEvidence { name: name.into_owned(), source: databases[index].0.to_owned() })
             })
             .collect();
     Ok((names, packs.problems_for("signatures")))

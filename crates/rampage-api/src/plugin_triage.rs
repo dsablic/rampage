@@ -261,7 +261,7 @@ pub fn prepare_plugin_triage(
             if name.len() > contract::MAX_TEXT_BYTES {
                 return Err(invalid("signature producer name exceeds admission limit"));
             }
-            rows.push((address, name.to_owned()));
+            rows.push((address, name.into_owned()));
         }
         Ok(rows)
     })?;

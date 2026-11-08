@@ -894,7 +894,7 @@ mod tests {
         let bodies = [(0x401000, LEAF), (0x402000, &[0xc3][..])];
         assert_eq!(
             crate::identify_program_sources(&[&db], &target(), &image, &bodies),
-            std::collections::BTreeMap::from([(0x401000, (0, "owned_leaf"))]),
+            std::collections::BTreeMap::from([(0x401000, (0, "owned_leaf".into()))]),
         );
         let lower = native_db("other_database");
         assert_eq!(crate::identify_program(&[&db, &lower], &target(), &image, &bodies)[&0x401000], "owned_leaf");

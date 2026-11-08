@@ -112,7 +112,7 @@ impl Project {
             let current = self.function_name(address);
             matches.push(SignatureMatch {
                 address,
-                name: name.to_owned(),
+                name: name.into_owned(),
                 unnamed: is_default_name(&current, address),
                 source: databases[index].0.to_owned(),
             });

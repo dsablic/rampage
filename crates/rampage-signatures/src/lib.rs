@@ -46,6 +46,7 @@ pub mod fuzzy;
 mod operands;
 mod pat;
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
@@ -1452,12 +1453,14 @@ fn add_unambiguous(map: &mut BTreeMap<String, String>, ambiguous: &mut BTreeSet<
 /// names found so far
 /// ([`SignatureDb::identify_with_callees`]). This repeats while it finds new names, so a wrapper is named once its
 /// callee is, up to [`MAX_CALLEE_ROUNDS`] rounds. A callee-keyed name rests on its callees' names being right.
+///
+/// Names come out as [`canonical_name`] spells them.
 pub fn identify_program<'d>(
     databases: &[&'d SignatureDb],
     target: &Target,
     image: &MaskContext,
     functions: &[(u64, &[u8])],
-) -> BTreeMap<u64, &'d str> {
+) -> BTreeMap<u64, Cow<'d, str>> {
     identify_program_sources(databases, target, image, functions)
         .into_iter()
         .map(|(address, (_, name))| (address, name))
@@ -1470,7 +1473,7 @@ pub fn identify_program_sources<'d>(
     target: &Target,
     image: &MaskContext,
     functions: &[(u64, &[u8])],
-) -> BTreeMap<u64, (usize, &'d str)> {
+) -> BTreeMap<u64, (usize, Cow<'d, str>)> {
     let mut names: BTreeMap<u64, (usize, &'d str)> = BTreeMap::new();
     let mut pending = functions.to_vec();
     // A database below one still waiting on a function's callees does not name it, until no round finds more.
@@ -1500,7 +1503,50 @@ pub fn identify_program_sources<'d>(
         names.extend(found);
         pending.retain(|(address, _)| !names.contains_key(address));
     }
-    names
+    // Callee keys were built over the databases' own spellings, so names are canonicalized only on the way out.
+    names.into_iter().map(|(address, (index, name))| (address, (index, canonical_name(name)))).collect()
+}
+
+/// The kinds of Zig's generated declaration names, which end in a build-local counter (`ldexp__func_40`,
+/// `qsort__struct_61.wrap`).
+const ZIG_COUNTED: [&str; 6] = ["func", "anon", "struct", "enum", "union", "opaque"];
+
+/// `name` without the counters Zig numbers its generated declarations with: `math.ldexp.ldexp__func_40` is
+/// `math.ldexp.ldexp__func`, `c.stdlib.qsort__struct_61.wrap` is `c.stdlib.qsort__struct.wrap`. The counter
+/// depends on everything else the compiler instantiated in that build (zig 0.17.0 and 0.17.1 number the same
+/// `ldexp` instance 37 and 40), so it is no part of what a function is. Instances of one generic declaration then
+/// share a name, as C++ templates do without their arguments. Identification reports names this way and the
+/// evaluations score them against truth spelled the same way. Every other name is returned unchanged.
+pub fn canonical_name(name: &str) -> Cow<'_, str> {
+    let mut out = String::new();
+    let mut copied = 0;
+    let mut search = 0;
+    while let Some(found) = name[search..].find("__") {
+        let start = search + found;
+        let rest = &name[start + 2..];
+        let counted = ZIG_COUNTED.iter().find_map(|kind| {
+            let digits = rest.strip_prefix(kind)?.strip_prefix('_')?;
+            let count = digits.bytes().take_while(u8::is_ascii_digit).count();
+            let after = digits.as_bytes().get(count);
+            (count > 0 && !after.is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_'))
+                .then_some((kind.len(), count))
+        });
+        match counted {
+            Some((kind, count)) => {
+                // Keep `__kind`, drop `_count`.
+                let kept = start + 2 + kind;
+                out.push_str(&name[copied..kept]);
+                copied = kept + 1 + count;
+                search = copied;
+            }
+            None => search = start + 1,
+        }
+    }
+    if copied == 0 {
+        return Cow::Borrowed(name);
+    }
+    out.push_str(&name[copied..]);
+    Cow::Owned(out)
 }
 
 /// What one database says about one body.
@@ -1661,6 +1707,22 @@ mod tests {
         let add = other.symbols.iter().find(|symbol| symbol.name == "add").expect("add symbol");
         let bytes = other.read(add.address, add.size).expect("add bytes");
         assert_eq!(db.identify(&other.target(), bytes, add.address), Some("add"));
+    }
+
+    #[test]
+    fn canonical_names_drop_zig_declaration_counters_only() {
+        for (name, canonical) in [
+            ("math.ldexp.ldexp__func_40", "math.ldexp.ldexp__func"),
+            ("c.stdlib.qsort__struct_61.wrap", "c.stdlib.qsort__struct.wrap"),
+            ("a__enum_3.getName__anon_12", "a__enum.getName__anon"),
+            ("Thread__func_7.Instance.entryFn", "Thread__func.Instance.entryFn"),
+        ] {
+            assert_eq!(canonical_name(name), canonical, "{name}");
+        }
+        // Not a counter: other kinds, no digits, digits run into a word, or a plain C name.
+        for name in ["memcpy", "__func_", "x__func_12ab", "x__funcs_1", "x__thing_4", "__libc_start_main", "f__func_1_"] {
+            assert!(matches!(canonical_name(name), Cow::Borrowed(same) if same == name), "{name}");
+        }
     }
 
     #[test]
@@ -2270,7 +2332,7 @@ mod tests {
     }
 
     /// Names every named function of `binary` over its symbol extent, as [`identify_program`] does.
-    fn identify_own_functions<'d>(db: &'d SignatureDb, binary: &Binary) -> BTreeMap<u64, &'d str> {
+    fn identify_own_functions<'d>(db: &'d SignatureDb, binary: &Binary) -> BTreeMap<u64, Cow<'d, str>> {
         let bodies: Vec<(u64, &[u8])> = canonical_functions(binary)
             .values()
             .map(|symbol| (symbol.address, binary.read(symbol.address, symbol.size).unwrap()))
@@ -2289,7 +2351,7 @@ mod tests {
             let function = symbol(&reference, name);
             let body = reference.read(function.address, function.size).unwrap();
             assert_eq!(db.identify_in(&target, &image, body, function.address), None, "{name} alone");
-            assert_eq!(names.get(&function.address).copied(), Some(name));
+            assert_eq!(names.get(&function.address).map(AsRef::as_ref), Some(name));
         }
         let restored = SignatureDb::from_json(&db.to_json()).unwrap();
         assert_eq!(identify_own_functions(&restored, &reference), names);
@@ -2306,7 +2368,7 @@ mod tests {
             let function = symbol(&reference, name);
             let body = reference.read(function.address, function.size).unwrap();
             assert_eq!(function_hash_in(&target, &image, body, function.address), None, "{name} passes the gate");
-            assert_eq!(names.get(&function.address).copied(), None, "{name}");
+            assert_eq!(names.get(&function.address).map(AsRef::as_ref), None, "{name}");
         }
         // `stp x29, x30, [sp, #-16]!; mov x29, sp; ldp x29, x30, [sp], #16; b ...` is shared by both, and names them
         // by where it goes.
@@ -2314,7 +2376,7 @@ mod tests {
             let function = symbol(&reference, name);
             let body = reference.read(function.address, function.size).unwrap();
             assert_eq!(db.identify_in(&target, &image, body, function.address), None, "{name} alone");
-            assert_eq!(names.get(&function.address).copied(), Some(name));
+            assert_eq!(names.get(&function.address).map(AsRef::as_ref), Some(name));
         }
     }
 
@@ -2388,12 +2450,12 @@ mod tests {
         bundled.add(wrapper_hash, None, None, "bundled_wrapper");
         let functions: [(u64, &[u8]); 2] = [(0x1000, &wrapper), (0x2000, &leaf)];
         let names = identify_program(&[&user, &bundled], &x64, &image(), &functions);
-        assert_eq!(names.get(&0x1000).copied(), Some("bundled_wrapper"), "nothing names the callee");
+        assert_eq!(names.get(&0x1000).map(AsRef::as_ref), Some("bundled_wrapper"), "nothing names the callee");
 
         bundled.add(function_hash_in(&x64, &image(), &leaf, 0x2000).unwrap(), None, None, "callee");
         let names = identify_program(&[&user, &bundled], &x64, &image(), &functions);
-        assert_eq!(names.get(&0x1000).copied(), Some("user_wrapper"));
-        assert_eq!(names.get(&0x2000).copied(), Some("callee"));
+        assert_eq!(names.get(&0x1000).map(AsRef::as_ref), Some("user_wrapper"));
+        assert_eq!(names.get(&0x2000).map(AsRef::as_ref), Some("callee"));
     }
 
     #[test]
@@ -2481,7 +2543,7 @@ mod tests {
         let functions: [(u64, &[u8]); 2] = [(0x1000, &call), (0x2000, &leaf)];
         let names = identify_program(&[&db], &x64, &image(), &functions)
             .into_iter()
-            .map(|(at, name)| (at, name.to_owned()))
+            .map(|(at, name)| (at, name.into_owned()))
             .collect();
         let named = explain_checked(&db, &x64, &call, 0x1000, &names);
         assert_eq!(named.named_result.as_deref(), Some("wrapper"));

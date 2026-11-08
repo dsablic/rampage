@@ -74,6 +74,12 @@ This is bounded corpus evidence, not a universal precision guarantee.
 Per-library and aggregate recall failures remain recorded. Low recall against the 80% matched-version target does
 not block shipping precision-checked databases, and does not replace the precision checks for default artifacts.
 
+Identification reports names, and the evaluator compares them, without the build-local counters Zig numbers its
+generated declarations with: `math.ldexp.ldexp__func_40` and `c.stdlib.qsort__struct_61.wrap` are
+`math.ldexp.ldexp__func` and `c.stdlib.qsort__struct.wrap`. Zig 0.17.0 and 0.17.1 give the same instance
+different counters. Instances of one generic declaration then share a name. The databases keep the spellings
+they were built with, since their callee keys hash them.
+
 Strict canonical-name behavior is the default. Explicit `--producer-alias-sets` enables the revalidated aggregates'
 `elf-producer-alias-sets-v3` policy: full-target grading accepts only verified exact native ELF same-range aliases;
 reference admission requires a unique default-visible strong definition with only weak default-visible aliases.

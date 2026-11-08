@@ -62,7 +62,9 @@ The corpus version is `libid-` plus a hash of the script, the recipe, the driver
 
 **Truth.** Every function symbol of the twin is a truth function, except the driver's own functions (from its
 object). Each is tagged with its library, or `runtime` (musl, compiler runtime) when the library's objects do
-not define it. Every truth function's bytes are checked to be identical in the stripped binary.
+not define it. Every truth function's bytes are checked to be identical in the stripped binary. Names are
+compared as identification reports them, without the build-local counters of Zig's generated declarations
+(`math.ldexp.ldexp__func_40` is `math.ldexp.ldexp__func`; see `canonical_name` in `rampage-signatures`).
 
 **Split: hold out what is measured.** The split holds out library versions:
 
