@@ -615,6 +615,7 @@ and 0 before. The compressed assets grow by 170 KB (x86-64) and 191 KB (AArch64)
 ### Next
 - **Regenerate the bundled hash databases with callee keys for forwarder entries** (128 bundled false positives).
   This needs the signature-corpus source caches and the pinned toolchains, so it needs its own session.
-- **The AI family needs a decision:** code-proposing candidates (above) rather than compiler/tool rules.
+- **The AI family needs a decision:** code-proposing candidates rather than compiler/tool rules. Proposal:
+  [2026-11-08-flywheel-code-candidates.md](2026-11-08-flywheel-code-candidates.md).
 - **Caller/callee-confirmed rows** for identical bodies under different names (`LZ4_read64` / `LZ4_read_ARCH`).
 - **A third, untouched split** before claims beyond this corpus: this arm's design read held-out numbers.
