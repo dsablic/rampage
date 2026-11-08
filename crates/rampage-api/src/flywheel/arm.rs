@@ -11,11 +11,21 @@
 //! - a body that also matches a function with another name, or none, anywhere in the training or negative
 //!   binaries is dropped: a proposed row matching one would fail the fast gate.
 //!
+//! Arm v2 also wildcards operand fields ([`OperandClass`]): each body's pattern with every byte of the chosen
+//! classes wildcarded (by default all of them) is its widened pattern, so a row still matches when the next version
+//! changes a constant, a structure offset or a stack slot. Bodies whose widened patterns agree form one widened
+//! group, which becomes one row under the rules above. A widened group that is too short or long, ambiguous,
+//! colliding or refused by the schema leaves its bodies to the next, narrower tier ([`tiers`]: relocations alone,
+//! then exact rows), so with no classes the arm is v1.
+//! The default is every class: choosing among class sets by held-out results would tune the baseline on the
+//! held-out split.
+//!
 //! The arm is generated, not proposed: it reads only training and negative binaries, never the held-out split.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use rampage_signatures::OperandClass;
 use serde::{Deserialize, Serialize};
 
 use super::candidate::{MAX_PATTERN_BYTES, Row, RowSource, format_pattern, rows_hash, write_pack};
@@ -26,7 +36,10 @@ use super::{FlywheelError, build_id, read_bounded, sha256_text, write_atomic};
 /// The arm's record inside its directory, beside the data pack holding its rows.
 pub const ARM_FILE: &str = "arm.json";
 /// Bumped when generation changes, so a stale arm is regenerated.
-const ARM_FORMAT: &str = "flywheel-arm-v1";
+const ARM_FORMAT: &str = "flywheel-arm-v2";
+
+/// The operand classes the arm wildcards unless told otherwise: all of them (see the module documentation).
+pub const DEFAULT_WILDCARDS: [OperandClass; 7] = OperandClass::ALL;
 const MAX_ARM_BYTES: u64 = 256 * 1024 * 1024;
 
 /// What the generator saw and why bodies were left out.
@@ -49,6 +62,17 @@ pub struct ArmStats {
     /// Groups the row schema refuses (too few fixed bytes).
     pub refused: usize,
     pub rows: usize,
+    /// Groups tried at a widened tier (bodies agreeing outside the wildcarded operand bytes) that differ from an
+    /// exact body.
+    pub widened_groups: usize,
+    /// Of those, groups that became one widened row.
+    pub widened_rows: usize,
+    /// Exact bodies those widened rows cover, each counted at the first tier that covers it.
+    pub widened_bodies: usize,
+    /// Widened groups that fell back to the next tier, by tier and reason.
+    pub widening_fallbacks: BTreeMap<String, usize>,
+    /// Rows by the tier that made them (`exact`, or the wildcarded classes joined by `+`).
+    pub rows_by_tier: BTreeMap<String, usize>,
 }
 
 /// The arm for one corpus, build and minimum pattern length.
@@ -61,6 +85,8 @@ pub struct Arm {
     pub corpus_identity: String,
     pub build_id: String,
     pub min_pattern_bytes: usize,
+    /// The operand classes wildcarded (none for v1's exact rows).
+    pub wildcards: Vec<OperandClass>,
     pub generated_unix_ms: u64,
     pub elapsed_ms: u64,
     pub stats: ArmStats,
@@ -75,15 +101,18 @@ impl Arm {
 }
 
 /// The directory holding the arm for `engine`'s corpus, this build and `min_bytes`: `baseline/libid/<key>/`.
-pub fn directory(engine: &Engine, min_bytes: usize) -> PathBuf {
-    let key = sha256_text(&format!("{ARM_FORMAT}\0{}\0{}\0{min_bytes}", engine.corpus.identity(), build_id()));
+pub fn directory(engine: &Engine, min_bytes: usize, wildcards: &[OperandClass]) -> PathBuf {
+    let classes = wildcard_set(wildcards).iter().map(|class| class.name()).collect::<Vec<_>>().join(",");
+    let key =
+        sha256_text(&format!("{ARM_FORMAT}\0{}\0{}\0{min_bytes}\0{classes}", engine.corpus.identity(), build_id()));
     engine.paths.root().join("baseline").join(super::FAMILY).join(format!("{}-{}", engine.corpus.key(), &key[..12]))
 }
 
 /// The arm, loaded when one was generated for this corpus, build and minimum length, else generated and saved
 /// (its record and a data pack of its rows).
-pub fn load_or_generate(engine: &Engine, min_bytes: usize) -> Result<Arm, FlywheelError> {
-    let directory = directory(engine, min_bytes);
+pub fn load_or_generate(engine: &Engine, min_bytes: usize, wildcards: &[OperandClass]) -> Result<Arm, FlywheelError> {
+    let wildcards = wildcard_set(wildcards);
+    let directory = directory(engine, min_bytes, &wildcards);
     let path = directory.join(ARM_FILE);
     let saved = || -> Result<Option<Arm>, FlywheelError> {
         if !path.is_file() {
@@ -94,6 +123,7 @@ pub fn load_or_generate(engine: &Engine, min_bytes: usize) -> Result<Arm, Flywhe
             arm.corpus_identity == engine.corpus.identity()
                 && arm.build_id == build_id()
                 && arm.min_pattern_bytes == min_bytes
+                && arm.wildcards == wildcards
         }))
     };
     if let Some(arm) = saved()? {
@@ -104,7 +134,7 @@ pub fn load_or_generate(engine: &Engine, min_bytes: usize) -> Result<Arm, Flywhe
     if let Some(arm) = saved()? {
         return Ok(arm);
     }
-    let arm = generate(engine, min_bytes)?;
+    let arm = generate(engine, min_bytes, &wildcards)?;
     write_pack(
         &directory,
         "flywheel-arm-libid",
@@ -122,22 +152,162 @@ pub fn load_or_generate(engine: &Engine, min_bytes: usize) -> Result<Arm, Flywhe
 /// Discovered functions by (architecture, length): binary index, start and truth name (none outside the truth).
 type ByShape = BTreeMap<(String, usize), Vec<(usize, u64, Option<String>)>>;
 
-/// One training body under construction.
+/// `wildcards` sorted and deduplicated, the form an arm records and keys on.
+pub fn wildcard_set(wildcards: &[OperandClass]) -> Vec<OperandClass> {
+    wildcards.iter().copied().collect::<BTreeSet<_>>().into_iter().collect()
+}
+
+/// `masked` with every byte whose class is in `wildcards` made a wildcard, or `masked` itself when the body's
+/// architecture has no operand classes.
+pub fn widen(
+    masked: &[Option<u8>],
+    classes: Option<&[Option<OperandClass>]>,
+    wildcards: &[OperandClass],
+) -> Vec<Option<u8>> {
+    let Some(classes) = classes else { return masked.to_vec() };
+    masked
+        .iter()
+        .enumerate()
+        .map(|(position, byte)| match classes.get(position) {
+            Some(Some(class)) if wildcards.contains(class) => None,
+            _ => *byte,
+        })
+        .collect()
+}
+
+/// One training body under construction: a distinct (architecture, masked body).
 struct Group {
     pattern: Vec<Option<u8>>,
+    /// The pattern at each tier ([`tiers`]): wildcards wherever any member's form at that tier has one.
+    tiers: Vec<Vec<Option<u8>>>,
     names: BTreeSet<String>,
     origins: BTreeSet<String>,
     example: (usize, u64),
 }
 
+/// The wildcard sets the arm tries, widest first: `wildcards`, then relocations alone, then none (exact rows).
+/// A widened row the schema refuses (too few fixed bytes), or that is ambiguous or colliding, leaves its bodies to
+/// the next tier rather than dropping them to exact rows.
+pub fn tiers(wildcards: &[OperandClass]) -> Vec<Vec<OperandClass>> {
+    let mut tiers = vec![wildcard_set(wildcards)];
+    for tier in [vec![OperandClass::Relocation], Vec::new()] {
+        let tier: Vec<OperandClass> = tier.into_iter().filter(|class| wildcards.contains(class)).collect();
+        if !tiers.contains(&tier) {
+            tiers.push(tier);
+        }
+    }
+    tiers
+}
+
+/// A tier's name in reports: its classes, or `exact`.
+fn tier_name(tier: &[OperandClass]) -> String {
+    if tier.is_empty() {
+        "exact".to_owned()
+    } else {
+        tier.iter().map(|class| class.name()).collect::<Vec<_>>().join("+")
+    }
+}
+
+/// Why a group makes no row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Dropped {
+    TooShort,
+    TooLong,
+    Ambiguous,
+    Colliding,
+    Refused,
+}
+
+impl Dropped {
+    fn name(self) -> &'static str {
+        match self {
+            Dropped::TooShort => "too_short",
+            Dropped::TooLong => "too_long",
+            Dropped::Ambiguous => "ambiguous",
+            Dropped::Colliding => "colliding",
+            Dropped::Refused => "refused",
+        }
+    }
+
+    fn count(self, stats: &mut ArmStats) {
+        *match self {
+            Dropped::TooShort => &mut stats.too_short,
+            Dropped::TooLong => &mut stats.too_long,
+            Dropped::Ambiguous => &mut stats.ambiguous,
+            Dropped::Colliding => &mut stats.colliding,
+            Dropped::Refused => &mut stats.refused,
+        } += 1;
+    }
+}
+
+/// Makes rows from patterns under the rules in the module documentation.
+struct RowMaker<'a> {
+    engine: &'a Engine,
+    functions: ByShape,
+    arches: BTreeSet<String>,
+    min_bytes: usize,
+}
+
+impl RowMaker<'_> {
+    fn row(
+        &self,
+        arch: &str,
+        pattern: &[Option<u8>],
+        names: &BTreeSet<String>,
+        origins: &BTreeSet<String>,
+        example: (usize, u64),
+    ) -> Result<Result<Row, Dropped>, FlywheelError> {
+        let length = pattern.len();
+        if length < self.min_bytes {
+            return Ok(Err(Dropped::TooShort));
+        }
+        if length > MAX_PATTERN_BYTES {
+            return Ok(Err(Dropped::TooLong));
+        }
+        if names.len() != 1 || origins.len() != 1 {
+            return Ok(Err(Dropped::Ambiguous));
+        }
+        let name = names.first().expect("one name");
+        let candidates = self.functions.get(&(arch.to_owned(), length)).map(Vec::as_slice).unwrap_or_default();
+        for (index, start, truth) in candidates {
+            if truth.as_deref() == Some(name.as_str()) {
+                continue;
+            }
+            let loaded = self.engine.get(*index)?;
+            if loaded.body(*start).is_some_and(|body| pattern_matches(pattern, body)) {
+                return Ok(Err(Dropped::Colliding));
+            }
+        }
+        let text = format_pattern(pattern);
+        let row = Row {
+            arch: arch.to_owned(),
+            name: name.clone(),
+            library: origins.first().cloned(),
+            pattern: text.clone(),
+            length: None,
+            source: Some(RowSource {
+                case: super::failures::case_id(arch, &text),
+                binary: self.engine.binary(example.0).id.clone(),
+                address: format!("{:#x}", example.1),
+            }),
+        };
+        if row.validate(&self.arches, self.min_bytes).is_err() {
+            return Ok(Err(Dropped::Refused));
+        }
+        Ok(Ok(row))
+    }
+}
+
 /// Generates the arm from the training split's truth (see the module documentation).
-pub fn generate(engine: &Engine, min_bytes: usize) -> Result<Arm, FlywheelError> {
+pub fn generate(engine: &Engine, min_bytes: usize, wildcards: &[OperandClass]) -> Result<Arm, FlywheelError> {
     let started = std::time::Instant::now();
+    let wildcards = wildcard_set(wildcards);
+    let tiers = tiers(&wildcards);
     let train = engine.corpus.indices(Split::Train);
     let negative = engine.corpus.indices(Split::Negative);
     let mut stats = ArmStats::default();
 
-    // Each training library body, by (architecture, masked pattern).
+    // Each training library body, by (architecture, masked pattern), with its pattern at every tier.
     let found = engine.parallel(&train, |index| {
         let loaded = engine.get(index)?;
         let target = loaded.binary.target();
@@ -153,7 +323,13 @@ pub fn generate(engine: &Engine, min_bytes: usize) -> Result<Arm, FlywheelError>
                 continue;
             };
             match rampage_signatures::masked_body_in(&target, &loaded.image, body, *address) {
-                Some(masked) => bodies.push((*address, masked, truth.name.clone(), truth.origin.clone())),
+                Some(masked) => {
+                    let classes = (!wildcards.is_empty())
+                        .then(|| rampage_signatures::operand_classes(&target, &loaded.image, body, *address))
+                        .flatten();
+                    let widened: Vec<_> = tiers.iter().map(|tier| widen(&masked, classes.as_deref(), tier)).collect();
+                    bodies.push((*address, masked, widened, truth.name.clone(), truth.origin.clone()))
+                }
                 None => below_gate += 1,
             }
         }
@@ -165,13 +341,21 @@ pub fn generate(engine: &Engine, min_bytes: usize) -> Result<Arm, FlywheelError>
         stats.undiscovered += undiscovered;
         stats.below_gate += below_gate;
         let arch = engine.binary(index).arch.clone();
-        for (address, masked, name, origin) in bodies {
+        for (address, masked, widened, name, origin) in bodies {
             let group = groups.entry((arch.clone(), format_pattern(&masked))).or_insert_with(|| Group {
                 pattern: masked,
+                tiers: widened.clone(),
                 names: BTreeSet::new(),
                 origins: BTreeSet::new(),
                 example: (index, address),
             });
+            for (tier, pattern) in group.tiers.iter_mut().zip(&widened) {
+                for (slot, byte) in tier.iter_mut().zip(pattern) {
+                    if slot != byte {
+                        *slot = None;
+                    }
+                }
+            }
             group.names.insert(name);
             group.origins.insert(origin);
         }
@@ -194,69 +378,102 @@ pub fn generate(engine: &Engine, min_bytes: usize) -> Result<Arm, FlywheelError>
         }
     }
 
-    let arches = engine.corpus.arches();
+    // Tier by tier, widest first: bodies agreeing at a tier form one group there, which becomes one row naming
+    // every body it covers. A group whose bodies all have rows already is skipped; the exact tier counts drops.
+    let maker = RowMaker { engine, functions, arches: engine.corpus.arches(), min_bytes };
     let mut rows = Vec::new();
-    for ((arch, _), group) in groups {
-        let length = group.pattern.len();
-        if length < min_bytes {
-            stats.too_short += 1;
-            continue;
+    let mut covered: BTreeSet<(String, String)> = BTreeSet::new();
+    // Widened patterns already tried: a narrower tier can produce the same pattern, with the same outcome.
+    let mut tried: BTreeSet<(String, String)> = BTreeSet::new();
+    for (level, tier) in tiers.iter().enumerate() {
+        let exact = tier.is_empty();
+        let mut agreeing: BTreeMap<(String, String), Vec<&(String, String)>> = BTreeMap::new();
+        for (key, group) in &groups {
+            agreeing.entry((key.0.clone(), format_pattern(&group.tiers[level]))).or_default().push(key);
         }
-        if length > MAX_PATTERN_BYTES {
-            stats.too_long += 1;
-            continue;
-        }
-        if group.names.len() != 1 || group.origins.len() != 1 {
-            stats.ambiguous += 1;
-            continue;
-        }
-        let name = group.names.into_iter().next().expect("one name");
-        let candidates = functions.get(&(arch.clone(), length)).map(Vec::as_slice).unwrap_or_default();
-        let mut colliding = false;
-        for (index, start, truth) in candidates {
-            if truth.as_deref() == Some(name.as_str()) {
+        for ((arch, text), members) in agreeing {
+            if members.iter().all(|key| covered.contains(*key)) {
                 continue;
             }
-            let loaded = engine.get(*index)?;
-            if loaded.body(*start).is_some_and(|body| pattern_matches(&group.pattern, body)) {
-                colliding = true;
-                break;
+            let first = &groups[members[0]];
+            let pattern = &first.tiers[level];
+            let widens = !exact && (members.len() > 1 || *pattern != first.pattern);
+            // Not widening, or a length no tier can row (widening keeps the length), or a pattern a wider tier
+            // tried: leave it to the narrower tiers; the exact tier counts the drops.
+            let rowable = (min_bytes..=MAX_PATTERN_BYTES).contains(&pattern.len());
+            if !exact && (!widens || !rowable || !tried.insert((arch.clone(), text))) {
+                continue;
+            }
+            let names: BTreeSet<String> = members.iter().flat_map(|key| groups[*key].names.iter().cloned()).collect();
+            let origins: BTreeSet<String> =
+                members.iter().flat_map(|key| groups[*key].origins.iter().cloned()).collect();
+            if widens {
+                stats.widened_groups += 1;
+            }
+            match maker.row(&arch, pattern, &names, &origins, first.example)? {
+                Ok(row) => {
+                    if widens {
+                        stats.widened_rows += 1;
+                        stats.widened_bodies += members.iter().filter(|key| !covered.contains(**key)).count();
+                    }
+                    *stats.rows_by_tier.entry(tier_name(tier)).or_default() += 1;
+                    covered.extend(members.into_iter().cloned());
+                    rows.push(row);
+                }
+                Err(dropped) if exact => dropped.count(&mut stats),
+                Err(dropped) => {
+                    *stats.widening_fallbacks.entry(format!("{}: {}", tier_name(tier), dropped.name())).or_default() +=
+                        1
+                }
             }
         }
-        if colliding {
-            stats.colliding += 1;
-            continue;
-        }
-        let pattern = format_pattern(&group.pattern);
-        let row = Row {
-            arch: arch.clone(),
-            name,
-            library: group.origins.into_iter().next(),
-            pattern: pattern.clone(),
-            length: None,
-            source: Some(RowSource {
-                case: super::failures::case_id(&arch, &pattern),
-                binary: engine.binary(group.example.0).id.clone(),
-                address: format!("{:#x}", group.example.1),
-            }),
-        };
-        if row.validate(&arches, min_bytes).is_err() {
-            stats.refused += 1;
-            continue;
-        }
-        rows.push(row);
     }
     stats.rows = rows.len();
     Ok(Arm {
-        schema_version: 1,
+        schema_version: 2,
         family: super::FAMILY.to_owned(),
         corpus_version: engine.corpus.version().to_owned(),
         corpus_identity: engine.corpus.identity().to_owned(),
         build_id: build_id().to_owned(),
         min_pattern_bytes: min_bytes,
+        wildcards,
         generated_unix_ms: super::now_ms(),
         elapsed_ms: started.elapsed().as_millis() as u64,
         stats,
         rows,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn widen_wildcards_only_the_chosen_classes_and_keeps_masked_wildcards() {
+        use OperandClass::*;
+        let masked = [Some(0x48), Some(0x8b), Some(0x47), Some(0x10), Some(0xe8), None, Some(0x00)];
+        let classes = [None, None, None, Some(Disp8), None, Some(Relocation), Some(Relocation)];
+        assert_eq!(
+            widen(&masked, Some(&classes), &[Disp8, Relocation]),
+            [Some(0x48), Some(0x8b), Some(0x47), None, Some(0xe8), None, None]
+        );
+        assert_eq!(widen(&masked, Some(&classes), &[Imm8]), masked, "no byte of an unchosen class changes");
+        assert_eq!(widen(&masked, None, &[Disp8]), masked, "an unclassified architecture keeps the masked body");
+    }
+
+    #[test]
+    fn wildcard_sets_are_sorted_and_deduplicated() {
+        use OperandClass::*;
+        assert_eq!(wildcard_set(&[Imm8, Relocation, Imm8]), [Relocation, Imm8]);
+        assert_eq!(wildcard_set(&DEFAULT_WILDCARDS), OperandClass::ALL);
+    }
+
+    #[test]
+    fn tiers_narrow_to_relocations_then_exact_rows() {
+        use OperandClass::*;
+        assert_eq!(tiers(&OperandClass::ALL), [OperandClass::ALL.to_vec(), vec![Relocation], vec![]]);
+        assert_eq!(tiers(&[Relocation]), [vec![Relocation], vec![]]);
+        assert_eq!(tiers(&[Imm8, Disp8]), [vec![Disp8, Imm8], vec![]], "relocations only when chosen");
+        assert_eq!(tiers(&[]), [Vec::<OperandClass>::new()], "no classes: v1's exact rows");
+    }
 }

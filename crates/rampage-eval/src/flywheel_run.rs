@@ -9,8 +9,9 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::Instant;
 
 use rampage_api::flywheel::{
-    Arm, Corpus, Engine, FAMILY, GateConfig, Layer, NOVEL_SLICE, Paths, PromotedSet, RECOGNISED_SLICE, Split,
-    SplitEvaluation, arm_directory, build_id, evaluate_split, layer, pack_layer, promoted_layer, revert,
+    ARM_WILDCARDS, Arm, Corpus, Engine, FAMILY, GateConfig, Layer, NOVEL_SLICE, OperandClass, Paths, PromotedSet,
+    RECOGNISED_SLICE, Split, SplitEvaluation, arm_directory, build_id, evaluate_split, layer, pack_layer,
+    promoted_layer, revert,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -165,6 +166,27 @@ pub struct FlywheelBaselineArgs {
     /// Generate the arm again even when one is saved for this corpus and build.
     #[arg(long)]
     regenerate: bool,
+    /// The operand classes the arm wildcards, comma-separated (relocation, disp8, disp-wide, imm8, imm-wide,
+    /// a64-immediate, a64-offset), or `none` for v1's exact rows. The default is all of them, the arm a corpus
+    /// server gates against; other sets are for comparison only.
+    #[arg(long)]
+    wildcards: Option<String>,
+}
+
+/// `--wildcards`: the default set when absent, none for `none`.
+fn parse_wildcards(text: Option<&str>) -> Result<Vec<OperandClass>, String> {
+    let Some(text) = text else { return Ok(ARM_WILDCARDS.to_vec()) };
+    if text.trim() == "none" {
+        return Ok(Vec::new());
+    }
+    text.split(',')
+        .map(|name| {
+            OperandClass::parse(name.trim()).ok_or_else(|| {
+                let known: Vec<&str> = OperandClass::ALL.iter().map(|class| class.name()).collect();
+                format!("unknown operand class `{}`; known: {}, or `none`", name.trim(), known.join(", "))
+            })
+        })
+        .collect()
 }
 
 fn open_engine(corpus: &Path, flywheel_dir: Option<&Path>, workers: usize) -> Result<Engine, String> {
@@ -283,6 +305,7 @@ fn arm_summary(arm: &Arm) -> Value {
         "stats": arm.stats,
         "build_id": arm.build_id,
         "min_pattern_bytes": arm.min_pattern_bytes,
+        "wildcards": arm.wildcards,
         "elapsed_ms": arm.elapsed_ms,
     })
 }
@@ -334,12 +357,14 @@ pub fn baseline(args: FlywheelBaselineArgs) -> Result<ExitCode, String> {
     let started = Instant::now();
     let all: Vec<usize> = (0..engine.corpus.manifest.binaries.len()).collect();
     let load = engine.load_all(&all).map_err(|error| error.to_string())?;
-    let directory = arm_directory(&engine, gate.min_pattern_bytes);
+    let wildcards = parse_wildcards(args.wildcards.as_deref())?;
+    let directory = arm_directory(&engine, gate.min_pattern_bytes, &wildcards);
     if args.regenerate {
         let _ = std::fs::remove_file(directory.join(rampage_api::flywheel::ARM_FILE));
     }
     let arm_started = Instant::now();
-    let arm = rampage_api::flywheel::arm(&engine, gate.min_pattern_bytes).map_err(|error| error.to_string())?;
+    let arm = rampage_api::flywheel::arm_with(&engine, gate.min_pattern_bytes, &wildcards)
+        .map_err(|error| error.to_string())?;
     let arm_ms = arm_started.elapsed().as_millis() as u64;
     let layers: Vec<Layer> = layer("arm", &arm.rows).map_err(|error| error.to_string())?.into_iter().collect();
     let mut evaluations = BTreeMap::new();
@@ -351,7 +376,7 @@ pub fn baseline(args: FlywheelBaselineArgs) -> Result<ExitCode, String> {
     let heldout = gate.heldout(&evaluations[&Split::Heldout], gate.novel_gain_required(false));
     let gains = engine.heldout_gains(&layers).map_err(|error| error.to_string())?;
     let overlap = engine.heldout_overlap().map_err(|error| error.to_string())?;
-    let reach = engine.novel_reach().map_err(|error| error.to_string())?;
+    let reach = engine.novel_reach(&wildcards).map_err(|error| error.to_string())?;
     let splits: BTreeMap<&str, Value> = evaluations
         .iter()
         .map(|(split, evaluation)| {
@@ -413,6 +438,29 @@ pub fn baseline(args: FlywheelBaselineArgs) -> Result<ExitCode, String> {
         arm.stats.below_gate,
         arm_ms as f64 / 1000.0,
     );
+    let classes = if arm.wildcards.is_empty() {
+        "none (exact rows)".to_owned()
+    } else {
+        arm.wildcards.iter().map(|class| class.name()).collect::<Vec<_>>().join(", ")
+    };
+    text.push_str(&format!(
+        "Operand wildcards: {classes}. {} widened groups; {} became widened rows covering {} exact bodies; \
+         rows by tier: {}; fallbacks to the next tier: {}.\n\n",
+        arm.stats.widened_groups,
+        arm.stats.widened_rows,
+        arm.stats.widened_bodies,
+        arm.stats.rows_by_tier.iter().map(|(tier, count)| format!("{tier} {count}")).collect::<Vec<_>>().join(", "),
+        if arm.stats.widening_fallbacks.is_empty() {
+            "none".to_owned()
+        } else {
+            arm.stats
+                .widening_fallbacks
+                .iter()
+                .map(|(why, count)| format!("{why} {count}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        },
+    ));
     text.push_str(
         "| Split | State | Scope | TP | FP | FN | P | R | F1 |\n|---|---|---|---:|---:|---:|---:|---:|---:|\n",
     );
@@ -435,7 +483,8 @@ pub fn baseline(args: FlywheelBaselineArgs) -> Result<ExitCode, String> {
          Novel reach (operator only; reads held-out truth): of {} novel held-out library functions, {} have a masked \
          body, {} a training body of the same name and architecture, {} one of exactly the same length (the only \
          ones a PAT row, which binds the module length, can reach), and {} would merge with it into a row the schema \
-         accepts. Differing bytes against the closest same-length training body: {}.\n",
+         accepts. Differing bytes against the closest same-length training body: {}. A widened training pattern \
+         matches {} of the same-length ones.\n",
         if fast.passed { "passed" } else { "failed" },
         fast.checks
             .iter()
@@ -455,6 +504,7 @@ pub fn baseline(args: FlywheelBaselineArgs) -> Result<ExitCode, String> {
         reach.same_length,
         reach.mergeable,
         reach.differing_bytes.iter().map(|(bucket, count)| format!("{bucket}: {count}")).collect::<Vec<_>>().join(", "),
+        reach.widened_matches,
     ));
     let pretty = serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&directory).map_err(|error| format!("{}: {error}", directory.display()))?;

@@ -24,7 +24,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-pub use arm::{ARM_FILE, Arm, ArmStats};
+pub use arm::{ARM_FILE, Arm, ArmStats, DEFAULT_WILDCARDS as ARM_WILDCARDS};
 pub use candidate::{
     Candidate, MAX_MODULE_BYTES, MAX_PATTERN_BYTES, MAX_ROWS, Row, RowSource, databases, format_pattern, layer,
     parse_pattern, rows_hash, write_pack,
@@ -42,16 +42,23 @@ pub use failures::{FailureGroup, FailureSet};
 pub use improve::{Baseline, FAMILY, Improve, ImproveOptions, ImproveTool, improve_tools};
 pub use observations::{OBSERVATIONS_VARIABLE, ObservationStore, ObservationTool, observation_tool};
 pub use promote::{ENTRIES_FILE, PromotedEntry, PromotedSet, pack_layer, promoted_layer, revert};
+pub use rampage_signatures::OperandClass;
 
-/// The deterministic arm for a corpus: loaded when generated before for this corpus, build and minimum pattern
-/// length, else generated from the training split and saved.
+/// The deterministic arm for a corpus with the default operand wildcards ([`ARM_WILDCARDS`]): loaded when generated
+/// before for this corpus, build and minimum pattern length, else generated from the training split and saved.
 pub fn arm(engine: &Engine, min_pattern_bytes: usize) -> Result<Arm, FlywheelError> {
-    arm::load_or_generate(engine, min_pattern_bytes)
+    arm::load_or_generate(engine, min_pattern_bytes, &ARM_WILDCARDS)
 }
 
-/// The directory the arm for `engine`'s corpus and `min_pattern_bytes` is kept in (its record and data pack).
-pub fn arm_directory(engine: &Engine, min_pattern_bytes: usize) -> PathBuf {
-    arm::directory(engine, min_pattern_bytes)
+/// [`arm`] wildcarding `wildcards` instead (none gives v1's exact rows), for comparing arms.
+pub fn arm_with(engine: &Engine, min_pattern_bytes: usize, wildcards: &[OperandClass]) -> Result<Arm, FlywheelError> {
+    arm::load_or_generate(engine, min_pattern_bytes, wildcards)
+}
+
+/// The directory the arm for `engine`'s corpus, `min_pattern_bytes` and `wildcards` is kept in (its record and data
+/// pack).
+pub fn arm_directory(engine: &Engine, min_pattern_bytes: usize, wildcards: &[OperandClass]) -> PathBuf {
+    arm::directory(engine, min_pattern_bytes, wildcards)
 }
 
 /// The flywheel's working directory (by default `target/flywheel`): scratch candidates, promoted packs, caches,

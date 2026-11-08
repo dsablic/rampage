@@ -43,6 +43,7 @@ mod compressed;
 mod diagnostics;
 pub mod fid;
 pub mod fuzzy;
+mod operands;
 mod pat;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -55,6 +56,7 @@ pub use diagnostics::{
     MatchDiagnostics, MatchVia,
 };
 use iced_x86::{ConstantOffsets, Decoder, DecoderOptions, Instruction, OpKind, Register};
+pub use operands::{OperandClass, operand_classes};
 pub use pat::{PatError, PatErrorKind, PatternByte, PatternDb, PatternMatch, PatternName, PatternRecord};
 use rampage_arch::{Arch, Target};
 use rampage_loaders::{Binary, Symbol, SymbolKind};
@@ -293,13 +295,18 @@ fn fold(bytes: &[u8]) -> u64 {
 /// Masks the position-dependent immediate bits of a little-endian AArch64 instruction word, leaving opcode and
 /// registers. Covers the PC-relative forms: B/BL, B.cond, CBZ/CBNZ, TBZ/TBNZ, ADR/ADRP and literal loads.
 fn mask_aarch64(word: u32) -> u32 {
+    word & !aarch64_relative_bits(word)
+}
+
+/// The bits [`mask_aarch64`] clears from `word`: its PC-relative offset field, or none.
+fn aarch64_relative_bits(word: u32) -> u32 {
     // Unconditional branch/branch-with-link: 26-bit relative offset.
     if word & 0x7c00_0000 == 0x1400_0000 {
-        return word & !0x03ff_ffff;
+        return 0x03ff_ffff;
     }
     // ADR/ADRP: page/byte relative, split into immlo (bits 30:29) and immhi (bits 23:5).
     if word & 0x1f00_0000 == 0x1000_0000 {
-        return word & !0x60ff_ffe0;
+        return 0x60ff_ffe0;
     }
     // B.cond, CBZ/CBNZ and literal loads: a 19-bit offset in bits 23:5.
     let imm19 = 0x7ffffu32 << 5;
@@ -308,13 +315,13 @@ fn mask_aarch64(word: u32) -> u32 {
         || word & 0x3b00_0000 == 0x1800_0000
     // LDR/LDRSW literal, PRFM literal
     {
-        return word & !imm19;
+        return imm19;
     }
     // TBZ/TBNZ: a 14-bit offset in bits 18:5.
     if word & 0x7e00_0000 == 0x3600_0000 {
-        return word & !(0x3fffu32 << 5);
+        return 0x3fffu32 << 5;
     }
-    word
+    0
 }
 
 /// The target of an AArch64 B or BL at `address`, the direct branches that leave a function (calls and tail calls).
@@ -337,7 +344,12 @@ struct AdrpPages {
 
 impl AdrpPages {
     fn mask(&mut self, word: u32) -> u32 {
-        let masked = mask_aarch64(word);
+        word & !self.bits(word)
+    }
+
+    /// The bits [`AdrpPages::mask`] clears from `word`, updating the tracked page registers.
+    fn bits(&mut self, word: u32) -> u32 {
+        let relative = aarch64_relative_bits(word);
         let destination = word & 0x1f;
         let source = (word >> 5) & 0x1f;
         if word & 0x9f00_0000 == 0x9000_0000 {
@@ -345,13 +357,13 @@ impl AdrpPages {
             if destination != 31 {
                 self.registers |= 1 << destination;
             }
-            return masked;
+            return relative;
         }
         let add_unshifted = word & 0x7fc0_0000 == 0x1100_0000;
         let load_store_unsigned = word & 0x3b00_0000 == 0x3900_0000;
         let completes = (add_unshifted || load_store_unsigned) && self.registers & (1 << source) != 0;
         self.registers &= !written_registers(word);
-        if completes { masked & !(0xfff << 10) } else { masked }
+        if completes { relative | 0xfff << 10 } else { relative }
     }
 }
 
@@ -580,30 +592,50 @@ fn x86_fingerprint(bitness: u32, bytes: &[u8], address: u64, image: Option<&Mask
         let Some(raw) = bytes.get(start..start + instruction.len()) else { break };
         let mut masked = raw.to_vec();
         let offsets = decoder.get_constant_offsets(&instruction);
-        // A RIP-relative displacement encodes an absolute address that moves with the function.
-        if instruction.memory_base() == Register::RIP && offsets.has_displacement() {
-            zero_range(&mut masked, offsets.displacement_offset(), offsets.displacement_size());
+        for range in x86_masked_ranges(&instruction, &offsets, image) {
+            zero_range(&mut masked, range.start, range.len());
         }
-        // A near branch or call encodes its target as a relative immediate that moves with layout.
-        let mut branch = None;
-        if is_relative_branch(&instruction) && offsets.has_immediate() {
-            zero_range(&mut masked, offsets.immediate_offset(), offsets.immediate_size());
-            branch = Some(instruction.near_branch_target());
-        }
-        if let Some(image) = image {
-            mask_absolute(&instruction, &offsets, image, &mut masked);
-        }
+        let branch =
+            (is_relative_branch(&instruction) && offsets.has_immediate()).then(|| instruction.near_branch_target());
         fingerprint.push(&masked, branch);
     }
     fingerprint
 }
 
-/// Zeroes the displacement and immediate fields of `instruction` whose value is an address inside `image`. Non-PIE
+/// The byte ranges, within one instruction, that the fingerprint masks (`image` selects scheme 2):
+/// - a RIP-relative displacement encodes an absolute address that moves with the function;
+/// - a near branch or call encodes its target as a relative immediate that moves with layout;
+/// - under scheme 2, the displacements and immediates [`mask_absolute`] finds.
+fn x86_masked_ranges(
+    instruction: &Instruction,
+    offsets: &ConstantOffsets,
+    image: Option<&MaskContext>,
+) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut push = |offset: usize, size: usize| ranges.push(offset..offset + size);
+    if instruction.memory_base() == Register::RIP && offsets.has_displacement() {
+        push(offsets.displacement_offset(), offsets.displacement_size());
+    }
+    if is_relative_branch(instruction) && offsets.has_immediate() {
+        push(offsets.immediate_offset(), offsets.immediate_size());
+    }
+    if let Some(image) = image {
+        mask_absolute(instruction, offsets, image, &mut push);
+    }
+    ranges
+}
+
+/// Reports the displacement and immediate fields of `instruction` whose value is an address inside `image`. Non-PIE
 /// code embeds the absolute addresses of its own globals and functions this way, and they move with layout. Only
 /// fields of at least 4 bytes can hold such an address. A displacement is masked whatever its base/index registers:
 /// besides `[abs]` and 64-bit moffs, non-PIE code indexes global arrays and jump tables as `[reg*s + abs]` and
 /// `[reg + abs]`.
-fn mask_absolute(instruction: &Instruction, offsets: &ConstantOffsets, image: &MaskContext, masked: &mut [u8]) {
+fn mask_absolute(
+    instruction: &Instruction,
+    offsets: &ConstantOffsets,
+    image: &MaskContext,
+    masked: &mut impl FnMut(usize, usize),
+) {
     let relative_memory = matches!(instruction.memory_base(), Register::RIP | Register::EIP);
     // fs:/gs: displacements are thread-local or OS-structure offsets, not image addresses.
     let segment_relative = matches!(instruction.segment_prefix(), Register::FS | Register::GS);
@@ -613,12 +645,12 @@ fn mask_absolute(instruction: &Instruction, offsets: &ConstantOffsets, image: &M
         && !segment_relative
         && image.contains(instruction.memory_displacement64())
     {
-        zero_range(masked, offsets.displacement_offset(), offsets.displacement_size());
+        masked(offsets.displacement_offset(), offsets.displacement_size());
     }
     if offsets.has_immediate() && offsets.immediate_size() >= 4 && !is_relative_branch(instruction) {
         let value = (0..instruction.op_count()).find_map(|op| instruction.try_immediate(op).ok());
         if value.is_some_and(|value| image.contains(value)) {
-            zero_range(masked, offsets.immediate_offset(), offsets.immediate_size());
+            masked(offsets.immediate_offset(), offsets.immediate_size());
         }
     }
 }

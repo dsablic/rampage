@@ -9,8 +9,8 @@
 - REA gap-closing wave 1 (2026-10-29): `formats` tools and the findings ledger done; log compaction open.
 - Head-to-head with REA: suite v1 and suite v2 published (`docs/benchmarks/`); follow-ups below. Suite v3
   (tasks where Ghidra is strong) and a second model or client are not run yet.
-- Flywheel fast loop: M1 and M2 done (`docs/plans/2026-11-05-flywheel-fast-loop.md`); for libid the deterministic
-  arm captures the recognisable gain, and the next family is compiler/tool identification.
+- Flywheel fast loop: M1, M2 and arm v2 (operand wildcarding, +325 novel held-out names, no new false positive)
+  done (`docs/plans/2026-11-05-flywheel-fast-loop.md`); the next family is compiler/tool identification.
 
 This file holds open items. Done sections, including every completed parity phase, are archived verbatim in
 [docs/plans/todo-archive.md](docs/plans/todo-archive.md); each section below that lost done items links to them.

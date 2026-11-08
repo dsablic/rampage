@@ -109,9 +109,9 @@ program, so naming them is not counted as a gain.
 **Novel and recognised.** A held-out function is *recognised* when its masked body (scheme 2, as a signature
 sees it) equals the masked body of some training library function, and *novel* otherwise; a body failing the
 confidence gate counts as novel. A gain on recognised functions is recognition of code unchanged between versions,
-which the deterministic arm already gets; a gain on novel ones needs a row that survives a code change. Masking
-is not symmetric (a field that happens to equal its masked form reads as fixed), so a training pattern can still
-match a few novel bodies: the arm itself names some.
+which the deterministic arm already gets; a gain on novel ones needs a row that survives a code change. The arm
+itself names many novel bodies: it wildcards operand fields, so a constant, offset or address that changed between
+versions no longer stops a match (below).
 
 ## The deterministic arm
 
@@ -129,9 +129,33 @@ proposed row meets:
 - a body whose pattern also matches another name, or code outside the truth, in any training or negative binary
   is dropped: a proposed row like it would fail the fast gate.
 
+**Operand wildcarding.** Each body also has widened patterns: the masked body with every byte of chosen operand
+classes made a wildcard. Patterns wildcard whole bytes, so a byte holding any bit of a field takes its class:
+
+| Class | Bytes |
+|---|---|
+| `relocation` | Every byte of a field scheme 2 masks: branch and call targets, RIP-relative and absolute image addresses, ADRP pages and their low halves. Masking zeroes a field, so a byte already equal to zero would otherwise read as fixed |
+| `disp8`, `disp-wide` | x86 one-byte and wider displacements: stack slots and structure offsets |
+| `imm8`, `imm-wide` | x86 one-byte and wider immediates (SSE selectors and syscall numbers included) |
+| `a64-immediate` | AArch64 ADD/SUB, logical and move-wide immediates |
+| `a64-offset` | AArch64 load/store offsets: unsigned, unscaled, pre/post-indexed and pair |
+
+AArch64 fields do not align to bytes, so there a byte takes a field's class only when every bit of it belongs to
+the field or to a register number. A byte that also holds opcode bits (load or store, MOVZ or EOR, the branch kind,
+the condition) stays fixed, and so do the field's bits in it.
+
+Rows are made tier by tier, widest first: every class, then `relocation` alone, then the exact masked body.
+Bodies whose patterns agree at a tier form one group, and the group becomes one row under the rules above. A
+group the rules refuse leaves its bodies to the next tier, so a widened row with too few fixed bytes, or one that
+merges two names, costs nothing. The default is every class with that ladder; variant class sets are for
+comparison, not for choosing by held-out score. `--wildcards LIST` (or `none`, v1's exact rows) generates another arm for comparison; a corpus server
+always gates against the default.
+
 It reads training and negative binaries only. The arm is saved under `baseline/libid/<corpus key>-<key>/`
-(`arm.json` and a data pack of its rows), keyed by the corpus identity, the rampage build and the minimum length,
-and regenerated when any changes (`--regenerate` forces it). The command evaluates the arm through the same gate
+(`arm.json` and a data pack of its rows), keyed by the corpus identity, the rampage build, the minimum length and
+the wildcard classes, and regenerated when any changes (`--regenerate` forces it). The report adds rows by tier,
+fallbacks by tier and reason, and (from held-out truth, for the operator only) how many same-length novel
+functions a widened training pattern matches. The command evaluates the arm through the same gate
 against the bundled databases, and reports bundled-only and bundled-plus-arm metrics on every split, overall and
 for novel and recognised held-out functions.
 

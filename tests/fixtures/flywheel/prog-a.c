@@ -10,6 +10,7 @@ unsigned program_a_entry(void) {
     unsigned total = ml_checksum(program_buffer, sizeof program_buffer);
     total += (unsigned)ml_find(program_buffer, sizeof program_buffer, 21);
     total += (unsigned)ml_sum_squares(program_values, 8);
+    total += ml_scale((const unsigned *)program_values, 8);
     return total ^ ml_mix(total, 3, 5) ^ ml_lookup(total);
 }
 

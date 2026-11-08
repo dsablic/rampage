@@ -404,3 +404,73 @@ Libid is not worth more AI effort in this form:
 
 The next AI family should be one with no deterministic generator: compiler and tool identification, where rules
 must be written rather than extracted, after its rules move into data.
+
+## Arm v2: operand wildcarding (2026-11-08)
+
+M2 recommended making operand wildcarding a deterministic arm: the remaining same-length headroom was operands that
+change with the source version, and a rule that names them belongs in the generator, not the agent. How-to:
+[docs/flywheel.md](../flywheel.md#the-deterministic-arm).
+
+### As built
+- **Operand classes** (`rampage_signatures::operand_classes`): per byte, `relocation` (every byte of a field scheme
+  2 masks), x86 `disp8`/`disp-wide`/`imm8`/`imm-wide` from iced-x86's constant offsets, and AArch64
+  `a64-immediate`/`a64-offset` from the encodings. Scheme 2's masking was refactored to report its fields (the
+  hashes are unchanged), so `relocation` is exactly what the hash masks.
+- **AArch64 bytes.** Fields do not align to bytes there, so a byte is wildcarded only when all its bits are the
+  field's or a register number's. Bytes that also hold opcode bits stay fixed: load vs store, MOVZ vs EOR, the
+  branch kind, the condition. The cost is that only part of each field is wildcarded (the low six bits of an
+  imm12, nothing of an unscaled imm9).
+- **Tiers.** Rows are made widest first: all classes, then `relocation` alone, then exact. Each tier groups the
+  bodies whose patterns agree there; a group the row rules refuse leaves its bodies to the next tier.
+- **Default:** all classes, with that ladder. The class set was fixed before any measurement. The ladder was not:
+  it was added after a first run without tiers on the held-out split (see the first row of the review notes
+  below), so it is a design choice informed by one held-out read. Variant class sets are diagnostics.
+- `flywheel-baseline --wildcards LIST|none` compares arms. `novel_reach` adds `widened_matches`: same-length novel
+  functions a widened training pattern matches, before collision checks.
+- The synthetic fixture gains `ml_scale`, whose version 2 changes only constants: the default arm names it in both
+  held-out programs, and v1's exact rows do not.
+
+### Baseline (corpus `libid-bfee58c53133`)
+The corpus was rebuilt for this run under a new version (toolchain updates; 270 binaries differ from
+`expected-digests.json`). Bundled-only held-out false positives rose from 60 to 276 on this build, so the numbers
+are compared within this corpus only.
+
+| Arm | Held-out TP | FP | F1 | Novel TP | Novel F1 |
+|---|---:|---:|---:|---:|---:|
+| bundled only | 1005 | 276 | 0.129 | 245 | 0.101 |
+| v1 (exact rows) | 8119 | 280 | 0.715 | 692 | 0.261 |
+| `relocation`, tiered | 8352 | 280 | 0.728 | 925 | 0.335 |
+| **v2 default (all classes, tiered)** | **8444** | **280** | **0.733** | **1017** | **0.362** |
+| reloc + immediates, tiered (diagnostic) | 8431 | 280 | 0.732 | 1004 | 0.358 |
+
+- Training and negative metrics are identical for every arm (train 9519 TP / 270 FP; negatives 134 FP from the
+  bundled databases alone).
+- Over v1, v2 names +325 held-out functions, all novel (+47%), with no new false positive. The recognised slice is
+  unchanged at 7427 TP.
+- The default arm holds 3008 rows: 2774 at the widest tier, 202 at `relocation`, 32 exact.
+- At the widest tier, 142 groups fall back as ambiguous (one widened pattern for two names), 57 as refused by the
+  row schema and 16 as colliding.
+- **Reach:** of the 1586 same-length novel functions, a widened training pattern matches 1182 (v1: 541). The arm
+  realises 325 new ones. The rest are lost to ambiguity, collisions and the 2080-byte row limit, and to bodies the
+  arm already named.
+- The arm still fails the held-out gate against the bundled databases on v1's same 4 false positives. They come
+  from exact rows, not from widening.
+
+### Review notes
+- **First measurement.** It classed a whole AArch64 byte by any field bit and had no tiers. Wildcarding all
+  classes then reached 8294 TP: worse than `relocation` alone, because 615 widened groups failed the schema and fell
+  straight to exact rows. That run motivated the tiers.
+- **Fresh-context review** found that byte rule erased opcode bits (`ldr` matched `str`, a BL became four
+  wildcards). The rule was fixed as above, and the numbers above are from the fixed build. The earlier,
+  higher-looking result (+372) relied on those over-broad rows.
+- x86 `imm8` and `imm-wide` are broad by design: they include SSE shuffle selectors and syscall numbers, so a
+  short wrapper can widen to match a sibling (`read` vs `write`). The row schema's fixed-byte minimum and the
+  collision check bound it. No new false positive appeared on held-out or negatives.
+
+### Next
+- **Per-row false-positive overrides.** The 4 false positives could get overrides in the style of Ghidra Function
+  ID: confirm by callers/callees, or fail the entry. Then the arm passes its own gate, and the overrides become a
+  small action space for the agent.
+- **A third, untouched split.** This arm's design read held-out numbers, so it needs one (for example a new
+  library set) before claims beyond this corpus.
+- **Compiler/tool identification** stays the next AI family.

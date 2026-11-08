@@ -276,7 +276,11 @@ impl Improve {
         }
         let engine = Engine::new(corpus, paths, options.workers);
         let arm = match options.baseline {
-            Baseline::Arm => Some(super::arm::load_or_generate(&engine, options.gate.min_pattern_bytes)?),
+            Baseline::Arm => Some(super::arm::load_or_generate(
+                &engine,
+                options.gate.min_pattern_bytes,
+                &super::arm::DEFAULT_WILDCARDS,
+            )?),
             Baseline::Bundled => None,
         };
         // A held-out split that training already covers would measure recognition, not generalisation.

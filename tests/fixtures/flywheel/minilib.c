@@ -1,6 +1,6 @@
 /* A small owned "library" in two versions for the flywheel's synthetic version-split test. MINILIB_V2 adds a
- * function ahead of the others (so every function moves), changes ml_checksum's body, and leaves the rest
- * unchanged in source: their masked bodies match across versions, their raw bytes do not. */
+ * function ahead of the others (so every function moves), changes ml_checksum's body and ml_scale's constants,
+ * and leaves the rest unchanged in source: their masked bodies match across versions, their raw bytes do not. */
 #include "minilib.h"
 
 static unsigned ml_table[16] = {3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3};
@@ -63,4 +63,18 @@ unsigned ml_mix(unsigned a, unsigned b, unsigned c) {
     b -= a; b ^= (a << 6) | (a >> 26); a += c;
     c -= b; c ^= (b << 8) | (b >> 24); b += a;
     return a ^ b ^ ml_lookup(c);
+}
+
+/* Version 2 changes only this function's constants, each to one of the same encoded size: the change operand
+ * wildcarding carries across versions. */
+unsigned ml_scale(const unsigned *values, unsigned count) {
+#ifdef MINILIB_V2
+    unsigned total = 0x9e3779b9u;
+    for (unsigned i = 0; i < count; i++) total = (total ^ values[i]) * 0x2545f491u + 0x3du;
+    return total ^ (total >> 11);
+#else
+    unsigned total = 0x811c9dc5u;
+    for (unsigned i = 0; i < count; i++) total = (total ^ values[i]) * 0x01000193u + 0x2bu;
+    return total ^ (total >> 13);
+#endif
 }

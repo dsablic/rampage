@@ -806,27 +806,40 @@ pub struct NovelReach {
     pub mergeable: usize,
     /// For the same-length ones: how many byte positions differ from the closest training body, in buckets.
     pub differing_bytes: BTreeMap<String, usize>,
+    /// The operand classes the widened counts below wildcard.
+    pub wildcards: Vec<rampage_signatures::OperandClass>,
+    /// Of the same-length ones, those a training body's widened pattern (its masked body with the operand bytes of
+    /// `wildcards` wildcarded, the arm's widened row) matches: the reach of operand wildcarding before collisions.
+    pub widened_matches: usize,
 }
 
 impl Engine {
-    /// [`NovelReach`] over the held-out split.
-    pub fn novel_reach(&self) -> Result<NovelReach, FlywheelError> {
-        let mut training: BTreeMap<(String, String), Vec<Vec<Option<u8>>>> = BTreeMap::new();
+    /// [`NovelReach`] over the held-out split, with widened patterns wildcarding `wildcards`.
+    pub fn novel_reach(&self, wildcards: &[rampage_signatures::OperandClass]) -> Result<NovelReach, FlywheelError> {
+        let wildcards = super::arm::wildcard_set(wildcards);
+        // Each training body by (architecture, name): its masked and widened patterns.
+        type Bodies = Vec<(Vec<Option<u8>>, Vec<Option<u8>>)>;
+        let mut training: BTreeMap<(String, String), Bodies> = BTreeMap::new();
         for index in self.corpus.indices(super::corpus::Split::Train) {
             let loaded = self.get(index)?;
+            let target = loaded.binary.target();
             for (address, truth) in &loaded.truth {
                 if truth.origin == RUNTIME {
                     continue;
                 }
                 if let Some(masked) = loaded.masked(*address) {
+                    let classes = loaded
+                        .body(*address)
+                        .and_then(|body| rampage_signatures::operand_classes(&target, &loaded.image, body, *address));
+                    let widened = super::arm::widen(&masked, classes.as_deref(), &wildcards);
                     let bodies = training.entry((self.binary(index).arch.clone(), truth.name.clone())).or_default();
-                    if !bodies.contains(&masked) {
-                        bodies.push(masked);
+                    if !bodies.iter().any(|(known, _)| *known == masked) {
+                        bodies.push((masked, widened));
                     }
                 }
             }
         }
-        let mut reach = NovelReach::default();
+        let mut reach = NovelReach { wildcards: wildcards.clone(), ..NovelReach::default() };
         for index in self.corpus.indices(super::corpus::Split::Heldout) {
             let loaded = self.get(index)?;
             let arch = &self.binary(index).arch;
@@ -844,6 +857,7 @@ impl Engine {
                 // merging the two would keep.
                 let closest = bodies
                     .iter()
+                    .map(|(body, _)| body)
                     .filter(|body| body.len() == masked.len())
                     .map(|body| {
                         let differing = body.iter().zip(&masked).filter(|(a, b)| a != b).count();
@@ -853,6 +867,11 @@ impl Engine {
                     .min();
                 let Some((differing, std::cmp::Reverse(fixed))) = closest else { continue };
                 reach.same_length += 1;
+                if let Some(raw) = loaded.body(*address)
+                    && bodies.iter().any(|(_, widened)| pattern_matches(widened, raw))
+                {
+                    reach.widened_matches += 1;
+                }
                 if fixed >= 6 && fixed * 2 >= masked.len() {
                     reach.mergeable += 1;
                 }

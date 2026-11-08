@@ -393,7 +393,8 @@ fn the_deterministic_arm_rows_every_unambiguous_training_body_and_novelty_splits
     assert_eq!(arm.rows.len(), names.len(), "one row per body: both training programs share the build");
     assert_eq!(rampage_api::flywheel::arm(engine, 32).unwrap().hash(), arm.hash(), "saved and loaded again");
 
-    // Novelty: ml_extra is new and ml_checksum changed in version 2; the other functions are unchanged.
+    // Novelty: ml_extra is new, ml_checksum changed and ml_scale changed only its constants in version 2; the
+    // other functions are unchanged.
     let index = engine.corpus.manifest.binaries.iter().position(|binary| binary.id == "v2-a").unwrap();
     let loaded = engine.get(index).unwrap();
     let novelty = engine.novelty(index).unwrap();
@@ -401,18 +402,31 @@ fn the_deterministic_arm_rows_every_unambiguous_training_body_and_novelty_splits
         let address = loaded.truth.iter().find(|(_, truth)| truth.name == name).unwrap().0;
         novelty[address]
     };
-    assert!(novel_of("ml_extra") && novel_of("ml_checksum"));
+    assert!(novel_of("ml_extra") && novel_of("ml_checksum") && novel_of("ml_scale"));
     assert!(!novel_of("ml_mix") && !novel_of("ml_reverse"));
     let training = engine.corpus.manifest.binaries.iter().position(|binary| binary.id == "v1-a").unwrap();
     assert!(engine.novelty(training).unwrap().is_empty(), "novelty is a held-out notion");
 
-    // The arm gains recognised functions only, without a false positive; the novel slice is untouched.
-    let layers: Vec<_> = layer("arm", &arm.rows).unwrap().into_iter().collect();
+    // v1's exact rows gain recognised functions only, without a false positive; the novel slice is untouched.
+    let exact = rampage_api::flywheel::arm_with(engine, 32, &[]).unwrap();
+    assert!(exact.wildcards.is_empty() && exact.stats.widened_rows == 0, "{:?}", exact.stats);
+    let layers: Vec<_> = layer("arm", &exact.rows).unwrap().into_iter().collect();
     let evaluation = evaluate_split(engine, Split::Heldout, &layers, &[]).unwrap();
     let (before, after) = evaluation.slice(RECOGNISED_SLICE);
     assert!(after.tp() > before.tp(), "{before:?} -> {after:?}");
     let (before, after) = evaluation.slice(NOVEL_SLICE);
     assert_eq!(after.tp(), before.tp());
+    assert_eq!(after.fn_(), 6, "ml_extra, ml_checksum and ml_scale in two programs");
+    let (before, after) = evaluation.overall();
+    assert_eq!(after.fp(), before.fp());
+
+    // The default arm wildcards operand fields: its ml_scale row carries across the constant-only change, while the
+    // rewritten ml_checksum and the new ml_extra stay out of reach.
+    assert!(arm.stats.widened_rows >= 1, "{:?}", arm.stats);
+    let layers: Vec<_> = layer("arm", &arm.rows).unwrap().into_iter().collect();
+    let evaluation = evaluate_split(engine, Split::Heldout, &layers, &[]).unwrap();
+    let (before, after) = evaluation.slice(NOVEL_SLICE);
+    assert_eq!(after.tp(), before.tp() + 2, "ml_scale in two programs");
     assert_eq!(after.fn_(), 4, "ml_extra and ml_checksum in two programs");
     let (before, after) = evaluation.overall();
     assert_eq!(after.fp(), before.fp());
