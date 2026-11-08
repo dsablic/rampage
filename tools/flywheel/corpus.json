@@ -21,7 +21,13 @@
          "sha256": "b3a24de97a8fdbc835b9833169501030b8977031bcb54b3b3ac13740f846ab30"},
         {"version": "1.3.1", "split": "heldout", "root": "zlib-1.3.1",
          "url": "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz",
-         "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"}
+         "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"},
+        {"version": "1.3.2", "split": "final", "root": "zlib-1.3.2",
+         "url": "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz",
+         "sha256": "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"},
+        {"version": "1.4", "split": "final", "root": "zlib-1.4",
+         "url": "https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.gz",
+         "sha256": "02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584"}
       ]
     },
     {
@@ -55,7 +61,10 @@
          "sha256": "5308fd4bd90cef7aa060558514de6a1a4a0819974a26e6ed13973c5f624c24b2"},
         {"version": "1.7.18", "split": "heldout", "root": "cJSON-1.7.18",
          "url": "https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.18.tar.gz",
-         "sha256": "3aa806844a03442c00769b83e99970be70fbef03735ff898f4811dd03b9f5ee5"}
+         "sha256": "3aa806844a03442c00769b83e99970be70fbef03735ff898f4811dd03b9f5ee5"},
+        {"version": "1.7.19", "split": "final", "root": "cJSON-1.7.19",
+         "url": "https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.19.tar.gz",
+         "sha256": "7fa616e3046edfa7a28a32d5f9eacfd23f92900fe1f8ccd988c1662f30454562"}
       ]
     },
     {
@@ -97,6 +106,88 @@
       "versions": [{"version": "1", "split": "negative"}]
     }
   ],
+  "prebuilt": [
+    {
+      "library": "zlib", "version": "1.2.13", "split": "train",
+      "compiler": "alpine-gcc", "opt": "distro", "distribution": "Alpine Linux v3.17",
+      "archive": "lib/libz.a", "include": ["usr/include"],
+      "drivers": ["zlib/z1.c", "zlib/z2.c", "zlib/z3.c", "zlib/z4.c"],
+      "packages": {
+        "x86_64": [
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.17/main/x86_64/zlib-static-1.2.13-r0.apk",
+           "sha256": "56cd53ab92f7a11f34e199a9a0d75f44930af20f8dd64a0d2e1a29a9214438ef"},
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.17/main/x86_64/zlib-dev-1.2.13-r0.apk",
+           "sha256": "09380f1b236bc0ef565af66de9d5ab79d8baf1207fd14f08d32af1460fb3b963"}
+        ],
+        "aarch64": [
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.17/main/aarch64/zlib-static-1.2.13-r0.apk",
+           "sha256": "21a656af684489a2cce482ba1e77755b7ec8b929e48d81c5b3d70ebc0f1f60d8"},
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.17/main/aarch64/zlib-dev-1.2.13-r0.apk",
+           "sha256": "ee51f7d3e0cef296d6c18c7cb058b2917a191af614e723c6e52856af7fc912fe"}
+        ]
+      }
+    },
+    {
+      "library": "zlib", "version": "1.3.1", "split": "heldout",
+      "compiler": "alpine-gcc", "opt": "distro", "distribution": "Alpine Linux v3.19",
+      "archive": "lib/libz.a", "include": ["usr/include"],
+      "drivers": ["zlib/z1.c", "zlib/z2.c", "zlib/z3.c", "zlib/z4.c"],
+      "packages": {
+        "x86_64": [
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.19/main/x86_64/zlib-static-1.3.1-r0.apk",
+           "sha256": "ab1e728b7a9f9be2816729f4553454f6a0155e34a879487ae89438a17a0c7731"},
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.19/main/x86_64/zlib-dev-1.3.1-r0.apk",
+           "sha256": "47c874215fae53051af8635634b2bfae1b2f00cf2150a6e84e37b120d1ab8855"}
+        ],
+        "aarch64": [
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.19/main/aarch64/zlib-static-1.3.1-r0.apk",
+           "sha256": "3249ac414be0599fe9c2907b9487aaea2882a9a61925376e120a27bd065a19bb"},
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.19/main/aarch64/zlib-dev-1.3.1-r0.apk",
+           "sha256": "ec59bdf3971fa5fa2c137f04234d41b408e6495c8f5aa23d1e5c29591354c4f4"}
+        ]
+      }
+    },
+    {
+      "library": "zlib", "version": "1.3.2", "split": "final",
+      "compiler": "alpine-gcc", "opt": "distro", "distribution": "Alpine Linux v3.20",
+      "archive": "lib/libz.a", "include": ["usr/include"],
+      "drivers": ["zlib/z1.c", "zlib/z2.c", "zlib/z3.c", "zlib/z4.c"],
+      "packages": {
+        "x86_64": [
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/x86_64/zlib-static-1.3.2-r0.apk",
+           "sha256": "ec7b509592442ea34cf9f2b355dd94933d79b1bb7cbf10524770c507ef14cbc4"},
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/x86_64/zlib-dev-1.3.2-r0.apk",
+           "sha256": "7fd9ec4aeac0719e5568062b9e4545e6b1c315ac477b37dad16ab4e5e2463729"}
+        ],
+        "aarch64": [
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/aarch64/zlib-static-1.3.2-r0.apk",
+           "sha256": "7efd739be719ad5ae2443a2fb0db32cd09b91da5bb2586d003d1cffa840e669c"},
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.20/main/aarch64/zlib-dev-1.3.2-r0.apk",
+           "sha256": "ddb990c3fb0307ff1521be9550d39d13e9779208d023d89a5d3baccf244f7388"}
+        ]
+      }
+    },
+    {
+      "library": "zlib", "version": "1.4", "split": "final",
+      "compiler": "alpine-gcc", "opt": "distro", "distribution": "Alpine Linux v3.22",
+      "archive": "usr/lib/libz.a", "include": ["usr/include"],
+      "drivers": ["zlib/z1.c", "zlib/z2.c", "zlib/z3.c", "zlib/z4.c"],
+      "packages": {
+        "x86_64": [
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/x86_64/zlib-static-1.4-r0.apk",
+           "sha256": "d388b801f70aa17137a17c51a86fc3a5d5fd97108ad61b14742768f728895516"},
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/x86_64/zlib-dev-1.4-r0.apk",
+           "sha256": "e9358e076fa00d65ca2eb94679ff21516ed86d4253d6aa7f97cd06d251b8a024"}
+        ],
+        "aarch64": [
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/zlib-static-1.4-r0.apk",
+           "sha256": "7b229b84708116c36942e9df6674d3cf5bef4380f678022e62d58ca8813dd362"},
+          {"url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/zlib-dev-1.4-r0.apk",
+           "sha256": "45fe9891c03d02d8ba155d15ff6da9d92aa2bcef045fbd085ed913c334145086"}
+        ]
+      }
+    }
+  ],
   "arches": [
     {"name": "x86_64", "triple": "x86_64-linux-musl"},
     {"name": "aarch64", "triple": "aarch64-linux-musl"}
@@ -112,6 +203,7 @@
     "rule": "version",
     "unit": "library version: every training binary links a target library's older version, every held-out binary its current one; negatives link no target library",
     "fast_programs_per_library": 1,
-    "max_heldout_overlap": 0.5
+    "max_heldout_overlap": 0.5,
+    "final": "target-library versions neither training nor held-out holds, in two cells: built from source with the same matrix, and Alpine gcc builds (whose older versions train and are held out like the rest); read only by `flywheel-eval --split final --final-reason TEXT`, which records every read"
   }
 }

@@ -122,7 +122,7 @@ impl SplitEvaluation {
     }
 }
 
-/// Evaluates `split` under `layers` against `reference` layers. Held-out evaluations never keep cases.
+/// Evaluates `split` under `layers` against `reference` layers. Held-out and final evaluations never keep cases.
 pub fn evaluate_split(
     engine: &Engine,
     split: Split,
@@ -135,8 +135,8 @@ pub fn evaluate_split(
     compare(engine, split, &before, &after)
 }
 
-/// Scores `split` from the names a reference (`before`) and a candidate (`after`) gave its binaries. Held-out
-/// evaluations never keep cases.
+/// Scores `split` from the names a reference (`before`) and a candidate (`after`) gave its binaries. Held-out and
+/// final evaluations never keep cases.
 pub fn compare(
     engine: &Engine,
     split: Split,
@@ -169,7 +169,7 @@ pub fn compare(
                 "broken" => broken += 1,
                 _ => {}
             }
-            if split != Split::Heldout {
+            if !matches!(split, Split::Heldout | Split::Final) {
                 cases.push(ChangedCase {
                     binary: engine.binary(index).id.clone(),
                     address: format!("{address:#x}"),

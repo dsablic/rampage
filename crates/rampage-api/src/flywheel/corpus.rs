@@ -58,6 +58,9 @@ pub struct SplitConfig {
     /// build again.
     #[serde(default = "default_refused_overlap")]
     pub refuse_heldout_overlap: f64,
+    /// What the final split holds, when the corpus has one (descriptive).
+    #[serde(default, rename = "final", skip_serializing_if = "String::is_empty")]
+    pub final_split: String,
 }
 
 fn default_overlap() -> f64 {
@@ -75,6 +78,9 @@ pub enum Role {
     Train,
     Heldout,
     Negative,
+    /// The final split: library versions no design decision, gate or report reads, measured only by an explicit,
+    /// ledgered `flywheel-eval --split final` (docs/flywheel.md, "The final split").
+    Final,
 }
 
 /// One stripped binary of the corpus with its symbolized twin.
@@ -146,6 +152,8 @@ pub enum Split {
     Fast,
     /// Binaries without any target library: every name a target signature gives there is false.
     Negative,
+    /// Untouched library versions (often another toolchain's builds), for claims rather than decisions.
+    Final,
 }
 
 impl Split {
@@ -155,6 +163,7 @@ impl Split {
             Split::Heldout => "heldout",
             Split::Fast => "fast",
             Split::Negative => "negative",
+            Split::Final => "final",
         }
     }
 }
@@ -168,7 +177,8 @@ impl std::str::FromStr for Split {
             "heldout" => Ok(Split::Heldout),
             "fast" => Ok(Split::Fast),
             "negative" => Ok(Split::Negative),
-            other => Err(format!("unknown split `{other}` (train, heldout, fast or negative)")),
+            "final" => Ok(Split::Final),
+            other => Err(format!("unknown split `{other}` (train, heldout, fast, negative or final)")),
         }
     }
 }
@@ -267,15 +277,21 @@ impl Corpus {
             }
             versions.entry((binary.library.as_str(), binary.split)).or_default().insert(&binary.library_version);
         }
-        // A version split holds out versions: one library version on both sides would hold out nothing.
+        // A version split holds out versions: one library version on both sides would hold out nothing. The final
+        // split holds out versions from the held-out split too, so a decision read there says nothing about it.
         for ((library, role), held) in &versions {
-            if *role != Role::Heldout {
-                continue;
-            }
-            if let Some(trained) = versions.get(&(*library, Role::Train))
-                && let Some(shared) = held.intersection(trained).next()
-            {
-                return invalid(format!("{library} {shared} is in both the training and the held-out split"));
+            let others: &[(Role, &str)] = match role {
+                Role::Heldout => &[(Role::Train, "training")],
+                Role::Final => &[(Role::Train, "training"), (Role::Heldout, "held-out")],
+                _ => continue,
+            };
+            let name = if *role == Role::Final { "final" } else { "held-out" };
+            for (other, other_name) in others {
+                if let Some(seen) = versions.get(&(*library, *other))
+                    && let Some(shared) = held.intersection(seen).next()
+                {
+                    return invalid(format!("{library} {shared} is in both the {other_name} and the {name} split"));
+                }
             }
         }
         let fast = fast_programs(&manifest);
@@ -308,6 +324,7 @@ impl Corpus {
             Split::Heldout => binary.split == Role::Heldout,
             Split::Train => binary.split == Role::Train,
             Split::Negative => binary.split == Role::Negative,
+            Split::Final => binary.split == Role::Final,
             Split::Fast => binary.split == Role::Train && self.fast.contains(&binary.program),
         }
     }
@@ -323,8 +340,14 @@ impl Corpus {
     }
 
     /// The architectures the corpus holds.
+    /// Final binaries are left out, so an architecture only the final split holds is never offered or accepted.
     pub fn arches(&self) -> BTreeSet<String> {
-        self.manifest.binaries.iter().map(|binary| binary.arch.clone()).collect()
+        self.manifest
+            .binaries
+            .iter()
+            .filter(|binary| binary.split != Role::Final)
+            .map(|binary| binary.arch.clone())
+            .collect()
     }
 
     /// The SPDX expression covering the target libraries, for packs made from them.
@@ -442,6 +465,7 @@ mod tests {
                 fast_programs_per_library: 1,
                 max_heldout_overlap: 0.5,
                 refuse_heldout_overlap: 0.95,
+                final_split: String::new(),
             },
             binaries,
         }
@@ -470,6 +494,28 @@ mod tests {
         both.binaries[0].split = Role::Heldout;
         let error = Corpus::from_manifest(PathBuf::from("/"), both).unwrap_err();
         assert!(error.message().contains("both the training and the held-out split"), "{error}");
+    }
+
+    #[test]
+    fn the_final_split_is_its_own_and_holds_out_versions_from_both_other_splits() {
+        let mut with_final = manifest("v1");
+        let mut extra = with_final.binaries[0].clone();
+        extra.id = "zlib-1.4-p0".to_owned();
+        extra.library_version = "1.4".to_owned();
+        extra.split = Role::Final;
+        with_final.binaries.push(extra.clone());
+        let corpus = Corpus::from_manifest(PathBuf::from("/"), with_final.clone()).unwrap();
+        let index = corpus.manifest.binaries.len() - 1;
+        assert_eq!(corpus.indices(Split::Final), [index]);
+        for split in [Split::Train, Split::Heldout, Split::Fast, Split::Negative] {
+            assert!(!corpus.indices(split).contains(&index), "{}", split.name());
+        }
+        for (shared, side) in [("1.3", "held-out"), ("1.2", "training")] {
+            let mut clash = with_final.clone();
+            clash.binaries.last_mut().unwrap().library_version = shared.to_owned();
+            let error = Corpus::from_manifest(PathBuf::from("/"), clash).unwrap_err();
+            assert!(error.message().contains(&format!("both the {side} and the final split")), "{error}");
+        }
     }
 
     #[test]

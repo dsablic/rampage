@@ -82,6 +82,40 @@ and novel bodies.
 The split rule for other families follows the same principle: hold out the thing the heuristic must generalise
 over, never a unit that shares the measured code with training.
 
+### The final split
+
+The held-out split guides decisions: the gate reads it, and the operator reads its reports while designing arms and
+rules. That makes it a development split, and gains measured on it are no longer clean evidence. The final split is
+held back for claims:
+
+- **What it holds.** Target-library versions neither training nor held-out holds (the corpus refuses one that
+  does), in two cells:
+  - zlib 1.3.2 and 1.4 and cJSON 1.7.19 built from source with the same matrix, so the split measures version
+    generalisation in the same toolchains;
+  - Alpine Linux's gcc-built static zlib (`prebuilt` in `corpus.json`), for x86-64 and AArch64. gcc gets its own
+    ladder: Alpine's zlib 1.2.13 trains, 1.3.1 is held out, and 1.3.2 and 1.4 are final. It reports as the
+    `compiler:alpine-gcc` slice.
+
+  A final cell must never change the compiler and the version at once. Byte signatures learned from clang builds
+  name nothing in gcc builds: a first final split made only of gcc builds of new versions scored 0 for every arm.
+  cJSON and lz4 have no gcc cell. Alpine packages cJSON statically only from 3.22, so no older version could
+  train, and its `liblz4.a` holds gcc slim-LTO bitcode, which only gcc can link.
+- **Origins only.** Packages are pinned by URL and SHA-256, downloaded into `target/flywheel/sources/`, unpacked and
+  never committed or run. Distributions replace package revisions, so a pin can stop resolving; updating it changes
+  the corpus version.
+- **Who reads it.** A corpus server, the arm and `flywheel-baseline` never load it. Only an explicit evaluation
+  does, and every read is appended, numbered and with its reason, to `final-ledger.jsonl` inside the corpus
+  directory, so any flywheel directory reading that corpus counts into the same ledger:
+
+  ```sh
+  rampage-eval flywheel-eval --corpus target/flywheel/corpus/<version> --split final \
+      --pack target/flywheel/baseline/libid/<arm> --final-reason "arm v2 claim"
+  ```
+
+  Like the held-out split, a final evaluation reports metrics and no per-function cases. A claim cites its read
+  number; a design changed after a final read is measured on a later corpus's final split, not on the same one
+  again.
+
 | Family | Hold out |
 |---|---|
 | libid | Library versions (or whole configurations) |

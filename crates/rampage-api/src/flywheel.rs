@@ -29,7 +29,7 @@ pub use candidate::{
     Candidate, MAX_MODULE_BYTES, MAX_PATTERN_BYTES, MAX_ROWS, Row, RowSource, databases, format_pattern, layer,
     parse_pattern, rows_hash, write_pack,
 };
-pub use corpus::{Corpus, CorpusBinary, CorpusManifest, Split, SplitConfig};
+pub use corpus::{Corpus, CorpusBinary, CorpusManifest, Role, Split, SplitConfig};
 pub use engine::{
     BodyKey, Bundled, Counts, Engine, Gains, Layer, Loaded, NovelReach, Outcome, Overlap, Proposals, SliceMetrics,
     TruthFunction,
@@ -228,11 +228,11 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), FlywheelErro
 }
 
 /// An exclusive advisory lock on a file, held across processes until dropped.
-pub(crate) struct FileLock(std::fs::File);
+pub struct FileLock(std::fs::File);
 
 impl FileLock {
     /// Waits for the exclusive lock on `path`, creating the file (and its directory) when missing.
-    pub(crate) fn acquire(path: &Path) -> Result<FileLock, FlywheelError> {
+    pub fn acquire(path: &Path) -> Result<FileLock, FlywheelError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| FlywheelError::io(parent, error))?;
         }

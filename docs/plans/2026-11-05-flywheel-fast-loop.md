@@ -467,6 +467,35 @@ are compared within this corpus only.
   short wrapper can widen to match a sibling (`read` vs `write`). The row schema's fixed-byte minimum and the
   collision check bound it. No new false positive appeared on held-out or negatives.
 
+### Final split (2026-11-08)
+The held-out split guided this arm's design, so a final split was added for claims ([docs/flywheel.md](../flywheel.md#the-final-split)).
+- **Contents:** versions no other split holds. From-source zlib 1.3.2/1.4 and cJSON 1.7.19 in the same matrix,
+  plus an Alpine gcc zlib ladder: 1.2.13 trains, 1.3.1 is held out, 1.3.2/1.4 are final.
+- **Read policy:** only by `flywheel-eval --split final --final-reason`, which appends each read to a ledger.
+  Corpus `libid-ed988c9a220e` has 536 binaries, 160 of them final.
+- **A first attempt failed** (corpus `libid-ada4c7e8765c`, final reads #1–#2 there). Its final split held only gcc
+  builds of new versions, with no gcc anywhere else. Every arm and the bundled databases named 0 of 2404 functions:
+  clang-trained byte signatures do not transfer to gcc, so that split measured toolchain transfer, not versions.
+
+Final reads #1 (v1) and #2 (v2) on `libid-ed988c9a220e`:
+
+| Final split | TP | FP | F1 | Novel TP | Novel F1 |
+|---|---:|---:|---:|---:|---:|
+| bundled only | 400 | 300 | – | 51 | – |
+| v1 (exact rows) | 5799 | 344 | 0.519 | 436 | 0.090 |
+| **v2 default** | **6468** | **348** | **0.562** | **1105** | **0.214** |
+| gcc cell, v1 → v2 | 223 → 287 | 0 → 0 | 0.240 → 0.299 | | |
+
+- **Generalisation holds on untouched data.** v2 names +669 more functions than v1, and 2.5x the novel ones. The
+  recognised slice is unchanged at 5363 TP.
+- **False positives grow off the dev split.**
+  - On held-out, v1 adds 4 false positives over the bundled databases and widening adds none.
+  - On final, v1 adds 44 and v2 adds 48: widening costs 4 (all in the clang cell).
+  - The held-out split understated the arm's false-positive rate. The cause cannot be read from final cases,
+    which the split never reports. Candidates to check on the dev split: renamed functions across versions, and
+    short bodies.
+- On this corpus's held-out split (with gcc zlib 1.3.1), v1 reaches 8396 TP and v2 8729, both at 280 FP.
+
 ### Next
 - **Per-row false-positive overrides.** The 4 false positives could get overrides in the style of Ghidra Function
   ID: confirm by callers/callees, or fail the entry. Then the arm passes its own gate, and the overrides become a

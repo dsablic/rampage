@@ -725,15 +725,15 @@ impl Engine {
             .map_err(FlywheelError::Corpus)
     }
 
-    /// Each target-library truth function of the held-out binary at `index` and whether it is novel: its masked
-    /// body is not one training holds (a body failing the confidence gate is novel too, since no training body
-    /// can equal it). Empty for a binary outside the held-out split. For scoring only: it reads held-out truth.
+    /// Each target-library truth function of the held-out or final binary at `index` and whether it is novel: its
+    /// masked body is not one training holds (a body failing the confidence gate is novel too, since no training
+    /// body can equal it). Empty for a binary outside those splits. For scoring only: it reads held-out truth.
     pub fn novelty(&self, index: usize) -> Result<Arc<BTreeMap<u64, bool>>, FlywheelError> {
         if let Some(novelty) = self.novelty[index].get() {
             return Ok(Arc::clone(novelty));
         }
         let mut novelty = BTreeMap::new();
-        if self.binary(index).split == super::corpus::Role::Heldout {
+        if matches!(self.binary(index).split, super::corpus::Role::Heldout | super::corpus::Role::Final) {
             let training = self.training_bodies()?;
             let loaded = self.get(index)?;
             for (address, truth) in &loaded.truth {

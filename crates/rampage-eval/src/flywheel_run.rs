@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use rampage_api::flywheel::{
     ARM_WILDCARDS, Arm, Corpus, Engine, FAMILY, GateConfig, Layer, NOVEL_SLICE, OperandClass, Paths, PromotedSet,
-    RECOGNISED_SLICE, Split, SplitEvaluation, arm_directory, build_id, evaluate_split, layer, pack_layer,
+    RECOGNISED_SLICE, Role, Split, SplitEvaluation, arm_directory, build_id, evaluate_split, layer, pack_layer,
     promoted_layer, revert,
 };
 use serde_json::{Value, json};
@@ -83,6 +83,46 @@ pub struct FlywheelEvalArgs {
     /// Also write the JSON here.
     #[arg(long)]
     out: Option<PathBuf>,
+    /// Required to measure the final split: why this read is made (for example the claim it backs). Every final
+    /// read is appended to the final ledger with it, and the read's number is printed, so reads stay countable.
+    #[arg(long)]
+    final_reason: Option<String>,
+}
+
+/// The final split's ledger: one JSON line per read, kept inside the corpus directory so every flywheel directory
+/// reading that corpus counts into the same ledger.
+fn final_ledger(engine: &Engine) -> PathBuf {
+    engine.corpus.root.join("final-ledger.jsonl")
+}
+
+/// Appends one final read to the ledger and returns its number (1 for the first read of this corpus).
+fn record_final_read(engine: &Engine, reason: &str, packs: &[PathBuf]) -> Result<usize, String> {
+    let path = final_ledger(engine);
+    // Concurrent final reads take turns, so each gets its own number.
+    let _lock =
+        rampage_api::flywheel::FileLock::acquire(&path.with_extension("lock")).map_err(|error| error.to_string())?;
+    let previous = match std::fs::read_to_string(&path) {
+        Ok(text) => text.lines().filter(|line| !line.trim().is_empty()).count(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    let entry = json!({
+        "read": previous + 1,
+        "unix_ms": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as u64),
+        "corpus_identity": engine.corpus.identity(),
+        "build_id": build_id(),
+        "reason": reason,
+        "packs": packs,
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    writeln!(file, "{entry}").map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(previous + 1)
 }
 
 #[derive(clap::Args)]
@@ -234,12 +274,26 @@ pub fn eval(args: FlywheelEvalArgs) -> Result<ExitCode, String> {
     let split: Split = args.split.parse()?;
     let engine = open_engine(&args.corpus, args.flywheel_dir.as_deref(), args.workers)?;
     let started = Instant::now();
-    let indices = engine.corpus.indices(split);
-    let load = engine.load_all(&indices).map_err(|error| error.to_string())?;
+    // Packs first: a mistyped pack must not use up a final read.
     let mut layers: Vec<Layer> = Vec::new();
     for pack in &args.pack {
         layers.extend(pack_layer(pack).map_err(|error| format!("{}: {error}", pack.display()))?);
     }
+    let final_read = match (split, args.final_reason.as_deref().map(str::trim)) {
+        (Split::Final, Some(reason)) if !reason.is_empty() => Some(record_final_read(&engine, reason, &args.pack)?),
+        (Split::Final, _) => {
+            return Err("the final split is read only for claims: pass --final-reason TEXT, which the final ledger \
+                        records"
+                .to_owned());
+        }
+        (_, Some(_)) => return Err("--final-reason applies only to --split final".to_owned()),
+        (_, None) => None,
+    };
+    if let Some(read) = final_read {
+        eprintln!("final read #{read} of corpus {}; ledger {}", engine.corpus.key(), final_ledger(&engine).display());
+    }
+    let indices = engine.corpus.indices(split);
+    let load = engine.load_all(&indices).map_err(|error| error.to_string())?;
     let evaluation = evaluate_split(&engine, split, &layers, &[]).map_err(|error| error.to_string())?;
     let mut output = evaluation_json(&evaluation, args.max_cases, true);
     if split == Split::Heldout || split == Split::Train {
@@ -256,6 +310,9 @@ pub fn eval(args: FlywheelEvalArgs) -> Result<ExitCode, String> {
     output["corpus_version"] = json!(engine.corpus.version());
     output["build_id"] = json!(build_id());
     output["packs"] = json!(args.pack);
+    if let Some(read) = final_read {
+        output["final_read"] = json!(read);
+    }
     output["load"] = json!(load);
     output["total_ms"] = json!(started.elapsed().as_millis() as u64);
     let text = serde_json::to_string_pretty(&output).map_err(|error| error.to_string())?;
@@ -355,7 +412,9 @@ pub fn baseline(args: FlywheelBaselineArgs) -> Result<ExitCode, String> {
     let gate = gate_config(args.gate.as_deref())?;
     let engine = open_engine(&args.corpus, args.flywheel_dir.as_deref(), args.workers)?;
     let started = Instant::now();
-    let all: Vec<usize> = (0..engine.corpus.manifest.binaries.len()).collect();
+    // Everything but the final split, which only a ledgered flywheel-eval reads.
+    let all: Vec<usize> =
+        (0..engine.corpus.manifest.binaries.len()).filter(|&index| engine.binary(index).split != Role::Final).collect();
     let load = engine.load_all(&all).map_err(|error| error.to_string())?;
     let wildcards = parse_wildcards(args.wildcards.as_deref())?;
     let directory = arm_directory(&engine, gate.min_pattern_bytes, &wildcards);

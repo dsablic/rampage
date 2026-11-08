@@ -7,6 +7,11 @@
 # target library is built twice: its older version for the training split and its current version, held out.
 # Negative libraries and owned programs are built the same way; no target signature may ever match them.
 #
+# A target library may also have a final version, which no other split holds; final binaries are read only by a
+# ledgered `flywheel-eval --split final`. Prebuilt distribution archives (corpus.json `prebuilt`, pinned by URL and
+# SHA-256) add another toolchain's static builds in any split, linked into the same drivers per architecture.
+# Packages are only unpacked, never installed or run.
+#
 # Each linked image yields a stripped binary (what is evaluated) and a symbolized twin with the same layout
 # (where the truth comes from). The driver's own object is kept so the truth can leave the program's functions
 # out; a relocatable link of the library's objects is kept so each truth function can be tagged with its library.
@@ -39,7 +44,7 @@ eval_bin=${RAMPAGE_EVAL:-}
 clang=${FLYWHEEL_CLANG:-/opt/homebrew/opt/llvm/bin/clang}
 
 usage() {
-    sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//' >&2
+    sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//' >&2
     exit 2
 }
 while [[ $# -gt 0 ]]; do
@@ -85,6 +90,13 @@ if what == 'builds':
                             version.get('url', ''), version.get('sha256', ''), version.get('root', ''),
                             ' '.join(library['include']), ' '.join(library['defines']),
                             ' '.join(library['sources']), ' '.join(library['drivers'])]))
+elif what == 'prebuilt':
+    triples = {arch['name']: arch['triple'] for arch in corpus['arches']}
+    for entry in corpus.get('prebuilt', []):
+        for arch, packages in entry['packages'].items():
+            print('|'.join([entry['library'], entry['version'], entry['split'], entry['compiler'], entry['opt'],
+                            entry['archive'], ' '.join(entry['include']), ' '.join(entry['drivers']), arch,
+                            triples[arch], ' '.join(package['url'] + '@' + package['sha256'] for package in packages)]))
 elif what == 'arches':
     for arch in corpus['arches']:
         print(arch['name'] + '|' + arch['triple'])
@@ -137,6 +149,40 @@ while IFS="|" read -r name _role _split library_version url sha256 source_root _
     tar -xzf "$archive" -C "$work/src"
     [[ -d "$work/src/$source_root" ]] || { echo "$archive has no $source_root/" >&2; exit 1; }
 done < <(query builds)
+
+# Fetch and check every prebuilt package, then unpack each library version's packages per architecture. An Alpine
+# .apk is a gzip'd tar (concatenated streams); its signature and metadata files are left unused.
+# Read into a variable first: a failing query then stops the build instead of silently dropping cells.
+prebuilt_records=$(query prebuilt)
+mapfile -t prebuilt <<<"$prebuilt_records"
+[[ -n "$prebuilt_records" ]] || prebuilt=()
+for record in "${prebuilt[@]}"; do
+    IFS="|" read -r name library_version _split _compiler _opt _archive _include _drivers arch _triple packages <<<"$record"
+    unpacked="$work/prebuilt/$name-$library_version-$arch"
+    mkdir -p "$unpacked"
+    for package in $packages; do
+        url=${package%@*}
+        sha256=${package##*@}
+        archive="$cache/prebuilt-$arch-$(basename "$url")"
+        if [[ ! -f "$archive" ]]; then
+            echo "fetching $url"
+            curl -fsSL -o "$archive.partial" "$url"
+            mv "$archive.partial" "$archive"
+        fi
+        actual=$(shasum -a 256 "$archive" | cut -d' ' -f1)
+        if [[ "$actual" != "$sha256" ]]; then
+            echo "$archive: SHA-256 $actual, but corpus.json pins $sha256 (distributions replace package" \
+                "revisions: update the pin, which changes the corpus version)" >&2
+            exit 1
+        fi
+        # bsdtar warns about the .apk's signature headers; the messages are kept for a failure only.
+        if ! tar -xzf "$archive" -C "$unpacked" 2>"$work/tar.log"; then
+            cat "$work/tar.log" >&2
+            echo "$archive: cannot unpack" >&2
+            exit 1
+        fi
+    done
+done
 
 # compile COMPILER TRIPLE OPT SOURCE OBJECT FLAGS...
 compile() {
@@ -201,6 +247,49 @@ build_cell() {
     echo "  built $tag $cell"
 }
 
+# build_prebuilt_cell PREBUILT_RECORD: one prebuilt library version on one architecture, and its drivers. Drivers
+# compile with zig at -O2; their functions are left out of the truth either way.
+build_prebuilt_cell() {
+    local name library_version split compiler opt archive include drivers arch triple _packages
+    IFS="|" read -r name library_version split compiler opt archive include drivers arch triple _packages <<<"$1"
+    local cell="$arch-$compiler-$opt"
+    local tag="$name-$library_version"
+    local unpacked="$work/prebuilt/$tag-$arch"
+    local objects="$work/$tag-$cell"
+    mkdir -p "$objects/members"
+    [[ -f "$unpacked/$archive" ]] || { echo "$tag $arch: no $archive in its packages" >&2; return 1; }
+    local flags=()
+    for directory in $include; do flags+=("-I$unpacked/$directory"); done
+    # The library's functions, for tagging truth functions with their library. gcc's slim LTO objects hold no code.
+    (cd "$objects/members" && zig ar x "$unpacked/$archive")
+    if ! compgen -G "$objects/members/*.o" >/dev/null; then
+        echo "$tag $arch: $archive holds no object files" >&2
+        return 1
+    fi
+    if grep -lq __gnu_lto_slim "$objects/members"/*.o; then
+        echo "$tag $arch: $archive holds slim LTO objects (bitcode only), which cannot be linked here" >&2
+        return 1
+    fi
+    local library_object="lib/$tag-$cell.o"
+    ld.lld -r -o "$root/$library_object" "$objects/members"/*.o
+    for driver in $drivers; do
+        local program
+        program=$(basename "$driver" .c)
+        local id="$tag-$program-$cell"
+        compile zig "$triple" O2 "$here/drivers/$driver" "$root/obj/$id.o" "${flags[@]}"
+        zig cc -target "$triple" -O2 -g -static "$root/obj/$id.o" "$unpacked/$archive" -o "$objects/$id.linked"
+        "$eval_bin" strip --keep-symbols "$objects/$id.linked" "$root/bin/$id.twin.elf"
+        "$eval_bin" strip "$objects/$id.linked" "$root/bin/$id.elf"
+        if "$eval_bin" artifact-info "$root/bin/$id.twin.elf" | grep -q '"static_function_symbols":0[,}]'; then
+            echo "$id: the symbolized twin has no function symbols" >&2
+            return 1
+        fi
+        printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$name/$program" "$name" "$library_version" "target" \
+            "$split" "$arch" "$compiler" "$opt" "$library_object" >"$work/rows/$id.row"
+    done
+    echo "  built $tag $cell (prebuilt)"
+}
+
 # The matrix is read up front: a `wait` must only ever see the build jobs, never a query's process.
 mapfile -t arches < <(query arches)
 mapfile -t compilers < <(query compilers)
@@ -220,6 +309,13 @@ for arch_record in "${arches[@]}"; do
             done
         done
     done
+done
+for record in "${prebuilt[@]}"; do
+    while [[ $(jobs -rp | wc -l) -ge $jobs ]]; do
+        sleep 0.2
+    done
+    build_prebuilt_cell "$record" </dev/null &
+    pids+=("$!")
 done
 # Every cell must succeed before the manifest is written.
 failed=0
@@ -274,7 +370,9 @@ manifest = {
     "toolchains": {"zig": zig_version, "clang": clang_version, "lld": lld_version},
     "libraries": [
         {"name": library["name"], "license": library["license"], "role": library["role"],
-         "versions": [{key: value for key, value in entry.items() if key != "root"} for entry in library["versions"]]}
+         "versions": [{key: value for key, value in entry.items() if key != "root"} for entry in library["versions"]]
+                     + [{key: value for key, value in entry.items() if key not in ("library", "drivers", "include")}
+                        for entry in recipe.get("prebuilt", []) if entry["library"] == library["name"]]}
         for library in recipe["libraries"]
     ],
     "split": recipe["split"],
