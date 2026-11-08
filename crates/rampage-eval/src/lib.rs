@@ -29,7 +29,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rampage_arch::UnsupportedArch;
 use rampage_loaders::Binary;
-use rampage_signatures::{MaskContext, SignatureDb, canonical_functions, canonical_name, identify_program, named_functions};
+use rampage_signatures::{
+    MaskContext, SignatureDb, canonical_functions, canonical_name, identify_program, named_functions,
+};
 use serde::{Deserialize, Serialize};
 pub use toolid::{
     DetectedTool, ExpectedTool, TOOL_KINDS, ToolBinary, ToolDisagreement, ToolTruth, Toolchain, detected_tools,

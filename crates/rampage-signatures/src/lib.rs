@@ -1720,7 +1720,8 @@ mod tests {
             assert_eq!(canonical_name(name), canonical, "{name}");
         }
         // Not a counter: other kinds, no digits, digits run into a word, or a plain C name.
-        for name in ["memcpy", "__func_", "x__func_12ab", "x__funcs_1", "x__thing_4", "__libc_start_main", "f__func_1_"] {
+        for name in ["memcpy", "__func_", "x__func_12ab", "x__funcs_1", "x__thing_4", "__libc_start_main", "f__func_1_"]
+        {
             assert!(matches!(canonical_name(name), Cow::Borrowed(same) if same == name), "{name}");
         }
     }

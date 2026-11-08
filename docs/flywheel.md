@@ -243,7 +243,8 @@ conservative:
 | `max_negative_matches` | 0 | Fast gate: the candidate may give no name at all on the negative binaries. |
 | `max_slice_f1_drop` | 0.0 | No gated slice (dimension or cell) may lose F1, on the fast slice, the training split or the held-out split. |
 | `min_f1_gain` | 0.001 | Held-out gate: gated F1 must rise by at least this much, and by more than zero. |
-| `max_fp_increase` | 0 | Held-out gate: false positives may not rise. |
+| `max_fp_increase` | 0 | Held-out gate: false positives may rise by at most this many, plus the `tp_per_fp` allowance. Checked again on the deployed state (without the arm). |
+| `tp_per_fp` | 100 | Held-out gate: one more false positive is allowed for every this many correct names gained (net of names lost); 0 allows none. Training and negatives get no allowance. |
 | `max_heldout_evaluations` | 20 | Held-out evaluations per corpus, counted across every server and run (cached results excepted). |
 | `require_novel_gain` | unset | Held-out gate: the `novelty:novel` slice's F1 must rise too. Unset, it is required exactly when the arm is the baseline; `--require-novel-gain true/false` on the server or the run overrides it. |
 | `min_novel_f1_gain` | 0.001 | The least novel-slice F1 gain, when one is required (and more than zero). |

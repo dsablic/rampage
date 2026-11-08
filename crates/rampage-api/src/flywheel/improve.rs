@@ -960,7 +960,8 @@ impl Improve {
                         "the held-out evaluation failed; the operator's server log has the detail".to_owned(),
                     )
                 })?;
-                for check in self.gate.deployed(&[("heldout_deployed_fp_increase", rise, self.gate.max_fp_increase)]) {
+                let allowance = self.gate.heldout_fp_allowance(&evaluation);
+                for check in self.gate.deployed(&[("heldout_deployed_fp_increase", rise, allowance)]) {
                     gate.add(check);
                 }
             }

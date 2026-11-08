@@ -610,7 +610,7 @@ pub(crate) struct FlywheelArgs {
     /// The flywheel working directory (default: two levels above a corpus in a corpus/ directory)
     #[arg(long, value_name = "DIR", requires = "corpus")]
     pub(crate) flywheel_dir: Option<PathBuf>,
-    /// A TOML file overriding gate settings (min_f1_gain, max_slice_f1_drop, max_fp_increase,
+    /// A TOML file overriding gate settings (min_f1_gain, max_slice_f1_drop, max_fp_increase, tp_per_fp,
     /// max_train_fp_increase, max_negative_matches, min_pattern_bytes, max_heldout_evaluations,
     /// require_novel_gain, min_novel_f1_gain)
     #[arg(long, value_name = "FILE", requires = "corpus")]

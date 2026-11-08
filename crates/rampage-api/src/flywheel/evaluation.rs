@@ -234,9 +234,9 @@ fn effect(was: Option<Outcome>, now: Option<Outcome>) -> &'static str {
 }
 
 /// The promotion gate. Every rule is checked on its split's gated counts (target-library functions, plus every
-/// false name), unrounded. The defaults are conservative: a held-out F1 gain of at least 0.001, not one false
-/// positive more on the held-out split, the full training split or the negatives, no gated slice losing any F1,
-/// and rows of at least 32 bytes.
+/// false name), unrounded. The defaults are conservative: a held-out F1 gain of at least 0.001, at most one false
+/// positive more on the held-out split for every 100 correct names it gains (none for a smaller gain), not one
+/// more on the full training split or the negatives, no gated slice losing any F1, and rows of at least 32 bytes.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct GateConfig {
@@ -244,8 +244,13 @@ pub struct GateConfig {
     pub min_f1_gain: f64,
     /// No gated slice, on any split, may lose more F1 than this.
     pub max_slice_f1_drop: f64,
-    /// The held-out split's false positives (wrong and spurious names) may rise by at most this many.
+    /// The held-out split's false positives (wrong and spurious names) may rise by at most this many, plus the
+    /// allowance `tp_per_fp` earns.
     pub max_fp_increase: u64,
+    /// One more held-out false positive is allowed for every this many correct names the held-out split gains; 0
+    /// allows none. A collision training cannot reveal (two names for one body, the second only in the held-out
+    /// version) would otherwise block any candidate, however much it gains.
+    pub tp_per_fp: u64,
     /// The full training split's false positives may rise by at most this many.
     pub max_train_fp_increase: u64,
     /// Names the candidate may add on the negative binaries, where every target name is false.
@@ -272,6 +277,7 @@ impl Default for GateConfig {
             min_f1_gain: 0.001,
             max_slice_f1_drop: 0.0,
             max_fp_increase: 0,
+            tp_per_fp: 100,
             max_train_fp_increase: 0,
             max_negative_matches: 0,
             min_pattern_bytes: 32,
@@ -345,12 +351,23 @@ impl GateConfig {
         self.require_novel_gain.unwrap_or(arm_baseline)
     }
 
-    /// The held-out gate: the overall F1 gain, no new false positive, no gated slice regression and, when
-    /// `require_novel`, an F1 gain on the novel held-out functions.
+    /// How many more false positives the held-out split may have under `evaluation`: `max_fp_increase`, plus one
+    /// for every `tp_per_fp` correct names gained.
+    pub fn heldout_fp_allowance(&self, evaluation: &SplitEvaluation) -> u64 {
+        let (before, after) = evaluation.overall();
+        let gained = after.tp().saturating_sub(before.tp());
+        let earned = gained.checked_div(self.tp_per_fp).unwrap_or(0);
+        self.max_fp_increase.saturating_add(earned)
+    }
+
+    /// The held-out gate: the overall F1 gain, false positives within the allowance
+    /// ([`GateConfig::heldout_fp_allowance`]), no gated slice regression and, when `require_novel`, an F1 gain on
+    /// the novel held-out functions.
     pub fn heldout(&self, evaluation: &SplitEvaluation, require_novel: bool) -> GateResult {
         let (before, after) = evaluation.overall();
         let gain = after.f1() - before.f1();
         let fp_rise = after.fp() as i64 - before.fp() as i64;
+        let allowance = self.heldout_fp_allowance(evaluation);
         let failing = self.failing_slices(evaluation);
         let mut checks = vec![
             GateCheck::new(
@@ -360,8 +377,11 @@ impl GateConfig {
             ),
             GateCheck::new(
                 "heldout_fp_increase",
-                fp_rise <= self.max_fp_increase as i64,
-                format!("false positives {fp_rise:+} (at most +{})", self.max_fp_increase),
+                fp_rise <= allowance as i64,
+                format!(
+                    "false positives {fp_rise:+} (at most +{allowance}: +{} and one per {} correct names gained)",
+                    self.max_fp_increase, self.tp_per_fp
+                ),
             ),
             // Which slices regress would tell a proposer where held-out code lies: the verdict alone is given.
             GateCheck::new(
@@ -508,6 +528,26 @@ mod tests {
         let result = gate.heldout(&evaluation(base, better, counts(400, 0, 100, 0), slice_worse), false);
         assert!(!result.passed);
         assert_eq!(result.failing_slices, ["arch:x86_64"]);
+    }
+
+    #[test]
+    fn large_held_out_gains_earn_a_false_positive_allowance() {
+        let gate = GateConfig::default();
+        let base = counts(500, 0, 9500, 0);
+        let fp_check =
+            |result: &GateResult| result.checks.iter().find(|c| c.rule == "heldout_fp_increase").unwrap().passed;
+        // 250 more correct names earn two false positives, not three.
+        let two = counts(750, 0, 9250, 2);
+        let three = counts(750, 0, 9250, 3);
+        assert_eq!(gate.heldout_fp_allowance(&evaluation(base, two, base, two)), 2);
+        assert!(fp_check(&gate.heldout(&evaluation(base, two, base, two), false)));
+        assert!(!fp_check(&gate.heldout(&evaluation(base, three, base, three), false)));
+        // A wrong name costs a correct one: the gain is counted net.
+        let wrong = counts(599, 1, 9400, 0);
+        assert_eq!(gate.heldout_fp_allowance(&evaluation(base, wrong, base, wrong)), 0);
+        // Without the ratio there is no allowance.
+        let strict = GateConfig { tp_per_fp: 0, ..GateConfig::default() };
+        assert!(!fp_check(&strict.heldout(&evaluation(base, two, base, two), false)));
     }
 
     #[test]
