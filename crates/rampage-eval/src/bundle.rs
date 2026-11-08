@@ -36,8 +36,12 @@ const ARCHES: [&str; 4] = ["x86_64", "aarch64", "x86", "arm"];
 pub struct BundleArgs {
     /// A pack directory holding promoted flywheel entries (`entries.json`): the promoted pack, or one installed by
     /// `rampage packs import`.
-    #[arg(long, conflicts_with = "remove", required_unless_present = "remove")]
+    #[arg(long, conflicts_with_all = ["remove", "arm"], required_unless_present_any = ["remove", "arm"])]
     from: Option<PathBuf>,
+    /// Bundle the deterministic arm for the corpus (its training rows, default operand wildcards) as one entry,
+    /// gated like any other against the bundled baseline.
+    #[arg(long, conflicts_with = "remove")]
+    arm: bool,
     /// Bundle only these entries (revert ids, comma-separated or repeated); default: every entry of the pack.
     #[arg(long, value_delimiter = ',', requires = "from")]
     entries: Vec<String>,
@@ -93,6 +97,9 @@ pub struct BundledEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundled_heldout_delta: Option<SliceDelta>,
     pub bundled_unix_ms: u64,
+    /// The licence of the code the rows were made from (SPDX), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
     pub rows: Vec<Row>,
 }
 
@@ -106,6 +113,22 @@ pub struct BundledSource {
 }
 
 impl BundledSource {
+    /// The licences of the code every entry's rows were made from, `NOASSERTION` when any is unknown.
+    pub fn license(&self) -> String {
+        let mut licenses = std::collections::BTreeSet::new();
+        for entry in &self.entries {
+            match &entry.license {
+                Some(license) => licenses.extend(license.split(" AND ").map(str::trim).map(str::to_owned)),
+                None => return "NOASSERTION".to_owned(),
+            }
+        }
+        if licenses.is_empty() {
+            "NOASSERTION".to_owned()
+        } else {
+            licenses.into_iter().collect::<Vec<_>>().join(" AND ")
+        }
+    }
+
     pub fn rows(&self, arch: &str) -> Vec<Row> {
         self.entries.iter().flat_map(|entry| entry.rows.iter().filter(|row| row.arch == arch).cloned()).collect()
     }
@@ -210,9 +233,9 @@ pub fn regenerate(repo: &Path, before: &BundledSource, after: &BundledSource) ->
                 library: format!("flywheel {FAMILY} promotions"),
                 version: format!("{} rows from {} entries", rows.len(), ids.len()),
                 target: format!("{arch}-linux-musl"),
-                compiler: "zig cc and Homebrew clang (flywheel corpus builds)".to_owned(),
-                optimization: "O0, O2 and Os".to_owned(),
-                license: "NOASSERTION".to_owned(),
+                compiler: "zig cc, Homebrew clang and Alpine gcc (flywheel corpus builds)".to_owned(),
+                optimization: "O0, O2, Os and the distribution's".to_owned(),
+                license: after.license(),
                 source: format!("rampage flywheel promotions; provenance in {SOURCE}"),
                 source_recipe: format!(
                     "entries {}; corpora {}; gated held out against the bundled baseline by rampage-eval bundle",
@@ -306,11 +329,44 @@ pub fn merged(source: &BundledSource, pack: &Path, ids: &[String]) -> Result<(Bu
             promoted_heldout_delta: entry.heldout_deltas.get("all").cloned(),
             bundled_heldout_delta: None,
             bundled_unix_ms: now,
+            license: None,
             rows: entry.rows.clone(),
         });
         added.push(entry.revert_id.clone());
     }
     Ok((out, added))
+}
+
+/// The source with the deterministic arm for `engine`'s corpus added as one entry, `arm-<rows hash>`. It replaces
+/// an earlier arm entry, so one arm is bundled at a time.
+pub fn with_arm(source: &BundledSource, engine: &Engine, gate: &GateConfig) -> Result<(BundledSource, String), String> {
+    let arm = rampage_api::flywheel::arm(engine, gate.min_pattern_bytes).map_err(|error| error.to_string())?;
+    let hash = arm.hash();
+    let id = format!("arm-{}", &hash[..12]);
+    if source.entries.iter().any(|entry| entry.id == id) {
+        return Err(format!("{id} is bundled already; nothing to do"));
+    }
+    let mut out = source.clone();
+    out.entries.retain(|entry| !entry.id.starts_with("arm-"));
+    let classes: Vec<&str> = arm.wildcards.iter().map(|class| class.name()).collect();
+    out.entries.push(BundledEntry {
+        id: id.clone(),
+        family: FAMILY.to_owned(),
+        candidate_hash: hash,
+        source_pack: format!("flywheel deterministic arm (wildcards: {})", classes.join(", ")),
+        corpus_version: arm.corpus_version.clone(),
+        promoted_baseline: Some("bundled".to_owned()),
+        proposer_run: None,
+        promoted_unix_ms: arm.generated_unix_ms,
+        promoted_heldout_delta: None,
+        bundled_heldout_delta: None,
+        bundled_unix_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64),
+        license: Some(engine.corpus.license()),
+        rows: arm.rows,
+    });
+    Ok((out, id))
 }
 
 /// The gate rerun: every split with the regenerated bundled databases against the repository's current ones (both
@@ -355,6 +411,10 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
 
     let before = load_source(&repo)?;
     let (mut after, action, ids) = match (&args.from, &args.remove) {
+        (None, None) if args.arm => {
+            let (after, id) = with_arm(&before, &engine, &gate)?;
+            (after, "add", vec![id])
+        }
         (Some(pack), None) => {
             let (after, added) = merged(&before, pack, &args.entries)?;
             if added.is_empty() {
@@ -372,7 +432,7 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
             after.entries.remove(position);
             (after, "remove", vec![id.clone()])
         }
-        _ => return Err("give --from <pack> or --remove <id>".to_owned()),
+        _ => return Err("give --from <pack>, --arm or --remove <id>".to_owned()),
     };
 
     // Measure first with the regenerated databases; the source records the result only once it passes.
@@ -712,6 +772,7 @@ mod tests {
             promoted_heldout_delta: None,
             bundled_heldout_delta: None,
             bundled_unix_ms: 2,
+            license: Some("Zlib".to_owned()),
             rows: vec![row],
         });
         let gz = repo.join(DATA).join("corpus-x86_64.json.gz");
@@ -782,6 +843,7 @@ mod tests {
 
         let args = |from: Option<PathBuf>, remove: Option<String>, label: &str, patch_only: bool| BundleArgs {
             from,
+            arm: false,
             entries: vec![],
             remove,
             corpus: corpus.clone(),

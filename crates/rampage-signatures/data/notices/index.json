@@ -319,6 +319,16 @@
       "notice": "sdk-rust-LLVM-exception.txt",
       "notice_sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
       "scope": "Complete related legal text, byte-identical in both captured toolchains; no whole-library license inference."
+    },
+    {
+      "profile": "cjson-1.7.15",
+      "license_declaration": "MIT",
+      "source_archive_sha256": "5308fd4bd90cef7aa060558514de6a1a4a0819974a26e6ed13973c5f624c24b2",
+      "source_notice_path": "LICENSE",
+      "source_notice_sha256": "a36dda207c36db5818729c54e7ad4e8b0c6fba847491ba64f372c1a2037b6d5c",
+      "notice": "cjson-1.7.15.txt",
+      "notice_sha256": "a36dda207c36db5818729c54e7ad4e8b0c6fba847491ba64f372c1a2037b6d5c",
+      "scope": "complete upstream notice file"
     }
   ]
 }
