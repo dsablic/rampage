@@ -751,7 +751,7 @@ pre-declared one.
 `rampage-eval bundle --call-graph` built `data/callgraph.json.gz` (7634 callers, 230 KB). Against the bundled
 databases (which carry the older arm) it gained:
 - dev: +4220 (novel +2312) for +38 false positives, allowance 42;
-- training: +3254, no false positive;
+- training: +3254, no false positive (in-sample: the graph is the training split's sequences);
 - negatives: nothing.
 
 The CLI on unseen binaries now names more functions:

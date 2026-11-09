@@ -22,7 +22,7 @@ use crate::{Packs, Project};
 pub const RUNTIME: &str = "runtime";
 
 /// Bumped when the cached truth or baseline format or meaning changes, so old entries are not reused.
-const CACHE_FORMAT: &str = "flywheel-cache-v3";
+const CACHE_FORMAT: &str = "flywheel-cache-v4";
 
 /// One truth function: its name in the symbolized twin and where it comes from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +56,8 @@ pub struct Loaded {
     pub baseline: BTreeMap<u64, String>,
     /// Each discovered function's call targets in call-site order, for call-graph propagation.
     pub calls: BTreeMap<u64, Vec<u64>>,
+    /// The names the stripped binary already has (loader symbols, exports), which seed propagation as in the product.
+    pub existing: BTreeMap<u64, String>,
 }
 
 impl Loaded {
@@ -309,8 +311,11 @@ impl Engine {
             names.into_iter().map(|(address, (_, name))| (address, name.into_owned())).collect();
         // As the product's identification does: the call graph names callees of named functions.
         if let Some(graph) = graph {
-            let added = graph.propagate(&arch.to_string(), &loaded.calls, &names, None);
-            names.extend(added);
+            let added =
+                crate::signatures::call_graph_names(graph, &arch.to_string(), &loaded.calls, &names, &loaded.existing);
+            for (address, name) in added {
+                names.entry(address).or_insert(name);
+            }
         }
         names
     }
@@ -355,9 +360,9 @@ impl Engine {
             )));
         }
         let truth = self.truth(index, &binary)?;
-        let (functions, baseline, calls) = self.baseline(index)?;
+        let (functions, baseline, calls, existing) = self.baseline(index)?;
         let image = MaskContext::from_binary(&binary);
-        Ok(Loaded { binary, image, truth, functions, baseline, calls })
+        Ok(Loaded { binary, image, truth, functions, baseline, calls, existing })
     }
 
     fn truth_path(&self, index: usize) -> PathBuf {
@@ -417,7 +422,12 @@ impl Engine {
         if let Ok(text) = std::fs::read_to_string(&path)
             && let Ok(cached) = serde_json::from_str::<CachedBaseline>(&text)
         {
-            return Ok((cached.functions, cached.names.into_iter().collect(), cached.calls.into_iter().collect()));
+            return Ok((
+                cached.functions,
+                cached.names.into_iter().collect(),
+                cached.calls.into_iter().collect(),
+                cached.existing.into_iter().collect(),
+            ));
         }
         let entry = self.binary(index);
         let stripped_path = self.corpus.path(&entry.stripped);
@@ -437,6 +447,7 @@ impl Engine {
         functions.sort_unstable();
         functions.dedup_by_key(|(start, _)| *start);
         let calls = crate::signatures::call_sequences(&project.binary, &analysis.program);
+        let existing = project.existing_names(&analysis.program);
         let application = project
             .identify_functions(None, true, false)
             .map_err(|error| FlywheelError::Corpus(format!("{}: {error}", entry.id)))?;
@@ -448,14 +459,15 @@ impl Engine {
             functions: functions.clone(),
             names: names.iter().map(|(&address, name)| (address, name.clone())).collect(),
             calls: calls.iter().map(|(&address, targets)| (address, targets.clone())).collect(),
+            existing: existing.iter().map(|(&address, name)| (address, name.clone())).collect(),
         };
         write_atomic(&path, serde_json::to_string(&cached).map_err(FlywheelError::json)?.as_bytes())?;
-        Ok((functions, names, calls))
+        Ok((functions, names, calls, existing))
     }
 }
 
-/// Discovered extents, the bundled-only names and the call sequences of one binary.
-type Baseline = (Vec<(u64, u64)>, BTreeMap<u64, String>, BTreeMap<u64, Vec<u64>>);
+/// Discovered extents, the bundled-only names, the call sequences and the existing names of one binary.
+type Baseline = (Vec<(u64, u64)>, BTreeMap<u64, String>, BTreeMap<u64, Vec<u64>>, BTreeMap<u64, String>);
 
 #[derive(Serialize, Deserialize)]
 struct CachedTruth {
@@ -477,6 +489,7 @@ struct CachedBaseline {
     functions: Vec<(u64, u64)>,
     names: Vec<(u64, String)>,
     calls: Vec<(u64, Vec<u64>)>,
+    existing: Vec<(u64, String)>,
 }
 
 /// The SHA-256 of the bundled signature asset for `arch` (empty when none ships) and of the bundled call graph,

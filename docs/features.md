@@ -250,8 +250,9 @@ converting them to native hashes. Genuine schema-6 FID databases use the separat
 Ghidra/JVM import/query API. It is static host analysis, not target execution or a sandbox for untrusted tools.
 
 After the signature databases, a bundled call graph names the callees of functions they named, where the caller
-calls them in the same position as training builds of the same library do and the callee's own calls agree
-(source `rampage-builtin call graph` in results). It covers the flywheel corpus's libraries (zlib, LZ4, cJSON,
+calls them in the same position as training builds of the same library do, the callee's own calls fit training too,
+and one of them is already named (source `rampage-builtin call graph` in results). Names the binary already has
+(symbols, exports, the analyst's) seed it and are never handed out again. It covers the flywheel corpus's libraries (zlib, LZ4, cJSON,
 zstd and Lua).
 
 [Secondary fuzzy matching](fuzzy-signatures.md) compares CFG, constants and calls. API/CLI/MCP results expose

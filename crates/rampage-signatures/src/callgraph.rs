@@ -1,6 +1,7 @@
 //! Call-graph propagation: naming a function from where an already-named caller calls it.
 //!
-//! The data is each training library function's call sequence: its direct calls and tail jumps to other functions,
+//! The data is each training library function's call sequence: its direct calls and unconditional tail jumps to
+//! other functions,
 //! in call-site order, as the callees' names (or `None` for a callee that is no library or runtime function). A
 //! named caller in a target whose sequence fits a training sequence of the same name and architecture names its
 //! unnamed callees by position. Measured on the flywheel corpus (docs/plans/2026-11-05-flywheel-fast-loop.md,
@@ -142,6 +143,8 @@ impl CallGraph {
         let mut names = names.clone();
         let mut added = BTreeMap::new();
         let mut refused: BTreeSet<u64> = BTreeSet::new();
+        // Names two callees were offered at once: ambiguous for good, not only for that round.
+        let mut refused_names: BTreeSet<String> = BTreeSet::new();
         loop {
             let used: BTreeSet<&String> = names.values().collect();
             let mut offers: BTreeMap<u64, BTreeSet<String>> = BTreeMap::new();
@@ -163,7 +166,7 @@ impl CallGraph {
                         matching.iter().map(|sequence| sequence.callees[position].as_deref()).collect();
                     let [Some(name)] = proposed.into_iter().collect::<Vec<_>>()[..] else { continue };
                     let own = calls.get(target).map(Vec::as_slice).unwrap_or_default();
-                    if !used.contains(&name.to_owned()) && fits(&names, name, own) {
+                    if !used.contains(&name.to_owned()) && !refused_names.contains(name) && fits(&names, name, own) {
                         offers.entry(*target).or_default().insert(name.to_owned());
                     }
                 }
@@ -185,6 +188,7 @@ impl CallGraph {
                     changed = true;
                 } else {
                     refused.extend(targets);
+                    refused_names.insert(name);
                 }
             }
             if !changed {

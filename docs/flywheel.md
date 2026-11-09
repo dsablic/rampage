@@ -411,7 +411,10 @@ split: each training library function's call sequence, as callee names (see
 `rampage_signatures::callgraph`). Identification uses it after the signature databases to name the callees of
 named functions. It goes through the same gate, with every binary identified again since any architecture can
 change. The shipped graph (`callgraph-d37036ca05ce`, 7634 callers from corpus `libid-00da6363626a`) gained 4220
-held-out names (2312 novel) for 38 false positives (allowance 42), 3254 training names and none on the negatives.
+held-out names (2312 novel) for 38 false positives (allowance 42) and none on the negatives. Its 3254 training
+names are in-sample (the graph is that split's sequences), so the training check only shows it adds no false
+positive there. A call-graph change is gated on its own (`--call-graph` does not combine with `--arm`), and is
+reverted with git rather than `--remove`.
 The flywheel engine applies the call graph as the product does, so baselines and gates include it.
 
 `bundle --from <pack>` merges the selected entries (default: all) into the source, regenerates the affected

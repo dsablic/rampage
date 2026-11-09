@@ -45,8 +45,8 @@ pub struct BundleArgs {
     #[arg(long, conflicts_with = "remove")]
     arm: bool,
     /// Regenerate the bundled call graph (`data/callgraph.json.gz`) from the corpus's training split: each training
-    /// library function's call sequence. Alone or with `--arm`; gated like any other change.
-    #[arg(long, conflicts_with_all = ["remove", "from"])]
+    /// library function's call sequence. Gated on its own like any other change; revert it with git.
+    #[arg(long, conflicts_with_all = ["remove", "from", "arm"])]
     call_graph: bool,
     /// Bundle only these entries (revert ids, comma-separated or repeated); default: every entry of the pack.
     #[arg(long, value_delimiter = ',', requires = "from")]
@@ -501,7 +501,8 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
         let graph = training_call_graph(&engine)?;
         let bytes = graph.to_gzip();
         let path = format!("{DATA}/{CALL_GRAPH_FILE}");
-        let current = read_bytes(&repo.join(&path))?;
+        // No asset yet: the first call graph.
+        let current = std::fs::read(repo.join(&path)).unwrap_or_default();
         if bytes == current {
             return Err("the bundled call graph is this corpus's already; nothing to do".to_owned());
         }

@@ -123,9 +123,11 @@ impl Project {
         if let Some(graph) = call_graph {
             let named: BTreeMap<u64, String> =
                 found.iter().map(|(address, (name, _))| (*address, name.clone())).collect();
+            let existing = self.existing_names(&analysis.program);
             let calls = call_sequences(&self.binary, &analysis.program);
-            for (address, name) in graph.propagate(&self.binary.arch.to_string(), &calls, &named, None) {
-                found.insert(address, (name, CALL_GRAPH.to_owned()));
+            let arch = self.binary.arch.to_string();
+            for (address, name) in call_graph_names(graph, &arch, &calls, &named, &existing) {
+                found.entry(address).or_insert((name, CALL_GRAPH.to_owned()));
             }
         }
         let mut matches = Vec::new();
@@ -154,6 +156,19 @@ impl Project {
             }
         }
         Ok(application)
+    }
+
+    /// Every discovered function's current name that is not a `sub_<hex>` default (loader symbols, exports, the
+    /// analyst's), as identification reports names (`canonical_name`): what call-graph propagation starts from
+    /// besides the signature matches.
+    pub(crate) fn existing_names(&self, program: &Program) -> BTreeMap<u64, String> {
+        program
+            .functions
+            .iter()
+            .map(|function| (function.address, self.function_name(function.address)))
+            .filter(|(address, name)| !is_default_name(name, *address))
+            .map(|(address, name)| (address, rampage_signatures::canonical_name(&name).into_owned()))
+            .collect()
     }
 
     /// The starter signature database bundled for this binary's architecture, or `None` when none ships for it.
@@ -217,12 +232,35 @@ impl Project {
     }
 }
 
-/// Each discovered function's direct call and tail-jump targets that start another discovered function, in
-/// call-site order: the call sequences call-graph propagation compares with training.
+/// The names the call graph gives one binary, as identification reports them: new names, seeded with the signature
+/// names and every name the binary already has (which are never handed out again); and, so a report is the same
+/// after its names are applied, the names propagation from the signature names alone gives that a function already
+/// has.
+pub fn call_graph_names(
+    graph: &CallGraph,
+    arch: &str,
+    calls: &BTreeMap<u64, Vec<u64>>,
+    signatures: &BTreeMap<u64, String>,
+    existing: &BTreeMap<u64, String>,
+) -> BTreeMap<u64, String> {
+    let mut seeds = signatures.clone();
+    seeds.extend(existing.iter().map(|(address, name)| (*address, name.clone())));
+    let mut names = graph.propagate(arch, calls, &seeds, None);
+    for (address, name) in graph.propagate(arch, calls, signatures, None) {
+        if existing.get(&address) == Some(&name) {
+            names.entry(address).or_insert(name);
+        }
+    }
+    names
+}
+
+/// Each discovered function's direct call and unconditional tail-jump targets that start another discovered function,
+/// in call-site order: the call sequences call-graph propagation compares with training.
 pub fn call_sequences(binary: &Binary, program: &Program) -> BTreeMap<u64, Vec<u64>> {
     let starts: std::collections::BTreeSet<u64> = program.functions.iter().map(|function| function.address).collect();
     let mut calls = BTreeMap::new();
     let Ok(mut decoder) = binary.decoder() else { return calls };
+    decoder.set_code_modes(&program.code_modes);
     for function in &program.functions {
         let mut targets = Vec::new();
         for block in &function.blocks {

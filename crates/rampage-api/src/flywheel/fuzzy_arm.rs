@@ -205,8 +205,8 @@ pub fn base_names<'a>(loaded: &'a Loaded, base: &'a Names, index: usize) -> &'a 
 /// Names per corpus binary.
 pub type Names = BTreeMap<usize, BTreeMap<u64, String>>;
 
-/// `base` holds the names each query binary starts from (bundled plus earlier arms); a binary it lacks starts from
-/// the bundled databases' names. Training binaries always start from the bundled names.
+/// `base` holds the names each binary starts from (signature databases, plus earlier arms for queries); a binary it
+/// lacks starts from the cached baseline, which includes the shipped call graph.
 pub fn measure(
     engine: &Engine,
     train: &[usize],
@@ -216,7 +216,7 @@ pub fn measure(
     let analysed = engine.parallel(train, |index| {
         let loaded = engine.get(index)?;
         let build = build_key(engine, index);
-        let analysed = describe(engine, index, &loaded.baseline)?;
+        let analysed = describe(engine, index, base_names(&loaded, base, index))?;
         let references: Vec<(String, String, FuzzyFeatures)> = analysed
             .described
             .iter()
@@ -274,7 +274,7 @@ pub fn measure(
             .remove(&index)
             .ok_or_else(|| FlywheelError::Corpus("training analysis missing".to_owned()))?;
         let database = &databases[&build_key(engine, index)];
-        Ok(query(index, &loaded, &loaded.baseline, analysed, database))
+        Ok(query(index, &loaded, base_names(&loaded, base, index), analysed, database))
     })?);
     for (index, found, refused, unmatched, reach, refusals, calls) in results {
         measurement.query_calls.insert(index, calls);

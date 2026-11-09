@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use rampage_api::flywheel::fuzzy_arm::{FuzzyMeasurement, FuzzyQuery, Names, base_names, measure, propagate};
 use rampage_api::flywheel::{
-    ARM_WILDCARDS, Corpus, Counts, Engine, GateConfig, Outcome, Paths, Split, layer, slice_counts,
+    ARM_WILDCARDS, Bundled, Corpus, Counts, Engine, GateConfig, Outcome, Paths, Split, layer, slice_counts,
 };
 use serde_json::json;
 
@@ -123,7 +123,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // bundled databases, since the arm holds every training body.
     let arm = rampage_api::flywheel::arm_with(&engine, GateConfig::default().min_pattern_bytes, &ARM_WILDCARDS)?;
     let layers: Vec<_> = layer("arm", &arm.rows)?.into_iter().collect();
-    let base: Names = engine.propose(&queries, &layers)?.names;
+    // Signature databases only: the shipped call graph comes from this corpus's training split and would leak into
+    // a measurement of propagation (and break leaving a training build out).
+    let signatures_only = Bundled {
+        databases: [rampage_arch::Arch::X86_64, rampage_arch::Arch::Aarch64]
+            .into_iter()
+            .filter_map(rampage_signatures::bundled)
+            .collect(),
+        call_graph: None,
+    };
+    let mut base: Names = engine.propose_in(&queries, &layers, Some(&signatures_only))?.names;
+    base.extend(engine.propose_in(&train, &[], Some(&signatures_only))?.names);
     if std::env::var("FUZZY_ARM_SLICES").is_ok() {
         // Diagnosis: the dev slices the arm alone makes worse than the bundled databases.
         let before = counts(&engine, &Names::new(), &dev, &BTreeMap::new());
