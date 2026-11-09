@@ -15,7 +15,15 @@ fn assert_bundled_names_library_code(name: &str) {
     assert!(result.matched >= 10, "{name}: only {} matches from the bundled database", result.matched);
     let names: Vec<&str> = result.matches.iter().map(|m| m.name.as_str()).collect();
     assert!(names.contains(&"vfprintf"), "{name}: expected vfprintf among {names:?}");
-    assert!(result.matches.iter().all(|m| m.source == rampage_api::packs::BUILTIN_PACK));
+    // The bundled database names most of them; the bundled call graph can add callees of named functions.
+    let builtin = result.matches.iter().filter(|m| m.source == rampage_api::packs::BUILTIN_PACK).count();
+    assert!(builtin >= 10, "{name}: only {builtin} matches from the bundled database");
+    assert!(
+        result
+            .matches
+            .iter()
+            .all(|m| m.source == rampage_api::packs::BUILTIN_PACK || m.source == rampage_api::CALL_GRAPH)
+    );
 }
 
 #[test]

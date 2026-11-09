@@ -15,7 +15,11 @@
   (`docs/plans/2026-11-05-flywheel-fast-loop.md`). Compiler/optimisation identification was checked first and is
   saturated by a one-feature miner, so it is not an AI family as planned; the AI family needs a decision
   (code-proposing candidates). The arm now ships in the bundled databases
-  (`rampage-eval bundle --arm`). Open: regenerating the bundled hash databases with callee keys for forwarders (needs the signature-corpus caches).
+  (`rampage-eval bundle --arm`). The corpus now has zstd and Lua and a fresh final split
+  (`libid-00da6363626a`); call-graph propagation ships as a bundled call graph (`bundle --call-graph`), and fuzzy
+  matching failed final on both corpora so it stays suggestion-only. Open: bundling this corpus's arm (blocked by
+  cross-library helper rows); regenerating the bundled hash databases with callee keys for forwarders (needs the
+  signature-corpus caches).
 
 This file holds open items. Done sections, including every completed parity phase, are archived verbatim in
 [docs/plans/todo-archive.md](docs/plans/todo-archive.md); each section below that lost done items links to them.

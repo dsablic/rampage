@@ -249,6 +249,11 @@ identify arbitrary library versions; its recall is in the [signature corpus](sig
 converting them to native hashes. Genuine schema-6 FID databases use the separate explicitly configured trusted
 Ghidra/JVM import/query API. It is static host analysis, not target execution or a sandbox for untrusted tools.
 
+After the signature databases, a bundled call graph names the callees of functions they named, where the caller
+calls them in the same position as training builds of the same library do and the callee's own calls agree
+(source `rampage-builtin call graph` in results). It covers the flywheel corpus's libraries (zlib, LZ4, cJSON,
+zstd and Lua).
+
 [Secondary fuzzy matching](fuzzy-signatures.md) compares CFG, constants and calls. API/CLI/MCP results expose
 scores, provenance and confidence gates as separate suggestions; even eligible proposals do not automatically
 rename functions. Exact signatures and existing analyst names retain priority.

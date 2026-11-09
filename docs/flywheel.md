@@ -46,15 +46,29 @@ tools/flywheel/build-corpus.sh --jobs 3
 
 The script downloads every pinned archive and checks its SHA-256. It builds three groups of binaries:
 
-- **Targets, two versions each.** zlib 1.2.13/1.3.1, LZ4 1.9.4/1.10.0 and cJSON 1.7.15/1.7.18. The older
-  versions are for training; the current versions are held out.
+- **Targets, three to six versions each.** zlib, LZ4, cJSON, zstd and Lua. One version per library trains,
+  the others are held out or final:
+
+  | Library | Train | Held out | Final |
+  | --- | --- | --- | --- |
+  | zlib | 1.2.13 | 1.3.1, 1.3.2, 1.4 | 1.2.12, 1.3 |
+  | LZ4 | 1.9.4 | 1.10.0, 1.9.3 | 1.9.2 |
+  | cJSON | 1.7.15 | 1.7.18, 1.7.19, 1.7.16 | 1.7.17 |
+  | zstd | 1.5.4 | 1.5.5 | 1.5.2 |
+  | Lua | 5.4.4 | 5.4.6 | 5.4.5 |
+
+  zstd and Lua versions avoid the ones the bundled hash databases already hold (zstd 1.5.6, Lua 5.4.7 and
+  5.4.8). zstd is built with `ZSTD_DISABLE_ASM`, Lua with `LUA_USE_POSIX` and without its `lua.c`/`luac.c`
+  front ends.
 - **Negatives.** inih r58, tinyexpr 1.1.1 and two owned programs that link no library.
 - **Configurations.** Each is built for x86-64 and AArch64 Linux (ELF, static musl) at O0, O2 and Os, with two
   compilers: `zig cc`, and Homebrew clang 23 against Zig's musl headers. O1 is left out because zig's O1 and O2
   produce byte-identical binaries.
 
-Owned driver programs link each build: four per target library, two per negative. The result is 360 stripped
-binaries (144 training, 144 held-out, 72 negative), each with a symbolized twin of the same linked image.
+Owned driver programs link each build: four per target library, two per negative. The result
+(`libid-00da6363626a`) is 1112 stripped binaries (248 training, 504 held-out, 288 final, 72 negative), each with a
+symbolized twin of the same linked image. Zig's O0 builds (and a few LZ4 clang O0 ones) are not byte-reproducible
+between runs, so they differ from `expected-digests.json` on every rebuild.
 
 The corpus version is `libid-` plus a hash of the script, the recipe, the drivers and the toolchain versions
 (zig, clang, ld.lld). Every build compares the binaries with `expected-digests.json` and reports any that differ;
@@ -91,12 +105,11 @@ rules. That makes it a development split, and gains measured on it are no longer
 held back for claims:
 
 - **What it holds.** Target-library versions neither training nor held-out holds (the corpus refuses one that
-  does), in two cells:
-  - zlib 1.3.2 and 1.4 and cJSON 1.7.19 built from source with the same matrix, so the split measures version
-    generalisation in the same toolchains;
-  - Alpine Linux's gcc-built static zlib (`prebuilt` in `corpus.json`), for x86-64 and AArch64. gcc gets its own
-    ladder: Alpine's zlib 1.2.13 trains, 1.3.1 is held out, and 1.3.2 and 1.4 are final. It reports as the
-    `compiler:alpine-gcc` slice.
+  does), built from source with the same matrix, so the split measures version generalisation in the same
+  toolchains. Alpine Linux's gcc-built static zlib (`prebuilt` in `corpus.json`, x86-64 and AArch64) has its own
+  ladder: 1.2.13 trains and 1.3.1, 1.3.2 and 1.4 are held out. It reports as the `compiler:alpine-gcc` slice.
+  The previous corpus (`libid-ed988c9a220e`) had zlib 1.3.2/1.4, cJSON 1.7.19 and gcc's 1.3.2/1.4 as its final
+  split; after three reads they became held-out versions here, and this corpus's final split is new.
 
   A final cell must never change the compiler and the version at once. Byte signatures learned from clang builds
   name nothing in gcc builds: a first final split made only of gcc builds of new versions scored 0 for every arm.
@@ -375,6 +388,7 @@ rampage --pack /path/to/libid function identify stripped.elf
 ```sh
 rampage-eval bundle --from /path/to/libid --corpus target/flywheel/corpus/<version> [--entries rv-...]
 rampage-eval bundle --arm --corpus target/flywheel/corpus/<version>
+rampage-eval bundle --call-graph --corpus target/flywheel/corpus/<version>
 rampage-eval bundle --remove rv-... --corpus target/flywheel/corpus/<version>
 ```
 
@@ -391,6 +405,14 @@ rejects, gets no name from that database.
 arm entry), with the licence of the code its rows come from, through the same gate. The shipped databases carry
 arm `arm-e77075a92a73` (3218 rows from corpus `libid-ed988c9a220e`): against the bundled baseline it gains 7713
 held-out names (783 novel) for 4 false positives, and none on training or the negatives.
+
+`bundle --call-graph` regenerates the bundled call graph (`data/callgraph.json.gz`) from the corpus's training
+split: each training library function's call sequence, as callee names (see
+`rampage_signatures::callgraph`). Identification uses it after the signature databases to name the callees of
+named functions. It goes through the same gate, with every binary identified again since any architecture can
+change. The shipped graph (`callgraph-d37036ca05ce`, 7634 callers from corpus `libid-00da6363626a`) gained 4220
+held-out names (2312 novel) for 38 false positives (allowance 42), 3254 training names and none on the negatives.
+The flywheel engine applies the call graph as the product does, so baselines and gates include it.
 
 `bundle --from <pack>` merges the selected entries (default: all) into the source, regenerates the affected
 assets and indexes, and reruns the gate on the corpus: every split identified with the regenerated databases

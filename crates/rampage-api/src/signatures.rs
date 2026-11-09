@@ -253,3 +253,58 @@ pub fn call_sequences(binary: &Binary, program: &Program) -> BTreeMap<u64, Vec<u
     }
     calls
 }
+
+#[cfg(test)]
+mod call_graph_tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::PathBuf;
+
+    use rampage_signatures::CallGraph;
+
+    use super::call_sequences;
+    use crate::Project;
+    use crate::workflows::is_default_name;
+
+    fn open(name: &str) -> Project {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/flywheel").join(name);
+        Project::new(rampage_loaders::Binary::open(&path).unwrap())
+    }
+
+    #[test]
+    fn call_sequences_name_callees_through_a_training_call_graph() {
+        let twin = open("v1-a.twin.elf");
+        let program = &twin.analysis().unwrap().program;
+        let calls = call_sequences(&twin.binary, program);
+        let starts: BTreeSet<u64> = program.functions.iter().map(|function| function.address).collect();
+        assert_eq!(calls.keys().copied().collect::<BTreeSet<_>>(), starts);
+        assert!(calls.values().flatten().all(|target| starts.contains(target)));
+        assert!(calls.values().any(|targets| !targets.is_empty()));
+
+        let names: BTreeMap<u64, String> = starts
+            .iter()
+            .map(|&address| (address, twin.function_name(address)))
+            .filter(|(address, name)| !is_default_name(name, *address))
+            .collect();
+        let arch = twin.binary.arch.to_string();
+        let mut graph = CallGraph::new("test", "MIT");
+        for (caller, targets) in &calls {
+            if let Some(name) = names.get(caller) {
+                graph.insert(&arch, name, targets.iter().map(|target| names.get(target).cloned()).collect(), None);
+            }
+        }
+
+        // The stripped copy has the same layout: name each caller alone and propagate from it.
+        let stripped = open("v1-a.elf");
+        let stripped_calls = call_sequences(&stripped.binary, &stripped.analysis().unwrap().program);
+        assert_eq!(stripped_calls, calls);
+        let mut total = 0;
+        for caller in calls.keys().filter(|caller| names.contains_key(caller)) {
+            let known = BTreeMap::from([(*caller, names[caller].clone())]);
+            for (address, name) in graph.propagate(&arch, &stripped_calls, &known, None) {
+                assert_eq!(names.get(&address), Some(&name), "{address:#x}");
+                total += 1;
+            }
+        }
+        assert!(total > 0, "propagation named nothing");
+    }
+}

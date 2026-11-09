@@ -112,7 +112,13 @@ fn bundled_corpus_never_relabels_surviving_musl_fixture_answers() {
                 assert_eq!(*name, &matched.name, "{arch}: a surviving baseline answer must not be relabeled");
             }
         }
-        assert!(corpus.matches.iter().all(|matched| matched.source == "rampage-builtin"));
+        // The bundled call graph may add callees of named functions; nothing else names anything here.
+        assert!(
+            corpus
+                .matches
+                .iter()
+                .all(|matched| matched.source == "rampage-builtin" || matched.source == rampage_api::CALL_GRAPH)
+        );
     }
 }
 
@@ -179,7 +185,10 @@ fn a_valid_pack_takes_effect_in_identify_detect_yara_and_capa() {
     let user = rampage_signatures::bundled(Arch::X86_64).unwrap();
     let sources: std::collections::BTreeSet<String> =
         bundled.identify_functions(Some(&user), true, false).unwrap().matches.into_iter().map(|m| m.source).collect();
-    assert_eq!(sources, ["user database".to_owned()].into());
+    // The user database answers before the bundled one; the bundled call graph only adds callees of named functions.
+    assert!(sources.contains("user database"));
+    assert!(!sources.contains("rampage-builtin"), "{sources:?}");
+    assert!(sources.iter().all(|source| source == "user database" || source == rampage_api::CALL_GRAPH), "{sources:?}");
 
     let exe = session.open(&fixture("hello-x64.exe"), None).unwrap();
     let detections = exe.detect_tools(None).unwrap().detections;

@@ -706,11 +706,83 @@ versions. What is missing is a development split that reproduces final's error r
 jump (zlib 1.4) and a second gcc version. The next step is a corpus with more held-out versions and more target
 libraries, and with it a fresh final split.
 
+### A larger corpus, final read #1, and the call graph ships (2026-11-09)
+**Corpus `libid-00da6363626a`** (1112 binaries). It adds zstd and Lua as target libraries and more held-out
+versions. The old final versions (zlib 1.3.2/1.4, cJSON 1.7.19, gcc zlib 1.3.2/1.4) are now held out, and the
+final split is new: zlib 1.2.12/1.3, LZ4 1.9.2, cJSON 1.7.17, zstd 1.5.2 and Lua 5.4.5. The details are in
+[flywheel.md](../flywheel.md#build-the-corpus).
+
+The new dev split reproduces the errors the old final split showed and the old dev split did not.
+
+**Fuzzy and call graph on the new dev split**, over bundled + the corpus's arm (the arm built from this corpus's
+training; training binaries are measured leaving one build out):
+
+| | Train (leave one build out) | Dev | Negative |
+| --- | ---: | ---: | ---: |
+| fuzzy 0.95/0.05 | +1026 / 0 | +1573 / +16 (allowance 15) | 0 |
+| call graph, two-sided | +6263 / +24 | +8752 / +56 | 0 |
+| call graph, two-sided and anchored | +2334 / 0 | +7287 / +33 | 0 |
+
+Dev diagnosis:
+- **Runtime confusions.** `ZSTD_customFree` inlined, so its caller calls `free` where training called
+  `ZSTD_customFree`; also `sin`/`exp` and `__stack_chk_fail`. The anchored check (a callee that calls anything
+  must already have a named call that agrees) removes them. It costs about 64 correct names per false positive
+  removed, under the allowance's 100.
+- **API splits between versions.** `uncompress2` → `uncompress2_z`, `compress2` → `compress2_z`,
+  `deflateBound` → `deflateBound_z`, `ZSTD_compressEnd` → `ZSTD_compressEnd_public`, and Lua's
+  `isinstack` → `instack`. The body is right but the name changed, so these remain.
+
+The fuzzy threshold was chosen by the module's calibration rule on training, again 0.95/0.05.
+
+**Final read #1 on `libid-00da6363626a`** (ledgered; configuration fixed before the read: fuzzy 0.95/0.05 plus
+the anchored call graph, over bundled + arm):
+
+| Final | dTP | dFP | Allowance | Precision of added names |
+| --- | ---: | ---: | ---: | ---: |
+| call graph | +5285 (novel +3826) | +30 | 52 | 99.4% |
+| fuzzy | +963 | +44 | 9 | 95.6% |
+| both | +5943 | +66 | 59 | 98.9% |
+
+The call graph passes on every split; fuzzy fails final on both corpora, so it stays suggestion-only. The ledgered
+configuration was the combination: the call-graph row is a component of that same read, not a separate
+pre-declared one.
+
+**Shipped.** `rampage_signatures::callgraph` holds the rule, shared by the flywheel and the product.
+`rampage-eval bundle --call-graph` built `data/callgraph.json.gz` (7634 callers, 230 KB). Against the bundled
+databases (which carry the older arm) it gained:
+- dev: +4220 (novel +2312) for +38 false positives, allowance 42;
+- training: +3254, no false positive;
+- negatives: nothing.
+
+The CLI on unseen binaries now names more functions:
+
+| Binary | Before | After |
+| --- | ---: | ---: |
+| lz4 1.10.0 (x86-64 clang O2) | 49 | 61 |
+| zstd 1.5.5 (x86-64 zig O2) | 172 | 237 |
+| Lua 5.4.6 (AArch64 clang Os) | 70 | 110 |
+| zlib 1.4 (x86-64 clang O2) | 57 | 67 |
+| cJSON 1.7.17 (x86-64 clang O2) | 117 | 140 |
+
+On the largest corpus binary, identify takes 1.87 s instead of 1.80 s.
+
+Outside the corpus, on the `eval-target-*` fixtures (stripped against their symbolized copies), every bundled-database
+name is correct and the call graph adds 10 (x86-64) and 20 (AArch64) runtime names. All 30 name the right function,
+but only 2 use the symbol table's spelling: the rest are aliases or namespaces of it (`lseek` for `__lseek`,
+`static_init_tls` for musl's `__init_tls`, `strnlen` for Zig's `c.string.strnlen`, `compiler_rt.addf3.__addtf3`
+for `__addtf3`). The corpus truth spells runtime functions as its own builds' symbol tables do, and the gate does
+not score runtime names. The names stay: they identify the function correctly.
+
+**The arm on this corpus** (adding zstd and Lua rows) passes everything but the per-slice rule: four lz4 O0 cells
+gain 2–4 false positives each. The cause is tiny helpers whose widened zstd patterns match lz4 bodies
+(`MEM_writeLE16`, `XXH_readBE64`, `ERR_getErrorName`). It is not bundled yet. Dropping those rows (bundle has no
+per-row exclusion yet) or refusing widened rows that match another library's body would unblock it.
+
 ### Next
 - **Regenerate the bundled hash databases with callee keys for forwarder entries** (128 bundled false positives).
   This needs the signature-corpus source caches and the pinned toolchains, so it needs its own session.
-- **Fuzzy + call-graph arms:** measured and calibrated on training, but they fail the allowance on final (read
-  #3). They need a development split that shows their final-split errors: more held-out versions and libraries.
+- **Bundle this corpus's arm** (zstd and Lua rows) once the cross-library helper rows are refused.
+- **Fuzzy stays suggestion-only:** it failed final on both corpora.
 - **The AI family needs a decision:** code-proposing candidates rather than compiler/tool rules. Proposal:
   [2026-11-08-flywheel-code-candidates.md](2026-11-08-flywheel-code-candidates.md).
 - **Caller/callee-confirmed rows** for identical bodies under different names (`LZ4_read64` / `LZ4_read_ARCH`).

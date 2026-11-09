@@ -86,6 +86,11 @@ them. A callee named by a flywheel row, which is canonical, therefore does not c
 over a counted spelling. The collector's per-body diagnostics pass canonical proposals as callee labels in the
 same way.
 
+The bundled call graph (`data/callgraph.json.gz`) is separate from the signature databases. It holds training call
+sequences from the flywheel corpus (callee names in call-site order, per architecture and caller) and names the
+callees of functions the databases named. It is generated and gated by `rampage-eval bundle --call-graph`
+([flywheel](flywheel.md#bundle-a-promotion)).
+
 Strict canonical-name behavior is the default. Explicit `--producer-alias-sets` enables the revalidated aggregates'
 `elf-producer-alias-sets-v3` policy: full-target grading accepts only verified exact native ELF same-range aliases;
 reference admission requires a unique default-visible strong definition with only weak default-visible aliases.
