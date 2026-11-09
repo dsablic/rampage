@@ -51,6 +51,26 @@ For other clients, a JSON `mcpServers` entry:
 An absolute path to the installed CLI can replace `rampage`. For clients that do not refresh their tool list, add
 `--all-tools` (`claude mcp add rampage -- rampage server serve --all-tools`).
 
+### Agents, subagents and scripted sessions
+
+An agent can only call rampage's tools if its session started the server. When an agent falls back to the
+`rampage` CLI or to shell scripts, check these in order:
+
+- **Registration scope.** Run `claude mcp list` in the directory where the agent runs. A `local` registration
+  applies only to the directory it was added in. Register with `--scope user` for every directory, or with
+  `--scope project` to write a `.mcp.json` that the repository shares (Claude Code asks once before it starts
+  project servers).
+- **Subagents.** Subagents use the MCP servers of the session that starts them. A custom subagent that lists
+  `tools` in its definition gets only those tools, so add the `mcp__rampage__…` names it needs, or omit `tools` so
+  it inherits every tool.
+- **Scripted sessions.** `claude -p` loads the servers registered for its working directory. Pass
+  `--mcp-config FILE` to name the server explicitly, and `--strict-mcp-config` to ignore every other server. An
+  `--allowedTools` list must include `mcp__rampage__*`, and `ToolSearch` when the client defers MCP tool schemas.
+  `tools/agent-bench/claude-runner.py` builds such a command.
+- **Startup.** `rampage server serve` must start from the agent's environment: `rampage` on `PATH` (or an absolute
+  `command`) and the worker beside it. The server writes start-up warnings to stderr; `/mcp` shows a server that
+  failed to start.
+
 Install `rampage-worker` beside `rampage` (as `tools/install.sh` does), or name it with `RAMPAGE_WORKER`.
 Decompilation then runs in that supervised worker process, with time, memory and output limits. **Without a
 worker, decompilation runs in-process**, inside the server itself. The server warns on stderr at startup when it

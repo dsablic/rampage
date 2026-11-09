@@ -224,6 +224,28 @@ Verify first which of these the existing raw-window and decoder-provider slices 
 - [ ] **Range disassembly to text**, native in `inspect_raw_code`, replacing wrapper scripts.
 - [ ] **Multi-stage images.** Load a decoded bootloader payload as a second region at its RAM base, linked to the
   source range. Overlaps the dump-as-linked-target idea in the malware-analysis track.
+- [ ] **Thumb-2 `MSR` decode bug.** `MSR` with bytes `80f31188` disassembles as `(bad)` and halts function
+  discovery, leaving the entry function at 4 bytes until the bytes were patched to `nop`. Needs an owned test
+  case; check the other system-register instructions (`MRS`, `CPS`) in the same pass.
+- [ ] **Function discovery from pointer tables.** Discovery seeds only the entry point. Seed from the vector table
+  and from tables of code pointers (with evidence per seed), so a raw image needs no hand-built symbol list.
+- [ ] **Decompiler accuracy on a raw Thumb image:**
+  - a `bl` checksum call dropped its length argument (a stale `r1` from earlier code);
+  - a shift-and-mask rendered as `&0xfff << 4`, which hid the real operation; compare against the disassembly
+    on an owned case before changing anything;
+  - literal-pool addresses showed as unnamed `iRam…`/`pxRam…` variables, so name or annotate them.
+- [ ] **Performance at about 5k symbols.** Listing 5,182 seeded symbols took about 22 seconds, and `xrefs --to`
+  ran past 2 minutes on the same image. Profile both and fix the slow path (likely a scan per query rather than
+  an index).
+- [ ] **Container recognition.** Triage and `carve` do not flag a proprietary compressed container, i.e. a
+  header with load address, sizes and a byte-sum around an LZSS stream. Report "header-checked
+  compressed-component candidate" with extents, so the compression probe has a starting range.
+- [x] **MCP tools in subagent sessions.** The agent had no rampage MCP tools and fell back to the CLI. Find out
+  why (server config, permissions or startup), and document how to expose them to agents. Done: configuration, not
+  a server fault. On the machine that ran it, `rampage` was neither installed on `PATH` nor registered at any
+  Claude Code scope, so no session there could start the server.
+  [MCP](docs/mcp.md#agents-subagents-and-scripted-sessions) now covers scope, subagent `tools` lists, `claude -p`
+  flags and startup checks.
 
 ### Execution rules for speed
 
