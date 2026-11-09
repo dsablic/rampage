@@ -242,7 +242,8 @@ Verify first which of these the existing raw-window and decoder-provider slices 
 - [ ] **Multi-stage images.** Load a decoded bootloader payload as a second region at its RAM base, linked to the
   source range. Overlaps the dump-as-linked-target idea in the malware-analysis track.
 - [ ] **Function discovery from pointer tables.** Discovery seeds only the entry point. Seed from tables of code
-  pointers (the Cortex-M vector table is done through `raw.vector_table`) (with evidence per seed), so a raw image needs no hand-built symbol list.
+  pointers, with evidence per seed, so a raw image needs no hand-built symbol list (the Cortex-M vector table
+  is done through `raw.vector_table`).
 - [ ] **Decompiler accuracy on a raw Thumb image:**
   - a `bl` checksum call dropped its length argument (a stale `r1` from earlier code);
   - a shift-and-mask rendered as `&0xfff << 4`, which hid the real operation; compare against the disassembly

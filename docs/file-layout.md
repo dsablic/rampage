@@ -67,8 +67,10 @@ Every `offset` and `length` in the result is an integer count of original-file b
   the word-aligned offset just before it, since a table whose first byte equals the preceding fill byte starts
   inside the fill run. It needs a word-aligned initial SP in the SRAM (0x20000000..0x3ffffffc) or CCM
   (0x10000000..0x11000000) range, followed by an odd reset address below 0x20000000, and at least 4 of the next 14
-  exception words inside the range, at least half of them zero or odd code-region addresses. A candidate
-  establishes no architecture, load base or entry point; [raw-code windows](raw-code.md) and
+  exception words inside the range, at least half of them zero or odd code-region addresses. Only region starts
+  are checked, so a table that follows padding shorter than `min_fill_run`, or that sits inside occupied bytes,
+  gets no hint; lower `min_fill_run`, or open the range as a Cortex-M Raw Project with `vector_table` set to its
+  address. A candidate establishes no architecture, load base or entry point; [raw-code windows](raw-code.md) and
   [Sleigh decoding](sleigh-decoding.md) take those as explicit analyst assertions.
 
 ## Bounds and continuation
