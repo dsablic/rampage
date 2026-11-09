@@ -350,7 +350,7 @@ impl Project {
     /// Candidate string-decoding routines: byte loops that load, transform and store bytes, with the call sites
     /// and encoded-looking data blobs that reach them. Static and bounded: nothing is emulated or executed.
     pub fn string_decoding(&self, limits: ReportLimits) -> Result<WorkflowReport, ApiError> {
-        if self.binary.raw_code_image().is_some() {
+        if crate::decoder::sleigh_raw(&self.binary) {
             let _decoder = crate::decoder::project_decoder(self)?;
             return Err(ApiError::Unavailable(
                 "string-decoding loop classification is not supported by the selected Sleigh Project profile".into(),

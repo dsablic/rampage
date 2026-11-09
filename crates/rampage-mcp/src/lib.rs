@@ -198,9 +198,12 @@ Its transient decoded preview uses decoded offsets, not source offsets or load a
 successful decoding do not authenticate content or prove stream boundaries. Tools whose schema has a `raw` \
 object open that explicit file range as a headerless Raw project with a closed profile instead of a native image \
 (never with arch/image_offset/image_length; null means absent). `raw` fields: profile (one of the Raw profiles \
-listed at the end), offset and length (original-file bytes, length up to 128 KiB), base_address, optional entry and \
-up to 8192 seeds (internal code-space byte coordinates, even for word-addressed processors; hex strings or \
-integers). The mapping is an analyst assertion; annotations are memory-only for this server and interpretation.
+listed at the end), offset and length (original-file bytes, length up to 128 KiB, 4 MiB for ARM:LE:32:Cortex), \
+base_address, optional entry and up to 8192 seeds (internal code-space byte coordinates, even for word-addressed \
+processors; hex strings or integers). The mapping is an analyst assertion; annotations are memory-only for this \
+server and interpretation. Cortex-M flash (profile cortex-m): vector_table true reads the vector table at \
+base_address (or give its address); accepted Thumb handlers become the entry and seeds, and binary_info reports \
+every word with its verdict and, for a base that misplaces the handlers, a base_address suggestion it never applies.
 
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \

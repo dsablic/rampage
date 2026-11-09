@@ -240,7 +240,7 @@ impl Binary {
     /// Owns one explicitly interpreted code image. No header parsing, entry inference or filesystem access.
     /// All addresses are internal byte offsets; this is not a C data-space or capture mapping.
     pub fn from_raw_code(data: Vec<u8>, options: crate::RawCodeOptions) -> Result<Self, LoadError> {
-        let raw = crate::RawCodeImage::admit(data.len(), options)?;
+        let raw = crate::RawCodeImage::admit(&data, options)?;
         let arch = raw.profile().arch();
         let len = data.len();
         Ok(Self {
@@ -258,7 +258,7 @@ impl Binary {
             warnings: Vec::new(),
             details: Details::None,
             big_endian: raw.profile().big_endian(),
-            thumb: Vec::new(),
+            thumb: raw.thumb_ranges(),
             overlay: None,
             code_big_endian: raw.profile().code_big_endian(),
             code_ranges: vec![raw.range()],
@@ -314,7 +314,7 @@ impl Binary {
             || self.slices != [self.arch]
             || self.big_endian != raw.profile().big_endian()
             || self.code_big_endian != raw.profile().code_big_endian()
-            || !self.thumb.is_empty()
+            || self.thumb != raw.thumb_ranges()
             || self.code_ranges != [raw.range()]
             || self.image != (0..self.data.len())
             || self.data.len() as u64 != raw.length()

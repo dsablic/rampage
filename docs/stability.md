@@ -39,7 +39,8 @@ These may change or disappear in any minor release. Each is marked as experiment
 - **The macOS `debugserver` and Windows-target debugging paths:** implemented but not live-verified. The `debug`
   tools' names and arguments are stable; behaviour specific to these stubs may change once they are verified.
 - **Raw processor profiles beyond the reviewed ones:** the Sleigh profiles other than MSP430 (`default`) and AVR8
-  (`gcc`), which have reviewed C models. Their names, discovery behaviour and results may change.
+  (`gcc`), which have reviewed C models, and the Cortex-M profile (`ARM:LE:32:Cortex`) with its `vector_table`
+  seeding and the `raw` field of `binary_info`. Their names, discovery behaviour and results may change.
 - **The `improve` group and the flywheel commands:** the MCP tools served with `--corpus`, the
   `--corpus`, `--flywheel-*`, `--gate`, `--require-novel-gain` and `--observations` options, the
   `report_observation` tool, and the files under `target/flywheel/`.

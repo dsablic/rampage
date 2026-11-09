@@ -124,6 +124,13 @@ pub fn render(context: &Context, operand: &Operand) -> Value {
         "<amode>" => address_mode(context),
         "<iflags>" => interrupt_flags(context),
         "<spec_reg>" => special_register(context),
+        "<sysm>" => {
+            let mask = context.field("mask").filter(|_| context.mnemonic() == "MSR");
+            context
+                .field("SYSm")
+                .and_then(|sysm| super::m_profile::special_register(sysm, mask))
+                .map_or(Value::Invalid, Value::Text)
+        }
         "<banked_reg>" => banked_register(context),
         "<CRn>" | "<CRm>" => Value::Text(format!("c{}", context.bits(operand).0)),
         "<rotate>" if !is_literal(operand.choices) => rotation(context, operand),

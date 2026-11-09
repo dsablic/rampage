@@ -64,16 +64,23 @@ use crate::search_code::{CodeImmediate, CodePattern, CodeReference, CodeSearchKi
 use crate::{ApiError, Project};
 
 fn project(profile: RawProfile, bytes: &[u8], base: u64, entry: Option<u64>, seeds: Vec<u64>) -> Project {
-    Project::new(Binary::from_raw_code(bytes.to_vec(), RawCodeOptions { profile, base, entry, seeds }).unwrap())
+    Project::new(
+        Binary::from_raw_code(bytes.to_vec(), RawCodeOptions { profile, base, entry, seeds, vector_table: None })
+            .unwrap(),
+    )
 }
 
 #[test]
 fn actual_native_profile_metadata_matches_raw_admission() {
     let mut matches = Vec::new();
-    for profile in RawProfile::ALL {
-        let binary =
-            Binary::from_raw_code(vec![0; 4], RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![] })
-                .unwrap();
+    // The native Thumb profile has no Sleigh translator; only Sleigh-decoded profiles are checked here.
+    let sleigh = RawProfile::ALL.into_iter().filter(|profile| !profile.native_decoder());
+    for profile in sleigh.clone() {
+        let binary = Binary::from_raw_code(
+            vec![0; 4],
+            RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![], vector_table: None },
+        )
+        .unwrap();
         let decoder = SleighDecoder::open(profile.language_id()).unwrap();
         let matched = validate_raw_metadata(binary.raw_code_image().unwrap(), decoder.metadata()).is_ok();
         println!(
@@ -88,7 +95,7 @@ fn actual_native_profile_metadata_matches_raw_admission() {
         assert_eq!(decoder.metadata().required_parallel_helper.as_deref(), profile.parallel_helper());
         matches.push(matched);
     }
-    assert_eq!(matches.len(), RawProfile::ALL.len());
+    assert_eq!(matches.len(), sleigh.count());
     assert!(matches.into_iter().all(|matched| matched), "all exact profile facts must match");
 }
 
@@ -346,10 +353,12 @@ fn distinct_raw_interpretations_never_share_cached_c() {
 #[test]
 fn matching_profile_does_not_excuse_any_translator_fact_mismatch() {
     let hexagon_helper = RawProfile::Hexagon.parallel_helper().unwrap();
-    for profile in RawProfile::ALL {
-        let binary =
-            Binary::from_raw_code(vec![0; 4], RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![] })
-                .unwrap();
+    for profile in RawProfile::ALL.into_iter().filter(|profile| !profile.native_decoder()) {
+        let binary = Binary::from_raw_code(
+            vec![0; 4],
+            RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![], vector_table: None },
+        )
+        .unwrap();
         let raw = binary.raw_code_image().unwrap();
         let decoder = SleighDecoder::open(profile.language_id()).unwrap();
         let original = decoder.metadata();

@@ -8,6 +8,8 @@
 #[rustfmt::skip]
 mod a32_spec;
 mod flow;
+#[rustfmt::skip]
+mod m_profile;
 mod operands;
 mod spec_types;
 #[allow(clippy::all)]
@@ -110,7 +112,9 @@ impl Decoded {
 fn decode_word(set: Set, word: u32, it: ItState) -> Option<Decoded> {
     let state = State { in_it_block: it.in_block() };
     let tables = set.tables();
-    let encoding = tables.lookup(word, state)?;
+    // The A-profile tables leave M-profile system-register moves (`msr basepri, r0`) unallocated.
+    let encoding =
+        tables.lookup(word, state).or_else(|| (set == Set::T32).then(|| m_profile::lookup(word)).flatten())?;
     // Aliases that spell out `.W` are the assembler's width-qualified synonyms of another alias; `format` adds
     // the qualifier where LLVM prints it.
     let unqualified = |alias: &mrs::Alias| {

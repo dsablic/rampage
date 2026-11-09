@@ -48,6 +48,15 @@ pub(crate) fn analysis_binding(binary: &Binary) -> Result<Option<String>, Decode
     if FAIL_ANALYSIS_BINDING.with(|failed| failed.get()) {
         return Err(initialization("injected specification revalidation failure"));
     }
+    if binary.raw_code_image().is_some_and(|image| image.profile().native_decoder()) {
+        // The native decoder reads no bundled specification, so only the interpretation binds the analysis.
+        let mut hash = Sha256::new();
+        hash.update(b"rampage-project-native-raw-analysis-v1\0");
+        hash.update(raw.schema.as_bytes());
+        hash.update([0]);
+        hash.update(raw.sha256.as_bytes());
+        return Ok(Some(rampage_arch::hex::bytes(&hash.finalize())));
+    }
     let context = rampage_decompiler::require_verified_bundled_native_context()
         .map_err(|error| DecoderInitializationError::Sleigh(Arc::new(error)))?;
     let mut hash = Sha256::new();
@@ -66,6 +75,10 @@ pub(crate) fn decoder_for_project(binary: &Binary) -> Result<Box<dyn Disassemble
     };
     if identity.is_none() {
         return Err(initialization("Raw decoder has no interpretation identity"));
+    }
+    if raw.profile().native_decoder() {
+        // The retained identity already checked that the target's Thumb ranges are exactly the mapped range.
+        return binary.decoder().map_err(DecoderInitializationError::Unsupported);
     }
     let decoder = rampage_decompiler::sleigh_decode::SleighDecoder::open(raw.profile().language_id())
         .map_err(|error| DecoderInitializationError::Sleigh(Arc::new(error)))?;
@@ -102,6 +115,11 @@ fn validate_raw_metadata(
         return Err(initialization("Raw admission facts disagree with the verified native translator"));
     }
     Ok(())
+}
+
+/// A Raw image decoded by a Sleigh translator, without typed operands or native IR; the native Thumb profile is not.
+pub(crate) fn sleigh_raw(binary: &Binary) -> bool {
+    binary.raw_code_image().is_some_and(|raw| !raw.profile().native_decoder())
 }
 
 pub(crate) fn project_decoder(project: &crate::Project) -> Result<Box<dyn Disassembler>, ApiError> {

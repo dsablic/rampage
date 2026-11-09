@@ -28,7 +28,7 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - **Worker supervision is not an OS sandbox.** It bounds time, memory and output. Analyse hostile files in a VM or
   container if you need isolation.
 - **Decompiled C is not proof** that the recovered program is correct. Results report their recovery issues.
-- Only MSP430 and AVR8 decompile among the Raw processor profiles; the others disassemble only.
+- Only MSP430, AVR8 and Cortex-M decompile among the Raw processor profiles; the others disassemble only.
 
 ## Analysis
 
@@ -39,8 +39,12 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   large image than exact searches do.
 - `disassemble` prints ARM and Thumb immediates in decimal (`movt r1, #1934`); only `inspect_raw_code` adds the
   hex value.
-- There is no Raw Project profile for ARM or Thumb (Cortex-M) firmware. `inspect_raw_code` reads it, without
-  functions, cross-references or decompilation.
+- The Cortex-M Raw profile (`ARM:LE:32:Cortex`) maps one code region of at most 4 MiB: RAM, peripherals and
+  other flash banks stay unmapped, and its base address is the analyst's assertion. A-profile ARM code has no Raw
+  profile; `inspect_raw_code` reads it, without functions, cross-references or decompilation.
+- Without symbols, a function first reached by another function's tail call (`b.w f`) before its own call is
+  seen can split at an internal join point: on a generated 1 MiB Cortex-M image, 1,773 of 6,030 reported
+  starts were such splits, the same on the stripped ELF.
 - Go string literals referenced only through static `{ptr, len}` headers in data, not by code, have no
   `go_literal` bounds.
 - `function_graph` refuses a view too large for one result; `function_summary` pages its blocks instead.

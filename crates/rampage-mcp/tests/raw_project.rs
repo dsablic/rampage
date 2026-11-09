@@ -91,7 +91,8 @@ async fn call(client: &RunningService<RoleClient, Client>, tool: &str, arguments
 
 /// Benchmark v2 firmware runs: 20 of rampage's 41 errors came from a headerless Cortex-M3 image. binary_info
 /// refused it without saying how to read it, and `raw` rejected `cortex-m3`, `thumb` and `ARM:LE:32:Cortex`
-/// without naming the right tool or profile.
+/// without naming the right tool or profile. Those names now select the Cortex-M profile; A-profile ARM and
+/// AArch64 still point at inspect_raw_code.
 #[tokio::test]
 async fn headerless_files_and_unknown_profiles_say_what_to_use_instead() {
     let fixture = FixtureCopy::new();
@@ -102,11 +103,16 @@ async fn headerless_files_and_unknown_profiles_say_what_to_use_instead() {
     assert!(text.contains("inspect_raw_code") && text.contains("\"profile\":\"msp430\""), "{text}");
 
     let mut selector = raw(&[]);
-    for profile in ["cortex-m3", "thumb", "ARM:LE:32:Cortex", "armv7m"] {
+    for profile in ["cortex-m3", "thumb", "ARM:LE:32:Cortex", "armv7m", "cortex-m0+", "armv6m"] {
+        selector["profile"] = json!(profile);
+        let (text, failed) = call(&client, "binary_info", json!({ "path": path, "raw": selector })).await;
+        assert!(!failed && text.contains("\"profile\":\"ARM:LE:32:Cortex\""), "{profile}: {text}");
+    }
+    for profile in ["arm", "armv7a", "cortex-a53", "aarch64"] {
         selector["profile"] = json!(profile);
         let (text, failed) = call(&client, "disassemble", json!({ "path": path, "raw": selector })).await;
         assert!(failed && text.contains("with inspect_raw_code"), "{text}");
-        assert!(text.contains("\"mode\":\"thumb\""), "{text}");
+        assert!(text.contains("\"mode\":\"thumb\"") && text.contains("cortex-m"), "{text}");
     }
     selector["profile"] = json!("msp431");
     let (text, failed) = call(&client, "disassemble", json!({ "path": path, "raw": selector })).await;
@@ -227,5 +233,51 @@ async fn raw_projects_list_disassemble_annotate_and_refuse_explicitly() {
 
     assert_eq!(names(&copy.0), ["msp430.bin"], "Raw projects write no sidecars or logs");
     assert_eq!(names(&fixtures()), fixture_names, "the fixture directory is untouched");
+    client.cancel().await.unwrap();
+}
+
+fn cortex_m_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware/raw-cortex-m.bin")
+}
+
+/// One `raw` selector with path, profile alias and base address opens a headerless Cortex-M image: the vector
+/// table seeds the entry and handlers, and listing, cross-references and decompilation answer from there.
+#[tokio::test]
+async fn a_cortex_m_image_opens_with_its_vector_table_in_one_call() {
+    let client = connect().await;
+    let path = cortex_m_fixture();
+    let length = std::fs::metadata(&path).unwrap().len();
+    let selector = json!({
+        "profile": "cortex-m3", "offset": 0, "length": length, "base_address": "0x8000000", "vector_table": true,
+    });
+    let (text, failed) = call(&client, "binary_info", json!({ "path": path, "raw": selector })).await;
+    assert!(!failed, "{text}");
+    let info: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(info["entry"], "0x8000240");
+    let table = &info["raw"]["vector_table"];
+    assert_eq!(table["vectors"][0]["name"], "initial_sp");
+    assert_eq!(table["vectors"][0]["word"], "0x20005000");
+    assert_eq!(table["vectors"][1]["target"], "0x8000240");
+    assert_eq!(table["vectors"][7]["status"], "empty");
+
+    let (text, failed) = call(&client, "list_functions", json!({ "path": path, "raw": selector })).await;
+    assert!(!failed, "{text}");
+    for start in ["0x8000060", "0x800008c", "0x80000b0", "0x8000150", "0x80001a0", "0x800020c", "0x800022c"] {
+        assert!(text.contains(start), "{start}: {text}");
+    }
+    let (text, failed) = call(&client, "xrefs", json!({ "path": path, "raw": selector, "to": "0x800008c" })).await;
+    assert!(!failed && text.contains("\"kind\":\"call\""), "{text}");
+    let (text, failed) = call(&client, "decompile", json!({ "path": path, "raw": selector, "at": "0x80001a0" })).await;
+    assert!(!failed && text.contains("sub_800008c("), "{text}");
+
+    // A wrong base reads the same words but seeds nothing, and only suggests a base.
+    let mut wrong = selector.clone();
+    wrong["base_address"] = json!(0);
+    let (text, failed) = call(&client, "binary_info", json!({ "path": path, "raw": wrong })).await;
+    assert!(!failed, "{text}");
+    let info: Value = serde_json::from_str(&text).unwrap();
+    assert!(info["entry"].is_null(), "{text}");
+    assert_eq!(info["raw"]["vector_table"]["base_address_suggestion"]["suggestion"], "0x8000000");
+    assert_eq!(info["segments"][0]["address"], "0x0");
     client.cancel().await.unwrap();
 }

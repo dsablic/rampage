@@ -12,7 +12,7 @@ This page is organised from overview to detail:
 - [Flywheel (improve)](#flywheel-improve): the restricted server for the experimental flywheel.
 - [Inputs, paging and decompiler tokens](#inputs-paging-and-decompiler-tokens): addresses, size caps, paging and
   per-tool notes.
-- [Raw projects](#raw-projects): headerless code through Sleigh processor profiles.
+- [Raw projects](#raw-projects): headerless code through Sleigh processor profiles and the Cortex-M profile.
 - [Edits and session state](#edits-and-session-state): annotations, undo, batches and the findings ledger.
 - [Authorization and data disclosure](#authorization-and-data-disclosure).
 - [For contributors](#for-contributors): the instruction size budget and how agent benchmarks drive the server.
@@ -382,16 +382,35 @@ Raw-capable tools (`binary_info`, `list_functions`, `disassemble`, `function_gra
 ```
 
 `profile` is a closed Raw language ID, listed in the server instructions, in any letter case, or a processor
-alias such as `msp430`, `avr`, `8051` or `z80`. An unknown name gets the closest profiles; an ARM, Thumb,
-Cortex-M, AArch64 or x86 name is pointed to `inspect_raw_code` with an example, since those have no Raw profile; `offset`/`length` select original-file bytes (1..=131072); `base_address`,
-`entry` and `seeds` (at most 8192) are internal code-space byte offsets, also for word-addressed processors, and
-tool addresses use the same coordinates. The mapping is an analyst assertion, not header admission. `raw` cannot
-be combined with `arch`, `image_offset` or `image_length`, and other tools refuse it with "tool X does not accept
-Raw projects". Tools that cannot answer on Raw code refuse explicitly (immediate search; decompilation for every
-profile except MSP430 and AVR8, which have reviewed C models). Annotations are memory-only for the server session and the exact
-interpretation (bytes, profile, mapping, entry, seed set): no sidecar or log is written, changed seeds or bytes
-give a fresh project, and at most 32 interpretations are retained. Each tool's `raw` schema is a compact shape
+alias such as `msp430`, `avr`, `8051`, `z80` or `cortex-m4`. An unknown name gets the closest profiles; an
+A-profile ARM, AArch64 or x86 name is pointed to `inspect_raw_code` with an example, since those have no Raw
+profile; `offset`/`length` select original-file bytes (1..=131072, or up to 4 MiB for `ARM:LE:32:Cortex`);
+`base_address`, `entry` and `seeds` (at most 8192) are internal code-space byte offsets, also for word-addressed
+processors, and tool addresses use the same coordinates. The mapping is an analyst assertion, not header admission.
+`raw` cannot be combined with `arch`, `image_offset` or `image_length`, and other tools refuse it with "tool X does not
+accept Raw projects". Tools that cannot answer on Raw code refuse explicitly (immediate search on Sleigh profiles;
+decompilation for every profile except MSP430, AVR8 and Cortex-M, which have reviewed C models). Annotations are
+memory-only for the server session and the exact interpretation (bytes, profile, mapping, entry, seed set): no sidecar
+or log is written, changed seeds or bytes give a fresh project, and at most 32 interpretations are retained. Each tool's
+`raw` schema is a compact shape
 (about 0.5 KB); the field meanings and profile list appear once in the server instructions to keep the catalog small. See [explicit Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects).
+
+A Cortex-M flash image (experimental `ARM:LE:32:Cortex` profile) opens in one call from path, profile and base
+address, with `"vector_table": true` to read the vector table at `base_address` (or an address in its place):
+
+```json
+{
+  "path": "tests/fixtures/firmware/raw-cortex-m.bin",
+  "raw": { "profile": "cortex-m3", "offset": 0, "length": 800, "base_address": "0x8000000", "vector_table": true }
+}
+```
+
+Accepted Thumb handlers become the entry (Reset, unless `entry` is given) and seeds. `binary_info` reports the
+table under `raw.vector_table`: every system vector and every nonzero external one with `index`, `name`, `word`,
+`status` (`stack_pointer`, `accepted`, `empty` or `refused`), the handler `target` and a refusal `reason`, plus why
+reading stopped. When handler words fall outside the asserted mapping, a `base_address_suggestion` names the most
+aligned base that would hold them; it is never applied. `disassemble` with `count` up to 1000 pages through the
+whole image as text, data included.
 
 ## Edits and session state
 

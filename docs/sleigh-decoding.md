@@ -47,10 +47,10 @@ These finite fixtures do not establish full-ISA, C-ABI or ordinary-project accep
 A Raw Project is one explicit, headerless code image analysed like an ordinary binary. MCP opens one through the
 `raw` selector of raw-capable tools ([MCP Raw projects](mcp.md#raw-projects)); the CLI uses
 `--raw-json`/`--raw-request` ([CLI reference](cli-reference.md#raw-projects)); the library entry point is
-`Binary::from_raw_code(bytes, RawCodeOptions { profile, base, entry, seeds })`. Input is 1..=128 KiB with at most
-8192 seeds. Base, entry and seeds must be aligned to the profile and backed by code bytes, and the last byte must
-stay within the profile's code-space highest byte. Header-driven `Binary::open` never falls back to Raw or infers
-an entry.
+`Binary::from_raw_code(bytes, RawCodeOptions { profile, base, entry, seeds, vector_table })`. Input is 1..=128 KiB
+(4 MiB for the [Cortex-M profile](#cortex-m-profile)) with at most 8192 seeds. Base, entry and seeds must be
+aligned to the profile and backed by code bytes, and the last byte must stay within the profile's code-space highest
+byte. Header-driven `Binary::open` never falls back to Raw or infers an entry.
 
 ### Published processor set
 
@@ -91,17 +91,55 @@ Discovery, listing and code search use one Sleigh decoder factory. Valid instruc
 serialize `flow: "unknown"` with a `decode_gate`; they stop successor discovery and are never reported as
 fall-through, return or noreturn. A helper-gated Hexagon entry stays a valid function with an unresolved exit;
 SuperH's delay-slot gate inside a body stops successors there. Cached analysis and decompiler engines are bound to
-a `rampage-raw-interpretation-v2` identity covering bytes, profile, byte order, mapping, entry and seeds; edited
+a `rampage-raw-interpretation-v3` identity covering bytes, profile, byte order, mapping, entry, seeds and the
+requested vector-table address; edited
 loader fields or a failed specification recheck refuse the cache instead of serving it stale.
 
 Decompilation is available for profiles with a reviewed C model: MSP430 (`default`) and AVR8 (`gcc`). It maps
 exactly one read-only RX code region, bounded by the translator's code space; AVR data, register and I/O spaces are
 never served from the code mapping. Every other profile refuses with "no reviewed C model for <profile>".
 
-Raw Projects also refuse immediate/constant code search (no typed operands), patch V1, capture identity and
-backing-source proofs. Annotations are memory-only, even when a persistent log is supplied. The sixteen
-architectures have no legacy pointer width (`pointer_size()` is `None`) and no native/Capstone decoder.
-Multi-region maps, MMIO, HEX/SREC and vector seeding are not supported.
+Sleigh-decoded Raw Projects also refuse immediate/constant code search (no typed operands); every Raw Project
+refuses patch V1, capture identity and backing-source proofs. Annotations are memory-only, even when a persistent
+log is supplied. The sixteen Sleigh architectures have no legacy pointer width (`pointer_size()` is `None`) and no
+native/Capstone decoder. Multi-region maps, MMIO and HEX/SREC are not supported.
+
+### Cortex-M profile
+
+`ARM:LE:32:Cortex` (aliases `cortex-m`, `cortex-m0`, `cortex-m0+`, `cortex-m3`, `cortex-m4`, `cortex-m7`,
+`thumb`, `thumb2`, `armv6m`, `armv7m`, `armv7em`, ...) is little-endian ARMv6-M/ARMv7-M Thumb. It is
+*experimental* ([stability policy](stability.md)). Design choices:
+
+- **Decoder.** Discovery, listing and search use rampage's native ARM decoder, the one ARM ELF uses, with the
+  whole mapped range in Thumb mode (the binary's Thumb ranges are exactly the mapping and are part of the
+  retained interpretation). It gives typed operands, `movw`/`movt` and literal-pool data references and IT-block
+  conditions, which the Sleigh path does not, and it decodes the M-profile `MRS`/`MSR` special registers
+  (`msp`, `psp`, `primask`, `basepri`, `basepri_max`, `faultmask`, `control`, ...) and `CPSIE`/`CPSID`. Mode is
+  never inferred: there is no A32 state, and odd Thumb pointers given as `entry` or `seeds` name the even
+  instruction. An even address formed into the image (a string, a switch table) is data, never a function start.
+- **Decompilation.** Ghidra's `ARM:LE:32:Cortex` uses `ARM7_le.sla` with `ARMCortex.pspec`; neither is bundled.
+  The bundled `ARM8_le.sla` defines `VERSION_7M` as `ARM7_le.slaspec` does (it adds `VERSION_8`), so it decodes
+  the M-profile constructors; the decompiler runs `ARM:LE:32:v8` with its reviewed `default` C model (pointer,
+  int and long 4 bytes, matching AAPCS) and TMode set explicitly at every function, as for ARM ELF Thumb code.
+  Only the code mapping is served: RAM and peripheral accesses show as absolute addresses.
+- **Input cap.** 4 MiB (`MAX_RAW_NATIVE_BYTES`); Sleigh profiles keep 128 KiB. A generated 1,039,864-byte
+  Cortex-M3 image (4,700 C functions, Reset as the only seed) lists its functions in 3.3 s wall (8.9 s CPU) with
+  139 MiB peak RSS in a release build on an Apple-silicon Mac.
+- **Vector table.** `vector_table` (an address, `true` for `base_address` in MCP/CLI) reads the initial SP and
+  up to 16 system and 240 external vectors as little-endian words. A handler is accepted when its word is odd,
+  inside the mapped range and outside the table; zero is `empty`; reserved slots 7-10 and 13 are never handlers
+  (some parts keep a checksum there). External vectors stop at the first word that is neither empty nor a
+  handler, at the lowest accepted handler address, at the image end or after 240. Reset becomes the entry unless
+  `entry` is given; other accepted handlers become seeds. Each word is reported with its verdict. The base address
+  is never inferred: when handler words fall outside the mapping, a `base_address_suggestion` gives the most
+  aligned base in the range that would hold them, labelled as not applied.
+
+Owned fixture: `tests/fixtures/firmware/raw-cortex-m.bin` is the flash image of `raw-cortex-m.elf`, built from
+`raw-cortex-m.c` by `build-raw-cortex-m.sh` (zig 0.17.1, `-mcpu=cortex_m3 -O1`, llvm-objcopy). Opened with base
+`0x8000000` and the vector table only, it recovers all 11 functions the ELF names (6 from vectors, 5 through
+calls) and no string or switch-table start; one extra start is `dispatch`'s join point, split because the UART
+handler tail-calls `dispatch` (see [known limits](known-limits.md#analysis)). The stripped ELF, which has only its
+entry, finds 6 of them (Reset and the 5 it calls), a loop-head split and 6 string or table starts.
 
 ## Window and discovery contract
 

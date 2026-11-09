@@ -6,9 +6,12 @@ use sha2::{Digest, Sha256};
 
 use crate::{LoadError, Perms, Section, SectionKind, Segment};
 
+/// Input cap for Sleigh-decoded profiles (every profile except [`RawProfile::CortexM`]).
 pub const MAX_RAW_BYTES: usize = 128 * 1024;
+/// Input cap for the natively decoded Cortex-M profile: flash images are typically 256 KiB to 2 MiB.
+pub const MAX_RAW_NATIVE_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_RAW_SEEDS: usize = 8192;
-const IDENTITY_SCHEMA: &str = "rampage-raw-interpretation-v2";
+const IDENTITY_SCHEMA: &str = "rampage-raw-interpretation-v3";
 
 /// Closed set of Raw ordinary-Project profiles, admitted family by family on Project-level evidence.
 /// Every row must equal the verified native translator's metadata; the decoder factory checks this.
@@ -30,6 +33,18 @@ pub enum RawProfile {
     Ebpf,
     Loongarch64,
     Hexagon,
+    /// Little-endian ARMv6-M/ARMv7-M Thumb. Decoded by rampage's native ARM decoder with every byte in Thumb
+    /// mode, not by a Sleigh translator; see [`RawProfile::native_decoder`].
+    CortexM,
+}
+
+/// Which decoder serves a Raw profile's discovery, listing and search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RawDecoder {
+    /// The bundled Sleigh translator of `language_id`, whose metadata must equal the profile's facts.
+    Sleigh,
+    /// rampage's native decoder for `arch`, with the whole mapped range in Thumb mode.
+    NativeThumb,
 }
 
 struct RawProfileFacts {
@@ -40,6 +55,7 @@ struct RawProfileFacts {
     code_big_endian: bool,
     code_space: RawCodeSpace,
     parallel_helper: Option<&'static str>,
+    decoder: RawDecoder,
 }
 
 const fn space(
@@ -67,6 +83,7 @@ const fn facts(
         code_big_endian: big_endian,
         code_space,
         parallel_helper: None,
+        decoder: RawDecoder::Sleigh,
     }
 }
 
@@ -74,7 +91,8 @@ const HEXAGON_PARALLEL_HELPER: &str = "ghidra.app.util.viewer.field.HexagonParal
 
 // Indexed by discriminant. Encoded address size and word units are not C-pointer defaults or cross-translator
 // space IDs; alignments are the SLA's declared instruction alignment, not the shortest encoding.
-const PROFILE_FACTS: [RawProfileFacts; 16] = [
+// The Cortex-M row's code space is ARM8_le.sla's `ram` space; no Sleigh translator decodes that profile.
+const PROFILE_FACTS: [RawProfileFacts; 17] = [
     facts(RawProfile::Msp430, "TI_MSP430:LE:16:default", Arch::Msp430, false, space("RAM", 2, 1, 0xffff, 2)),
     facts(RawProfile::Avr8, "avr8:LE:16:default", Arch::Avr8, false, space("code", 2, 2, 0x1ffff, 2)),
     facts(RawProfile::Mos6502, "6502:LE:16:default", Arch::Mos6502, false, space("RAM", 2, 1, 0xffff, 1)),
@@ -93,6 +111,10 @@ const PROFILE_FACTS: [RawProfileFacts; 16] = [
     RawProfileFacts {
         parallel_helper: Some(HEXAGON_PARALLEL_HELPER),
         ..facts(RawProfile::Hexagon, "Hexagon:LE:32:default", Arch::Hexagon, false, space("ram", 4, 1, 0xffff_ffff, 4))
+    },
+    RawProfileFacts {
+        decoder: RawDecoder::NativeThumb,
+        ..facts(RawProfile::CortexM, "ARM:LE:32:Cortex", Arch::Arm, false, space("ram", 4, 1, 0xffff_ffff, 2))
     },
 ];
 
@@ -147,6 +169,18 @@ impl RawProfile {
     pub fn code_space(self) -> RawCodeSpace {
         self.facts().code_space
     }
+
+    /// Whether rampage's native decoder for [`Self::arch`] serves this profile, with the whole mapped range in
+    /// Thumb mode, instead of a Sleigh translator. Such a profile has typed operands, data references and a
+    /// pointer width; the others have none of these.
+    pub fn native_decoder(self) -> bool {
+        self.facts().decoder == RawDecoder::NativeThumb
+    }
+
+    /// Largest admitted input: 4 MiB for the natively decoded profile, 128 KiB for Sleigh-decoded ones.
+    pub fn max_bytes(self) -> usize {
+        if self.native_decoder() { MAX_RAW_NATIVE_BYTES } else { MAX_RAW_BYTES }
+    }
 }
 
 impl Serialize for RawProfile {
@@ -170,6 +204,9 @@ pub struct RawCodeOptions {
     pub base: u64,
     pub entry: Option<u64>,
     pub seeds: Vec<u64>,
+    /// Cortex-M only: the code-space byte address of a vector table to read the initial SP and handler words
+    /// from. Accepted handlers become the entry (Reset, unless `entry` is given) and seeds.
+    pub vector_table: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -180,6 +217,8 @@ pub struct RawCodeImage {
     end: u64,
     entry: Option<u64>,
     seeds: Vec<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vector_table: Option<crate::raw_vectors::VectorTable>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -189,9 +228,15 @@ pub struct RawInterpretationIdentity {
 }
 
 impl RawCodeImage {
-    pub(crate) fn admit(length: usize, mut options: RawCodeOptions) -> Result<Self, LoadError> {
-        if length == 0 || length > MAX_RAW_BYTES || options.seeds.len() > MAX_RAW_SEEDS {
-            return Err(LoadError::Malformed("Raw requires 1..=128 KiB and at most 8192 supplied seeds".into()));
+    pub(crate) fn admit(bytes: &[u8], mut options: RawCodeOptions) -> Result<Self, LoadError> {
+        let length = bytes.len();
+        let max = options.profile.max_bytes();
+        if length == 0 || length > max || options.seeds.len() > MAX_RAW_SEEDS {
+            return Err(LoadError::Malformed(format!(
+                "Raw {} requires 1..={} KiB and at most 8192 supplied seeds",
+                options.profile.language_id(),
+                max / 1024
+            )));
         }
         let length = u64::try_from(length).map_err(|_| LoadError::Malformed("Raw length overflows".into()))?;
         let space = options.profile.code_space();
@@ -200,6 +245,11 @@ impl RawCodeImage {
             return Err(LoadError::Malformed("Raw base violates profile instruction alignment".into()));
         }
         let end = checked_code_end(options.base, length, space.highest_byte)?;
+        if options.profile.native_decoder() {
+            // Thumb code pointers carry bit 0; the instruction starts at the even address.
+            options.entry = options.entry.map(|entry| entry & !1);
+            options.seeds.iter_mut().for_each(|seed| *seed &= !1);
+        }
         let check_start = |address: u64| {
             if !address.is_multiple_of(alignment) || !(options.base..end).contains(&address) {
                 return Err(LoadError::Malformed("Raw entry/seed must be aligned and backed by code bytes".into()));
@@ -212,8 +262,32 @@ impl RawCodeImage {
         for &seed in &options.seeds {
             check_start(seed)?;
         }
+        let vector_table = match options.vector_table {
+            None => None,
+            Some(_) if !options.profile.native_decoder() => {
+                return Err(LoadError::Malformed(
+                    "Raw vector-table seeding is defined only for ARM:LE:32:Cortex".into(),
+                ));
+            }
+            Some(address) => {
+                let table = crate::raw_vectors::read(bytes, options.base, address)?;
+                if let Some(reset) = table.reset() {
+                    match options.entry {
+                        None => options.entry = Some(reset),
+                        Some(entry) if entry != reset => options.seeds.push(reset),
+                        Some(_) => {}
+                    }
+                }
+                let entry = options.entry;
+                options.seeds.extend(table.handlers().filter(|&handler| Some(handler) != entry));
+                Some(table)
+            }
+        };
         options.seeds.sort_unstable();
         options.seeds.dedup();
+        if options.seeds.len() > MAX_RAW_SEEDS {
+            return Err(LoadError::Malformed("Raw accepts at most 8192 seeds, vector-table handlers included".into()));
+        }
         Ok(Self {
             profile: options.profile,
             base: options.base,
@@ -221,6 +295,7 @@ impl RawCodeImage {
             end,
             entry: options.entry,
             seeds: options.seeds,
+            vector_table,
         })
     }
 
@@ -242,6 +317,16 @@ impl RawCodeImage {
 
     pub fn seeds(&self) -> &[u64] {
         &self.seeds
+    }
+
+    /// Evidence for every vector read when vector-table seeding was requested.
+    pub fn vector_table(&self) -> Option<&crate::raw_vectors::VectorTable> {
+        self.vector_table.as_ref()
+    }
+
+    /// The Thumb-mode ranges a native decoder reads: the whole mapped range for the Cortex-M profile.
+    pub fn thumb_ranges(&self) -> Vec<Range<u64>> {
+        if self.profile.native_decoder() { vec![self.range()] } else { Vec::new() }
     }
 
     pub fn range(&self) -> Range<u64> {
@@ -298,6 +383,10 @@ impl RawCodeImage {
         for seed in &self.seeds {
             hash.update(seed.to_be_bytes());
         }
+        // Schema v3 binds the requested vector-table address; its evidence is a function of bytes and address.
+        let table = self.vector_table.as_ref().map(|table| table.address);
+        hash.update([u8::from(table.is_some())]);
+        hash.update(table.unwrap_or(0).to_be_bytes());
         RawInterpretationIdentity { schema: IDENTITY_SCHEMA, sha256: rampage_arch::hex::bytes(&hash.finalize()) }
     }
 }
@@ -323,8 +412,10 @@ mod tests {
             assert_eq!(PROFILE_FACTS[index].profile, profile);
             assert_eq!(RawProfile::from_language_id(profile.language_id()).unwrap(), profile);
             assert_eq!(serde_json::to_value(profile).unwrap(), profile.language_id());
-            assert_eq!(profile.arch().pointer_size(), None);
-            assert_eq!(profile.arch().native_address_width(), None);
+            // Sleigh-decoded profiles have no legacy pointer width; the native Thumb profile is 32-bit ARM.
+            assert_eq!(profile.arch().pointer_size(), profile.native_decoder().then_some(4));
+            assert_eq!(profile.arch().native_address_width().is_some(), profile.native_decoder());
+            assert_eq!(profile.max_bytes() > super::MAX_RAW_BYTES, profile.native_decoder());
             assert!(RawProfile::ALL[..index].iter().all(|other| other.arch() != profile.arch()));
         }
     }

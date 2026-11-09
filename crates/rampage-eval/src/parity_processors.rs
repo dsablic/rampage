@@ -208,7 +208,7 @@ fn fixtures(root: &Path) -> Result<Vec<Fixture>, String> {
 }
 
 fn project(fixture: &Fixture, entry: Option<u64>, seeds: Vec<u64>) -> Result<Project, String> {
-    let options = RawCodeOptions { profile: fixture.profile, base: fixture.base, entry, seeds };
+    let options = RawCodeOptions { profile: fixture.profile, base: fixture.base, entry, seeds, vector_table: None };
     let binary = Binary::from_raw_code(fixture.bytes.clone(), options)
         .map_err(|error| format!("{}: Raw admission refused: {error}", fixture.name))?;
     Ok(Project::new(binary))
@@ -309,7 +309,9 @@ mod tests {
         let section = measure(&root).unwrap();
         let rows = section["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 16);
-        assert_eq!(rows.len(), RawProfile::ALL.len());
+        // The Cortex-M profile is natively decoded and measured on its own fixture, not in the Sleigh roster.
+        let sleigh = || RawProfile::ALL.into_iter().filter(|profile| !profile.native_decoder());
+        assert_eq!(rows.len(), sleigh().count());
         let totals = &section["totals"];
         assert_eq!(totals["truth_entries"], 32);
         assert_eq!(totals["manual"], json!({"retained": 32, "exact_extents": 23}));
@@ -332,7 +334,7 @@ mod tests {
             }
         }
         let languages: BTreeSet<_> = rows.iter().map(|row| row["language_id"].as_str().unwrap()).collect();
-        let roster: BTreeSet<_> = RawProfile::ALL.iter().map(|profile| profile.language_id()).collect();
+        let roster: BTreeSet<_> = sleigh().map(|profile| profile.language_id()).collect();
         assert_eq!(languages, roster);
         let hexagon = rows.iter().find(|row| row["fixture"] == "Hexagon-v2").unwrap();
         assert_eq!(hexagon["manual"]["misses_by_gate_reason"], json!({"processor_helper_required": 2}));

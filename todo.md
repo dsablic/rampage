@@ -71,8 +71,10 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
 - [ ] ARM immediates are printed in LLVM's decimal (`movt r1, #1934`) by the shared native renderer, used by
   `disassemble` and search operand globs too. Only `inspect_raw_code` appends hex now; adding it to the native
   listing needs its own field or comment so CLI/UI comment columns and operand-glob matching stay unchanged.
-- [ ] No Raw Project profile for ARM/Thumb (Cortex-M): firmware runs needed `inspect_raw_code`, which has no
-  functions, xrefs or decompilation. A reviewed ARM/Thumb Raw profile would let `raw` serve them.
+- [x] No Raw Project profile for ARM/Thumb (Cortex-M): firmware runs needed `inspect_raw_code`, which has no
+  functions, xrefs or decompilation. A reviewed ARM/Thumb Raw profile would let `raw` serve them. Done:
+  experimental `ARM:LE:32:Cortex` (aliases `cortex-m*`, `thumb`, `armv7m`, ...), native Thumb decoder, ARM v8
+  decompilation, 4 MiB cap ([Cortex-M profile](docs/sleigh-decoding.md#cortex-m-profile)).
 - [ ] Go string literals referenced only through static `{ptr, len}` headers in data (not by code) get no
   `go_literal` start, since data-to-data references are not retained; reading headers would bound them too.
 - [ ] `function_graph` refuses oversized views like `function_summary` did; page its blocks the same way (edges
@@ -216,22 +218,31 @@ Verify first which of these the existing raw-window and decoder-provider slices 
 - [x] **Firmware layout tool.** Regions, 0xFF/0x00 padding runs, per-block entropy (packed areas), string
   clusters and range hashes in one call. Extends the byte/ASCII triage slice above. Done: `file_layout` (MCP
   `core`) and `binary layout`, up to 64 MiB per call with capped lists and a continuation range, plus labelled
-  Cortex-M vector-table candidate hints (evidence only; the vector-table item below remains open).
+  Cortex-M vector-table candidate hints (evidence only; the Raw selector's `vector_table` does the seeding).
 - [ ] **Unknown-compression probe.** Try LZSS/LZ4/LZ77 variants and a bit-order/length-encoding sweep against a
   supplied or expected output size or an entropy drop, and return candidate decoder-provider parameters. Builds
   on the explicit LZSS-4K provider; the agent re-derived this by hand.
-- [ ] **Cortex-M vector table and entry detection.** Reset/SP/handler candidates with evidence, so the first
-  load needs no trial and error. Pairs with the ARM/Thumb Raw profile item under the benchmark follow-ups.
-- [ ] **Raw ingest in one call.** Blob plus arch, mode and base address returns a ready project (see the
+- [x] **Cortex-M vector table and entry detection.** Reset/SP/handler candidates with evidence, so the first
+  load needs no trial and error. Pairs with the ARM/Thumb Raw profile item under the benchmark follow-ups. Done:
+  `raw.vector_table` seeds entry and handlers and reports each word's verdict in `binary_info`, with a labelled
+  base-address suggestion it never applies.
+- [x] **Raw ingest in one call.** Blob plus arch, mode and base address returns a ready project (see the
   ARM/Thumb Raw profile item), so agents need not read `cli-reference.md` and `sleigh-decoding.md` to learn it.
-- [ ] **Range disassembly to text**, native in `inspect_raw_code`, replacing wrapper scripts.
+  Done: `"raw":{"profile":"cortex-m","offset":0,"length":N,"base_address":...,"vector_table":true}` on any
+  raw-capable tool; the server instructions and headerless-file guidance show it.
+- [x] **Range disassembly to text**, native in `inspect_raw_code`, replacing wrapper scripts. Done through the
+  Cortex-M Raw Project instead: `disassemble` with `raw`, `count` up to 1000 and `view: "code"` pages over the whole
+  image (tested end to end on the owned fixture).
+- [x] **Thumb-2 MSR decode bug.** `msr basepri, r0` (`80 f3 11 88`) decoded as invalid, stopping discovery and
+  `inspect_raw_code`. Done: hand-written M-profile `MRS`/`MSR` encodings behind the generated A-profile tables,
+  llvm-mc-checked for every SYSm register; `CPSIE`/`CPSID` already decoded.
+- [ ] **Tail-call splits without symbols.** A function first reached by a tail call (`b.w f`) before its own
+  call is seen splits at internal join points: 1,773 of 6,030 starts on a generated 1 MiB Cortex-M image, the same
+  on its stripped ELF. Discovery should drop the caller's stale exploration once `f` becomes a function.
 - [ ] **Multi-stage images.** Load a decoded bootloader payload as a second region at its RAM base, linked to the
   source range. Overlaps the dump-as-linked-target idea in the malware-analysis track.
-- [ ] **Thumb-2 `MSR` decode bug.** `MSR` with bytes `80f31188` disassembles as `(bad)` and halts function
-  discovery, leaving the entry function at 4 bytes until the bytes were patched to `nop`. Needs an owned test
-  case; check the other system-register instructions (`MRS`, `CPS`) in the same pass.
-- [ ] **Function discovery from pointer tables.** Discovery seeds only the entry point. Seed from the vector table
-  and from tables of code pointers (with evidence per seed), so a raw image needs no hand-built symbol list.
+- [ ] **Function discovery from pointer tables.** Discovery seeds only the entry point. Seed from tables of code
+  pointers (the Cortex-M vector table is done through `raw.vector_table`) (with evidence per seed), so a raw image needs no hand-built symbol list.
 - [ ] **Decompiler accuracy on a raw Thumb image:**
   - a `bl` checksum call dropped its length argument (a stale `r1` from earlier code);
   - a shift-and-mask rendered as `&0xfff << 4`, which hid the real operation; compare against the disassembly

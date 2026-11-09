@@ -245,6 +245,21 @@ pub struct Summary<'a> {
     pub snapshot_registers: &'a [rampage_loaders::snapshot::SnapshotRegister],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snapshot_target: Option<&'a rampage_loaders::snapshot::SnapshotTarget>,
+    /// A Raw Project's asserted interpretation, with vector-table evidence when seeding was requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw: Option<RawSummary<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RawSummary<'a> {
+    pub profile: rampage_loaders::RawProfile,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub base_address: u64,
+    pub length: u64,
+    /// Discovery seeds, supplied and vector-table handlers together (the entry is counted separately).
+    pub seeds: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_table: Option<&'a rampage_loaders::raw_vectors::VectorTable>,
 }
 
 #[derive(Debug, Serialize)]

@@ -63,7 +63,12 @@ fn msp430(seeds: &[&str]) -> RawProjectRequest {
 
 fn refusal(path: &Path, value: Value) -> String {
     let error = Session::default().open_raw(path, &request(value)).err().expect("Raw open must refuse");
-    let text = error.to_string();
+    let mut text = error.to_string();
+    let mut source = std::error::Error::source(&error);
+    while let Some(cause) = source {
+        text.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
     assert!(matches!(error, ApiError::Invalid(_) | ApiError::Unavailable(_) | ApiError::Load { .. }), "{text}");
     text
 }
@@ -281,4 +286,166 @@ fn raw_capable_tools_refuse_unsupported_raw_questions_explicitly() {
     assert!(failed, "{text}");
     assert!(text.contains("no reviewed C model for 6502:LE:16:default"), "{text}");
     assert_eq!(owned.names(), ["6502.bin", "code.bin"]);
+}
+
+const CORTEX_M: &[u8] = include_bytes!("../../../tests/fixtures/firmware/raw-cortex-m.bin");
+const CORTEX_M_ELF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/raw-cortex-m.elf");
+
+fn cortex(profile: &str) -> RawProjectRequest {
+    request(json!({
+        "profile": profile,
+        "offset": 0,
+        "length": CORTEX_M.len(),
+        "base_address": "0x8000000",
+        "vector_table": true,
+    }))
+}
+
+fn truth(name: &str) -> u64 {
+    let elf = rampage_loaders::Binary::open(CORTEX_M_ELF).unwrap();
+    elf.symbol_by_name(name).unwrap().address & !1
+}
+
+/// One call opens a headerless Cortex-M image: profile, range and base address, with the vector table seeding
+/// the entry and handlers. Every function the unstripped ELF names is found from that alone.
+#[test]
+fn a_cortex_m_image_opens_in_one_call_and_recovers_every_elf_function() {
+    let owned = OwnedDirectory::new();
+    let path = owned.file("firmware.bin", CORTEX_M);
+    let session = Session::default();
+    let project = session.open_raw(&path, &cortex("cortex-m3")).unwrap();
+    // Aliases and the language ID in any case are the same interpretation.
+    for alias in ["ARM:LE:32:Cortex", "arm:le:32:cortex", "Cortex-M4", "thumb", "armv7m", "ARMv6-M"] {
+        assert!(Arc::ptr_eq(&project, &session.open_raw(&path, &cortex(alias)).unwrap()), "{alias}");
+    }
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    assert_eq!(summary["arch"], "arm");
+    assert_eq!(summary["entry"], format!("{:#x}", truth("reset_handler")));
+    assert_eq!(summary["raw"]["profile"], "ARM:LE:32:Cortex");
+    assert_eq!(summary["raw"]["vector_table"]["vectors"][1]["status"], "accepted");
+    assert_eq!(summary["raw"]["vector_table"]["vectors"][0]["status"], "stack_pointer");
+
+    let functions = project.functions(&rampage_api::FunctionsQuery::default()).unwrap();
+    let found: Vec<u64> = functions.items.iter().map(|function| function.address).collect();
+    let elf = rampage_loaders::Binary::open(CORTEX_M_ELF).unwrap();
+    let mut names: Vec<&str> = elf
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.kind == rampage_loaders::SymbolKind::Function)
+        .map(|symbol| symbol.name.as_str())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names.len(), 11, "{names:?}");
+    for name in names {
+        assert!(found.contains(&truth(name)), "{name} at {:#x} missing from {found:x?}", truth(name));
+    }
+    // String constants that movw/movt pairs form are even addresses: data, not function starts.
+    assert!(!found.contains(&truth("BANNER")));
+    assert!(found.len() <= 12, "{found:x?}");
+    assert_eq!(owned.names(), ["firmware.bin"]);
+}
+
+#[test]
+fn cortex_m_raw_projects_serve_every_raw_capable_tool_with_native_evidence() {
+    let owned = OwnedDirectory::new();
+    let path = owned.file("firmware.bin", CORTEX_M);
+    let session = Session::default();
+    let mut project = session.open_raw(&path, &cortex("cortex-m")).unwrap();
+    let registry = tools();
+    let reset = format!("{:#x}", truth("reset_handler"));
+    let puts = format!("{:#x}", truth("uart_puts"));
+    let inputs = [
+        ("binary_info", json!({})),
+        ("list_functions", json!({})),
+        ("disassemble", json!({ "at": reset, "count": 8 })),
+        ("function_graph", json!({ "at": reset })),
+        ("xrefs", json!({ "to": format!("{:#x}", truth("BANNER")) })),
+        (
+            "search",
+            json!({ "mode": { "kind": "immediate", "immediate": { "value": { "kind": "unsigned", "value": 0x1b } } } }),
+        ),
+        ("analysis_diagnostics", json!({ "include_discovery": true })),
+        ("entry_diagnostics", json!({})),
+        ("capabilities", json!({})),
+        ("rename", json!({ "at": puts, "name": "uart_puts" })),
+        ("set_comment", json!({ "at": reset, "text": "reset" })),
+        ("annotate_batch", json!({ "entries": [{ "at": reset, "comment": "Reset vector" }] })),
+        ("list_annotations", json!({})),
+        ("undo", json!({})),
+        ("redo", json!({})),
+        ("decompile", json!({ "at": reset })),
+    ];
+    assert_eq!(inputs.each_ref().map(|(name, _)| *name), RAW_CAPABLE_TOOLS);
+    let mut outcomes = Vec::new();
+    for (name, input) in inputs {
+        let (text, failed) = call_shared(&registry, &mut project, name, input);
+        assert!(!failed, "{name}: {text}");
+        serde_json::from_str::<Value>(&text).unwrap_or_else(|error| panic!("{name}: {error}: {text}"));
+        outcomes.push((name, text));
+    }
+    let outcome = |name: &str| &outcomes.iter().find(|(tool, _)| *tool == name).unwrap().1;
+    // reset_handler forms the banner string's address with movw/movt (the entry function, named `entry`).
+    assert!(outcome("xrefs").contains("\"from_function\":\"entry\""), "{}", outcome("xrefs"));
+    // The native decoder serves immediate search (Sleigh-decoded Raw profiles refuse it); ARM operand evidence
+    // is partial, as for ARM ELF, and the result says so.
+    assert!(outcome("search").contains("native operand evidence"), "{}", outcome("search"));
+    assert!(outcome("binary_info").contains("\"vector_table\""), "{}", outcome("binary_info"));
+    // ARM v8 Thumb with its reviewed C model decompiles the reset handler and names the analyst's callee.
+    let decompiled = outcome("decompile");
+    assert!(decompiled.contains("uart_puts(") && decompiled.contains("while"), "{decompiled}");
+    assert_eq!(owned.names(), ["firmware.bin"]);
+}
+
+/// `disassemble` pages over the whole image as text, 1000 instructions at a time, data included.
+#[test]
+fn cortex_m_disassembly_lists_the_whole_image_in_pages() {
+    let owned = OwnedDirectory::new();
+    let path = owned.file("firmware.bin", CORTEX_M);
+    let mut project = Session::default().open_raw(&path, &cortex("cortex-m3")).unwrap();
+    let registry = tools();
+    let end = 0x0800_0000 + CORTEX_M.len() as u64;
+    let mut at = 0x0800_0000u64;
+    let mut lines = 0;
+    while at < end {
+        let (text, failed) = call_shared(
+            &registry,
+            &mut project,
+            "disassemble",
+            json!({ "at": format!("{at:#x}"), "count": 1000, "view": "code" }),
+        );
+        assert!(!failed, "{text}");
+        let value: Value = serde_json::from_str(&text).unwrap();
+        let rows = value.as_array().or_else(|| value["lines"].as_array()).expect("listing rows");
+        let last = rows.last().unwrap();
+        let address = u64::from_str_radix(last["address"].as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+        at = address + last["bytes"].as_str().unwrap().len() as u64 / 2;
+        lines += rows.len();
+    }
+    assert_eq!(at, end);
+    assert!(lines > 300, "{lines}");
+}
+
+#[test]
+fn cortex_m_requests_bound_size_and_refuse_vector_tables_elsewhere() {
+    let owned = OwnedDirectory::new();
+    let big = owned.file("big.bin", &vec![0; rampage_loaders::MAX_RAW_NATIVE_BYTES + 2]);
+    let full = request(json!({
+        "profile": "cortex-m", "offset": 0, "length": rampage_loaders::MAX_RAW_NATIVE_BYTES, "base_address": "0x8000000"
+    }));
+    let project = Session::default().open_raw(&big, &full).unwrap();
+    assert_eq!(project.binary.image_bytes().len(), 4 * 1024 * 1024);
+    let text =
+        refusal(&big, json!({ "profile": "cortex-m", "offset": 0, "length": 4 * 1024 * 1024 + 1, "base_address": 0 }));
+    assert!(text.contains("1..=4194304 bytes for ARM:LE:32:Cortex"), "{text}");
+    let path = owned.file("code.bin", MSP430);
+    let text = refusal(
+        &path,
+        json!({ "profile": "msp430", "offset": 0, "length": MSP430.len(), "base_address": "0x4400", "vector_table": true }),
+    );
+    assert!(text.contains("only for ARM:LE:32:Cortex"), "{text}");
+    let error = serde_json::from_value::<RawProjectRequest>(json!({
+        "profile": "cortex-m", "offset": 0, "length": 2, "base_address": 0, "vector_table": "nowhere"
+    }))
+    .unwrap_err();
+    assert!(error.to_string().contains("vector_table"), "{error}");
 }

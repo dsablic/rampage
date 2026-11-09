@@ -571,7 +571,7 @@ fn explore(
             let code = memory.code_address(target);
             if Some(target) == accessed {
                 refs.accessed.push(code);
-            } else if memory.is_executable(code) {
+            } else if memory.is_executable(code) && memory.may_point_to_code(target) {
                 refs.pointers.push(code);
             }
         }

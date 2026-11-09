@@ -1580,6 +1580,7 @@ mod tests {
             snapshot_modules: &modules,
             snapshot_registers: &registers,
             snapshot_target: Some(&target),
+            raw: None,
         };
         serde_json::to_value(summary).unwrap()
     }

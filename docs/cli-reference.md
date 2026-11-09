@@ -246,14 +246,17 @@ use its `--other-image-*` options for the second. MCP tools take `image_offset`/
 `--raw-json JSON` or `--raw-request REQUEST` (a regular JSON file of at most 1 MiB) opens the positional file as
 an ordinary Raw Project instead of admitting a native header. The `RawProjectRequest` has `profile` (a closed Raw
 language ID),
-`offset` and `length` (original-file bytes, 1..=131072), `base_address`, and optional `entry` and `seeds`
-(internal code-space BYTE addresses). Unknown fields are rejected. The mapping is an analyst assertion; see
-[Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects) for profiles and limits.
+`offset` and `length` (original-file bytes, 1..=131072, or up to 4 MiB for `ARM:LE:32:Cortex`), `base_address`,
+optional `entry` and `seeds` (internal code-space BYTE addresses), and for Cortex-M an optional `vector_table`
+(`true` for one at `base_address`, or its address). Unknown fields are rejected. The mapping is an analyst
+assertion; see [Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects) for profiles and limits.
 
 ```sh
 raw='{"profile":"TI_MSP430:LE:16:default","offset":0,"length":30,"base_address":"0x4400","seeds":["0x4400","0x4410"]}'
 rampage --json --raw-json "$raw" function list code.bin
 rampage --json --raw-json "$raw" function disassemble code.bin --at 0x4400
+fw='{"profile":"cortex-m3","offset":0,"length":800,"base_address":"0x8000000","vector_table":true}'
+rampage --json --raw-json "$fw" function list tests/fixtures/firmware/raw-cortex-m.bin
 ```
 
 The two options exclude each other, `--arch` and `--image-*`. They apply only to `binary inspect`, `binary audit`,

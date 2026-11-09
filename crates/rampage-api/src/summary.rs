@@ -39,8 +39,9 @@ impl Project {
     fn summary_from_graph(&self, graph: FunctionGraph) -> Result<FunctionSummary, ApiError> {
         let references = self.xrefs(XrefQuery::From(graph.address), None, Some(1000))?;
         let mut ir = Vec::new();
+        let sleigh = crate::decoder::sleigh_raw(&self.binary);
         for line in graph.blocks.iter().flat_map(|block| &block.lines) {
-            if self.binary.raw_code_image().is_some() {
+            if sleigh {
                 continue;
             }
             let bytes: Vec<_> = line
@@ -70,7 +71,7 @@ impl Project {
         ];
         let gates =
             graph.blocks.iter().flat_map(|block| &block.lines).filter(|line| line.decode_gate.is_some()).count();
-        if self.binary.raw_code_image().is_some() {
+        if sleigh {
             limitations.push(
                 "Selected Sleigh Project profiles have structural flow only; native IR/SSA is unavailable.".into(),
             );

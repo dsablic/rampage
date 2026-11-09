@@ -689,6 +689,13 @@ impl Project {
             snapshot_modules: &binary.snapshot_modules,
             snapshot_registers: &binary.snapshot_registers,
             snapshot_target: binary.snapshot_target.as_ref(),
+            raw: binary.raw_code_image().map(|raw| crate::rows::RawSummary {
+                profile: raw.profile(),
+                base_address: raw.base(),
+                length: raw.length(),
+                seeds: raw.seeds().len(),
+                vector_table: raw.vector_table(),
+            }),
         }
     }
 
@@ -978,6 +985,7 @@ mod tests {
                     base: 0x1000,
                     entry: None,
                     seeds: vec![0x1000],
+                    vector_table: None,
                 },
             )
             .unwrap(),

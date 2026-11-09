@@ -140,3 +140,48 @@ fn fixed_vector_conversions_cover_every_fraction_width() {
         }
     }
 }
+
+fn thumb_text(word: u32) -> Option<String> {
+    let decoded = if word > 0xffff {
+        decode_t32((word >> 16) as u16, Some(word as u16), ItState::default())
+    } else {
+        decode_t32(word as u16, None, ItState::default())
+    };
+    decoded.and_then(|decoded| format(&decoded, 0, LabelStyle::Relative))
+}
+
+/// M-profile system-register moves and interrupt masking, as llvm-mc 23 prints them for `thumbv7em-none-eabi`.
+/// The A-profile tables left SYSm other than zero unallocated, which stopped Cortex-M discovery at `msr basepri`.
+#[test]
+fn m_profile_system_registers_match_llvm() {
+    for (word, expected) in [
+        (0xf380_8811, "msr basepri, r0"),
+        (0xf380_8808, "msr msp, r0"),
+        (0xf381_8809, "msr psp, r1"),
+        (0xf382_8810, "msr primask, r2"),
+        (0xf383_8812, "msr basepri_max, r3"),
+        (0xf384_8813, "msr faultmask, r4"),
+        (0xf385_8814, "msr control, r5"),
+        (0xf3ef_8008, "mrs r0, msp"),
+        (0xf3ef_8109, "mrs r1, psp"),
+        (0xf3ef_8210, "mrs r2, primask"),
+        (0xf3ef_8311, "mrs r3, basepri"),
+        (0xf3ef_8412, "mrs r4, basepri_max"),
+        (0xf3ef_8513, "mrs r5, faultmask"),
+        (0xf3ef_8614, "mrs r6, control"),
+        // SYSm zero keeps the generated A-profile decoding, spelled as llvm-mc does for A-profile targets.
+        (0xf380_8800, "msr APSR_nzcvq, r0"),
+        (0xf380_8400, "msr APSR_g, r0"),
+        (0xf3ef_8000, "mrs r0, apsr"),
+        (0xf3ef_8003, "mrs r0, xpsr"),
+        (0xf3ef_8005, "mrs r0, ipsr"),
+        (0xb662, "cpsie i"),
+        (0xb672, "cpsid i"),
+        (0xb661, "cpsie f"),
+        (0xb671, "cpsid f"),
+    ] {
+        assert_eq!(thumb_text(word).as_deref(), Some(expected), "{word:#x}");
+    }
+    // A SYSm no M-profile register uses stays undecodable.
+    assert_eq!(thumb_text(0xf3ef_8004), None);
+}

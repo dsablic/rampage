@@ -14,6 +14,21 @@ see the [stability policy](docs/stability.md) for what the version promises.
   such as Cortex-M vector-table candidates. Capped lists report totals and a continuation range. See
   [file layout](docs/file-layout.md).
 
+### Firmware
+
+- Experimental Raw Project profile `ARM:LE:32:Cortex` for headerless Cortex-M (ARMv6-M/ARMv7-M Thumb) images, with
+  aliases such as `cortex-m4`, `thumb` and `armv7m`. It uses the native ARM decoder in Thumb mode, so listing,
+  cross-references, search and decompilation (ARM v8 Thumb with its reviewed C model) work as for ARM ELF. Input
+  may be up to 4 MiB for this profile; Sleigh profiles keep 128 KiB.
+- `"vector_table": true` (or an address) in the `raw` selector reads the Cortex-M vector table: Reset becomes the
+  entry and the other Thumb handlers seeds, and `binary_info` reports every word with its verdict under
+  `raw.vector_table`, with a labelled, never applied base-address suggestion when the handlers fall outside the
+  asserted mapping. One call with path, profile and base address now opens a firmware image.
+- The native Thumb decoder decodes the M-profile `MRS`/`MSR` special registers (`msp`, `psp`, `primask`,
+  `basepri`, `basepri_max`, `faultmask`, `control`, ...); `msr basepri, r0` used to stop discovery and
+  `inspect_raw_code` as an invalid instruction.
+- Raw interpretation identities move to `rampage-raw-interpretation-v3`, which binds the vector-table request.
+
 ## 1.0.0 (unreleased)
 
 The first stable release. The stable surface in the [stability policy](docs/stability.md) is the one rc.1 froze;

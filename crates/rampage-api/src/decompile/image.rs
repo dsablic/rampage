@@ -11,7 +11,8 @@ fn raw_region(binary: &Binary) -> Result<MemoryRegion<'_>, ApiError> {
         .filter(|_| identity.is_some())
         .ok_or_else(|| ApiError::Invalid("Raw native memory requires retained admission facts".into()))?;
     let profile = raw.profile();
-    if !has_reviewed_raw_c_model(profile.language_id()) {
+    // The native Thumb profile decompiles through ARM:LE:32:v8 with its reviewed `default` C model, like ARM ELF.
+    if !profile.native_decoder() && !has_reviewed_raw_c_model(profile.language_id()) {
         return Err(ApiError::Unavailable(format!("no reviewed C model for {}", profile.language_id())));
     }
     let bytes = binary.image_bytes();
@@ -69,7 +70,7 @@ mod raw_tests {
     use rampage_loaders::{Binary, RawCodeOptions, RawProfile};
 
     fn binary(profile: RawProfile) -> Binary {
-        let input = RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![] };
+        let input = RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![], vector_table: None };
         Binary::from_raw_code(vec![0; 4], input).unwrap()
     }
 

@@ -57,7 +57,7 @@ fn fixtures() -> Vec<Fixture> {
 }
 
 fn project(fixture: &Fixture, entry: Option<u64>, seeds: Vec<u64>) -> Project {
-    let options = RawCodeOptions { profile: fixture.profile, base: fixture.base, entry, seeds };
+    let options = RawCodeOptions { profile: fixture.profile, base: fixture.base, entry, seeds, vector_table: None };
     Project::new(Binary::from_raw_code(fixture.bytes.clone(), options).unwrap())
 }
 
@@ -258,7 +258,7 @@ fn superh_delay_slot_gate_within_a_body_stops_successors_and_serializes_unknown(
 #[test]
 fn big_endian_identity_follows_the_profile_and_drift_is_refused() {
     for profile in RawProfile::ALL {
-        let options = RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![] };
+        let options = RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![], vector_table: None };
         let binary = Binary::from_raw_code(vec![0; 4], options).unwrap();
         assert_eq!(binary.big_endian, profile.big_endian(), "{profile:?}");
         assert_eq!(binary.arch, profile.arch());
@@ -267,8 +267,11 @@ fn big_endian_identity_follows_the_profile_and_drift_is_refused() {
         drifted.big_endian = !profile.big_endian();
         assert!(drifted.raw_interpretation_identity().is_err(), "{profile:?}");
         let mut project = Project::new(
-            Binary::from_raw_code(vec![0; 4], RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![] })
-                .unwrap(),
+            Binary::from_raw_code(
+                vec![0; 4],
+                RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![], vector_table: None },
+            )
+            .unwrap(),
         );
         project.binary.big_endian = !profile.big_endian();
         assert!(project.disassemble(Some("0x1000"), 1).is_err(), "{profile:?}");
