@@ -8,9 +8,9 @@ use rmcp::service::{RoleClient, RunningService};
 use rmcp::{ClientHandler, ServiceExt};
 use serde_json::{Value, json};
 
-const CALLEE: &str = "0x201160";
-const CALLER: &str = "0x201170";
-const TYPES: &str = "struct PropState { int4 gain; int4 bias; }; \
+pub(crate) const CALLEE: &str = "0x201160";
+pub(crate) const CALLER: &str = "0x201170";
+pub(crate) const TYPES: &str = "struct PropState { int4 gain; int4 bias; }; \
                      struct OtherState { int4 first; int4 second; };";
 
 #[derive(Default)]

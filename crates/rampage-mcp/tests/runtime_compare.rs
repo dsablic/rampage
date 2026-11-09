@@ -97,15 +97,15 @@ fn controlled_universal(selected: &[u8]) -> Vec<u8> {
     bytes
 }
 
-struct Fixture {
+pub(crate) struct Fixture {
     root: PathBuf,
-    original: PathBuf,
+    pub(crate) original: PathBuf,
     capture: PathBuf,
     bytes: Vec<u8>,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
             "rampage-mcp-selected-runtime-{}-{}",
@@ -144,7 +144,7 @@ impl Fixture {
         self.write(name, &wrapper)
     }
 
-    fn arguments(&self, original: &Path) -> Value {
+    pub(crate) fn arguments(&self, original: &Path) -> Value {
         json!({"path": self.capture, "original": original, "module": UUID,
             "ranges": [{"address": "0x1000", "size": 10}, {"address": "0x10fe", "size": 4},
                 {"address": "0x1200", "size": 2}]})

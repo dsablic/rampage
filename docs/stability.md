@@ -104,10 +104,11 @@ Snapshots under `tests/contract/` pin the stable surface, and tests compare it w
 - `mcp-tools.json`: every tool's name, group and arguments (type and whether required), from `tools/list` on a
   server with every group, a debug server with `--debug-writes` and `--debug-kill`, and a corpus server (the
   `improve` tools, marked experimental).
-- `mcp-results-core.json` and `mcp-results-debug.json`: the result field paths every core tool and every debug tool
-  returns on committed fixtures (debug against the scripted fake stub). Result fields are observed, not derived
-  from types, so a field that a fixture does not produce is not pinned. The result fields of the other stable
-  groups follow the same rules but are not snapshot-checked yet; review changes to them by hand.
+- `mcp-results-<group>.json`, one per stable group: the result field paths every tool of the group returns on
+  committed fixtures (`debug` against the scripted fake stub). Result fields are observed, not derived from types,
+  so a field that a fixture does not produce is not pinned. A tool a group adds without being exercised fails the
+  test. `query_debugger` is the one exception: it returns the LLDB bridge's response unchanged, so its fields are
+  the bridge protocol's (`rampage-lldb-query-v1`) and are reviewed by hand.
 - `cli-commands.json`: every CLI route, the compatibility spellings included, with its flags and positionals.
 - `cli-json.json`: the `--json` field paths of the main commands on committed fixtures.
 

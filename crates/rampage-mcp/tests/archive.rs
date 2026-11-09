@@ -10,14 +10,14 @@ use serde_json::{Value, json};
 
 static SERIAL: AtomicUsize = AtomicUsize::new(0);
 
-struct Input {
+pub(crate) struct Input {
     directory: PathBuf,
-    path: PathBuf,
+    pub(crate) path: PathBuf,
     bytes: Vec<u8>,
 }
 
 impl Input {
-    fn new(names: &[Vec<u8>]) -> Self {
+    pub(crate) fn new(names: &[Vec<u8>]) -> Self {
         let directory = std::env::temp_dir().join(format!(
             "rampage-mcp-zip32-{}-{}",
             std::process::id(),
