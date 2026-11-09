@@ -234,8 +234,10 @@ Verify first which of these the existing raw-window and decoder-provider slices 
   Cortex-M Raw Project instead: `disassemble` with `raw`, `count` up to 1000 and `view: "code"` pages over the whole
   image (tested end to end on the owned fixture).
 - [x] **Thumb-2 MSR decode bug.** `msr basepri, r0` (`80 f3 11 88`) decoded as invalid, stopping discovery and
-  `inspect_raw_code`. Done: hand-written M-profile `MRS`/`MSR` encodings behind the generated A-profile tables,
-  llvm-mc-checked for every SYSm register; `CPSIE`/`CPSID` already decoded.
+  `inspect_raw_code`. Done for the Cortex-M Raw profile, the documented path for Cortex-M code: M-profile
+  decoding adds hand-written `MRS`/`MSR` encodings (UNPREDICTABLE forms refused) and makes A-profile-only
+  instructions (BLX to A32, Advanced SIMD, SETEND, ERET, ...) UNDEFINED, llvm-mc-checked. `inspect_raw_code`
+  `thumb` stays A-profile and its docs point Cortex-M users at the Raw profile.
 - [ ] **Tail-call splits without symbols.** A function first reached by a tail call (`b.w f`) before its own
   call is seen splits at internal join points: 1,773 of 6,030 starts on a generated 1 MiB Cortex-M image, the same
   on its stripped ELF. Discovery should drop the caller's stale exploration once `f` becomes a function.

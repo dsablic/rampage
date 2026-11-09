@@ -318,7 +318,7 @@ impl Project {
             return Ok(cancelled_report(query, "Cancelled before native analysis initialization."));
         }
         let analysis = self.analysis()?;
-        if crate::decoder::sleigh_raw(&self.binary)
+        if self.binary.is_sleigh_raw()
             && matches!(
                 &query.kind,
                 CodeSearchKind::Immediate(_) | CodeSearchKind::FunctionsReferencing(CodeReference::Constant(_))
@@ -979,7 +979,7 @@ fn semantic_lookahead(
     work: &mut u64,
 ) -> Result<Option<usize>, SearchStopReason> {
     let arch = project.binary.arch;
-    if crate::decoder::sleigh_raw(&project.binary) {
+    if project.binary.is_sleigh_raw() {
         // Sleigh may translate delay slots past a gated block end; discovery saw those backed bytes too.
         return Ok(Some(32));
     }

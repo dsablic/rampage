@@ -62,7 +62,7 @@ fn vector_table_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
         "description": "ARM:LE:32:Cortex only: true reads a Cortex-M vector table at base_address, or give its \
                         code-space BYTE address. Accepted Thumb handlers become the entry and seeds.",
-        "anyOf": [{ "type": "boolean" }, { "type": "integer", "minimum": 0 }, { "type": "string" }]
+        "anyOf": [{ "type": "boolean" }, { "type": "integer", "minimum": 0 }, { "type": "string" }, { "type": "null" }]
     })
 }
 
@@ -117,6 +117,9 @@ const PROFILE_ALIASES: [(RawProfile, &[&str]); 17] = [
             "armv6m",
             "armv7m",
             "armv7em",
+            "thumbv6m",
+            "thumbv7m",
+            "thumbv7em",
         ],
     ),
 ];
@@ -305,12 +308,14 @@ mod tests {
             assert!(error.contains("no Raw profile covers this processor") && !error.contains("closest"), "{error}");
         }
         assert!(resolve_raw_profile("msp431").unwrap_err().contains("closest: TI_MSP430:LE:16:default"));
-        for alias in ["cortex-m3", "Cortex-M4", "CORTEX-M0+", "thumb", "armv7m", "ARMv6-M", "arm:le:32:cortex"] {
+        let aliases =
+            ["cortex-m3", "Cortex-M4", "CORTEX-M0+", "thumb", "armv7m", "ARMv6-M", "arm:le:32:cortex", "thumbv7em"];
+        for alias in aliases.into_iter().chain(["thumbv6m", "thumbv7m"]) {
             assert_eq!(resolve_raw_profile(alias), Ok(RawProfile::CortexM), "{alias}");
         }
         // Another ARM variant names the one ARM profile; A-profile ARM and AArch64 point at inspect_raw_code.
         assert!(resolve_raw_profile("ARM:LE:32:v8").unwrap_err().contains("the only ARM profile is"));
-        for other in ["arm", "armv7a", "cortex-a53", "aarch64"] {
+        for other in ["arm", "armv7a", "cortex-a53", "aarch64", "cortex-m33", "cortex-m55"] {
             let error = resolve_raw_profile(other).unwrap_err();
             assert!(error.contains("inspect_raw_code") && error.contains("ARM:LE:32:Cortex"), "{error}");
         }

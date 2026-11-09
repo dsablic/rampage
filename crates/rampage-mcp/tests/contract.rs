@@ -142,6 +142,16 @@ async fn contract_mcp_core_results() {
 
     exercise(c, o, "enable_tools", json!({})).await;
     exercise(c, o, "binary_info", json!({"path": elf})).await;
+    // Raw projects add `raw` (experimental): an MSP430 interpretation, and a Cortex-M one with its vector table.
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let raw = json!({"profile": "msp430", "offset": 0, "length": 30, "base_address": "0x4400"});
+    exercise(c, o, "binary_info", json!({"path": fixtures.join("sleigh/msp430.bin"), "raw": raw})).await;
+    let raw =
+        json!({"profile": "cortex-m3", "offset": 0, "length": 800, "base_address": "0x8000000", "vector_table": true});
+    exercise(c, o, "binary_info", json!({"path": fixtures.join("firmware/raw-cortex-m.bin"), "raw": raw})).await;
+    // A wrong base: refused vectors and the never-applied base-address suggestion.
+    let raw = json!({"profile": "cortex-m3", "offset": 0, "length": 800, "base_address": 0, "vector_table": true});
+    exercise(c, o, "binary_info", json!({"path": fixtures.join("firmware/raw-cortex-m.bin"), "raw": raw})).await;
     exercise(c, o, "triage", json!({"path": elf})).await;
     exercise(c, o, "triage_report", json!({"path": elf})).await;
     exercise(c, o, "list_functions", json!({"path": elf, "limit": 3})).await;

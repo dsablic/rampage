@@ -284,6 +284,17 @@ impl Binary {
         self.raw.as_ref()
     }
 
+    /// A Raw image a Sleigh translator decodes: no typed operands, pointer evidence or native IR. A Raw format
+    /// without retained admission facts counts too, so nothing native is trusted for it.
+    pub fn is_sleigh_raw(&self) -> bool {
+        self.format == Format::Raw && !self.raw.as_ref().is_some_and(|raw| raw.profile().native_decoder())
+    }
+
+    /// An ARMv6-M/ARMv7-M(E) image: all Thumb, no A32 state, M-profile instruction set (the Cortex-M Raw profile).
+    pub fn m_profile(&self) -> bool {
+        self.raw.as_ref().is_some_and(|raw| raw.profile().m_profile())
+    }
+
     /// Content-and-interpretation identity, not a mapped-file freshness or producer/capture proof.
     /// Public loader fields can be edited; refuse interpretation drift instead of returning a stale key.
     pub fn raw_interpretation_identity(&self) -> Result<Option<crate::RawInterpretationIdentity>, LoadError> {
@@ -944,6 +955,7 @@ impl Binary {
             thumb: self.thumb.clone().into(),
             global_pointer: self.global_pointer,
             got: self.got.clone(),
+            m_profile: self.m_profile(),
         }
     }
 

@@ -209,6 +209,8 @@ pub fn inspect_raw_code(bytes: &[u8], request: &RawCodeRequest) -> Result<RawCod
         },
         global_pointer: None,
         got: None,
+        // A-profile Thumb: Cortex-M images open as the ARM:LE:32:Cortex Raw profile instead.
+        m_profile: false,
     };
     let mut decoder = rampage_arch::decoder(&target)?;
     let mut probe = rampage_arch::decoder(&target)?;

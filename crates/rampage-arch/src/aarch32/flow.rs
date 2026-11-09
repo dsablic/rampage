@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use super::operands::{canonical_rotation, label_target};
 use super::spec_types::a32_expand_imm;
-use super::{Decoded, ItState, LabelStyle, Set, decode_a32, decode_t32, format};
+use super::{Decoded, ItState, LabelStyle, Set, decode_a32, decode_t32, decode_t32_m, format};
 
 const PC: u64 = 15;
 const LR: u64 = 14;
@@ -226,6 +226,10 @@ impl Aarch32Disassembler {
     }
 
     fn is_thumb(&self, address: u64) -> bool {
+        // An M-profile processor has no A32 state: nothing switches it.
+        if self.target.m_profile {
+            return true;
+        }
         self.modes
             .get(&address)
             .copied()
@@ -283,7 +287,10 @@ impl Aarch32Disassembler {
     }
 
     fn decode_in_mode(&self, bytes: &[u8], set: Set, it: ItState) -> Option<Decoded> {
-        if set != Set::A32 {
+        if self.target.m_profile {
+            let first = self.halfword(bytes, 0)?;
+            decode_t32_m(first, self.halfword(bytes, 2), it)
+        } else if set != Set::A32 {
             let first = self.halfword(bytes, 0)?;
             decode_t32(first, self.halfword(bytes, 2), it)
         } else {
@@ -614,6 +621,9 @@ impl Disassembler for Aarch32Disassembler {
     }
 
     fn code_modes(&self) -> Vec<(u64, bool)> {
+        if self.target.m_profile {
+            return Vec::new();
+        }
         self.switches.iter().map(|(&address, &thumb)| (address, thumb)).collect()
     }
 
@@ -622,6 +632,10 @@ impl Disassembler for Aarch32Disassembler {
     }
 
     fn code_mode_at(&self, address: u64) -> Option<bool> {
+        if self.target.m_profile {
+            // Always Thumb: never an A32 hint.
+            return Some(true);
+        }
         if let Some((next, thumb)) = self.sequential_mode
             && next == address
         {

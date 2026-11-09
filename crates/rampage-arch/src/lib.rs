@@ -210,6 +210,9 @@ pub struct Target {
     pub global_pointer: Option<u64>,
     /// The global offset table's contents, which position-independent code loads addresses from.
     pub got: Option<Got>,
+    /// ARM only: an ARMv6-M/ARMv7-M(E) processor. All its code is Thumb, there is no A32 state to switch to, and
+    /// A-profile-only instructions are UNDEFINED while the M-profile system-register moves decode.
+    pub m_profile: bool,
 }
 
 /// Pointer-sized entries starting at `address`, as stored in the file (before dynamic relocation).
@@ -239,6 +242,7 @@ impl Target {
             thumb: std::sync::Arc::new([]),
             global_pointer: None,
             got: None,
+            m_profile: false,
         }
     }
 

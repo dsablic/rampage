@@ -277,7 +277,14 @@ async fn a_cortex_m_image_opens_with_its_vector_table_in_one_call() {
     assert!(!failed, "{text}");
     let info: Value = serde_json::from_str(&text).unwrap();
     assert!(info["entry"].is_null(), "{text}");
-    assert_eq!(info["raw"]["vector_table"]["base_address_suggestion"]["suggestion"], "0x8000000");
+    assert_eq!(info["raw"]["vector_table"]["base_address_suggestion"]["base_address"], "0x8000000");
+    assert_eq!(info["raw"]["vector_table"]["vectors"][1]["refused_reason"], "outside_image");
+
+    // The length bound holds at the MCP layer: 4 MiB for this profile.
+    let mut long = selector.clone();
+    long["length"] = json!(4 * 1024 * 1024 + 1);
+    let (text, failed) = call(&client, "binary_info", json!({ "path": path, "raw": long })).await;
+    assert!(failed && text.contains("1..=4194304 bytes for ARM:LE:32:Cortex"), "{text}");
     assert_eq!(info["segments"][0]["address"], "0x0");
     client.cancel().await.unwrap();
 }

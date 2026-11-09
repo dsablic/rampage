@@ -117,11 +117,6 @@ fn validate_raw_metadata(
     Ok(())
 }
 
-/// A Raw image decoded by a Sleigh translator, without typed operands or native IR; the native Thumb profile is not.
-pub(crate) fn sleigh_raw(binary: &Binary) -> bool {
-    binary.raw_code_image().is_some_and(|raw| !raw.profile().native_decoder())
-}
-
 pub(crate) fn project_decoder(project: &crate::Project) -> Result<Box<dyn Disassembler>, ApiError> {
     decoder_for_project(&project.binary).map_err(|error| error.to_api_error())
 }

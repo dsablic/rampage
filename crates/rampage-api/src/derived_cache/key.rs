@@ -35,6 +35,7 @@ struct Context<'a> {
     code_big_endian: bool,
     data_big_endian: bool,
     thumb: &'a [Range<u64>],
+    m_profile: bool,
     global_pointer: Option<u64>,
     got_address: Option<u64>,
     got_entries: &'a [u64],
@@ -118,7 +119,7 @@ pub(super) fn dependency_key(
     for (_, name) in project.inventory_loader_names() {
         budget.text(name)?;
     }
-    let Target { arch: _, big_endian, data_big_endian, thumb, global_pointer, got } = binary.target();
+    let Target { arch: _, big_endian, data_big_endian, thumb, global_pointer, got, m_profile } = binary.target();
     let got_entries = got.as_ref().map_or(&[][..], |got| got.entries.as_ref());
     budget.items(got_entries.len())?;
     if binary.file_bytes().len() > INPUT_BYTES || binary.image_bytes().len() > INPUT_BYTES {
@@ -157,6 +158,7 @@ pub(super) fn dependency_key(
         code_big_endian: big_endian,
         data_big_endian,
         thumb: &thumb,
+        m_profile,
         global_pointer,
         got_address: got.as_ref().map(|got| got.address),
         got_entries,

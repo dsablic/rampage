@@ -448,4 +448,97 @@ fn cortex_m_requests_bound_size_and_refuse_vector_tables_elsewhere() {
     }))
     .unwrap_err();
     assert!(error.to_string().contains("vector_table"), "{error}");
+    for absent in [json!(false), Value::Null] {
+        let request: RawProjectRequest = serde_json::from_value(json!({
+            "profile": "cortex-m", "offset": 0, "length": 2, "base_address": 0, "vector_table": absent
+        }))
+        .unwrap();
+        assert!(request.vector_table.is_none(), "{absent}");
+    }
+}
+
+/// An M-profile processor has no A32 state: `blx 0x14` (00 f0 08 e8) at the entry is UNDEFINED, not a call into A32
+/// code, and the zero words at 0x14 list as Thumb (`movs r0, r0`), never as A32 (`andeq r0, r0, r0`).
+#[test]
+fn cortex_m_never_switches_to_a32() {
+    let mut bytes = vec![0x00, 0xf0, 0x08, 0xe8];
+    bytes.extend([0x00, 0xbf].repeat(6));
+    bytes.extend([0x70, 0x47, 0x00, 0xbf]);
+    bytes.extend([0; 12]);
+    let owned = OwnedDirectory::new();
+    let path = owned.file("blx.bin", &bytes);
+    let mut project = Session::default()
+        .open_raw(
+            &path,
+            &request(
+                json!({ "profile": "cortex-m4", "offset": 0, "length": bytes.len(), "base_address": 0, "entry": 0 }),
+            ),
+        )
+        .unwrap();
+    let functions = project.functions(&rampage_api::FunctionsQuery::default()).unwrap();
+    assert!(functions.items.iter().all(|function| function.address != 0x14), "{:?}", functions.items);
+    let (text, failed) =
+        call_shared(&tools(), &mut project, "disassemble", json!({ "at": "0x0", "count": 40, "view": "code" }));
+    assert!(!failed, "{text}");
+    assert!(!text.contains("blx") && !text.contains("andeq"), "{text}");
+    assert!(text.contains("movs r0, r0"), "{text}");
+}
+
+const CORTEX_M_STRINGS: &[u8] = include_bytes!("../../../tests/fixtures/firmware/raw-cortex-m-strings.bin");
+const CORTEX_M_STRINGS_ELF: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/raw-cortex-m-strings.elf");
+
+/// zig packs "A", "Bc", "Cde" and "Defg" so that "Cde" and "Bc" start at odd addresses, which movw/movt form like
+/// Thumb code pointers. Exactly the ELF's functions are found, no string.
+#[test]
+fn cortex_m_odd_string_literals_are_not_function_starts() {
+    let owned = OwnedDirectory::new();
+    let path = owned.file("strings.bin", CORTEX_M_STRINGS);
+    let request = request(json!({
+        "profile": "cortex-m3", "offset": 0, "length": CORTEX_M_STRINGS.len(), "base_address": "0x8000000",
+        "vector_table": true,
+    }));
+    let project = Session::default().open_raw(&path, &request).unwrap();
+    let functions = project.functions(&rampage_api::FunctionsQuery::default()).unwrap();
+    let found: Vec<u64> = functions.items.iter().map(|function| function.address).collect();
+    let elf = rampage_loaders::Binary::open(CORTEX_M_STRINGS_ELF).unwrap();
+    let mut truth: Vec<u64> = elf
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.kind == rampage_loaders::SymbolKind::Function)
+        .map(|symbol| symbol.address & !1)
+        .collect();
+    truth.sort_unstable();
+    assert_eq!(truth.len(), 6);
+    assert_eq!(found, truth);
+}
+
+/// Four 4 MiB Cortex-M images would pin 16 MiB each time; the cache also bounds total input bytes, evicting the least
+/// recently used.
+#[test]
+fn the_raw_cache_is_bounded_by_total_input_bytes() {
+    let owned = OwnedDirectory::new();
+    let size = rampage_loaders::MAX_RAW_NATIVE_BYTES;
+    let session = Session::default();
+    let count = rampage_api::MAX_RAW_PROJECT_BYTES / size;
+    let paths: Vec<PathBuf> =
+        (0..=count).map(|index| owned.file(&format!("image{index}.bin"), &vec![index as u8; size])).collect();
+    let open = |path: &Path| {
+        session
+            .open_raw(
+                path,
+                &request(json!({ "profile": "cortex-m", "offset": 0, "length": size, "base_address": "0x8000000" })),
+            )
+            .unwrap()
+    };
+    let first = open(&paths[0]);
+    for path in &paths[1..count] {
+        open(path);
+    }
+    assert!(Arc::ptr_eq(&first, &open(&paths[0])), "still within the byte bound");
+    let second = open(&paths[1]);
+    // One more image passes the byte bound: the least recently used (paths[2]) goes, the reused ones stay.
+    open(&paths[count]);
+    assert!(Arc::ptr_eq(&first, &open(&paths[0])));
+    assert!(Arc::ptr_eq(&second, &open(&paths[1])));
 }

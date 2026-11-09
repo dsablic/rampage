@@ -1,14 +1,14 @@
-//! M-profile (ARMv6-M/ARMv7-M/ARMv8-M) T32 encodings the A-profile specification tables leave out, written by hand
-//! from the ARMv7-M Architecture Reference Manual (A7.7.82 MRS, A7.7.83 MSR). Only words the generated tables leave
-//! unallocated reach these: the A-profile forms with SYSm zero (`MRS Rd, APSR`, `MSR APSR_nzcvq, Rn`) keep their
-//! generated decoding.
+//! M-profile (ARMv6-M/ARMv7-M) T32 encodings the A-profile specification tables leave out or spell differently,
+//! written by hand from the ARMv7-M Architecture Reference Manual (A7.7.82 MRS, A7.7.83 MSR), and the A-profile-only
+//! encodings an M-profile processor leaves UNDEFINED. Used only when decoding for an M-profile target. The ARMv8-M
+//! Mainline stack-limit and Non-secure register names decode too; ARMv8-M-only instructions are not reviewed.
 
 use super::spec_types::*;
 
 const MSR_FIELDS: &[Field] = &[f("Rn", 16, 4), f("mask", 10, 2), f("SYSm", 0, 8)];
 const MRS_FIELDS: &[Field] = &[f("Rd", 8, 4), f("SYSm", 0, 8)];
 
-static ENCODINGS: [Encoding; 2] = [
+pub(super) static ENCODINGS: [Encoding; 2] = [
     // MSR<c> <spec_reg>, <Rn>: 11110 0 1110 0 0 Rn | 10 0 0 mask 0 0 SYSm.
     enc(
         "MSR_M_T1",
@@ -31,9 +31,43 @@ static ENCODINGS: [Encoding; 2] = [
     ),
 ];
 
-/// The M-profile encoding of a 32-bit T32 word the generated tables do not allocate.
+/// Whether a 32-bit T32 word is in the M-profile MRS/MSR encoding space, allocated or not.
+pub(super) fn claims(word: u32) -> bool {
+    ENCODINGS.iter().any(|encoding| word & encoding.mask == encoding.value)
+}
+
+/// The M-profile MRS/MSR encoding of a 32-bit T32 word. UNPREDICTABLE forms (an empty
+/// or non-`nzcvq` mask for a register other than an APSR form, SP or PC as the general register, a SYSm no
+/// M-profile register uses) are left unallocated.
 pub(super) fn lookup(word: u32) -> Option<&'static Encoding> {
-    ENCODINGS.iter().find(|encoding| word & encoding.mask == encoding.value)
+    let encoding = ENCODINGS.iter().find(|encoding| word & encoding.mask == encoding.value)?;
+    let sysm = encoding.field(word, "SYSm")?;
+    let register = encoding.field(word, "Rn").or_else(|| encoding.field(word, "Rd"))?;
+    let mask = encoding.field(word, "mask");
+    let mask_ok = match mask {
+        None => true,
+        Some(0) => false,
+        Some(mask) => sysm <= 3 || mask == 0b10,
+    };
+    (mask_ok && !matches!(register, 13 | 15) && special_register(sysm, mask).is_some()).then_some(encoding)
+}
+
+/// Whether an encoding of the A-profile tables is UNDEFINED on an ARMv6-M/ARMv7-M(E) processor. Floating-point
+/// (VFP, coprocessors 10 and 11) instructions of the FP extension stay allocated.
+pub(super) fn undefined(encoding: &Encoding, word: u32) -> bool {
+    let name = encoding.name;
+    let wide = word > 0xffff;
+    let top = word >> 24;
+    // Advanced SIMD data processing (0xEF/0xFF) and element/structure loads and stores (0xF9 with bit 20 clear).
+    let simd = wide && (top == 0xef || top == 0xff || (top == 0xf9 && (word >> 20) & 1 == 0));
+    let a_profile_only = [
+        "BL_i_T2", "SETEND_T1", "SRS_T1_AS", "SRS_T2_AS", "RFE_T1_AS", "RFE_T2_AS", "ERET_T1", "SUBS_PC_T5_AS",
+        "SMC_T1_AS", "HVC_T1", "MSR_br_T1_AS", "MRS_br_T1_AS", "LDREXD_T1", "STREXD_T1", "LDAEXD_T1", "STLEXD_T1",
+        "CPS_T2_AS", "CPSID_T2_AS", "CPSID_T2_ASM", "CPSIE_T2_AS", "CPSIE_T2_ASM",
+    ]
+    .contains(&name);
+    let cps_a = matches!(name, "CPSID_T1_AS" | "CPSIE_T1_AS") && encoding.field(word, "A") == Some(1);
+    simd || a_profile_only || cps_a
 }
 
 /// The special register SYSm names, as LLVM spells it; MSR to an APSR form names the flags `mask` writes.

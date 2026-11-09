@@ -109,12 +109,17 @@ impl Decoded {
     }
 }
 
-fn decode_word(set: Set, word: u32, it: ItState) -> Option<Decoded> {
+fn decode_word(set: Set, word: u32, it: ItState, profile: Profile) -> Option<Decoded> {
     let state = State { in_it_block: it.in_block() };
     let tables = set.tables();
-    // The A-profile tables leave M-profile system-register moves (`msr basepri, r0`) unallocated.
-    let encoding =
-        tables.lookup(word, state).or_else(|| (set == Set::T32).then(|| m_profile::lookup(word)).flatten())?;
+    let encoding = match profile {
+        Profile::A => tables.lookup(word, state)?,
+        // The A-profile tables leave M-profile system-register moves (`msr basepri, r0`) unallocated, and allocate
+        // A-profile-only instructions that are UNDEFINED on an M-profile processor.
+        // Every MRS/MSR word follows the M-profile rules, including the APSR forms the A-profile tables also hold.
+        Profile::M if set == Set::T32 && m_profile::claims(word) => m_profile::lookup(word)?,
+        Profile::M => tables.lookup(word, state).filter(|encoding| !m_profile::undefined(encoding, word))?,
+    };
     // Aliases that spell out `.W` are the assembler's width-qualified synonyms of another alias; `format` adds
     // the qualifier where LLVM prints it.
     let unqualified = |alias: &mrs::Alias| {
@@ -130,19 +135,39 @@ fn decode_word(set: Set, word: u32, it: ItState) -> Option<Decoded> {
     Some(Decoded { word, set, encoding, syntax, it })
 }
 
-/// Decodes an A32 instruction word, or `None` when it is unallocated.
-pub fn decode_a32(word: u32) -> Option<Decoded> {
-    decode_word(Set::A32, word, ItState::default())
+/// Which architecture profile's T32 instruction set to decode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Profile {
+    /// A/R-profile: the generated specification tables as they are.
+    A,
+    /// ARMv6-M/ARMv7-M(E): without A-profile-only groups, with the M-profile system-register moves.
+    M,
 }
 
-/// Decodes the T32 instruction that starts with `first`, reading `second` when it is 32-bit. `None` when it is
-/// unallocated, or 32-bit without a second halfword.
-pub fn decode_t32(first: u16, second: Option<u16>, it: ItState) -> Option<Decoded> {
+/// Decodes an A32 instruction word, or `None` when it is unallocated.
+pub fn decode_a32(word: u32) -> Option<Decoded> {
+    decode_word(Set::A32, word, ItState::default(), Profile::A)
+}
+
+fn decode_thumb(first: u16, second: Option<u16>, it: ItState, profile: Profile) -> Option<Decoded> {
     if is_wide(first) {
-        decode_word(Set::T32, (u32::from(first) << 16) | u32::from(second?), it)
+        decode_word(Set::T32, (u32::from(first) << 16) | u32::from(second?), it, profile)
     } else {
-        decode_word(Set::T16, u32::from(first), it)
+        decode_word(Set::T16, u32::from(first), it, profile)
     }
+}
+
+/// Decodes the A-profile T32 instruction that starts with `first`, reading `second` when it is 32-bit. `None`
+/// when it is unallocated, or 32-bit without a second halfword.
+pub fn decode_t32(first: u16, second: Option<u16>, it: ItState) -> Option<Decoded> {
+    decode_thumb(first, second, it, Profile::A)
+}
+
+/// [`decode_t32`] for an ARMv6-M/ARMv7-M(E) processor: the M-profile `MRS`/`MSR` special registers decode, and
+/// A-profile-only instructions (BLX to A32, Advanced SIMD, SETEND, SRS/RFE, ERET, SMC/HVC, banked registers,
+/// LDREXD/STREXD, 32-bit CPS, `cpsie a`) are UNDEFINED.
+pub fn decode_t32_m(first: u16, second: Option<u16>, it: ItState) -> Option<Decoded> {
+    decode_thumb(first, second, it, Profile::M)
 }
 
 /// Renders a decoded instruction at `address`, or `None` when an operand value has no rendering (the encoding
@@ -232,14 +257,17 @@ mod tests {
     fn every_encoding_formats_without_panicking() {
         let mut state = 11u64;
         for set in [Set::A32, Set::T16, Set::T32] {
-            for encoding in set.tables().encodings {
+            for encoding in set.tables().encodings.iter().chain(m_profile::ENCODINGS.iter().filter(|_| set == Set::T32))
+            {
                 for _ in 0..64 {
                     state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                     let word = ((state >> 32) as u32 & !encoding.mask) | encoding.value;
                     let word = if set == Set::T16 { word & 0xffff } else { word };
                     for it in [ItState::default(), ItState::new(0, 0x8)] {
-                        if let Some(decoded) = decode_word(set, word, it) {
-                            let _ = format(&decoded, 0x1000, LabelStyle::Relative);
+                        for profile in [Profile::A, Profile::M] {
+                            if let Some(decoded) = decode_word(set, word, it, profile) {
+                                let _ = format(&decoded, 0x1000, LabelStyle::Relative);
+                            }
                         }
                     }
                 }

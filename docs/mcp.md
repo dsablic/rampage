@@ -406,11 +406,15 @@ address, with `"vector_table": true` to read the vector table at `base_address` 
 ```
 
 Accepted Thumb handlers become the entry (Reset, unless `entry` is given) and seeds. `binary_info` reports the
-table under `raw.vector_table`: every system vector and every nonzero external one with `index`, `name`, `word`,
-`status` (`stack_pointer`, `accepted`, `empty` or `refused`), the handler `target` and a refusal `reason`, plus why
-reading stopped. When handler words fall outside the asserted mapping, a `base_address_suggestion` names the most
-aligned base that would hold them; it is never applied. `disassemble` with `count` up to 1000 pages through the
-whole image as text, data included.
+interpretation under `raw` (experimental for every profile): `profile`, `base_address`, `length`, `seed_count` and,
+for Cortex-M seeding, `vector_table`. That lists every system vector and every accepted external one with `index`,
+`name`, `word`, `status` (`stack_pointer`, `accepted`, `empty`, `erased` for 0xFFFFFFFF, or `refused`), the handler
+`target` and a `refused_reason` (`sp_unaligned`, `reserved`, `thumb_bit_clear`, `outside_image`, `in_table`), plus
+`stop_reason` (`image_end`, `max_external`, `reached_handler`, `non_handler_word`) and `stop_detail`. When handler
+words fall outside the asserted mapping, `base_address_suggestion` gives `base_address` (the most aligned base that
+would hold them) within `lowest_base`..`highest_base`; it is never applied, and an explicit `vector_table` address
+moves with the base. `disassemble` with `count` up to 1000 pages through the whole image as text, data included.
+The session keeps at most 32 Raw interpretations and 64 MiB of their input bytes, evicting the least recently used.
 
 ## Edits and session state
 

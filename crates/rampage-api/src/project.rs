@@ -693,7 +693,7 @@ impl Project {
                 profile: raw.profile(),
                 base_address: raw.base(),
                 length: raw.length(),
-                seeds: raw.seeds().len(),
+                seed_count: raw.seeds().len(),
                 vector_table: raw.vector_table(),
             }),
         }

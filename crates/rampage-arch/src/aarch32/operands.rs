@@ -68,7 +68,7 @@ impl Context<'_> {
     fn ranked_choice(&self, operand: &Operand) -> Option<String> {
         let set = self.decoded.set;
         let it = self.decoded.it;
-        let lookup = move |word: u32| decode_word(set, word, it).map(|decoded| decoded.encoding);
+        let lookup = move |word: u32| decode_word(set, word, it, super::Profile::A).map(|decoded| decoded.encoding);
         self.decoded.encoding.ranked_choice(self.word(), operand, &lookup)
     }
 }

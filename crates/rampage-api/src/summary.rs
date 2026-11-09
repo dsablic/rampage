@@ -39,7 +39,7 @@ impl Project {
     fn summary_from_graph(&self, graph: FunctionGraph) -> Result<FunctionSummary, ApiError> {
         let references = self.xrefs(XrefQuery::From(graph.address), None, Some(1000))?;
         let mut ir = Vec::new();
-        let sleigh = crate::decoder::sleigh_raw(&self.binary);
+        let sleigh = self.binary.is_sleigh_raw();
         for line in graph.blocks.iter().flat_map(|block| &block.lines) {
             if sleigh {
                 continue;

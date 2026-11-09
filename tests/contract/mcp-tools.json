@@ -25,7 +25,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         }
       }
     },
@@ -54,7 +84,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         }
       }
     },
@@ -273,7 +333,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         },
         "view": {
           "type": "string",
@@ -385,7 +475,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         }
       }
     },
@@ -1079,7 +1199,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         },
         "view": {
           "type": "string",
@@ -1207,7 +1357,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         },
         "view": {
           "type": "string",
@@ -1409,7 +1589,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         }
       }
     },
@@ -1641,7 +1851,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         },
         "view": {
           "type": "string",
@@ -2122,7 +2362,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         }
       }
     },
@@ -2241,7 +2511,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         }
       }
     },
@@ -2786,7 +3086,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         }
       }
     },
@@ -2823,7 +3153,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         }
       }
     },
@@ -2869,7 +3229,25 @@
         },
         "budget": {
           "type": "object",
-          "required": false
+          "required": false,
+          "fields": {
+            "instructions": {
+              "type": "integer",
+              "required": false
+            },
+            "match_work": {
+              "type": "integer",
+              "required": false
+            },
+            "results": {
+              "type": "integer",
+              "required": false
+            },
+            "scan_bytes": {
+              "type": "integer",
+              "required": false
+            }
+          }
         },
         "image_length": {
           "type": "integer|null|string",
@@ -2905,7 +3283,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         }
       }
     },
@@ -2938,7 +3346,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         },
         "text": {
           "type": "null|string",
@@ -3137,7 +3575,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         }
       }
     },
@@ -3195,7 +3663,37 @@
         },
         "raw": {
           "type": "null|object",
-          "required": false
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|string",
+              "required": true
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|string",
+              "required": true
+            },
+            "offset": {
+              "type": "integer|string",
+              "required": true
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         },
         "to": {
           "type": "null|string",

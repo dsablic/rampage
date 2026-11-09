@@ -257,7 +257,7 @@ pub struct RawSummary<'a> {
     pub base_address: u64,
     pub length: u64,
     /// Discovery seeds, supplied and vector-table handlers together (the entry is counted separately).
-    pub seeds: usize,
+    pub seed_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_table: Option<&'a rampage_loaders::raw_vectors::VectorTable>,
 }

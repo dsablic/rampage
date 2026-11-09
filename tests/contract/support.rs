@@ -187,13 +187,27 @@ fn widens(old: &str, new: &str) -> bool {
 
 /// An input schema's arguments: each name with its type and whether it is required.
 pub fn arguments(schema: &Value) -> Value {
+    arguments_in(schema, schema, 0)
+}
+
+/// [`arguments`] of an object schema inside `root`; an argument that is itself an object with properties (such as
+/// the `raw` selector) lists its own arguments under `fields`.
+fn arguments_in(schema: &Value, root: &Value, depth: usize) -> Value {
     let required = strings(&schema["required"]);
     let mut arguments = BTreeMap::new();
     for (name, property) in entries(&schema["properties"]) {
-        arguments.insert(
-            name.clone(),
-            serde_json::json!({ "type": schema_type(&property, schema), "required": required.contains(&name) }),
-        );
+        let mut argument =
+            serde_json::json!({ "type": schema_type(&property, root), "required": required.contains(&name) });
+        let resolved = match property.get("$ref").and_then(Value::as_str) {
+            Some(reference) => {
+                reference.strip_prefix('#').and_then(|pointer| root.pointer(pointer)).unwrap_or(&property)
+            }
+            None => &property,
+        };
+        if depth < 4 && resolved["properties"].is_object() {
+            argument["fields"] = arguments_in(resolved, root, depth + 1);
+        }
+        arguments.insert(name.clone(), argument);
     }
     serde_json::to_value(arguments).unwrap()
 }
@@ -274,6 +288,18 @@ pub fn compare_arguments(owner: &str, old: &Value, new: &Value) -> Vec<Change> {
             (true, false) => changes.push(Change::breaking(format!("{owner}: argument `{name}` no longer repeats"))),
             (false, true) => changes.push(Change::additive(format!("{owner}: argument `{name}` now repeats"))),
             _ => {}
+        }
+        match (old_argument.get("fields"), new_argument.get("fields")) {
+            (Some(old_fields), Some(new_fields)) => {
+                changes.extend(compare_arguments(&format!("{owner}: argument `{name}`"), old_fields, new_fields));
+            }
+            (None, Some(_)) => {
+                changes.push(Change::additive(format!("{owner}: argument `{name}` now pins its fields")));
+            }
+            (Some(_), None) => {
+                changes.push(Change::breaking(format!("{owner}: argument `{name}` no longer lists its fields")));
+            }
+            (None, None) => {}
         }
     }
     for (name, new_argument) in &new {

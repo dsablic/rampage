@@ -177,6 +177,12 @@ impl RawProfile {
         self.facts().decoder == RawDecoder::NativeThumb
     }
 
+    /// Whether the profile is an ARMv6-M/ARMv7-M(E) processor: all code Thumb, no A32 state, the M-profile
+    /// instruction set and a Cortex-M vector table.
+    pub fn m_profile(self) -> bool {
+        self == RawProfile::CortexM
+    }
+
     /// Largest admitted input: 4 MiB for the natively decoded profile, 128 KiB for Sleigh-decoded ones.
     pub fn max_bytes(self) -> usize {
         if self.native_decoder() { MAX_RAW_NATIVE_BYTES } else { MAX_RAW_BYTES }
@@ -245,7 +251,7 @@ impl RawCodeImage {
             return Err(LoadError::Malformed("Raw base violates profile instruction alignment".into()));
         }
         let end = checked_code_end(options.base, length, space.highest_byte)?;
-        if options.profile.native_decoder() {
+        if options.profile.m_profile() {
             // Thumb code pointers carry bit 0; the instruction starts at the even address.
             options.entry = options.entry.map(|entry| entry & !1);
             options.seeds.iter_mut().for_each(|seed| *seed &= !1);
@@ -264,7 +270,7 @@ impl RawCodeImage {
         }
         let vector_table = match options.vector_table {
             None => None,
-            Some(_) if !options.profile.native_decoder() => {
+            Some(_) if !options.profile.m_profile() => {
                 return Err(LoadError::Malformed(
                     "Raw vector-table seeding is defined only for ARM:LE:32:Cortex".into(),
                 ));
@@ -326,7 +332,7 @@ impl RawCodeImage {
 
     /// The Thumb-mode ranges a native decoder reads: the whole mapped range for the Cortex-M profile.
     pub fn thumb_ranges(&self) -> Vec<Range<u64>> {
-        if self.profile.native_decoder() { vec![self.range()] } else { Vec::new() }
+        if self.profile.m_profile() { vec![self.range()] } else { Vec::new() }
     }
 
     pub fn range(&self) -> Range<u64> {

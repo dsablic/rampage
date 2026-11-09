@@ -24,9 +24,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
   entry and the other Thumb handlers seeds, and `binary_info` reports every word with its verdict under
   `raw.vector_table`, with a labelled, never applied base-address suggestion when the handlers fall outside the
   asserted mapping. One call with path, profile and base address now opens a firmware image.
-- The native Thumb decoder decodes the M-profile `MRS`/`MSR` special registers (`msp`, `psp`, `primask`,
-  `basepri`, `basepri_max`, `faultmask`, `control`, ...); `msr basepri, r0` used to stop discovery and
-  `inspect_raw_code` as an invalid instruction.
+- The Cortex-M profile decodes the M-profile instruction set: `MRS`/`MSR` special registers (`msp`, `psp`,
+  `primask`, `basepri`, `basepri_max`, `faultmask`, `control`, ...), which used to stop discovery as invalid
+  instructions, and no A32 state or A-profile-only instructions (BLX to A32, Advanced SIMD, SETEND, ERET, ...).
+  Odd-aligned string literals are not taken for Thumb function pointers. `inspect_raw_code` stays A-profile.
+- The session's Raw project cache is also bounded by 64 MiB of input bytes.
 - Raw interpretation identities move to `rampage-raw-interpretation-v3`, which binds the vector-table request.
 
 ## 1.0.0 (unreleased)

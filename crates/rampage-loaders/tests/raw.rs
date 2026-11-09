@@ -1,4 +1,4 @@
-use rampage_loaders::raw_vectors::VectorStatus;
+use rampage_loaders::raw_vectors::{RefusedReason, StopReason, VectorStatus};
 use rampage_loaders::{Binary, Format, MAX_RAW_BYTES, MAX_RAW_NATIVE_BYTES, MAX_RAW_SEEDS, RawCodeOptions, RawProfile};
 
 fn options() -> RawCodeOptions {
@@ -279,7 +279,8 @@ fn cortex_m_vector_table_seeds_entry_and_handlers_from_the_fixture() {
     assert_eq!(irq3.target, Some(symbol("uart_irq_handler")));
     assert_eq!(table.empty_external_vectors, 3);
     // uart_putc's first instructions follow the table: an even word that is not a handler ends it.
-    assert!(table.stop.contains("0x466fb580 at slot 0x8000060 is neither empty nor a handler"), "{}", table.stop);
+    assert_eq!(table.stop_reason, StopReason::NonHandlerWord);
+    assert!(table.stop_detail.contains("0x466fb580 at slot 0x8000060"), "{}", table.stop_detail);
     assert!(table.base_address_suggestion.is_none());
     // An explicit entry wins; Reset becomes a seed.
     let mut explicit = cortex(0x0800_0000, Some(0x0800_0000));
@@ -295,10 +296,11 @@ fn cortex_m_vector_table_with_a_wrong_base_seeds_nothing_and_suggests_one() {
     assert_eq!(binary.entry, None);
     assert!(binary.function_starts.is_empty());
     let table = binary.raw_code_image().unwrap().vector_table().unwrap();
-    let refused = table.vectors.iter().filter(|vector| vector.status == VectorStatus::Refused).count();
-    assert_eq!(refused, 10, "{table:?}");
+    let refused: Vec<_> = table.vectors.iter().filter(|vector| vector.status == VectorStatus::Refused).collect();
+    assert_eq!(refused.len(), 10, "{table:?}");
+    assert!(refused.iter().all(|vector| vector.refused_reason == Some(RefusedReason::OutsideImage)));
     let suggestion = table.base_address_suggestion.as_ref().unwrap();
-    assert_eq!(suggestion.suggestion, 0x0800_0000);
+    assert_eq!(suggestion.base_address, 0x0800_0000);
     assert!(suggestion.note.contains("not applied"));
     // The project keeps the asserted base.
     assert_eq!(binary.segments[0].address, 0);

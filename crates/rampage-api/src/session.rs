@@ -48,6 +48,9 @@ struct State {
 
 /// Raw interpretations retained per session; the least recently used is evicted beyond this.
 pub const MAX_RAW_PROJECTS: usize = 32;
+/// The retained Raw projects' input bytes together, so 4 MiB Cortex-M images cannot pin 128 MiB at once; the least
+/// recently used are evicted first, and the newest project is always kept.
+pub const MAX_RAW_PROJECT_BYTES: usize = 64 * 1024 * 1024;
 
 /// A cheap stand-in for a file's contents: its length, modification time and, on Unix, device and inode. A rewrite
 /// that keeps all of them (same length, within the file system's timestamp granularity) goes unnoticed.
@@ -186,10 +189,15 @@ impl Session {
                     }));
                 }
                 let project = Arc::new(project);
-                if state.raw.len() >= MAX_RAW_PROJECTS {
+                state.raw.push((key, Arc::clone(&project)));
+                let bytes = |raw: &[(_, Arc<Project>)]| -> usize {
+                    raw.iter().map(|(_, project)| project.binary.image_bytes().len()).sum()
+                };
+                while state.raw.len() > MAX_RAW_PROJECTS
+                    || (state.raw.len() > 1 && bytes(&state.raw) > MAX_RAW_PROJECT_BYTES)
+                {
                     state.raw.remove(0);
                 }
-                state.raw.push((key, Arc::clone(&project)));
                 project
             }
         };

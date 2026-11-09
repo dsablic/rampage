@@ -3,7 +3,7 @@
 //! Most remaining differences are rare instructions (VEXT element sizes, half-precision VFMAL lanes) and
 //! encodings LLVM spells unusually; the thresholds catch regressions while those are worked through.
 
-use rampage_arch::aarch32::{ItState, LabelStyle, decode_a32, decode_t32, format};
+use rampage_arch::aarch32::{Decoded, ItState, LabelStyle, decode_a32, decode_t32, decode_t32_m, format};
 
 fn agreement(golden: &str, decode: impl Fn(u32) -> Option<String>) -> (usize, usize, Vec<String>) {
     let mut checked = 0;
@@ -141,13 +141,18 @@ fn fixed_vector_conversions_cover_every_fraction_width() {
     }
 }
 
-fn thumb_text(word: u32) -> Option<String> {
+fn thumb_text_with(word: u32, decode: fn(u16, Option<u16>, ItState) -> Option<Decoded>) -> Option<String> {
     let decoded = if word > 0xffff {
-        decode_t32((word >> 16) as u16, Some(word as u16), ItState::default())
+        decode((word >> 16) as u16, Some(word as u16), ItState::default())
     } else {
-        decode_t32(word as u16, None, ItState::default())
+        decode(word as u16, None, ItState::default())
     };
     decoded.and_then(|decoded| format(&decoded, 0, LabelStyle::Relative))
+}
+
+/// M-profile decoding.
+fn thumb_text(word: u32) -> Option<String> {
+    thumb_text_with(word, decode_t32_m)
 }
 
 /// M-profile system-register moves and interrupt masking, as llvm-mc 23 prints them for `thumbv7em-none-eabi`.
@@ -169,9 +174,9 @@ fn m_profile_system_registers_match_llvm() {
         (0xf3ef_8412, "mrs r4, basepri_max"),
         (0xf3ef_8513, "mrs r5, faultmask"),
         (0xf3ef_8614, "mrs r6, control"),
-        // SYSm zero keeps the generated A-profile decoding, spelled as llvm-mc does for A-profile targets.
-        (0xf380_8800, "msr APSR_nzcvq, r0"),
-        (0xf380_8400, "msr APSR_g, r0"),
+        (0xf380_8800, "msr apsr_nzcvq, r0"),
+        (0xf380_8400, "msr apsr_g, r0"),
+        (0xf380_8c00, "msr apsr_nzcvqg, r0"),
         (0xf3ef_8000, "mrs r0, apsr"),
         (0xf3ef_8003, "mrs r0, xpsr"),
         (0xf3ef_8005, "mrs r0, ipsr"),
@@ -182,6 +187,40 @@ fn m_profile_system_registers_match_llvm() {
     ] {
         assert_eq!(thumb_text(word).as_deref(), Some(expected), "{word:#x}");
     }
-    // A SYSm no M-profile register uses stays undecodable.
-    assert_eq!(thumb_text(0xf3ef_8004), None);
+    // UNPREDICTABLE forms stay undecodable: a SYSm no M-profile register uses, an empty mask, a mask other than
+    // `nzcvq` for a non-APSR register, SP or PC as the general register (`mrs pc, msp` must not fall through).
+    for word in [0xf3ef_8004, 0xf380_8000, 0xf380_8411, 0xf38d_8808, 0xf38f_8808, 0xf3ef_8d08, 0xf3ef_8f08] {
+        assert_eq!(thumb_text(word), None, "{word:#x}");
+    }
+    // A-profile Thumb (ELF Thumb code, inspect_raw_code) keeps the A-profile decoding: no M-profile registers.
+    assert_eq!(thumb_text_with(0xf380_8811, decode_t32), None);
+    assert_eq!(thumb_text_with(0xf380_8800, decode_t32).as_deref(), Some("msr APSR_nzcvq, r0"));
+}
+
+/// A-profile-only instructions are UNDEFINED on ARMv7-M; llvm-mc rejects each for `thumbv7em-none-eabi`. The FP
+/// extension's VFP instructions (Cortex-M4F/M7) still decode.
+#[test]
+fn m_profile_refuses_a_profile_only_instructions_and_keeps_vfp() {
+    for (word, what) in [
+        (0xf000_e808, "blx 0x14 (to A32)"),
+        (0xef40_0800, "vadd.i8 d16, d0, d0 (Advanced SIMD)"),
+        (0xf920_070f, "vld1.8 {d0}, [r0] (Advanced SIMD load)"),
+        (0xb650, "setend le"),
+        (0xe8d0_007f, "ldrexd r0, r0, [r0]"),
+        (0xf3af_8100, "cps #0"),
+        (0xf3de_8f00, "eret"),
+        (0xb664, "cpsie a"),
+    ] {
+        assert_eq!(thumb_text(word), None, "{what}");
+        assert!(thumb_text_with(word, decode_t32).is_some(), "A-profile still decodes {what}");
+    }
+    for (word, expected) in [
+        (0xee30_0a81, "vadd.f32 s0, s0, s2"),
+        (0xeeb7_0a00, "vmov.f32 s0, #1.000000e+00"),
+        (0xf990_0000, "ldrsb.w r0, [r0]"),
+    ] {
+        let text = thumb_text(word);
+        assert!(text.is_some(), "{expected}: {text:?}");
+        assert_eq!(text, thumb_text_with(word, decode_t32), "{expected}");
+    }
 }

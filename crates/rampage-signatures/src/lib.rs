@@ -1616,6 +1616,7 @@ mod tests {
             thumb: std::sync::Arc::new([]),
             global_pointer: None,
             got: None,
+            m_profile: false,
         }
     }
 

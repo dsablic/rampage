@@ -17,11 +17,13 @@ rampage --json binary inspect-raw input.bin --request "$request"
 ```
 
 Limits: 4096 input bytes, 256 instructions, x86/x64/ARM/AArch64 and little-endian code/data only; ARM requires
-`arm` or `thumb`, other architectures `native`. Invalid/incomplete instructions remain unconsumed. ARM literal
-reads use complete words in the supplied suffix; backward literals and prior IT context outside the window
-remain unknown. JSON is bounded and complete or refused. File access uses the Unix regular-file
-checks; reads are non-atomic. Decoded bytes can use the internal borrowed-buffer API, but this MCP operation
-does not implicitly decode input or turn decoded offsets into source-file offsets.
+`arm` or `thumb`, other architectures `native`. `thumb` is A-profile Thumb: M-profile system-register moves (`msr
+basepri, r0`) are invalid here. Open Cortex-M code as the `ARM:LE:32:Cortex` Raw profile instead ([Cortex-M
+profile](sleigh-decoding.md#cortex-m-profile)), which decodes them. Invalid/incomplete instructions remain
+unconsumed. ARM literal reads use complete words in the supplied suffix; backward literals and prior IT context
+outside the window remain unknown. JSON is bounded and complete or refused. File access uses the Unix regular-file
+checks; reads are non-atomic. Decoded bytes can use the internal borrowed-buffer API, but this MCP operation does
+not implicitly decode input or turn decoded offsets into source-file offsets.
 
 Owned acceptance assembles `tests/fixtures/src/raw-window.s` for Thumb, extracts its `.text` centrally, and
 runs `compiler_owned_thumb_window` with `RAMPAGE_RAW_FIXTURE` set to those bytes. No target execution is needed.

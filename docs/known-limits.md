@@ -45,6 +45,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - Without symbols, a function first reached by another function's tail call (`b.w f`) before its own call is
   seen can split at an internal join point: on a generated 1 MiB Cortex-M image, 1,773 of 6,030 reported
   starts were such splits, the same on the stripped ELF.
+- An odd address formed into a Cortex-M image that does not start a printable NUL-terminated run is still taken
+  as a Thumb code pointer; odd-aligned binary constants can become false function starts.
 - Go string literals referenced only through static `{ptr, len}` headers in data, not by code, have no
   `go_literal` bounds.
 - `function_graph` refuses a view too large for one result; `function_summary` pages its blocks instead.
