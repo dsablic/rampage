@@ -82,6 +82,10 @@ pub struct BundleArgs {
     /// Write the patch and summary only, restoring the working tree afterwards.
     #[arg(long)]
     patch_only: bool,
+    /// Also read the final split, recording the read with this reason in the corpus's final ledger: the claim
+    /// check for what ships. It reports deltas only and never decides the gate.
+    #[arg(long)]
+    final_reason: Option<String>,
     /// A name for the output directory (default: bundle-<unix seconds>).
     #[arg(long)]
     label: Option<String>,
@@ -477,9 +481,13 @@ pub fn with_arm(
 
 /// The gate rerun: every split with the regenerated bundled databases against the repository's current ones (both
 /// standing in for the compiled-in databases, so no rebuild is needed in between).
-fn evaluate(engine: &Engine, regenerated: &Regenerated) -> Result<BTreeMap<Split, SplitEvaluation>, String> {
+fn evaluate(
+    engine: &Engine,
+    regenerated: &Regenerated,
+    splits: &[Split],
+) -> Result<BTreeMap<Split, SplitEvaluation>, String> {
     let mut evaluations = BTreeMap::new();
-    for split in [Split::Fast, Split::Train, Split::Negative, Split::Heldout] {
+    for &split in splits {
         let indices = engine.corpus.indices(split);
         let before = engine.propose_in(&indices, &[], Some(&regenerated.before)).map_err(|error| error.to_string())?;
         // Only binaries of an architecture whose database changed can be named differently.
@@ -583,7 +591,7 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
             String::from_utf8_lossy(&status.stdout)
         ));
     }
-    let evaluations = evaluate(&engine, &regenerated)?;
+    let evaluations = evaluate(&engine, &regenerated, &[Split::Fast, Split::Train, Split::Negative, Split::Heldout])?;
     let fast = gate.fast(&evaluations[&Split::Fast], &evaluations[&Split::Train], &evaluations[&Split::Negative]);
     let heldout_eval = &evaluations[&Split::Heldout];
     let (verdict, checks): (bool, Vec<Value>) = if action == "add" {
@@ -630,6 +638,15 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
             );
         }
     }
+    // The final read, when asked for: after the gate, so it can never inform the verdict.
+    let final_eval = match &args.final_reason {
+        Some(reason) => {
+            let read = super::flywheel_run::record_final_read(&engine, reason, &[])?;
+            eprintln!("bundle: final read #{read} recorded");
+            Some(evaluate(&engine, &regenerated, &[Split::Final])?.remove(&Split::Final).ok_or("final split missing")?)
+        }
+        None => None,
+    };
     let heldout_all = heldout_eval.deltas().remove("all");
     for entry in &mut after.entries {
         if ids.contains(&entry.id) {
@@ -691,6 +708,8 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
             "negative": delta_json(&evaluations[&Split::Negative], "all"),
             "heldout": delta_json(heldout_eval, "all"),
             "heldout_novel": delta_json(heldout_eval, NOVEL_SLICE),
+            "final": final_eval.as_ref().map(|evaluation| delta_json(evaluation, "all")),
+            "final_novel": final_eval.as_ref().map(|evaluation| delta_json(evaluation, NOVEL_SLICE)),
         },
         "applied_to_working_tree": verdict && !args.patch_only,
         "patch": if verdict { Some(out_dir.join("change.patch")) } else { None },
@@ -738,8 +757,13 @@ fn summary_markdown(summary: &Value, after: &BundledSource, ids: &[String]) -> S
         ("negative", "negative"),
         ("held out", "heldout"),
         ("held out, novel bodies", "heldout_novel"),
+        ("final (claim read, not gated)", "final"),
+        ("final, novel bodies", "final_novel"),
     ] {
         let delta = &summary["deltas"][key];
+        if delta.is_null() {
+            continue;
+        }
         text.push_str(&format!(
             "| {label} | {:+} | {:+} | {:+} | {:+.6} |\n",
             delta["tp"].as_i64().unwrap_or(0),
@@ -1048,6 +1072,7 @@ mod tests {
             require_novel_gain: None,
             workers: 1,
             patch_only,
+            final_reason: None,
             label: Some(label.to_owned()),
         };
         let gz = repo.join(DATA).join("corpus-x86_64.json.gz");

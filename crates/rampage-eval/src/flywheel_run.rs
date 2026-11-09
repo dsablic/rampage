@@ -100,7 +100,7 @@ fn final_ledger(engine: &Engine) -> PathBuf {
 }
 
 /// Appends one final read to the ledger and returns its number (1 for the first read of this corpus).
-fn record_final_read(engine: &Engine, reason: &str, packs: &[PathBuf]) -> Result<usize, String> {
+pub(crate) fn record_final_read(engine: &Engine, reason: &str, packs: &[PathBuf]) -> Result<usize, String> {
     let path = final_ledger(engine);
     // Concurrent final reads take turns, so each gets its own number.
     let _lock =
