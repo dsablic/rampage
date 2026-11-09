@@ -385,7 +385,11 @@ fn metadata_guard_refuses_a_source_replaced_after_background_validation() {
     app.save_project_workspace(output.clone()).unwrap();
     app.preview_project_workspace(output).unwrap();
     let original = Arc::clone(&app.workspace.as_ref().unwrap().project);
+    // Hold the worker so the poll inside `begin_*` cannot consume a job that finishes immediately.
+    let (started, release) = hold_next(&mut app);
     app.begin_workspace_open_reviewed(&ctx).unwrap();
+    started.recv_timeout(Duration::from_secs(10)).unwrap();
+    release.send(()).unwrap();
     receive(&mut app);
     assert!(matches!(&app.workspace_jobs.job, Job::Done(Ok(WorkspaceOutput::OpenReviewed(Ok(_))))));
     let progress = app.workspace_jobs.progress.lock().unwrap().clone().unwrap();
@@ -411,7 +415,11 @@ fn inactive_editor_opened_after_worker_validation_prevents_every_module_swap() {
     app.save_project_workspace(output.clone()).unwrap();
     app.preview_project_workspace(output).unwrap();
     let original = Arc::clone(&app.workspace.as_ref().unwrap().project);
+    // Hold the worker so the poll inside `begin_*` cannot consume a job that finishes immediately.
+    let (started, release) = hold_next(&mut app);
     app.begin_workspace_open_reviewed(&ctx).unwrap();
+    started.recv_timeout(Duration::from_secs(10)).unwrap();
+    release.send(()).unwrap();
     receive(&mut app);
     assert!(matches!(&app.workspace_jobs.job, Job::Done(Ok(WorkspaceOutput::OpenReviewed(Ok(_))))));
     let inactive = &mut app.workspace_bank.inactive[0].workspace;
