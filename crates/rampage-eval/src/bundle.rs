@@ -44,6 +44,10 @@ pub struct BundleArgs {
     /// gated like any other against the bundled baseline.
     #[arg(long, conflicts_with = "remove")]
     arm: bool,
+    /// With `--arm`: leave out the arm's rows with these names (comma-separated or repeated), for rows a held-out
+    /// diagnosis showed matching another library's function. The entry's id is the hash of the rows it keeps.
+    #[arg(long, value_delimiter = ',', requires = "arm")]
+    arm_exclude: Vec<String>,
     /// Regenerate the bundled call graph (`data/callgraph.json.gz`) from the corpus's training split: each training
     /// library function's call sequence. Gated on its own like any other change; revert it with git.
     #[arg(long, conflicts_with_all = ["remove", "from", "arm"])]
@@ -391,9 +395,22 @@ pub fn merged(source: &BundledSource, pack: &Path, ids: &[String]) -> Result<(Bu
 
 /// The source with the deterministic arm for `engine`'s corpus added as one entry, `arm-<rows hash>`. It replaces
 /// an earlier arm entry, so one arm is bundled at a time.
-pub fn with_arm(source: &BundledSource, engine: &Engine, gate: &GateConfig) -> Result<(BundledSource, String), String> {
-    let arm = rampage_api::flywheel::arm(engine, gate.min_pattern_bytes).map_err(|error| error.to_string())?;
-    let hash = arm.hash();
+pub fn with_arm(
+    source: &BundledSource,
+    engine: &Engine,
+    gate: &GateConfig,
+    exclude: &[String],
+) -> Result<(BundledSource, String), String> {
+    let mut arm = rampage_api::flywheel::arm(engine, gate.min_pattern_bytes).map_err(|error| error.to_string())?;
+    if let Some(missing) = exclude.iter().find(|name| !arm.rows.iter().any(|row| &row.name == *name)) {
+        return Err(format!("--arm-exclude {missing}: the arm has no row with that name"));
+    }
+    let before = arm.rows.len();
+    arm.rows.retain(|row| !exclude.contains(&row.name));
+    if !exclude.is_empty() {
+        eprintln!("bundle: left out {} arm rows named {}", before - arm.rows.len(), exclude.join(", "));
+    }
+    let hash = rampage_api::flywheel::rows_hash(&arm.rows);
     let id = format!("arm-{}", &hash[..12]);
     if source.entries.iter().any(|entry| entry.id == id) {
         return Err(format!("{id} is bundled already; nothing to do"));
@@ -408,7 +425,15 @@ pub fn with_arm(source: &BundledSource, engine: &Engine, gate: &GateConfig) -> R
         id: id.clone(),
         family: FAMILY.to_owned(),
         candidate_hash: hash,
-        source_pack: format!("flywheel deterministic arm (wildcards: {})", classes.join(", ")),
+        source_pack: if exclude.is_empty() {
+            format!("flywheel deterministic arm (wildcards: {})", classes.join(", "))
+        } else {
+            format!(
+                "flywheel deterministic arm (wildcards: {}; rows left out: {})",
+                classes.join(", "),
+                exclude.join(", ")
+            )
+        },
         corpus_version: arm.corpus_version.clone(),
         promoted_baseline: Some("bundled".to_owned()),
         proposer_run: None,
@@ -470,7 +495,7 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
     let before = load_source(&repo)?;
     let (mut after, action, ids) = match (&args.from, &args.remove) {
         (None, None) if args.arm => {
-            let (after, id) = with_arm(&before, &engine, &gate)?;
+            let (after, id) = with_arm(&before, &engine, &gate, &args.arm_exclude)?;
             (after, "add", vec![id])
         }
         (None, None) if args.call_graph => (before.clone(), "add", Vec::new()),
@@ -958,6 +983,7 @@ mod tests {
         let args = |from: Option<PathBuf>, remove: Option<String>, label: &str, patch_only: bool| BundleArgs {
             from,
             arm: false,
+            arm_exclude: vec![],
             call_graph: false,
             entries: vec![],
             remove,
