@@ -15,6 +15,7 @@ mod decompiler_diagnostics;
 mod detection;
 mod entry_scope;
 mod ergonomics;
+mod file_layout;
 mod format_compat;
 mod hierarchy;
 mod inspect_sleigh;

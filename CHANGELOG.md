@@ -4,6 +4,16 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
+## Unreleased
+
+### Added
+
+- `file_layout` (MCP, `core`) and `binary layout` map any regular file, or a range of up to 64 MiB, without a
+  loader: 0xff/0x00/repeated-byte fill and occupied regions with per-region SHA-256 and entropy, per-block
+  entropy with high and low spans, printable-string clusters, the range's SHA-256, and labelled heuristic hints
+  such as Cortex-M vector-table candidates. Capped lists report totals and a continuation range. See
+  [file layout](docs/file-layout.md).
+
 ## 1.0.0 (unreleased)
 
 The first stable release. The stable surface in the [stability policy](docs/stability.md) is the one rc.1 froze;

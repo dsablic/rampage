@@ -705,6 +705,7 @@ fn read_only_tool(name: &str) -> bool {
             | "inspect_data"
             | "read_data"
             | "decode_file_range"
+            | "file_layout"
             | "archive_inventory"
             | "carve"
             | "build_info"

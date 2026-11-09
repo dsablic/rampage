@@ -95,6 +95,142 @@ pub fn inspect_raw(out: &mut impl Write, path: &Path, request: &str, options: &O
     Ok(())
 }
 
+pub fn file_layout(
+    out: &mut impl Write,
+    path: &Path,
+    request: &rampage_api::FileLayoutRequest,
+    options: &Options,
+) -> Result<()> {
+    use rampage_api::file_layout::{EntropyClass, RegionKind, StringEncoding};
+
+    let report = rampage_api::file_layout(path, request)?;
+    if options.json {
+        return write_json(out, &report);
+    }
+    let summary = &report.summary;
+    writeln!(
+        out,
+        "{:#x} +{} of {} bytes; SHA-256 {}",
+        report.offset, report.length, report.source_size, report.sha256
+    )?;
+    writeln!(
+        out,
+        "occupied {} bytes in {} regions; fill 0xff {}, 0x00 {}, other {} bytes in {} regions",
+        summary.occupied_bytes,
+        summary.occupied_regions,
+        summary.fill_ff_bytes,
+        summary.fill_zero_bytes,
+        summary.fill_other_bytes,
+        summary.fill_regions
+    )?;
+    writeln!(
+        out,
+        "entropy {:.2} bits/byte overall; {} high and {} low bytes in {}-byte blocks; {} strings in {} clusters",
+        report.entropy.whole_range,
+        summary.high_entropy_bytes,
+        summary.low_entropy_bytes,
+        report.entropy.block_size,
+        summary.strings,
+        summary.string_clusters
+    )?;
+    writeln!(out, "\nregions:")?;
+    for region in &report.regions {
+        let end = region.offset + region.length;
+        match region.kind {
+            RegionKind::Occupied => writeln!(
+                out,
+                "  {:#010x}..{end:#010x} occupied  entropy {:.2}  sha256 {}",
+                region.offset,
+                region.entropy.unwrap_or_default(),
+                region.sha256.as_deref().unwrap_or_default()
+            )?,
+            _ => writeln!(
+                out,
+                "  {:#010x}..{end:#010x} fill {}",
+                region.offset,
+                region.fill_byte.as_deref().unwrap_or_default()
+            )?,
+        }
+    }
+    if !report.entropy.spans.is_empty() {
+        writeln!(out, "\nentropy spans:")?;
+    }
+    for span in &report.entropy.spans {
+        let class = match span.class {
+            EntropyClass::High => "high",
+            EntropyClass::Low => "low",
+        };
+        writeln!(
+            out,
+            "  {:#010x}..{:#010x} {class} ({:.2}..{:.2} bits/byte over {} blocks)",
+            span.offset,
+            span.offset + span.length,
+            span.min,
+            span.max,
+            span.blocks
+        )?;
+    }
+    if !report.string_clusters.is_empty() {
+        writeln!(out, "\nstring clusters:")?;
+    }
+    for cluster in &report.string_clusters {
+        let encoding = match cluster.encoding {
+            StringEncoding::Ascii => "ascii",
+            StringEncoding::Utf16le => "utf-16le",
+        };
+        let previews: Vec<String> = cluster.previews.iter().map(|preview| format!("{:?}", preview.text)).collect();
+        writeln!(
+            out,
+            "  {:#010x}..{:#010x} {encoding}, {} strings: {}",
+            cluster.offset,
+            cluster.offset + cluster.length,
+            cluster.strings,
+            previews.join(", ")
+        )?;
+    }
+    if !report.hints.is_empty() {
+        writeln!(out, "\nhints (heuristic candidates, not mappings):")?;
+    }
+    for hint in &report.hints {
+        writeln!(
+            out,
+            "  {:#010x} {}: initial SP {:#x}, reset {:#x}, {}/{} handler words plausible",
+            hint.offset,
+            hint.kind,
+            hint.initial_sp,
+            hint.reset_handler,
+            hint.handler_words_plausible,
+            hint.handler_words_checked
+        )?;
+    }
+    let bounds = &report.bounds;
+    for (name, bound) in [
+        ("regions", &bounds.regions),
+        ("entropy blocks", &bounds.blocks),
+        ("entropy spans", &bounds.entropy_spans),
+        ("string clusters", &bounds.string_clusters),
+        ("hints", &bounds.hints),
+    ] {
+        if let Some(next) = bound.next_offset {
+            writeln!(
+                out,
+                "{name}: {} of {} listed; the first omitted starts at {next:#x}",
+                bound.returned, bound.total
+            )?;
+        }
+    }
+    if let Some(size) = report.entropy.suggested_block_size {
+        writeln!(out, "suggested --block-size {size}")?;
+    }
+    if let Some(continuation) = &report.continuation {
+        writeln!(out, "continue with --offset {:#x} --length {}", continuation.offset, continuation.length)?;
+    }
+    for note in &report.limitations {
+        writeln!(out, "note: {note}")?;
+    }
+    Ok(())
+}
+
 pub fn decode_range(
     out: &mut impl Write,
     path: &Path,

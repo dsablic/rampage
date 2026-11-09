@@ -28,6 +28,9 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 
 ## Formats and instruction decoding
 
+- [File layout](file-layout.md) maps any file or range of up to 64 MiB in one call: padding and occupied
+  regions with hashes, block entropy, string clusters and labelled hints. Limits: statistics and heuristic
+  candidates only; no format, architecture or compression detection.
 - Bounded [raw-code windows](raw-code.md) accept explicit ranges and asserted architecture/mode/order/base
   through MCP without a native executable header. Limits: little-endian x86/x64/ARM/AArch64, linear decoding
   only; no code detection, function discovery or execution.

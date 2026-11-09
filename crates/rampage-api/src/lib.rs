@@ -27,6 +27,7 @@ mod detect;
 mod diagnostics;
 mod dotnet;
 mod fid_signatures;
+pub mod file_layout;
 mod files;
 mod findings;
 pub mod flywheel;
@@ -143,6 +144,7 @@ pub use fid_signatures::{
     FidHostAdapter, FidReader, FidSignatureReport, FidSignatureRow, FidSignatureStatus, MAX_FID_QUERY_ROWS,
     MAX_FID_REPORT_BYTES,
 };
+pub use file_layout::{FileLayoutReport, FileLayoutRequest, MAX_LAYOUT_BYTES, file_layout};
 pub use files::{
     MAX_CONSTANTS_BYTES, MAX_PACK_MANIFEST_BYTES, MAX_PEID_BYTES, MAX_RULE_FILE_BYTES, MAX_SIGNATURE_DB_BYTES,
     read_bounded,

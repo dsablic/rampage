@@ -353,6 +353,33 @@ pub fn field_snapshot(observed: &BTreeMap<String, BTreeSet<String>>) -> Value {
     serde_json::to_value(observed).unwrap()
 }
 
+/// A small headerless image that produces every `file_layout` result field: a Cortex-M-like vector table,
+/// ASCII and UTF-16LE strings, 0xff and 0x00 fill, and high-entropy bytes.
+pub fn layout_fixture() -> Vec<u8> {
+    let mut words = vec![0x2000_2000u32, 0x0000_0101, 0x0000_0141, 0x0000_0143];
+    words.extend([0; 7]);
+    words.extend([0x0000_0145, 0, 0, 0x0000_0147, 0x0000_0149]);
+    let mut bytes: Vec<u8> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+    for text in ["rampage layout fixture", "Version 1.0.0", "Copyright example"] {
+        bytes.extend(text.as_bytes());
+        bytes.push(0);
+    }
+    for text in ["Settings", "Network", "Password"] {
+        bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+        bytes.extend([0, 0]);
+    }
+    bytes.extend([0xff; 512]);
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    bytes.extend((0..1024).map(|_| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 24) as u8
+    }));
+    bytes.extend([0; 512]);
+    bytes
+}
+
 #[cfg(test)]
 mod classification {
     use serde_json::json;

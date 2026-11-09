@@ -662,6 +662,66 @@ pub(crate) struct InspectRawArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct LayoutArgs {
+    pub(crate) file: PathBuf,
+    /// Original-file byte offset where the selection starts, in hex or decimal; default 0
+    #[arg(long, value_parser = rampage_api::parse_file_offset)]
+    pub(crate) offset: Option<u64>,
+    /// Selected bytes, at most 64 MiB; default the rest of the file, at most 64 MiB
+    #[arg(long, value_parser = rampage_api::parse_file_offset)]
+    pub(crate) length: Option<u64>,
+    /// Shortest run of one repeated byte reported as fill (8..=16777216, default 64)
+    #[arg(long, value_parser = rampage_api::parse_file_offset)]
+    pub(crate) min_fill_run: Option<u64>,
+    /// Entropy block size in bytes (256..=16777216, default 4096)
+    #[arg(long, value_parser = rampage_api::parse_file_offset)]
+    pub(crate) block_size: Option<u64>,
+    /// Shortest printable run counted as a string (4..=64, default 6)
+    #[arg(long)]
+    pub(crate) min_string_length: Option<usize>,
+    /// Largest byte gap between strings of one cluster (0..=4096, default 64)
+    #[arg(long)]
+    pub(crate) cluster_gap: Option<u64>,
+    /// Fewest strings a cluster needs (1..=64, default 3)
+    #[arg(long)]
+    pub(crate) cluster_min_strings: Option<usize>,
+    /// Also cluster UTF-16LE strings
+    #[arg(long)]
+    pub(crate) utf16: bool,
+    /// Leave out heuristic hints such as Cortex-M vector-table candidates
+    #[arg(long)]
+    pub(crate) no_hints: bool,
+    /// Regions listed (1..=256, default 128)
+    #[arg(long)]
+    pub(crate) region_limit: Option<usize>,
+    /// Per-block entropy values listed (1..=4096, default 1024)
+    #[arg(long)]
+    pub(crate) block_limit: Option<usize>,
+    /// String clusters listed (1..=128, default 32)
+    #[arg(long)]
+    pub(crate) cluster_limit: Option<usize>,
+}
+
+impl LayoutArgs {
+    pub(crate) fn request(&self) -> rampage_api::FileLayoutRequest {
+        rampage_api::FileLayoutRequest {
+            offset: self.offset.map(rampage_api::FileOffset),
+            length: self.length.map(rampage_api::FileOffset),
+            min_fill_run: self.min_fill_run,
+            block_size: self.block_size,
+            min_string_length: self.min_string_length,
+            cluster_gap: self.cluster_gap,
+            cluster_min_strings: self.cluster_min_strings,
+            utf16: Some(self.utf16),
+            hints: Some(!self.no_hints),
+            region_limit: self.region_limit,
+            block_limit: self.block_limit,
+            cluster_limit: self.cluster_limit,
+        }
+    }
+}
+
+#[derive(Args)]
 pub(crate) struct DecodeFileArgs {
     pub(crate) file: PathBuf,
     /// Explicit decoder selection: lzss-4k (no format guessing)

@@ -1468,6 +1468,63 @@
         }
       }
     },
+    "file_layout": {
+      "group": "core",
+      "arguments": {
+        "block_limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "block_size": {
+          "type": "integer|null",
+          "required": false
+        },
+        "cluster_gap": {
+          "type": "integer|null",
+          "required": false
+        },
+        "cluster_limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "cluster_min_strings": {
+          "type": "integer|null",
+          "required": false
+        },
+        "hints": {
+          "type": "boolean|null",
+          "required": false
+        },
+        "length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "min_fill_run": {
+          "type": "integer|null",
+          "required": false
+        },
+        "min_string_length": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "region_limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "utf16": {
+          "type": "boolean|null",
+          "required": false
+        }
+      }
+    },
     "find_crypto": {
       "group": "detection",
       "arguments": {

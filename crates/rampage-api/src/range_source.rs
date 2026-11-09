@@ -40,6 +40,15 @@ mod platform {
 
     impl RangeSource {
         pub(crate) fn open(path: &Path, offset: u64, length: usize) -> Result<Self, ApiError> {
+            Self::open_sized(path, offset, |_| Ok(length))
+        }
+
+        /// [`Self::open`] with the length chosen from the regular file's size, observed on the open descriptor.
+        pub(crate) fn open_sized(
+            path: &Path,
+            offset: u64,
+            length: impl FnOnce(u64) -> Result<usize, ApiError>,
+        ) -> Result<Self, ApiError> {
             let descriptor = rustix::fs::open(
                 path,
                 OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
@@ -49,6 +58,7 @@ mod platform {
             let file = File::from(descriptor);
             let metadata = file.metadata().map_err(io_error)?;
             let stamp = stamp(&metadata)?;
+            let length = length(metadata.len())?;
             if offset.checked_add(length as u64).is_none_or(|end| end > metadata.len()) {
                 return Err(invalid("file range is outside the regular source"));
             }
@@ -91,6 +101,13 @@ mod platform {
     pub(crate) struct RangeSource;
     impl RangeSource {
         pub(crate) fn open(_: &Path, _: u64, _: usize) -> Result<Self, ApiError> {
+            Err(ApiError::Unavailable("file ranges require Unix regular-file source checks".into()))
+        }
+        pub(crate) fn open_sized(
+            _: &Path,
+            _: u64,
+            _: impl FnOnce(u64) -> Result<usize, ApiError>,
+        ) -> Result<Self, ApiError> {
             Err(ApiError::Unavailable("file ranges require Unix regular-file source checks".into()))
         }
         pub(crate) fn read(&self) -> Result<Vec<u8>, ApiError> {

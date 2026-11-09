@@ -462,6 +462,35 @@ pub fn file_tools() -> Vec<FileTool> {
         },
         FileTool {
             group: Group::Core,
+            name: "file_layout",
+            description: "Map any regular file, such as headerless firmware, without a loader: in one call, regions \
+                (runs of 0xff, 0x00 or another repeated byte of at least min_fill_run bytes, default 64, versus \
+                occupied bytes) with a SHA-256 and entropy per occupied region; Shannon entropy per block \
+                (block_size, default 4096) with high (>=7.2 bits/byte) and low (<=2.0) spans; dense clusters of \
+                printable ASCII (and with utf16, UTF-16LE) strings with a few previews; the whole range's SHA-256; \
+                and labelled hints such as Cortex-M vector-table candidates (initial SP in SRAM, odd reset address), \
+                which are evidence, not a mapping. Whole file or offset/length, at most 64 MiB per call. Lists are \
+                capped (region_limit, block_limit, cluster_limit); bounds give totals and the first omitted offset, \
+                continuation gives the offset/length of a follow-up call, and entropy.suggested_block_size a \
+                coarser block size. Offsets are original-file offsets. Use list_strings for every string, \
+                inspect_raw_code or inspect_sleigh to decode a region, decode_file_range to decompress one.",
+            input_schema: file_layout_schema(),
+            handler: |_, mut input| {
+                if input.to_string().len() > 16_384 {
+                    return Err("file layout arguments exceed the input budget".into());
+                }
+                let object = input.as_object_mut().ok_or("file layout arguments must be an object")?;
+                let path = object
+                    .remove("path")
+                    .and_then(|value| value.as_str().map(std::path::PathBuf::from))
+                    .ok_or("file layout path must be a string")?;
+                let request: crate::FileLayoutRequest = arguments(input)?;
+                let report = crate::file_layout(&path, &request).map_err(|error| error_chain(&error))?;
+                serde_json::to_value(report).map_err(|error| error.to_string())
+            },
+        },
+        FileTool {
+            group: Group::Core,
             name: "inspect_data",
             description: "Inspect 1..=1024 native-image bytes and 4/8-byte words without discovery, naming scans or \
                 sidecars. Image VAs, selected-image and outer-file offsets are distinct. Gaps, zero-fill, unreadable \
@@ -675,6 +704,16 @@ fn raw_file_schema() -> Value {
     value["properties"].as_object_mut().expect("request properties").insert("path".into(),
         serde_json::json!({ "type": "string", "description": "Explicit regular input file; no native loader is used." }));
     value["required"].as_array_mut().expect("required raw mapping fields").push(Value::String("path".into()));
+    value
+}
+
+fn file_layout_schema() -> Value {
+    let mut value = schema::<crate::FileLayoutRequest>();
+    value["properties"].as_object_mut().expect("layout request properties").insert(
+        "path".into(),
+        serde_json::json!({ "type": "string", "description": "Explicit regular input file; no native loader is used." }),
+    );
+    value["required"] = serde_json::json!(["path"]);
     value
 }
 

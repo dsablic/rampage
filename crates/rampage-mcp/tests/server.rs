@@ -102,6 +102,7 @@ async fn lists_all_tools_with_instructions() {
         "enable_tools",
         "entry_diagnostics",
         "export_patched",
+        "file_layout",
         "find_crypto",
         "find_main",
         "function_frame",

@@ -54,6 +54,7 @@ Patching:
 
 Formats and raw code:
 
+- [File layout](file-layout.md): regions, padding, entropy, string clusters and hashes of any file.
 - [Raw-code windows](raw-code.md), [explicit Sleigh decoding and Raw Projects](sleigh-decoding.md),
   [explicit content decoding](decoding.md), [native data inspection](data-inspection.md),
   [ZIP32 inventory](archive-inventory.md).

@@ -186,8 +186,9 @@ Shared API/CLI/MCP edits and builds remain coordinated; each parallel worker own
 - [x] Reproduce the actual tool gap: unknown-file inspect/triage/strings and explicit-offset disassembly refuse
   before useful inspection because they require native executable headers. Zero carve candidates missed the
   proprietary components; it did not establish that the image was empty or encrypted.
-- [ ] First enabling slice: format-independent byte/ASCII-string triage on explicit file ranges, with offsets,
+- [x] First enabling slice: format-independent byte/ASCII-string triage on explicit file ranges, with offsets,
   bounded previews, fill/occupied-region summaries and range hashes; no native loader or extraction required.
+  Done: `file_layout` / `binary layout` ([file layout](docs/file-layout.md)).
 - [x] Second enabling slice: explicit raw-code windows with file range, address base, architecture, code mode
   and byte order supplied as analyst assertions. Use the existing decoder; no guessed executable layout or seeds.
   MCP and CLI expose bounded original-file windows; owned compiler/IT/literal/boundary cases and a real loader
@@ -212,8 +213,10 @@ An agent analysing a headerless ARM Thumb (Cortex-M) firmware image fell back to
 LZ parameter brute force. Each is a candidate MCP tool; one at a time, each needing its own design and go-ahead.
 Verify first which of these the existing raw-window and decoder-provider slices above already cover.
 
-- [ ] **Firmware layout tool.** Regions, 0xFF/0x00 padding runs, per-block entropy (packed areas), string
-  clusters and range hashes in one call. Extends the byte/ASCII triage slice above.
+- [x] **Firmware layout tool.** Regions, 0xFF/0x00 padding runs, per-block entropy (packed areas), string
+  clusters and range hashes in one call. Extends the byte/ASCII triage slice above. Done: `file_layout` (MCP
+  `core`) and `binary layout`, up to 64 MiB per call with capped lists and a continuation range, plus labelled
+  Cortex-M vector-table candidate hints (evidence only; the vector-table item below remains open).
 - [ ] **Unknown-compression probe.** Try LZSS/LZ4/LZ77 variants and a bit-order/length-encoding sweep against a
   supplied or expected output size or an entropy drop, and return candidate decoder-provider parameters. Builds
   on the explicit LZSS-4K provider; the agent re-derived this by hand.

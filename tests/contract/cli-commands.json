@@ -1800,6 +1800,111 @@
       },
       "subcommand_required": false
     },
+    "rampage binary layout": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--block-limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--block-size": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--cluster-gap": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--cluster-limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--cluster-min-strings": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--min-fill-run": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--min-string-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--no-hints": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--region-limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--utf16": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
     "rampage binary list-exports": {
       "arguments": {
         "--arch": {

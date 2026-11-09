@@ -38,7 +38,11 @@ fn contract_cli_json_fields() {
     let copy = Copy::new();
     let elf = copy.0.to_str().unwrap().to_owned();
     let exe = fixture("hello-x64.exe").to_str().unwrap().to_owned();
+    let firmware = copy.0.with_file_name("firmware.bin");
+    std::fs::write(&firmware, contract::layout_fixture()).unwrap();
+    let firmware = firmware.to_str().unwrap().to_owned();
     let commands: Vec<Vec<&str>> = vec![
+        vec!["binary", "layout", &firmware, "--block-size", "256", "--block-limit", "2", "--utf16"],
         vec!["binary", "inspect", &elf],
         vec!["binary", "triage", &elf],
         vec!["binary", "detect", &exe],

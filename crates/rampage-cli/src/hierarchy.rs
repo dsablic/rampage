@@ -87,6 +87,7 @@ impl RootCommand {
             Self::Binary(BinaryCommand::InspectData(args)) => Command::InspectData(args),
             Self::Binary(BinaryCommand::InspectRaw(args)) => Command::InspectRaw(args),
             Self::Binary(BinaryCommand::Decode(args)) => Command::DecodeFile(args),
+            Self::Binary(BinaryCommand::Layout(args)) => Command::FileLayout(args),
             Self::Binary(BinaryCommand::Triage(args)) => Command::Triage(args),
             Self::Binary(BinaryCommand::PeResources(args)) => Command::PeResources(args),
             Self::Binary(BinaryCommand::PeLoadConfig(args)) => Command::PeLoadConfig(args),
@@ -181,6 +182,8 @@ pub(crate) enum BinaryCommand {
     InspectRaw(InspectRawArgs),
     /// Decode an explicitly selected file range into transient bytes; no extraction or native loading
     Decode(DecodeFileArgs),
+    /// Map fill/occupied regions, block entropy, string clusters, range hashes and hints of any file, without a loader
+    Layout(crate::args::LayoutArgs),
     /// Hashes, entropy, format details, overlay and hints of packing or weak hardening
     Triage(FileArgs),
     /// PE resource leaves (type, name, language, location), with RT_VERSION and RT_MANIFEST decoded

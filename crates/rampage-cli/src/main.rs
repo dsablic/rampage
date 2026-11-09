@@ -141,6 +141,8 @@ enum Command {
     PyInstallerArchive(args::PyInstallerArchiveArgs),
     #[command(skip)]
     WasmModule(args::WasmModuleArgs),
+    #[command(skip)]
+    FileLayout(args::LayoutArgs),
     #[command(hide = true)]
     QueryDebugger(QueryDebuggerArgs),
     /// Run bounded workflows and selected decompilations as one multi-architecture analysis report
@@ -322,6 +324,7 @@ fn main() -> ExitCode {
             | Command::InspectRaw(..)
             | Command::PyInstallerArchive(..)
             | Command::WasmModule(..)
+            | Command::FileLayout(..)
     ) && (cli.arch.is_some() || cli.image_offset.is_some() || cli.image_length.is_some())
     {
         let name = match &command {
@@ -329,6 +332,7 @@ fn main() -> ExitCode {
             Command::InspectRaw(..) => "inspect-raw (put architecture and mapping in --request)",
             Command::PyInstallerArchive(..) => "pyinstaller-archive",
             Command::WasmModule(..) => "wasm-module",
+            Command::FileLayout(..) => "layout",
             _ => "archive-inventory",
         };
         eprintln!("rampage: binary {name} does not accept --arch, --image-offset or --image-length");
@@ -391,6 +395,7 @@ fn main() -> ExitCode {
         Command::WasmModule(args) => {
             commands::wasm_module(&mut out, &args.file, args.list, args.offset, args.limit as usize, &options)
         }
+        Command::FileLayout(args) => commands::file_layout(&mut out, &args.file, &args.request(), &options),
         Command::QueryDebugger(args) => debugger_query(&mut out, args),
         Command::Analyze(args) => analyze::analyze(&mut out, &args, &options),
         Command::Info(args::ViewedFileArgs { file, view }) => commands::info(&mut out, &file, view, &options),
@@ -649,6 +654,7 @@ fn without_one_image(command: &Command) -> Option<&'static str> {
         Command::ArchiveInventory(..) => "binary archive-inventory",
         Command::PyInstallerArchive(..) => "binary pyinstaller-archive",
         Command::WasmModule(..) => "binary wasm-module",
+        Command::FileLayout(..) => "binary layout",
         Command::DecodeFile(..) => "binary decode",
         Command::InspectRaw(..) => "binary inspect-raw",
         Command::Packs { .. } => "packs",

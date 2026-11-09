@@ -34,6 +34,7 @@ directory, and `ADDRESS` an address or supported name. Brackets describe optiona
 | `binary inspect-sleigh FILE [OPTIONS]` | `inspect-sleigh` | Raw byte windows through the bundled Sleigh IDs ([Sleigh decoding](sleigh-decoding.md)) |
 | `binary inspect-raw FILE --request JSON` | `inspect-raw` | An explicitly mapped raw-code window ([raw code](raw-code.md)) |
 | `binary decode FILE --codec C --offset N --length N --expected-output-size N` | `decode-file` | Transient decoded bytes of a file range ([decoding](decoding.md)) |
+| `binary layout FILE [--offset N --length N --block-size N]` | — | Fill/occupied regions, block entropy, string clusters, hashes and hints of any file ([file layout](file-layout.md)) |
 | `binary assemble FILE --at ADDRESS --source TEXT` | `assemble` | Read-only assembly proposal; nothing applied ([assembly](assembly.md)) |
 | `binary patch-bytes FILE --at A --original-hex H --replacement-hex H --allow-data B --source-sha256 S --expected-revision R` | `patch-bytes` | Persist one reviewed equal-length patch ([patching](patching.md)) |
 | `binary revert-patch FILE --at A --source-sha256 S --expected-revision R` | `revert-patch` | Remove one reviewed patch through annotation history |
