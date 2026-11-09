@@ -652,11 +652,65 @@ Operating points (margin 0.02 unless noted; dev baseline TP 8718, FP 64, F1 0.73
 novel misses have no descriptor at all, and about 370 have a wrong top name. That residue is what a code
 candidate would target.
 
+### Fuzzy and call-graph arms: residue, training calibration, final read #3 (2026-11-09)
+**Residue.** Of the 2007 novel dev misses without a fuzzy descriptor:
+- 1149 are single-block functions of 1–3 instructions;
+- 387 exceed the extractor's bounds (4096 instructions, 512 blocks);
+- 217 have too few constants and no known callee;
+- 248 are single-block functions of 4+ instructions.
+
+Raising the bounds to 32768 instructions and 4096 blocks adds 361 described novel misses. The numbers below were
+measured with those bounds (`MAX_INSTRUCTIONS`/`MAX_BLOCKS` in `fuzzy.rs` and the matching limits in
+`fuzzy_code_projection`). The committed code keeps the product's bounds, so a rerun of the example gives
+slightly lower fuzzy numbers.
+
+**Call-graph propagation** (`fuzzy_arm::propagate`). It names an unnamed callee from its position in a named
+caller's call sequence (direct calls and tail jumps, in call-site order). It requires:
+- every training sequence of that caller name, architecture and length to agree with the caller's named callees,
+  and to give one name at that position;
+- **two-sided confirmation:** the callee's own call sequence must also fit a training sequence of the proposed
+  name.
+
+Names offered twice, or already used, are dropped. The rule repeats to a fixed point. The two-sided check removed
+every false positive seen without it: four `LZ4_decompress_safe*` names rotated by one position at clang O0,
+`gz_load`/`gz_decomp` swapped, and the lz4 1.10 `extState`/`extState_internal` split. It has no tuned parameter.
+
+**Training calibration.** Each training binary is queried against references from the other training builds
+(leave one build out), so the operating point is chosen without reading dev. Fuzzy references are target-library
+functions only: runtime names earn nothing in the gated score, and Zig's `PageAllocator.alloc`/`map` siblings
+were its training false positives. The fuzzy module's own calibration rule (zero incorrect, ties to the larger
+threshold and margin) picks **0.95 / 0.05**:
+
+| Split | Fuzzy 0.95/0.05 | Propagation | Both |
+| --- | ---: | ---: | ---: |
+| train (leave one build out) | +215 / 0 | +309 / 0 | +466 / 0 |
+| dev | +638 / 0 | +1186 / 0 | +1620 / 0 (novel +1270) |
+| negative | 0 / 0 | 0 / 0 | 0 / 0 |
+
+(Each cell is correct names gained / false positives added over the bundled databases with arm v2.)
+
+**Final read #3** (ledgered; this configuration only, fixed before the read):
+
+| Final | dTP | dFP | Allowance | Precision of added names |
+| --- | ---: | ---: | ---: | ---: |
+| fuzzy | +639 | +8 | 6 | 98.8% |
+| propagation | +946 | +21 | 9 | 97.8% |
+| both | +1621 (novel +1388) | +29 | 16 | 98.2% |
+
+Overall final F1 goes from 0.567 to 0.661, but both components exceed the one-per-100 allowance, so neither ships.
+Dev and leave-one-build-out training both show zero false positives at this point, so they carry no signal about
+what goes wrong on final. The final cases were not opened: opening them would make final a design split.
+
+**Reading.** The headroom is real and mostly deterministic: +1600 names at about 98% precision on untouched
+versions. What is missing is a development split that reproduces final's error rate. Final adds a larger version
+jump (zlib 1.4) and a second gcc version. The next step is a corpus with more held-out versions and more target
+libraries, and with it a fresh final split.
+
 ### Next
 - **Regenerate the bundled hash databases with callee keys for forwarder entries** (128 bundled false positives).
   This needs the signature-corpus source caches and the pinned toolchains, so it needs its own session.
-- **Fuzzy arm decision:** wire it as a shipped arm at threshold 0.90 (needs leave-one-build-out training check
-  and a final read), or keep it as the baseline code candidates must beat.
+- **Fuzzy + call-graph arms:** measured and calibrated on training, but they fail the allowance on final (read
+  #3). They need a development split that shows their final-split errors: more held-out versions and libraries.
 - **The AI family needs a decision:** code-proposing candidates rather than compiler/tool rules. Proposal:
   [2026-11-08-flywheel-code-candidates.md](2026-11-08-flywheel-code-candidates.md).
 - **Caller/callee-confirmed rows** for identical bodies under different names (`LZ4_read64` / `LZ4_read_ARCH`).
