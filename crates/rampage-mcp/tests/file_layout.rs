@@ -62,18 +62,24 @@ async fn file_layout_is_a_default_core_tool_mapping_a_headerless_image() {
     assert_ne!(result.is_error, Some(true), "{}", text(&result));
     let report: Value = serde_json::from_str(text(&result)).unwrap();
 
-    assert_eq!((report["offset"].as_str(), report["length"].as_u64()), (Some("0x80"), Some(bytes.len() as u64 - 128)));
-    let kinds: Vec<(&str, &str)> = report["regions"]
+    assert_eq!(
+        (report["source_offset"].as_u64(), report["source_length"].as_u64()),
+        (Some(0x80), Some(bytes.len() as u64 - 128))
+    );
+    let kinds: Vec<(u64, &str)> = report["regions"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|region| (region["offset"].as_str().unwrap(), region["kind"].as_str().unwrap()))
+        .map(|region| (region["offset"].as_u64().unwrap(), region["kind"].as_str().unwrap()))
         .collect();
-    assert_eq!(kinds, [("0x80", "fill_ff"), ("0x100", "occupied"), ("0x15c", "fill_zero")]);
+    assert_eq!(kinds, [(0x80, "fill_ff"), (0x100, "occupied"), (0x15c, "fill_zero")]);
     assert_eq!(report["regions"][1]["sha256"].as_str().unwrap().len(), 64);
     assert_eq!(report["hints"][0]["kind"], "cortex_m_vector_table_candidate");
     assert_eq!(
-        (report["hints"][0]["initial_sp"].as_str(), report["hints"][0]["reset_handler"].as_str()),
+        (
+            report["hints"][0]["cortex_m"]["initial_sp"].as_str(),
+            report["hints"][0]["cortex_m"]["reset_handler"].as_str()
+        ),
         (Some("0x20002000"), Some("0x8000101"))
     );
     assert_eq!(report["hint_interpretation"], "heuristic_candidates_not_mappings");

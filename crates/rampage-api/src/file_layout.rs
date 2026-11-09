@@ -3,9 +3,13 @@
 
 use std::path::{Path, PathBuf};
 
+use rampage_analysis::strings::is_printable;
+use rampage_analysis::triage::entropy;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+pub use rampage_analysis::strings::Encoding as StringEncoding;
 
 use crate::range_source::RangeSource;
 use crate::{ApiError, FileOffset};
@@ -18,11 +22,16 @@ pub const MAX_LAYOUT_RESULT_BYTES: usize = 60_000;
 pub const HIGH_ENTROPY: f64 = 7.2;
 /// Bits per byte at or below which a block is flagged low entropy.
 pub const LOW_ENTROPY: f64 = 2.0;
-/// A block shorter than this (only the selection's last block can be) is not classified: its entropy is capped at
-/// log2 of its size.
-const MIN_CLASSIFIED_BLOCK: usize = 256;
-const MAX_SPANS: usize = 64;
-const MAX_HINTS: usize = 16;
+/// The smallest block size, and the smallest block that is classified. The entropy of a small sample is biased
+/// low: uniformly random 256-byte blocks average about 7.2 bits per byte (often below the high threshold),
+/// 512-byte blocks about 7.6.
+pub const MIN_BLOCK_SIZE: u64 = 512;
+const MAX_BLOCK_SIZE: u64 = 16 << 20;
+/// Spans summarise `blocks`, so they are capped at `block_limit` and at most this many.
+const MAX_SPANS: usize = 128;
+const MAX_HINTS: usize = 8;
+/// Exception words after the reset vector that a vector-table hint needs within the range.
+const MIN_HANDLER_WORDS: usize = 4;
 const PREVIEWS_PER_CLUSTER: usize = 3;
 const PREVIEW_CHARS: usize = 48;
 
@@ -37,14 +46,14 @@ pub struct FileLayoutRequest {
     /// Shortest run of one repeated byte reported as a fill region, 8..=16777216; default 64.
     #[schemars(range(min = 8, max = 16777216))]
     pub min_fill_run: Option<u64>,
-    /// Entropy block size in bytes, 256..=16777216; default 4096. Blocks start at the selection offset.
-    #[schemars(range(min = 256, max = 16777216))]
+    /// Entropy block size in bytes, 512..=16777216; default 4096. Blocks start at the selection offset.
+    #[schemars(range(min = 512, max = 16777216))]
     pub block_size: Option<u64>,
     /// Shortest printable run counted as a string, 4..=64 characters; default 6.
     #[schemars(range(min = 4, max = 64))]
     pub min_string_length: Option<usize>,
-    /// Largest byte gap between consecutive strings of one cluster, 0..=4096; default 64.
-    #[schemars(range(min = 0, max = 4096))]
+    /// Largest byte gap between consecutive strings of one cluster, 1..=4096; default 64.
+    #[schemars(range(min = 1, max = 4096))]
     pub cluster_gap: Option<u64>,
     /// Fewest strings a cluster needs, 1..=64; default 3.
     #[schemars(range(min = 1, max = 64))]
@@ -59,7 +68,7 @@ pub struct FileLayoutRequest {
     /// Per-block entropy values returned, 1..=4096; default 1024.
     #[schemars(range(min = 1, max = 4096))]
     pub block_limit: Option<usize>,
-    /// String clusters returned, 1..=128; default 32.
+    /// String clusters returned, 1..=128; default 16.
     #[schemars(range(min = 1, max = 128))]
     pub cluster_limit: Option<usize>,
 }
@@ -97,15 +106,15 @@ impl LayoutParameters {
         }
         Ok(Self {
             min_fill_run: bounded("min_fill_run", request.min_fill_run, 64, (8, 16 << 20))?,
-            block_size: bounded("block_size", request.block_size, 4096, (256, 16 << 20))?,
+            block_size: bounded("block_size", request.block_size, 4096, (MIN_BLOCK_SIZE, MAX_BLOCK_SIZE))?,
             min_string_length: bounded("min_string_length", request.min_string_length, 6, (4, 64))?,
-            cluster_gap: bounded("cluster_gap", request.cluster_gap, 64, (0, 4096))?,
+            cluster_gap: bounded("cluster_gap", request.cluster_gap, 64, (1, 4096))?,
             cluster_min_strings: bounded("cluster_min_strings", request.cluster_min_strings, 3, (1, 64))?,
             utf16: request.utf16.unwrap_or(false),
             hints: request.hints.unwrap_or(true),
             region_limit: bounded("region_limit", request.region_limit, 128, (1, 256))?,
             block_limit: bounded("block_limit", request.block_limit, 1024, (1, 4096))?,
-            cluster_limit: bounded("cluster_limit", request.cluster_limit, 32, (1, 128))?,
+            cluster_limit: bounded("cluster_limit", request.cluster_limit, 16, (1, 128))?,
             high_entropy_threshold: HIGH_ENTROPY,
             low_entropy_threshold: LOW_ENTROPY,
         })
@@ -127,7 +136,6 @@ pub enum RegionKind {
 
 #[derive(Debug, Serialize)]
 pub struct LayoutRegion {
-    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub offset: u64,
     pub length: u64,
     pub kind: RegionKind,
@@ -137,9 +145,9 @@ pub struct LayoutRegion {
     /// SHA-256 of an occupied region's bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
-    /// Shannon entropy of an occupied region's bytes, in bits per byte.
+    /// Shannon entropy of an occupied region's bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub entropy: Option<f64>,
+    pub entropy_bits_per_byte: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -152,11 +160,10 @@ pub enum EntropyClass {
 /// Adjacent blocks of one entropy class.
 #[derive(Debug, Serialize)]
 pub struct EntropySpan {
-    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub offset: u64,
     pub length: u64,
     pub class: EntropyClass,
-    pub blocks: usize,
+    pub block_count: usize,
     pub min: f64,
     pub max: f64,
 }
@@ -166,31 +173,25 @@ pub struct EntropyReport {
     pub block_size: u64,
     /// Entropy of the whole selection, bits per byte.
     pub whole_range: f64,
-    /// Bits per byte of each block from the selection offset; block `i` starts at `offset + i * block_size`.
+    /// Bits per byte of each block, one number per block: block `i` starts at `source_offset + i * block_size`.
     pub blocks: Vec<f64>,
     /// Size of the selection's last block, which is shorter than `block_size` when the selection is not a
     /// multiple of it.
     pub last_block_bytes: u64,
     /// High- and low-entropy spans of adjacent blocks; medium blocks are not listed.
     pub spans: Vec<EntropySpan>,
-    /// A power-of-two block size that fits every block in `block_limit`, when the blocks were cut off.
+    /// When the blocks were cut off: the smallest power of two that fits every block in `block_limit`, or the
+    /// 16 MiB maximum when none does.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggested_block_size: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StringEncoding {
-    Ascii,
-    Utf16le,
-}
-
 #[derive(Debug, Serialize)]
 pub struct StringPreview {
-    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub offset: u64,
-    /// The string's length in characters.
-    pub length: usize,
+    /// The string's length in bytes (two per character in UTF-16LE).
+    pub length: u64,
+    pub characters: usize,
     /// At most 48 characters of the string.
     pub text: String,
     pub truncated: bool,
@@ -199,7 +200,6 @@ pub struct StringPreview {
 /// A dense area of printable strings, from the first string's start to the last one's end.
 #[derive(Debug, Serialize)]
 pub struct StringCluster {
-    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub offset: u64,
     pub length: u64,
     pub encoding: StringEncoding,
@@ -211,22 +211,29 @@ pub struct StringCluster {
     pub previews: Vec<StringPreview>,
 }
 
-/// A heuristic observation, never a mapping, base address or architecture claim.
+/// The words of a Cortex-M vector-table candidate.
 #[derive(Debug, Serialize)]
-pub struct LayoutHint {
-    pub kind: &'static str,
-    #[serde(serialize_with = "rampage_arch::hex::address")]
-    pub offset: u64,
+pub struct CortexMVectors {
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub initial_sp: u64,
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub reset_handler: u64,
     pub handler_words_checked: usize,
     pub handler_words_plausible: usize,
-    pub evidence: Vec<String>,
 }
 
+/// A heuristic observation, never a mapping, base address or architecture claim. `kind` names which of the
+/// kind-specific objects is present.
 #[derive(Debug, Serialize)]
+pub struct LayoutHint {
+    pub kind: &'static str,
+    pub offset: u64,
+    pub evidence: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cortex_m: Option<CortexMVectors>,
+}
+
+#[derive(Debug, Default, Serialize)]
 pub struct LayoutSummary {
     pub occupied_bytes: u64,
     pub occupied_regions: usize,
@@ -245,7 +252,6 @@ pub struct LayoutSummary {
 pub struct ListBound {
     pub total: usize,
     pub returned: usize,
-    #[serde(serialize_with = "rampage_arch::hex::optional_address")]
     pub next_offset: Option<u64>,
 }
 
@@ -261,10 +267,10 @@ pub struct LayoutBounds {
 /// Arguments for a follow-up call covering what this one left out.
 #[derive(Debug, Serialize)]
 pub struct LayoutContinuation {
-    #[serde(serialize_with = "rampage_arch::hex::address")]
     pub offset: u64,
     pub length: u64,
-    /// Why: the lists that were cut off, or `range` when the whole-file default stopped at 64 MiB.
+    /// Why: the lists that were cut off (`regions`, `blocks`, `string_clusters`), or `range` when the whole-file
+    /// default stopped at 64 MiB.
     pub truncated: Vec<&'static str>,
     pub note: &'static str,
 }
@@ -273,13 +279,11 @@ pub struct LayoutContinuation {
 pub struct FileLayoutReport {
     pub file_path: PathBuf,
     pub source_size: u64,
-    #[serde(serialize_with = "rampage_arch::hex::address")]
-    pub offset: u64,
-    pub length: u64,
-    /// SHA-256 of the whole selected range.
-    pub sha256: String,
+    pub source_offset: u64,
+    pub source_length: u64,
+    pub source_range_sha256: String,
     pub source_observation: &'static str,
-    pub coordinate_space: &'static str,
+    pub source_coordinate_space: &'static str,
     pub parameters: LayoutParameters,
     pub summary: LayoutSummary,
     pub regions: Vec<LayoutRegion>,
@@ -340,33 +344,20 @@ pub(crate) fn layout(
     parameters: &LayoutParameters,
 ) -> FileLayoutReport {
     let end = offset + bytes.len() as u64;
-    let mut summary = LayoutSummary {
-        occupied_bytes: 0,
-        occupied_regions: 0,
-        fill_ff_bytes: 0,
-        fill_zero_bytes: 0,
-        fill_other_bytes: 0,
-        fill_regions: 0,
-        high_entropy_bytes: 0,
-        low_entropy_bytes: 0,
-        strings: 0,
-        string_clusters: 0,
-    };
+    let mut summary = LayoutSummary::default();
     let mut bounds = LayoutBounds::default();
 
     let (regions, hints) = regions_and_hints(bytes, offset, parameters, &mut summary, &mut bounds);
     let entropy = entropy_report(bytes, offset, parameters, &mut summary, &mut bounds);
     let string_clusters = clusters(bytes, offset, parameters, &mut summary, &mut bounds.string_clusters);
 
+    // Only the caller-sized lists move the continuation. Spans summarise `blocks`, which stay complete up to
+    // their own cut, and hints are a capped sample.
     let mut truncated = Vec::new();
     let mut next = None::<u64>;
-    for (name, bound) in [
-        ("regions", &bounds.regions),
-        ("blocks", &bounds.blocks),
-        ("entropy_spans", &bounds.entropy_spans),
-        ("string_clusters", &bounds.string_clusters),
-        ("hints", &bounds.hints),
-    ] {
+    for (name, bound) in
+        [("regions", &bounds.regions), ("blocks", &bounds.blocks), ("string_clusters", &bounds.string_clusters)]
+    {
         if let Some(at) = bound.next_offset {
             truncated.push(name);
             next = Some(next.map_or(at, |next| next.min(at)));
@@ -387,11 +378,11 @@ pub(crate) fn layout(
     FileLayoutReport {
         file_path: PathBuf::new(),
         source_size,
-        offset,
-        length: bytes.len() as u64,
-        sha256: rampage_arch::hex::bytes(&Sha256::digest(bytes)),
+        source_offset: offset,
+        source_length: bytes.len() as u64,
+        source_range_sha256: rampage_arch::hex::bytes(&Sha256::digest(bytes)),
         source_observation: "revalidated_non_atomic_file_range",
-        coordinate_space: "original_file_byte_offset",
+        source_coordinate_space: "original_file_byte_offset",
         parameters: parameters.clone(),
         summary,
         regions,
@@ -437,8 +428,7 @@ fn regions_and_hints(
             if parameters.hints {
                 // A table whose first bytes equal the preceding fill byte starts inside the fill run.
                 let absolute = offset + start as u64;
-                let aligned = absolute & !3;
-                for candidate in [aligned, absolute] {
+                for candidate in [absolute & !3, absolute] {
                     let Some(index) = candidate.checked_sub(offset).map(|index| index as usize) else { continue };
                     if candidate % 4 != 0 || last_hint_check == Some(index) {
                         continue;
@@ -461,7 +451,7 @@ fn regions_and_hints(
             },
             fill_byte: fill.map(|byte| format!("{byte:#04x}")),
             sha256: None,
-            entropy: None,
+            entropy_bits_per_byte: None,
         };
         record(&mut bounds.regions, &mut regions, parameters.region_limit, region.offset, region);
     };
@@ -486,7 +476,7 @@ fn regions_and_hints(
         let start = (region.offset - offset) as usize;
         let slice = &bytes[start..start + region.length as usize];
         region.sha256 = Some(rampage_arch::hex::bytes(&Sha256::digest(slice)));
-        region.entropy = Some(round(entropy(slice)));
+        region.entropy_bits_per_byte = Some(entropy(slice));
     }
     (regions, hints)
 }
@@ -515,8 +505,8 @@ fn thumb_code(value: u32) -> bool {
 }
 
 /// A word pair at `index` that reads like a Cortex-M initial SP and reset vector: the SP word-aligned in the SRAM
-/// (or CCM) region and the reset handler an odd (Thumb) code-region address, with the following exception words
-/// mostly zero or odd code-region addresses.
+/// (or CCM) region and the reset handler an odd (Thumb) code-region address, with at least four following
+/// exception words in the range, at least half of them zero or odd code-region addresses.
 fn cortex_m_candidate(bytes: &[u8], index: usize, offset: u64) -> Option<LayoutHint> {
     let sp = word(bytes, index)?;
     let reset = word(bytes, index + 4)?;
@@ -525,16 +515,12 @@ fn cortex_m_candidate(bytes: &[u8], index: usize, offset: u64) -> Option<LayoutH
     }
     let handlers: Vec<u32> = (2..16).map_while(|slot| word(bytes, index + slot * 4)).collect();
     let plausible = handlers.iter().filter(|&&handler| handler == 0 || thumb_code(handler)).count();
-    if plausible * 2 < handlers.len() {
+    if handlers.len() < MIN_HANDLER_WORDS || plausible * 2 < handlers.len() {
         return None;
     }
     Some(LayoutHint {
         kind: "cortex_m_vector_table_candidate",
         offset: offset + index as u64,
-        initial_sp: sp.into(),
-        reset_handler: reset.into(),
-        handler_words_checked: handlers.len(),
-        handler_words_plausible: plausible,
         evidence: vec![
             format!("word {sp:#010x} is word-aligned in the Cortex-M SRAM/CCM address range, like an initial SP"),
             format!("next word {reset:#010x} is odd (Thumb bit) and below 0x20000000, like a reset handler"),
@@ -543,24 +529,13 @@ fn cortex_m_candidate(bytes: &[u8], index: usize, offset: u64) -> Option<LayoutH
                 handlers.len()
             ),
         ],
+        cortex_m: Some(CortexMVectors {
+            initial_sp: sp.into(),
+            reset_handler: reset.into(),
+            handler_words_checked: handlers.len(),
+            handler_words_plausible: plausible,
+        }),
     })
-}
-
-fn entropy(bytes: &[u8]) -> f64 {
-    let mut counts = [0u32; 256];
-    for &byte in bytes {
-        counts[usize::from(byte)] += 1;
-    }
-    let total = bytes.len() as f64;
-    counts
-        .iter()
-        .filter(|&&count| count > 0)
-        .map(|&count| f64::from(count) / total * (total / f64::from(count)).log2())
-        .sum()
-}
-
-fn round(value: f64) -> f64 {
-    (value * 100.0).round() / 100.0
 }
 
 fn entropy_report(
@@ -571,18 +546,15 @@ fn entropy_report(
     bounds: &mut LayoutBounds,
 ) -> EntropyReport {
     let block_size = parameters.block_size as usize;
+    let span_limit = parameters.block_limit.min(MAX_SPANS);
     let mut blocks = Vec::new();
     let mut spans: Vec<EntropySpan> = Vec::new();
     let mut open: Option<EntropySpan> = None;
-    let close = |span: EntropySpan, spans: &mut Vec<EntropySpan>, bound: &mut ListBound| {
-        let at = span.offset;
-        record(bound, spans, MAX_SPANS, at, span);
-    };
     for (index, block) in bytes.chunks(block_size).enumerate() {
         let start = offset + (index * block_size) as u64;
-        let value = round(entropy(block));
+        let value = entropy(block);
         record(&mut bounds.blocks, &mut blocks, parameters.block_limit, start, value);
-        let class = if block.len() < MIN_CLASSIFIED_BLOCK {
+        let class = if (block.len() as u64) < MIN_BLOCK_SIZE {
             None
         } else if value >= HIGH_ENTROPY {
             Some(EntropyClass::High)
@@ -599,19 +571,19 @@ fn entropy_report(
         match (&mut open, class) {
             (Some(span), Some(class)) if span.class == class => {
                 span.length += block.len() as u64;
-                span.blocks += 1;
+                span.block_count += 1;
                 span.min = span.min.min(value);
                 span.max = span.max.max(value);
             }
             _ => {
                 if let Some(span) = open.take() {
-                    close(span, &mut spans, &mut bounds.entropy_spans);
+                    record(&mut bounds.entropy_spans, &mut spans, span_limit, span.offset, span);
                 }
                 open = class.map(|class| EntropySpan {
                     offset: start,
                     length: block.len() as u64,
                     class,
-                    blocks: 1,
+                    block_count: 1,
                     min: value,
                     max: value,
                 });
@@ -619,27 +591,26 @@ fn entropy_report(
         }
     }
     if let Some(span) = open {
-        close(span, &mut spans, &mut bounds.entropy_spans);
+        record(&mut bounds.entropy_spans, &mut spans, span_limit, span.offset, span);
     }
-    let total = bounds.blocks.total;
-    let suggested_block_size = (total > parameters.block_limit)
-        .then(|| (bytes.len() as u64).div_ceil(parameters.block_limit as u64).next_power_of_two().clamp(256, 16 << 20));
+    let suggested_block_size = (bounds.blocks.total > parameters.block_limit).then(|| {
+        (bytes.len() as u64)
+            .div_ceil(parameters.block_limit as u64)
+            .next_power_of_two()
+            .clamp(MIN_BLOCK_SIZE, MAX_BLOCK_SIZE)
+    });
     let last_block_bytes = match bytes.len() % block_size {
         0 => block_size.min(bytes.len()) as u64,
         partial => partial as u64,
     };
     EntropyReport {
         block_size: parameters.block_size,
-        whole_range: round(entropy(bytes)),
+        whole_range: entropy(bytes),
         blocks,
         last_block_bytes,
         spans,
         suggested_block_size,
     }
-}
-
-fn printable(byte: u8) -> bool {
-    (0x20..=0x7e).contains(&byte) || byte == b'\t'
 }
 
 struct Building {
@@ -676,7 +647,7 @@ impl<'a> Clusterer<'a> {
         }
     }
 
-    fn push(&mut self, start: usize, end: usize, chars: usize) {
+    fn push(&mut self, start: usize, end: usize, characters: usize) {
         self.strings += 1;
         if let Some(current) = &self.current
             && (start - current.end) as u64 > self.parameters.cluster_gap
@@ -684,7 +655,7 @@ impl<'a> Clusterer<'a> {
             self.flush();
         }
         let wanted = self.current.as_ref().is_none_or(|current| current.previews.len() < PREVIEWS_PER_CLUSTER);
-        let preview = wanted.then(|| self.preview(start, end, chars));
+        let preview = wanted.then(|| self.preview(start, end, characters));
         match &mut self.current {
             Some(current) => {
                 current.end = end;
@@ -704,17 +675,18 @@ impl<'a> Clusterer<'a> {
         }
     }
 
-    fn preview(&self, start: usize, end: usize, chars: usize) -> StringPreview {
+    fn preview(&self, start: usize, end: usize, characters: usize) -> StringPreview {
         let step = match self.encoding {
             StringEncoding::Ascii => 1,
-            StringEncoding::Utf16le => 2,
+            StringEncoding::Utf16Le => 2,
         };
         let text = self.bytes[start..end].iter().step_by(step).take(PREVIEW_CHARS).map(|&byte| char::from(byte));
         StringPreview {
             offset: self.offset + start as u64,
-            length: chars,
+            length: (end - start) as u64,
+            characters,
             text: text.collect(),
-            truncated: chars > PREVIEW_CHARS,
+            truncated: characters > PREVIEW_CHARS,
         }
     }
 
@@ -730,7 +702,7 @@ impl<'a> Clusterer<'a> {
             encoding: self.encoding,
             strings: building.strings,
             string_bytes: building.string_bytes,
-            density: round(building.string_bytes as f64 / length as f64),
+            density: (building.string_bytes as f64 / length as f64 * 100.0).round() / 100.0,
             previews: building.previews,
         };
         let at = cluster.offset;
@@ -746,12 +718,12 @@ impl<'a> Clusterer<'a> {
 fn ascii_strings(bytes: &[u8], minimum: usize, clusterer: &mut Clusterer) {
     let mut index = 0;
     while index < bytes.len() {
-        if !printable(bytes[index]) {
+        if !is_printable(bytes[index]) {
             index += 1;
             continue;
         }
         let start = index;
-        while index < bytes.len() && printable(bytes[index]) {
+        while index < bytes.len() && is_printable(bytes[index]) {
             index += 1;
         }
         if index - start >= minimum {
@@ -761,7 +733,7 @@ fn ascii_strings(bytes: &[u8], minimum: usize, clusterer: &mut Clusterer) {
 }
 
 fn utf16_strings(bytes: &[u8], parity: usize, minimum: usize, clusterer: &mut Clusterer) {
-    let character = |index: usize| index + 1 < bytes.len() && printable(bytes[index]) && bytes[index + 1] == 0;
+    let character = |index: usize| index + 1 < bytes.len() && is_printable(bytes[index]) && bytes[index + 1] == 0;
     let mut index = parity;
     while index + 1 < bytes.len() {
         if !character(index) {
@@ -772,9 +744,9 @@ fn utf16_strings(bytes: &[u8], parity: usize, minimum: usize, clusterer: &mut Cl
         while character(index) {
             index += 2;
         }
-        let chars = (index - start) / 2;
-        if chars >= minimum {
-            clusterer.push(start, index, chars);
+        let characters = (index - start) / 2;
+        if characters >= minimum {
+            clusterer.push(start, index, characters);
         }
     }
 }
@@ -792,7 +764,7 @@ fn clusters(
     if parameters.utf16 {
         // Even and odd starts are separate streams, so each is in offset order.
         for parity in 0..2 {
-            let mut wide = Clusterer::new(bytes, offset, StringEncoding::Utf16le, parameters);
+            let mut wide = Clusterer::new(bytes, offset, StringEncoding::Utf16Le, parameters);
             utf16_strings(bytes, parity, parameters.min_string_length, &mut wide);
             scans.push(wide.finish());
         }
@@ -807,7 +779,7 @@ fn clusters(
         }
         kept.extend(scan.kept);
     }
-    kept.sort_by_key(|cluster| (cluster.offset, cluster.encoding as u8));
+    kept.sort_by_key(|cluster| (cluster.offset, cluster.encoding == StringEncoding::Utf16Le));
     if kept.len() > parameters.cluster_limit {
         let at = kept[parameters.cluster_limit].offset;
         next = Some(next.map_or(at, |next| next.min(at)));

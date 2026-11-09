@@ -218,7 +218,7 @@ async fn contract_mcp_core_results() {
     exercise(c, o, "inspect_sleigh", sleigh).await;
     let firmware = scratch.0.join("firmware.bin");
     std::fs::write(&firmware, contract::layout_fixture()).unwrap();
-    let layout = json!({"path": firmware, "block_size": 256, "block_limit": 2, "utf16": true});
+    let layout = json!({"path": firmware, "block_size": 512, "block_limit": 2, "utf16": true});
     exercise(c, o, "file_layout", layout).await;
     client.cancel().await.unwrap();
 

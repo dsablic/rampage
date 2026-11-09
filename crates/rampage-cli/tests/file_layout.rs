@@ -48,7 +48,7 @@ fn binary_layout_json_matches_the_mcp_report_and_text_lists_the_map() {
     rampage()
         .args(["binary", "layout"])
         .arg(&input.0)
-        .args(["--block-size", "256", "--block-limit", "2"])
+        .args(["--block-size", "512", "--block-limit", "2"])
         .assert()
         .success()
         .stdout(contains("regions:"))
@@ -56,7 +56,7 @@ fn binary_layout_json_matches_the_mcp_report_and_text_lists_the_map() {
         .stdout(contains("cortex_m_vector_table_candidate: initial SP 0x20002000, reset 0x101"))
         .stdout(contains("\"rampage layout fixture\""))
         .stdout(contains("suggested --block-size 2048"))
-        .stdout(contains("continue with --offset 0x200 --length"));
+        .stdout(contains("continue with --offset 0x400 --length"));
 }
 
 #[test]

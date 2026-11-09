@@ -111,7 +111,7 @@ pub fn file_layout(
     writeln!(
         out,
         "{:#x} +{} of {} bytes; SHA-256 {}",
-        report.offset, report.length, report.source_size, report.sha256
+        report.source_offset, report.source_length, report.source_size, report.source_range_sha256
     )?;
     writeln!(
         out,
@@ -141,7 +141,7 @@ pub fn file_layout(
                 out,
                 "  {:#010x}..{end:#010x} occupied  entropy {:.2}  sha256 {}",
                 region.offset,
-                region.entropy.unwrap_or_default(),
+                region.entropy_bits_per_byte.unwrap_or_default(),
                 region.sha256.as_deref().unwrap_or_default()
             )?,
             _ => writeln!(
@@ -167,7 +167,7 @@ pub fn file_layout(
             span.offset + span.length,
             span.min,
             span.max,
-            span.blocks
+            span.block_count
         )?;
     }
     if !report.string_clusters.is_empty() {
@@ -176,7 +176,7 @@ pub fn file_layout(
     for cluster in &report.string_clusters {
         let encoding = match cluster.encoding {
             StringEncoding::Ascii => "ascii",
-            StringEncoding::Utf16le => "utf-16le",
+            StringEncoding::Utf16Le => "utf-16le",
         };
         let previews: Vec<String> = cluster.previews.iter().map(|preview| format!("{:?}", preview.text)).collect();
         writeln!(
@@ -192,16 +192,18 @@ pub fn file_layout(
         writeln!(out, "\nhints (heuristic candidates, not mappings):")?;
     }
     for hint in &report.hints {
-        writeln!(
-            out,
-            "  {:#010x} {}: initial SP {:#x}, reset {:#x}, {}/{} handler words plausible",
-            hint.offset,
-            hint.kind,
-            hint.initial_sp,
-            hint.reset_handler,
-            hint.handler_words_plausible,
-            hint.handler_words_checked
-        )?;
+        write!(out, "  {:#010x} {}", hint.offset, hint.kind)?;
+        if let Some(vectors) = &hint.cortex_m {
+            write!(
+                out,
+                ": initial SP {:#x}, reset {:#x}, {}/{} handler words plausible",
+                vectors.initial_sp,
+                vectors.reset_handler,
+                vectors.handler_words_plausible,
+                vectors.handler_words_checked
+            )?;
+        }
+        writeln!(out)?;
     }
     let bounds = &report.bounds;
     for (name, bound) in [

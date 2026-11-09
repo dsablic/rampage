@@ -673,13 +673,13 @@ pub(crate) struct LayoutArgs {
     /// Shortest run of one repeated byte reported as fill (8..=16777216, default 64)
     #[arg(long, value_parser = rampage_api::parse_file_offset)]
     pub(crate) min_fill_run: Option<u64>,
-    /// Entropy block size in bytes (256..=16777216, default 4096)
+    /// Entropy block size in bytes (512..=16777216, default 4096)
     #[arg(long, value_parser = rampage_api::parse_file_offset)]
     pub(crate) block_size: Option<u64>,
     /// Shortest printable run counted as a string (4..=64, default 6)
     #[arg(long)]
     pub(crate) min_string_length: Option<usize>,
-    /// Largest byte gap between strings of one cluster (0..=4096, default 64)
+    /// Largest byte gap between strings of one cluster (1..=4096, default 64)
     #[arg(long)]
     pub(crate) cluster_gap: Option<u64>,
     /// Fewest strings a cluster needs (1..=64, default 3)
@@ -697,7 +697,7 @@ pub(crate) struct LayoutArgs {
     /// Per-block entropy values listed (1..=4096, default 1024)
     #[arg(long)]
     pub(crate) block_limit: Option<usize>,
-    /// String clusters listed (1..=128, default 32)
+    /// String clusters listed (1..=128, default 16)
     #[arg(long)]
     pub(crate) cluster_limit: Option<usize>,
 }

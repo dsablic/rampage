@@ -65,7 +65,8 @@ fn utf16le_run(bytes: &[u8]) -> usize {
     bytes.as_chunks::<2>().0.iter().take_while(|&&[low, high]| is_printable(low) && high == 0).count()
 }
 
-fn is_printable(byte: u8) -> bool {
+/// Printable ASCII (0x20..=0x7e) or tab: the bytes a string run consists of.
+pub fn is_printable(byte: u8) -> bool {
     (0x20..=0x7e).contains(&byte) || byte == b'\t'
 }
 

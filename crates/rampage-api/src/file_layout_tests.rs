@@ -46,7 +46,7 @@ fn fill_runs_at_both_edges_bracket_one_hashed_occupied_region() {
     let occupied = &report.regions[1];
     assert_eq!(occupied.sha256.as_deref(), Some(rampage_arch::hex::bytes(&Sha256::digest(&bytes[100..150])).as_str()));
     assert!(report.regions[0].sha256.is_none());
-    assert_eq!(report.sha256, rampage_arch::hex::bytes(&Sha256::digest(&bytes)));
+    assert_eq!(report.source_range_sha256, rampage_arch::hex::bytes(&Sha256::digest(&bytes)));
     let summary = &report.summary;
     assert_eq!((summary.fill_ff_bytes, summary.fill_zero_bytes, summary.occupied_bytes), (100, 100, 50));
     assert_eq!((summary.fill_regions, summary.occupied_regions), (2, 1));
@@ -85,7 +85,7 @@ fn a_huge_fill_run_is_one_region_and_one_low_entropy_span() {
     assert_eq!(kinds(&report), [(0, 10 << 20, RegionKind::FillFf)]);
     assert_eq!(report.entropy.spans.len(), 1);
     let span = &report.entropy.spans[0];
-    assert_eq!((span.class, span.length, span.blocks, span.max), (EntropyClass::Low, 10 << 20, 2560, 0.0));
+    assert_eq!((span.class, span.length, span.block_count, span.max), (EntropyClass::Low, 10 << 20, 2560, 0.0));
     assert_eq!(report.summary.low_entropy_bytes, 10 << 20);
     // 2560 blocks exceed the default 1024: the list is cut and a coarser block size suggested.
     assert_eq!((report.bounds.blocks.total, report.bounds.blocks.returned), (2560, 1024));
@@ -174,10 +174,13 @@ fn strings_cluster_by_gap_and_count_with_bounded_previews() {
     let report = layout(&bytes, 0, bytes.len() as u64, true, &parameters(request));
     assert_eq!(report.string_clusters.len(), 2);
     let first = &report.string_clusters[0];
-    let request = FileLayoutRequest { cluster_gap: Some(0), cluster_min_strings: Some(1), ..Default::default() };
+    let request = FileLayoutRequest { cluster_gap: Some(1), cluster_min_strings: Some(1), ..Default::default() };
     let report = layout(&bytes, 0, bytes.len() as u64, true, &parameters(request));
     let long = report.string_clusters.iter().find(|cluster| cluster.string_bytes == 60).unwrap();
-    assert_eq!((long.previews[0].length, long.previews[0].text.len(), long.previews[0].truncated), (60, 48, true));
+    assert_eq!(
+        (long.previews[0].length, long.previews[0].characters, long.previews[0].text.len(), long.previews[0].truncated),
+        (60, 60, 48, true)
+    );
     assert_eq!(first.strings, 4);
 }
 
@@ -195,7 +198,7 @@ fn utf16_clusters_only_when_requested_and_cluster_truncation_is_a_prefix() {
     let report = layout(&bytes, 0, bytes.len() as u64, true, &parameters(request));
     assert_eq!(report.string_clusters.len(), 1);
     let cluster = &report.string_clusters[0];
-    assert_eq!((cluster.offset, cluster.encoding, cluster.strings), (3, StringEncoding::Utf16le, 3));
+    assert_eq!((cluster.offset, cluster.encoding, cluster.strings), (3, StringEncoding::Utf16Le, 3));
     assert_eq!(cluster.previews[1].text, "Network");
 
     let mut many = Vec::new();
@@ -230,8 +233,9 @@ fn cortex_m_vector_table_after_zero_padding_is_a_hint_at_the_aligned_word() {
     assert_eq!(report.hints.len(), 1);
     let hint = &report.hints[0];
     assert_eq!((hint.kind, hint.offset), ("cortex_m_vector_table_candidate", 0x8100));
-    assert_eq!((hint.initial_sp, hint.reset_handler), (0x2000_5000, 0x0800_0131));
-    assert_eq!((hint.handler_words_checked, hint.handler_words_plausible), (14, 14));
+    let vectors = hint.cortex_m.as_ref().unwrap();
+    assert_eq!((vectors.initial_sp, vectors.reset_handler), (0x2000_5000, 0x0800_0131));
+    assert_eq!((vectors.handler_words_checked, vectors.handler_words_plausible), (14, 14));
     assert_eq!(report.hint_interpretation, "heuristic_candidates_not_mappings");
 
     let request = FileLayoutRequest { hints: Some(false), ..FileLayoutRequest::default() };
@@ -257,7 +261,7 @@ fn implausible_vector_words_and_noise_give_no_hint() {
 #[test]
 fn parameters_outside_their_ranges_are_refused() {
     for request in [
-        FileLayoutRequest { block_size: Some(255), ..Default::default() },
+        FileLayoutRequest { block_size: Some(511), ..Default::default() },
         FileLayoutRequest { min_fill_run: Some(7), ..Default::default() },
         FileLayoutRequest { region_limit: Some(0), ..Default::default() },
         FileLayoutRequest { block_limit: Some(4097), ..Default::default() },
@@ -289,7 +293,7 @@ impl Drop for Temporary {
 fn file_ranges_are_checked_and_empty_selections_refused() {
     let file = Temporary::new("ranges", &[[0xff; 128].as_slice(), &varied(64)].concat());
     let report = file_layout(&file.0, &FileLayoutRequest::default()).unwrap();
-    assert_eq!((report.offset, report.length, report.source_size), (0, 192, 192));
+    assert_eq!((report.source_offset, report.source_length, report.source_size), (0, 192, 192));
     assert_eq!(report.file_path, file.0);
     let request = FileLayoutRequest {
         offset: Some(FileOffset(128)),
@@ -328,8 +332,8 @@ fn oversized_json_is_refused_with_the_limits_to_lower() {
     let file = Temporary::new("budget", &bytes);
     let request = FileLayoutRequest {
         min_fill_run: Some(8),
-        block_size: Some(256),
-        cluster_gap: Some(0),
+        block_size: Some(512),
+        cluster_gap: Some(1),
         cluster_min_strings: Some(1),
         region_limit: Some(256),
         block_limit: Some(4096),
@@ -338,4 +342,118 @@ fn oversized_json_is_refused_with_the_limits_to_lower() {
     };
     let error = file_layout(&file.0, &request).unwrap_err().to_string();
     assert!(error.contains("60000 JSON bytes") && error.contains("region_limit"), "{error}");
+}
+
+#[test]
+fn random_blocks_at_the_minimum_block_size_classify_high() {
+    let bytes = noise(MIN_BLOCK_SIZE as usize * 64, 11);
+    let request = FileLayoutRequest { block_size: Some(MIN_BLOCK_SIZE), ..FileLayoutRequest::default() };
+    let report = layout(&bytes, 0, bytes.len() as u64, true, &parameters(request));
+
+    assert!(report.entropy.blocks.iter().all(|&value| value >= HIGH_ENTROPY), "{:?}", report.entropy.blocks);
+    let spans: Vec<_> = report.entropy.spans.iter().map(|span| (span.class, span.block_count)).collect();
+    assert_eq!(spans, [(EntropyClass::High, 64)]);
+}
+
+#[test]
+fn vector_table_hints_need_four_handler_words_inside_an_unaligned_selection() {
+    let mut bytes = vec![0; 0x100];
+    bytes.extend(vector_table(0x2000_5000, 0x0800_0131));
+    bytes.extend(varied(64));
+    // An unaligned selection start: the hint is still at the aligned table word, in file offsets.
+    let report = layout(&bytes[3..], 3, bytes.len() as u64, true, &defaults());
+    let offsets: Vec<u64> = report.hints.iter().map(|hint| hint.offset).collect();
+    assert_eq!(offsets, [0x100]);
+
+    // The range ends inside the table: three handler words are too few, four are enough.
+    let cut = &bytes[3..0x100 + 8 + 12];
+    assert!(layout(cut, 3, bytes.len() as u64, true, &defaults()).hints.is_empty());
+    let cut = &bytes[3..0x100 + 8 + 16];
+    let report = layout(cut, 3, bytes.len() as u64, true, &defaults());
+    assert_eq!(report.hints[0].cortex_m.as_ref().unwrap().handler_words_checked, 4);
+}
+
+#[test]
+fn utf16_previews_count_bytes_and_characters_separately() {
+    let mut bytes = vec![0x90; 4];
+    bytes.extend("abcdefghij".repeat(6).encode_utf16().flat_map(u16::to_le_bytes));
+    bytes.extend([0x90; 4]);
+    let request = FileLayoutRequest { utf16: Some(true), cluster_min_strings: Some(1), ..FileLayoutRequest::default() };
+    let report = layout(&bytes, 0, bytes.len() as u64, true, &parameters(request));
+
+    let cluster = &report.string_clusters[0];
+    assert_eq!((cluster.encoding, cluster.length, cluster.string_bytes), (StringEncoding::Utf16Le, 120, 120));
+    let preview = &cluster.previews[0];
+    assert_eq!((preview.offset, preview.length, preview.characters), (4, 120, 60));
+    let expected = "abcdefghij".repeat(5);
+    assert_eq!((preview.text.as_str(), preview.truncated), (&expected[..48], true));
+    let json = serde_json::to_value(cluster).unwrap();
+    assert_eq!(json["encoding"], "utf16_le");
+}
+
+#[cfg(unix)]
+#[test]
+fn following_continuations_terminates_at_the_range_end() {
+    let mut bytes = Vec::new();
+    for index in 0..200u64 {
+        bytes.extend([0xff; 64]);
+        bytes.extend(b"alpha1\x01beta22\x01gamma3");
+        bytes.extend(noise(4000, index + 1));
+    }
+    let file = Temporary::new("continuations", &bytes);
+    let mut request = FileLayoutRequest {
+        region_limit: Some(16),
+        cluster_limit: Some(5),
+        block_limit: Some(64),
+        ..FileLayoutRequest::default()
+    };
+    let mut calls = 0;
+    let mut reasons = std::collections::BTreeSet::new();
+    let end = loop {
+        calls += 1;
+        assert!(calls < 1000, "continuations do not terminate");
+        let report = file_layout(&file.0, &request).unwrap();
+        let end = report.source_offset + report.source_length;
+        let Some(continuation) = report.continuation else { break end };
+        assert!(continuation.offset > report.source_offset && continuation.offset < end, "continuations progress");
+        assert_eq!(continuation.offset + continuation.length, bytes.len() as u64);
+        reasons.extend(continuation.truncated);
+        request.offset = Some(FileOffset(continuation.offset));
+        request.length = Some(FileOffset(continuation.length));
+    };
+    assert_eq!(end, bytes.len() as u64);
+    assert!(calls > 2);
+    assert!(reasons.contains("regions") && reasons.contains("string_clusters"), "{reasons:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_default_limits_fit_the_json_budget_in_the_worst_case() {
+    // Every list at its cap with long entries: vector tables, escape-heavy strings, alternating high and low
+    // entropy blocks, and more regions, blocks, spans, clusters and hints than are returned.
+    let table: Vec<u8> = vector_table(0x2000_5000, 0x0800_0131);
+    let strings = [br#""\"#.repeat(40), vec![1]].concat().repeat(3);
+    let mut bytes = Vec::new();
+    for index in 0..1100 {
+        if index % 2 == 0 {
+            let start = bytes.len();
+            bytes.extend(&table);
+            bytes.extend(&strings);
+            bytes.extend(noise(4096 - (bytes.len() - start), index as u64 + 1));
+        } else {
+            bytes.extend([0; 4096]);
+        }
+    }
+    let file = Temporary::new("worst-case", &bytes);
+    let report = file_layout(&file.0, &FileLayoutRequest::default()).unwrap();
+
+    let bounds = &report.bounds;
+    assert_eq!(bounds.regions.returned, 128);
+    assert_eq!(bounds.blocks.returned, 1024);
+    assert_eq!(bounds.entropy_spans.returned, 128);
+    assert_eq!(bounds.string_clusters.returned, 16);
+    assert_eq!(bounds.hints.returned, MAX_HINTS);
+    assert!(report.string_clusters.iter().all(|cluster| cluster.previews.len() == 3));
+    let size = serde_json::to_vec(&report).unwrap().len();
+    assert!(size <= MAX_LAYOUT_RESULT_BYTES, "{size}");
 }

@@ -42,7 +42,7 @@ fn contract_cli_json_fields() {
     std::fs::write(&firmware, contract::layout_fixture()).unwrap();
     let firmware = firmware.to_str().unwrap().to_owned();
     let commands: Vec<Vec<&str>> = vec![
-        vec!["binary", "layout", &firmware, "--block-size", "256", "--block-limit", "2", "--utf16"],
+        vec!["binary", "layout", &firmware, "--block-size", "512", "--block-limit", "2", "--utf16"],
         vec!["binary", "inspect", &elf],
         vec!["binary", "triage", &elf],
         vec!["binary", "detect", &exe],
