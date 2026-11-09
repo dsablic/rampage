@@ -64,7 +64,8 @@ A pack written for this release must keep loading in every later 1.x release. Th
 ## Precedence and validation
 
 For library identification, the first database to name a function wins: user `--db`, then packs in supplied
-order, then bundled `rampage-builtin`. Each match names its `source`. PeID, YARA and capa content runs alongside
+order, then bundled `rampage-builtin`, then the bundled call graph (`rampage-builtin call graph`), which only names
+functions no database named. Each match names its `source`, an open-ended set of names. PeID, YARA and capa content runs alongside
 bundled and user-supplied content. See [library identification](features.md#library-identification) for signature
 architecture coverage, confidence gates and library-build specificity.
 

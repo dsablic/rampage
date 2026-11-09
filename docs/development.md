@@ -174,7 +174,7 @@ Install a downloaded archive with the installer, which verifies the checksum whe
 the archive and then publishes the programs through the same guarded path as a source install:
 
 ```sh
-tools/install.sh --archive rampage-1.0.0-rc.1-x86_64-unknown-linux-gnu.tar.gz [ROOT] [--ui]
+tools/install.sh --archive rampage-1.0.0-rc.2-x86_64-unknown-linux-gnu.tar.gz [ROOT] [--ui]
 tools/install.sh [ROOT] [--ui] [--plugins]   # build from this checkout instead
 tools/install.sh [ROOT] --uninstall          # remove rampage, rampage-worker, rampage-ui, rampage-plugin-worker
 ```

@@ -4,7 +4,33 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
-## 1.0.0-rc.1 (unreleased)
+## 1.0.0-rc.2 (unreleased)
+
+The second release candidate. The stable surface is unchanged from rc.1: no contract snapshot changed. This
+candidate improves library identification only, which the [stability policy](docs/stability.md) counts as an
+analysis improvement, not an API change.
+
+### Library identification
+
+- The bundled signature databases gain rows learned on the flywheel corpus (zlib, lz4, cJSON, zstd and Lua builds
+  across compilers and optimisation levels), with operand fields wildcarded so one row covers more builds. On
+  held-out library versions, for example, Lua 5.4.6 goes from 70 to 772 named functions and zstd 1.5.5 from 172
+  to 348.
+- A bundled call graph names unnamed callees of already named functions by their position in known call
+  sequences, and only when the callee's own calls also fit. These names report the source
+  `rampage-builtin call graph` and never replace a database match or an existing name.
+- Precision is traded slightly for recall: on the ledgered final split the new rows gained about 37,000 correct
+  names against 100 wrong ones. Names for libc and compiler-runtime functions can be an alias of the binary's own
+  symbol (`lseek` for `__lseek`).
+- Identification takes slightly longer on large binaries (about 0.16 s on the largest corpus binary).
+
+### Experimental
+
+- The flywheel corpus has a ledgered final split, a false-positive allowance earned by large gains, and an
+  operator-only view of development cases. `rampage-eval bundle` gains `--arm`, `--arm-library`,
+  `--arm-exclude`, `--call-graph` and `--final-reason`.
+
+## 1.0.0-rc.1 (2026-11-06)
 
 The first public release, as a release candidate for 1.0.0: the stable surface in the
 [stability policy](docs/stability.md) is frozen unless the candidate turns up a problem, and 1.0.0 follows once it

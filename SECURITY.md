@@ -12,7 +12,7 @@ Fixes are coordinated in the private advisory before disclosure.
 
 ## Supported versions
 
-rampage is at its first release candidate, 1.0.0-rc.1. Only the latest commit on `main` and the most recent release
+rampage is at its second release candidate, 1.0.0-rc.2. Only the latest commit on `main` and the most recent release
 or release candidate receive fixes; there are no backports to older commits.
 
 ## Scope
