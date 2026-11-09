@@ -612,9 +612,51 @@ identify` on an unseen dev binary (lz4 1.10.0, x86-64 clang O2) names 49 functio
 and 0 before. The compressed assets grow by 170 KB (x86-64) and 191 KB (AArch64), and the provenance source
 `data/flywheel/libid.json` is 3.5 MB.
 
+### Fuzzy matching as a third arm: measurement (2026-11-09)
+Step 1 of the [code-candidates proposal](2026-11-08-flywheel-code-candidates.md). The existing fuzzy matcher
+(`rampage_signatures::fuzzy`: CFG degree histogram, constants, known callees, size, flow) runs after the bundled
+databases, which now carry arm v2. References are the training split's truth functions with a descriptor (4252
+distinct). Queries are the discovered functions the bundled databases leave unnamed on dev and negatives. Known
+callees come from the bundled names, never from truth. The final split is not read. Run with
+`cargo run --release -p rampage-eval --example fuzzy_arm -- CORPUS OUT.json`; a full pass takes about 25 s.
+
+Reach on dev, target-library functions the bundled databases miss:
+
+| Slice | Missed | With a descriptor | Top-1 name correct |
+| --- | ---: | ---: | ---: |
+| novel | 4017 | 2010 | 1642 |
+| recognised | 2329 | 570 | 432 |
+
+Half the novel misses get no descriptor: the matcher refuses functions under 12 instructions or 2 blocks, and
+those without two constants (or one constant and a known callee). Where it does describe a function, the top
+name is right 82% of the time.
+
+Operating points (margin 0.02 unless noted; dev baseline TP 8718, FP 64, F1 0.7303):
+
+| Threshold | dev dTP | dev dFP | novel dTP | negative dFP | dev F1 | Passes the allowance |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 0.95 | +558 | 0 | +448 | 0 | 0.7593 | yes |
+| 0.90 | +900 | +2 | +677 | 0 | 0.7764 | yes (allowance 9) |
+| 0.85 | +1018 | +18 | +794 | 0 | 0.7817 | no (allowance 10) |
+| 0.80 | +1511 | +34 | +1265 | +3 | 0.8048 | no (negatives) |
+| 0.70 | +1811 | +96 | +1515 | +27 | 0.8168 | no |
+
+**Caveats.**
+- The operating point is read off dev. Training has one version per library, so there is no second training
+  cohort to calibrate on, as the fuzzy module's own calibration requires. A final read is needed before a claim.
+- The gate's training check cannot be run as is: the references are the training functions, so every training
+  query matches itself. It would need leave-one-build-out references.
+
+**Reading.** Fuzzy matching is a real third arm. At 0.90 it adds +900 dev names (novel 1028 → 1705, +66%) for
++2 false positives and none on negatives, within the allowance. It does not close the novel gap: about 2000
+novel misses have no descriptor at all, and about 370 have a wrong top name. That residue is what a code
+candidate would target.
+
 ### Next
 - **Regenerate the bundled hash databases with callee keys for forwarder entries** (128 bundled false positives).
   This needs the signature-corpus source caches and the pinned toolchains, so it needs its own session.
+- **Fuzzy arm decision:** wire it as a shipped arm at threshold 0.90 (needs leave-one-build-out training check
+  and a final read), or keep it as the baseline code candidates must beat.
 - **The AI family needs a decision:** code-proposing candidates rather than compiler/tool rules. Proposal:
   [2026-11-08-flywheel-code-candidates.md](2026-11-08-flywheel-code-candidates.md).
 - **Caller/callee-confirmed rows** for identical bodies under different names (`LZ4_read64` / `LZ4_read_ARCH`).

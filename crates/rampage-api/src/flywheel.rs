@@ -16,6 +16,7 @@ mod corpus;
 mod engine;
 mod evaluation;
 mod failures;
+pub mod fuzzy_arm;
 mod improve;
 mod observations;
 mod promote;
@@ -32,7 +33,7 @@ pub use candidate::{
 pub use corpus::{Corpus, CorpusBinary, CorpusManifest, Role, Split, SplitConfig};
 pub use engine::{
     BodyKey, Bundled, Counts, Engine, Gains, Layer, Loaded, NovelReach, Outcome, Overlap, Proposals, SliceMetrics,
-    TruthFunction,
+    TruthFunction, gated_slice, slice_counts,
 };
 pub use evaluation::{
     ChangedCase, GateCheck, GateConfig, GateResult, NOVEL_SLICE, RECOGNISED_SLICE, SliceDelta, SplitEvaluation,

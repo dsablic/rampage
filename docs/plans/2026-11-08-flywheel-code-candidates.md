@@ -1,6 +1,7 @@
 # Flywheel: candidates that are code (proposal, 2026-11-08)
 
-Status: proposal, not started. Needs a go-ahead.
+Status: step 1 measured (2026-11-09; see the fast-loop plan, "Fuzzy matching as a third arm"). Steps 2–4 need
+a go-ahead.
 
 ## Why
 
@@ -50,6 +51,11 @@ and they are the deterministic baseline to measure first.
    - a wall-time and memory budget per binary;
    - a size limit;
    - the fuzzy arm from step 1 as the baseline the candidate must beat.
+
+Step 1 result: at threshold 0.90 the fuzzy matcher adds +900 dev names (novel +677) for +2 false positives and
+none on negatives. About 2000 novel misses get no fuzzy descriptor (under 12 instructions or 2 blocks, or too
+few constants) and about 370 have a wrong top name. That residue is the target for code candidates, and the
+fuzzy arm at 0.90 is their baseline.
 
 ## Risks and costs
 
