@@ -48,6 +48,10 @@ pub struct BundleArgs {
     /// diagnosis showed matching another library's function. The entry's id is the hash of the rows it keeps.
     #[arg(long, value_delimiter = ',', requires = "arm")]
     arm_exclude: Vec<String>,
+    /// With `--arm`: keep only the arm's rows for these libraries, as an entry added beside the bundled arm instead
+    /// of replacing it (for libraries the bundled arm does not cover).
+    #[arg(long, value_delimiter = ',', requires = "arm")]
+    arm_library: Vec<String>,
     /// Regenerate the bundled call graph (`data/callgraph.json.gz`) from the corpus's training split: each training
     /// library function's call sequence. Gated on its own like any other change; revert it with git.
     #[arg(long, conflicts_with_all = ["remove", "from", "arm"])]
@@ -400,6 +404,7 @@ pub fn with_arm(
     engine: &Engine,
     gate: &GateConfig,
     exclude: &[String],
+    libraries: &[String],
 ) -> Result<(BundledSource, String), String> {
     let mut arm = rampage_api::flywheel::arm(engine, gate.min_pattern_bytes).map_err(|error| error.to_string())?;
     if let Some(missing) = exclude.iter().find(|name| !arm.rows.iter().any(|row| &row.name == *name)) {
@@ -407,6 +412,22 @@ pub fn with_arm(
     }
     let before = arm.rows.len();
     arm.rows.retain(|row| !exclude.contains(&row.name));
+    if !libraries.is_empty() {
+        arm.rows.retain(|row| row.library.as_ref().is_some_and(|library| libraries.contains(library)));
+        if arm.rows.is_empty() {
+            return Err(format!("the arm has no row for {}", libraries.join(", ")));
+        }
+        let covered: Vec<&str> = source
+            .entries
+            .iter()
+            .filter(|entry| entry.id.starts_with("arm-"))
+            .filter(|entry| entry.rows.iter().any(|row| row.library.as_ref().is_some_and(|l| libraries.contains(l))))
+            .map(|entry| entry.id.as_str())
+            .collect();
+        if !covered.is_empty() {
+            return Err(format!("bundled arm entries {} already hold rows for these libraries", covered.join(", ")));
+        }
+    }
     if !exclude.is_empty() {
         eprintln!("bundle: left out {} arm rows named {}", before - arm.rows.len(), exclude.join(", "));
     }
@@ -416,23 +437,28 @@ pub fn with_arm(
         return Err(format!("{id} is bundled already; nothing to do"));
     }
     let mut out = source.clone();
-    for replaced in out.entries.iter().filter(|entry| entry.id.starts_with("arm-")) {
+    for replaced in out.entries.iter().filter(|entry| libraries.is_empty() && entry.id.starts_with("arm-")) {
         eprintln!("bundle: {id} replaces the bundled arm {}", replaced.id);
     }
-    out.entries.retain(|entry| !entry.id.starts_with("arm-"));
+    // An arm for some libraries sits beside the bundled arm; a whole arm replaces it.
+    if libraries.is_empty() {
+        out.entries.retain(|entry| !entry.id.starts_with("arm-"));
+    }
     let classes: Vec<&str> = arm.wildcards.iter().map(|class| class.name()).collect();
     out.entries.push(BundledEntry {
         id: id.clone(),
         family: FAMILY.to_owned(),
         candidate_hash: hash,
-        source_pack: if exclude.is_empty() {
-            format!("flywheel deterministic arm (wildcards: {})", classes.join(", "))
-        } else {
-            format!(
-                "flywheel deterministic arm (wildcards: {}; rows left out: {})",
-                classes.join(", "),
-                exclude.join(", ")
-            )
+        source_pack: {
+            let mut text = format!("flywheel deterministic arm (wildcards: {}", classes.join(", "));
+            if !libraries.is_empty() {
+                text.push_str(&format!("; libraries: {}", libraries.join(", ")));
+            }
+            if !exclude.is_empty() {
+                text.push_str(&format!("; rows left out: {}", exclude.join(", ")));
+            }
+            text.push(')');
+            text
         },
         corpus_version: arm.corpus_version.clone(),
         promoted_baseline: Some("bundled".to_owned()),
@@ -495,7 +521,7 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
     let before = load_source(&repo)?;
     let (mut after, action, ids) = match (&args.from, &args.remove) {
         (None, None) if args.arm => {
-            let (after, id) = with_arm(&before, &engine, &gate, &args.arm_exclude)?;
+            let (after, id) = with_arm(&before, &engine, &gate, &args.arm_exclude, &args.arm_library)?;
             (after, "add", vec![id])
         }
         (None, None) if args.call_graph => (before.clone(), "add", Vec::new()),
@@ -577,6 +603,33 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
         let passed = checks.iter().all(|(_, rise)| *rise <= 0);
         (passed, checks.iter().map(|(rule, rise)| json!({"rule": rule, "passed": *rise <= 0, "detail": format!("false positives {rise:+}")})).collect())
     };
+    if !verdict {
+        // Operator diagnostics (bundle is never served to a proposer): the slices that lose F1, and on training the
+        // cases a change broke.
+        for split in [Split::Train, Split::Heldout] {
+            let evaluation = &evaluations[&split];
+            for (slice, change) in evaluation.f1_changes() {
+                if change + 1e-12 < -gate.max_slice_f1_drop {
+                    let (before, after) = evaluation.slice(slice);
+                    eprintln!(
+                        "bundle: {} slice {slice} loses {:.6} F1 (TP {} -> {}, FP {} -> {})",
+                        split.name(),
+                        -change,
+                        before.tp(),
+                        after.tp(),
+                        before.fp(),
+                        after.fp()
+                    );
+                }
+            }
+        }
+        for case in evaluations[&Split::Train].cases.iter().filter(|case| case.effect == "broken").take(40) {
+            eprintln!(
+                "bundle: train broken {} {}: {:?} -> {:?} (truth {:?})",
+                case.binary, case.address, case.before, case.after, case.truth
+            );
+        }
+    }
     let heldout_all = heldout_eval.deltas().remove("all");
     for entry in &mut after.entries {
         if ids.contains(&entry.id) {
@@ -984,6 +1037,7 @@ mod tests {
             from,
             arm: false,
             arm_exclude: vec![],
+            arm_library: vec![],
             call_graph: false,
             entries: vec![],
             remove,

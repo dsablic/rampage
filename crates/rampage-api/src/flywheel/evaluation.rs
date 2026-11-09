@@ -100,7 +100,7 @@ impl SplitEvaluation {
     }
 
     /// Each gated slice's F1 change, unrounded, for the gate.
-    fn f1_changes(&self) -> BTreeMap<&str, f64> {
+    pub fn f1_changes(&self) -> BTreeMap<&str, f64> {
         self.candidate
             .iter()
             .filter(|(slice, _)| gated_slice(slice))
