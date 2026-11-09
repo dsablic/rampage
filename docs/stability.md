@@ -107,8 +107,8 @@ Snapshots under `tests/contract/` pin the stable surface, and tests compare it w
 - `mcp-results-<group>.json`, one per stable group: the result field paths every tool of the group returns on
   committed fixtures (`debug` against the scripted fake stub). Result fields are observed, not derived from types,
   so a field that a fixture does not produce is not pinned. A tool a group adds without being exercised fails the
-  test. `query_debugger` is the one exception: it returns the LLDB bridge's response unchanged, so its fields are
-  the bridge protocol's (`rampage-lldb-query-v1`) and are reviewed by hand.
+  test. `query_debugger` runs against a scripted bridge socket, so its envelope is pinned; the fields inside
+  `data` follow the bridge protocol (`rampage-lldb-query-v1`).
 - `cli-commands.json`: every CLI route, the compatibility spellings included, with its flags and positionals.
 - `cli-json.json`: the `--json` field paths of the main commands on committed fixtures.
 

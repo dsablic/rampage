@@ -17,14 +17,14 @@ use serde_json::{Value, json};
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
-struct Socket {
+pub(crate) struct Socket {
     directory: PathBuf,
-    path: PathBuf,
+    pub(crate) path: PathBuf,
     listener: Option<UnixListener>,
 }
 
 impl Socket {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let directory = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "rmq-{}-{}",
             std::process::id(),
@@ -37,7 +37,7 @@ impl Socket {
         Self { directory, path, listener: Some(listener) }
     }
 
-    fn serve(&mut self, run: impl FnOnce(Value) -> Value + Send + 'static) -> std::thread::JoinHandle<()> {
+    pub(crate) fn serve(&mut self, run: impl FnOnce(Value) -> Value + Send + 'static) -> std::thread::JoinHandle<()> {
         let listener = self.listener.take().unwrap();
         std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
@@ -81,7 +81,7 @@ fn text(result: &CallToolResult) -> &str {
     &result.content[0].as_text().unwrap().text
 }
 
-fn response() -> Value {
+pub(crate) fn response() -> Value {
     json!({"protocol":"rampage-lldb-query-v1","ok":true,"operation":"describe_session",
         "token":{"backend":"lldb-sb","session_id":"mcp-test","process_unique_id":7,"stop_id":3,"target_index":0},
         "data":{"state":"stopped","stop_evidence":{"source":"SBThread.GetStopReason/current-process-stop",

@@ -99,5 +99,27 @@
     "slot_permissions.execute",
     "slot_permissions.read",
     "slot_permissions.write"
+  ],
+  "query_debugger": [
+    "data",
+    "data.state",
+    "data.stop_evidence",
+    "data.stop_evidence.is_stopped",
+    "data.stop_evidence.source",
+    "data.stop_evidence.stop_reason",
+    "observation",
+    "observation.atomic_snapshot",
+    "observation.consistency",
+    "observation.content_sha256",
+    "observation.identity_scope",
+    "ok",
+    "operation",
+    "protocol",
+    "token",
+    "token.backend",
+    "token.process_unique_id",
+    "token.session_id",
+    "token.stop_id",
+    "token.target_index"
   ]
 }

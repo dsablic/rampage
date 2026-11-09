@@ -2,7 +2,7 @@
 //! - `mcp-tools.json`: every tool's name, group and arguments (type and whether required), as `tools/list` gives
 //!   them on a server with every group, a debug server with the write and kill flags, and a corpus server;
 //! - `mcp-results-<group>.json`: the result field paths each tool of every stable group returns on committed
-//!   fixtures.
+//!   fixtures (`query_debugger` against a scripted bridge socket, `debug` against the fake stub).
 //!
 //! `tests/contract/support.rs` classifies each difference as additive or breaking and says how to update.
 
@@ -357,6 +357,8 @@ async fn contract_mcp_carve_results() {
 /// The result fields of the `formats` group, each on a fixture that has the structure it reads.
 #[tokio::test]
 async fn contract_mcp_formats_results() {
+    let scratch = Scratch::new("formats");
+    let fixture = |name: &str| owned(&scratch, &fixture(name));
     let client = connect(RampageServer::with_groups(Group::ALL)).await;
     let mut observed = Observed::new();
     let (c, o) = (&client, &mut observed);
@@ -437,8 +439,9 @@ async fn contract_mcp_detection_results() {
     check_group(client, "detection", &observed, &[]).await;
 }
 
-/// The result fields of the `runtime` group on committed runtime snapshots. `query_debugger` is exempt: it returns
-/// the LLDB bridge's own response unchanged, so its fields are the bridge protocol's, not the tool's.
+/// The result fields of the `runtime` group on committed runtime snapshots, and `query_debugger` against a scripted
+/// bridge socket (its `data` object is the bridge's own and is not pinned beyond what the script returns).
+#[cfg(unix)]
 #[tokio::test]
 async fn contract_mcp_runtime_results() {
     let scratch = Scratch::new("runtime");
@@ -453,7 +456,12 @@ async fn contract_mcp_runtime_results() {
     let compare = json!({"path": arm64, "other": arm64, "at": "0x3000", "other_at": "0x4000"});
     exercise(c, o, "compare_pointer_observations", compare).await;
     exercise(c, o, "compare_runtime_bytes", comparison.arguments(&comparison.original)).await;
-    check_group(client, "runtime", &observed, &["query_debugger"]).await;
+    let mut socket = crate::debugger::Socket::new();
+    let bridge = socket.serve(|_| crate::debugger::response());
+    let query = json!({"socket": socket.path, "request": {"version": 1, "operation": "describe_session"}});
+    exercise(c, o, "query_debugger", query).await;
+    bridge.join().unwrap();
+    check_group(client, "runtime", &observed, &[]).await;
 }
 
 /// The result fields of the `types` group: the type library, typed data and operands, variables and frames,
@@ -511,8 +519,10 @@ async fn contract_mcp_types_results() {
 
     // Debug-information imports, previewed.
     exercise(c, o, "import_debug_signatures", json!({"path": debug})).await;
+    exercise(c, o, "import_debug_signatures", json!({"path": debug, "apply": true})).await;
     exercise(c, o, "import_debug_types", json!({"path": debug, "limit": 2})).await;
     exercise(c, o, "import_debug_layouts", json!({"path": debug, "limit": 2})).await;
     exercise(c, o, "import_pdb_names", json!({"path": exe, "pdb": pdb, "limit": 2})).await;
+    exercise(c, o, "import_pdb_names", json!({"path": exe, "pdb": pdb, "limit": 2, "apply": true})).await;
     check_group(client, "types", &observed, &[]).await;
 }
