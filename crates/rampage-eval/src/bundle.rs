@@ -416,6 +416,7 @@ pub fn with_arm(
     }
     let before = arm.rows.len();
     arm.rows.retain(|row| !exclude.contains(&row.name));
+    let excluded = before - arm.rows.len();
     if !libraries.is_empty() {
         arm.rows.retain(|row| row.library.as_ref().is_some_and(|library| libraries.contains(library)));
         if arm.rows.is_empty() {
@@ -433,7 +434,7 @@ pub fn with_arm(
         }
     }
     if !exclude.is_empty() {
-        eprintln!("bundle: left out {} arm rows named {}", before - arm.rows.len(), exclude.join(", "));
+        eprintln!("bundle: left out {excluded} arm rows named {}", exclude.join(", "));
     }
     let hash = rampage_api::flywheel::rows_hash(&arm.rows);
     let id = format!("arm-{}", &hash[..12]);

@@ -3,10 +3,10 @@
   "arch": "x86_64",
   "scheme": 2,
   "asset": "corpus-x86_64.json.gz",
-  "gzip_sha256": "6f61be54bc2cb52b14618dad15663df054008ebaa6655b02f1e47d84fce580ab",
-  "compressed_bytes": 996283,
-  "json_bytes": 2678559,
-  "signatures": 12898,
+  "gzip_sha256": "f9846a45e043337ef879150126fd428dc5acacb9913f8af1f87145b767001af3",
+  "compressed_bytes": 1731221,
+  "json_bytes": 7671814,
+  "signatures": 19063,
   "callee_keys": 822,
   "recognition": "same_build",
   "profiles": [
@@ -533,13 +533,13 @@
     {
       "id": "flywheel-libid-x86_64",
       "library": "flywheel libid promotions",
-      "version": "1529 rows from 1 entries",
+      "version": "7694 rows from 2 entries",
       "target": "x86_64-linux-musl",
       "compiler": "zig cc, Homebrew clang and Alpine gcc (flywheel corpus builds)",
       "optimization": "O0, O2, Os and the distribution's",
-      "license": "BSD-2-Clause AND MIT AND Zlib",
+      "license": "BSD-2-Clause AND BSD-3-Clause AND MIT AND Zlib",
       "source": "rampage flywheel promotions; provenance in crates/rampage-signatures/data/flywheel/libid.json",
-      "source_recipe": "entries arm-e77075a92a73; corpora libid-ed988c9a220e; gated held out against the bundled baseline by rampage-eval bundle",
+      "source_recipe": "entries arm-e77075a92a73, arm-fe9ae8b57e9e; corpora libid-00da6363626a, libid-ed988c9a220e; gated held out against the bundled baseline by rampage-eval bundle",
       "archive_sha256": null,
       "archive_identity_unavailable": "signature rows gated on a flywheel corpus, not a build of one source archive"
     }
