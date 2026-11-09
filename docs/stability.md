@@ -1,6 +1,6 @@
 # Stability policy
 
-Takes effect with the first public release (1.0.0 or its release candidates).
+In effect since the first public release, 1.0.0-rc.1, and binding from 1.0.0.
 
 This page says which parts of rampage you can build on across releases, which parts may change, and how changes
 are announced. rampage's product is its MCP server, so the policy is written around what an agent, a client

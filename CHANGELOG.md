@@ -4,6 +4,18 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
+## 1.0.0 (unreleased)
+
+The first stable release. The stable surface in the [stability policy](docs/stability.md) is the one rc.1 froze;
+no contract snapshot changed through either release candidate, and from here a change to it needs a new major
+version. The code is rc.2's.
+
+### Stability
+
+- Contract snapshots now pin the result fields of every stable MCP group (`mcp-results-<group>.json`), not just
+  `core` and `debug`. A tool that a group adds without a fixture exercising it fails the test, and
+  `query_debugger`'s result envelope is pinned against a scripted bridge.
+
 ## 1.0.0-rc.2 (2026-11-09)
 
 The second release candidate. The stable surface is unchanged from rc.1: no contract snapshot changed. This
