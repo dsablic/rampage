@@ -1461,3 +1461,25 @@ After each group: `cargo fmt`, `cargo clippy --all-targets`, `cargo test`, and t
 - Literal pools tested with all code/data byte-order combinations and truncated reads.
 - A64 rendering compared against the pre-change code on 500,000 deterministic words (identical SHA-1 above).
 - Release builds report a local `rust-objcopy`/`libLLVM.dylib` stripping warning; the tests still pass.
+
+## Linux ARM64 host support (after the repository is public)
+
+GitHub's `ubuntu-24.04-arm` runners are free only for public repositories, so this started once the repository
+was public.
+
+- [x] Add an `ubuntu-24.04-arm` CI job mirroring the Linux x86-64 job (hygiene gate, Clippy, workspace nextest,
+  sccache), dispatchable on its own like `macos`. Done: the `linux-arm64` job, `-f linux_arm64=true`; it also runs
+  the supervised decompiler corpus gate.
+- [x] Gate lanes that are x86-64 by design with job conditions or `cfg`; fix any test that assumes an x86-64 host.
+  Done: no lane needed a gate. The ELF layout and DWARF/C++ oracles cross-compile x86-64 fixtures with clang and
+  rust-lld, so they run on ARM64 with `rust-objcopy` in place of Ubuntu's ARM64 binutils, which cannot read x86-64
+  ELF. No test assumed the host; Clippy rejected one `c_char as u8` cast in `sleigh_decode.rs` (`c_char` is `u8`
+  on Linux ARM64), now `to_ne_bytes`.
+- [x] Check supervised decompilation and the plugin host's resource limits on Linux ARM64. Done: the corpus gate
+  (`--isolated`), the worker's limit tests and the hostile resource probes pass; the `setrlimit` and `O_NONBLOCK`
+  constants are the generic Linux values AArch64 uses.
+- [x] Add `aarch64-unknown-linux-gnu` to `release.yml`'s build matrix on a native ARM64 runner, with the same
+  packaging and in-job archive check; dry-run it, then install the archive with `tools/install.sh --archive` on a
+  clean ARM64 container. Done: installed in `ubuntu:24.04` (`linux/arm64`); `--version`, `server serve --help`, an
+  MCP `initialize` and `--uninstall` work.
+- [x] Update the README support table, `docs/known-limits.md`, `docs/getting-started.md` and the changelog.

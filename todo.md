@@ -1,50 +1,25 @@
 # To do
 
-## Status (2026-11-06)
+## Status (2026-11-09)
 
+- Release: 1.0.0-rc.1 (2026-11-06) and rc.2 (2026-11-09) are published as pre-releases; 1.0.0 is being prepared.
+  Contract snapshots pin every stable MCP group. Linux ARM64 host support shipped in rc.1 (archived).
 - Parity roadmap: Phases 0–3 and 4.1 implemented; live Phase 1 sign-off, the Phase 2 recall target and the
   Phase 3.3 live improvement gate are open. Phase 4.2 is next in roadmap order.
 - Debugger (Phase 9): 9.1–9.4 done; 9.5 (macOS `debugserver`) and 9.6a (Windows through RSP stubs) implemented,
-  live acceptance pending. See `docs/plans/2026-10-29-debugger-control.md`.
+  live acceptance pending (experimental in 1.0). See `docs/plans/2026-10-29-debugger-control.md`.
 - REA gap-closing wave 1 (2026-10-29): `formats` tools and the findings ledger done; log compaction open.
 - Head-to-head with REA: suite v1 and suite v2 published (`docs/benchmarks/`); follow-ups below. Suite v3
   (tasks where Ghidra is strong) and a second model or client are not run yet.
-- Flywheel fast loop: M1, M2, arm v2 (operand wildcarding), a ledgered final split, Zig counters dropped from
-  names (bundled false positives 270/276/134 → 54/60/26 on train/dev/negatives) and a held-out false-positive
-  allowance (one per 100 correct names gained; the arm now passes) are done
-  (`docs/plans/2026-11-05-flywheel-fast-loop.md`). Compiler/optimisation identification was checked first and is
-  saturated by a one-feature miner, so it is not an AI family as planned; the AI family needs a decision
-  (code-proposing candidates). The arm now ships in the bundled databases
-  (`rampage-eval bundle --arm`). The corpus now has zstd and Lua and a fresh final split
-  (`libid-00da6363626a`); call-graph propagation ships as a bundled call graph (`bundle --call-graph`), and fuzzy
-  matching failed final on both corpora so it stays suggestion-only. The zstd and Lua arm rows ship too (final read #2: +37323 for +100). Open: an arm rule for
-  rows that match another library's body (fixed by name for now); regenerating the bundled hash databases with callee keys for forwarders (needs the
-  signature-corpus caches).
+- Flywheel fast loop (`docs/plans/2026-11-05-flywheel-fast-loop.md`): the deterministic arm (exact rows, operand
+  wildcarding) and call-graph propagation ship in the bundled databases; fuzzy matching failed the final split on
+  both corpora and stays suggestion-only. The AI proposer has made no promotion a deterministic generator could
+  not; whether it proposes code next (`docs/plans/2026-11-08-flywheel-code-candidates.md`, steps 2–4) is
+  undecided. Open: an arm rule for rows that match another library's body (fixed by name for now); regenerating
+  the bundled hash databases with callee keys for forwarders (needs the signature-corpus caches).
 
 This file holds open items. Done sections, including every completed parity phase, are archived verbatim in
 [docs/plans/todo-archive.md](docs/plans/todo-archive.md); each section below that lost done items links to them.
-
-## Linux ARM64 host support (after the repository is public)
-
-GitHub's `ubuntu-24.04-arm` runners are free only for public repositories, so this started once the repository
-was public.
-
-- [x] Add an `ubuntu-24.04-arm` CI job mirroring the Linux x86-64 job (hygiene gate, Clippy, workspace nextest,
-  sccache), dispatchable on its own like `macos`. Done: the `linux-arm64` job, `-f linux_arm64=true`; it also runs
-  the supervised decompiler corpus gate.
-- [x] Gate lanes that are x86-64 by design with job conditions or `cfg`; fix any test that assumes an x86-64 host.
-  Done: no lane needed a gate. The ELF layout and DWARF/C++ oracles cross-compile x86-64 fixtures with clang and
-  rust-lld, so they run on ARM64 with `rust-objcopy` in place of Ubuntu's ARM64 binutils, which cannot read x86-64
-  ELF. No test assumed the host; Clippy rejected one `c_char as u8` cast in `sleigh_decode.rs` (`c_char` is `u8`
-  on Linux ARM64), now `to_ne_bytes`.
-- [x] Check supervised decompilation and the plugin host's resource limits on Linux ARM64. Done: the corpus gate
-  (`--isolated`), the worker's limit tests and the hostile resource probes pass; the `setrlimit` and `O_NONBLOCK`
-  constants are the generic Linux values AArch64 uses.
-- [x] Add `aarch64-unknown-linux-gnu` to `release.yml`'s build matrix on a native ARM64 runner, with the same
-  packaging and in-job archive check; dry-run it, then install the archive with `tools/install.sh --archive` on a
-  clean ARM64 container. Done: installed in `ubuntu:24.04` (`linux/arm64`); `--version`, `server serve --help`, an
-  MCP `initialize` and `--uninstall` work.
-- [x] Update the README support table, `docs/known-limits.md`, `docs/getting-started.md` and the changelog.
 
 ## Proposed tracks (2026-11-08, not started)
 
@@ -229,6 +204,26 @@ Shared API/CLI/MCP edits and builds remain coordinated; each parallel worker own
   byte sums through the CLI; raw-code loading and the complete loader contract are still open.
 - Static only: no updater/installer execution, flashing, emulator execution or security changes. Do not turn
   this into an automatic unpacker or a generic firmware framework before the first traced loader path.
+
+### Firmware gaps seen in an agent run on a Cortex-M image (2026-11-09, not started)
+
+An agent analysing a headerless ARM Thumb (Cortex-M) firmware image fell back to
+`strings`/`xxd`, a Python wrapper around the rampage CLI for range disassembly, an entropy/0xFF-run map, and an
+LZ parameter brute force. Each is a candidate MCP tool; one at a time, each needing its own design and go-ahead.
+Verify first which of these the existing raw-window and decoder-provider slices above already cover.
+
+- [ ] **Firmware layout tool.** Regions, 0xFF/0x00 padding runs, per-block entropy (packed areas), string
+  clusters and range hashes in one call. Extends the byte/ASCII triage slice above.
+- [ ] **Unknown-compression probe.** Try LZSS/LZ4/LZ77 variants and a bit-order/length-encoding sweep against a
+  supplied or expected output size or an entropy drop, and return candidate decoder-provider parameters. Builds
+  on the explicit LZSS-4K provider; the agent re-derived this by hand.
+- [ ] **Cortex-M vector table and entry detection.** Reset/SP/handler candidates with evidence, so the first
+  load needs no trial and error. Pairs with the ARM/Thumb Raw profile item under the benchmark follow-ups.
+- [ ] **Raw ingest in one call.** Blob plus arch, mode and base address returns a ready project (see the
+  ARM/Thumb Raw profile item), so agents need not read `cli-reference.md` and `sleigh-decoding.md` to learn it.
+- [ ] **Range disassembly to text**, native in `inspect_raw_code`, replacing wrapper scripts.
+- [ ] **Multi-stage images.** Load a decoded bootloader payload as a second region at its RAM base, linked to the
+  source range. Overlaps the dump-as-linked-target idea in the malware-analysis track.
 
 ### Execution rules for speed
 
