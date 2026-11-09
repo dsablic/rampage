@@ -9,8 +9,10 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use rampage_api::flywheel::fuzzy_arm::{FuzzyMeasurement, FuzzyQuery, measure, propagate};
-use rampage_api::flywheel::{Corpus, Counts, Engine, Outcome, Paths, Split, slice_counts};
+use rampage_api::flywheel::fuzzy_arm::{FuzzyMeasurement, FuzzyQuery, Names, base_names, measure, propagate};
+use rampage_api::flywheel::{
+    ARM_WILDCARDS, Corpus, Counts, Engine, GateConfig, Outcome, Paths, Split, layer, slice_counts,
+};
 use serde_json::json;
 
 const THRESHOLDS: &[f64] = &[0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95];
@@ -18,13 +20,14 @@ const MARGINS: &[f64] = &[0.0, 0.02, 0.05, 0.10, 0.15];
 
 fn counts(
     engine: &Engine,
+    base: &Names,
     indices: &[usize],
     fuzzy: &BTreeMap<usize, BTreeMap<u64, String>>,
 ) -> BTreeMap<String, Counts> {
     let mut outcomes: BTreeMap<usize, BTreeMap<u64, Outcome>> = BTreeMap::new();
     for &index in indices {
         let loaded = engine.get(index).expect("loaded");
-        let mut names = loaded.baseline.clone();
+        let mut names = base_names(&loaded, base, index).clone();
         if let Some(extra) = fuzzy.get(&index) {
             for (address, name) in extra {
                 names.entry(*address).or_insert_with(|| name.clone());
@@ -49,32 +52,23 @@ fn pick(queries: &[FuzzyQuery], threshold: f64, margin: f64) -> BTreeMap<usize, 
 fn with_propagation(
     engine: &Engine,
     measurement: &FuzzyMeasurement,
+    base: &Names,
     indices: &[usize],
     fuzzy: &BTreeMap<usize, BTreeMap<u64, String>>,
 ) -> BTreeMap<usize, BTreeMap<u64, String>> {
     let mut out = BTreeMap::new();
     for &index in indices {
         let loaded = engine.get(index).expect("loaded");
-        let mut names = loaded.baseline.clone();
+        let mut names = base_names(&loaded, base, index).clone();
         let extra = fuzzy.get(&index).cloned().unwrap_or_default();
         for (address, name) in &extra {
             names.entry(*address).or_insert_with(|| name.clone());
         }
         let mut added = extra;
-        added.extend(propagate(engine, measurement, index, &names, max_unnamed(), confirm_callee()));
+        added.extend(propagate(engine, measurement, index, &names));
         out.insert(index, added);
     }
     out
-}
-
-/// The propagation's limit on unnamed callees per caller, from `FUZZY_ARM_MAX_UNNAMED` (default 1).
-fn max_unnamed() -> usize {
-    std::env::var("FUZZY_ARM_MAX_UNNAMED").ok().and_then(|text| text.parse().ok()).unwrap_or(1)
-}
-
-/// Whether a propagated callee's own calls must fit its name's training sequences (`FUZZY_ARM_CONFIRM=1`).
-fn confirm_callee() -> bool {
-    std::env::var("FUZZY_ARM_CONFIRM").is_ok_and(|text| text == "1")
 }
 
 fn row(slices: &BTreeMap<String, Counts>, slice: &str) -> serde_json::Value {
@@ -125,7 +119,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     engine.load_all(&[train.clone(), dev.clone(), negative.clone()].concat())?;
     let started = std::time::Instant::now();
     let queries: Vec<usize> = [dev.clone(), negative.clone()].concat();
-    let measurement = measure(&engine, &train, &queries)?;
+    // Dev, negatives (and final) start from the bundled databases plus the deterministic arm; training from the
+    // bundled databases, since the arm holds every training body.
+    let arm = rampage_api::flywheel::arm_with(&engine, GateConfig::default().min_pattern_bytes, &ARM_WILDCARDS)?;
+    let layers: Vec<_> = layer("arm", &arm.rows)?.into_iter().collect();
+    let base: Names = engine.propose(&queries, &layers)?.names;
+    if std::env::var("FUZZY_ARM_SLICES").is_ok() {
+        // Diagnosis: the dev slices the arm alone makes worse than the bundled databases.
+        let before = counts(&engine, &Names::new(), &dev, &BTreeMap::new());
+        let after = counts(&engine, &base, &dev, &BTreeMap::new());
+        for (slice, counts) in &after {
+            let old = before.get(slice).cloned().unwrap_or_default();
+            if counts.f1() + 1e-12 < old.f1() && rampage_api::flywheel::gated_slice(slice) {
+                eprintln!(
+                    "{slice}: F1 {:.6} -> {:.6} (tp {} -> {}, fp {} -> {})",
+                    old.f1(),
+                    counts.f1(),
+                    old.tp(),
+                    counts.tp(),
+                    old.fp(),
+                    counts.fp()
+                );
+            }
+        }
+        for &index in &dev {
+            let loaded = engine.get(index)?;
+            let entry = engine.binary(index);
+            if entry.library != "lz4" || entry.opt != "O0" {
+                continue;
+            }
+            for (address, name) in base_names(&loaded, &base, index) {
+                let truth = loaded.truth.get(address);
+                let bundled = loaded.baseline.get(address);
+                if truth.is_none_or(|truth| truth.name != *name) && bundled != Some(name) {
+                    eprintln!(
+                        "{} {address:#x}: {name} (bundled {:?}, truth {:?})",
+                        entry.id,
+                        bundled,
+                        truth.map(|t| &t.name)
+                    );
+                }
+            }
+        }
+        return Ok(());
+    }
+    let measurement = measure(&engine, &train, &queries, &base)?;
     let elapsed = started.elapsed().as_secs_f64();
     eprintln!(
         "{} references ({} train functions refused), {} queries, {} refused, {} unmatched, {elapsed:.0}s",
@@ -147,7 +185,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let described: std::collections::BTreeSet<u64> =
             measurement.described.get(&index).into_iter().flatten().copied().collect();
         for (address, truth) in &loaded.truth {
-            if truth.origin == "runtime" || loaded.baseline.contains_key(address) {
+            if truth.origin == "runtime" || base_names(&loaded, &base, index).contains_key(address) {
                 continue;
             }
             let slice = if novelty.get(address).copied().unwrap_or(false) { "novel" } else { "recognised" };
@@ -178,9 +216,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    let baseline_dev = counts(&engine, &dev, &BTreeMap::new());
-    let baseline_negative = counts(&engine, &negative, &BTreeMap::new());
-    let baseline_train = counts(&engine, &train, &BTreeMap::new());
+    let baseline_dev = counts(&engine, &base, &dev, &BTreeMap::new());
+    let baseline_negative = counts(&engine, &base, &negative, &BTreeMap::new());
+    let baseline_train = counts(&engine, &base, &train, &BTreeMap::new());
     // Each fuzzy point (threshold 2.0: no fuzzy names), without and with call-graph propagation over its names.
     let mut points = Vec::new();
     let thresholds: Vec<f64> = THRESHOLDS.iter().copied().chain([2.0]).collect();
@@ -196,11 +234,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for propagated in [false, true] {
                 let score = |indices: &[usize]| {
                     let names = if propagated {
-                        with_propagation(&engine, &measurement, indices, &chosen)
+                        with_propagation(&engine, &measurement, &base, indices, &chosen)
                     } else {
                         chosen.clone()
                     };
-                    counts(&engine, indices, &names)
+                    counts(&engine, &base, indices, &names)
                 };
                 let (train_slices, dev_slices, negative_slices) = (score(&train), score(&dev), score(&negative));
                 points.push(json!({
@@ -224,8 +262,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for &(label, propagated, threshold, margin) in diagnoses {
         let chosen = pick(&measurement.queries, threshold, margin);
         for indices in [&train, &dev, &negative] {
-            let names =
-                if propagated { with_propagation(&engine, &measurement, indices, &chosen) } else { chosen.clone() };
+            let names = if propagated {
+                with_propagation(&engine, &measurement, &base, indices, &chosen)
+            } else {
+                chosen.clone()
+            };
             for (index, added) in &names {
                 let loaded = engine.get(*index)?;
                 for (address, name) in added {

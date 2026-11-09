@@ -22,7 +22,7 @@ use crate::{Packs, Project};
 pub const RUNTIME: &str = "runtime";
 
 /// Bumped when the cached truth or baseline format or meaning changes, so old entries are not reused.
-const CACHE_FORMAT: &str = "flywheel-cache-v2";
+const CACHE_FORMAT: &str = "flywheel-cache-v3";
 
 /// One truth function: its name in the symbolized twin and where it comes from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,8 +52,10 @@ pub struct Loaded {
     pub truth: BTreeMap<u64, TruthFunction>,
     /// Each discovered function with a body: start and exclusive end.
     pub functions: Vec<(u64, u64)>,
-    /// The names the bundled databases alone give: the cached baseline.
+    /// The names the bundled databases and call graph alone give: the cached baseline.
     pub baseline: BTreeMap<u64, String>,
+    /// Each discovered function's call targets in call-site order, for call-graph propagation.
+    pub calls: BTreeMap<u64, Vec<u64>>,
 }
 
 impl Loaded {
@@ -129,9 +131,13 @@ pub fn pattern_matches(pattern: &[Option<u8>], body: &[u8]) -> bool {
 /// A masked body as a signature sees it: its architecture and canonical pattern (`format_pattern`).
 pub type BodyKey = (String, String);
 
-/// Signature databases standing in for the bundled ones (one per architecture): a regenerated bundled asset measured
-/// before it is compiled in (`rampage-eval bundle`).
-pub type Bundled = Vec<SignatureDb>;
+/// Signature databases (one per architecture) and a call graph standing in for the bundled ones: regenerated bundled
+/// assets measured before they are compiled in (`rampage-eval bundle`).
+#[derive(Debug, Clone)]
+pub struct Bundled {
+    pub databases: Vec<SignatureDb>,
+    pub call_graph: Option<rampage_signatures::CallGraph>,
+}
 
 /// The names one evaluation gave each binary.
 #[derive(Debug, Clone)]
@@ -287,13 +293,26 @@ impl Engine {
             .iter()
             .flat_map(|layer| layer.databases.iter().filter(move |database| database.arch() == arch))
             .collect();
-        match bundled {
-            Some(bundled) => databases.extend(bundled.iter().find(|database| database.arch() == arch)),
-            None => databases.extend(rampage_signatures::bundled_ref(arch)),
-        }
+        let graph = match bundled {
+            Some(bundled) => {
+                databases.extend(bundled.databases.iter().find(|database| database.arch() == arch));
+                bundled.call_graph.as_ref()
+            }
+            None => {
+                databases.extend(rampage_signatures::bundled_ref(arch));
+                rampage_signatures::bundled_call_graph()
+            }
+        };
         let bodies = loaded.bodies();
         let names = identify_program_sources(&databases, &loaded.binary.target(), &loaded.image, &bodies);
-        names.into_iter().map(|(address, (_, name))| (address, name.into_owned())).collect()
+        let mut names: BTreeMap<u64, String> =
+            names.into_iter().map(|(address, (_, name))| (address, name.into_owned())).collect();
+        // As the product's identification does: the call graph names callees of named functions.
+        if let Some(graph) = graph {
+            let added = graph.propagate(&arch.to_string(), &loaded.calls, &names, None);
+            names.extend(added);
+        }
+        names
     }
 
     /// The names under `layers`, where `layers` are the layers `before` was proposed under plus the rows of
@@ -336,9 +355,9 @@ impl Engine {
             )));
         }
         let truth = self.truth(index, &binary)?;
-        let (functions, baseline) = self.baseline(index)?;
+        let (functions, baseline, calls) = self.baseline(index)?;
         let image = MaskContext::from_binary(&binary);
-        Ok(Loaded { binary, image, truth, functions, baseline })
+        Ok(Loaded { binary, image, truth, functions, baseline, calls })
     }
 
     fn truth_path(&self, index: usize) -> PathBuf {
@@ -398,7 +417,7 @@ impl Engine {
         if let Ok(text) = std::fs::read_to_string(&path)
             && let Ok(cached) = serde_json::from_str::<CachedBaseline>(&text)
         {
-            return Ok((cached.functions, cached.names.into_iter().collect()));
+            return Ok((cached.functions, cached.names.into_iter().collect(), cached.calls.into_iter().collect()));
         }
         let entry = self.binary(index);
         let stripped_path = self.corpus.path(&entry.stripped);
@@ -417,6 +436,7 @@ impl Engine {
             .collect();
         functions.sort_unstable();
         functions.dedup_by_key(|(start, _)| *start);
+        let calls = crate::signatures::call_sequences(&project.binary, &analysis.program);
         let application = project
             .identify_functions(None, true, false)
             .map_err(|error| FlywheelError::Corpus(format!("{}: {error}", entry.id)))?;
@@ -427,14 +447,15 @@ impl Engine {
             analysis_ms: started.elapsed().as_millis() as u64,
             functions: functions.clone(),
             names: names.iter().map(|(&address, name)| (address, name.clone())).collect(),
+            calls: calls.iter().map(|(&address, targets)| (address, targets.clone())).collect(),
         };
         write_atomic(&path, serde_json::to_string(&cached).map_err(FlywheelError::json)?.as_bytes())?;
-        Ok((functions, names))
+        Ok((functions, names, calls))
     }
 }
 
-/// Discovered extents and the bundled-only names of one binary.
-type Baseline = (Vec<(u64, u64)>, BTreeMap<u64, String>);
+/// Discovered extents, the bundled-only names and the call sequences of one binary.
+type Baseline = (Vec<(u64, u64)>, BTreeMap<u64, String>, BTreeMap<u64, Vec<u64>>);
 
 #[derive(Serialize, Deserialize)]
 struct CachedTruth {
@@ -455,15 +476,18 @@ struct CachedBaseline {
     analysis_ms: u64,
     functions: Vec<(u64, u64)>,
     names: Vec<(u64, String)>,
+    calls: Vec<(u64, Vec<u64>)>,
 }
 
-/// The SHA-256 of the bundled signature asset for `arch` (empty when none ships), part of the baseline key.
+/// The SHA-256 of the bundled signature asset for `arch` (empty when none ships) and of the bundled call graph,
+/// part of the baseline key.
 pub fn bundled_hash(arch: Arch) -> String {
-    match SignatureDb::bundled_metadata(arch) {
+    let database = match SignatureDb::bundled_metadata(arch) {
         Ok(Some(metadata)) => metadata.gzip_sha256.clone(),
         Ok(None) => "none".to_owned(),
         Err(_) => "invalid".to_owned(),
-    }
+    };
+    format!("{database}+{}", hex(&Sha256::digest(rampage_signatures::callgraph::BUNDLED_BYTES)))
 }
 
 /// Every function of the symbolized twin except the program's own, each tagged with the library that defines

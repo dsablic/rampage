@@ -19,16 +19,18 @@ use std::process::{Command, ExitCode};
 use std::time::Instant;
 
 use rampage_api::flywheel::{
-    Corpus, Engine, FAMILY, GateConfig, NOVEL_SLICE, Paths, PromotedSet, Row, SliceDelta, Split, SplitEvaluation,
-    compare,
+    Bundled, Corpus, Engine, FAMILY, GateConfig, NOVEL_SLICE, Paths, PromotedSet, Row, SliceDelta, Split,
+    SplitEvaluation, compare,
 };
-use rampage_signatures::{BundledMetadata, BundledProfile, FLYWHEEL_PROFILE_PREFIX, PatternDb, SignatureDb};
+use rampage_signatures::{BundledMetadata, BundledProfile, CallGraph, FLYWHEEL_PROFILE_PREFIX, PatternDb};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// The bundled source of flywheel promotions, relative to the repository root.
 pub const SOURCE: &str = "crates/rampage-signatures/data/flywheel/libid.json";
 const DATA: &str = "crates/rampage-signatures/data";
+/// The bundled call graph's file in [`DATA`].
+const CALL_GRAPH_FILE: &str = "callgraph.json.gz";
 /// The architectures a bundled asset ships for.
 const ARCHES: [&str; 4] = ["x86_64", "aarch64", "x86", "arm"];
 
@@ -36,12 +38,16 @@ const ARCHES: [&str; 4] = ["x86_64", "aarch64", "x86", "arm"];
 pub struct BundleArgs {
     /// A pack directory holding promoted flywheel entries (`entries.json`): the promoted pack, or one installed by
     /// `rampage packs import`.
-    #[arg(long, conflicts_with_all = ["remove", "arm"], required_unless_present_any = ["remove", "arm"])]
+    #[arg(long, conflicts_with_all = ["remove", "arm"], required_unless_present_any = ["remove", "arm", "call_graph"])]
     from: Option<PathBuf>,
     /// Bundle the deterministic arm for the corpus (its training rows, default operand wildcards) as one entry,
     /// gated like any other against the bundled baseline.
     #[arg(long, conflicts_with = "remove")]
     arm: bool,
+    /// Regenerate the bundled call graph (`data/callgraph.json.gz`) from the corpus's training split: each training
+    /// library function's call sequence. Alone or with `--arm`; gated like any other change.
+    #[arg(long, conflicts_with_all = ["remove", "from"])]
+    call_graph: bool,
     /// Bundle only these entries (revert ids, comma-separated or repeated); default: every entry of the pack.
     #[arg(long, value_delimiter = ',', requires = "from")]
     entries: Vec<String>,
@@ -171,10 +177,41 @@ pub struct Change {
 /// to measure.
 pub struct Regenerated {
     pub changes: Vec<Change>,
-    pub before: Vec<SignatureDb>,
-    pub after: Vec<SignatureDb>,
+    pub before: Bundled,
+    pub after: Bundled,
     /// The architectures whose database changed.
     pub changed: std::collections::BTreeSet<String>,
+    /// Whether the call graph changed (every architecture can then be named differently).
+    pub call_graph_changed: bool,
+}
+
+/// The repository's bundled call graph, as `data/callgraph.json.gz` holds it now (`None` without one, or when it
+/// holds no sequence).
+fn repository_call_graph(repo: &Path) -> Result<Option<CallGraph>, String> {
+    let path = repo.join(DATA).join(CALL_GRAPH_FILE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let graph = CallGraph::from_gzip(&read_bytes(&path)?).map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok((graph.callers() > 0).then_some(graph))
+}
+
+/// Each training library function's call sequence on `engine`'s corpus (callee names from the truth, `None` for a
+/// callee that is no library or runtime function), as the bundled call graph ships it.
+pub fn training_call_graph(engine: &Engine) -> Result<CallGraph, String> {
+    let mut graph = CallGraph::new(engine.corpus.identity(), &engine.corpus.license());
+    let train = engine.corpus.indices(Split::Train);
+    engine.load_all(&train).map_err(|error| error.to_string())?;
+    for index in train {
+        let loaded = engine.get(index).map_err(|error| error.to_string())?;
+        let arch = loaded.binary.arch.to_string();
+        for (caller, targets) in &loaded.calls {
+            let Some(truth) = loaded.truth.get(caller) else { continue };
+            let callees = targets.iter().map(|target| loaded.truth.get(target).map(|truth| truth.name.clone()));
+            graph.insert(&arch, &truth.name, callees.collect(), None);
+        }
+    }
+    Ok(graph.without_builds())
 }
 
 fn read_bytes(path: &Path) -> Result<Vec<u8>, String> {
@@ -273,7 +310,14 @@ pub fn regenerate(repo: &Path, before: &BundledSource, after: &BundledSource) ->
         let on_disk = read_bytes(&repo.join(SOURCE))?;
         changes.push(Change { path: SOURCE.to_owned(), before: on_disk, after: source_after.into_bytes() });
     }
-    Ok(Regenerated { changes, before: databases_before, after: databases, changed })
+    let call_graph = repository_call_graph(repo)?;
+    Ok(Regenerated {
+        changes,
+        before: Bundled { databases: databases_before, call_graph: call_graph.clone() },
+        after: Bundled { databases, call_graph },
+        changed,
+        call_graph_changed: false,
+    })
 }
 
 /// Reads the bundled source.
@@ -388,8 +432,11 @@ fn evaluate(engine: &Engine, regenerated: &Regenerated) -> Result<BTreeMap<Split
         let indices = engine.corpus.indices(split);
         let before = engine.propose_in(&indices, &[], Some(&regenerated.before)).map_err(|error| error.to_string())?;
         // Only binaries of an architecture whose database changed can be named differently.
-        let changed: Vec<usize> =
-            indices.iter().copied().filter(|&index| regenerated.changed.contains(&engine.binary(index).arch)).collect();
+        let changed: Vec<usize> = indices
+            .iter()
+            .copied()
+            .filter(|&index| regenerated.call_graph_changed || regenerated.changed.contains(&engine.binary(index).arch))
+            .collect();
         let mut after = before.clone();
         let renamed = engine.propose_in(&changed, &[], Some(&regenerated.after)).map_err(|error| error.to_string())?;
         after.names.extend(renamed.names);
@@ -426,6 +473,7 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
             let (after, id) = with_arm(&before, &engine, &gate)?;
             (after, "add", vec![id])
         }
+        (None, None) if args.call_graph => (before.clone(), "add", Vec::new()),
         (Some(pack), None) => {
             let (after, added) = merged(&before, pack, &args.entries)?;
             if added.is_empty() {
@@ -443,11 +491,30 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
             after.entries.remove(position);
             (after, "remove", vec![id.clone()])
         }
-        _ => return Err("give --from <pack>, --arm or --remove <id>".to_owned()),
+        _ => return Err("give --from <pack>, --arm, --call-graph or --remove <id>".to_owned()),
     };
+    let mut ids = ids;
 
     // Measure first with the regenerated databases; the source records the result only once it passes.
     let mut regenerated = regenerate(&repo, &before, &after)?;
+    if args.call_graph {
+        let graph = training_call_graph(&engine)?;
+        let bytes = graph.to_gzip();
+        let path = format!("{DATA}/{CALL_GRAPH_FILE}");
+        let current = read_bytes(&repo.join(&path))?;
+        if bytes == current {
+            return Err("the bundled call graph is this corpus's already; nothing to do".to_owned());
+        }
+        let digest = {
+            use sha2::Digest;
+            rampage_arch::hex::bytes(&sha2::Sha256::digest(&bytes))
+        };
+        eprintln!("bundle: call graph of {} callers from corpus {}", graph.callers(), engine.corpus.version());
+        ids.push(format!("callgraph-{}", &digest[..12]));
+        regenerated.changes.push(Change { path, before: current, after: bytes });
+        regenerated.after.call_graph = Some(graph);
+        regenerated.call_graph_changed = true;
+    }
     let files: Vec<String> = regenerated.changes.iter().map(|change| change.path.clone()).collect();
     // The patch is `git diff` of these files: an uncommitted edit already in one would end up in it.
     let status = Command::new("git")
@@ -781,7 +848,7 @@ mod tests {
     }
 
     fn decoded(path: &Path) -> String {
-        SignatureDb::from_gzip(&std::fs::read(path).unwrap()).unwrap().to_json()
+        rampage_signatures::SignatureDb::from_gzip(&std::fs::read(path).unwrap()).unwrap().to_json()
     }
 
     #[test]
@@ -818,12 +885,14 @@ mod tests {
         let gz = repo.join(DATA).join("corpus-x86_64.json.gz");
         let index = repo.join(DATA).join("corpus-x86_64.index.json");
         let (original_json, original_index) = (decoded(&gz), std::fs::read_to_string(&index).unwrap());
-        let original_records = SignatureDb::from_gzip(&std::fs::read(&gz).unwrap()).unwrap().pat_records();
+        let original_records =
+            rampage_signatures::SignatureDb::from_gzip(&std::fs::read(&gz).unwrap()).unwrap().pat_records();
 
         let regenerated = regenerate(&repo, &empty, &added).unwrap();
         let paths: Vec<&str> = regenerated.changes.iter().map(|change| change.path.as_str()).collect();
         assert_eq!(paths.len(), 3, "the x86_64 asset, its index and the source: {paths:?}");
-        let x86_64 = regenerated.after.iter().find(|database| database.arch().to_string() == "x86_64").unwrap();
+        let x86_64 =
+            regenerated.after.databases.iter().find(|database| database.arch().to_string() == "x86_64").unwrap();
         assert_eq!(x86_64.pat_records(), original_records + 1);
         for change in &regenerated.changes {
             std::fs::write(repo.join(&change.path), &change.after).unwrap();
@@ -888,6 +957,7 @@ mod tests {
         let args = |from: Option<PathBuf>, remove: Option<String>, label: &str, patch_only: bool| BundleArgs {
             from,
             arm: false,
+            call_graph: false,
             entries: vec![],
             remove,
             corpus: corpus.clone(),

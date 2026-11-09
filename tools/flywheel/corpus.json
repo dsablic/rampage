@@ -2,7 +2,7 @@
   "schema_version": 2,
   "family": "libid",
   "name": "libid-versions",
-  "description": "Library-identification corpus for the flywheel fast loop. Each target library is built in an older version for training and its current version, held out, linked statically into the same owned driver programs, per architecture, compiler and optimisation level. Unrelated libraries and owned programs, built the same way, are negatives: no target signature may match them. Sources are downloaded and built locally and never committed.",
+  "description": "Library-identification corpus for the flywheel fast loop. Each target library is built in an older version for training and in other versions, held out, linked statically into the same owned driver programs, per architecture, compiler and optimisation level. Unrelated libraries and owned programs, built the same way, are negatives: no target signature may match them. Further versions no other split holds form the final split. Sources are downloaded and built locally and never committed.",
   "libraries": [
     {
       "name": "zlib",
@@ -22,12 +22,18 @@
         {"version": "1.3.1", "split": "heldout", "root": "zlib-1.3.1",
          "url": "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz",
          "sha256": "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"},
-        {"version": "1.3.2", "split": "final", "root": "zlib-1.3.2",
+        {"version": "1.3.2", "split": "heldout", "root": "zlib-1.3.2",
          "url": "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz",
          "sha256": "bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"},
-        {"version": "1.4", "split": "final", "root": "zlib-1.4",
+        {"version": "1.4", "split": "heldout", "root": "zlib-1.4",
          "url": "https://github.com/madler/zlib/releases/download/v1.4/zlib-1.4.tar.gz",
-         "sha256": "02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584"}
+         "sha256": "02dd159783677a749c04adbdd02b55b8a2bcc7e054f51b76b549199a916ad584"},
+        {"version": "1.2.12", "split": "final", "root": "zlib-1.2.12",
+         "url": "https://zlib.net/fossils/zlib-1.2.12.tar.gz",
+         "sha256": "91844808532e5ce316b3c010929493c0244f3d37593afd6de04f71821d5136d9"},
+        {"version": "1.3", "split": "final", "root": "zlib-1.3",
+         "url": "https://github.com/madler/zlib/releases/download/v1.3/zlib-1.3.tar.gz",
+         "sha256": "ff0ba4c292013dbc27530b3a81e1f9a813cd39de01ca5e0f8bf355702efa593e"}
       ]
     },
     {
@@ -44,7 +50,13 @@
          "sha256": "0b0e3aa07c8c063ddf40b082bdf7e37a1562bda40a0ff5272957f3e987e0e54b"},
         {"version": "1.10.0", "split": "heldout", "root": "lz4-1.10.0",
          "url": "https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz",
-         "sha256": "537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b"}
+         "sha256": "537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b"},
+        {"version": "1.9.3", "split": "heldout", "root": "lz4-1.9.3",
+         "url": "https://github.com/lz4/lz4/archive/refs/tags/v1.9.3.tar.gz",
+         "sha256": "030644df4611007ff7dc962d981f390361e6c97a34e5cbc393ddfbe019ffe2c1"},
+        {"version": "1.9.2", "split": "final", "root": "lz4-1.9.2",
+         "url": "https://github.com/lz4/lz4/archive/refs/tags/v1.9.2.tar.gz",
+         "sha256": "658ba6191fa44c92280d4aa2c271b0f4fbc0e34d249578dd05e50e76d0e5efcc"}
       ]
     },
     {
@@ -62,9 +74,71 @@
         {"version": "1.7.18", "split": "heldout", "root": "cJSON-1.7.18",
          "url": "https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.18.tar.gz",
          "sha256": "3aa806844a03442c00769b83e99970be70fbef03735ff898f4811dd03b9f5ee5"},
-        {"version": "1.7.19", "split": "final", "root": "cJSON-1.7.19",
+        {"version": "1.7.19", "split": "heldout", "root": "cJSON-1.7.19",
          "url": "https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.19.tar.gz",
-         "sha256": "7fa616e3046edfa7a28a32d5f9eacfd23f92900fe1f8ccd988c1662f30454562"}
+         "sha256": "7fa616e3046edfa7a28a32d5f9eacfd23f92900fe1f8ccd988c1662f30454562"},
+        {"version": "1.7.16", "split": "heldout", "root": "cJSON-1.7.16",
+         "url": "https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.16.tar.gz",
+         "sha256": "451131a92c55efc5457276807fc0c4c2c2707c9ee96ef90c47d68852d5384c6c"},
+        {"version": "1.7.17", "split": "final", "root": "cJSON-1.7.17",
+         "url": "https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.17.tar.gz",
+         "sha256": "c91d1eeb7175c50d49f6ba2a25e69b46bd05cffb798382c19bfb202e467ec51c"}
+      ]
+    },
+    {
+      "name": "zstd",
+      "license": "BSD-3-Clause",
+      "role": "target",
+      "include": ["lib", "lib/common"],
+      "defines": ["ZSTD_DISABLE_ASM"],
+      "sources": [
+        "lib/common/debug.c", "lib/common/entropy_common.c", "lib/common/error_private.c",
+        "lib/common/fse_decompress.c", "lib/common/pool.c", "lib/common/threading.c", "lib/common/xxhash.c",
+        "lib/common/zstd_common.c", "lib/compress/fse_compress.c", "lib/compress/hist.c",
+        "lib/compress/huf_compress.c", "lib/compress/zstd_compress.c", "lib/compress/zstd_compress_literals.c",
+        "lib/compress/zstd_compress_sequences.c", "lib/compress/zstd_compress_superblock.c",
+        "lib/compress/zstd_double_fast.c", "lib/compress/zstd_fast.c", "lib/compress/zstd_lazy.c",
+        "lib/compress/zstd_ldm.c", "lib/compress/zstd_opt.c", "lib/compress/zstdmt_compress.c",
+        "lib/decompress/huf_decompress.c", "lib/decompress/zstd_ddict.c", "lib/decompress/zstd_decompress.c",
+        "lib/decompress/zstd_decompress_block.c"
+      ],
+      "drivers": ["zstd/s1.c", "zstd/s2.c", "zstd/s3.c", "zstd/s4.c"],
+      "versions": [
+        {"version": "1.5.4", "split": "train", "root": "zstd-1.5.4",
+         "url": "https://github.com/facebook/zstd/releases/download/v1.5.4/zstd-1.5.4.tar.gz",
+         "sha256": "0f470992aedad543126d06efab344dc5f3e171893810455787d38347343a4424"},
+        {"version": "1.5.5", "split": "heldout", "root": "zstd-1.5.5",
+         "url": "https://github.com/facebook/zstd/releases/download/v1.5.5/zstd-1.5.5.tar.gz",
+         "sha256": "9c4396cc829cfae319a6e2615202e82aad41372073482fce286fac78646d3ee4"},
+        {"version": "1.5.2", "split": "final", "root": "zstd-1.5.2",
+         "url": "https://github.com/facebook/zstd/releases/download/v1.5.2/zstd-1.5.2.tar.gz",
+         "sha256": "7c42d56fac126929a6a85dbc73ff1db2411d04f104fae9bdea51305663a83fd0"}
+      ]
+    },
+    {
+      "name": "lua",
+      "license": "MIT",
+      "role": "target",
+      "include": ["src"],
+      "defines": ["LUA_USE_POSIX"],
+      "sources": [
+        "src/lapi.c", "src/lauxlib.c", "src/lbaselib.c", "src/lcode.c", "src/lcorolib.c", "src/lctype.c",
+        "src/ldblib.c", "src/ldebug.c", "src/ldo.c", "src/ldump.c", "src/lfunc.c", "src/lgc.c", "src/linit.c",
+        "src/liolib.c", "src/llex.c", "src/lmathlib.c", "src/lmem.c", "src/loadlib.c", "src/lobject.c",
+        "src/lopcodes.c", "src/loslib.c", "src/lparser.c", "src/lstate.c", "src/lstring.c", "src/lstrlib.c",
+        "src/ltable.c", "src/ltablib.c", "src/ltm.c", "src/lundump.c", "src/lutf8lib.c", "src/lvm.c", "src/lzio.c"
+      ],
+      "drivers": ["lua/u1.c", "lua/u2.c", "lua/u3.c", "lua/u4.c"],
+      "versions": [
+        {"version": "5.4.4", "split": "train", "root": "lua-5.4.4",
+         "url": "https://www.lua.org/ftp/lua-5.4.4.tar.gz",
+         "sha256": "164c7849653b80ae67bec4b7473b884bf5cc8d2dca05653475ec2ed27b9ebf61"},
+        {"version": "5.4.6", "split": "heldout", "root": "lua-5.4.6",
+         "url": "https://www.lua.org/ftp/lua-5.4.6.tar.gz",
+         "sha256": "7d5ea1b9cb6aa0b59ca3dde1c6adcb57ef83a1ba8e5432c0ecd06bf439b3ad88"},
+        {"version": "5.4.5", "split": "final", "root": "lua-5.4.5",
+         "url": "https://www.lua.org/ftp/lua-5.4.5.tar.gz",
+         "sha256": "59df426a3d50ea535a460a452315c4c0d4e1121ba72ff0bdde58c2ef31d6f444"}
       ]
     },
     {
@@ -148,7 +222,7 @@
       }
     },
     {
-      "library": "zlib", "version": "1.3.2", "split": "final",
+      "library": "zlib", "version": "1.3.2", "split": "heldout",
       "compiler": "alpine-gcc", "opt": "distro", "distribution": "Alpine Linux v3.20",
       "archive": "lib/libz.a", "include": ["usr/include"],
       "drivers": ["zlib/z1.c", "zlib/z2.c", "zlib/z3.c", "zlib/z4.c"],
@@ -168,7 +242,7 @@
       }
     },
     {
-      "library": "zlib", "version": "1.4", "split": "final",
+      "library": "zlib", "version": "1.4", "split": "heldout",
       "compiler": "alpine-gcc", "opt": "distro", "distribution": "Alpine Linux v3.22",
       "archive": "usr/lib/libz.a", "include": ["usr/include"],
       "drivers": ["zlib/z1.c", "zlib/z2.c", "zlib/z3.c", "zlib/z4.c"],
@@ -201,9 +275,9 @@
   "strip": "rampage-eval strip (stripped) and rampage-eval strip --keep-symbols (twin) of the same linked image",
   "split": {
     "rule": "version",
-    "unit": "library version: every training binary links a target library's older version, every held-out binary its current one; negatives link no target library",
+    "unit": "library version: every training binary links a target library's training version, every held-out binary one of its held-out versions; negatives link no target library",
     "fast_programs_per_library": 1,
     "max_heldout_overlap": 0.5,
-    "final": "target-library versions neither training nor held-out holds, in two cells: built from source with the same matrix, and Alpine gcc builds (whose older versions train and are held out like the rest); read only by `flywheel-eval --split final --final-reason TEXT`, which records every read"
+    "final": "target-library versions neither training nor held-out holds, built from source with the same matrix (Alpine's gcc builds train and are held out); read only by `flywheel-eval --split final --final-reason TEXT`, which records every read"
   }
 }

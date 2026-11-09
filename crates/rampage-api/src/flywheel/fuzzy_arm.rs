@@ -29,43 +29,6 @@ pub struct Refusal {
     pub blocks: usize,
 }
 
-/// Each discovered function's direct call and tail-jump targets that start a discovered function, in call-site
-/// order.
-fn call_sequences(binary: &rampage_loaders::Binary, program: &rampage_analysis::discover::Program) -> Calls {
-    let starts: BTreeSet<u64> = program.functions.iter().map(|function| function.address).collect();
-    let mut calls = BTreeMap::new();
-    let Ok(mut decoder) = binary.decoder() else { return calls };
-    for function in &program.functions {
-        let mut targets = Vec::new();
-        for block in &function.blocks {
-            let Some(bytes) = block.end.checked_sub(block.start).and_then(|size| binary.read(block.start, size)) else {
-                continue;
-            };
-            decoder.begin_run();
-            let mut offset = 0usize;
-            while offset < bytes.len() {
-                let instruction = decoder.decode(&bytes[offset..], block.start + offset as u64);
-                let size = usize::from(instruction.len);
-                if size == 0 || size > bytes.len() - offset {
-                    break;
-                }
-                match instruction.flow {
-                    rampage_arch::Flow::Call(target) if starts.contains(&target) => targets.push(target),
-                    rampage_arch::Flow::Jump(target)
-                        if target != function.address && starts.contains(&target) && !function.contains(target) =>
-                    {
-                        targets.push(target)
-                    }
-                    _ => {}
-                }
-                offset += size;
-            }
-        }
-        calls.insert(function.address, targets);
-    }
-    calls
-}
-
 /// (architecture, caller name).
 pub type CallerKey = (String, String);
 
@@ -80,15 +43,14 @@ struct Analysed {
 }
 
 /// Each discovered function's fuzzy descriptor in one corpus binary, the refused ones, and the call sequences.
-fn describe(engine: &Engine, index: usize, loaded: &Loaded) -> Result<Analysed, FlywheelError> {
+fn describe(engine: &Engine, index: usize, names: &BTreeMap<u64, String>) -> Result<Analysed, FlywheelError> {
     let entry = engine.binary(index);
     let path = engine.corpus.path(&entry.stripped);
     let binary = rampage_loaders::Binary::open(&path).map_err(|error| FlywheelError::io_text(&path, error))?;
     let project = Project::new(binary);
     project.set_packs(Arc::new(Packs::default()));
     let analysis = project.analysis().map_err(|error| FlywheelError::Corpus(format!("{}: {error}", entry.id)))?;
-    let mut known: BTreeMap<u64, KnownCallee> = loaded
-        .baseline
+    let mut known: BTreeMap<u64, KnownCallee> = names
         .iter()
         .map(|(&address, name)| {
             (address, KnownCallee { name: name.clone(), provenance: CalleeProvenance::ExactSignatureProposal })
@@ -116,7 +78,7 @@ fn describe(engine: &Engine, index: usize, loaded: &Loaded) -> Result<Analysed, 
             }
         }
     }
-    let calls = call_sequences(&project.binary, &analysis.program);
+    let calls = crate::signatures::call_sequences(&project.binary, &analysis.program);
     Ok(Analysed { described, refused, calls })
 }
 
@@ -145,10 +107,9 @@ pub struct FuzzyMeasurement {
     pub query_unmatched: usize,
     /// Per query binary: truth addresses with a descriptor (reach).
     pub described: BTreeMap<usize, Vec<u64>>,
-    /// Training call sequences: (architecture, caller truth name) -> each distinct sequence of callee truth names
-    /// (`None` where the callee is no truth function) -> the training builds it occurs in.
+    /// Training call sequences by architecture and caller truth name, with the builds each occurs in.
     #[serde(skip)]
-    pub train_calls: BTreeMap<CallerKey, BTreeMap<Vec<Option<String>>, BTreeSet<String>>>,
+    pub train_calls: rampage_signatures::CallGraph,
     /// Per query binary: each discovered function's call targets.
     #[serde(skip)]
     pub query_calls: BTreeMap<usize, Calls>,
@@ -194,7 +155,13 @@ fn database(
 /// What one query binary contributes to the measurement.
 type QueryResult = (usize, Vec<FuzzyQuery>, usize, usize, Vec<u64>, BTreeMap<u64, Refusal>, Calls);
 
-fn query(index: usize, loaded: &Loaded, analysed: Analysed, database: &FuzzyDb) -> QueryResult {
+fn query(
+    index: usize,
+    loaded: &Loaded,
+    names: &BTreeMap<u64, String>,
+    analysed: Analysed,
+    database: &FuzzyDb,
+) -> QueryResult {
     let Analysed { described, refused, calls } = analysed;
     let mut found = Vec::new();
     let mut unmatched = 0;
@@ -206,7 +173,7 @@ fn query(index: usize, loaded: &Loaded, analysed: Analysed, database: &FuzzyDb) 
         if loaded.truth.contains_key(&function.address) {
             reach.push(function.address);
         }
-        if loaded.baseline.contains_key(&function.address) {
+        if names.contains_key(&function.address) {
             continue;
         }
         let Ok(report) = database.candidates(&function.features, "query", 2) else {
@@ -230,11 +197,26 @@ fn query(index: usize, loaded: &Loaded, analysed: Analysed, database: &FuzzyDb) 
 
 /// Builds references from `train` (truth names, one per distinct descriptor) and ranks every unnamed discovered
 /// function of `queries` against them, and of each training binary against the other training builds'.
-pub fn measure(engine: &Engine, train: &[usize], queries: &[usize]) -> Result<FuzzyMeasurement, FlywheelError> {
+/// The names a query binary starts from: `base`'s, or the bundled databases' (the cached baseline).
+pub fn base_names<'a>(loaded: &'a Loaded, base: &'a Names, index: usize) -> &'a BTreeMap<u64, String> {
+    base.get(&index).unwrap_or(&loaded.baseline)
+}
+
+/// Names per corpus binary.
+pub type Names = BTreeMap<usize, BTreeMap<u64, String>>;
+
+/// `base` holds the names each query binary starts from (bundled plus earlier arms); a binary it lacks starts from
+/// the bundled databases' names. Training binaries always start from the bundled names.
+pub fn measure(
+    engine: &Engine,
+    train: &[usize],
+    queries: &[usize],
+    base: &Names,
+) -> Result<FuzzyMeasurement, FlywheelError> {
     let analysed = engine.parallel(train, |index| {
         let loaded = engine.get(index)?;
         let build = build_key(engine, index);
-        let analysed = describe(engine, index, &loaded)?;
+        let analysed = describe(engine, index, &loaded.baseline)?;
         let references: Vec<(String, String, FuzzyFeatures)> = analysed
             .described
             .iter()
@@ -264,7 +246,7 @@ pub fn measure(engine: &Engine, train: &[usize], queries: &[usize]) -> Result<Fu
         measurement.reference_refused += analysed.refused.len();
         let build = build_key(engine, index);
         for (key, sequence) in sequences {
-            measurement.train_calls.entry(key).or_default().entry(sequence).or_default().insert(build.clone());
+            measurement.train_calls.insert(&key.0, &key.1, sequence, Some(&build));
         }
         references.extend(list);
         train_analyses.insert(index, analysed);
@@ -273,8 +255,9 @@ pub fn measure(engine: &Engine, train: &[usize], queries: &[usize]) -> Result<Fu
     measurement.references = count;
     let mut results = engine.parallel(queries, |index| {
         let loaded = engine.get(index)?;
-        let analysed = describe(engine, index, &loaded)?;
-        Ok(query(index, &loaded, analysed, &full))
+        let names = base_names(&loaded, base, index);
+        let analysed = describe(engine, index, names)?;
+        Ok(query(index, &loaded, names, analysed, &full))
     })?;
     let builds: BTreeSet<String> = train.iter().map(|&index| build_key(engine, index)).collect();
     let builds: Vec<String> = builds.into_iter().collect();
@@ -291,7 +274,7 @@ pub fn measure(engine: &Engine, train: &[usize], queries: &[usize]) -> Result<Fu
             .remove(&index)
             .ok_or_else(|| FlywheelError::Corpus("training analysis missing".to_owned()))?;
         let database = &databases[&build_key(engine, index)];
-        Ok(query(index, &loaded, analysed, database))
+        Ok(query(index, &loaded, &loaded.baseline, analysed, database))
     })?);
     for (index, found, refused, unmatched, reach, refusals, calls) in results {
         measurement.query_calls.insert(index, calls);
@@ -304,98 +287,15 @@ pub fn measure(engine: &Engine, train: &[usize], queries: &[usize]) -> Result<Fu
     Ok(measurement)
 }
 
-/// Names unnamed callees from their position in a named caller's call sequence: where every training sequence of
-/// the same caller name and architecture with the same length agrees with the caller's already-named callees, and
-/// all of those sequences give one name at a position, that position's callee gets it. Repeats to a fixed point.
-/// A callee offered two names, or a name some other function already has, stays unnamed. A caller with more than
-/// `max_unnamed` distinct unnamed callees is skipped: assigning several unknowns by position alone breaks when
-/// compilers order call sites differently. Returns only the added names.
+/// The names call-graph propagation (`rampage_signatures::callgraph`) adds to `names` on one corpus binary, from the
+/// training call sequences; a training binary uses only the other training builds' sequences.
 pub fn propagate(
     engine: &Engine,
     measurement: &FuzzyMeasurement,
     index: usize,
     names: &BTreeMap<u64, String>,
-    max_unnamed: usize,
-    confirm_callee: bool,
 ) -> BTreeMap<u64, String> {
     let Some(calls) = measurement.query_calls.get(&index) else { return BTreeMap::new() };
-    let arch = engine.binary(index).arch.clone();
-    // A training binary is answered from the other training builds only.
     let own = build_key(engine, index);
-    // Whether `targets`, under `names`, fits one of `name`'s training call sequences.
-    let fits = |names: &BTreeMap<u64, String>, name: &str, targets: &[u64]| {
-        measurement.train_calls.get(&(arch.clone(), name.to_owned())).is_some_and(|sequences| {
-            sequences.iter().filter(|(_, builds)| builds.iter().any(|build| *build != own)).any(|(sequence, _)| {
-                sequence.len() == targets.len()
-                    && targets.iter().zip(sequence).all(|(target, expected)| match names.get(target) {
-                        Some(known) => expected.as_deref() == Some(known.as_str()),
-                        None => true,
-                    })
-            })
-        })
-    };
-    let mut names = names.clone();
-    let mut added = BTreeMap::new();
-    let mut refused: BTreeSet<u64> = BTreeSet::new();
-    loop {
-        let used: BTreeSet<&String> = names.values().collect();
-        let mut offers: BTreeMap<u64, BTreeSet<String>> = BTreeMap::new();
-        for (caller, targets) in calls {
-            let Some(caller_name) = names.get(caller) else { continue };
-            let unnamed: BTreeSet<&u64> = targets.iter().filter(|target| !names.contains_key(*target)).collect();
-            if unnamed.is_empty() || unnamed.len() > max_unnamed {
-                continue;
-            }
-            let Some(sequences) = measurement.train_calls.get(&(arch.clone(), caller_name.clone())) else { continue };
-            let matching: Vec<&Vec<Option<String>>> = sequences
-                .iter()
-                .filter(|(_, builds)| builds.iter().any(|build| *build != own))
-                .map(|(sequence, _)| sequence)
-                .filter(|sequence| {
-                    sequence.len() == targets.len()
-                        && targets.iter().zip(sequence.iter()).all(|(target, expected)| match names.get(target) {
-                            Some(name) => expected.as_ref() == Some(name),
-                            None => true,
-                        })
-                })
-                .collect();
-            if matching.is_empty() {
-                continue;
-            }
-            for (position, target) in targets.iter().enumerate() {
-                if names.contains_key(target) || refused.contains(target) {
-                    continue;
-                }
-                let proposed: BTreeSet<&Option<String>> = matching.iter().map(|sequence| &sequence[position]).collect();
-                if let [Some(name)] = proposed.into_iter().collect::<Vec<_>>()[..] {
-                    let confirmed =
-                        !confirm_callee || fits(&names, name, calls.get(target).map(Vec::as_slice).unwrap_or_default());
-                    if !used.contains(name) && confirmed {
-                        offers.entry(*target).or_default().insert(name.clone());
-                    }
-                }
-            }
-        }
-        let mut changed = false;
-        let mut claimed: BTreeMap<String, Vec<u64>> = BTreeMap::new();
-        for (target, offered) in &offers {
-            if offered.len() == 1 {
-                claimed.entry(offered.iter().next().cloned().unwrap_or_default()).or_default().push(*target);
-            } else {
-                refused.insert(*target);
-            }
-        }
-        for (name, targets) in claimed {
-            if let [target] = targets[..] {
-                names.insert(target, name.clone());
-                added.insert(target, name);
-                changed = true;
-            } else {
-                refused.extend(targets);
-            }
-        }
-        if !changed {
-            return added;
-        }
-    }
+    measurement.train_calls.propagate(&engine.binary(index).arch, calls, names, Some(&own))
 }

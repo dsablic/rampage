@@ -39,6 +39,7 @@
 //! follow, so this matches a stripped target where discovery stops at the same place in both.
 
 mod bundled;
+pub mod callgraph;
 mod compressed;
 mod diagnostics;
 pub mod fid;
@@ -51,6 +52,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 pub use bundled::{BundledMetadata, BundledProfile, FLYWHEEL_PROFILE_PREFIX, bundled, bundled_counts, bundled_ref};
+pub use callgraph::{CallGraph, CallSequence, bundled_call_graph};
 pub use compressed::{CombineError, SignatureDbError};
 pub use diagnostics::{
     CalleeNameInput, CalleeNameSource, FingerprintStatus, GateDiagnostics, KeyDiagnostics, LookupState,

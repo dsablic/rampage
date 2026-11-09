@@ -3,7 +3,9 @@
 
 use std::collections::BTreeMap;
 
-use rampage_signatures::{MaskContext, SignatureDb, identify_program_sources};
+use rampage_analysis::discover::Program;
+use rampage_loaders::Binary;
+use rampage_signatures::{CallGraph, MaskContext, SignatureDb, identify_program_sources};
 use serde::Serialize;
 
 use crate::packs::BUILTIN_PACK;
@@ -13,6 +15,10 @@ use crate::{ApiError, Project};
 /// The [`SignatureMatch::source`] of a match from a database the caller supplied (`--db`, `database`).
 pub const USER_SIGNATURES: &str = "user database";
 
+/// The [`SignatureMatch::source`] of a name the bundled call graph gave: where an already-named caller calls the
+/// function, as training builds of the same library do (`rampage_signatures::callgraph`).
+pub const CALL_GRAPH: &str = "rampage-builtin call graph";
+
 #[derive(Debug, Serialize)]
 pub struct SignatureMatch {
     #[serde(serialize_with = "rampage_arch::hex::address")]
@@ -21,8 +27,9 @@ pub struct SignatureMatch {
     pub name: String,
     /// Whether the function is currently unnamed (a `sub_<hex>` default), so naming it adds information.
     pub unnamed: bool,
-    /// The database that named it: [`USER_SIGNATURES`], the name of the data pack that holds it, or
-    /// [`BUILTIN_PACK`] for the starter database bundled with rampage.
+    /// The database that named it: [`USER_SIGNATURES`], the name of the data pack that holds it,
+    /// [`BUILTIN_PACK`] for the starter database bundled with rampage, or [`CALL_GRAPH`] for a name the bundled
+    /// call graph gave from an already-named caller.
     pub source: String,
 }
 
@@ -37,6 +44,7 @@ impl SignatureMatch {
 pub(crate) fn signature_origin(source: &str) -> String {
     match source {
         BUILTIN_PACK => "the bundled starter database".to_owned(),
+        CALL_GRAPH => "the bundled call graph (from an already-named caller)".to_owned(),
         USER_SIGNATURES => "the user-supplied database".to_owned(),
         pack => format!("data pack `{pack}`"),
     }
@@ -79,12 +87,13 @@ impl Project {
         databases: &[(&str, &SignatureDb)],
         apply: bool,
     ) -> Result<SignatureApplication, ApiError> {
-        self.apply_layered_signatures_with_preflight(databases, apply, Vec::new(), |_| Ok(()))
+        self.apply_layered_signatures_with_preflight(databases, None, apply, Vec::new(), |_| Ok(()))
     }
 
     fn apply_layered_signatures_with_preflight(
         &self,
         databases: &[(&str, &SignatureDb)],
+        call_graph: Option<&CallGraph>,
         apply: bool,
         warnings: Vec<String>,
         preflight: impl FnOnce(&SignatureApplication) -> Result<(), ApiError>,
@@ -107,15 +116,22 @@ impl Project {
         let image = MaskContext::from_binary(&self.binary);
         let only: Vec<&SignatureDb> = databases.iter().map(|&(_, database)| database).collect();
         let names = identify_program_sources(&only, &self.binary.target(), &image, &bodies);
+        let mut found: BTreeMap<u64, (String, String)> = names
+            .into_iter()
+            .map(|(address, (index, name))| (address, (name.into_owned(), databases[index].0.to_owned())))
+            .collect();
+        if let Some(graph) = call_graph {
+            let named: BTreeMap<u64, String> =
+                found.iter().map(|(address, (name, _))| (*address, name.clone())).collect();
+            let calls = call_sequences(&self.binary, &analysis.program);
+            for (address, name) in graph.propagate(&self.binary.arch.to_string(), &calls, &named, None) {
+                found.insert(address, (name, CALL_GRAPH.to_owned()));
+            }
+        }
         let mut matches = Vec::new();
-        for (address, (index, name)) in names {
+        for (address, (name, source)) in found {
             let current = self.function_name(address);
-            matches.push(SignatureMatch {
-                address,
-                name: name.into_owned(),
-                unnamed: is_default_name(&current, address),
-                source: databases[index].0.to_owned(),
-            });
+            matches.push(SignatureMatch { address, name, unnamed: is_default_name(&current, address), source });
         }
 
         let mut application = SignatureApplication { matched: matches.len(), applied: 0, matches, warnings };
@@ -186,10 +202,54 @@ impl Project {
                     .to_owned(),
             ));
         }
+        let call_graph = if bundled { rampage_signatures::bundled_call_graph() } else { None };
         let bundled = if bundled { rampage_signatures::bundled_ref(self.binary.arch) } else { None };
         let user = user.map(|database| (USER_SIGNATURES, database));
         let bundled = bundled.map(|database| (BUILTIN_PACK, database));
         let databases: Vec<(&str, &SignatureDb)> = user.into_iter().chain(packed).chain(bundled).collect();
-        self.apply_layered_signatures_with_preflight(&databases, apply, packs.problems_for("signatures"), preflight)
+        self.apply_layered_signatures_with_preflight(
+            &databases,
+            call_graph,
+            apply,
+            packs.problems_for("signatures"),
+            preflight,
+        )
     }
+}
+
+/// Each discovered function's direct call and tail-jump targets that start another discovered function, in
+/// call-site order: the call sequences call-graph propagation compares with training.
+pub fn call_sequences(binary: &Binary, program: &Program) -> BTreeMap<u64, Vec<u64>> {
+    let starts: std::collections::BTreeSet<u64> = program.functions.iter().map(|function| function.address).collect();
+    let mut calls = BTreeMap::new();
+    let Ok(mut decoder) = binary.decoder() else { return calls };
+    for function in &program.functions {
+        let mut targets = Vec::new();
+        for block in &function.blocks {
+            let Some(bytes) = block.end.checked_sub(block.start).and_then(|size| binary.read(block.start, size)) else {
+                continue;
+            };
+            decoder.begin_run();
+            let mut offset = 0usize;
+            while offset < bytes.len() {
+                let instruction = decoder.decode(&bytes[offset..], block.start + offset as u64);
+                let size = usize::from(instruction.len);
+                if size == 0 || size > bytes.len() - offset {
+                    break;
+                }
+                match instruction.flow {
+                    rampage_arch::Flow::Call(target) if starts.contains(&target) => targets.push(target),
+                    rampage_arch::Flow::Jump(target)
+                        if target != function.address && starts.contains(&target) && !function.contains(target) =>
+                    {
+                        targets.push(target)
+                    }
+                    _ => {}
+                }
+                offset += size;
+            }
+        }
+        calls.insert(function.address, targets);
+    }
+    calls
 }
