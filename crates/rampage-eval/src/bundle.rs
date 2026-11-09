@@ -401,6 +401,28 @@ pub fn merged(source: &BundledSource, pack: &Path, ids: &[String]) -> Result<(Bu
     Ok((out, added))
 }
 
+/// The arm rows a bundle keeps: only those of `libraries` (when given), then without the rows named in `exclude`.
+/// Every library must have rows and every excluded name must name a kept row, so a typo cannot pass silently.
+/// Returns the rows and how many the exclusion removed.
+pub fn select_arm_rows(rows: Vec<Row>, exclude: &[String], libraries: &[String]) -> Result<(Vec<Row>, usize), String> {
+    let mut rows = rows;
+    if !libraries.is_empty() {
+        if let Some(missing) =
+            libraries.iter().find(|library| !rows.iter().any(|row| row.library.as_deref() == Some(library.as_str())))
+        {
+            return Err(format!("--arm-library {missing}: the arm has no row for that library"));
+        }
+        rows.retain(|row| row.library.as_ref().is_some_and(|library| libraries.contains(library)));
+    }
+    if let Some(missing) = exclude.iter().find(|name| !rows.iter().any(|row| &row.name == *name)) {
+        return Err(format!("--arm-exclude {missing}: the selected arm rows have none with that name"));
+    }
+    let before = rows.len();
+    rows.retain(|row| !exclude.contains(&row.name));
+    let excluded = before - rows.len();
+    Ok((rows, excluded))
+}
+
 /// The source with the deterministic arm for `engine`'s corpus added as one entry, `arm-<rows hash>`. It replaces
 /// an earlier arm entry, so one arm is bundled at a time.
 pub fn with_arm(
@@ -411,17 +433,9 @@ pub fn with_arm(
     libraries: &[String],
 ) -> Result<(BundledSource, String), String> {
     let mut arm = rampage_api::flywheel::arm(engine, gate.min_pattern_bytes).map_err(|error| error.to_string())?;
-    if let Some(missing) = exclude.iter().find(|name| !arm.rows.iter().any(|row| &row.name == *name)) {
-        return Err(format!("--arm-exclude {missing}: the arm has no row with that name"));
-    }
-    let before = arm.rows.len();
-    arm.rows.retain(|row| !exclude.contains(&row.name));
-    let excluded = before - arm.rows.len();
+    let excluded;
+    (arm.rows, excluded) = select_arm_rows(std::mem::take(&mut arm.rows), exclude, libraries)?;
     if !libraries.is_empty() {
-        arm.rows.retain(|row| row.library.as_ref().is_some_and(|library| libraries.contains(library)));
-        if arm.rows.is_empty() {
-            return Err(format!("the arm has no row for {}", libraries.join(", ")));
-        }
         let covered: Vec<&str> = source
             .entries
             .iter()
@@ -474,7 +488,7 @@ pub fn with_arm(
         bundled_unix_ms: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as u64),
-        license: Some(engine.corpus.license()),
+        license: Some(engine.corpus.license_of((!libraries.is_empty()).then_some(libraries))),
         rows: arm.rows,
     });
     Ok((out, id))
@@ -527,6 +541,9 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
     };
     let require_novel = args.require_novel_gain.or(gate.require_novel_gain).unwrap_or(false);
 
+    if args.final_reason.as_deref().is_some_and(|reason| reason.trim().is_empty()) {
+        return Err("--final-reason needs a reason".to_owned());
+    }
     let before = load_source(&repo)?;
     let (mut after, action, ids) = match (&args.from, &args.remove) {
         (None, None) if args.arm => {
@@ -640,9 +657,15 @@ pub fn run(args: BundleArgs) -> Result<ExitCode, String> {
         }
     }
     // The final read, when asked for: after the gate, so it can never inform the verdict.
+    // Only a passing change is read: a failed attempt must not spend (and gradually fit) the final split.
     let final_eval = match &args.final_reason {
+        Some(_) if !verdict => {
+            eprintln!("bundle: the gate failed, so the final split was not read");
+            None
+        }
         Some(reason) => {
-            let read = super::flywheel_run::record_final_read(&engine, reason, &[])?;
+            let reason = format!("{reason} [bundle {action} {}]", ids.join(", "));
+            let read = super::flywheel_run::record_final_read(&engine, &reason, &[])?;
             eprintln!("bundle: final read #{read} recorded");
             Some(evaluate(&engine, &regenerated, &[Split::Final])?.remove(&Split::Final).ok_or("final split missing")?)
         }
@@ -808,6 +831,35 @@ mod tests {
 
     fn workspace() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    #[test]
+    fn arm_rows_are_selected_by_library_then_name_and_typos_are_refused() {
+        let row = |name: &str, library: &str| Row {
+            arch: "x86_64".to_owned(),
+            name: name.to_owned(),
+            library: Some(library.to_owned()),
+            pattern: "554889e5".to_owned(),
+            length: None,
+            source: None,
+        };
+        let rows =
+            vec![row("a", "zstd"), row("shared", "zstd"), row("shared", "lz4"), row("b", "lua"), row("c", "lz4")];
+        let names = |rows: &[Row]| {
+            rows.iter().map(|row| format!("{}:{}", row.library.as_deref().unwrap(), row.name)).collect::<Vec<_>>()
+        };
+
+        let (kept, excluded) = select_arm_rows(rows.clone(), &[], &[]).unwrap();
+        assert_eq!((kept.len(), excluded), (5, 0));
+        // The library filter first: excluding "shared" then removes only zstd's row, not lz4's.
+        let (kept, excluded) =
+            select_arm_rows(rows.clone(), &["shared".to_owned()], &["zstd".to_owned(), "lua".to_owned()]).unwrap();
+        assert_eq!(names(&kept), ["zstd:a", "lua:b"]);
+        assert_eq!(excluded, 1);
+        // A name only another library has, or a library with no rows, is a typo.
+        assert!(select_arm_rows(rows.clone(), &["c".to_owned()], &["zstd".to_owned()]).is_err());
+        assert!(select_arm_rows(rows.clone(), &[], &["zstd".to_owned(), "lau".to_owned()]).is_err());
+        assert!(select_arm_rows(rows, &["missing".to_owned()], &[]).is_err());
     }
 
     /// A scratch repository holding copies of the bundled assets and the bundled source, committed to git so

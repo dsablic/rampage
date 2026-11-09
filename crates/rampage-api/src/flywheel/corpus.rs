@@ -352,12 +352,25 @@ impl Corpus {
 
     /// The SPDX expression covering the target libraries, for packs made from them.
     pub fn license(&self) -> String {
+        self.license_of(None)
+    }
+
+    /// [`Corpus::license`] restricted to the target libraries named in `only`, when given.
+    pub fn license_of(&self, only: Option<&[String]>) -> String {
         let licenses: BTreeSet<&str> = self
             .manifest
             .libraries
             .iter()
             .filter(|library| {
                 library.get("role").and_then(serde_json::Value::as_str).is_none_or(|role| role == "target")
+            })
+            .filter(|library| {
+                only.is_none_or(|only| {
+                    library
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|name| only.iter().any(|o| o == name))
+                })
             })
             .filter_map(|library| library.get("license").and_then(serde_json::Value::as_str))
             .collect();

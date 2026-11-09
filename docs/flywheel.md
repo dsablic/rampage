@@ -412,8 +412,9 @@ arm entry), with the licence of the code its rows come from, through the same ga
 - When the gate fails, `bundle` lists the slices that lose F1 and the training cases that broke. It is an operator
   tool, never served to a proposer.
 
-`--final-reason TEXT` also reads the final split after the gate, records the read in the corpus's ledger and
-reports its deltas. It never decides the verdict: it is the claim check for what ships.
+`--final-reason TEXT` also reads the final split once the gate has passed, records the read in the corpus's
+ledger (with the bundled ids) and reports its deltas. It never decides the verdict: it is the claim check for what
+ships, and a failed attempt does not spend a read. A library-scoped arm records only its libraries' licences.
 
 The shipped databases carry two arms:
 - **`arm-e77075a92a73`**: 3218 rows for zlib, LZ4 and cJSON from corpus `libid-ed988c9a220e`. Against the bundled

@@ -35438,7 +35438,7 @@
         "f1": 0.365132
       },
       "bundled_unix_ms": 1794223730986,
-      "license": "BSD-2-Clause AND BSD-3-Clause AND MIT AND Zlib",
+      "license": "BSD-3-Clause AND MIT",
       "rows": [
         {
           "arch": "aarch64",
