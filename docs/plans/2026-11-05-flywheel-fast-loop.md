@@ -773,15 +773,41 @@ but only 2 use the symbol table's spelling: the rest are aliases or namespaces o
 for `__addtf3`). The corpus truth spells runtime functions as its own builds' symbol tables do, and the gate does
 not score runtime names. The names stay: they identify the function correctly.
 
-**The arm on this corpus** (adding zstd and Lua rows) passes everything but the per-slice rule: four lz4 O0 cells
-gain 2–4 false positives each. The cause is tiny helpers whose widened zstd patterns match lz4 bodies
-(`MEM_writeLE16`, `XXH_readBE64`, `ERR_getErrorName`). It is not bundled yet. Dropping those rows (bundle has no
-per-row exclusion yet) or refusing widened rows that match another library's body would unblock it.
+**The arm on this corpus.** Measured as a layer, it failed only the per-slice rule: four lz4 O0 cells gained 2–4
+false positives each, from tiny zstd helpers whose widened patterns match lz4 bodies (`MEM_writeLE16`,
+`XXH_readBE64`, `ERR_getErrorName`).
+
+Replacing the bundled arm with this whole arm, those three rows left out, then failed the slice rule on training:
+25 slices, 0.0002–0.026 F1 each. With zstd and Lua in training, thin O0 wrappers (`cJSON_GetObjectItem`,
+`cJSON_ReplaceItemInObjectCaseSensitive` and others) collide with other libraries' wrappers, so the new arm refuses
+rows the old arm had.
+
+**Shipped instead: the zstd and Lua rows beside the old arm** (`bundle --arm --arm-library zstd,lua
+--arm-exclude …`, `arm-fe9ae8b57e9e`, 13664 rows), with the call graph already bundled:
+
+| Split | dTP | dFP |
+| --- | ---: | ---: |
+| train | +48654 | −162 |
+| dev | +40523 (novel +8710) | +78 (allowance 405) |
+| negative | 0 | 0 |
+| final read #2 (ledgered, after the gate) | +37323 (novel +9244) | +100 |
+
+CLI before this branch and after:
+
+| Binary | Before | After |
+| --- | ---: | ---: |
+| zstd 1.5.5 | 172 | 348 |
+| Lua 5.4.6 | 70 | 772 |
+
+On the largest corpus binary, identify takes 1.96 s instead of 1.80 s. The compressed assets grow to 1.7 MB
+(x86-64) and 1.4 MB (AArch64). The provenance source `data/flywheel/libid.json` grows from 3.5 MB to 19.6 MB of
+text (2.2 MB gzipped; git stores it compressed and as deltas).
 
 ### Next
 - **Regenerate the bundled hash databases with callee keys for forwarder entries** (128 bundled false positives).
   This needs the signature-corpus source caches and the pinned toolchains, so it needs its own session.
-- **Bundle this corpus's arm** (zstd and Lua rows) once the cross-library helper rows are refused.
+- **An arm rule for rows that match another library's body.** It was diagnosed on dev and fixed here by name
+  (`--arm-exclude`); a generator rule would generalise.
 - **Fuzzy stays suggestion-only:** it failed final on both corpora.
 - **The AI family needs a decision:** code-proposing candidates rather than compiler/tool rules. Proposal:
   [2026-11-08-flywheel-code-candidates.md](2026-11-08-flywheel-code-candidates.md).

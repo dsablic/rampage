@@ -17,8 +17,8 @@
   (code-proposing candidates). The arm now ships in the bundled databases
   (`rampage-eval bundle --arm`). The corpus now has zstd and Lua and a fresh final split
   (`libid-00da6363626a`); call-graph propagation ships as a bundled call graph (`bundle --call-graph`), and fuzzy
-  matching failed final on both corpora so it stays suggestion-only. Open: bundling this corpus's arm (blocked by
-  cross-library helper rows); regenerating the bundled hash databases with callee keys for forwarders (needs the
+  matching failed final on both corpora so it stays suggestion-only. The zstd and Lua arm rows ship too (final read #2: +37323 for +100). Open: an arm rule for
+  rows that match another library's body (fixed by name for now); regenerating the bundled hash databases with callee keys for forwarders (needs the
   signature-corpus caches).
 
 This file holds open items. Done sections, including every completed parity phase, are archived verbatim in

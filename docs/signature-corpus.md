@@ -11,15 +11,15 @@ database is not rerun.
 
 | Architecture | Masked signature entries | Flywheel PAT rows | Callee keys | Recorded build profiles |
 | --- | ---: | ---: | ---: | ---: |
-| x86-64 | 11,369 | 1,529 | 822 | 41 |
-| AArch64 | 7,037 | 1,689 | 402 | 29 |
+| x86-64 | 11,369 | 7,694 | 822 | 41 |
+| AArch64 | 7,037 | 9,188 | 402 | 29 |
 | i386 | 2,123 | 0 | 90 | 15 |
 | ARM/Thumb | 2,117 | 0 | 0 | 14 |
 
 Counts describe index keys, not unique recognized functions. An index's `signatures` count is the masked entries
-plus the PAT rows. The PAT rows are the flywheel's deterministic arm, bundled by `rampage-eval bundle --arm` under
-one `flywheel-libid-<arch>` profile each (zlib 1.2.13, LZ4 1.9.4 and cJSON 1.7.15 built with zig cc, clang and
-Alpine gcc; [flywheel.md](flywheel.md#bundle-a-promotion)). The ARM profiles are Thumb builds. The x64/AArch64
+plus the PAT rows. The PAT rows are the flywheel's deterministic arms, bundled by `rampage-eval bundle --arm` under
+one `flywheel-libid-<arch>` profile each (zlib 1.2.13, LZ4 1.9.4, cJSON 1.7.15, zstd 1.5.4 and Lua 5.4.4 built
+with zig cc, clang and Alpine gcc; [flywheel.md](flywheel.md#bundle-a-promotion)). The ARM profiles are Thumb builds. The x64/AArch64
 indexes include the frozen musl starter inputs; their original source archive identity is unrecorded and
 explicitly unavailable. The other profiles record archive digests, compiler identity, requested optimization,
 license declarations, recipe fingerprints and an aggregate measurement witness.

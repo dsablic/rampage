@@ -388,6 +388,7 @@ rampage --pack /path/to/libid function identify stripped.elf
 ```sh
 rampage-eval bundle --from /path/to/libid --corpus target/flywheel/corpus/<version> [--entries rv-...]
 rampage-eval bundle --arm --corpus target/flywheel/corpus/<version>
+rampage-eval bundle --arm --arm-library zstd,lua --arm-exclude NAME,... --corpus target/flywheel/corpus/<version>
 rampage-eval bundle --call-graph --corpus target/flywheel/corpus/<version>
 rampage-eval bundle --remove rv-... --corpus target/flywheel/corpus/<version>
 ```
@@ -402,9 +403,29 @@ matches under another name than the hash entries give, or that several PAT rows 
 rejects, gets no name from that database.
 
 `bundle --arm` bundles the deterministic arm for the corpus as one entry (`arm-<rows hash>`, replacing an earlier
-arm entry), with the licence of the code its rows come from, through the same gate. The shipped databases carry
-arm `arm-e77075a92a73` (3218 rows from corpus `libid-ed988c9a220e`): against the bundled baseline it gains 7713
-held-out names (783 novel) for 4 false positives, and none on training or the negatives.
+arm entry), with the licence of the code its rows come from, through the same gate.
+- `--arm-library LIBS` keeps only the rows for those libraries and adds the entry beside the bundled arm instead of
+  replacing it.
+- `--arm-exclude NAMES` leaves out rows by name, for rows a held-out diagnosis showed matching another library's
+  function.
+- The entry's id is the hash of the rows it keeps.
+- When the gate fails, `bundle` lists the slices that lose F1 and the training cases that broke. It is an operator
+  tool, never served to a proposer.
+
+`--final-reason TEXT` also reads the final split after the gate, records the read in the corpus's ledger and
+reports its deltas. It never decides the verdict: it is the claim check for what ships.
+
+The shipped databases carry two arms:
+- **`arm-e77075a92a73`**: 3218 rows for zlib, LZ4 and cJSON from corpus `libid-ed988c9a220e`. Against the bundled
+  baseline it gained 7713 held-out names (783 novel) for 4 false positives, and none on training or the negatives.
+- **`arm-fe9ae8b57e9e`**: 13664 rows for zstd and Lua from corpus `libid-00da6363626a`, without
+  `MEM_writeLE16`, `XXH_readBE64` and `ERR_getErrorName`, whose widened zstd patterns matched LZ4 functions.
+  - Gate: held out +40523 (novel +8710) for +78 false positives (allowance 405); training +48654 with 162 fewer
+    false positives; nothing on the negatives.
+  - Final read #2: +37323 (novel +9244) for +100.
+  - Replacing the older arm with this corpus's whole arm instead failed the slice rule. The bigger corpus refuses
+    thin O0 wrappers (`cJSON_GetObjectItem` and others) whose patterns now collide with zstd and Lua wrappers, so
+    25 training slices lost names.
 
 `bundle --call-graph` regenerates the bundled call graph (`data/callgraph.json.gz`) from the corpus's training
 split: each training library function's call sequence, as callee names (see
