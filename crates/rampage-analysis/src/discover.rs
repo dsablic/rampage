@@ -190,9 +190,10 @@ impl Program {
 /// Discovers functions reachable from `seeds` in two phases.
 ///
 /// Phase 1 finds the complete set of function starts: rounds explore newly found functions in parallel and add
-/// their call targets, code pointers, and any unconditional jump target reached from two or more functions (a shared
-/// tail, which would otherwise be copied into every caller). Phase 2 then builds every function's blocks against
-/// that final set, so whether a jump is a tail call does not depend on the round its target was found in.
+/// their call targets and code pointers, then any unconditional jump target reached from two or more functions (a
+/// shared tail, which would otherwise be copied into every caller), counted once every exploration stops at every
+/// known start (see [`settle_starts`]). Phase 2 then builds every function's blocks against that final set, so
+/// whether a jump is a tail call does not depend on the round its target was found in.
 /// Merges are ordered by address, so the result does not depend on thread count or scheduling.
 ///
 /// No callee is known not to return beyond what discovery infers; see [`discover_with_noreturn`].
@@ -324,41 +325,23 @@ where
     seen_modes.insert(Vec::<(u64, bool)>::new());
     // Starts whose first instruction does not decode are not functions, in either phase.
     let (mut known, mut branch_targets, mut undecodable) = loop {
-        let mut known = initial_seeds.clone();
-        let mut pending: Vec<_> = known.iter().copied().collect();
-        let mut first_jumper: HashMap<u64, u64> = HashMap::new();
+        let modes: Vec<_> = code_modes.iter().map(|(&at, &thumb)| (at, thumb)).collect();
+        let (mut known, results) = settle_starts(memory, &initial_seeds, |starts, known| {
+            explore_all(starts, known, None, &modes, &Assumed::new())
+        })?;
         let mut empty = BTreeSet::new();
         let mut branch_targets = Vec::new();
         let mut contributions = Vec::new();
         let mut instruction_modes = BTreeMap::new();
         let mut instruction_owners = BTreeMap::new();
-        let modes: Vec<_> = code_modes.iter().map(|(&at, &thumb)| (at, thumb)).collect();
-        while !pending.is_empty() {
-            let mut next = BTreeSet::new();
-            for result in explore_all(&pending, &known, None, &modes, &Assumed::new())? {
-                contributions.extend(result.mode_hints);
-                instruction_owners
-                    .extend(result.instruction_modes.iter().map(|&(at, _)| (at, result.function.address)));
-                instruction_modes.extend(result.instruction_modes);
-                branch_targets.extend_from_slice(&result.branch_targets);
-                let start = result.function.address;
-                if result.function.blocks.is_empty() {
-                    empty.insert(start);
-                }
-                for &target in &result.new_seeds {
-                    if !known.contains(&target) && memory.is_executable(target) {
-                        next.insert(target);
-                    }
-                }
-                for &target in &result.jump_targets {
-                    let first = *first_jumper.entry(target).or_insert(start);
-                    if first != start && !known.contains(&target) {
-                        next.insert(target);
-                    }
-                }
+        for result in results.into_values() {
+            contributions.extend(result.mode_hints);
+            instruction_owners.extend(result.instruction_modes.iter().map(|&(at, _)| (at, result.function.address)));
+            instruction_modes.extend(result.instruction_modes);
+            branch_targets.extend_from_slice(&result.branch_targets);
+            if result.function.blocks.is_empty() {
+                empty.insert(result.function.address);
             }
-            known.extend(next.iter().copied());
-            pending = next.into_iter().collect();
         }
         let mut merged = BTreeMap::new();
         for &(source, at, thumb) in &contributions {
@@ -506,6 +489,89 @@ where
     Ok((program, noreturn))
 }
 
+/// Phase 1's function starts from `seeds`, with the latest exploration of each: the closure under calls and code
+/// pointers, plus every unconditional jump target reached from two or more functions (a shared tail).
+///
+/// Without symbols, a function is often first reached by a caller's tail call, and the caller explores its body as
+/// its own until a direct call proves the start. Every exploration that ran through a start found after it is
+/// redone before jumps are counted, so a join inside that body is not mistaken for a tail shared by the callee
+/// and its tail callers. A shared tail promoted in the same batch as the function around it (two functions
+/// tail-call one that jumps to its own join) is dropped for good once the re-explored functions no longer both
+/// jump to it, unless something calls or points at it.
+fn settle_starts<E>(
+    memory: &impl Memory,
+    seeds: &BTreeSet<u64>,
+    mut explore: impl FnMut(&[u64], &BTreeSet<u64>) -> Result<Vec<Explored>, E>,
+) -> Result<(BTreeSet<u64>, BTreeMap<u64, Explored>), E> {
+    let mut known = seeds.clone();
+    let mut results: BTreeMap<u64, Explored> = BTreeMap::new();
+    let mut tails = BTreeSet::new();
+    let mut dropped = BTreeSet::new();
+    // Starts that became known since explorations were last checked for running through one.
+    let mut fresh: BTreeSet<u64> = BTreeSet::new();
+    let mut pending = known.clone();
+    loop {
+        while !pending.is_empty() {
+            let starts: Vec<u64> = std::mem::take(&mut pending).into_iter().collect();
+            for result in explore(&starts, &known)? {
+                results.insert(result.function.address, result);
+            }
+            for start in &starts {
+                for &target in results.get(start).map_or(&[][..], |result| &result.new_seeds) {
+                    if !known.contains(&target) && memory.is_executable(target) {
+                        pending.insert(target);
+                    }
+                }
+            }
+            known.extend(&pending);
+            fresh.extend(&pending);
+        }
+        let runs_through = |(&start, result): (&u64, &Explored)| {
+            let blocks = &result.function.blocks;
+            blocks.iter().any(|block| fresh.range(block.start..block.end).any(|&other| other != start)).then_some(start)
+        };
+        pending = results.iter().filter_map(runs_through).collect();
+        fresh.clear();
+        if !pending.is_empty() {
+            continue;
+        }
+
+        // Jumps are counted only from explorations that stop at every known start.
+        let mut jumpers: HashMap<u64, (u64, bool)> = HashMap::new();
+        for (&start, result) in &results {
+            for &target in &result.jumps {
+                let (first, shared) = jumpers.entry(target).or_insert((start, false));
+                *shared |= *first != start;
+            }
+        }
+        let shared = |target: &u64| jumpers.get(target).is_some_and(|&(_, shared)| shared);
+        let anchored: BTreeSet<u64> =
+            results.values().flat_map(|result| result.new_seeds.iter().copied()).chain(seeds.iter().copied()).collect();
+        let stale: BTreeSet<u64> =
+            tails.iter().copied().filter(|tail| !shared(tail) && !anchored.contains(tail)).collect();
+        let mut promoted: Vec<u64> = jumpers
+            .iter()
+            .filter(|&(target, &(_, shared))| shared && !known.contains(target) && !dropped.contains(target))
+            .map(|(&target, _)| target)
+            .collect();
+        promoted.sort_unstable();
+        if stale.is_empty() && promoted.is_empty() {
+            return Ok((known, results));
+        }
+        for tail in &stale {
+            known.remove(tail);
+            tails.remove(tail);
+            results.remove(tail);
+        }
+        pending.extend(results.iter().filter(|(_, result)| result.reaches(&stale)).map(|(&start, _)| start));
+        dropped.extend(stale);
+        known.extend(&promoted);
+        tails.extend(&promoted);
+        fresh.extend(&promoted);
+        pending.extend(promoted);
+    }
+}
+
 struct Explored {
     decode_gates: Vec<InstructionGate>,
     resolved_flows: Vec<ResolvedFlow>,
@@ -519,6 +585,8 @@ struct Explored {
     /// stays in each function that reaches it (as IDA's function chunks do): promoting it cascades, splitting the
     /// owner's own blocks into fragments.
     jump_targets: Vec<u64>,
+    /// Targets of every unconditional jump, other functions' starts included.
+    jumps: Vec<u64>,
     /// Targets of every branch taken while exploring.
     branch_targets: Vec<u64>,
     /// Calls that end their block because the callee never returns.
@@ -583,6 +651,7 @@ fn explore(
     let mut code_refs = CodeRefs::default();
     let mut jump_bases = Vec::new();
     let mut jump_targets = Vec::new();
+    let mut jumps = Vec::new();
     let mut branch_targets = Vec::new();
     let mut instruction_modes = Vec::new();
     let mut mode_hints = Vec::new();
@@ -740,6 +809,7 @@ fn explore(
                 Flow::Jump(target) => {
                     xrefs.push(Xref { to: target, from: address, kind: XrefKind::Jump });
                     branch_targets.push(target);
+                    jumps.push(target);
                     if is_other_function(target) {
                         exits.leave_to(target, noreturn);
                     } else {
@@ -800,6 +870,9 @@ fn explore(
     jump_targets.retain(|target| *target != start);
     jump_targets.sort_unstable();
     jump_targets.dedup();
+    jumps.retain(|target| *target != start);
+    jumps.sort_unstable();
+    jumps.dedup();
     let blocks = blocks.into_iter().map(|(start, end)| Block { start, end }).collect();
     switches.sort_unstable_by_key(|switch: &Switch| switch.jump);
     let function = DiscoveredFunction { address: start, blocks, instruction_count: instructions.len(), switches };
@@ -816,6 +889,7 @@ fn explore(
         xrefs,
         new_seeds,
         jump_targets,
+        jumps,
         branch_targets,
         mode_hints,
         instruction_modes,
@@ -1585,6 +1659,42 @@ mod tests {
         let program = run(&bytes, &[0, 0x10]);
         assert_eq!(blocks(&program, 0), [(0, 2)]);
         assert!(program.function_at(0x20).is_some());
+    }
+
+    /// F at 0x30 branches to its join at 0x38: `jz 0x36; nop; nop; jmp 0x38; nop; nop; ret`.
+    fn with_join_at_0x38(mut bytes: Vec<u8>) -> Vec<u8> {
+        bytes.resize(0x30, 0xcc);
+        bytes.extend([0x74, 0x04, 0x90, 0x90, 0xeb, 0x02, 0x90, 0x90, 0xc3]);
+        bytes
+    }
+
+    #[test]
+    fn a_function_tail_called_before_its_call_is_seen_keeps_its_joins() {
+        // A at 0: call 0x10; jmp 0x30 (a tail call to F). B at 0x10: call 0x20; ret. C at 0x20: call 0x30; ret.
+        // A's exploration runs through F's body three rounds before C's call proves F; its jump to F's join is
+        // stale once F is a function, so the join is not a tail F shares with A.
+        let mut bytes = vec![0xcc; 0x30];
+        bytes[..7].copy_from_slice(&[0xe8, 0x0b, 0, 0, 0, 0xeb, 0x29]);
+        bytes[0x10..0x16].copy_from_slice(&[0xe8, 0x0b, 0, 0, 0, 0xc3]);
+        bytes[0x20..0x26].copy_from_slice(&[0xe8, 0x0b, 0, 0, 0, 0xc3]);
+        let program = run(&with_join_at_0x38(bytes), &[0]);
+        let starts: Vec<u64> = program.functions.iter().map(|function| function.address).collect();
+        assert_eq!(starts, [0, 0x10, 0x20, 0x30]);
+        assert_eq!(blocks(&program, 0), [(0, 7)]);
+        assert_eq!(blocks(&program, 0x30), [(0x30, 0x32), (0x32, 0x36), (0x36, 0x38), (0x38, 0x39)]);
+    }
+
+    #[test]
+    fn a_join_inside_a_shared_tail_is_not_a_tail_of_its_own() {
+        // A at 0 and X at 0x10 both jmp 0x30, so F there is a shared tail; each also reached F's join at 0x38
+        // through F's body before F was a function.
+        let mut bytes = vec![0xcc; 0x30];
+        bytes[..2].copy_from_slice(&[0xeb, 0x2e]);
+        bytes[0x10..0x12].copy_from_slice(&[0xeb, 0x1e]);
+        let program = run(&with_join_at_0x38(bytes), &[0, 0x10]);
+        let starts: Vec<u64> = program.functions.iter().map(|function| function.address).collect();
+        assert_eq!(starts, [0, 0x10, 0x30]);
+        assert_eq!(program.function_at(0x30).unwrap().instruction_count, 7);
     }
 
     #[test]

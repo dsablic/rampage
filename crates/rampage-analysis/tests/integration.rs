@@ -22,4 +22,5 @@ mod stack_registers;
 mod structure;
 mod structure_execution;
 mod switch_structure;
+mod tail_calls;
 mod type_evidence;
