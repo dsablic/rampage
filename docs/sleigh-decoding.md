@@ -129,7 +129,24 @@ but ARMv8-M-only instructions are not reviewed, and `cortex-m33`/`cortex-m55` ar
   The bundled `ARM8_le.sla` defines `VERSION_7M` as `ARM7_le.slaspec` does (it adds `VERSION_8`), so it decodes
   the M-profile constructors; the decompiler runs `ARM:LE:32:v8` with its reviewed `default` C model (pointer,
   int and long 4 bytes, matching AAPCS) and TMode set explicitly at every function, as for ARM ELF Thumb code.
-  Only the code mapping is served: RAM and peripheral accesses show as absolute addresses.
+  Only the code mapping is served, read-only, so a literal-pool word folds into the address it holds. A global
+  with no other name is named by its architectural ARMv6-M/ARMv7-M region and address (`code_`, `ram_`, `periph_`,
+  `extram_`, `extdev_`, `ppb_`, `vendor_sys_`: `ram_20000004`, `periph_40021000`); an analyst's `rename` of the
+  address wins. The data type stays inferred.
+- **Callees.** Raw images carry no prototypes, so on ARM rampage tells the decompiler two things about each direct
+  callee before decompiling a function. The call-clobbered registers (r0-r3, r12) that the callee and everything
+  it calls never write are preserved across the call: GCC's `-fipa-ra` (on at `-O2`/`-Os`) and LLVM's IPRA keep a
+  caller's value in such a register across the call, and without this the next call's argument read as
+  `extraout_r1` or disappeared. A callee with an indirect call or jump, a supervisor call, recursion or code that
+  does not decode keeps the convention's effects. And each callee's prototype is committed from its own
+  decompilation, leaves first, as Ghidra's Decompiler Parameter ID does, so `f(g(x))` no longer prints as
+  `g(x); f();` and an argument passed through untouched still reaches the call. At most 64 callee decompilations
+  per request; a callee in a recursive cycle, or calling one that cannot be derived, stays as Ghidra infers it.
+  Committed types are the callee's own inferred ones, so a 64-bit `r0:r1` return can appear where only `r0` is
+  used (`CONCAT44(...)`), as in Ghidra.
+- **Bit fields.** `ubfx r0, r0, #4, #12` reads as `(x & 0xffff) >> 4` and `lsls #4; uxth` as `(int2)x << 4`:
+  Ghidra keeps the mask beside the operand it applies to, which is equivalent to `(x >> 4) & 0xfff`. Compare
+  against the disassembly; the expression is right, only its grouping differs.
 - **Input cap.** 4 MiB (`MAX_RAW_NATIVE_BYTES`); Sleigh profiles keep 128 KiB. A generated 1,039,864-byte
   Cortex-M3 image (4,700 C functions, Reset as the only seed) lists its functions in 0.6 s wall (3.8 s CPU) with
   92 MiB peak RSS in a release build on an otherwise idle Apple-silicon Mac. A session keeps at most 32 Raw
@@ -150,6 +167,8 @@ Owned fixture: `tests/fixtures/firmware/raw-cortex-m.bin` is the flash image of 
 `0x8000000` and the vector table only, it recovers all 11 functions the ELF names (6 from vectors, 5 through
 calls); its strings and switch tables are at even addresses and give no start. One extra start is `dispatch`'s
 join point, split because the UART handler tail-calls `dispatch` (see [known limits](known-limits.md#analysis)).
+`raw-cortex-m-decompile.bin` (same script, built without `movw`/`movt` and with LLVM's IPRA) holds the decompiler
+cases above: literal-pool globals, an argument kept in r1 or r2 across a call, and a call's result passed on.
 The stripped ELF, which has only its entry, finds 6 of them (Reset and the 5 it calls), a loop-head split and 6
 string or table starts. `raw-cortex-m-strings.bin`, from the same script, has the odd-aligned literals `"Cde"` and
 `"Bc"`; exactly its 6 ELF functions are found.

@@ -17,7 +17,8 @@ context variables; `funcdata.hh` synchronizes display names and `funcdata.cc` re
 `grammar.cc` and `type.cc` bound array layouts;
 `prettyprint.hh` and `printlanguage.hh` allow an address-aware token emitter. Default loader hooks preserve
 upstream behavior; `modelrules.hh` and `modelrules.cc` add optional aligned stack-slot assignment for Darwin.
-`fspec.hh`, `fspec.cc` and `marshal.cc` add an opt-in bounded integer input-extension window.
+`fspec.hh`, `fspec.cc` and `marshal.cc` add an opt-in bounded integer input-extension window; `fspec.hh` also
+lets a prototype take and drop per-function effect overrides without a decode round trip.
 Other vendored sources are unchanged.
 
 Ghidra is Copyright the National Security Agency, licensed under the Apache License 2.0; `vendor/ghidra/LICENSE`

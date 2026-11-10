@@ -18,7 +18,10 @@
 #include <algorithm>
 #include <cstring>
 #include <sstream>
+#include <iterator>
+#include <map>
 #include <memory>
+#include <set>
 #include <vector>
 
 using namespace ghidra;
@@ -142,9 +145,55 @@ public:
     void adjustVma(long adjust) override {}
 };
 
+// The global scope, naming globals that have no symbol. An address rampage knows a name for (a data symbol or the
+// analyst's name) takes that name, and one inside a named memory region takes the region's prefix and its address
+// (`ram_20000004`), where Ghidra's default spells only the space and a type letter (`iRam20000004`). Names only:
+// types stay inferred, so nothing here locks a type or a size.
+class NamedGlobalScope : public ScopeInternal {
+    std::map<uintb, std::string> labels;
+    std::map<uintb, std::pair<uintb, std::string>> regions;  // first byte -> (last byte, prefix)
+
+public:
+    explicit NamedGlobalScope(Architecture *architecture) : ScopeInternal(0, "", architecture) {}
+
+    void addLabel(uintb address, const std::string &name) { labels[address] = name; }
+    void addRegion(uintb first, uintb last, const std::string &prefix) {
+        auto next = regions.lower_bound(first);
+        if (next != regions.end() && next->first <= last) throw LowlevelError("Data regions overlap");
+        if (next != regions.begin() && std::prev(next)->second.first >= first)
+            throw LowlevelError("Data regions overlap");
+        regions[first] = {last, prefix};
+    }
+
+    string buildVariableName(const Address &addr, const Address &pc, Datatype *ct, int4 &index,
+                             uint4 flags) const override {
+        bool global = (flags & (Varnode::addrtied | Varnode::persist)) != 0
+            && (flags & (Varnode::unaffected | Varnode::input)) == 0
+            && addr.getSpace() == glb->getDefaultDataSpace();
+        if (global) {
+            auto label = labels.find(addr.getOffset());
+            if (label != labels.end()) return label->second;
+            auto region = regions.upper_bound(addr.getOffset());
+            if (region != regions.begin() && addr.getOffset() <= (--region)->second.first) {
+                std::ostringstream name;
+                name << region->second.second << '_' << std::hex << addr.getOffset();
+                return name.str();
+            }
+        }
+        return ScopeInternal::buildVariableName(addr, pc, ct, index, flags);
+    }
+};
+
 // Mirrors RawBinaryArchitecture, but takes its bytes from a MemImage we own until init hands it over.
 class MemArchitecture : public SleighArchitecture {
     MemImage *image;
+
+    Scope *buildDatabase(DocumentStorage &store) override {
+        symboltab = new Database(this, true);
+        Scope *global = new NamedGlobalScope(this);
+        symboltab->attachScope(global, nullptr);
+        return global;
+    }
 
     Translate *buildTranslator(DocumentStorage &store) override {
         // restoreFromSpec owns this pointer until initialization assigns Architecture::translate.
@@ -214,6 +263,15 @@ struct Handle {
     std::map<uintb, std::vector<rampage::LocalOverride>> localOverrides;
     std::map<uintb, std::vector<rampage::TypeHint>> typeHints;
     std::map<uintb, rampage::CalleeTypeShape> calleeTypeShapes;
+    // Callee register effects: the registers each function (with its callees) may write, once derived.
+    bool inferCalleeEffects = false;
+    std::map<uintb, std::vector<VarnodeData>> calleeWrites;
+    std::set<uintb> unknownWrites;
+    std::set<uintb> effectsApplied;
+    std::map<uintb, std::vector<EffectRecord>> effectOverrides;
+    // Callee prototypes: committed from each callee's own decompilation, bottom-up, before its callers'.
+    bool deriveCalleePrototypes = false;
+    std::set<uintb> underivablePrototypes;
     bool preparingTypeHintContext = false;
     bool poisoned = false;
     bool fallbackError = false;
@@ -684,6 +742,282 @@ template<typename Result> void decodeSpaces(const Sleigh &sleigh, Result &result
     }
 }
 
+bool identifier(const char *text) {
+    if (text == nullptr || text[0] == '\0' || std::isdigit(static_cast<unsigned char>(text[0]))) return false;
+    for (const char *at = text; *at != '\0'; ++at)
+        if (!std::isalnum(static_cast<unsigned char>(*at)) && *at != '_') return false;
+    return std::strlen(text) <= 256;
+}
+
+NamedGlobalScope &namedGlobals(Handle *handle) {
+    auto *scope = dynamic_cast<NamedGlobalScope *>(handle->arch->symboltab->getGlobalScope());
+    if (scope == nullptr) throw LowlevelError("Global scope does not name data");
+    return *scope;
+}
+
+// Callee register effects. Ghidra assumes every call clobbers what the calling convention says it may (r0-r3 and
+// r12 on ARM), so a caller that keeps a value in r1 across a call to a leaf that never touches r1 (as GCC's
+// -fipa-ra and LLVM's IPRA do) loses it: the next call's argument reads as `extraout_r1` or disappears. From the
+// callee's own p-code, rampage marks the clobberable registers it (and every function it calls) never writes as
+// unaffected, the way a <prototype> with <unaffected> children would.
+enum class WritesResult { Known, Unknown, Limited };
+
+constexpr int4 calleeWritesDepth = 16;
+
+bool overlaps(const VarnodeData &a, const VarnodeData &b) {
+    return a.space == b.space && a.offset < b.offset + b.size && b.offset < a.offset + a.size;
+}
+
+bool unknownUserOp(Architecture *arch, const PcodeOp *op) {
+    UserPcodeOp *userop = arch->userops.getOp(uint4(op->getIn(0)->getOffset()));
+    if (userop == nullptr) return true;
+    std::string name = userop->getName();
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    // A supervisor call runs a handler whose register use the caller cannot see.
+    return name.find("software") != std::string::npos || name.find("supervisor") != std::string::npos;
+}
+
+// The registers the function at `entry` may write, itself or through its direct callees. Unknown when it has an
+// indirect call or jump, a supervisor call, undecodable or unimplemented code, or a recursive cycle; Limited when
+// the depth or function budget ran out (which another query, with a fresh budget, may not).
+WritesResult calleeWrites(Handle *handle, uintb entry, std::set<uintb> &visiting, size_t &budget, int4 depth,
+                          std::vector<VarnodeData> &writes) {
+    auto known = handle->calleeWrites.find(entry);
+    if (known != handle->calleeWrites.end()) {
+        writes.insert(writes.end(), known->second.begin(), known->second.end());
+        return WritesResult::Known;
+    }
+    if (handle->unknownWrites.count(entry) != 0 || visiting.count(entry) != 0) return WritesResult::Unknown;
+    if (depth > calleeWritesDepth || budget == 0) return WritesResult::Limited;
+    --budget;
+    Architecture *arch = handle->arch;
+    AddrSpace *code = arch->getDefaultCodeSpace();
+    std::vector<VarnodeData> own;
+    std::vector<uintb> callees;
+    bool unknown = false;
+    try {
+        // A scratch function: the raw p-code of every reachable instruction, without touching the registered
+        // function's own analysis state.
+        Funcdata scratch("rampage_callee_writes", "rampage_callee_writes", arch->symboltab->getGlobalScope(),
+                         Address(code, entry), nullptr);
+        scratch.followFlow(Address(code, 0), Address(code, code->getHighest()));
+        unknown = scratch.hasUnimplemented() || scratch.hasBadData();
+        for (auto iter = scratch.beginOpAll(); !unknown && iter != scratch.endOpAll(); ++iter) {
+            const PcodeOp *op = iter->second;
+            const Varnode *out = op->getOut();
+            if (out != nullptr && out->getSpace()->getType() == IPTR_PROCESSOR) {
+                VarnodeData data;
+                data.space = out->getSpace();
+                data.offset = out->getOffset();
+                data.size = uint4(out->getSize());
+                own.push_back(data);
+            }
+            switch (op->code()) {
+            case CPUI_CALL:
+                if (op->getIn(0)->getSpace() != code) unknown = true;
+                else callees.push_back(op->getIn(0)->getOffset());
+                break;
+            case CPUI_CALLIND:
+            case CPUI_BRANCHIND:
+                unknown = true;
+                break;
+            case CPUI_CALLOTHER:
+                unknown = unknownUserOp(arch, op);
+                break;
+            default:
+                break;
+            }
+        }
+    } catch (const LowlevelError &) {
+        unknown = true;
+    }
+    if (unknown) {
+        handle->unknownWrites.insert(entry);
+        return WritesResult::Unknown;
+    }
+    visiting.insert(entry);
+    WritesResult result = WritesResult::Known;
+    for (uintb callee : callees) {
+        result = calleeWrites(handle, callee, visiting, budget, depth + 1, own);
+        if (result != WritesResult::Known) break;
+    }
+    visiting.erase(entry);
+    if (result == WritesResult::Unknown) handle->unknownWrites.insert(entry);
+    if (result == WritesResult::Known) {
+        handle->calleeWrites[entry] = own;
+        writes.insert(writes.end(), own.begin(), own.end());
+    }
+    return result;
+}
+
+// Marks, on each direct callee of `function`, the call-clobbered general registers it never writes as unaffected.
+void inferCalleeEffects(Handle *handle, Funcdata *function) {
+    Architecture *arch = handle->arch;
+    ProtoModel *model = arch->defaultfp;
+    if (model == nullptr) return;
+    std::vector<VarnodeData> clobbered;
+    int4 pointer = int4(arch->types->getSizeOfPointer());
+    for (auto iter = model->effectBegin(); iter != model->effectEnd(); ++iter) {
+        if (iter->getType() != EffectRecord::killedbycall) continue;
+        if (iter->getAddress().getSpace()->getType() != IPTR_PROCESSOR || iter->getSize() != pointer) continue;
+        VarnodeData data;
+        data.space = iter->getAddress().getSpace();
+        data.offset = iter->getAddress().getOffset();
+        data.size = uint4(iter->getSize());
+        clobbered.push_back(data);
+    }
+    if (clobbered.empty()) return;
+    Scope *global = arch->symboltab->getGlobalScope();
+    for (int4 i = 0; i < function->numCalls(); ++i) {
+        const FuncCallSpecs *call = function->getCallSpecs(i);
+        if (call->getOp() == nullptr || call->getOp()->code() != CPUI_CALL) continue;
+        const Address &target = call->getEntryAddress();
+        if (target.isInvalid() || target.getSpace() != arch->getDefaultCodeSpace()) continue;
+        if (handle->effectsApplied.count(target.getOffset()) != 0) continue;
+        Funcdata *callee = global->queryFunction(target);
+        if (callee == nullptr || callee == function || !callee->getFuncProto().hasModel()
+            || callee->getFuncProto().getModelName() != model->getName())
+            continue;
+        std::set<uintb> visiting;
+        size_t budget = 256;
+        std::vector<VarnodeData> writes;
+        WritesResult result = calleeWrites(handle, target.getOffset(), visiting, budget, 0, writes);
+        if (result == WritesResult::Limited) continue;
+        handle->effectsApplied.insert(target.getOffset());
+        if (result != WritesResult::Known) continue;
+        std::vector<EffectRecord> preserved;
+        for (const VarnodeData &candidate : clobbered) {
+            bool written = std::any_of(writes.begin(), writes.end(),
+                [&](const VarnodeData &write) { return overlaps(candidate, write); });
+            if (!written) preserved.emplace_back(candidate, EffectRecord::unaffected);
+        }
+        if (preserved.empty()) continue;
+        callee->getFuncProto().overrideEffects(preserved);
+        handle->effectOverrides[target.getOffset()] = std::move(preserved);
+    }
+}
+
+// The overrides describe calls to a function, not the function itself: a register it never writes may still be one
+// of its parameters, which an unaffected input would hide. While a function is decompiled, its own overrides are
+// lifted.
+class OwnEffectsLifted {
+    Handle *handle;
+    Funcdata *function;
+    const std::vector<EffectRecord> *overrides = nullptr;
+
+public:
+    OwnEffectsLifted(Handle *h, Funcdata *f) : handle(h), function(f) {
+        auto found = handle->effectOverrides.find(function->getAddress().getOffset());
+        if (found == handle->effectOverrides.end()) return;
+        overrides = &found->second;
+        function->getFuncProto().clearEffectOverrides();
+    }
+    ~OwnEffectsLifted() {
+        if (overrides == nullptr) return;
+        try {
+            function->getFuncProto().overrideEffects(*overrides);
+        } catch (...) {
+            handle->unsafeCleanup = true;
+        }
+    }
+    OwnEffectsLifted(const OwnEffectsLifted &) = delete;
+    OwnEffectsLifted &operator=(const OwnEffectsLifted &) = delete;
+};
+
+// Callee prototypes. With no prototype for a callee, Ghidra decides its parameters from each call site alone, and
+// an argument that is the previous call's result, or a register the caller passes through untouched, reads as
+// inactive: `f(g(x))` prints as `g(x); f();`. Ghidra's own analysis commits each function's recovered prototype,
+// leaves first, before its callers are decompiled (Decompiler Parameter ID); this does the same within a handle.
+enum class Derivation { Locked, Underivable, Limited };
+
+constexpr size_t calleePrototypeBudget = 64;
+
+std::vector<uintb> directCallees(Funcdata *function) {
+    std::vector<uintb> callees;
+    for (int4 i = 0; i < function->numCalls(); ++i) {
+        const FuncCallSpecs *call = function->getCallSpecs(i);
+        if (call->getOp() == nullptr || call->getOp()->code() != CPUI_CALL) continue;
+        const Address &target = call->getEntryAddress();
+        if (target.isInvalid() || target == function->getAddress()) continue;
+        if (std::find(callees.begin(), callees.end(), target.getOffset()) == callees.end())
+            callees.push_back(target.getOffset());
+    }
+    return callees;
+}
+
+// Locks `function`'s prototype to the one its own decompilation recovers, once every function it calls has a locked
+// prototype. A cycle, a failed decompilation or an underivable callee leaves it as Ghidra would (unlocked).
+Derivation deriveCalleePrototype(Handle *handle, Funcdata *function, std::set<uintb> &deriving, size_t &budget) {
+    if (function->getFuncProto().isInputLocked()) return Derivation::Locked;
+    uintb entry = function->getAddress().getOffset();
+    // Analyst local overrides and type hints apply only in the function's own decompilation; locking a prototype
+    // without them would contradict it.
+    if (handle->underivablePrototypes.count(entry) != 0 || deriving.count(entry) != 0
+        || handle->localOverrides.count(entry) != 0 || handle->typeHints.count(entry) != 0)
+        return Derivation::Underivable;
+    if (budget == 0) return Derivation::Limited;
+    --budget;
+    Architecture *arch = handle->arch;
+    AddrSpace *code = arch->getDefaultCodeSpace();
+    Address low(code, 0);
+    Address high(code, code->getHighest());
+    Scope *global = arch->symboltab->getGlobalScope();
+    Derivation result = Derivation::Locked;
+    deriving.insert(entry);
+    try {
+        arch->clearAnalysis(function);
+        function->followFlow(low, high);
+        std::vector<uintb> callees = directCallees(function);
+        arch->clearAnalysis(function);
+        for (uintb target : callees) {
+            Funcdata *callee = global->queryFunction(Address(code, target));
+            Derivation derived = callee == nullptr ? Derivation::Underivable
+                                                   : deriveCalleePrototype(handle, callee, deriving, budget);
+            if (derived != Derivation::Locked) {
+                result = derived;
+                break;
+            }
+        }
+        if (result == Derivation::Locked) {
+            function->followFlow(low, high);
+            if (handle->inferCalleeEffects) inferCalleeEffects(handle, function);
+            OwnEffectsLifted ownEffects(handle, function);
+            arch->allacts.getCurrent()->reset(*function);
+            arch->allacts.getCurrent()->perform(*function);
+            PrototypePieces pieces;
+            function->getFuncProto().getPieces(pieces);
+            arch->clearAnalysis(function);
+            function->getFuncProto().setPieces(pieces);
+        }
+    } catch (const LowlevelError &) {
+        arch->clearAnalysis(function);
+        result = Derivation::Underivable;
+    }
+    deriving.erase(entry);
+    if (result == Derivation::Underivable) handle->underivablePrototypes.insert(entry);
+    return result;
+}
+
+// Derives the prototypes of `function`'s direct callees, leaving `function` cleared for a fresh flow.
+void deriveCalleePrototypes(Handle *handle, Funcdata *function) {
+    Architecture *arch = handle->arch;
+    Scope *global = arch->symboltab->getGlobalScope();
+    std::vector<uintb> callees = directCallees(function);
+    bool pending = std::any_of(callees.begin(), callees.end(), [&](uintb target) {
+        Funcdata *callee = global->queryFunction(Address(arch->getDefaultCodeSpace(), target));
+        return callee != nullptr && !callee->getFuncProto().isInputLocked()
+            && handle->underivablePrototypes.count(target) == 0;
+    });
+    arch->clearAnalysis(function);
+    if (!pending) return;
+    std::set<uintb> deriving{function->getAddress().getOffset()};
+    size_t budget = calleePrototypeBudget;
+    for (uintb target : callees) {
+        Funcdata *callee = global->queryFunction(Address(arch->getDefaultCodeSpace(), target));
+        if (callee != nullptr) deriveCalleePrototype(handle, callee, deriving, budget);
+    }
+}
+
 } // namespace
 
 extern "C" {
@@ -986,6 +1320,9 @@ void *rampage_decomp_open(const char *sleighhome, const char *langid, size_t nse
         initializing = true;
         arch->init(store);
         initializing = false;
+        // Fold loads from read-only mappings into their values, as Ghidra's "Respect read-only flags" default
+        // does: an ARM literal-pool word then reads as the address or constant it holds, not as a variable.
+        arch->readonlypropagate = true;
         std::unique_ptr<rampage::TokenEmitter> emitter(new rampage::TokenEmitter(handle->tokens));
         arch->print->setEmitter(emitter.get());
         handle->emitter = emitter.release();
@@ -1110,6 +1447,42 @@ const char *rampage_decomp_noreturn(void *h, uint64_t addr, uint8_t indirect) no
     });
 }
 
+// Names the global at a data address that has no typed symbol, without locking its type or size.
+const char *rampage_decomp_data_name(void *h, uint64_t addr, const char *name) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &nativeMutation) {
+        if (!identifier(name)) throw LowlevelError("Data name must be a C identifier");
+        if (addr > handle->arch->getDefaultDataSpace()->getHighest())
+            throw LowlevelError("Data name address exceeds the data space");
+        NamedGlobalScope &scope = namedGlobals(handle);
+        nativeMutation = true;
+        scope.addLabel(addr, name);
+    });
+}
+
+// Names unnamed globals in [first, last] `<prefix>_<hex address>`.
+const char *rampage_decomp_data_region(void *h, uint64_t first, uint64_t last, const char *prefix) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &nativeMutation) {
+        if (!identifier(prefix)) throw LowlevelError("Data region prefix must be a C identifier");
+        if (first > last || last > handle->arch->getDefaultDataSpace()->getHighest())
+            throw LowlevelError("Data region exceeds the data space");
+        NamedGlobalScope &scope = namedGlobals(handle);
+        nativeMutation = true;
+        scope.addRegion(first, last, prefix);
+    });
+}
+
+// Opts in to callee register-effect inference (inferCalleeEffects) and callee prototype derivation
+// (deriveCalleePrototypes) before each decompilation.
+const char *rampage_decomp_callee_inference(void *h, uint8_t effects, uint8_t prototypes) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &) {
+        handle->inferCalleeEffects = effects != 0;
+        handle->deriveCalleePrototypes = prototypes != 0;
+    });
+}
+
 // Parses C declarations (typedefs, prototypes) into the program's type database, so matching functions get
 const char *rampage_decomp_global(void *h, uint64_t addr, const char *text) noexcept {
     Handle *handle = static_cast<Handle *>(h);
@@ -1143,6 +1516,10 @@ const char *rampage_decomp_global(void *h, uint64_t addr, const char *text) noex
         if (!named.empty()) throw LowlevelError("Global name is already registered");
         if (scope->findOverlap(address, type->getSize()) != nullptr)
             throw LowlevelError("Global declaration overlaps an existing symbol");
+        // A named, typed global reads by its name, not folded into its bytes as other read-only data is. The symbol
+        // takes the range's properties when it is added, so clear them first.
+        Range range(address.getSpace(), addr, addr + uintb(type->getSize()) - 1);
+        handle->arch->symboltab->clearPropertyRange(Varnode::readonly, range);
         SymbolEntry *entry = scope->addSymbol(name, type, address, Address());
         scope->setAttribute(entry->getSymbol(), Varnode::typelock | Varnode::namelock);
     });
@@ -1392,6 +1769,11 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         Address low(arch->getDefaultCodeSpace(), 0);
         Address high(arch->getDefaultCodeSpace(), arch->getDefaultCodeSpace()->getHighest());
         fd->followFlow(low, high);
+        if (handle->inferCalleeEffects) inferCalleeEffects(handle, fd);
+        if (handle->deriveCalleePrototypes) {
+            deriveCalleePrototypes(handle, fd);
+            fd->followFlow(low, high);
+        }
         if (!handle->preparingTypeHintContext) {
             handle->calleeTypeShapes.clear();
             std::set<uintb> needed;
@@ -1445,6 +1827,7 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
             }
             hintContext.callees = &handle->calleeTypeShapes;
         }
+        OwnEffectsLifted ownEffects(handle, fd);
         arch->allacts.getCurrent()->reset(*fd);
         arch->allacts.getCurrent()->perform(*fd);
         auto local = handle->localOverrides.find(addr);
