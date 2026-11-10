@@ -599,11 +599,12 @@ fn call_context(project: &Project, root: u64, limit: usize) -> Result<(BTreeSet<
         if !context.insert(function) {
             continue;
         }
-        for xref in &project.analysis()?.program.xrefs {
+        let analysis = project.analysis()?;
+        for xref in &analysis.program.xrefs {
             if xref.kind != rampage_analysis::discover::XrefKind::Call {
                 continue;
             }
-            let caller = project.function_containing(xref.from)?;
+            let caller = analysis.function_containing(xref.from);
             if xref.to != function && caller != Some(function) {
                 continue;
             }

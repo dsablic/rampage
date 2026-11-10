@@ -156,6 +156,21 @@ struct BlockSpan {
     reach: u64,
 }
 
+impl Analysis {
+    /// The start of the function whose block contains `address`, preferring the latest-starting block. Callers
+    /// that look up many addresses use this on one checked analysis rather than [`Project::function_containing`],
+    /// which rechecks the analysis binding (for a Raw project, a hash of the whole image) on every call.
+    pub(crate) fn function_containing(&self, address: u64) -> Option<u64> {
+        let candidates = self.blocks.partition_point(|block| block.start <= address);
+        self.blocks[..candidates]
+            .iter()
+            .rev()
+            .take_while(|block| block.reach > address)
+            .find(|block| address < block.end)
+            .map(|block| block.function)
+    }
+}
+
 impl Project {
     /// Process-local names-only identity for Arc::ptr_eq; not serialized authority or source freshness.
     pub fn names_revision(&self) -> Result<Arc<()>, ApiError> {
@@ -779,14 +794,7 @@ impl Project {
 
     /// The start of the function whose block contains `address`, preferring the latest-starting block.
     pub fn function_containing(&self, address: u64) -> Result<Option<u64>, ApiError> {
-        let blocks = &self.analysis()?.blocks;
-        let candidates = blocks.partition_point(|block| block.start <= address);
-        Ok(blocks[..candidates]
-            .iter()
-            .rev()
-            .take_while(|block| block.reach > address)
-            .find(|block| address < block.end)
-            .map(|block| block.function))
+        Ok(self.analysis()?.function_containing(address))
     }
 
     /// Hashes, entropy, format details and hints, computed once per project.

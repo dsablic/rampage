@@ -55,7 +55,7 @@ impl Project {
                 from: xref.from,
                 to: xref.to,
                 kind: xref.kind,
-                from_function: self.function_containing(xref.from)?.map(|function| self.function_name(function)),
+                from_function: analysis.function_containing(xref.from).map(|function| self.function_name(function)),
                 to_name: self.name_at(xref.to),
             });
         }

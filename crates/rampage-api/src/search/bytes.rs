@@ -683,6 +683,8 @@ pub(super) fn search(
     scan.report.cancelled = scan.report.stop_reason == SearchStopReason::Cancelled;
     scan.report.hits = scan.retained.into_iter().skip(query.offset).take(query.limit).collect();
     if query.include_context {
+        // Checked once, on the first hit not cancelled, rather than once per hit.
+        let mut checked = None;
         for hit in &mut scan.report.hits {
             if control.cancelled() {
                 scan.report.cancelled = true;
@@ -691,7 +693,11 @@ pub(super) fn search(
                 scan.report.total_is_exact = false;
                 break;
             }
-            hit.function = function_context(project, hit.address)?;
+            let analysis = match checked {
+                Some(analysis) => analysis,
+                None => *checked.insert(project.analysis()?),
+            };
+            hit.function = function_context(project, analysis, hit.address);
         }
     }
     project

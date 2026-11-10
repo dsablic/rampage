@@ -357,9 +357,14 @@ pub(crate) fn invalid(message: &str) -> ApiError {
     ApiError::Invalid(message.to_owned())
 }
 
-pub(crate) fn function_context(project: &Project, address: u64) -> Result<Option<SearchFunctionContext>, ApiError> {
-    let Some(address) = project.function_containing(address)? else { return Ok(None) };
-    Ok(Some(function_context_for_owner(project, address)))
+/// The function containing `address`, looked up in an analysis the caller already checked once for all its hits.
+pub(crate) fn function_context(
+    project: &Project,
+    analysis: &crate::project::Analysis,
+    address: u64,
+) -> Option<SearchFunctionContext> {
+    let address = analysis.function_containing(address)?;
+    Some(function_context_for_owner(project, address))
 }
 
 fn function_context_for_owner(project: &Project, address: u64) -> SearchFunctionContext {
@@ -618,7 +623,7 @@ fn search_references(
                 size: 0,
                 image_offset,
                 file_offset,
-                function: if query.include_context { function_context(project, address)? } else { None },
+                function: if query.include_context { function_context(project, analysis, address) } else { None },
                 evidence: SearchHitEvidence::Reference,
                 target: Some(target),
                 code: None,
