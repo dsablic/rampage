@@ -65,8 +65,11 @@ use crate::{ApiError, Project};
 
 fn project(profile: RawProfile, bytes: &[u8], base: u64, entry: Option<u64>, seeds: Vec<u64>) -> Project {
     Project::new(
-        Binary::from_raw_code(bytes.to_vec(), RawCodeOptions { profile, base, entry, seeds, vector_table: None })
-            .unwrap(),
+        Binary::from_raw_code(
+            bytes.to_vec(),
+            RawCodeOptions { profile, base, entry, seeds, vector_table: None, pointer_tables: false },
+        )
+        .unwrap(),
     )
 }
 
@@ -78,7 +81,14 @@ fn actual_native_profile_metadata_matches_raw_admission() {
     for profile in sleigh.clone() {
         let binary = Binary::from_raw_code(
             vec![0; 4],
-            RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![], vector_table: None },
+            RawCodeOptions {
+                profile,
+                base: 0x1000,
+                entry: None,
+                seeds: vec![],
+                vector_table: None,
+                pointer_tables: false,
+            },
         )
         .unwrap();
         let decoder = SleighDecoder::open(profile.language_id()).unwrap();
@@ -356,7 +366,14 @@ fn matching_profile_does_not_excuse_any_translator_fact_mismatch() {
     for profile in RawProfile::ALL.into_iter().filter(|profile| !profile.native_decoder()) {
         let binary = Binary::from_raw_code(
             vec![0; 4],
-            RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![], vector_table: None },
+            RawCodeOptions {
+                profile,
+                base: 0x1000,
+                entry: None,
+                seeds: vec![],
+                vector_table: None,
+                pointer_tables: false,
+            },
         )
         .unwrap();
         let raw = binary.raw_code_image().unwrap();

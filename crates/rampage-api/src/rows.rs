@@ -256,10 +256,13 @@ pub struct RawSummary<'a> {
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub base_address: u64,
     pub length: u64,
-    /// Discovery seeds, supplied and vector-table handlers together (the entry is counted separately).
+    /// Discovery seeds, supplied, vector-table handlers and pointer-table targets together (the entry is counted
+    /// separately).
     pub seed_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_table: Option<&'a rampage_loaders::raw_vectors::VectorTable>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pointer_tables: Option<&'a rampage_loaders::raw_pointers::PointerTables>,
 }
 
 #[derive(Debug, Serialize)]

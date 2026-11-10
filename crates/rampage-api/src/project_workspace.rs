@@ -1097,7 +1097,14 @@ mod raw_tests {
     #[test]
     fn raw_cannot_acquire_a_legacy_workspace_identity() {
         for profile in [RawProfile::Msp430, RawProfile::Avr8, RawProfile::Mos6502] {
-            let options = RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![], vector_table: None };
+            let options = RawCodeOptions {
+                profile,
+                base: 0x1000,
+                entry: None,
+                seeds: vec![],
+                vector_table: None,
+                pointer_tables: false,
+            };
             let binary = Binary::from_raw_code(vec![0; 4], options).unwrap();
             let result = uncontrolled(|control| identity_controlled(&binary, control));
             assert!(
@@ -1110,8 +1117,14 @@ mod raw_tests {
 
     #[test]
     fn cancellation_keeps_its_unavailable_classification_before_raw_workspace_refusal() {
-        let options =
-            RawCodeOptions { profile: RawProfile::Avr8, base: 0x1000, entry: None, seeds: vec![], vector_table: None };
+        let options = RawCodeOptions {
+            profile: RawProfile::Avr8,
+            base: 0x1000,
+            entry: None,
+            seeds: vec![],
+            vector_table: None,
+            pointer_tables: false,
+        };
         let binary = Binary::from_raw_code(vec![0; 4], options).unwrap();
         let cancelled = AtomicBool::new(true);
         let mut observer = |_| {};

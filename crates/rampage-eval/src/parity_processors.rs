@@ -208,7 +208,14 @@ fn fixtures(root: &Path) -> Result<Vec<Fixture>, String> {
 }
 
 fn project(fixture: &Fixture, entry: Option<u64>, seeds: Vec<u64>) -> Result<Project, String> {
-    let options = RawCodeOptions { profile: fixture.profile, base: fixture.base, entry, seeds, vector_table: None };
+    let options = RawCodeOptions {
+        profile: fixture.profile,
+        base: fixture.base,
+        entry,
+        seeds,
+        vector_table: None,
+        pointer_tables: false,
+    };
     let binary = Binary::from_raw_code(fixture.bytes.clone(), options)
         .map_err(|error| format!("{}: Raw admission refused: {error}", fixture.name))?;
     Ok(Project::new(binary))

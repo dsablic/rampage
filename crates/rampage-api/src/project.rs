@@ -710,6 +710,7 @@ impl Project {
                 length: raw.length(),
                 seed_count: raw.seeds().len(),
                 vector_table: raw.vector_table(),
+                pointer_tables: raw.pointer_tables(),
             }),
         }
     }
@@ -994,6 +995,7 @@ mod tests {
                     entry: None,
                     seeds: vec![0x1000],
                     vector_table: None,
+                    pointer_tables: false,
                 },
             )
             .unwrap(),

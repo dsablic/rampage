@@ -7,6 +7,7 @@ mod load;
 mod macho;
 mod model;
 mod raw;
+pub mod raw_pointers;
 pub mod raw_vectors;
 mod slots;
 pub mod snapshot;

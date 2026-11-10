@@ -248,7 +248,8 @@ an ordinary Raw Project instead of admitting a native header. The `RawProjectReq
 language ID),
 `offset` and `length` (original-file bytes, 1..=131072, or up to 4 MiB for `ARM:LE:32:Cortex`), `base_address`,
 optional `entry` and `seeds` (internal code-space BYTE addresses), and for Cortex-M an optional `vector_table`
-(`true` for one at `base_address`, or its address). Unknown fields are rejected. The mapping is an analyst
+(`true` for one at `base_address`, or its address) and `pointer_tables` (`true` seeds functions from tables of
+Thumb code pointers). Unknown fields are rejected. The mapping is an analyst
 assertion; see [Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects) for profiles and limits.
 
 ```sh
