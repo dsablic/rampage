@@ -412,3 +412,24 @@ fn native_fourteen_keep_their_native_selector_and_raw_is_not_inferred_from_an_ar
         assert!(decoder_for_project(&binary).is_err());
     }
 }
+
+#[test]
+fn raw_xrefs_check_the_analysis_binding_once_per_query_not_once_per_row() {
+    // `rts` at 0x1000, then 64 `jsr $1000` and an `rts`: one function referenced from 64 call sites.
+    const CALLS: usize = 64;
+    let mut bytes = vec![0x60];
+    for _ in 0..CALLS {
+        bytes.extend([0x20, 0x00, 0x10]);
+    }
+    bytes.push(0x60);
+    let project = project(RawProfile::Mos6502, &bytes, 0x1000, None, vec![0x1000, 0x1001]);
+    project.analysis().unwrap();
+    let (page, bindings) = crate::decoder::count_raw_analysis_bindings(|| {
+        project.xrefs(crate::xrefs::XrefQuery::To(0x1000), None, None).unwrap()
+    });
+    assert_eq!(page.total, CALLS);
+    assert!(page.items.iter().all(|row| row.from_function.as_deref() == Some("sub_1001")));
+    // Each binding hashes the whole image (and checks the bundled specifications for Sleigh profiles), so one per
+    // row made a 5k-reference query on a 1 MiB image take minutes.
+    assert_eq!(bindings, 1);
+}

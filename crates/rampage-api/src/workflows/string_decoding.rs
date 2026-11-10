@@ -630,6 +630,8 @@ impl Project {
         let mut tracing = Tracing::default();
         // (candidate index, call address, caller, start of the caller's block holding the call)
         let mut sites = Vec::new();
+        // Checked once for every call site below, not once per lookup.
+        let analysis = self.analysis().ok();
         for (index, candidate) in candidates.iter_mut().enumerate() {
             if index >= MAX_TRACED_CANDIDATES {
                 tracing.untraced_candidates += 1;
@@ -639,8 +641,8 @@ impl Project {
             candidate.traced = true;
             candidate.call_sites_cut = page.total > page.items.len();
             for row in page.items.iter().filter(|row| row.kind == XrefKind::Call) {
-                let caller = self.function_containing(row.from).ok().flatten();
-                let block = caller.and_then(|caller| self.block_start(caller, row.from));
+                let caller = analysis.and_then(|analysis| analysis.function_containing(row.from));
+                let block = caller.and_then(|caller| block_start(analysis?, caller, row.from));
                 sites.push((index, row.from, caller, block));
             }
         }
@@ -703,12 +705,6 @@ impl Project {
         tracing
     }
 
-    /// The start of the block of `function` that contains `address`.
-    fn block_start(&self, function: u64, address: u64) -> Option<u64> {
-        let function = self.analysis().ok()?.program.function_at(function)?;
-        function.blocks.iter().find(|block| (block.start..block.end).contains(&address)).map(|block| block.start)
-    }
-
     /// The data at `address` if it is file-backed and not code, measured to the first NUL, the next referenced
     /// address (`xrefs` is sorted by target) or `MAX_BLOB_BYTES`.
     fn blob_at(&self, address: u64, xrefs: &[rampage_analysis::discover::Xref]) -> Option<Blob> {
@@ -736,6 +732,12 @@ impl Project {
             passed_from: Vec::new(),
         })
     }
+}
+
+/// The start of the block of `function` that holds `address`.
+fn block_start(analysis: &crate::project::Analysis, function: u64, address: u64) -> Option<u64> {
+    let function = analysis.program.function_at(function)?;
+    function.blocks.iter().find(|block| (block.start..block.end).contains(&address)).map(|block| block.start)
 }
 
 #[cfg(test)]

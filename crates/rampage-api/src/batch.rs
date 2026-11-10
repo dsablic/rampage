@@ -224,6 +224,8 @@ impl Project {
         let mut renamed = HashMap::new();
         let mut names = HashMap::new();
         let mut bytes = 0usize;
+        // Checked on the first signature entry, then reused rather than rechecked per entry.
+        let mut analysis = None;
         for (index, entry) in entries.iter().enumerate() {
             let (field, at, value) = entry.parts();
             bytes = bytes.saturating_add(at.len()).saturating_add(value.map_or(0, str::len));
@@ -232,7 +234,11 @@ impl Project {
             }
             let mut address = self.resolve_in(current, at)?;
             if field == Field::Signature && self.binary.import_slot(address).is_none() {
-                address = self.function_containing(address)?.unwrap_or(address);
+                let checked = match analysis {
+                    Some(checked) => checked,
+                    None => *analysis.insert(self.analysis()?),
+                };
+                address = checked.function_containing(address).unwrap_or(address);
             }
             if let Some(earlier) = targets.insert((field as u8, address), index) {
                 return Err(ApiError::Invalid(format!(

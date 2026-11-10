@@ -413,6 +413,8 @@ impl<'p> Tracer<'p> {
         let mut targets = targets.to_vec();
         targets.sort_unstable();
         targets.dedup();
+        // Checked once for every reference below, not once per lookup.
+        let analysis = self.project.analysis().ok();
         for &target in &targets {
             let page = match self.project.xrefs(XrefQuery::To(target), None, Some(REFERENCES_PER_ITEM)) {
                 Ok(page) => page,
@@ -427,7 +429,7 @@ impl<'p> Tracer<'p> {
             }
             for row in page.items {
                 // A PLT stub or the API's own body referencing it is plumbing, not a user.
-                if let Ok(Some(function)) = self.project.function_containing(row.from)
+                if let Some(function) = analysis.and_then(|analysis| analysis.function_containing(row.from))
                     && targets.binary_search(&function).is_err()
                 {
                     users.references += 1;

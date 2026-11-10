@@ -1,6 +1,16 @@
 #[cfg(test)]
 std::thread_local! {
     static FAIL_ANALYSIS_BINDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static RAW_ANALYSIS_BINDINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many Raw analysis bindings (each a hash of the whole image, and for Sleigh profiles a check of the
+/// bundled specifications) `work` computes on this thread.
+#[cfg(test)]
+pub(crate) fn count_raw_analysis_bindings<T>(work: impl FnOnce() -> T) -> (T, usize) {
+    let before = RAW_ANALYSIS_BINDINGS.with(std::cell::Cell::get);
+    let value = work();
+    (value, RAW_ANALYSIS_BINDINGS.with(std::cell::Cell::get) - before)
 }
 
 #[cfg(test)]
@@ -44,6 +54,8 @@ pub(crate) fn analysis_binding(binary: &Binary) -> Result<Option<String>, Decode
     let Some(raw) = binary.raw_interpretation_identity().map_err(|error| initialization(error.to_string()))? else {
         return Ok(None);
     };
+    #[cfg(test)]
+    RAW_ANALYSIS_BINDINGS.with(|count| count.set(count.get() + 1));
     #[cfg(test)]
     if FAIL_ANALYSIS_BINDING.with(|failed| failed.get()) {
         return Err(initialization("injected specification revalidation failure"));
