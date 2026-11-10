@@ -15,3 +15,11 @@ for build in raw-cortex-m:cortex_m3 raw-cortex-m-strings:cortex_m3 raw-cortex-m-
   llvm-objcopy -O binary --only-section=.text "$name.elf" "$name.bin"
   chmod -x "$name.bin"
 done
+# Literal pools instead of movw/movt (as GCC-built firmware has), and interprocedural register allocation so a
+# caller keeps an argument in a call-clobbered register across a call to a leaf that leaves it alone.
+zig cc -target thumb-freestanding-eabi -mcpu=cortex_m3+no_movt -O1 -g0 -ffreestanding -nostdlib -mllvm -enable-ipra \
+  -fno-unwind-tables -fno-asynchronous-unwind-tables \
+  -Wl,--build-id=none -Wl,--nmagic -Wl,-e,reset_handler -Wl,-T,raw-cortex-m.ld \
+  -o raw-cortex-m-decompile.elf raw-cortex-m-decompile.c
+llvm-objcopy -O binary --only-section=.text raw-cortex-m-decompile.elf raw-cortex-m-decompile.bin
+chmod -x raw-cortex-m-decompile.bin

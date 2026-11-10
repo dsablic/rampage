@@ -133,7 +133,76 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
             operations.push(WorkerOperation::NoReturn { address, indirect });
         }
     }
+    operations.extend(data_names(project, annotations, &identities, &slots));
+    if binary.arch == rampage_arch::Arch::Arm {
+        let inference = rampage_decompiler::CalleeInference { register_effects: true, prototypes: true };
+        operations.push(WorkerOperation::CalleeInference { inference });
+    }
     Ok(operations)
+}
+
+/// The architectural ARMv6-M/ARMv7-M system address map: every M-profile core decodes these ranges the same way,
+/// whatever the device. A global in one with no other name reads `ram_20000004`, `periph_40021000` and so on.
+const CORTEX_M_REGIONS: [(u64, u64, &str); 7] = [
+    (0x0000_0000, 0x1fff_ffff, "code"),
+    (0x2000_0000, 0x3fff_ffff, "ram"),
+    (0x4000_0000, 0x5fff_ffff, "periph"),
+    (0x6000_0000, 0x9fff_ffff, "extram"),
+    (0xa000_0000, 0xdfff_ffff, "extdev"),
+    (0xe000_0000, 0xe00f_ffff, "ppb"),
+    (0xe010_0000, 0xffff_ffff, "vendor_sys"),
+];
+
+fn c_identifier(name: &str) -> bool {
+    let mut characters = name.chars();
+    characters.next().is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+        && name.len() <= 256
+}
+
+/// Names for globals the decompiler would otherwise call `iRam…`/`uRam…`: the analyst's name for a data address,
+/// else the binary's data symbol (when that name is unique), and on a Cortex-M Raw image the architectural
+/// region of the address. Names only; typed globals (`set_global`) keep their own symbols.
+fn data_names(
+    project: &Project,
+    annotations: &Annotations,
+    functions: &BTreeMap<u64, String>,
+    slots: &std::collections::BTreeSet<u64>,
+) -> Vec<WorkerOperation> {
+    let data = |address: &u64| !functions.contains_key(address) && !slots.contains(address);
+    let mut names: BTreeMap<u64, String> = BTreeMap::new();
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for symbol in &project.binary.symbols {
+        if symbol.kind == SymbolKind::Data {
+            *counts.entry(symbol.name.as_str()).or_default() += 1;
+        }
+    }
+    for symbol in &project.binary.symbols {
+        if symbol.kind == SymbolKind::Data
+            && counts.get(symbol.name.as_str()) == Some(&1)
+            && c_identifier(&symbol.name)
+            && data(&symbol.address)
+        {
+            names.entry(symbol.address).or_insert_with(|| symbol.name.clone());
+        }
+    }
+    for (address, name) in annotations.names() {
+        if data(address) && c_identifier(name) {
+            names.insert(*address, name.clone());
+        }
+    }
+    let mut operations: Vec<_> =
+        names.into_iter().map(|(address, name)| WorkerOperation::DataName { address, name }).collect();
+    let cortex_m =
+        project.binary.raw_code_image().is_some_and(|image| image.profile() == rampage_loaders::RawProfile::CortexM);
+    if cortex_m {
+        operations.extend(CORTEX_M_REGIONS.iter().map(|&(first, last, prefix)| WorkerOperation::DataRegion {
+            first,
+            last,
+            prefix: prefix.to_owned(),
+        }));
+    }
+    operations
 }
 
 pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -> Result<(), ApiError> {
@@ -220,6 +289,15 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
             WorkerOperation::NoReturn { address, indirect } => {
                 engine.set_noreturn(address, indirect).map_err(|error| failure(address, "mark noreturn", error))?
             }
+            WorkerOperation::DataName { address, name } => {
+                engine.set_data_name(address, &name).map_err(|error| failure(address, "name data", error))?
+            }
+            WorkerOperation::DataRegion { first, last, prefix } => engine
+                .add_data_region(first, last, &prefix)
+                .map_err(|error| failure(first, "name data region", error))?,
+            WorkerOperation::CalleeInference { inference } => engine
+                .set_callee_inference(inference)
+                .map_err(|error| ApiError::Unavailable(format!("callee inference: {error}")))?,
             WorkerOperation::Mode { .. } => unreachable!(),
         }
         if checks_types {

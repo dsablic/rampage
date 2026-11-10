@@ -334,6 +334,9 @@ unsafe extern "C" {
     ) -> *const c_char;
     fn rampage_decomp_prototype(handle: *mut Opaque, addr: u64, indirect: u8, text: *const c_char) -> *const c_char;
     fn rampage_decomp_noreturn(handle: *mut Opaque, addr: u64, indirect: u8) -> *const c_char;
+    fn rampage_decomp_data_name(handle: *mut Opaque, addr: u64, name: *const c_char) -> *const c_char;
+    fn rampage_decomp_data_region(handle: *mut Opaque, first: u64, last: u64, prefix: *const c_char) -> *const c_char;
+    fn rampage_decomp_callee_inference(handle: *mut Opaque, effects: u8, prototypes: u8) -> *const c_char;
     fn rampage_decomp_global(handle: *mut Opaque, addr: u64, text: *const c_char) -> *const c_char;
     fn rampage_decomp_parse_c(handle: *mut Opaque, text: *const c_char) -> *const c_char;
     fn rampage_decomp_error(handle: *mut Opaque) -> *const c_char;
@@ -440,6 +443,22 @@ pub struct Decompiler {
     data_organization: DataOrganization,
     language_id: String,
     address_highest: u64,
+}
+
+/// What the decompiler infers about a function's direct callees before decompiling it. Off by default: Ghidra then
+/// takes each callee's effects from the calling convention and its parameters from each call site alone.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalleeInference {
+    /// Marks the call-clobbered registers that a callee (with everything it calls) provably never writes as
+    /// preserved across calls to it, so a caller keeping a value there across the call (interprocedural register
+    /// allocation: GCC `-fipa-ra`, LLVM IPRA) keeps its argument. A callee with an indirect call or jump, a
+    /// supervisor call, recursion or undecodable code keeps the convention's effects.
+    pub register_effects: bool,
+    /// Commits each callee's prototype, as its own decompilation recovers it, leaves first (Ghidra's Decompiler
+    /// Parameter ID), so `f(g(x))` and arguments passed through untouched are not lost at call sites. Bounded per
+    /// decompilation; a callee in a recursive cycle, or calling one it cannot derive, stays unlocked.
+    pub prototypes: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -557,6 +576,36 @@ impl Decompiler {
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: valid serialized handle and a checked address; the returned error belongs to the handle.
         ffi_result(unsafe { rampage_decomp_noreturn(self.handle, address, u8::from(indirect)) })
+    }
+
+    /// Names the global at a data address that has no typed symbol, so its uses print `name` rather than Ghidra's
+    /// default (`iRam20000004`). Only the name: the data type and size stay inferred.
+    pub fn set_data_name(&mut self, address: u64, name: &str) -> Result<(), Error> {
+        let name = CString::new(name).map_err(|_| Error::Ghidra("data name contains NUL".to_owned()))?;
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid serialized handle and a live C string; the returned error belongs to the handle.
+        ffi_result(unsafe { rampage_decomp_data_name(self.handle, address, name.as_ptr()) })
+    }
+
+    /// Names unnamed globals in `first..=last` as `<prefix>_<hex address>` (`ram_20000004`). Regions must not overlap.
+    pub fn add_data_region(&mut self, first: u64, last: u64, prefix: &str) -> Result<(), Error> {
+        let prefix = CString::new(prefix).map_err(|_| Error::Ghidra("region prefix contains NUL".to_owned()))?;
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid serialized handle and a live C string; the returned error belongs to the handle.
+        ffi_result(unsafe { rampage_decomp_data_region(self.handle, first, last, prefix.as_ptr()) })
+    }
+
+    /// Opts in to inference about direct callees, made before each decompilation; see [`CalleeInference`].
+    pub fn set_callee_inference(&mut self, inference: CalleeInference) -> Result<(), Error> {
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid serialized handle; the returned error belongs to the handle.
+        ffi_result(unsafe {
+            rampage_decomp_callee_inference(
+                self.handle,
+                u8::from(inference.register_effects),
+                u8::from(inference.prototypes),
+            )
+        })
     }
 
     /// Opens a decompiler for `arch` over `segments`. Each segment's bytes stay mapped at its base for the life

@@ -34,7 +34,7 @@ pub use metrics::{
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Parent-owned cleanup proof, independent of result category and diagnostic metrics. Confirmed covers
 /// the supported owned group and direct-root reap, not descendants outside the supervisor's group boundary.
@@ -196,6 +196,21 @@ pub enum WorkerOperation {
     NoReturn {
         address: u64,
         indirect: bool,
+    },
+    /// Name the untyped global at a data address (see `Decompiler::set_data_name`).
+    DataName {
+        address: u64,
+        name: String,
+    },
+    /// Name unnamed globals in `first..=last` by region (see `Decompiler::add_data_region`).
+    DataRegion {
+        first: u64,
+        last: u64,
+        prefix: String,
+    },
+    /// Infer callee effects and prototypes (see [`crate::CalleeInference`]).
+    CalleeInference {
+        inference: crate::CalleeInference,
     },
 }
 
@@ -1099,6 +1114,9 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
                 }
             }
             WorkerOperation::NoReturn { address, indirect } => engine.set_noreturn(address, indirect),
+            WorkerOperation::DataName { address, name } => engine.set_data_name(address, &name),
+            WorkerOperation::DataRegion { first, last, prefix } => engine.add_data_region(first, last, &prefix),
+            WorkerOperation::CalleeInference { inference } => engine.set_callee_inference(inference),
         };
         result.map_err(|error| format!("operation {index}: {error}"))?;
         if checks_types {

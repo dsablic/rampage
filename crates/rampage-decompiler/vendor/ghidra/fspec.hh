@@ -1384,6 +1384,14 @@ public:
   Architecture *getArch(void) const { return model->getArch(); }	///< Get the Architecture owning \b this
   void copy(const FuncProto &op2);					///< Copy another function prototype
   void copyFlowEffects(const FuncProto &op2);	 			///< Copy properties that affect data-flow
+  /// rampage: merge per-function effect overrides, as a decoded \<prototype> with \<unaffected> children would
+  void overrideEffects(const vector<EffectRecord> &records) {
+    if (records.empty()) return;
+    effectlist.insert(effectlist.end(),records.begin(),records.end());
+    decodeEffect();
+  }
+  /// rampage: drop every effect override, so the prototype model's effects apply again
+  void clearEffectOverrides(void) { effectlist.clear(); }
   void getPieces(PrototypePieces &pieces) const;			///< Get the raw pieces of the prototype
   void setPieces(const PrototypePieces &pieces);			///< Set \b this prototype based on raw pieces
   void setScope(Scope *s,const Address &startpoint);			///< Set a backing symbol Scope for \b this
