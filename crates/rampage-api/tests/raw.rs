@@ -33,8 +33,14 @@ impl Drop for OwnedDirectory {
 }
 
 fn project() -> Arc<Project> {
-    let options =
-        RawCodeOptions { profile: RawProfile::Msp430, base: 0x1000, entry: None, seeds: vec![], vector_table: None };
+    let options = RawCodeOptions {
+        profile: RawProfile::Msp430,
+        base: 0x1000,
+        entry: None,
+        seeds: vec![],
+        vector_table: None,
+        pointer_tables: false,
+    };
     Arc::new(Project::new(Binary::from_raw_code(vec![0x30, 0x41], options).unwrap()))
 }
 
@@ -44,7 +50,7 @@ fn raw_is_not_a_capture_or_original_source_proof() {
     assert!(rampage_analysis::capture_identity::capture_identity(&project.binary).is_none());
     assert!(project.binary.validate_backing_source().is_err());
     assert!(!project.binary.validate_available_backing_source().unwrap());
-    assert_eq!(project.binary.raw_interpretation_identity().unwrap().unwrap().schema, "rampage-raw-interpretation-v3");
+    assert_eq!(project.binary.raw_interpretation_identity().unwrap().unwrap().schema, "rampage-raw-interpretation-v4");
 }
 
 #[test]
@@ -76,8 +82,14 @@ fn supplying_a_persistent_annotation_log_cannot_enable_raw_sidecar_writes() {
     let mut annotations = Annotations::open(path.clone()).unwrap();
     annotations.set(Field::Comment, 0x1000, Some("retained".into())).unwrap();
     let before = std::fs::read(&path).unwrap();
-    let input =
-        RawCodeOptions { profile: RawProfile::Msp430, base: 0x1000, entry: None, seeds: vec![], vector_table: None };
+    let input = RawCodeOptions {
+        profile: RawProfile::Msp430,
+        base: 0x1000,
+        entry: None,
+        seeds: vec![],
+        vector_table: None,
+        pointer_tables: false,
+    };
     let binary = Binary::from_raw_code(vec![0x30, 0x41], input).unwrap();
     let project = Project::with_annotations(binary, annotations);
     assert_eq!(project.comment_at(0x1000).as_deref(), Some("retained"));

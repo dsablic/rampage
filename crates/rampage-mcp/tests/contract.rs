@@ -152,6 +152,12 @@ async fn contract_mcp_core_results() {
     // A wrong base: refused vectors and the never-applied base-address suggestion.
     let raw = json!({"profile": "cortex-m3", "offset": 0, "length": 800, "base_address": 0, "vector_table": true});
     exercise(c, o, "binary_info", json!({"path": fixtures.join("firmware/raw-cortex-m.bin"), "raw": raw})).await;
+    // Pointer-table seeding: accepted and refused tables with evidence per entry.
+    let tables = fixtures.join("firmware/raw-cortex-m-tables.bin");
+    let length = std::fs::metadata(&tables).unwrap().len();
+    let raw = json!({"profile": "cortex-m0", "offset": 0, "length": length, "base_address": "0x8000000",
+        "vector_table": true, "pointer_tables": true});
+    exercise(c, o, "binary_info", json!({"path": tables, "raw": raw})).await;
     exercise(c, o, "triage", json!({"path": elf})).await;
     exercise(c, o, "triage_report", json!({"path": elf})).await;
     exercise(c, o, "list_functions", json!({"path": elf, "limit": 3})).await;

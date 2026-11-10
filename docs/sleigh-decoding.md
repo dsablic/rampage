@@ -47,7 +47,7 @@ These finite fixtures do not establish full-ISA, C-ABI or ordinary-project accep
 A Raw Project is one explicit, headerless code image analysed like an ordinary binary. MCP opens one through the
 `raw` selector of raw-capable tools ([MCP Raw projects](mcp.md#raw-projects)); the CLI uses
 `--raw-json`/`--raw-request` ([CLI reference](cli-reference.md#raw-projects)); the library entry point is
-`Binary::from_raw_code(bytes, RawCodeOptions { profile, base, entry, seeds, vector_table })`. Input is 1..=128 KiB
+`Binary::from_raw_code(bytes, RawCodeOptions { profile, base, entry, seeds, vector_table, pointer_tables })`. Input is 1..=128 KiB
 (4 MiB for the [Cortex-M profile](#cortex-m-profile)) with at most 8192 seeds. Base, entry and seeds must be
 aligned to the profile and backed by code bytes, and the last byte must stay within the profile's code-space highest
 byte. Header-driven `Binary::open` never falls back to Raw or infers an entry.
@@ -91,8 +91,8 @@ Discovery, listing and code search use one Sleigh decoder factory. Valid instruc
 serialize `flow: "unknown"` with a `decode_gate`; they stop successor discovery and are never reported as
 fall-through, return or noreturn. A helper-gated Hexagon entry stays a valid function with an unresolved exit;
 SuperH's delay-slot gate inside a body stops successors there. Cached analysis and decompiler engines are bound to
-a `rampage-raw-interpretation-v3` identity covering bytes, profile, byte order, mapping, entry, seeds and the
-requested vector-table address; edited
+a `rampage-raw-interpretation-v4` identity covering bytes, profile, byte order, mapping, entry, seeds, the
+requested vector-table address and whether pointer tables were scanned; edited
 loader fields or a failed specification recheck refuse the cache instead of serving it stale.
 
 Decompilation is available for profiles with a reviewed C model: MSP430 (`default`) and AVR8 (`gcc`). It maps
@@ -144,6 +144,17 @@ but ARMv8-M-only instructions are not reviewed, and `cortex-m33`/`cortex-m55` ar
   `entry` is given; other accepted handlers become seeds. Each word is reported with its verdict. The base address
   is never inferred: when handler words fall outside the mapping, a `base_address_suggestion` gives the most
   aligned base in the range that would hold them, labelled as not applied.
+- **Pointer tables.** `pointer_tables` (off by default) scans every word-aligned word outside the vector table
+  for Thumb code pointers: odd, inside the mapping, and whose target's first instruction decodes. Each target's
+  evidence is `push_lr` (a `push {..., lr}`, `push.w` or `str lr, [sp, #-4]!` among its first four
+  instructions), `call_target` (a 32-bit `bl` encoding at any halfword targets it) or `reaches_exit` (its
+  straight-line decode, up to 256 instructions, reaches an unconditional return, branch or halt); a target with
+  none is not a code pointer, which drops string pointers. Runs of at least three code pointers are found at a
+  4-byte stride first, then 8, 12 and 16 over what is left (arrays of `{name, handler}` structs), with up to 8
+  empty slots between entries. A run is accepted when it names two distinct targets and one has strong evidence
+  (`push_lr` or `call_target`); a switch table of case labels or constants pointing into a function have only
+  `reaches_exit` and are refused. Accepted targets become seeds; every table is reported with its verdict.
+  It is opt-in because it adds guesses beyond what the analyst asserted and changes the interpretation identity.
 
 Owned fixture: `tests/fixtures/firmware/raw-cortex-m.bin` is the flash image of `raw-cortex-m.elf`, built from
 `raw-cortex-m.c` by `build-raw-cortex-m.sh` (zig 0.17.1, `-mcpu=cortex_m3 -O1`, llvm-objcopy). Opened with base
@@ -152,7 +163,13 @@ calls); its strings and switch tables are at even addresses and give no start. O
 join point, split because the UART handler tail-calls `dispatch` (see [known limits](known-limits.md#analysis)).
 The stripped ELF, which has only its entry, finds 6 of them (Reset and the 5 it calls), a loop-head split and 6
 string or table starts. `raw-cortex-m-strings.bin`, from the same script, has the odd-aligned literals `"Cde"` and
-`"Bc"`; exactly its 6 ELF functions are found.
+`"Bc"`; exactly its 6 ELF functions are found. `raw-cortex-m-tables.bin` (`-mcpu=cortex_m0`) reaches 11 of its 18
+functions only through a `{name, handler}` command table, a callback table with an empty slot and a state-handler
+array, and holds decoys: a string-pointer array, odd constants pointing into a function and a clang ARMv6-M switch
+table of absolute case-label addresses. With the vector table only, discovery finds 4 functions, all real
+(precision 4/4, recall 4/18); with `pointer_tables` it finds 17, all real (precision 17/17, recall 17/18; the miss
+is `run_command`, inlined into Reset and unreferenced), and refuses the switch table and the constants with
+`no_strong_evidence`.
 
 ## Window and discovery contract
 

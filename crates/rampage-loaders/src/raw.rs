@@ -11,7 +11,7 @@ pub const MAX_RAW_BYTES: usize = 128 * 1024;
 /// Input cap for the natively decoded Cortex-M profile: flash images are typically 256 KiB to 2 MiB.
 pub const MAX_RAW_NATIVE_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_RAW_SEEDS: usize = 8192;
-const IDENTITY_SCHEMA: &str = "rampage-raw-interpretation-v3";
+const IDENTITY_SCHEMA: &str = "rampage-raw-interpretation-v4";
 
 /// Closed set of Raw ordinary-Project profiles, admitted family by family on Project-level evidence.
 /// Every row must equal the verified native translator's metadata; the decoder factory checks this.
@@ -213,6 +213,8 @@ pub struct RawCodeOptions {
     /// Cortex-M only: the code-space byte address of a vector table to read the initial SP and handler words
     /// from. Accepted handlers become the entry (Reset, unless `entry` is given) and seeds.
     pub vector_table: Option<u64>,
+    /// Cortex-M only: scan the image for tables of Thumb code pointers. Targets of accepted tables become seeds.
+    pub pointer_tables: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -225,6 +227,8 @@ pub struct RawCodeImage {
     seeds: Vec<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vector_table: Option<crate::raw_vectors::VectorTable>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pointer_tables: Option<crate::raw_pointers::PointerTables>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -289,10 +293,23 @@ impl RawCodeImage {
                 Some(table)
             }
         };
+        let pointer_tables = if !options.pointer_tables {
+            None
+        } else if !options.profile.m_profile() {
+            return Err(LoadError::Malformed("Raw pointer-table seeding is defined only for ARM:LE:32:Cortex".into()));
+        } else {
+            let skip = vector_table.as_ref().map(|table| table.address..table.address + 4 * table.words_read as u64);
+            let tables = crate::raw_pointers::scan(bytes, options.base, skip);
+            let entry = options.entry;
+            options.seeds.extend(tables.targets().filter(|&target| Some(target) != entry));
+            Some(tables)
+        };
         options.seeds.sort_unstable();
         options.seeds.dedup();
         if options.seeds.len() > MAX_RAW_SEEDS {
-            return Err(LoadError::Malformed("Raw accepts at most 8192 seeds, vector-table handlers included".into()));
+            return Err(LoadError::Malformed(
+                "Raw accepts at most 8192 seeds, vector-table handlers and pointer-table targets included".into(),
+            ));
         }
         Ok(Self {
             profile: options.profile,
@@ -302,6 +319,7 @@ impl RawCodeImage {
             entry: options.entry,
             seeds: options.seeds,
             vector_table,
+            pointer_tables,
         })
     }
 
@@ -328,6 +346,11 @@ impl RawCodeImage {
     /// Evidence for every vector read when vector-table seeding was requested.
     pub fn vector_table(&self) -> Option<&crate::raw_vectors::VectorTable> {
         self.vector_table.as_ref()
+    }
+
+    /// Evidence for every pointer table found when pointer-table seeding was requested.
+    pub fn pointer_tables(&self) -> Option<&crate::raw_pointers::PointerTables> {
+        self.pointer_tables.as_ref()
     }
 
     /// The Thumb-mode ranges a native decoder reads: the whole mapped range for the Cortex-M profile.
@@ -393,6 +416,8 @@ impl RawCodeImage {
         let table = self.vector_table.as_ref().map(|table| table.address);
         hash.update([u8::from(table.is_some())]);
         hash.update(table.unwrap_or(0).to_be_bytes());
+        // Schema v4 binds whether pointer tables were scanned; their evidence is a function of bytes and mapping.
+        hash.update([u8::from(self.pointer_tables.is_some())]);
         RawInterpretationIdentity { schema: IDENTITY_SCHEMA, sha256: rampage_arch::hex::bytes(&hash.finalize()) }
     }
 }

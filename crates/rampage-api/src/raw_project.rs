@@ -37,6 +37,23 @@ pub struct RawProjectRequest {
     #[serde(default, deserialize_with = "vector_table")]
     #[schemars(schema_with = "vector_table_schema")]
     pub vector_table: Option<RawVectorTable>,
+    /// ARM:LE:32:Cortex only: `true` scans the image for tables of Thumb code pointers (handler arrays, command
+    /// tables) and seeds the targets of the tables it accepts; every table found, accepted or refused, is reported
+    /// with the evidence per entry in binary_info. Off by default.
+    #[serde(default, deserialize_with = "pointer_tables")]
+    #[schemars(schema_with = "pointer_tables_schema")]
+    pub pointer_tables: bool,
+}
+
+fn pointer_tables<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(Option::<bool>::deserialize(deserializer)?.unwrap_or(false))
+}
+
+fn pointer_tables_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "description": "ARM:LE:32:Cortex only: true seeds functions from tables of Thumb code pointers it accepts.",
+        "type": ["boolean", "null"]
+    })
 }
 
 /// Where to read a Cortex-M vector table from.
@@ -256,6 +273,7 @@ impl RawProjectRequest {
                 RawVectorTable::AtBase => self.base_address.0,
                 RawVectorTable::At(address) => address,
             }),
+            pointer_tables: self.pointer_tables,
         };
         Ok((length, options))
     }

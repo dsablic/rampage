@@ -1,8 +1,16 @@
+use rampage_loaders::raw_pointers::{EntryStatus, Evidence, TableRefusedReason, TableStatus};
 use rampage_loaders::raw_vectors::{RefusedReason, StopReason, VectorStatus};
 use rampage_loaders::{Binary, Format, MAX_RAW_BYTES, MAX_RAW_NATIVE_BYTES, MAX_RAW_SEEDS, RawCodeOptions, RawProfile};
 
 fn options() -> RawCodeOptions {
-    RawCodeOptions { profile: RawProfile::Msp430, base: 0x1000, entry: None, seeds: vec![], vector_table: None }
+    RawCodeOptions {
+        profile: RawProfile::Msp430,
+        base: 0x1000,
+        entry: None,
+        seeds: vec![],
+        vector_table: None,
+        pointer_tables: false,
+    }
 }
 
 fn identity(bytes: Vec<u8>, options: RawCodeOptions) -> String {
@@ -98,7 +106,14 @@ fn admission_refuses_empty_oversize_overflow_misalignment_and_unbacked_starts() 
 #[test]
 fn profile_highest_bytes_are_byte_scaled_and_inclusive() {
     for (profile, base) in [(RawProfile::Msp430, 0xfffe), (RawProfile::Avr8, 0x1fffe), (RawProfile::Mos6502, 0xfffe)] {
-        let input = RawCodeOptions { profile, base, entry: Some(base), seeds: vec![base], vector_table: None };
+        let input = RawCodeOptions {
+            profile,
+            base,
+            entry: Some(base),
+            seeds: vec![base],
+            vector_table: None,
+            pointer_tables: false,
+        };
         let binary = Binary::from_raw_code(vec![0; 2], input.clone()).unwrap();
         assert_eq!(binary.read(base + 1, 1), Some([0].as_slice()));
         assert!(Binary::from_raw_code(vec![0; 3], input).is_err());
@@ -109,6 +124,7 @@ fn profile_highest_bytes_are_byte_scaled_and_inclusive() {
         entry: Some(0xffff),
         seeds: vec![],
         vector_table: None,
+        pointer_tables: false,
     };
     assert!(Binary::from_raw_code(vec![0x60], input).is_ok());
 }
@@ -134,12 +150,20 @@ fn only_exact_roster_languages_are_admitted() {
         assert!(RawProfile::from_language_id(language).is_err(), "{language}");
     }
     let profile = RawProfile::from_language_id("avr8:LE:16:default").unwrap();
-    let input = RawCodeOptions { profile, base: 0x10000, entry: None, seeds: vec![], vector_table: None };
+    let input = RawCodeOptions {
+        profile,
+        base: 0x10000,
+        entry: None,
+        seeds: vec![],
+        vector_table: None,
+        pointer_tables: false,
+    };
     assert!(Binary::from_raw_code(vec![0x08, 0x95], input.clone()).is_ok());
     let mut unaligned = input;
     unaligned.base += 1;
     assert!(Binary::from_raw_code(vec![0x08, 0x95], unaligned).is_err());
-    let full = RawCodeOptions { profile, base: 0, entry: None, seeds: vec![], vector_table: None };
+    let full =
+        RawCodeOptions { profile, base: 0, entry: None, seeds: vec![], vector_table: None, pointer_tables: false };
     assert!(Binary::from_raw_code(vec![0; MAX_RAW_BYTES], full).is_ok());
 }
 
@@ -150,12 +174,26 @@ fn every_profile_admits_its_inclusive_highest_byte_and_alignment() {
         let alignment = u64::from(space.instruction_alignment);
         let length = alignment.max(2);
         let base = space.highest_byte - (length - 1);
-        let input = RawCodeOptions { profile, base, entry: Some(base), seeds: vec![base], vector_table: None };
+        let input = RawCodeOptions {
+            profile,
+            base,
+            entry: Some(base),
+            seeds: vec![base],
+            vector_table: None,
+            pointer_tables: false,
+        };
         if space.highest_byte == u64::MAX {
             // The exclusive end must still be representable, so the 64-bit top byte is never backed.
             assert!(Binary::from_raw_code(vec![0; length as usize], input).is_err(), "{profile:?}");
             let base = base - alignment;
-            let input = RawCodeOptions { profile, base, entry: Some(base), seeds: vec![base], vector_table: None };
+            let input = RawCodeOptions {
+                profile,
+                base,
+                entry: Some(base),
+                seeds: vec![base],
+                vector_table: None,
+                pointer_tables: false,
+            };
             assert!(Binary::from_raw_code(vec![0; length as usize], input).is_ok(), "{profile:?}");
             continue;
         }
@@ -164,7 +202,14 @@ fn every_profile_admits_its_inclusive_highest_byte_and_alignment() {
         assert_eq!(binary.big_endian, profile.big_endian());
         assert!(Binary::from_raw_code(vec![0; length as usize + 1], input).is_err(), "{profile:?}");
         if alignment > 1 {
-            let input = RawCodeOptions { profile, base: 0x1000 + 1, entry: None, seeds: vec![], vector_table: None };
+            let input = RawCodeOptions {
+                profile,
+                base: 0x1000 + 1,
+                entry: None,
+                seeds: vec![],
+                vector_table: None,
+                pointer_tables: false,
+            };
             assert!(Binary::from_raw_code(vec![0; 4], input).is_err(), "{profile:?}");
         }
     }
@@ -177,7 +222,14 @@ fn identities_separate_every_profile_and_include_byte_order() {
         .map(|profile| {
             identity(
                 vec![0; 4],
-                RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![], vector_table: None },
+                RawCodeOptions {
+                    profile,
+                    base: 0x1000,
+                    entry: None,
+                    seeds: vec![],
+                    vector_table: None,
+                    pointer_tables: false,
+                },
             )
         })
         .collect();
@@ -185,7 +237,14 @@ fn identities_separate_every_profile_and_include_byte_order() {
     assert!(RawProfile::ALL.into_iter().any(RawProfile::big_endian));
     assert!(RawProfile::ALL.into_iter().any(|profile| !profile.big_endian()));
     for profile in RawProfile::ALL {
-        let input = RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![], vector_table: None };
+        let input = RawCodeOptions {
+            profile,
+            base: 0x1000,
+            entry: None,
+            seeds: vec![],
+            vector_table: None,
+            pointer_tables: false,
+        };
         let binary = Binary::from_raw_code(vec![0; 4], input.clone()).unwrap();
         assert_eq!(binary.big_endian, profile.big_endian());
         assert!(binary.raw_interpretation_identity().unwrap().is_some());
@@ -218,7 +277,14 @@ const CORTEX_M: &[u8] = include_bytes!("../../../tests/fixtures/firmware/raw-cor
 const CORTEX_M_ELF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/raw-cortex-m.elf");
 
 fn cortex(base: u64, vector_table: Option<u64>) -> RawCodeOptions {
-    RawCodeOptions { profile: RawProfile::CortexM, base, entry: None, seeds: vec![], vector_table }
+    RawCodeOptions {
+        profile: RawProfile::CortexM,
+        base,
+        entry: None,
+        seeds: vec![],
+        vector_table,
+        pointer_tables: false,
+    }
 }
 
 #[test]
@@ -323,4 +389,77 @@ fn vector_tables_refuse_other_profiles_bad_places_and_change_the_identity() {
     manual.entry = table.entry;
     manual.seeds = table.function_starts.clone();
     assert_ne!(identity(CORTEX_M.to_vec(), manual), seeded);
+}
+
+const TABLES: &[u8] = include_bytes!("../../../tests/fixtures/firmware/raw-cortex-m-tables.bin");
+const TABLES_ELF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/raw-cortex-m-tables.elf");
+
+fn tables(pointer_tables: bool) -> RawCodeOptions {
+    RawCodeOptions { pointer_tables, ..cortex(0x0800_0000, Some(0x0800_0000)) }
+}
+
+/// The tables fixture's command, state and callback tables seed their handlers; the switch jump table, the string
+/// pointers and the odd constants seed nothing. The ELF's symbols are the truth.
+#[test]
+fn cortex_m_pointer_tables_seed_handlers_and_refuse_decoys() {
+    let truth = Binary::open(std::path::Path::new(TABLES_ELF)).unwrap();
+    let symbol = |name: &str| truth.symbol_by_name(name).unwrap().address & !1;
+    let binary = Binary::from_raw_code(TABLES.to_vec(), tables(true)).unwrap();
+    let found = binary.raw_code_image().unwrap().pointer_tables().unwrap();
+    let accepted: Vec<(u64, u8)> = found
+        .tables
+        .iter()
+        .filter(|table| table.status == TableStatus::Accepted)
+        .map(|table| (table.address, table.stride))
+        .collect();
+    // COMMANDS' handlers at stride 8; its last handler sits right before CALLBACKS and STATES, which are adjacent,
+    // so those form one plain array of nine slots.
+    let reboot = symbol("COMMANDS") + 28;
+    assert_eq!(reboot + 4, symbol("CALLBACKS"));
+    assert_eq!(accepted, [(symbol("COMMANDS") + 4, 8), (reboot, 4)], "{found:#?}");
+    let handlers = [
+        "cmd_help",
+        "cmd_status",
+        "cmd_version",
+        "cmd_reboot",
+        "on_tick",
+        "on_rx",
+        "on_tx",
+        "state_idle",
+        "state_run",
+        "state_stop",
+        "state_fault",
+    ];
+    for name in handlers {
+        assert!(binary.function_starts.contains(&symbol(name)), "{name}");
+    }
+    assert_eq!(found.seeds, handlers.len());
+    // The case-label table inside reset_handler is found and refused.
+    let switch = found.tables.iter().find(|table| table.status == TableStatus::Refused).unwrap();
+    assert_eq!(switch.refused_reason, Some(TableRefusedReason::NoStrongEvidence));
+    assert!((symbol("reset_handler")..symbol("COMMANDS")).contains(&switch.address));
+    // Every seed is a symbol: nothing from NAMES, MAGIC or the case labels.
+    let starts: Vec<u64> = truth.symbols.iter().map(|symbol| symbol.address & !1).collect();
+    for seed in &binary.function_starts {
+        assert!(starts.contains(seed), "{seed:#x} is not a function");
+    }
+    // Case labels reach an exit but never open with a prologue; every accepted entry has a prologue here.
+    assert!(switch.entries.iter().all(|entry| entry.evidence == [Evidence::ReachesExit]));
+    let entries = || found.tables.iter().flat_map(|table| &table.entries);
+    assert!(
+        entries()
+            .filter(|entry| entry.status == EntryStatus::Accepted)
+            .all(|entry| entry.evidence.contains(&Evidence::PushLr))
+    );
+    // MAGIC's odd constants point inside run_command: refused for the same reason.
+    let magic = found.tables.iter().find(|table| table.address == symbol("MAGIC")).unwrap();
+    assert_eq!(magic.refused_reason, Some(TableRefusedReason::NoStrongEvidence));
+    // Off by default, refused elsewhere, and part of the identity.
+    let plain = Binary::from_raw_code(TABLES.to_vec(), tables(false)).unwrap();
+    assert!(plain.raw_code_image().unwrap().pointer_tables().is_none());
+    assert!(!plain.function_starts.contains(&symbol("cmd_help")));
+    assert_ne!(identity(TABLES.to_vec(), tables(true)), identity(TABLES.to_vec(), tables(false)));
+    let msp430 = RawCodeOptions { pointer_tables: true, ..options() };
+    let error = Binary::from_raw_code(vec![0; 64], msp430).unwrap_err().to_string();
+    assert!(error.contains("pointer-table seeding is defined only for ARM:LE:32:Cortex"), "{error}");
 }

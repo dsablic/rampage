@@ -454,7 +454,17 @@ fn cortex_m_requests_bound_size_and_refuse_vector_tables_elsewhere() {
         }))
         .unwrap();
         assert!(request.vector_table.is_none(), "{absent}");
+        let request: RawProjectRequest = serde_json::from_value(json!({
+            "profile": "cortex-m", "offset": 0, "length": 2, "base_address": 0, "pointer_tables": absent
+        }))
+        .unwrap();
+        assert!(!request.pointer_tables, "{absent}");
     }
+    let text = refusal(
+        &path,
+        json!({ "profile": "msp430", "offset": 0, "length": MSP430.len(), "base_address": "0x4400", "pointer_tables": true }),
+    );
+    assert!(text.contains("pointer-table seeding is defined only for ARM:LE:32:Cortex"), "{text}");
 }
 
 /// An M-profile processor has no A32 state: `blx 0x14` (00 f0 08 e8) at the entry is UNDEFINED, not a call into A32
@@ -511,6 +521,59 @@ fn cortex_m_odd_string_literals_are_not_function_starts() {
     truth.sort_unstable();
     assert_eq!(truth.len(), 6);
     assert_eq!(found, truth);
+}
+
+const CORTEX_M_TABLES: &[u8] = include_bytes!("../../../tests/fixtures/firmware/raw-cortex-m-tables.bin");
+const CORTEX_M_TABLES_ELF: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/raw-cortex-m-tables.elf");
+
+/// Precision and recall of discovery against the ELF's function symbols on an image whose handlers are reached
+/// only through tables: with `pointer_tables` every function is found and nothing else; without it the
+/// table-only handlers are missed.
+#[test]
+fn cortex_m_pointer_tables_recover_table_only_functions() {
+    let owned = OwnedDirectory::new();
+    let path = owned.file("tables.bin", CORTEX_M_TABLES);
+    let elf = rampage_loaders::Binary::open(CORTEX_M_TABLES_ELF).unwrap();
+    let mut truth: Vec<u64> = elf
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.kind == rampage_loaders::SymbolKind::Function)
+        .map(|symbol| symbol.address & !1)
+        .collect();
+    truth.sort_unstable();
+    assert_eq!(truth.len(), 18);
+    let session = Session::default();
+    let discover = |pointer_tables: bool| {
+        let request = request(json!({
+            "profile": "cortex-m0", "offset": 0, "length": CORTEX_M_TABLES.len(), "base_address": "0x8000000",
+            "vector_table": true, "pointer_tables": pointer_tables,
+        }));
+        let project = session.open_raw(&path, &request).unwrap();
+        let functions = project.functions(&rampage_api::FunctionsQuery::default()).unwrap();
+        let found: Vec<u64> = functions.items.iter().map(|function| function.address).collect();
+        let hits = found.iter().filter(|address| truth.contains(address)).count();
+        (project, found.len(), hits)
+    };
+    let (_, without_found, without_hits) = discover(false);
+    let (project, found, hits) = discover(true);
+    // Without tables: Reset, the two other vector-table handlers and classify, which Reset calls: precision 4/4,
+    // recall 4/18.
+    assert_eq!((without_found, without_hits), (4, 4));
+    // With them: precision 17/17, recall 17/18. The miss is run_command, which clang inlined into reset_handler and
+    // nothing references; no seed can reach dead code.
+    assert_eq!((found, hits), (17, 17));
+    let elf_run_command = elf.symbol_by_name("run_command").unwrap().address & !1;
+    let listed = project.functions(&rampage_api::FunctionsQuery::default()).unwrap();
+    assert!(listed.items.iter().all(|function| function.address != elf_run_command));
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    let tables = &summary["raw"]["pointer_tables"];
+    assert_eq!(tables["accepted_tables"], 2, "{tables:#}");
+    assert_eq!(tables["refused_tables"], 2, "{tables:#}");
+    assert_eq!(tables["tables"][0]["refused_reason"], "no_strong_evidence");
+    assert_eq!(tables["tables"][1]["entries"][0]["evidence"], json!(["push_lr", "reaches_exit"]));
+    // Two vector-table handlers besides Reset, the entry, and eleven table targets.
+    assert_eq!(summary["raw"]["seed_count"], 13);
 }
 
 /// Four 4 MiB Cortex-M images would pin 16 MiB each time; the cache also bounds total input bytes, evicting the least

@@ -203,7 +203,9 @@ base_address, optional entry and up to 8192 seeds (internal code-space byte coor
 processors; hex strings or integers). The mapping is an analyst assertion; annotations are memory-only for this \
 server and interpretation. Cortex-M flash (profile cortex-m): vector_table true reads the vector table at \
 base_address (or give its address); accepted Thumb handlers become the entry and seeds, and binary_info reports \
-every word with its verdict and, for a base that misplaces the handlers, a base_address suggestion it never applies.
+every word with its verdict and, for a base that misplaces the handlers, a base_address suggestion it never applies. \
+pointer_tables true also seeds functions from tables of Thumb code pointers (handler arrays, command tables) that \
+show prologue or call evidence; binary_info reports each table, accepted or refused, with evidence per entry.
 
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \
@@ -518,7 +520,7 @@ fn compact_raw_selector() -> Value {
     fn strip(value: &mut Value) {
         match value {
             Value::Object(object) => {
-                for key in ["description", "title", "examples", "enum"] {
+                for key in ["description", "title", "examples", "enum", "default"] {
                     object.remove(key);
                 }
                 if let Some(types) =

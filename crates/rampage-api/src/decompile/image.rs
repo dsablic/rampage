@@ -70,7 +70,14 @@ mod raw_tests {
     use rampage_loaders::{Binary, RawCodeOptions, RawProfile};
 
     fn binary(profile: RawProfile) -> Binary {
-        let input = RawCodeOptions { profile, base: 0x1000, entry: None, seeds: vec![], vector_table: None };
+        let input = RawCodeOptions {
+            profile,
+            base: 0x1000,
+            entry: None,
+            seeds: vec![],
+            vector_table: None,
+            pointer_tables: false,
+        };
         Binary::from_raw_code(vec![0; 4], input).unwrap()
     }
 

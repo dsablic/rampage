@@ -43,6 +43,10 @@
               "type": "integer|string",
               "required": true
             },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
             "profile": {
               "type": "string",
               "required": true
@@ -101,6 +105,10 @@
             "offset": {
               "type": "integer|string",
               "required": true
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
             },
             "profile": {
               "type": "string",
@@ -351,6 +359,10 @@
               "type": "integer|string",
               "required": true
             },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
             "profile": {
               "type": "string",
               "required": true
@@ -492,6 +504,10 @@
             "offset": {
               "type": "integer|string",
               "required": true
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
             },
             "profile": {
               "type": "string",
@@ -1217,6 +1233,10 @@
               "type": "integer|string",
               "required": true
             },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
             "profile": {
               "type": "string",
               "required": true
@@ -1374,6 +1394,10 @@
             "offset": {
               "type": "integer|string",
               "required": true
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
             },
             "profile": {
               "type": "string",
@@ -1606,6 +1630,10 @@
             "offset": {
               "type": "integer|string",
               "required": true
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
             },
             "profile": {
               "type": "string",
@@ -1868,6 +1896,10 @@
             "offset": {
               "type": "integer|string",
               "required": true
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
             },
             "profile": {
               "type": "string",
@@ -2380,6 +2412,10 @@
               "type": "integer|string",
               "required": true
             },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
             "profile": {
               "type": "string",
               "required": true
@@ -2528,6 +2564,10 @@
             "offset": {
               "type": "integer|string",
               "required": true
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
             },
             "profile": {
               "type": "string",
@@ -3104,6 +3144,10 @@
               "type": "integer|string",
               "required": true
             },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
             "profile": {
               "type": "string",
               "required": true
@@ -3170,6 +3214,10 @@
             "offset": {
               "type": "integer|string",
               "required": true
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
             },
             "profile": {
               "type": "string",
@@ -3301,6 +3349,10 @@
               "type": "integer|string",
               "required": true
             },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
             "profile": {
               "type": "string",
               "required": true
@@ -3363,6 +3415,10 @@
             "offset": {
               "type": "integer|string",
               "required": true
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
             },
             "profile": {
               "type": "string",
@@ -3593,6 +3649,10 @@
               "type": "integer|string",
               "required": true
             },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
             "profile": {
               "type": "string",
               "required": true
@@ -3680,6 +3740,10 @@
             "offset": {
               "type": "integer|string",
               "required": true
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
             },
             "profile": {
               "type": "string",
