@@ -7,15 +7,23 @@
 //! switch tables of case labels, string pointers and constants lack. Every table found is reported with its
 //! verdict and the evidence per entry; only accepted entries become seeds.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rampage_arch::{Arch, Flow, Target};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 /// Code pointers a run needs before it is judged as a table.
 pub const MIN_TABLE_ENTRIES: usize = 3;
+/// Distinct targets with strong evidence a table needs, so one coincidental prologue or `bl`-shaped data word
+/// cannot promote a run of weak entries.
+pub const MIN_STRONG_TARGETS: usize = 2;
+/// Recent scans kept, keyed by the image's SHA-256, base and skipped range, so reopening the same interpretation
+/// (every Raw tool call admits its image again) does not rescan.
+const MEMO_SCANS: usize = 8;
 /// Strides tried, in words: plain arrays and arrays of structs up to four words with one code pointer each.
 const MAX_STRIDE_WORDS: usize = 4;
 /// Empty (zero or erased) slots a run may skip in a row, like reserved vector slots.
@@ -68,8 +76,8 @@ pub enum TableStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TableRefusedReason {
-    /// No target opens with a `push {…, lr}` or is a `bl` target: the shape of a switch table of case labels, or
-    /// of constants that happen to point into code.
+    /// Fewer than two distinct targets open with a `push {…, lr}` or are `bl` targets: the shape of a switch table
+    /// of case labels, of constants that happen to point into code, or of a table of leaf functions.
     NoStrongEvidence,
     /// Fewer than two distinct targets, like a fault-handler table that names one function throughout.
     TooFewFunctions,
@@ -78,7 +86,7 @@ pub enum TableRefusedReason {
 /// One slot of a table and the verdict on it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TableEntry {
-    pub index: u16,
+    pub index: u32,
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     #[serde(serialize_with = "rampage_arch::hex::address")]
@@ -133,9 +141,51 @@ impl PointerTables {
     }
 }
 
+type MemoKey = ([u8; 32], u64, Option<Range<u64>>);
+
+type Memo = Vec<(MemoKey, Arc<PointerTables>)>;
+
+static MEMO: Mutex<Memo> = Mutex::new(Vec::new());
+thread_local! {
+    static SCANS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Full scans run on this thread; a repeated interpretation is served from the memo without one.
+pub fn scans_run() -> usize {
+    SCANS.with(Cell::get)
+}
+
 /// Scans `bytes` mapped at `base` for tables of Thumb code pointers, skipping the `skip` range (a vector table
-/// already read).
+/// already read). The result is a function of exactly these inputs, so a recent identical scan is reused.
 pub(crate) fn scan(bytes: &[u8], base: u64, skip: Option<Range<u64>>) -> PointerTables {
+    let key: MemoKey = (Sha256::digest(bytes).into(), base, skip.clone());
+    let memo = |action: &mut dyn FnMut(&mut Memo)| {
+        let mut memo = MEMO.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        action(&mut memo);
+    };
+    let mut found = None;
+    memo(&mut |memo| {
+        if let Some(index) = memo.iter().position(|(cached, _)| *cached == key) {
+            let entry = memo.remove(index);
+            found = Some(Arc::clone(&entry.1));
+            memo.push(entry);
+        }
+    });
+    if let Some(found) = found {
+        return PointerTables::clone(&found);
+    }
+    SCANS.with(|scans| scans.set(scans.get() + 1));
+    let tables = Arc::new(scan_uncached(bytes, base, skip));
+    memo(&mut |memo| {
+        memo.push((key.clone(), Arc::clone(&tables)));
+        if memo.len() > MEMO_SCANS {
+            memo.remove(0);
+        }
+    });
+    PointerTables::clone(&tables)
+}
+
+fn scan_uncached(bytes: &[u8], base: u64, skip: Option<Range<u64>>) -> PointerTables {
     let end = base + bytes.len() as u64;
     let first = base.next_multiple_of(4);
     let count = usize::try_from(end.saturating_sub(first) / 4).unwrap_or(0);
@@ -202,7 +252,7 @@ pub(crate) fn scan(bytes: &[u8], base: u64, skip: Option<Range<u64>>) -> Pointer
                 .iter()
                 .enumerate()
                 .map(|(position, &index)| TableEntry {
-                    index: position as u16,
+                    index: u32::try_from(position).expect("a table has fewer entries than the image has words"),
                     address: slot(index),
                     word: u64::from(words[index]),
                     status: if code(index) { EntryStatus::Accepted } else { EntryStatus::Empty },
@@ -237,21 +287,25 @@ pub(crate) fn scan(bytes: &[u8], base: u64, skip: Option<Range<u64>>) -> Pointer
         seeds: 0,
         tables,
         note: "a table is a run of at least three Thumb code pointers whose targets decode like code; it is accepted \
-               when two targets differ and one opens with push {..., lr} or is a bl target, and its targets become \
-               seeds",
+               when two distinct targets open with push {..., lr} or are called by a decodable bl, and its targets \
+               become seeds",
     };
     result.seeds = result.targets().collect::<BTreeSet<_>>().len();
     result
 }
 
-/// Accepts a run when it names two functions and one target has strong evidence; otherwise refuses every entry.
+/// Accepts a run when two distinct targets have strong evidence; otherwise refuses every entry.
 fn verdict(address: u64, stride: u8, mut entries: Vec<TableEntry>) -> PointerTable {
     let targets: BTreeSet<u64> = entries.iter().filter_map(|entry| entry.target).collect();
-    let strong = entries.iter().flat_map(|entry| &entry.evidence).any(|evidence| evidence.strong());
-    let refused_reason = if !strong {
-        Some(TableRefusedReason::NoStrongEvidence)
-    } else if targets.len() < 2 {
+    let strong: BTreeSet<u64> = entries
+        .iter()
+        .filter(|entry| entry.evidence.iter().any(|evidence| evidence.strong()))
+        .filter_map(|entry| entry.target)
+        .collect();
+    let refused_reason = if targets.len() < 2 {
         Some(TableRefusedReason::TooFewFunctions)
+    } else if strong.len() < MIN_STRONG_TARGETS {
+        Some(TableRefusedReason::NoStrongEvidence)
     } else {
         None
     };
@@ -282,7 +336,28 @@ impl<'a> Judge<'a> {
             ..Target::new(Arch::Arm)
         };
         let decoder = rampage_arch::decoder(&target).expect("the native ARM decoder is always available");
-        Self { bytes, base, decoder, calls: bl_targets(bytes, base), cache: BTreeMap::new() }
+        let mut judge = Self { bytes, base, decoder, calls: BTreeSet::new(), cache: BTreeMap::new() };
+        let sites = bl_sites(bytes, base);
+        judge.calls = sites
+            .into_iter()
+            .filter(|&(site, target)| judge.real_call(site, target))
+            .map(|(_, target)| target)
+            .collect();
+        judge
+    }
+
+    /// A `bl`-shaped pair is a call only when the decoder agrees and the instruction after it decodes too, so data
+    /// that merely encodes like a `bl` does not count.
+    fn real_call(&mut self, site: u64, target: u64) -> bool {
+        self.decoder.begin_run();
+        self.decode(site).is_some_and(|insn| insn.flow == Flow::Call(target))
+            && self.decode(site + 4).is_some_and(|insn| insn.flow != Flow::Invalid && insn.len != 0)
+    }
+
+    fn decode(&mut self, address: u64) -> Option<rampage_arch::Insn> {
+        let offset = usize::try_from(address.checked_sub(self.base)?).ok()?;
+        let bytes = self.bytes.get(offset..).filter(|bytes| !bytes.is_empty())?;
+        Some(self.decoder.decode(&bytes[..bytes.len().min(4)], address))
     }
 
     fn halfword(&self, address: u64) -> Option<u16> {
@@ -345,8 +420,8 @@ impl<'a> Judge<'a> {
     }
 }
 
-/// Targets of every Thumb `bl` encoding at a halfword boundary, kept when they land inside the image.
-fn bl_targets(bytes: &[u8], base: u64) -> BTreeSet<u64> {
+/// Sites and targets of every Thumb `bl` encoding at a halfword boundary, kept when they land inside the image.
+fn bl_sites(bytes: &[u8], base: u64) -> Vec<(u64, u64)> {
     let end = base + bytes.len() as u64;
     let halfwords: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
     halfwords
@@ -363,7 +438,7 @@ fn bl_targets(bytes: &[u8], base: u64) -> BTreeSet<u64> {
             let offset = i64::from(((offset << 7) as i32) >> 7);
             let pc = base + 2 * index as u64 + 4;
             let target = pc.checked_add_signed(offset)?;
-            (base..end).contains(&target).then_some(target)
+            (base..end).contains(&target).then_some((pc - 4, target))
         })
         .collect()
 }
@@ -383,13 +458,18 @@ mod tests {
     }
 
     #[test]
-    fn bl_targets_decode_forward_and_backward_calls() {
-        // At 0x100: bl 0x200 (offset 0xfc); at 0x104: bl 0x40 (offset -0xc8).
+    fn bl_sites_decode_forward_and_backward_calls_and_count_only_decodable_ones() {
+        let base = 0x0800_0000;
+        // At 0x100: bl 0x200 (offset 0xfc); at 0x104: bl 0x40 (offset -0xc8), then zeros (`movs r0, r0`).
         let mut bytes = vec![0u8; 0x300];
         bytes[0x100..0x104].copy_from_slice(&[0x00, 0xf0, 0x7e, 0xf8]);
         bytes[0x104..0x108].copy_from_slice(&[0xff, 0xf7, 0x9c, 0xff]);
-        let targets = bl_targets(&bytes, 0x0800_0000);
-        assert_eq!(targets.into_iter().collect::<Vec<_>>(), [0x0800_0040, 0x0800_0200]);
+        let sites = bl_sites(&bytes, base);
+        assert_eq!(sites, [(base + 0x100, base + 0x200), (base + 0x104, base + 0x40)]);
+        assert_eq!(Judge::new(&bytes, base).calls.into_iter().collect::<Vec<_>>(), [base + 0x40, base + 0x200]);
+        // A bl-shaped pair followed by an undecodable instruction (0xe800 0x0000) is data, not a call.
+        bytes[0x108..0x10c].copy_from_slice(&[0x00, 0xe8, 0x00, 0x00]);
+        assert_eq!(Judge::new(&bytes, base).calls.into_iter().collect::<Vec<_>>(), [base + 0x200]);
     }
 
     /// Three functions (push/pop, a leaf `bx lr`, push/pop) behind a table, and a run of case-label-like targets
@@ -428,6 +508,48 @@ mod tests {
         assert_eq!(refused.refused_reason, Some(TableRefusedReason::NoStrongEvidence));
         assert!(refused.entries.iter().all(|entry| entry.status == EntryStatus::Refused));
         assert_eq!(tables.seeds, 3);
+    }
+
+    /// One prologue does not carry a table of leaves: a single coincidental strong target is not enough.
+    #[test]
+    fn one_strong_target_does_not_promote_weak_entries() {
+        let mut bytes = image(&[], 0x200);
+        bytes[0x100..0x106].copy_from_slice(&[0x80, 0xb5, 0x01, 0x20, 0x80, 0xbd]); // push; movs; pop
+        for at in [0x110, 0x120, 0x130] {
+            bytes[at..at + 4].copy_from_slice(&[0x02, 0x20, 0x70, 0x47]); // movs r0, #2; bx lr
+        }
+        for (index, target) in [0x101u32, 0x111, 0x121, 0x131].into_iter().enumerate() {
+            put_word(&mut bytes, 0x180 + 4 * index, target);
+        }
+        let tables = scan(&bytes, 0, None);
+        assert_eq!(tables.tables[0].refused_reason, Some(TableRefusedReason::NoStrongEvidence), "{tables:#?}");
+        assert_eq!(tables.targets().count(), 0);
+        // A second prologue makes it a table, leaves included.
+        bytes[0x120..0x126].copy_from_slice(&[0x80, 0xb5, 0x01, 0x20, 0x80, 0xbd]);
+        assert_eq!(scan(&bytes, 0, None).targets().count(), 4);
+    }
+
+    /// Entries are indexed past 65,535, and a repeated identical scan is served from the memo.
+    #[test]
+    fn long_tables_index_every_entry_and_repeat_scans_are_memoized() {
+        let entries = 70_000;
+        let mut bytes = image(&[], 0x100 + 4 * entries);
+        for at in [0x10, 0x20] {
+            bytes[at..at + 6].copy_from_slice(&[0x80, 0xb5, 0x01, 0x20, 0x80, 0xbd]);
+        }
+        for index in 0..entries {
+            put_word(&mut bytes, 0x100 + 4 * index, if index % 2 == 0 { 0x11 } else { 0x21 });
+        }
+        let before = scans_run();
+        let tables = scan(&bytes, 0, None);
+        assert_eq!(tables.tables[0].entries.last().unwrap().index, 69_999);
+        assert_eq!(tables.seeds, 2);
+        assert_eq!(scans_run(), before + 1);
+        assert_eq!(scan(&bytes, 0, None), tables);
+        assert_eq!(scans_run(), before + 1);
+        // Another base or skipped range is another scan.
+        scan(&bytes, 0, Some(0..4));
+        assert_eq!(scans_run(), before + 2);
     }
 
     /// An array of {name, handler} structs: the handlers form a stride-8 table between even name pointers.

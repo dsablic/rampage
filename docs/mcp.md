@@ -419,10 +419,11 @@ moves with the base.
 such as handler arrays and command tables, so a raw image needs no hand-built symbol list. A table is a run of at
 least three word-aligned code pointers at a stride of 4, 8, 12 or 16 bytes (zero or 0xFFFFFFFF slots allowed
 between them), where a code pointer is an odd word whose target lies in the image and decodes like code. Its
-`evidence` is `push_lr` (one of the first four instructions pushes `lr`), `call_target` (a `bl` in the image calls
-it) or `reaches_exit` (its straight-line decode reaches a return or branch). A table is `accepted` when it names
-at least two targets and one has strong evidence (`push_lr` or `call_target`); otherwise it is `refused` with
-`no_strong_evidence` (switch tables of case labels, constants that point into code) or `too_few_functions`.
+`evidence` is `push_lr` (one of the first four instructions pushes `lr`), `call_target` (a decodable `bl` in the image
+calls it) or `reaches_exit` (its straight-line decode reaches a return or branch). A table is `accepted` when two
+distinct targets have strong evidence (`push_lr` or `call_target`); otherwise it is `refused` with
+`too_few_functions` (one target throughout) or `no_strong_evidence` (switch tables of case labels, constants that
+point into code, tables of leaf functions only).
 `binary_info` reports `raw.pointer_tables`: `words_scanned` (the vector table's words are skipped),
 `pointers_without_evidence`, `isolated_pointers` (code pointers in no run of three), `accepted_tables`,
 `refused_tables`, `refused_tables_not_listed` (beyond 64 listed), `seeds` (distinct accepted targets) and

@@ -556,7 +556,12 @@ fn cortex_m_pointer_tables_recover_table_only_functions() {
         (project, found.len(), hits)
     };
     let (_, without_found, without_hits) = discover(false);
+    let scans = rampage_loaders::raw_pointers::scans_run();
     let (project, found, hits) = discover(true);
+    // Every tool call reopens the request; the same bytes and mapping reuse the scan and the cached project.
+    let (again, _, _) = discover(true);
+    assert!(Arc::ptr_eq(&project, &again));
+    assert_eq!(rampage_loaders::raw_pointers::scans_run(), scans + 1);
     // Without tables: Reset, the two other vector-table handlers and classify, which Reset calls: precision 4/4,
     // recall 4/18.
     assert_eq!((without_found, without_hits), (4, 4));

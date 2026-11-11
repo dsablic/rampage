@@ -164,14 +164,20 @@ but ARMv8-M-only instructions are not reviewed, and `cortex-m33`/`cortex-m55` ar
 - **Pointer tables.** `pointer_tables` (off by default) scans every word-aligned word outside the vector table
   for Thumb code pointers: odd, inside the mapping, and whose target's first instruction decodes. Each target's
   evidence is `push_lr` (a `push {..., lr}`, `push.w` or `str lr, [sp, #-4]!` among its first four
-  instructions), `call_target` (a 32-bit `bl` encoding at any halfword targets it) or `reaches_exit` (its
+  instructions), `call_target` (a 32-bit `bl` at any halfword targets it, counted only when the decoder reads it as that call
+  and the instruction after it decodes) or `reaches_exit` (its
   straight-line decode, up to 256 instructions, reaches an unconditional return, branch or halt); a target with
   none is not a code pointer, which drops string pointers. Runs of at least three code pointers are found at a
   4-byte stride first, then 8, 12 and 16 over what is left (arrays of `{name, handler}` structs), with up to 8
-  empty slots between entries. A run is accepted when it names two distinct targets and one has strong evidence
-  (`push_lr` or `call_target`); a switch table of case labels or constants pointing into a function have only
-  `reaches_exit` and are refused. Accepted targets become seeds; every table is reported with its verdict.
-  It is opt-in because it adds guesses beyond what the analyst asserted and changes the interpretation identity.
+  empty slots between entries. A run is accepted when two distinct targets have strong evidence (`push_lr` or
+  `call_target`), so one coincidental prologue or `bl`-shaped word cannot promote a run of weak entries; a switch
+  table of case labels or constants pointing into a function have only `reaches_exit` and are refused, and so is
+  a table of leaf functions only. Accepted targets become seeds (deduplicated before the 8192-seed cap); every
+  table is reported with its verdict. It is opt-in because it adds guesses beyond what the analyst asserted and
+  changes the interpretation identity. Every Raw tool call admits its request again, so the last 8 scans are
+  memoized by image SHA-256, base and skipped range: on a generated 1.8 MiB Cortex-M3 image (6,000 functions,
+  1,099 table targets, all real) the first scan takes about 42 ms in a release build and a repeated call about
+  1 ms, where each call used to rescan (about 30-50 ms).
 
 Owned fixture: `tests/fixtures/firmware/raw-cortex-m.bin` is the flash image of `raw-cortex-m.elf`, built from
 `raw-cortex-m.c` by `build-raw-cortex-m.sh` (zig 0.17.1, `-mcpu=cortex_m3 -O1`, llvm-objcopy). Opened with base

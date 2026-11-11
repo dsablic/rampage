@@ -463,3 +463,32 @@ fn cortex_m_pointer_tables_seed_handlers_and_refuse_decoys() {
     let error = Binary::from_raw_code(vec![0; 64], msp430).unwrap_err().to_string();
     assert!(error.contains("pointer-table seeding is defined only for ARM:LE:32:Cortex"), "{error}");
 }
+
+/// `count` functions (`push {r7, lr}; pop {r7, pc}`) from 0x100 and a table of `entries` pointers cycling over them.
+fn function_table(count: usize, entries: usize) -> Vec<u8> {
+    let table = 0x100 + 4 * count;
+    let mut bytes = vec![0; table + 4 * entries];
+    for function in 0..count {
+        bytes[0x100 + 4 * function..0x104 + 4 * function].copy_from_slice(&[0x80, 0xb5, 0x80, 0xbd]);
+    }
+    for entry in 0..entries {
+        let target = 0x100 + 4 * (entry % count) as u32 + 1;
+        bytes[table + 4 * entry..table + 4 * entry + 4].copy_from_slice(&target.to_le_bytes());
+    }
+    bytes
+}
+
+/// Repeated targets are deduplicated before the 8192-seed cap; more distinct targets than that are refused.
+#[test]
+fn pointer_table_targets_meet_the_seed_cap_once_each() {
+    let options = RawCodeOptions { pointer_tables: true, ..cortex(0, None) };
+    let repeated = Binary::from_raw_code(function_table(3, 9000), options.clone()).unwrap();
+    assert_eq!(repeated.function_starts, [0x100, 0x104, 0x108]);
+    let found = repeated.raw_code_image().unwrap().pointer_tables().unwrap();
+    assert_eq!(found.tables[0].entries.len(), 9000);
+    let error = Binary::from_raw_code(function_table(MAX_RAW_SEEDS + 1, MAX_RAW_SEEDS + 1), options.clone())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("at most 8192 seeds"), "{error}");
+    assert!(Binary::from_raw_code(function_table(MAX_RAW_SEEDS, MAX_RAW_SEEDS), options).is_ok());
+}

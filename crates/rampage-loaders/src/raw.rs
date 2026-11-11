@@ -301,7 +301,9 @@ impl RawCodeImage {
             let skip = vector_table.as_ref().map(|table| table.address..table.address + 4 * table.words_read as u64);
             let tables = crate::raw_pointers::scan(bytes, options.base, skip);
             let entry = options.entry;
-            options.seeds.extend(tables.targets().filter(|&target| Some(target) != entry));
+            // Tables repeat targets (a default handler in many slots): dedupe before they meet the seed cap.
+            let targets: std::collections::BTreeSet<u64> = tables.targets().collect();
+            options.seeds.extend(targets.into_iter().filter(|&target| Some(target) != entry));
             Some(tables)
         };
         options.seeds.sort_unstable();
