@@ -29,7 +29,31 @@ see the [stability policy](docs/stability.md) for what the version promises.
   instructions, and no A32 state or A-profile-only instructions (BLX to A32, Advanced SIMD, SETEND, ERET, ...).
   Odd-aligned string literals are not taken for Thumb function pointers. `inspect_raw_code` stays A-profile.
 - The session's Raw project cache is also bounded by 64 MiB of input bytes.
-- Raw interpretation identities move to `rampage-raw-interpretation-v3`, which binds the vector-table request.
+- `"pointer_tables": true` in the Cortex-M `raw` selector seeds discovery from tables of code pointers (plain
+  arrays and 8/12/16-byte struct arrays). A table needs at least two distinct targets with strong evidence (a
+  push of `lr`, or a decodable `bl` calling it); string-pointer arrays, switch tables and stray constants are
+  refused. `binary_info` reports every table with its verdict and per-entry evidence under `raw.pointer_tables`.
+  Off by default; repeat calls on the same image reuse the scan.
+- Raw interpretation identities move to `rampage-raw-interpretation-v4`, which also binds the pointer-table request.
+- Decompiling a Cortex-M Raw image folds literal-pool loads to the addresses they hold, names unnamed globals by
+  ARMv7-M region (`ram_`, `periph_`, `ppb_`, ...) unless the analyst renamed them, keeps caller values live across
+  callees that never write a register (interprocedural register allocation), and locks callee parameter lists
+  derived from the callees themselves, so call arguments are no longer dropped. Derived locks and caches are reset
+  before each decompile, so output does not depend on earlier requests. This applies to Cortex-M Raw images only;
+  the worker protocol is now 10. Shift-and-mask forms such as `ubfx` stay in
+  Ghidra's equivalent `(x & 0xffff) >> 4` shape; see [Sleigh decoding](docs/sleigh-decoding.md).
+
+### Changed
+
+- Function discovery no longer splits a function first reached by a tail call (`b.w f`) at its internal join
+  points: callers that explored such a function are re-explored once it becomes a start, before shared tails are
+  counted. On a generated 6,000-function Cortex-M image this removes 2,232 bogus starts; starts on other
+  binaries are unchanged.
+- Decompiler output on every format names otherwise unnamed globals from a unique data symbol of the binary
+  (`__hwcap` instead of `xRam00031248`).
+- Raw projects check their analysis binding once per query rather than once per result row: `xrefs --to` with
+  5,000 rows on a Sleigh Raw image dropped from about 100 s to under 2 s. Search, call context, tracing, string
+  decoding and batch signatures use the same path.
 
 ## 1.0.0 (unreleased)
 

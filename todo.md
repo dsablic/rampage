@@ -208,7 +208,7 @@ Shared API/CLI/MCP edits and builds remain coordinated; each parallel worker own
 - Static only: no updater/installer execution, flashing, emulator execution or security changes. Do not turn
   this into an automatic unpacker or a generic firmware framework before the first traced loader path.
 
-### Firmware gaps seen in an agent run on a Cortex-M image (2026-11-09, not started)
+### Firmware gaps seen in an agent run on a Cortex-M image (2026-11-09, in progress)
 
 An agent analysing a headerless ARM Thumb (Cortex-M) firmware image fell back to
 `strings`/`xxd`, a Python wrapper around the rampage CLI for range disassembly, an entropy/0xFF-run map, and an
@@ -238,22 +238,30 @@ Verify first which of these the existing raw-window and decoder-provider slices 
   decoding adds hand-written `MRS`/`MSR` encodings (UNPREDICTABLE forms refused) and makes A-profile-only
   instructions (BLX to A32, Advanced SIMD, SETEND, ERET, ...) UNDEFINED, llvm-mc-checked. `inspect_raw_code`
   `thumb` stays A-profile and its docs point Cortex-M users at the Raw profile.
-- [ ] **Tail-call splits without symbols.** A function first reached by a tail call (`b.w f`) before its own
+- [x] **Tail-call splits without symbols.** A function first reached by a tail call (`b.w f`) before its own
   call is seen splits at internal join points: 1,773 of 6,030 starts on a generated 1 MiB Cortex-M image, the same
-  on its stripped ELF. Discovery should drop the caller's stale exploration once `f` becomes a function.
+  on its stripped ELF. Discovery should drop the caller's stale exploration once `f` becomes a function. Done: callers are re-explored
+  once a later start appears, before shared tails are counted (generated 6,000-function image: 8,234 → 6,002
+  starts, exact; other binaries unchanged). Still open: a function reached only by one tail call stays in its caller.
 - [ ] **Multi-stage images.** Load a decoded bootloader payload as a second region at its RAM base, linked to the
   source range. Overlaps the dump-as-linked-target idea in the malware-analysis track.
-- [ ] **Function discovery from pointer tables.** Discovery seeds only the entry point. Seed from tables of code
+- [x] **Function discovery from pointer tables.** Discovery seeds only the entry point. Seed from tables of code
   pointers, with evidence per seed, so a raw image needs no hand-built symbol list (the Cortex-M vector table
-  is done through `raw.vector_table`).
-- [ ] **Decompiler accuracy on a raw Thumb image:**
+  is done through `raw.vector_table`). Done: opt-in `raw.pointer_tables` (needs two strong targets per table;
+  fixture 17/17 precision, 17/18 recall). Leaf-only tables are refused; adjacent tables report as one run.
+- [x] **Decompiler accuracy on a raw Thumb image:**
   - a `bl` checksum call dropped its length argument (a stale `r1` from earlier code);
   - a shift-and-mask rendered as `&0xfff << 4`, which hid the real operation; compare against the disassembly
     on an owned case before changing anything;
   - literal-pool addresses showed as unnamed `iRam…`/`pxRam…` variables, so name or annotate them.
-- [ ] **Performance at about 5k symbols.** Listing 5,182 seeded symbols took about 22 seconds, and `xrefs --to`
+  Done for Cortex-M Raw images: pool folding, region names, IPRA-aware callee effects and parameter-only callee
+  prototypes; the shift-and-mask is correct Ghidra output (documented). Open: `--exact-entry` path, other
+  architectures, pool constants printed as numbers, callees whose return is used still print `void`.
+- [x] **Performance at about 5k symbols.** Listing 5,182 seeded symbols took about 22 seconds, and `xrefs --to`
   ran past 2 minutes on the same image. Profile both and fix the slow path (likely a scan per query rather than
-  an index).
+  an index). Done: the slow path was a full-image hash per xref row (binding check); now once per query. The
+  22 s listing did not reproduce on the Cortex-M profile; re-time the original Sleigh workflow. Open: one image
+  hash per call remains (cache the raw identity in `rampage-loaders`).
 - [ ] **Container recognition.** Triage and `carve` do not flag a proprietary compressed container, i.e. a
   header with load address, sizes and a byte-sum around an LZSS stream. Report "header-checked
   compressed-component candidate" with extents, so the compression probe has a starting range.
