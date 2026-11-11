@@ -26,6 +26,7 @@ fn project() -> Project {
         entry: None,
         seeds: vec![],
         vector_table: Some(0x0800_0000),
+        pointer_tables: false,
     };
     Project::new(Binary::from_raw_code(IMAGE.to_vec(), options).unwrap())
 }

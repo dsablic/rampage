@@ -35,6 +35,7 @@ fn raw_starts(image: &Path) -> BTreeSet<u64> {
         entry: None,
         seeds: vec![],
         vector_table: Some(BASE),
+        pointer_tables: false,
     };
     starts(&Binary::from_raw_code(std::fs::read(image).unwrap(), options).unwrap())
 }
