@@ -1,7 +1,7 @@
 # Debugger execution control (Phase 9) — design for review
 
-Status: **approved 2026-10-29** with the decisions under "Approval decisions" below. 9.1–9.4 are done; 9.5 (macOS
-`debugserver`) and 9.6a (Windows through RSP stubs) are implemented, with live acceptance pending. See
+Status: **approved 2026-10-29** with the decisions under "Approval decisions" below. 9.1–9.5 are done (9.5's live macOS
+`debugserver` acceptance passed 2026-11-11); 9.6a (Windows through RSP stubs) is implemented, with live acceptance pending. See
 [Phased delivery](#phased-delivery) and the user-facing [debug control guide](../debug-control.md). The parity
 roadmap requires an approved design before any launch, attach, resume, step, breakpoint or target-write code lands
 (`docs/plans/2026-10-16-ida-ghidra-parity-roadmap.md`, Phase 9; `todo.md` "execution-control debugger integration
@@ -109,7 +109,7 @@ recorded in the project's findings ledger with the debug session as evidence.
 | 9.2 | **Done 2026-11-04** (`019c5b3`; live QEMU Cortex-M3 acceptance passes). Execution control: continue/wait/interrupt, step, breakpoints and watchpoints; stop epochs enforced. | Medium. |
 | 9.3 | **Done 2026-11-05** (`b111cea`; live QEMU Cortex-M3 acceptance passes). Static correlation: binding, slides, symbolic breakpoints, step-over via rampage decoders, stop-location enrichment. | Medium. |
 | 9.4 | **Done 2026-11-05** (`4b2190d`; live QEMU RAM, register and flash writes and kill pass). Writes behind `--debug-writes`; kill behind `--debug-kill`. | Higher; reviewed separately. |
-| 9.5 | **Implemented 2026-11-05** (`6a184b3`); live debugserver acceptance pending (needs DevToolsSecurity enabled). macOS `debugserver` acceptance (RSP plus LLDB extensions); evaluate driving LLDB's SB API through the existing bridge for crash/core files. | Platform-dependent. |
+| 9.5 | **Implemented 2026-11-05** (`6a184b3`); live debugserver acceptance passed 2026-11-11. macOS `debugserver` acceptance (RSP plus LLDB extensions); evaluate driving LLDB's SB API through the existing bridge for crash/core files. | Platform-dependent. |
 | 9.6 | **9.6a implemented 2026-11-05** (`c3f9669`); live acceptance pending (no Windows host). Windows: separate short design (dbgeng vs. a GDB stub such as a Windows gdbserver); Option A (RSP stub) approved 2026-11-05: [`2026-11-05-debugger-windows.md`](2026-11-05-debugger-windows.md). 9.6a covers user-mode processes through `gdbserver.exe` and `lldb-server`; Option B (DbgEng) is deferred. | Platform-dependent. |
 
 Each step follows the same cadence: implementation, independent review, fixes, full suite, then MCP-level acceptance.

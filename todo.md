@@ -6,8 +6,8 @@
   Contract snapshots pin every stable MCP group. Linux ARM64 host support shipped in rc.1 (archived).
 - Parity roadmap: Phases 0–3 and 4.1 implemented; live Phase 1 sign-off, the Phase 2 recall target and the
   Phase 3.3 live improvement gate are open. Phase 4.2 is next in roadmap order.
-- Debugger (Phase 9): 9.1–9.4 done; 9.5 (macOS `debugserver`) and 9.6a (Windows through RSP stubs) implemented,
-  live acceptance pending (experimental in 1.0). See `docs/plans/2026-10-29-debugger-control.md`.
+- Debugger (Phase 9): 9.1–9.5 done (9.5's live macOS `debugserver` acceptance passed 2026-11-11); 9.6a (Windows through
+  RSP stubs) implemented, live acceptance pending (experimental in 1.0). See `docs/plans/2026-10-29-debugger-control.md`.
 - REA gap-closing wave 1 (2026-10-29): `formats` tools and the findings ledger done; log compaction open.
 - Head-to-head with REA: suite v1 and suite v2 published (`docs/benchmarks/`); follow-ups below. Suite v3
   (tasks where Ghidra is strong) and a second model or client are not run yet.

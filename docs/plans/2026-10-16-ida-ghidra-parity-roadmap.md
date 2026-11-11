@@ -378,8 +378,7 @@ write, module tracking; MCP tools with explicit operator consent per session. Do
 the design is approved.
 
 *Status (2026-11-05):* design approved 2026-10-29 as
-[`2026-10-29-debugger-control.md`](2026-10-29-debugger-control.md). 9.1–9.4 done; 9.5 (macOS `debugserver`)
-implemented, live acceptance pending; 9.6a (Windows through RSP stubs, Option A of
+[`2026-10-29-debugger-control.md`](2026-10-29-debugger-control.md). 9.1–9.5 done (9.5 live acceptance passed 2026-11-11); 9.6a (Windows through RSP stubs, Option A of
 [`2026-11-05-debugger-windows.md`](2026-11-05-debugger-windows.md)) implemented, live acceptance pending. See the
 [phase table](2026-10-29-debugger-control.md#phased-delivery) and [debug control](../debug-control.md).
 
