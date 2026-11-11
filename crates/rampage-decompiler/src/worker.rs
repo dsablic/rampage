@@ -212,6 +212,10 @@ pub enum WorkerOperation {
     CalleeInference {
         inference: crate::CalleeInference,
     },
+    /// Fold loads from read-only mappings into their values (see `Decompiler::set_read_only_folding`).
+    FoldReadOnly {
+        enabled: bool,
+    },
 }
 
 fn expected_context<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
@@ -1117,6 +1121,7 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
             WorkerOperation::DataName { address, name } => engine.set_data_name(address, &name),
             WorkerOperation::DataRegion { first, last, prefix } => engine.add_data_region(first, last, &prefix),
             WorkerOperation::CalleeInference { inference } => engine.set_callee_inference(inference),
+            WorkerOperation::FoldReadOnly { enabled } => engine.set_read_only_folding(enabled),
         };
         result.map_err(|error| format!("operation {index}: {error}"))?;
         if checks_types {

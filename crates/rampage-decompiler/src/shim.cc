@@ -267,6 +267,7 @@ struct Handle {
     bool inferCalleeEffects = false;
     std::map<uintb, std::vector<VarnodeData>> calleeWrites;
     std::set<uintb> unknownWrites;
+    std::set<uintb> limitedWrites;
     std::set<uintb> effectsApplied;
     std::map<uintb, std::vector<EffectRecord>> effectOverrides;
     // Callee prototypes: committed from each callee's own decompilation, bottom-up, before its callers'.
@@ -768,6 +769,14 @@ bool overlaps(const VarnodeData &a, const VarnodeData &b) {
     return a.space == b.space && a.offset < b.offset + b.size && b.offset < a.offset + a.size;
 }
 
+// A direct call's target. Flow following replaces a CALL's address input with its call specification (an `fspec`
+// space constant), so the address comes from the specification.
+Address callTarget(const Funcdata &function, const PcodeOp *op) {
+    const FuncCallSpecs *call = function.getCallSpecs(op);
+    if (call != nullptr) return call->getEntryAddress();
+    return op->getIn(0)->getAddr();
+}
+
 bool unknownUserOp(Architecture *arch, const PcodeOp *op) {
     UserPcodeOp *userop = arch->userops.getOp(uint4(op->getIn(0)->getOffset()));
     if (userop == nullptr) return true;
@@ -779,7 +788,8 @@ bool unknownUserOp(Architecture *arch, const PcodeOp *op) {
 
 // The registers the function at `entry` may write, itself or through its direct callees. Unknown when it has an
 // indirect call or jump, a supervisor call, undecodable or unimplemented code, or a recursive cycle; Limited when
-// the depth or function budget ran out (which another query, with a fresh budget, may not).
+// the depth or function budget ran out. Every verdict is kept for the life of the handle, which rampage opens
+// afresh for each decompilation that uses this inference.
 WritesResult calleeWrites(Handle *handle, uintb entry, std::set<uintb> &visiting, size_t &budget, int4 depth,
                           std::vector<VarnodeData> &writes) {
     auto known = handle->calleeWrites.find(entry);
@@ -788,7 +798,9 @@ WritesResult calleeWrites(Handle *handle, uintb entry, std::set<uintb> &visiting
         return WritesResult::Known;
     }
     if (handle->unknownWrites.count(entry) != 0 || visiting.count(entry) != 0) return WritesResult::Unknown;
-    if (depth > calleeWritesDepth || budget == 0) return WritesResult::Limited;
+    // Remembered, so a callee too deep for the budget is not walked again for every later call to it.
+    if (handle->limitedWrites.count(entry) != 0 || depth > calleeWritesDepth || budget == 0)
+        return WritesResult::Limited;
     --budget;
     Architecture *arch = handle->arch;
     AddrSpace *code = arch->getDefaultCodeSpace();
@@ -813,10 +825,12 @@ WritesResult calleeWrites(Handle *handle, uintb entry, std::set<uintb> &visiting
                 own.push_back(data);
             }
             switch (op->code()) {
-            case CPUI_CALL:
-                if (op->getIn(0)->getSpace() != code) unknown = true;
-                else callees.push_back(op->getIn(0)->getOffset());
+            case CPUI_CALL: {
+                Address target = callTarget(scratch, op);
+                if (target.getSpace() != code) unknown = true;
+                else callees.push_back(target.getOffset());
                 break;
+            }
             case CPUI_CALLIND:
             case CPUI_BRANCHIND:
                 unknown = true;
@@ -843,6 +857,7 @@ WritesResult calleeWrites(Handle *handle, uintb entry, std::set<uintb> &visiting
     }
     visiting.erase(entry);
     if (result == WritesResult::Unknown) handle->unknownWrites.insert(entry);
+    if (result == WritesResult::Limited) handle->limitedWrites.insert(entry);
     if (result == WritesResult::Known) {
         handle->calleeWrites[entry] = own;
         writes.insert(writes.end(), own.begin(), own.end());
@@ -882,7 +897,6 @@ void inferCalleeEffects(Handle *handle, Funcdata *function) {
         size_t budget = 256;
         std::vector<VarnodeData> writes;
         WritesResult result = calleeWrites(handle, target.getOffset(), visiting, budget, 0, writes);
-        if (result == WritesResult::Limited) continue;
         handle->effectsApplied.insert(target.getOffset());
         if (result != WritesResult::Known) continue;
         std::vector<EffectRecord> preserved;
@@ -945,6 +959,41 @@ std::vector<uintb> directCallees(Funcdata *function) {
     return callees;
 }
 
+// Whether `function`'s raw flow leaves nothing hidden from its own decompilation: no indirect call or jump, no
+// supervisor call (it passes registers the p-code never shows: `mov r1, r0; svc #0`), no
+// call outside the code space, and no branch into another function (a thunk or tail call, whose parameters are
+// the target's).
+bool derivableFlow(Handle *handle, Funcdata *function) {
+    if (function->hasUnimplemented() || function->hasBadData()) return false;
+    Architecture *arch = handle->arch;
+    AddrSpace *code = arch->getDefaultCodeSpace();
+    Scope *global = arch->symboltab->getGlobalScope();
+    for (auto iter = function->beginOpAll(); iter != function->endOpAll(); ++iter) {
+        const PcodeOp *op = iter->second;
+        switch (op->code()) {
+        case CPUI_CALLIND:
+        case CPUI_BRANCHIND:
+            return false;
+        case CPUI_CALLOTHER:
+            if (unknownUserOp(arch, op)) return false;
+            break;
+        case CPUI_CALL:
+            if (callTarget(*function, op).getSpace() != code) return false;
+            break;
+        case CPUI_BRANCH: {
+            const Varnode *target = op->getIn(0);
+            if (target->getSpace() == code && target->getAddr() != function->getAddress()
+                && global->queryFunction(target->getAddr()) != nullptr)
+                return false;
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    return true;
+}
+
 // Locks `function`'s prototype to the one its own decompilation recovers, once every function it calls has a locked
 // prototype. A cycle, a failed decompilation or an underivable callee leaves it as Ghidra would (unlocked).
 Derivation deriveCalleePrototype(Handle *handle, Funcdata *function, std::set<uintb> &deriving, size_t &budget) {
@@ -968,8 +1017,11 @@ Derivation deriveCalleePrototype(Handle *handle, Funcdata *function, std::set<ui
         arch->clearAnalysis(function);
         function->followFlow(low, high);
         std::vector<uintb> callees = directCallees(function);
+        bool opaque = !derivableFlow(handle, function);
         arch->clearAnalysis(function);
+        if (opaque) result = Derivation::Underivable;
         for (uintb target : callees) {
+            if (result != Derivation::Locked) break;
             Funcdata *callee = global->queryFunction(Address(code, target));
             Derivation derived = callee == nullptr ? Derivation::Underivable
                                                    : deriveCalleePrototype(handle, callee, deriving, budget);
@@ -988,6 +1040,9 @@ Derivation deriveCalleePrototype(Handle *handle, Funcdata *function, std::set<ui
             function->getFuncProto().getPieces(pieces);
             arch->clearAnalysis(function);
             function->getFuncProto().setPieces(pieces);
+            // Inputs only. A locked return changes how Ghidra recovers its callers' own returns: a caller that
+            // returns its input on one path and a constant on another lost its return value entirely.
+            function->getFuncProto().setOutputLock(false);
         }
     } catch (const LowlevelError &) {
         arch->clearAnalysis(function);
@@ -1320,9 +1375,6 @@ void *rampage_decomp_open(const char *sleighhome, const char *langid, size_t nse
         initializing = true;
         arch->init(store);
         initializing = false;
-        // Fold loads from read-only mappings into their values, as Ghidra's "Respect read-only flags" default
-        // does: an ARM literal-pool word then reads as the address or constant it holds, not as a variable.
-        arch->readonlypropagate = true;
         std::unique_ptr<rampage::TokenEmitter> emitter(new rampage::TokenEmitter(handle->tokens));
         arch->print->setEmitter(emitter.get());
         handle->emitter = emitter.release();
@@ -1471,6 +1523,13 @@ const char *rampage_decomp_data_region(void *h, uint64_t first, uint64_t last, c
         nativeMutation = true;
         scope.addRegion(first, last, prefix);
     });
+}
+
+// Folds loads from read-only mappings into their values (Ghidra's "respect read-only flags"): an ARM
+// literal-pool word then reads as the address or constant it holds, not as a variable.
+const char *rampage_decomp_fold_read_only(void *h, uint8_t enabled) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &) { handle->arch->readonlypropagate = enabled != 0; });
 }
 
 // Opts in to callee register-effect inference (inferCalleeEffects) and callee prototype derivation

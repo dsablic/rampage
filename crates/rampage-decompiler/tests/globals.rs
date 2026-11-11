@@ -54,16 +54,22 @@ const POOLS: [u8; 24] = [
 fn pools() -> Decompiler {
     let regions =
         [MemoryRegion { base: 0x1000, bytes: &POOLS, size: 24, readable: true, writable: false, executable: true }];
-    Decompiler::open_regions(Arch::Arm, false, &regions).unwrap()
+    let mut engine = Decompiler::open_regions(Arch::Arm, false, &regions).unwrap();
+    engine.set_read_only_folding(true).unwrap();
+    engine
 }
 
 #[test]
-fn literal_pool_words_fold_into_the_globals_they_address() {
+fn literal_pool_words_fold_into_the_globals_they_address_only_when_asked() {
     let mut engine = pools();
     let code = engine.decompile(0x1000, "read_ram", true).unwrap();
     // Ghidra's default name for the unnamed global, not a variable for the pool word at 0x1008.
     assert!(code.contains("Ram20000004;"), "{code}");
     assert!(!code.contains("1008"), "{code}");
+    // Off by default, as for headered images whose read-only sections may be written at run time.
+    engine.set_read_only_folding(false).unwrap();
+    let code = engine.decompile(0x1000, "read_ram", true).unwrap();
+    assert!(code.contains("Ram00001008"), "{code}");
 }
 
 #[test]

@@ -337,6 +337,7 @@ unsafe extern "C" {
     fn rampage_decomp_data_name(handle: *mut Opaque, addr: u64, name: *const c_char) -> *const c_char;
     fn rampage_decomp_data_region(handle: *mut Opaque, first: u64, last: u64, prefix: *const c_char) -> *const c_char;
     fn rampage_decomp_callee_inference(handle: *mut Opaque, effects: u8, prototypes: u8) -> *const c_char;
+    fn rampage_decomp_fold_read_only(handle: *mut Opaque, enabled: u8) -> *const c_char;
     fn rampage_decomp_global(handle: *mut Opaque, addr: u64, text: *const c_char) -> *const c_char;
     fn rampage_decomp_parse_c(handle: *mut Opaque, text: *const c_char) -> *const c_char;
     fn rampage_decomp_error(handle: *mut Opaque) -> *const c_char;
@@ -455,9 +456,12 @@ pub struct CalleeInference {
     /// allocation: GCC `-fipa-ra`, LLVM IPRA) keeps its argument. A callee with an indirect call or jump, a
     /// supervisor call, recursion or undecodable code keeps the convention's effects.
     pub register_effects: bool,
-    /// Commits each callee's prototype, as its own decompilation recovers it, leaves first (Ghidra's Decompiler
-    /// Parameter ID), so `f(g(x))` and arguments passed through untouched are not lost at call sites. Bounded per
-    /// decompilation; a callee in a recursive cycle, or calling one it cannot derive, stays unlocked.
+    /// Locks each callee's parameters, as its own decompilation recovers them, leaves first (Ghidra's Decompiler
+    /// Parameter ID), so `f(g(x))` and arguments passed through untouched are not lost at call sites. The return
+    /// stays unlocked: a locked callee return can cost a caller its own recovered return. Bounded per
+    /// decompilation; a callee with an indirect call or jump, a supervisor call (`svc`), a branch into
+    /// another function, a recursive cycle, or a callee it cannot derive stays unlocked. The derived locks and
+    /// effects live in the handle, so callers wanting history-independent output open a fresh handle per request.
     pub prototypes: bool,
 }
 
@@ -593,6 +597,16 @@ impl Decompiler {
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: valid serialized handle and a live C string; the returned error belongs to the handle.
         ffi_result(unsafe { rampage_decomp_data_region(self.handle, first, last, prefix.as_ptr()) })
+    }
+
+    /// Folds loads from read-only mappings into the values they read, as Ghidra's "respect read-only flags"
+    /// does: an ARM literal-pool word then reads as the address or constant it holds. Off by default, because a
+    /// headered image's read-only sections can be written at run time (a PE pseudo-relocator unprotects `.rdata`).
+    /// Typed globals (`add_global`) never fold.
+    pub fn set_read_only_folding(&mut self, enabled: bool) -> Result<(), Error> {
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid serialized handle; the returned error belongs to the handle.
+        ffi_result(unsafe { rampage_decomp_fold_read_only(self.handle, u8::from(enabled)) })
     }
 
     /// Opts in to inference about direct callees, made before each decompilation; see [`CalleeInference`].

@@ -524,6 +524,11 @@ impl Project {
         {
             slot.engine = None;
         }
+        // Callee inference leaves derived prototypes and effects in the engine; each decompilation starts from a
+        // fresh one so its output never depends on what was decompiled before (and matches the worker's).
+        if symbols::stateful_engine(&self.binary) {
+            slot.engine = None;
+        }
         if slot.engine.is_none() {
             let options = slot.options.clone().unwrap_or_else(|| default_options(&self.binary));
             slot.engine =

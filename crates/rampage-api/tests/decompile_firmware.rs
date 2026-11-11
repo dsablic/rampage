@@ -96,12 +96,78 @@ fn bit_field_extracts_read_as_mask_then_shift() {
     assert!(code.contains("return (param_1 & 0xffff) >> 4;"), "{code}");
 }
 
-/// The unstripped ELF build of the same code names its data symbols, which the decompiler now uses for globals.
+/// In every format, a global the binary's data symbols name reads by that name (only the name: no folding, region
+/// names or callee inference outside Raw images).
 #[test]
-fn elf_data_symbols_name_their_globals() {
-    let project = Project::new(Binary::open(ELF).unwrap());
-    let code = project.decompile(truth("verify_image")).unwrap().code;
-    assert!(code.contains("last_checksum = checksum(0x20000004,param_1);"), "{code}");
-    let code = project.decompile(truth("advance_cursor")).unwrap().code;
-    assert!(code.contains("cursor = cursor + 4;"), "{code}");
+fn data_symbols_name_their_globals_in_every_format() {
+    for (name, exit) in [("hello-x64.elf", 0x10023ea), ("hello-thumb.elf", 0x20cbc)] {
+        let code = fixture(name).decompile(exit).unwrap().code;
+        assert!(code.contains("close_file(__stderr_used);"), "{name}: {code}");
+        assert!(code.contains("close_file(__stdout_used);"), "{name}: {code}");
+    }
+}
+
+/// Each decompilation starts from a fresh engine: derived callee prototypes and effects never carry over, so a
+/// function reads the same whatever was decompiled before it.
+#[test]
+fn raw_decompilation_does_not_depend_on_history() {
+    let reversed = project();
+    let project = project();
+    let first = decompile(&project, "reset_handler");
+    let others = ["verify_image", "checksum_after_quiet", "checksum", "unpack_field", "place_field"];
+    for name in others {
+        decompile(&project, name);
+    }
+    assert_eq!(decompile(&project, "reset_handler"), first);
+    for name in others.iter().rev() {
+        decompile(&reversed, name);
+    }
+    assert_eq!(decompile(&reversed, "reset_handler"), first);
+}
+
+/// The isolated worker opens its own engine per request; in process, the engine is rebuilt for each decompilation
+/// of a Raw ARM image, so both give the same C.
+#[test]
+fn raw_decompilation_matches_the_isolated_worker() {
+    // The worker built beside this test binary (target/<profile>/rampage-worker), or RAMPAGE_WORKER.
+    let worker = rampage_api::find_decompiler_worker().or_else(|| {
+        let sibling = std::env::current_exe().ok()?.parent()?.parent()?.join("rampage-worker");
+        sibling.is_file().then_some(sibling)
+    });
+    let worker = worker.expect("rampage-worker is built beside the tests (cargo build -p rampage-worker)");
+    let in_process = project();
+    let isolated = project();
+    isolated.set_decompiler_worker(Some(rampage_api::DecompilerWorkerConfig {
+        executable: Some(worker),
+        ..Default::default()
+    }));
+    for name in ["reset_handler", "verify_image", "checksum_after_quiet", "checksum_after_scratch"] {
+        assert_eq!(decompile(&isolated, name), decompile(&in_process, name), "{name}");
+    }
+}
+
+fn fixture(name: &str) -> Project {
+    let path = format!("{}/../../tests/fixtures/bin/{name}", env!("CARGO_MANIFEST_DIR"));
+    Project::new(Binary::open(path).unwrap())
+}
+
+/// The firmware inference (callee effects and prototypes, read-only folding, region names) is for Raw images only:
+/// headered binaries keep Ghidra's defaults.
+#[test]
+fn headered_binaries_keep_ghidra_defaults() {
+    // musl `exit` passes its status in r0 to `_Exit`, whose body is `mov r1, r0; svc #0`.
+    let thumb = fixture("hello-thumb.elf");
+    let code = thumb.decompile(0x207ec).unwrap().code;
+    assert!(code.contains("_Exit(status);"), "{code}");
+    // Returns its input on one path and -1 on the other.
+    let code = thumb.decompile(0x20b36).unwrap().code;
+    assert!(code.contains("uint4 __syscall_ret(uint4 param_1)"), "{code}");
+    assert!(code.contains("return param_1;") && code.contains("return 0xffffffff;"), "{code}");
+    let arm = fixture("hello-arm.elf");
+    let code = arm.decompile(0x202fc).unwrap().code;
+    assert!(code.contains("0,0,param_1);"), "{code}");
+    // mingw's pseudo-relocator writes `.rdata` at run time: its words stay variables, not constants.
+    let exe = fixture("hello-x64.exe");
+    let code = exe.decompile(0x1_4000_1fc0).unwrap().code;
+    assert!(code.contains("*param_1 ^ uRam00000001400293c0"), "{code}");
 }

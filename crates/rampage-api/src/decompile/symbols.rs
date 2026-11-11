@@ -134,11 +134,28 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
         }
     }
     operations.extend(data_names(project, annotations, &identities, &slots));
-    if binary.arch == rampage_arch::Arch::Arm {
+    operations.extend(raw_image_operations(binary));
+    Ok(operations)
+}
+
+/// Whether the engine's analysis state changes as it decompiles (callee inference), so it must not be reused.
+pub(crate) fn stateful_engine(binary: &rampage_loaders::Binary) -> bool {
+    binary.raw_code_image().is_some() && binary.arch == rampage_arch::Arch::Arm
+}
+
+/// Raw images only: nothing in them is ever written by a loader, they carry no prototypes, and their code is often
+/// built with interprocedural register allocation. Headered formats keep Ghidra's defaults (a PE's `.rdata` can be
+/// rewritten at run time by its pseudo-relocator, and ELF and PE callees have libc/import prototypes).
+pub(crate) fn raw_image_operations(binary: &rampage_loaders::Binary) -> Vec<WorkerOperation> {
+    if binary.raw_code_image().is_none() {
+        return Vec::new();
+    }
+    let mut operations = vec![WorkerOperation::FoldReadOnly { enabled: true }];
+    if stateful_engine(binary) {
         let inference = rampage_decompiler::CalleeInference { register_effects: true, prototypes: true };
         operations.push(WorkerOperation::CalleeInference { inference });
     }
-    Ok(operations)
+    operations
 }
 
 /// The architectural ARMv6-M/ARMv7-M system address map: every M-profile core decodes these ranges the same way,
@@ -153,6 +170,7 @@ const CORTEX_M_REGIONS: [(u64, u64, &str); 7] = [
     (0xe010_0000, 0xffff_ffff, "vendor_sys"),
 ];
 
+/// Mirrors the shim's `identifier()` check (shim.cc), which refuses any other name and with it the whole engine.
 fn c_identifier(name: &str) -> bool {
     let mut characters = name.chars();
     characters.next().is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
@@ -298,6 +316,9 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
             WorkerOperation::CalleeInference { inference } => engine
                 .set_callee_inference(inference)
                 .map_err(|error| ApiError::Unavailable(format!("callee inference: {error}")))?,
+            WorkerOperation::FoldReadOnly { enabled } => engine
+                .set_read_only_folding(enabled)
+                .map_err(|error| ApiError::Unavailable(format!("read-only folding: {error}")))?,
             WorkerOperation::Mode { .. } => unreachable!(),
         }
         if checks_types {

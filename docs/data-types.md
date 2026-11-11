@@ -16,6 +16,12 @@ An element type and count specify the range's footprint. Named arrays of structs
 views; `set_global` declarations remain available for manually named globals. Conflicting bindings
 are refused rather than silently replacing user work.
 
+In decompiled C, a global without a `set_global` declaration takes a name when rampage has one for its address, in
+any format: the analyst's `rename` of the address, else the binary's data symbol when that name is unique and a C
+identifier (`counter`, not `uRam00601040`). Only the name is applied; Ghidra still infers the type and size.
+Other unnamed globals keep Ghidra's `<type><Space><address>` names, except on a Cortex-M Raw image, where they are
+named by memory region ([Cortex-M profile](sleigh-decoding.md#cortex-m-profile)).
+
 String encoding is explicit: `utf8`, `utf16_le`, `utf16_be`, or `ascii`. Byte lengths are not character counts.
 Original bytes remain available; invalid or partial encoding is reported without replacement text or normalization.
 Integer displays preserve all bits, non-finite floats remain explicit, and pointer words are not followed.

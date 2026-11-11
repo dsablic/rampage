@@ -129,21 +129,24 @@ but ARMv8-M-only instructions are not reviewed, and `cortex-m33`/`cortex-m55` ar
   The bundled `ARM8_le.sla` defines `VERSION_7M` as `ARM7_le.slaspec` does (it adds `VERSION_8`), so it decodes
   the M-profile constructors; the decompiler runs `ARM:LE:32:v8` with its reviewed `default` C model (pointer,
   int and long 4 bytes, matching AAPCS) and TMode set explicitly at every function, as for ARM ELF Thumb code.
-  Only the code mapping is served, read-only, so a literal-pool word folds into the address it holds. A global
-  with no other name is named by its architectural ARMv6-M/ARMv7-M region and address (`code_`, `ram_`, `periph_`,
-  `extram_`, `extdev_`, `ppb_`, `vendor_sys_`: `ram_20000004`, `periph_40021000`); an analyst's `rename` of the
-  address wins. The data type stays inferred.
-- **Callees.** Raw images carry no prototypes, so on ARM rampage tells the decompiler two things about each direct
-  callee before decompiling a function. The call-clobbered registers (r0-r3, r12) that the callee and everything
-  it calls never write are preserved across the call: GCC's `-fipa-ra` (on at `-O2`/`-Os`) and LLVM's IPRA keep a
-  caller's value in such a register across the call, and without this the next call's argument read as
-  `extraout_r1` or disappeared. A callee with an indirect call or jump, a supervisor call, recursion or code that
-  does not decode keeps the convention's effects. And each callee's prototype is committed from its own
-  decompilation, leaves first, as Ghidra's Decompiler Parameter ID does, so `f(g(x))` no longer prints as
-  `g(x); f();` and an argument passed through untouched still reaches the call. At most 64 callee decompilations
-  per request; a callee in a recursive cycle, or calling one that cannot be derived, stays as Ghidra infers it.
-  Committed types are the callee's own inferred ones, so a 64-bit `r0:r1` return can appear where only `r0` is
-  used (`CONCAT44(...)`), as in Ghidra.
+  Only the code mapping is served, read-only, and on Raw images (only) the decompiler folds loads from it, so a
+  literal-pool word reads as the address it holds. A global with no other name is named by its architectural
+  ARMv6-M/ARMv7-M region and address (`code_`, `ram_`, `periph_`, `extram_`, `extdev_`, `ppb_`, `vendor_sys_`:
+  `ram_20000004`, `periph_40021000`); an analyst's `rename` of the address wins. The data type stays inferred.
+- **Callees.** Raw images carry no prototypes, so for a Cortex-M Raw image (only; headered ARM binaries keep
+  Ghidra's defaults) rampage tells the decompiler two things about each direct callee before decompiling a
+  function. The call-clobbered registers (r0-r3, r12) that the callee and everything it calls never write are
+  preserved across the call: GCC's `-fipa-ra` (on at `-O2`/`-Os`) and LLVM's IPRA keep a caller's value in such a
+  register across the call, and without this the next call's argument read as `extraout_r1` or disappeared. A
+  callee with an indirect call or jump, a supervisor call, recursion or code that does not decode keeps the
+  convention's effects. And each callee's parameters are committed from its own decompilation, leaves first, as
+  Ghidra's Decompiler Parameter ID does, so `f(g(x))` no longer prints as `g(x); f();` and an argument passed
+  through untouched still reaches the call. Return types stay inferred: a locked return changes how Ghidra
+  recovers a caller's own return. A callee is left as Ghidra infers it when its code has an indirect call or jump,
+  a supervisor call (`svc`, which passes registers its p-code never shows), a branch into another function (a
+  thunk or tail call), a recursive cycle, or a callee that cannot be derived; at most 64 callee decompilations per
+  request. The engine is rebuilt for every such decompilation, so the result never depends on what was decompiled
+  before, in process or in the worker.
 - **Bit fields.** `ubfx r0, r0, #4, #12` reads as `(x & 0xffff) >> 4` and `lsls #4; uxth` as `(int2)x << 4`:
   Ghidra keeps the mask beside the operand it applies to, which is equivalent to `(x >> 4) & 0xfff`. Compare
   against the disassembly; the expression is right, only its grouping differs.
