@@ -460,8 +460,8 @@ pub struct CalleeInference {
     /// Parameter ID), so `f(g(x))` and arguments passed through untouched are not lost at call sites. The return
     /// stays unlocked: a locked callee return can cost a caller its own recovered return. Bounded per
     /// decompilation; a callee with an indirect call or jump, a supervisor call (`svc`), a branch into
-    /// another function, a recursive cycle, or a callee it cannot derive stays unlocked. The derived locks and
-    /// effects live in the handle, so callers wanting history-independent output open a fresh handle per request.
+    /// another function, a recursive cycle, or a callee it cannot derive stays unlocked. Every derived lock and
+    /// effect is put back before each decompilation, so the output never depends on earlier ones.
     pub prototypes: bool,
 }
 

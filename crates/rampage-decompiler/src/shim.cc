@@ -273,6 +273,8 @@ struct Handle {
     // Callee prototypes: committed from each callee's own decompilation, bottom-up, before its callers'.
     bool deriveCalleePrototypes = false;
     std::set<uintb> underivablePrototypes;
+    // Each derived function's prototype as it was before the lock, to put back between top-level decompilations.
+    std::map<uintb, std::unique_ptr<FuncProto>> derivedRestore;
     bool preparingTypeHintContext = false;
     bool poisoned = false;
     bool fallbackError = false;
@@ -788,8 +790,8 @@ bool unknownUserOp(Architecture *arch, const PcodeOp *op) {
 
 // The registers the function at `entry` may write, itself or through its direct callees. Unknown when it has an
 // indirect call or jump, a supervisor call, undecodable or unimplemented code, or a recursive cycle; Limited when
-// the depth or function budget ran out. Every verdict is kept for the life of the handle, which rampage opens
-// afresh for each decompilation that uses this inference.
+// the depth or function budget ran out. Known and Unknown verdicts are kept until the next top-level
+// decompilation resets them (resetCalleeInference); Limited only for a top-level query.
 WritesResult calleeWrites(Handle *handle, uintb entry, std::set<uintb> &visiting, size_t &budget, int4 depth,
                           std::vector<VarnodeData> &writes) {
     auto known = handle->calleeWrites.find(entry);
@@ -799,7 +801,7 @@ WritesResult calleeWrites(Handle *handle, uintb entry, std::set<uintb> &visiting
     }
     if (handle->unknownWrites.count(entry) != 0 || visiting.count(entry) != 0) return WritesResult::Unknown;
     // Remembered, so a callee too deep for the budget is not walked again for every later call to it.
-    if (handle->limitedWrites.count(entry) != 0 || depth > calleeWritesDepth || budget == 0)
+    if ((depth == 0 && handle->limitedWrites.count(entry) != 0) || depth > calleeWritesDepth || budget == 0)
         return WritesResult::Limited;
     --budget;
     Architecture *arch = handle->arch;
@@ -857,7 +859,9 @@ WritesResult calleeWrites(Handle *handle, uintb entry, std::set<uintb> &visiting
     }
     visiting.erase(entry);
     if (result == WritesResult::Unknown) handle->unknownWrites.insert(entry);
-    if (result == WritesResult::Limited) handle->limitedWrites.insert(entry);
+    // Only a top-level query, with the whole budget, says the callee itself is out of reach; an intermediate ran out
+    // of what its caller left, which another caller may not.
+    if (result == WritesResult::Limited && depth == 0) handle->limitedWrites.insert(entry);
     if (result == WritesResult::Known) {
         handle->calleeWrites[entry] = own;
         writes.insert(writes.end(), own.begin(), own.end());
@@ -980,7 +984,9 @@ bool derivableFlow(Handle *handle, Funcdata *function) {
         case CPUI_CALL:
             if (callTarget(*function, op).getSpace() != code) return false;
             break;
-        case CPUI_BRANCH: {
+        case CPUI_BRANCH:
+        case CPUI_CBRANCH: {
+            // Conditional tail calls too: `cmp r0, #0; bne.w other; ...`.
             const Varnode *target = op->getIn(0);
             if (target->getSpace() == code && target->getAddr() != function->getAddress()
                 && global->queryFunction(target->getAddr()) != nullptr)
@@ -990,6 +996,12 @@ bool derivableFlow(Handle *handle, Funcdata *function) {
         default:
             break;
         }
+        // Flow that reaches another function's entry by any path (a fall-through into it, say) reads that
+        // function's code as this one's. A branch into the middle of another function is not caught: Ghidra knows
+        // entries, not extents.
+        if (op->getAddr() != function->getAddress() && op->getAddr().getSpace() == code
+            && global->queryFunction(op->getAddr()) != nullptr)
+            return false;
     }
     return true;
 }
@@ -1039,6 +1051,9 @@ Derivation deriveCalleePrototype(Handle *handle, Funcdata *function, std::set<ui
             PrototypePieces pieces;
             function->getFuncProto().getPieces(pieces);
             arch->clearAnalysis(function);
+            auto before = std::make_unique<FuncProto>();
+            before->copy(function->getFuncProto());
+            handle->derivedRestore[entry] = std::move(before);
             function->getFuncProto().setPieces(pieces);
             // Inputs only. A locked return changes how Ghidra recovers its callers' own returns: a caller that
             // returns its input on one path and a constant on another lost its return value entirely.
@@ -1051,6 +1066,33 @@ Derivation deriveCalleePrototype(Handle *handle, Funcdata *function, std::set<ui
     deriving.erase(entry);
     if (result == Derivation::Underivable) handle->underivablePrototypes.insert(entry);
     return result;
+}
+
+// Undoes every derived lock and effect override, and forgets every cached verdict, so each top-level decompilation
+// starts from the same engine state and its output never depends on what was decompiled before.
+void resetCalleeInference(Handle *handle) {
+    Architecture *arch = handle->arch;
+    Scope *global = arch->symboltab->getGlobalScope();
+    AddrSpace *code = arch->getDefaultCodeSpace();
+    for (auto &[entry, before] : handle->derivedRestore) {
+        Funcdata *function = global->queryFunction(Address(code, entry));
+        if (function == nullptr) continue;
+        arch->clearAnalysis(function);
+        // The lock's parameters are symbols in the function's scope; the store finds its inputs there.
+        function->getScopeLocal()->clearCategory(Symbol::function_parameter);
+        function->getFuncProto().copy(*before);
+    }
+    for (auto &[entry, records] : handle->effectOverrides) {
+        Funcdata *function = global->queryFunction(Address(code, entry));
+        if (function != nullptr) function->getFuncProto().clearEffectOverrides();
+    }
+    handle->derivedRestore.clear();
+    handle->effectOverrides.clear();
+    handle->effectsApplied.clear();
+    handle->calleeWrites.clear();
+    handle->unknownWrites.clear();
+    handle->limitedWrites.clear();
+    handle->underivablePrototypes.clear();
 }
 
 // Derives the prototypes of `function`'s direct callees, leaving `function` cleared for a fresh flow.
@@ -1814,6 +1856,8 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         }
         nativeMutation = true;
         handle->arch->resetTranslationCache();
+        if (!handle->preparingTypeHintContext && (handle->inferCalleeEffects || handle->deriveCalleePrototypes))
+            resetCalleeInference(handle);
         Scope *global = arch->symboltab->getGlobalScope();
         fd = global->queryFunction(entry);
         if (fd == nullptr) {

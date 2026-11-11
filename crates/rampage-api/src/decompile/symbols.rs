@@ -138,24 +138,18 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
     Ok(operations)
 }
 
-/// Whether the engine's analysis state changes as it decompiles (callee inference), so it must not be reused.
-pub(crate) fn stateful_engine(binary: &rampage_loaders::Binary) -> bool {
-    binary.raw_code_image().is_some() && binary.arch == rampage_arch::Arch::Arm
-}
-
-/// Raw images only: nothing in them is ever written by a loader, they carry no prototypes, and their code is often
-/// built with interprocedural register allocation. Headered formats keep Ghidra's defaults (a PE's `.rdata` can be
-/// rewritten at run time by its pseudo-relocator, and ELF and PE callees have libc/import prototypes).
-pub(crate) fn raw_image_operations(binary: &rampage_loaders::Binary) -> Vec<WorkerOperation> {
-    if binary.raw_code_image().is_none() {
+/// Cortex-M Raw images only: their mapping is flash, which nothing writes at run time, they carry no prototypes, and
+/// their code is often built with interprocedural register allocation. Headered formats keep Ghidra's defaults (a
+/// PE's `.rdata` can be rewritten at run time by its pseudo-relocator, and ELF and PE callees have libc/import
+/// prototypes), and so do the other Raw profiles, whose image is often RAM that the program writes (`lda counter`
+/// would fold to its load-time byte). The engine resets the callee inference before each top-level decompilation,
+/// so a cached engine gives the same C whatever was decompiled before.
+fn raw_image_operations(binary: &rampage_loaders::Binary) -> Vec<WorkerOperation> {
+    if !binary.m_profile() {
         return Vec::new();
     }
-    let mut operations = vec![WorkerOperation::FoldReadOnly { enabled: true }];
-    if stateful_engine(binary) {
-        let inference = rampage_decompiler::CalleeInference { register_effects: true, prototypes: true };
-        operations.push(WorkerOperation::CalleeInference { inference });
-    }
-    operations
+    let inference = rampage_decompiler::CalleeInference { register_effects: true, prototypes: true };
+    vec![WorkerOperation::FoldReadOnly { enabled: true }, WorkerOperation::CalleeInference { inference }]
 }
 
 /// The architectural ARMv6-M/ARMv7-M system address map: every M-profile core decodes these ranges the same way,
@@ -187,7 +181,15 @@ fn data_names(
     functions: &BTreeMap<u64, String>,
     slots: &std::collections::BTreeSet<u64>,
 ) -> Vec<WorkerOperation> {
-    let data = |address: &u64| !functions.contains_key(address) && !slots.contains(address);
+    // The decompiler refuses a name beyond its data space (and with it the whole engine), so such names are left
+    // out: an analyst may name any address. The data space is as wide as a pointer; the Raw profiles with a C
+    // model but no native width (MSP430, AVR8) have 16-bit data spaces.
+    let highest = match project.binary.arch.default_pointer_size() {
+        Some(size) if size < 8 => (1u64 << (8 * u32::from(size))) - 1,
+        Some(_) => u64::MAX,
+        None => u64::from(u16::MAX),
+    };
+    let data = |address: &u64| *address <= highest && !functions.contains_key(address) && !slots.contains(address);
     let mut names: BTreeMap<u64, String> = BTreeMap::new();
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for symbol in &project.binary.symbols {
@@ -211,9 +213,7 @@ fn data_names(
     }
     let mut operations: Vec<_> =
         names.into_iter().map(|(address, name)| WorkerOperation::DataName { address, name }).collect();
-    let cortex_m =
-        project.binary.raw_code_image().is_some_and(|image| image.profile() == rampage_loaders::RawProfile::CortexM);
-    if cortex_m {
+    if project.binary.m_profile() {
         operations.extend(CORTEX_M_REGIONS.iter().map(|&(first, last, prefix)| WorkerOperation::DataRegion {
             first,
             last,
@@ -376,6 +376,31 @@ pub(crate) fn stub_targets(project: &Project, slot: u64) -> Vec<u64> {
 mod tests {
     use super::*;
     use rampage_decompiler::{DataOrganization, DecompilerOptions, Platform};
+
+    /// Folding and callee inference are for Cortex-M images, whose mapping is flash. An MSP430/AVR8 Raw image is
+    /// often RAM the program writes, where folding would read a variable as its load-time byte.
+    #[test]
+    fn raw_image_inference_is_for_cortex_m_only() {
+        let raw = |profile| {
+            let options = rampage_loaders::RawCodeOptions {
+                profile,
+                base: 0x1000,
+                entry: None,
+                seeds: vec![],
+                vector_table: None,
+                pointer_tables: false,
+            };
+            rampage_loaders::Binary::from_raw_code(vec![0; 4], options).unwrap()
+        };
+        for profile in [rampage_loaders::RawProfile::Msp430, rampage_loaders::RawProfile::Avr8] {
+            assert!(raw_image_operations(&raw(profile)).is_empty(), "{profile:?}");
+        }
+        let operations = raw_image_operations(&raw(rampage_loaders::RawProfile::CortexM));
+        assert!(matches!(
+            operations[..],
+            [WorkerOperation::FoldReadOnly { enabled: true }, WorkerOperation::CalleeInference { .. }]
+        ));
+    }
 
     #[test]
     fn selected_windows_recv_replaces_generic_catalog_before_the_analyst_signature() {

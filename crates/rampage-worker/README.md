@@ -7,7 +7,12 @@ cancellation, resource limits, and child reaping without initializing Ghidra in 
 The executable is resolved from `WorkerConfig::executable`, then `RAMPAGE_WORKER`, then `rampage-worker` beside the
 calling application's executable. Missing workers are explicit errors; there is no in-process fallback.
 
-## Protocol version 8
+## Protocol version 10
+
+Version 10 adds `data_name` (name an untyped global), `data_region` (name unnamed globals in a range by prefix),
+`fold_read_only` and `callee_inference` (register effects and parameter locks for direct callees, reset before
+each top-level decompilation); rampage sends the last two for Cortex-M Raw images only. Version 9 was an
+unreleased draft of the same operations with different semantics.
 
 `assert_named_types` adds a read-only check after all `type_library` declarations and before dependent
 globals, prototypes, local overrides and hints. Its fields are `language_id`, `organization` (the byte

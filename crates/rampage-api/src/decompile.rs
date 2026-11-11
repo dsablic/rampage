@@ -524,11 +524,6 @@ impl Project {
         {
             slot.engine = None;
         }
-        // Callee inference leaves derived prototypes and effects in the engine; each decompilation starts from a
-        // fresh one so its output never depends on what was decompiled before (and matches the worker's).
-        if symbols::stateful_engine(&self.binary) {
-            slot.engine = None;
-        }
         if slot.engine.is_none() {
             let options = slot.options.clone().unwrap_or_else(|| default_options(&self.binary));
             slot.engine =
@@ -588,7 +583,8 @@ impl Project {
     }
 
     /// Builds a decompiler over the program's loadable segments and registers the names rampage knows, so calls
-    /// render by name. Read-only segments are mapped read-only so strings and constant pointers fold into output.
+    /// render by name. Read-only segments are mapped read-only; loads from them fold into constants only on Cortex-M
+    /// Raw images (`FoldReadOnly`), since a headered image's read-only sections can be written at run time.
     pub(crate) fn build_decompiler(
         &self,
         options: &DecompilerOptions,

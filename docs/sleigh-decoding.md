@@ -129,8 +129,9 @@ but ARMv8-M-only instructions are not reviewed, and `cortex-m33`/`cortex-m55` ar
   The bundled `ARM8_le.sla` defines `VERSION_7M` as `ARM7_le.slaspec` does (it adds `VERSION_8`), so it decodes
   the M-profile constructors; the decompiler runs `ARM:LE:32:v8` with its reviewed `default` C model (pointer,
   int and long 4 bytes, matching AAPCS) and TMode set explicitly at every function, as for ARM ELF Thumb code.
-  Only the code mapping is served, read-only, and on Raw images (only) the decompiler folds loads from it, so a
-  literal-pool word reads as the address it holds. A global with no other name is named by its architectural
+  Only the code mapping is served, read-only, and on Cortex-M Raw images (only: other Raw profiles' images are
+  often RAM the program writes) the decompiler folds loads from it, so a literal-pool word reads as the address it
+  holds. A global with no other name is named by its architectural
   ARMv6-M/ARMv7-M region and address (`code_`, `ram_`, `periph_`, `extram_`, `extdev_`, `ppb_`, `vendor_sys_`:
   `ram_20000004`, `periph_40021000`); an analyst's `rename` of the address wins. The data type stays inferred.
 - **Callees.** Raw images carry no prototypes, so for a Cortex-M Raw image (only; headered ARM binaries keep
@@ -144,9 +145,13 @@ but ARMv8-M-only instructions are not reviewed, and `cortex-m33`/`cortex-m55` ar
   through untouched still reaches the call. Return types stay inferred: a locked return changes how Ghidra
   recovers a caller's own return. A callee is left as Ghidra infers it when its code has an indirect call or jump,
   a supervisor call (`svc`, which passes registers its p-code never shows), a branch into another function (a
-  thunk or tail call), a recursive cycle, or a callee that cannot be derived; at most 64 callee decompilations per
-  request. The engine is rebuilt for every such decompilation, so the result never depends on what was decompiled
-  before, in process or in the worker.
+  thunk or tail call, conditional or not), a recursive cycle, or a callee that cannot be derived; at most 64 callee
+  decompilations per request. A branch into the middle of another function is not recognised (the decompiler knows
+  entries, not extents). Before each decompilation the engine puts back every derived lock and effect and forgets
+  what it learned, so the result never depends on what was decompiled before, and matches the isolated worker,
+  which opens a fresh engine per request. Keeping one engine costs about 10 ms per decompilation (dev build) on a
+  generated 680 KiB image (50 functions in 0.49 s, against 0.32 s without callee inference; reopening the engine
+  each time took 13.7 s).
 - **Bit fields.** `ubfx r0, r0, #4, #12` reads as `(x & 0xffff) >> 4` and `lsls #4; uxth` as `(int2)x << 4`:
   Ghidra keeps the mask beside the operand it applies to, which is equivalent to `(x >> 4) & 0xfff`. Compare
   against the disassembly; the expression is right, only its grouping differs.

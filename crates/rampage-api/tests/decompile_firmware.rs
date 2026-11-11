@@ -107,43 +107,83 @@ fn data_symbols_name_their_globals_in_every_format() {
     }
 }
 
-/// Each decompilation starts from a fresh engine: derived callee prototypes and effects never carry over, so a
-/// function reads the same whatever was decompiled before it.
+/// One engine serves every decompilation, and it puts back derived callee prototypes and effects before each one,
+/// so a function reads the same whatever was decompiled before it. chain0..chain70 is longer than the 64 callee
+/// derivations one request may make: decompiling chain30 first would otherwise leave chain31..chain70 locked, and
+/// chain_head's own request would then reach chain0.
 #[test]
 fn raw_decompilation_does_not_depend_on_history() {
     let reversed = project();
     let project = project();
-    let first = decompile(&project, "reset_handler");
-    let others = ["verify_image", "checksum_after_quiet", "checksum", "unpack_field", "place_field"];
+    let first = decompile(&project, "chain_head");
+    assert!(first.contains(&format!("{}()", sub("chain0"))), "{first}");
+    let reset = decompile(&project, "reset_handler");
+    let others = ["chain30", "chain60", "verify_image", "checksum_after_quiet", "checksum", "unpack_field"];
     for name in others {
         decompile(&project, name);
     }
-    assert_eq!(decompile(&project, "reset_handler"), first);
+    assert_eq!(decompile(&project, "chain_head"), first);
+    assert_eq!(decompile(&project, "reset_handler"), reset);
     for name in others.iter().rev() {
         decompile(&reversed, name);
     }
-    assert_eq!(decompile(&reversed, "reset_handler"), first);
+    assert_eq!(decompile(&reversed, "reset_handler"), reset);
+    assert_eq!(decompile(&reversed, "chain_head"), first);
 }
 
-/// The isolated worker opens its own engine per request; in process, the engine is rebuilt for each decompilation
-/// of a Raw ARM image, so both give the same C.
+/// depth_probe keeps its argument in r2 across chain54, whose callees the register scan can follow to the end, just
+/// after calling chain53, whose callees it cannot. Seeing chain54 too deep below chain53 must not make it unknown.
 #[test]
-fn raw_decompilation_matches_the_isolated_worker() {
-    // The worker built beside this test binary (target/<profile>/rampage-worker), or RAMPAGE_WORKER.
-    let worker = rampage_api::find_decompiler_worker().or_else(|| {
-        let sibling = std::env::current_exe().ok()?.parent()?.parent()?.join("rampage-worker");
-        sibling.is_file().then_some(sibling)
-    });
-    let worker = worker.expect("rampage-worker is built beside the tests (cargo build -p rampage-worker)");
-    let in_process = project();
-    let isolated = project();
-    isolated.set_decompiler_worker(Some(rampage_api::DecompilerWorkerConfig {
-        executable: Some(worker),
-        ..Default::default()
-    }));
-    for name in ["reset_handler", "verify_image", "checksum_after_quiet", "checksum_after_scratch"] {
-        assert_eq!(decompile(&isolated, name), decompile(&in_process, name), "{name}");
-    }
+fn a_callee_too_deep_below_another_is_still_scanned_on_its_own() {
+    let code = decompile(&project(), "depth_probe");
+    assert!(code.contains(&format!("{}(param_1,param_1)", sub("checksum"))), "{code}");
+    assert!(!code.contains("extraout"), "{code}");
+}
+
+/// An analyst may name any address; a name beyond the 32-bit data space is left out rather than refusing the
+/// decompilation.
+#[test]
+fn names_beyond_the_data_space_are_left_out() {
+    let project = project();
+    project.rename(0x1_2000_0048, Some("beyond")).unwrap();
+    let code = decompile(&project, "advance_cursor");
+    assert!(code.contains("ram_20000048 = ram_20000048 + 4;"), "{code}");
+}
+
+/// A supervisor-call wrapper hides its parameter from its own decompilation (`mov r1, r0; svc #0`), so its
+/// prototype is never derived and the caller's argument stays.
+#[test]
+fn a_supervisor_call_wrapper_keeps_its_argument() {
+    let code = decompile(&project(), "report_length");
+    assert!(code.contains(&format!("{}(param_1 * 3 + 1);", sub("sys_report"))), "{code}");
+}
+
+/// A thunk (`b.w checksum`) and a conditional tail call (`cmp r0, #0; bne.w checksum`) are never derived from
+/// their own flow, which runs into checksum's code.
+#[test]
+fn tail_call_thunks_keep_their_arguments() {
+    let code = decompile(&project(), "sum_through_tail");
+    assert!(code.contains(&format!("{}(0x20000004,param_1)", sub("checksum_tail"))), "{code}");
+    let code = decompile(&project(), "sum_if_data");
+    assert!(code.contains(&format!("{}(0x20000004,param_1)", sub("checksum_if_data"))), "{code}");
+}
+
+/// musl's __syscall_ret shape: the input on one path, -1 on the other, after a call to a derived callee. A
+/// derived callee return would make Ghidra drop this function's own return.
+#[test]
+fn a_return_of_input_or_constant_survives_a_derived_callee() {
+    let code = decompile(&project(), "syscall_ret");
+    assert!(code.contains(&format!("uint4 {}(uint4 param_1)", sub("syscall_ret"))), "{code}");
+    assert!(code.contains("return param_1;") && code.contains("return 0xffffffff;"), "{code}");
+}
+
+/// checksum_after_probes keeps its length in r2 across probe_twice, which calls probe_status twice; the callee's
+/// own calls are followed to see that none of them writes r2.
+#[test]
+fn arguments_survive_a_callee_whose_callees_leave_them_alone() {
+    let code = decompile(&project(), "checksum_after_probes");
+    assert!(code.contains(&format!("{}(param_1,param_2)", sub("checksum"))), "{code}");
+    assert!(!code.contains("extraout"), "{code}");
 }
 
 fn fixture(name: &str) -> Project {

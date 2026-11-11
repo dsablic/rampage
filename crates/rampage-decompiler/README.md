@@ -210,9 +210,9 @@ Text output is bounded to four MiB and tokens to 262,144; the engine also retain
 Sessions select a sibling worker automatically when installed beside the application; `tools/install.sh`
 installs the worker and CLI together, optionally with the UI. Direct `Project` construction remains explicitly
 opt-in; `Session::open` also selects a sibling worker when present.
-Worker protocol version 8 carries ordered symbol/type/prototype/global/mode, `no_return`, local-variable,
-soft-type-hint and layout-assertion operations; mismatched request or response versions are rejected. Install CLI and worker
-together rather than mixing builds.
+Worker protocol version 10 carries ordered symbol/type/prototype/global/mode, `no_return`, data-name/region,
+read-only folding, callee-inference, local-variable, soft-type-hint and layout-assertion operations; mismatched
+request or response versions are rejected. Install CLI and worker together rather than mixing builds.
 The protocol bounds input/output, drains pipes concurrently, cancels/times out and reaps failed children without
 native fallback. Hard wire limits are 128 MiB requests, 16 MiB stdout and 64 KiB stderr. Defaults are 30 seconds
 and one GiB memory. Linux uses hard AS/DATA limits; macOS samples RSS and can overshoot between samples.

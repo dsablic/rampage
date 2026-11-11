@@ -10,6 +10,7 @@ mod entry_measurements;
 mod entry_scope;
 mod local_variables;
 mod measurements;
+mod raw_firmware;
 mod smoke;
 mod type_hints;
 mod type_library;

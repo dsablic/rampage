@@ -34,7 +34,7 @@ pub use metrics::{
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// Parent-owned cleanup proof, independent of result category and diagnostic metrics. Confirmed covers
 /// the supported owned group and direct-root reap, not descendants outside the supervisor's group boundary.
