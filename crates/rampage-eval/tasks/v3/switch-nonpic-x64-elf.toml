@@ -1,0 +1,29 @@
+version = 1
+id = "switch-nonpic-x64-elf"
+kind = "analysis"
+question = """
+This stripped x86-64 Linux executable (non-PIC) was compiled from C. The function at 0x1002bf0 dispatches on its
+first argument through a jump table. Which values of that argument make it reach the block at 0x1002c09, the code
+that calls the function at 0x1002ad0? Count every value that reaches that block through the jump table, and only
+those. Return them in ascending order, as an array of integers named values.
+"""
+truth_reference = """
+Host run of src/opcodes.c (VARIANT=1) over every opcode, cross-checked against the twin's absolute jump table;
+vm_dispatch, op_jump and the block from the twin; derive-truth.py.
+"""
+required_capabilities = ["switch_tables", "decompile"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "opcodes-x64-elf"
+path = "tests/fixtures/bench-v3/bin/opcodes-x64.elf"
+sha256 = "cd485423e3bf8ab8f4a517c5edce053fd54181ee89269f82930b913e1d16e594"
+source = "tests/fixtures/bench-v3/src/opcodes.c"
+build = "tests/fixtures/bench-v3/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+values = [66, 71, 75]

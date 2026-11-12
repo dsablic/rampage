@@ -1,0 +1,28 @@
+version = 1
+id = "callconv-member-x86-pe"
+kind = "analysis"
+question = """
+This stripped 32-bit x86 Windows executable was compiled from C and C++. The function at 0x401170 is a non-static
+C++ member function. Name the calling convention it was compiled with, one of cdecl, stdcall, fastcall or thiscall,
+as convention, and the number of parameters it takes, not counting the object pointer, as parameters.
+"""
+truth_reference = """
+src/conv.cpp Mixer::blend(int, int, int); the twin's PDB public name; callee cleanup of 12 bytes and the object
+pointer read from ecx in the twin's disassembly; derive-truth.py.
+"""
+required_capabilities = ["calling_conventions"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "conv-x86-pe"
+path = "tests/fixtures/bench-v3/bin/conv-x86.exe"
+sha256 = "2b9ca5cc77910c2d8d15d2c5d136eef9c0a4ab1a1d0f8094a7ce7e9dfc64d422"
+source = "tests/fixtures/bench-v3/src/conv.cpp"
+build = "tests/fixtures/bench-v3/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+convention = "thiscall"
+parameters = 3

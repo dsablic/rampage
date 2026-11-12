@@ -48,6 +48,26 @@ pub struct NeutralTask {
     pub truth: BTreeMap<String, ProbeTruth>,
     #[serde(default)]
     pub truth_evidence: BTreeMap<String, String>,
+    /// Spelling variants the lenient score forgives, declared before any run: a string anywhere in the answer that
+    /// equals a key, ignoring ASCII case, is read as its value. The strict score never uses them.
+    #[serde(default)]
+    pub lenient_spellings: BTreeMap<String, String>,
+}
+
+/// An answer with every string that is a declared spelling variant (ignoring ASCII case) replaced by its
+/// canonical spelling.
+pub fn respell(value: &Value, spellings: &BTreeMap<String, String>) -> Value {
+    match value {
+        Value::String(text) => spellings
+            .iter()
+            .find(|(variant, _)| variant.eq_ignore_ascii_case(text))
+            .map_or_else(|| value.clone(), |(_, canonical)| Value::String(canonical.clone())),
+        Value::Array(items) => Value::Array(items.iter().map(|item| respell(item, spellings)).collect()),
+        Value::Object(object) => {
+            Value::Object(object.iter().map(|(key, item)| (key.clone(), respell(item, spellings))).collect())
+        }
+        _ => value.clone(),
+    }
 }
 
 /// A capability probe's expected `available` for one server.
@@ -345,8 +365,9 @@ pub struct RunRow {
     /// Partial credit for set answers (Jaccard index, defined before any run); `None` for exact contracts. A run
     /// without a scorable answer gets 0.
     pub partial: Option<f64>,
-    /// Correct once an extra `"status": "ok"` field, a format slip, is dropped from the answer object; equals
-    /// the strict outcome otherwise. A reporting variant beside the strict score, never instead of it.
+    /// Correct once an extra `"status": "ok"` field, a format slip, is dropped from the answer object and the
+    /// task's declared `lenient_spellings` are applied to its strings; equals the strict outcome otherwise. A
+    /// reporting variant beside the strict score, never instead of it.
     #[serde(default)]
     pub lenient: bool,
     /// How the answer object was found; `None` when there was none.
@@ -400,12 +421,15 @@ pub fn score(
         }
         other => task.check(other).outcome,
     };
+    let spellings = &suite.tasks[&task.id].lenient_spellings;
     let lenient = outcome == TaskOutcome::AnswerMatches
-        || matches!(&attempt, TaskAttempt::Answer(Value::Object(object))
-        if object.get("status").and_then(Value::as_str) == Some("ok") && {
+        || matches!(&attempt, TaskAttempt::Answer(Value::Object(object)) if {
             let mut trimmed = object.clone();
-            trimmed.remove("status");
-            expected.matches(&Value::Object(trimmed))
+            if trimmed.get("status").and_then(Value::as_str) == Some("ok") {
+                trimmed.remove("status");
+            }
+            (trimmed.len() < object.len() || !spellings.is_empty())
+                && expected.matches(&respell(&Value::Object(trimmed), spellings))
         });
     Ok(RunRow {
         task_id: task.id.clone(),

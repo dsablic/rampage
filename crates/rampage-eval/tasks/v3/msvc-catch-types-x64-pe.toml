@@ -1,0 +1,27 @@
+version = 1
+id = "msvc-catch-types-x64-pe"
+kind = "analysis"
+question = """
+This x86-64 Windows executable was compiled from C++ with the Microsoft C++ ABI, RTTI and C++ exceptions; its debug
+information is not available. The function at 0x140001240 contains one try block. Which class types do its catch
+clauses catch? Return the class names without the namespace in an array named caught.
+"""
+truth_reference = """
+src/engine.cpp's catch clauses in load_checked, cross-checked against the image's own .pdata, unwind info and
+__CxxFrameHandler3 FuncInfo/HandlerType tables; load_checked from the build's PDB; derive-truth.py.
+"""
+required_capabilities = ["exception_handlers", "rtti"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "engine-x64-pe"
+path = "target/bench/v3/msvc/engine-x64.exe"
+sha256 = "94c1b7570c19eb60d3dde5c702fac779a0962c6de242e45ef8dd80b23ef52627"
+source = "tests/fixtures/bench-v3/src/engine.cpp"
+build = "tools/agent-bench/v3/build-msvc.sh"
+
+[answer]
+kind = "string_set"
+field = "caught"
+values = ["BudgetError", "FormatError"]

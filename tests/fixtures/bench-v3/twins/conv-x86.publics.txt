@@ -1,0 +1,22 @@
+S_PUB32 [size = 36] `__ZN5Mixer5blendEiii`
+flags = function, addr = 0001:0368
+S_PUB32 [size = 28] `_weigh_four`
+flags = function, addr = 0001:0096
+S_PUB32 [size = 32] `_select_four@16`
+flags = function, addr = 0001:0144
+S_PUB32 [size = 24] `_submit`
+flags = function, addr = 0001:0320
+S_PUB32 [size = 32] `@record_five@20`
+flags = function, addr = 0001:0208
+S_PUB32 [size = 32] `@pack_three@12`
+flags = function, addr = 0001:0064
+S_PUB32 [size = 36] `__ZNK5Mixer5levelEv`
+flags = function, addr = 0001:0416
+S_PUB32 [size = 32] `_clamp_three@12`
+flags = function, addr = 0001:0032
+S_PUB32 [size = 32] `@rotate_four@16`
+flags = function, addr = 0001:0176
+S_PUB32 [size = 28] `_blend_three`
+flags = function, addr = 0001:0000
+S_PUB32 [size = 32] `_record_three@12`
+flags = function, addr = 0001:0272

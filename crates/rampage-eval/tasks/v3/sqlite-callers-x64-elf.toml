@@ -1,0 +1,27 @@
+version = 1
+id = "sqlite-callers-x64-elf"
+kind = "analysis"
+question = """
+This x86-64 Linux executable is an optimized release build of the SQLite command-line shell that keeps its symbol
+table and debug information. List every function that contains at least one direct call to the internal function
+ptrmapPut. Return their symbol names in an array named callers.
+"""
+truth_reference = """
+Direct call sites of ptrmapPut in llvm-objdump of the fixture itself (its own symbol table); every reference to
+ptrmapPut is a call and its address is never taken; derive-truth.py.
+"""
+required_capabilities = ["symbols", "xrefs"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "sqlite3-x64-elf"
+path = "target/bench/v3/sqlite/sqlite3-x64.elf"
+sha256 = "f0d5ef122f34844022332073987dff351fbd5e99684b216da58c6d674ffe9b5f"
+source = "sqlite-amalgamation-3460100.zip (sqlite.org, SHA-256 77823cb110929c2bcb0f5d48e4833b5c59a8a6e40cdea3936b99e199dbbe5784)"
+build = "tools/agent-bench/v3/build-sqlite.sh"
+
+[answer]
+kind = "string_set"
+field = "callers"
+values = ["balance", "freePage2", "ptrmapPutOvflPtr", "relocatePage", "setChildPtrmaps", "sqlite3BtreeCreateTable", "sqlite3BtreeInsert", "sqlite3VdbeExec"]

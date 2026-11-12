@@ -1,0 +1,30 @@
+version = 1
+id = "sqlite-nested-member-x64-elf"
+kind = "analysis"
+question = """
+This x86-64 Linux executable is an optimized release build of the SQLite command-line shell that keeps its symbol
+table and debug information. In struct sqlite3 as the debug information describes it, the member init is itself a
+structure. Give the byte offset of init.busy counted from the start of struct sqlite3 as offset, and its size in
+bytes as size.
+"""
+truth_reference = """
+The init member's offset in struct sqlite3 plus busy's offset in its nested structure type, from the fixture's
+DWARF (llvm-dwarfdump), and busy's declared type in the amalgamation source; derive-truth.py.
+"""
+required_capabilities = ["dwarf_types"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "sqlite3-x64-elf"
+path = "target/bench/v3/sqlite/sqlite3-x64.elf"
+sha256 = "f0d5ef122f34844022332073987dff351fbd5e99684b216da58c6d674ffe9b5f"
+source = "sqlite-amalgamation-3460100.zip (sqlite.org, SHA-256 77823cb110929c2bcb0f5d48e4833b5c59a8a6e40cdea3936b99e199dbbe5784)"
+build = "tools/agent-bench/v3/build-sqlite.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+offset = 197
+size = 1

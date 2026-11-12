@@ -1,0 +1,31 @@
+version = 1
+id = "sqlite-field-use-x64-elf"
+kind = "analysis"
+question = """
+This x86-64 Linux executable is an optimized release build of the SQLite command-line shell that keeps its symbol
+table and debug information. The function sqlite3_total_changes64 returns one member of the structure its argument
+points to. Return the structure's type name as the debug information records it as structure, the member's name as
+member, and the member's byte offset as offset.
+"""
+truth_reference = """
+The single load in sqlite3_total_changes64 (llvm-objdump), the parameter type and member offsets from the fixture's
+DWARF (llvm-dwarfdump), and the amalgamation source's `return db->...;`; derive-truth.py.
+"""
+required_capabilities = ["symbols", "dwarf_types"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "sqlite3-x64-elf"
+path = "target/bench/v3/sqlite/sqlite3-x64.elf"
+sha256 = "f0d5ef122f34844022332073987dff351fbd5e99684b216da58c6d674ffe9b5f"
+source = "sqlite-amalgamation-3460100.zip (sqlite.org, SHA-256 77823cb110929c2bcb0f5d48e4833b5c59a8a6e40cdea3936b99e199dbbe5784)"
+build = "tools/agent-bench/v3/build-sqlite.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+structure = "sqlite3"
+member = "nTotalChange"
+offset = 128

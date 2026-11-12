@@ -1,0 +1,28 @@
+version = 1
+id = "semantics-bits-x86-elf"
+kind = "analysis"
+question = """
+This stripped 32-bit x86 Linux executable was compiled from C. The function at 0x12830 takes two 32-bit unsigned
+integer arguments on the stack (cdecl) and returns a 32-bit unsigned integer. What does it return when its first
+argument is 0x00F0A500 and its second is 3? Return the value as result.
+"""
+truth_reference = """
+Host run of src/semantics.c (fold_bits 0x00F0A500 3) at -O1 and -O0; fold_bits = 0x12830 from the twin's symbols;
+derive-truth.py.
+"""
+required_capabilities = ["decompile", "semantics"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "semantics-x86-elf"
+path = "tests/fixtures/bench-v3/bin/semantics-x86.elf"
+sha256 = "ca50f35de1b22c04b7015eb20eccacf75245b4d075fdec4133aa3ae8881b4605"
+source = "tests/fixtures/bench-v3/src/semantics.c"
+build = "tests/fixtures/bench-v3/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+result = 957007382

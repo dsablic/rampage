@@ -1,0 +1,29 @@
+version = 1
+id = "msvc-vtable-slots-x64-pe"
+kind = "analysis"
+question = """
+This x86-64 Windows executable was compiled from C++ with the Microsoft C++ ABI, RTTI and C++ exceptions; its debug
+information is not available. For the class whose RTTI type descriptor is named .?AVCubeTexture@engine@@, list the
+entry addresses of the functions in its vtable, in slot order, starting at the slot an object's vtable pointer
+refers to, through the class's last virtual function. Return them as an array named slots.
+"""
+truth_reference = """
+The ??_7CubeTexture@engine@@6B@ vtable's address from the build's PDB public symbols, its entries read from the
+image, each matched to the PDB public name the source's slot order predicts; derive-truth.py.
+"""
+required_capabilities = ["rtti", "vtables"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "engine-x64-pe"
+path = "target/bench/v3/msvc/engine-x64.exe"
+sha256 = "94c1b7570c19eb60d3dde5c702fac779a0962c6de242e45ef8dd80b23ef52627"
+source = "tests/fixtures/bench-v3/src/engine.cpp"
+build = "tools/agent-bench/v3/build-msvc.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+slots = [5368715120, 5368715072, 5368715088, 5368714656, 5368715104, 5368714736]

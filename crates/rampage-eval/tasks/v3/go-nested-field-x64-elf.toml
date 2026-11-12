@@ -1,0 +1,32 @@
+version = 1
+id = "go-nested-field-x64-elf"
+kind = "analysis"
+question = """
+This is a large stripped Go executable for x86-64 Linux. The Go struct type
+github.com/restic/restic/internal/restic.Snapshot has a field named Summary that points to another struct type.
+Give that struct type's full name, with its package path, as type; its size in bytes as size; and, for its field
+named DataAddedPacked, the byte offset as offset and the Go type name as field_type.
+"""
+truth_reference = """
+The Summary member's pointer type, then the target struct's size and DataAddedPacked's offset and type, from the
+unstripped twin's DWARF; the stripped binary keeps the type's name and the field name; derive-truth.py.
+"""
+required_capabilities = ["go_metadata", "go_types", "scale"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "restic-v0173-x64-elf"
+path = "target/bench/v3/go/restic-x64-stripped.elf"
+sha256 = "b35458f9e003dd3b8a34eb10ea583e8038be78ed964ed710d467b89294994d6c"
+source = "github.com/restic/restic@v0.17.3 (Go module proxy), built with go1.23.3"
+build = "tools/agent-bench/v3/build-go.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+type = "github.com/restic/restic/internal/restic.SnapshotSummary"
+size = 144
+offset = 120
+field_type = "uint64"

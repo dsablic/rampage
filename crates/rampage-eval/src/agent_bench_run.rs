@@ -16,14 +16,19 @@ use sha2::{Digest, Sha256};
 
 use super::read;
 
+/// Suite v3's REA Ghidra limits when the command line sets none.
+pub const V3_REA_GHIDRA_STARTUP_TIMEOUT_MS: u64 = 3_600_000;
+pub const V3_REA_GHIDRA_MAXMEM: &str = "16G";
+
 pub const DEFAULT_RUNNER: &str = "python3 -I tools/agent-bench/claude-runner.py";
 
-/// Which task set to run: the frozen canonical manifests with `tasks/h2h/neutral.toml`, or suite v2's manifests
-/// under `tasks/v2/` with `tasks/h2h/neutral-v2.toml`.
+/// Which task set to run: the frozen canonical manifests with `tasks/h2h/neutral.toml`, or suite v2's (v3's)
+/// manifests under `tasks/v2/` (`tasks/v3/`) with `tasks/h2h/neutral-v2.toml` (`neutral-v3.toml`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Suite {
     Canonical,
     V2,
+    V3,
 }
 
 impl Suite {
@@ -32,6 +37,7 @@ impl Suite {
         match self {
             Self::Canonical => (tasks.clone(), tasks.join("h2h/neutral.toml")),
             Self::V2 => (tasks.join("v2"), tasks.join("h2h/neutral-v2.toml")),
+            Self::V3 => (tasks.join("v3"), tasks.join("h2h/neutral-v3.toml")),
         }
     }
 }
@@ -66,11 +72,11 @@ pub struct AgentBenchArgs {
     #[arg(long, default_value_t = 0.0, requires = "cost_cap_usd")]
     spent_usd: f64,
     /// REA_GHIDRA_STARTUP_TIMEOUT_MS for the REA server: how long REA lets Ghidra import and analyze before
-    /// failing (REA's own default, 330000, applies when unset).
+    /// failing (REA's own default, 330000, applies when unset; suite v3 defaults to 3600000).
     #[arg(long)]
     rea_ghidra_startup_timeout_ms: Option<u64>,
     /// GHIDRA_HEADLESS_MAXMEM for the REA server: the Java heap REA gives headless Ghidra (REA's own default,
-    /// 2G, applies when unset), such as `16G`.
+    /// 2G, applies when unset; suite v3 defaults to 16G), such as `16G`.
     #[arg(long)]
     rea_ghidra_maxmem: Option<String>,
     /// Measurements made outside the agent runs (NAME=PATH to a JSON file), embedded in the report under
@@ -133,7 +139,13 @@ pub struct AgentBenchArgs {
     rea_tool_families: Option<String>,
 }
 
-pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
+pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
+    if args.suite == Suite::V3 {
+        // Suite v3's Go fixture needs more than REA's defaults (suite v2 measured 708-2,355 s imports, and an
+        // out-of-memory failure at 2G); its run recipe sets the remediations REA's own errors name.
+        args.rea_ghidra_startup_timeout_ms.get_or_insert(V3_REA_GHIDRA_STARTUP_TIMEOUT_MS);
+        args.rea_ghidra_maxmem.get_or_insert_with(|| V3_REA_GHIDRA_MAXMEM.to_owned());
+    }
     let root = args.repository_root.clone().unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
     let root = std::fs::canonicalize(&root).map_err(|error| format!("{}: {error}", root.display()))?;
     let (task_directory, suite_path) = args.suite.paths(&root);
