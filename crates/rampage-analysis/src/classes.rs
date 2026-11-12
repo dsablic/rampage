@@ -26,9 +26,15 @@ pub struct ClassRecovery {
     pub vftables_offset: usize,
     /// Where the next page of `vftables` starts, when more exist.
     pub vftables_next_offset: Option<usize>,
+    /// All RTTI classes found; `rtti_classes` holds the page starting at `rtti_classes_offset`.
+    pub rtti_classes_total: usize,
+    pub rtti_classes_offset: usize,
+    /// Where the next page of `rtti_classes` starts, when more exist.
+    pub rtti_classes_next_offset: Option<usize>,
     pub classes: Vec<ClassEvidence>,
     /// Classes recovered from RTTI data, scanned for every ELF, Mach-O and PE image whether or not symbols
-    /// exist, minus any class already named in the symbol-derived `classes` above.
+    /// exist, minus any class already named in the symbol-derived `classes` above. MSVC classes with a complete
+    /// object locator come first (`source` `rtti_scan`), then classes seen only as bases (`rtti_base`).
     pub rtti_classes: Vec<crate::rtti::RttiClass>,
     /// MSVC vftables of a PE image, each tied to its class by the complete object locator before slot 0.
     pub vftables: Vec<MsvcVftable>,
@@ -354,6 +360,9 @@ pub fn recover_named_bounded(binary: &Binary, max_tables: usize, max_slots: u64)
         vftables_total: 0,
         vftables_offset: 0,
         vftables_next_offset: None,
+        rtti_classes_total: 0,
+        rtti_classes_offset: 0,
+        rtti_classes_next_offset: None,
         warnings: Vec::new(),
         limitations: vec![
             format!(
@@ -380,6 +389,9 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
         vftables_total: 0,
         vftables_offset: 0,
         vftables_next_offset: None,
+        rtti_classes_total: 0,
+        rtti_classes_offset: 0,
+        rtti_classes_next_offset: None,
         warnings: Vec::new(),
         limitations: vec![
             "`classes` is named Itanium vtable evidence only; no automatic type insertion, complete class \
@@ -445,6 +457,7 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
     recover_named_into(binary, &mut result, MAX_CLASSES, MAX_SLOTS, None);
     let named: std::collections::BTreeSet<&str> = result.classes.iter().map(|class| class.name.as_str()).collect();
     result.rtti_classes.retain(|class| !named.contains(class.name.as_str()));
+    result.rtti_classes_total = result.rtti_classes.len();
     result
 }
 

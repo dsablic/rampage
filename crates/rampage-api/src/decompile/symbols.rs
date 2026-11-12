@@ -135,7 +135,118 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
     }
     operations.extend(data_names(project, annotations, &identities, &slots));
     operations.extend(raw_image_operations(binary));
+    operations.extend(virtual_tables(project, annotations));
     Ok(operations)
+}
+
+/// The MSVC vftables of a PE, so virtual calls through them decompile with their slot's targets named. Each table
+/// serves the type names of the classes whose vfptr it is (from RTTI): the class name with every run of characters
+/// outside C identifiers made one `_` (`geo::Shape` is `geo_Shape`, `Box<int>` is `Box_int`), and its last
+/// component alone (`Shape`) when no other class shares it. A pointer typed with one of these names, or the `this`
+/// of a function in a table's slots, resolves calls through its vfptr.
+fn virtual_tables(project: &Project, annotations: &Annotations) -> Option<WorkerOperation> {
+    let metadata = project.binary.msvc_metadata()?;
+    if metadata.vftables.is_empty() {
+        return None;
+    }
+    let mut type_names: BTreeMap<u64, Vec<String>> = BTreeMap::new();
+    let mut short: BTreeMap<String, std::collections::BTreeSet<u64>> = BTreeMap::new();
+    for (descriptor, mangled) in metadata.vftables.iter().flat_map(|table| &table.subobjects) {
+        if type_names.contains_key(descriptor) {
+            continue;
+        }
+        let Some(name) = rampage_analysis::language::msvc_type_name(mangled) else { continue };
+        let names = class_type_names(&name);
+        if let Some(last) = names.get(1) {
+            short.entry(last.clone()).or_default().insert(*descriptor);
+        }
+        type_names.insert(*descriptor, names);
+    }
+    for names in type_names.values_mut() {
+        if names.len() > 1 && short.get(&names[1]).is_some_and(|owners| owners.len() > 1) {
+            names.truncate(1);
+        }
+    }
+    // Bounds the operation (a supervised worker request is at most 128 MiB): tables past a million slots, and target
+    // names past 16 MiB, are left out; such calls stay unresolved or name their targets by address.
+    const MAX_SLOTS: usize = 1 << 20;
+    const MAX_NAME_BYTES: usize = 16 << 20;
+    let mut slots = 0usize;
+    let mut targets = std::collections::BTreeSet::new();
+    let tables = metadata
+        .vftables
+        .iter()
+        .take_while(|table| {
+            slots += table.slots.len();
+            slots <= MAX_SLOTS
+        })
+        .map(|table| {
+            targets.extend(table.slots.iter().copied());
+            let mut types: Vec<String> = table
+                .subobjects
+                .iter()
+                .flat_map(|(descriptor, _)| type_names.get(descriptor).into_iter().flatten().cloned())
+                .collect();
+            types.sort();
+            types.dedup();
+            rampage_decompiler::VirtualTable {
+                address: table.address,
+                complete: table.type_descriptor,
+                offset: i64::from(table.offset),
+                slots: table.slots.clone(),
+                truncated: table.truncated,
+                types,
+            }
+        })
+        .collect();
+    let mut name_bytes = 0usize;
+    let names = targets
+        .into_iter()
+        .map(|address| (address, project.function_name_in(annotations, address)))
+        .filter(|(_, name)| !name.contains('\0'))
+        .take_while(|(_, name)| {
+            name_bytes += name.len();
+            name_bytes <= MAX_NAME_BYTES
+        })
+        .collect();
+    Some(WorkerOperation::VirtualTables { tables, names })
+}
+
+/// The C type names a class serves: its whole name as an identifier, then its last component when that differs.
+fn class_type_names(name: &str) -> Vec<String> {
+    let identifier = |text: &str| {
+        let mut result = String::new();
+        for character in text.chars() {
+            if character.is_ascii_alphanumeric() || character == '_' {
+                result.push(character);
+            } else if !result.ends_with('_') {
+                result.push('_');
+            }
+        }
+        result.trim_matches('_').to_owned()
+    };
+    let mut names = Vec::new();
+    let whole = identifier(name);
+    if whole.is_empty() || whole.starts_with(|character: char| character.is_ascii_digit()) {
+        return names;
+    }
+    names.push(whole);
+    let mut depth = 0i32;
+    let mut last = 0;
+    let bytes = name.as_bytes();
+    for (index, &byte) in bytes.iter().enumerate() {
+        match byte {
+            b'<' => depth += 1,
+            b'>' => depth -= 1,
+            b':' if depth == 0 && bytes.get(index + 1) == Some(&b':') => last = index + 2,
+            _ => {}
+        }
+    }
+    let tail = identifier(&name[last..]);
+    if last != 0 && !tail.is_empty() && !tail.starts_with(|character: char| character.is_ascii_digit()) {
+        names.push(tail);
+    }
+    names
 }
 
 /// Cortex-M Raw images only: their mapping is flash, which nothing writes at run time, they carry no prototypes, and
@@ -319,6 +430,9 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
             WorkerOperation::FoldReadOnly { enabled } => engine
                 .set_read_only_folding(enabled)
                 .map_err(|error| ApiError::Unavailable(format!("read-only folding: {error}")))?,
+            WorkerOperation::VirtualTables { tables, names } => engine
+                .add_virtual_tables(&tables, &names)
+                .map_err(|error| ApiError::Unavailable(format!("virtual tables: {error}")))?,
             WorkerOperation::Mode { .. } => unreachable!(),
         }
         if checks_types {
@@ -375,6 +489,19 @@ pub(crate) fn stub_targets(project: &Project, slot: u64) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn class_type_names_are_identifiers_with_the_last_component_after() {
+        assert_eq!(class_type_names("geo::Shape"), ["geo_Shape", "Shape"]);
+        assert_eq!(class_type_names("Shape"), ["Shape"]);
+        assert_eq!(class_type_names("Box<int>"), ["Box_int"]);
+        assert_eq!(class_type_names("FixedStack<int,4>"), ["FixedStack_int_4"]);
+        // A template argument's `::` is not a scope of the class.
+        assert_eq!(class_type_names("ns::Box<std::string>"), ["ns_Box_std_string", "Box_std_string"]);
+        assert_eq!(class_type_names("`anonymous namespace'::Impl"), ["anonymous_namespace_Impl", "Impl"]);
+        assert_eq!(class_type_names("<lambda_1>"), ["lambda_1"]);
+        assert!(class_type_names("<>").is_empty());
+    }
     use rampage_decompiler::{DataOrganization, DecompilerOptions, Platform};
 
     /// Folding and callee inference are for Cortex-M images, whose mapping is flash. An MSP430/AVR8 Raw image is

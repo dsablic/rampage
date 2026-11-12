@@ -97,6 +97,26 @@ than as separate funclets, which is untested.
   and class hierarchy validate. Each table reports the demangled class, the locator, the subobject offset
   (non-zero for the tables of a second or virtual base) and up to 64 slot targets; slots run to the first non-code
   word. Classes built without RTTI (`/GR-`) have no locator and are not found.
+- **RTTI classes** (`class_evidence` fields `rtti_classes_total` and `rtti_classes`, one page of 50 by default,
+  paged with `rtti_class_offset`/`rtti_class_limit` and bounded to 16,000 JSON bytes): each class with a complete
+  object locator (`source` `rtti_scan`), then each class that appears only as a base in those classes' hierarchies
+  (`rtti_base`): an interface, an abstract class or any base whose vftable was never emitted. Each row lists the
+  class's direct bases.
+- **Virtual calls in decompilation**: a call through a vfptr, `(**(code **)(*this + 0x10))(this)`, whose object is
+  known to point at some of these vftables gets a comment naming the slot and its possible targets
+  (`Virtual call: vftable slot 2 (+0x10) -> geo::Rect::perimeter, geo::Circle::perimeter`), never the
+  `_purecall` stub of an abstract table. The object is known when it is the `this` of a function in a table's slots
+  (the vfptr it reads at any offset from `this` is then the matching table of the same complete class), or when it
+  is a pointer typed with a class's name: the demangled name with every run of characters outside C identifiers
+  made one `_` (`geo::Shape` is `geo_Shape`, `Box<int>` is `Box_int`), or its last component (`Shape`) when no other
+  class shares it. Declare the type (`set_types`, any layout) and use it in a signature or a variable type; it
+  matches a table whose vfptr sits at that class's offset 0 in its complete object, through non-virtual bases. When
+  every target's own decompilation derives the same parameters, the call takes that prototype, so arguments are
+  not dropped; `this` is always passed even to a target that ignores it. On x86, MSVC passes `this` in ECX
+  (`__thiscall`), which Ghidra's default for an indirect call leaves out: every vfptr call in an image with
+  vftables is given `__thiscall` unless ECX holds something other than the object (a COM `__stdcall` method takes
+  `this` on the stack). Bases reached through a virtual base, and constructor-stored vftables in a caller, are not
+  used.
 - **Exception handling** (`exception_handlers`, formats group, **experimental**: its row shape may change): on x64, the unwind info of each `.pdata` entry
   names its language handler; entries whose handler is the `__CxxFrameHandler3` import (or an unnamed, statically
   linked handler whose data starts with a valid FuncInfo) are grouped by FuncInfo, and the entry that is not one of

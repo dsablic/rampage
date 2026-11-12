@@ -183,4 +183,14 @@ fn identical_code_folding_names_folded_bodies_by_alias_or_omits_them_with_a_warn
     assert_eq!(names[&(text + 48)], "icf_entry");
     assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
     assert!(report.warnings[0].starts_with("1 addresses omitted"), "{:?}", report.warnings);
+
+    // Producer procedure ranges: both folded addresses have two procedure records with different names, so
+    // neither has a range of its own; the rest import.
+    let (procedures, warnings, _) =
+        rampage_loaders::pdb::matched_procedures_reported(&binary, &path("msvc-icf-x64.pdb")).unwrap();
+    let ranges: BTreeMap<u64, &str> =
+        procedures.iter().map(|procedure| (procedure.address, procedure.name.as_str())).collect();
+    assert_eq!(ranges, BTreeMap::from([(text + 32, "distinct"), (text + 48, "icf_entry")]));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].starts_with("2 producer procedure addresses omitted"), "{warnings:?}");
 }

@@ -23,6 +23,10 @@ pub const MAX_LIMIT: usize = 100;
 /// Bytes the vftable page of `class_evidence` may take.
 const VFTABLE_PAGE_BUDGET: usize = 24_000;
 pub const DEFAULT_VFTABLE_LIMIT: usize = 16;
+/// Bytes the RTTI class page of `class_evidence` may take.
+const RTTI_CLASS_PAGE_BUDGET: usize = 16_000;
+pub const DEFAULT_RTTI_CLASS_LIMIT: usize = 50;
+pub const MAX_RTTI_CLASS_LIMIT: usize = 200;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -362,18 +366,37 @@ impl Project {
         Ok(page)
     }
 
-    /// Class evidence with one byte-capped page of MSVC vftables starting at `vftable_offset`.
-    pub fn class_evidence(&self, vftable_offset: usize, vftable_limit: usize) -> Result<ClassRecovery, ApiError> {
+    /// Class evidence with one byte-capped page of MSVC vftables and one of RTTI classes.
+    pub fn class_evidence(&self, vftables: ClassPage, rtti_classes: ClassPage) -> Result<ClassRecovery, ApiError> {
         let mut recovery = rampage_analysis::classes::recover(&self.binary);
         let all = std::mem::take(&mut recovery.vftables);
-        let limit = vftable_limit.clamp(1, MAX_LIMIT);
-        let window = fit_window(all.into_iter().skip(vftable_offset), limit, VFTABLE_PAGE_BUDGET)?;
-        let next = vftable_offset.saturating_add(window.items.len());
-        recovery.vftables_offset = vftable_offset;
+        let limit = vftables.limit.clamp(1, MAX_LIMIT);
+        let window = fit_window(all.into_iter().skip(vftables.offset), limit, VFTABLE_PAGE_BUDGET)?;
+        let next = vftables.offset.saturating_add(window.items.len());
+        recovery.vftables_offset = vftables.offset;
         recovery.vftables_next_offset = (next < recovery.vftables_total).then_some(next);
         recovery.vftables = window.items;
+        let all = std::mem::take(&mut recovery.rtti_classes);
+        let limit = rtti_classes.limit.clamp(1, MAX_RTTI_CLASS_LIMIT);
+        let window = fit_window(all.into_iter().skip(rtti_classes.offset), limit, RTTI_CLASS_PAGE_BUDGET)?;
+        let next = rtti_classes.offset.saturating_add(window.items.len());
+        recovery.rtti_classes_offset = rtti_classes.offset;
+        recovery.rtti_classes_next_offset = (next < recovery.rtti_classes_total).then_some(next);
+        recovery.rtti_classes = window.items;
         Ok(recovery)
     }
+}
+
+/// One page of a `class_evidence` list: rows to skip, and at most how many to return.
+#[derive(Debug, Clone, Copy)]
+pub struct ClassPage {
+    pub offset: usize,
+    pub limit: usize,
+}
+
+impl ClassPage {
+    pub const VFTABLES: Self = Self { offset: 0, limit: DEFAULT_VFTABLE_LIMIT };
+    pub const RTTI_CLASSES: Self = Self { offset: 0, limit: DEFAULT_RTTI_CLASS_LIMIT };
 }
 
 #[cfg(test)]

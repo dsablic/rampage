@@ -66,6 +66,11 @@ pub struct Vftable {
     pub slots: Vec<u64>,
     /// The slot cap ended the table, so later slots exist.
     pub truncated: bool,
+    /// The classes whose vfptr this table is, from the hierarchy's base class array: each (type descriptor,
+    /// stored name) is the complete class (when `offset` is 0) or a non-virtual base placed at `offset`. Bases
+    /// reached through a virtual base are left out, since their place is only known at run time.
+    #[serde(skip)]
+    pub subobjects: Vec<(u64, String)>,
 }
 
 /// One state-transition action of a `FuncInfo` unwind map: leaving `state` runs `action` and enters `to_state`.
@@ -240,6 +245,8 @@ fn element(base: u64, index: u64, size: u64) -> Option<u64> {
 }
 
 type TryMapKey = (u64, u32, u32);
+/// A validated complete object locator: subobject offset, type descriptor, its stored name and the subobjects.
+type Locator = (u32, u64, String, Vec<(u64, String)>);
 type Memo<K, V> = RefCell<HashMap<K, Option<V>>>;
 
 struct Reader<'a> {
@@ -381,8 +388,9 @@ impl<'a> Reader<'a> {
             .then(|| name.to_owned())
     }
 
-    /// Validates an RTTI complete object locator, returning its subobject offset and type descriptor.
-    fn locator(&self, address: u64) -> Option<(u32, u64, String)> {
+    /// Validates an RTTI complete object locator, returning its subobject offset, type descriptor and the
+    /// classes whose vfptr sits at that offset (see [`Vftable::subobjects`]).
+    fn locator(&self, address: u64) -> Option<Locator> {
         self.spend(8)?;
         if self.u32(address)? != u32::from(self.wide) {
             return None;
@@ -398,8 +406,26 @@ impl<'a> Reader<'a> {
         if self.u32(hierarchy)? != 0 || bases == 0 || bases > MAX_BASES {
             return None;
         }
-        self.data_reference(at(hierarchy, 12)?)?;
-        Some((offset, type_descriptor, mangled))
+        let array = self.data_reference(at(hierarchy, 12)?)?;
+        let mut subobjects = Vec::new();
+        // A base that does not validate is left out of the subobjects; it does not reject the table.
+        let subobject = |index: u32| {
+            let descriptor = self.data_reference(element(array, u64::from(index), 4)?)?;
+            let base_type = self.data_reference(descriptor)?;
+            let displacement = self.u32(at(descriptor, 8)?)?;
+            let virtual_base = self.i32(at(descriptor, 12)?)?;
+            (virtual_base == -1 && displacement == offset).then_some(base_type)
+        };
+        for index in 0..bases {
+            self.spend(4)?;
+            let Some(base_type) = subobject(index) else { continue };
+            if subobjects.iter().all(|&(seen, _)| seen != base_type)
+                && let Some(name) = self.type_name(base_type).filter(|name| name.starts_with(".?A"))
+            {
+                subobjects.push((base_type, name));
+            }
+        }
+        Some((offset, type_descriptor, mangled, subobjects))
     }
 
     /// File-backed data sections as (address, bytes).
@@ -438,7 +464,7 @@ impl<'a> Reader<'a> {
 fn read_vftables(reader: &Reader) -> Vec<Vftable> {
     let binary = reader.binary;
     let width = reader.pointer_size();
-    let mut locators: HashMap<u64, Option<(u32, u64, String)>> = HashMap::new();
+    let mut locators: HashMap<u64, Option<Locator>> = HashMap::new();
     let mut tables = Vec::new();
     // Every locator lies in a data section; anything outside their span is rejected without a lookup.
     let low = reader.data_sections().map(|(start, _)| start).min().unwrap_or(0);
@@ -466,7 +492,7 @@ fn read_vftables(reader: &Reader) -> Vec<Vftable> {
             if reader.exhausted() {
                 break 'sections;
             }
-            let Some((subobject, type_descriptor, mangled)) = parsed else { continue };
+            let Some((subobject, type_descriptor, mangled, subobjects)) = parsed else { continue };
             let Some(address) = at(here, width) else { continue };
             let mut slots = Vec::new();
             let mut truncated = false;
@@ -495,6 +521,7 @@ fn read_vftables(reader: &Reader) -> Vec<Vftable> {
                     offset: subobject,
                     slots,
                     truncated,
+                    subobjects,
                 });
             }
         }

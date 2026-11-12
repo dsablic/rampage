@@ -357,37 +357,52 @@ fn strip_msvc_keyword(name: &str) -> &str {
     name
 }
 
-/// Direct base-class names from an MSVC `ClassHierarchyDescriptor`, or `None` when the hierarchy does not
-/// validate.
-///
-/// The base class array flattens the whole hierarchy in pre-order: entry 0 is the class itself and each
-/// `BaseClassDescriptor` is followed by its own `numContainedBases` bases. Direct bases are therefore the entries
-/// reached from index 1 by skipping each entry's contained subtree.
-fn msvc_bases(image: &Image, chd: u64, signature: u32, image_base: u64, own: &str) -> Option<Vec<String>> {
+/// One entry of an MSVC base class array: the class, and the array indices of its own direct bases.
+struct HierarchyEntry {
+    type_descriptor: u64,
+    mangled: String,
+    name: String,
+    bases: Vec<usize>,
+}
+
+/// Every entry of an MSVC `ClassHierarchyDescriptor`'s base class array, or `None` when the hierarchy does not
+/// validate. The array flattens the hierarchy in pre-order: entry 0 is the class itself and each
+/// `BaseClassDescriptor` is followed by its own `numContainedBases` bases. An entry's direct bases are therefore
+/// the entries reached from just after it by skipping each one's contained subtree, within its own subtree.
+fn msvc_hierarchy(image: &Image, chd: u64, signature: u32, image_base: u64) -> Option<Vec<HierarchyEntry>> {
     let count = image.read_u32(va_at(chd, 8)?)?;
     if count == 0 || count as usize > MAX_BASES {
         return None;
     }
     let array = msvc_resolve(signature, image_base, image.read_u32(va_at(chd, 12)?)?);
-    let mut bases = Vec::new();
-    let mut index = 1;
-    while index < count {
+    let mut entries = Vec::new();
+    let mut contained = Vec::new();
+    for index in 0..count {
         let slot = array.checked_add(u64::from(index).checked_mul(4)?)?;
         let descriptor = msvc_resolve(signature, image_base, image.read_u32(slot)?);
         let type_descriptor = msvc_resolve(signature, image_base, image.read_u32(descriptor)?);
-        let contained = image.read_u32(va_at(descriptor, 4)?)?;
-        if contained >= count - index {
+        let below = image.read_u32(va_at(descriptor, 4)?)?;
+        if below >= count - index {
             return None;
         }
-        let (_, name) = msvc_type_descriptor(image, type_descriptor)?;
-        bases.push(name);
-        index += 1 + contained;
+        let (mangled, name) = msvc_type_descriptor(image, type_descriptor)?;
+        entries.push(HierarchyEntry { type_descriptor, mangled, name, bases: Vec::new() });
+        contained.push(below as usize);
     }
-    Some(dedup_bases(bases, own))
+    for index in 0..entries.len() {
+        let end = index + 1 + contained[index];
+        let mut child = index + 1;
+        while child < end {
+            entries[index].bases.push(child);
+            child += 1 + contained[child];
+        }
+    }
+    Some(entries)
 }
 
-/// Parses a Complete Object Locator at `address`, returning the class it describes.
-fn msvc_complete_object_locator(image: &Image, address: u64) -> Option<RttiClass> {
+/// The class a Complete Object Locator at `address` describes, then every class in its hierarchy, each with its
+/// own direct bases (source `rtti_base`).
+fn msvc_locator_classes(image: &Image, address: u64) -> Option<Vec<RttiClass>> {
     let signature = image.read_u32(address)?;
     // x86 locators hold absolute pointers (signature 0) and x64 ones image-relative RVAs (signature 1).
     if signature != u32::from(image.pointer_size == 8) {
@@ -407,13 +422,25 @@ fn msvc_complete_object_locator(image: &Image, address: u64) -> Option<RttiClass
     let type_descriptor = msvc_resolve(signature, image_base, image.read_u32(va_at(address, 12)?)?);
     let hierarchy = msvc_resolve(signature, image_base, image.read_u32(va_at(address, 16)?)?);
     let (mangled, name) = msvc_type_descriptor(image, type_descriptor)?;
-    let bases = msvc_bases(image, hierarchy, signature, image_base, &name)?;
-    Some(RttiClass { name, mangled, abi: "msvc", type_info: type_descriptor, bases, source: "rtti_scan" })
+    let entries = msvc_hierarchy(image, hierarchy, signature, image_base)?;
+    let record = |entry: &HierarchyEntry, mangled: String, name: String, type_info: u64, source| {
+        let bases = entry.bases.iter().map(|&index| entries[index].name.clone()).collect();
+        let bases = dedup_bases(bases, &name);
+        RttiClass { name, mangled, abi: "msvc", type_info, bases, source }
+    };
+    let mut classes = vec![record(&entries[0], mangled, name, type_descriptor, "rtti_scan")];
+    for entry in &entries[1..] {
+        classes.push(record(entry, entry.mangled.clone(), entry.name.clone(), entry.type_descriptor, "rtti_base"));
+    }
+    Some(classes)
 }
 
-/// Recovers MSVC (PE) classes from a mapped image.
+/// Recovers MSVC (PE) classes from a mapped image: each class with a complete object locator (`rtti_scan`), then
+/// each class seen only as a base in those classes' hierarchies (`rtti_base`), such as an abstract interface or a
+/// base whose vftable was never emitted.
 pub fn recover_msvc(image: &Image) -> Vec<RttiClass> {
     let mut classes = Vec::new();
+    let mut bases = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     // A 32-bit locator spans five dwords (signature..pClassDescriptor); a 64-bit one adds the self RVA.
     let locator_len = if image.pointer_size == 8 { 24 } else { 20 };
@@ -421,12 +448,23 @@ pub fn recover_msvc(image: &Image) -> Vec<RttiClass> {
         if classes.len() >= MAX_RECORDS {
             return;
         }
-        if let Some(class) = msvc_complete_object_locator(image, address)
-            && seen.insert(class.type_info)
+        if let Some(mut found) = msvc_locator_classes(image, address)
+            && seen.insert(found[0].type_info)
         {
-            classes.push(class);
+            classes.push(found.remove(0));
+            if bases.len() < MAX_RECORDS {
+                bases.extend(found);
+            }
         }
     });
+    for base in bases {
+        if classes.len() >= MAX_RECORDS {
+            break;
+        }
+        if seen.insert(base.type_info) {
+            classes.push(base);
+        }
+    }
     classes
 }
 

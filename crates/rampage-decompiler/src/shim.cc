@@ -249,6 +249,15 @@ public:
     }
 };
 
+// One vftable: its slots, the complete class (by type descriptor) and the vfptr's offset in it.
+struct VirtualTable {
+    uintb address;
+    uintb complete;
+    intb offset;
+    std::vector<uintb> slots;
+    bool truncated;
+};
+
 struct Handle {
     MemArchitecture *arch = nullptr;
     rampage::TokenEmitter *emitter = nullptr;
@@ -275,6 +284,14 @@ struct Handle {
     std::set<uintb> underivablePrototypes;
     // Each derived function's prototype as it was before the lock, to put back between top-level decompilations.
     std::map<uintb, std::unique_ptr<FuncProto>> derivedRestore;
+    // MSVC vftables (see `rampage_decomp_virtual_table`), indexed for virtual call resolution.
+    std::vector<VirtualTable> vtables;
+    std::map<uintb, std::vector<size_t>> vtablesByMember;
+    std::map<std::pair<uintb, intb>, size_t> vtablesBySubobject;
+    std::map<std::string, std::vector<size_t>> vtablesByType;
+    std::map<uintb, std::string> virtualNames;
+    // Functions whose call-site overrides and comments the virtual call pass set, cleared before the next one.
+    std::set<uintb> virtualTouched;
     bool preparingTypeHintContext = false;
     bool poisoned = false;
     bool fallbackError = false;
@@ -1115,6 +1132,298 @@ void deriveCalleePrototypes(Handle *handle, Funcdata *function) {
     }
 }
 
+
+// Virtual calls. An MSVC virtual call loads the vfptr from an object and calls through one of its slots:
+// `(**(code **)(*this + 0x10))(this)`. Where the object's class is known, from the function being a slot of
+// known vftables (its `this` is then one of their objects) or from a pointer typed with a class's name, the
+// pass names the slot's possible targets in a comment at the call and gives the call the targets' prototype
+// when they all agree, so arguments the call-site heuristics drop (an argument passed through untouched) are
+// kept. On 32-bit x86, where MSVC passes `this` in ECX (__thiscall) but an indirect call defaults to __cdecl,
+// a vfptr call whose ECX holds the object pointer gets __thiscall. Everything is per call site and is undone
+// before the next top-level decompilation.
+constexpr size_t virtualSiteLimit = 64;
+constexpr size_t virtualCommentNames = 6;
+
+const Varnode *stripCopies(const Varnode *vn) {
+    for (int4 depth = 0; depth < 16 && vn->isWritten(); ++depth) {
+        const PcodeOp *def = vn->getDef();
+        if (def->code() != CPUI_COPY && def->code() != CPUI_CAST) break;
+        vn = def->getIn(0);
+    }
+    return vn;
+}
+
+// `vn` as `base + offset` for a constant offset (INT_ADD, PTRSUB or a constant-index PTRADD).
+const Varnode *splitOffset(const Varnode *vn, intb &offset) {
+    offset = 0;
+    vn = stripCopies(vn);
+    if (!vn->isWritten()) return vn;
+    const PcodeOp *def = vn->getDef();
+    switch (def->code()) {
+    case CPUI_INT_ADD:
+    case CPUI_PTRSUB:
+        if (def->getIn(1)->isConstant()) {
+            const Varnode *constant = def->getIn(1);
+            offset = sign_extend((intb)constant->getOffset(), constant->getSize() * 8 - 1);
+            return stripCopies(def->getIn(0));
+        }
+        break;
+    case CPUI_PTRADD:
+        if (def->getIn(1)->isConstant() && def->getIn(2)->isConstant()) {
+            const Varnode *index = def->getIn(1);
+            offset = sign_extend((intb)index->getOffset(), index->getSize() * 8 - 1) * (intb)def->getIn(2)->getOffset();
+            return stripCopies(def->getIn(0));
+        }
+        break;
+    default:
+        break;
+    }
+    return vn;
+}
+
+// A vfptr call's shape: the call target is `*(*(object + vfptr) + slot)`.
+struct VirtualShape {
+    const Varnode *object = nullptr;
+    intb vfptr = 0;
+    intb slot = 0;
+};
+
+bool virtualShape(const PcodeOp *call, VirtualShape &shape) {
+    const Varnode *target = stripCopies(call->getIn(0));
+    if (!target->isWritten() || target->getDef()->code() != CPUI_LOAD) return false;
+    const Varnode *table = splitOffset(target->getDef()->getIn(1), shape.slot);
+    if (!table->isWritten() || table->getDef()->code() != CPUI_LOAD) return false;
+    shape.object = splitOffset(table->getDef()->getIn(1), shape.vfptr);
+    return !shape.object->isConstant();
+}
+
+// The vftables that can be the vfptr at `vfptr` bytes past an object pointer, given tables at its offset 0.
+std::vector<size_t> tablesAt(const Handle *handle, const std::vector<size_t> &bases, intb vfptr) {
+    std::vector<size_t> result;
+    for (size_t index : bases) {
+        const VirtualTable &table = handle->vtables[index];
+        auto found = handle->vtablesBySubobject.find({table.complete, table.offset + vfptr});
+        if (found != handle->vtablesBySubobject.end()
+            && std::find(result.begin(), result.end(), found->second) == result.end())
+            result.push_back(found->second);
+    }
+    return result;
+}
+
+// The tables `shape`'s vfptr can hold in `function`: from the object pointer's class type, else from the function
+// being a slot of known tables when the object pointer is its `this`.
+std::vector<size_t> virtualTables(const Handle *handle, Funcdata *function, const VirtualShape &shape) {
+    Datatype *type = shape.object->getType();
+    if (type != nullptr && type->getMetatype() == TYPE_PTR) {
+        auto found = handle->vtablesByType.find(static_cast<TypePointer *>(type)->getPtrTo()->getName());
+        if (found != handle->vtablesByType.end()) return tablesAt(handle, found->second, shape.vfptr);
+    }
+    if (!shape.object->isInput()) return {};
+    auto member = handle->vtablesByMember.find(function->getAddress().getOffset());
+    if (member == handle->vtablesByMember.end()) return {};
+    const FuncProto &proto = function->getFuncProto();
+    bool self = proto.numParams() > 0 && proto.getParam(0)->getAddress() == shape.object->getAddr();
+    if (!self && shape.object->getSpace()->getType() == IPTR_PROCESSOR) {
+        // An unrecovered __thiscall `this`: ECX on x86, RCX on x64.
+        std::string name = handle->arch->translate->getRegisterName(shape.object->getSpace(),
+            shape.object->getOffset(), shape.object->getSize());
+        self = name == "ECX" || name == "RCX";
+    }
+    return self ? tablesAt(handle, member->second, shape.vfptr) : std::vector<size_t>{};
+}
+
+struct VirtualSite {
+    Address call;
+    std::vector<uintb> targets;
+    intb slot = 0;
+    bool partial = false;
+    // The object pointer's type, when the call passes the object itself as `this`.
+    Datatype *self = nullptr;
+};
+
+// Whether `target` is the runtime's pure-virtual stub (`_purecall`), which an abstract class's table holds in
+// the slots it leaves pure; the call never reaches it in a correct program.
+bool pureVirtual(const Handle *handle, uintb target) {
+    auto name = handle->virtualNames.find(target);
+    if (name == handle->virtualNames.end()) return false;
+    size_t start = name->second.find_first_not_of('_');
+    return start != std::string::npos && name->second.compare(start, std::string::npos, "purecall") == 0;
+}
+
+std::string virtualComment(const Handle *handle, const VirtualSite &site, int4 width) {
+    std::ostringstream text;
+    text << "Virtual call: vftable slot " << site.slot / width << " (+0x" << std::hex << site.slot << std::dec
+         << ") -> ";
+    for (size_t index = 0; index < site.targets.size() && index < virtualCommentNames; ++index) {
+        if (index != 0) text << ", ";
+        auto name = handle->virtualNames.find(site.targets[index]);
+        if (name != handle->virtualNames.end()) text << name->second;
+        else text << "FUN_" << std::hex << site.targets[index] << std::dec;
+    }
+    if (site.targets.size() > virtualCommentNames)
+        text << " (" << site.targets.size() << " targets in all)";
+    if (site.partial) text << "; a truncated vftable may hold others";
+    return text.str();
+}
+
+// The prototype the targets agree on, derived from their own decompilations, or null.
+FuncProto *agreedPrototype(Handle *handle, Funcdata *function, const VirtualSite &site, size_t &budget) {
+    const std::vector<uintb> &targets = site.targets;
+    Architecture *arch = handle->arch;
+    Scope *global = arch->symboltab->getGlobalScope();
+    AddrSpace *code = arch->getDefaultCodeSpace();
+    std::unique_ptr<PrototypePieces> agreed;
+    for (uintb target : targets) {
+        if (target == function->getAddress().getOffset()) return nullptr;
+        Funcdata *callee = global->queryFunction(Address(code, target));
+        if (callee == nullptr) return nullptr;
+        std::set<uintb> deriving{function->getAddress().getOffset()};
+        if (deriveCalleePrototype(handle, callee, deriving, budget) != Derivation::Locked) return nullptr;
+        auto pieces = std::make_unique<PrototypePieces>();
+        callee->getFuncProto().getPieces(*pieces);
+        pieces->firstVarArgSlot = -1;
+        if (agreed == nullptr) {
+            agreed = std::move(pieces);
+            continue;
+        }
+        if (agreed->model != pieces->model || agreed->intypes.size() != pieces->intypes.size()) return nullptr;
+        for (size_t index = 0; index < pieces->intypes.size(); ++index)
+            if (agreed->intypes[index]->getSize() != pieces->intypes[index]->getSize()) return nullptr;
+    }
+    if (agreed == nullptr) return nullptr;
+    // A target that never reads `this` derives no parameter for it, but the call still passes it. On x64 that is
+    // RCX, the first parameter. On x86 it is ECX under __thiscall, but a COM __stdcall method takes it on the
+    // stack; leave those to the call site's own __thiscall check (resolveVirtualCalls).
+    int4 width = arch->getDefaultDataSpace()->getAddrSize();
+    bool passesThis = false;
+    if (!agreed->intypes.empty()) {
+        Funcdata *first = global->queryFunction(Address(code, targets.front()));
+        const Address &storage = first->getFuncProto().getParam(0)->getAddress();
+        std::string name = arch->translate->getRegisterName(storage.getSpace(), storage.getOffset(), width);
+        passesThis = name == "ECX" || name == "RCX";
+    }
+    if (!passesThis && width == 4) return nullptr;
+    if (agreed->intypes.empty()) {
+        agreed->intypes.push_back(arch->types->getTypePointer(width, arch->types->getTypeVoid(),
+            arch->getDefaultDataSpace()->getWordSize()));
+        agreed->innames.push_back("this");
+    }
+    if (site.self != nullptr && site.self->getSize() == agreed->intypes[0]->getSize()) agreed->intypes[0] = site.self;
+    auto proto = std::make_unique<FuncProto>();
+    proto->setInternal(agreed->model != nullptr ? agreed->model : arch->defaultfp, arch->types->getTypeVoid());
+    proto->setPieces(*agreed);
+    proto->setOutputLock(false);
+    return proto.release();
+}
+
+// An unlocked prototype on `model`: the call site still recovers its own arguments, from the model's storage.
+FuncProto *unlockedPrototype(Architecture *arch, ProtoModel *model) {
+    auto proto = std::make_unique<FuncProto>();
+    proto->setInternal(model, arch->types->getTypeVoid());
+    return proto.release();
+}
+
+// Whether the __thiscall given to the call at `address` passes something other than the vfptr's object in ECX.
+bool foreignThis(Handle *handle, Funcdata *function, const Address &address) {
+    for (int4 i = 0; i < function->numCalls(); ++i) {
+        FuncCallSpecs *call = function->getCallSpecs(i);
+        const PcodeOp *op = call->getOp();
+        if (op == nullptr || op->getAddr() != address) continue;
+        VirtualShape shape;
+        if (op->code() != CPUI_CALLIND || !virtualShape(op, shape)) return true;
+        for (int4 param = 0; param < call->numParams() && param + 1 < op->numInput(); ++param) {
+            ProtoParameter *input = call->getParam(param);
+            std::string name = handle->arch->translate->getRegisterName(input->getAddress().getSpace(),
+                input->getAddress().getOffset(), input->getSize());
+            if (name == "ECX") return stripCopies(op->getIn(param + 1)) != shape.object;
+        }
+        return false;
+    }
+    return false;
+}
+
+void clearVirtualCalls(Handle *handle) {
+    Architecture *arch = handle->arch;
+    Scope *global = arch->symboltab->getGlobalScope();
+    for (uintb entry : handle->virtualTouched) {
+        Address address(arch->getDefaultCodeSpace(), entry);
+        Funcdata *function = global->queryFunction(address);
+        if (function != nullptr) {
+            // Override::clear is private; ending the member's lifetime (its destructor clears and frees every
+            // override) and starting a fresh one is the public equivalent.
+            Override &overrides = function->getOverride();
+            overrides.~Override();
+            new (&overrides) Override();
+        }
+        arch->commentdb->clearType(address, Comment::user2);
+    }
+    handle->virtualTouched.clear();
+}
+
+// Runs after `function`'s first analysis; re-analyzes it when it changes a call site.
+void resolveVirtualCalls(Handle *handle, Funcdata *function, const Address &low, const Address &high,
+                         rampage::TypeHintContext &hintContext) {
+    Architecture *arch = handle->arch;
+    int4 width = arch->getDefaultDataSpace()->getAddrSize();
+    ProtoModel *thiscall = width == 4 ? arch->getModel("__thiscall") : nullptr;
+    std::vector<VirtualSite> sites;
+    std::vector<Address> fallbacks;
+    for (int4 i = 0; i < function->numCalls() && sites.size() + fallbacks.size() < virtualSiteLimit; ++i) {
+        const PcodeOp *op = function->getCallSpecs(i)->getOp();
+        VirtualShape shape;
+        if (op == nullptr || op->code() != CPUI_CALLIND || !virtualShape(op, shape)) continue;
+        VirtualSite site{op->getAddr(), {}, shape.slot, false, nullptr};
+        Datatype *type = shape.object->getType();
+        if (shape.vfptr == 0 && type != nullptr && type->getMetatype() == TYPE_PTR) site.self = type;
+        if (shape.slot >= 0 && shape.slot % width == 0) {
+            size_t slot = shape.slot / width;
+            for (size_t index : virtualTables(handle, function, shape)) {
+                const VirtualTable &table = handle->vtables[index];
+                if (slot < table.slots.size()) {
+                    if (!pureVirtual(handle, table.slots[slot])
+                        && std::find(site.targets.begin(), site.targets.end(), table.slots[slot]) == site.targets.end())
+                        site.targets.push_back(table.slots[slot]);
+                } else if (table.truncated) {
+                    site.partial = true;
+                }
+            }
+        }
+        if (!site.targets.empty()) {
+            std::sort(site.targets.begin(), site.targets.end());
+            sites.push_back(std::move(site));
+        } else if (thiscall != nullptr) {
+            fallbacks.push_back(op->getAddr());
+        }
+    }
+    if (sites.empty() && fallbacks.empty()) return;
+    Address entry = function->getAddress();
+    handle->virtualTouched.insert(entry.getOffset());
+    arch->clearAnalysis(function);
+    size_t budget = calleePrototypeBudget;
+    for (const VirtualSite &site : sites) {
+        arch->commentdb->addCommentNoDuplicate(Comment::user2, entry, site.call, virtualComment(handle, site, width));
+        FuncProto *proto = site.partial ? nullptr : agreedPrototype(handle, function, site, budget);
+        if (proto != nullptr) function->getOverride().insertProtoOverride(site.call, proto);
+        else if (thiscall != nullptr) fallbacks.push_back(site.call);
+    }
+    for (const Address &call : fallbacks)
+        function->getOverride().insertProtoOverride(call, unlockedPrototype(arch, thiscall));
+    for (int4 pass = 0; pass < 2; ++pass) {
+        hintContext.edges = 0;
+        function->followFlow(low, high);
+        arch->allacts.getCurrent()->reset(*function);
+        arch->allacts.getCurrent()->perform(*function);
+        std::vector<Address> foreign;
+        for (const Address &call : fallbacks)
+            if (foreignThis(handle, function, call)) foreign.push_back(call);
+        if (foreign.empty() || pass == 1) break;
+        // ECX held something else: this is not a __thiscall vfptr call (a COM __stdcall method, say).
+        for (const Address &call : foreign)
+            function->getOverride().insertProtoOverride(call, unlockedPrototype(arch, arch->defaultfp));
+        arch->clearAnalysis(function);
+    }
+}
+
 } // namespace
 
 extern "C" {
@@ -1567,6 +1876,37 @@ const char *rampage_decomp_data_region(void *h, uint64_t first, uint64_t last, c
     });
 }
 
+// Registers one MSVC vftable for virtual call resolution: its slots, its complete class (type descriptor
+// address) and vfptr offset, and the NUL-separated type names whose pointers it serves at offset 0.
+const char *rampage_decomp_virtual_table(void *h, uint64_t address, uint64_t complete, int64_t offset,
+                                         const uint64_t *slots, size_t count, uint8_t truncated,
+                                         const char *types, size_t typesLength) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &) {
+        if (handle->vtables.size() >= 65536 || count > 1024) throw LowlevelError("Too many vftables or slots");
+        size_t index = handle->vtables.size();
+        VirtualTable table{address, complete, offset, std::vector<uintb>(slots, slots + count), truncated != 0};
+        handle->vtablesBySubobject.emplace(std::make_pair(table.complete, table.offset), index);
+        for (uintb slot : table.slots) {
+            auto &members = handle->vtablesByMember[slot];
+            if (std::find(members.begin(), members.end(), index) == members.end()) members.push_back(index);
+        }
+        size_t start = 0;
+        for (size_t at = 0; at <= typesLength; ++at) {
+            if (at != typesLength && types[at] != '\0') continue;
+            if (at > start) handle->vtablesByType[std::string(types + start, at - start)].push_back(index);
+            start = at + 1;
+        }
+        handle->vtables.push_back(std::move(table));
+    });
+}
+
+// Names a virtual call target in the comments of the virtual call pass.
+const char *rampage_decomp_virtual_name(void *h, uint64_t address, const char *name) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &) { handle->virtualNames[address] = name; });
+}
+
 // Folds loads from read-only mappings into their values (Ghidra's "respect read-only flags"): an ARM
 // literal-pool word then reads as the address or constant it holds, not as a variable.
 const char *rampage_decomp_fold_read_only(void *h, uint8_t enabled) noexcept {
@@ -1856,8 +2196,10 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         }
         nativeMutation = true;
         handle->arch->resetTranslationCache();
-        if (!handle->preparingTypeHintContext && (handle->inferCalleeEffects || handle->deriveCalleePrototypes))
+        if (!handle->preparingTypeHintContext
+            && (handle->inferCalleeEffects || handle->deriveCalleePrototypes || !handle->vtables.empty()))
             resetCalleeInference(handle);
+        if (!handle->preparingTypeHintContext && !handle->virtualTouched.empty()) clearVirtualCalls(handle);
         Scope *global = arch->symboltab->getGlobalScope();
         fd = global->queryFunction(entry);
         if (fd == nullptr) {
@@ -1933,6 +2275,8 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         OwnEffectsLifted ownEffects(handle, fd);
         arch->allacts.getCurrent()->reset(*fd);
         arch->allacts.getCurrent()->perform(*fd);
+        if (!handle->preparingTypeHintContext && !handle->vtables.empty())
+            resolveVirtualCalls(handle, fd, low, high, hintContext);
         auto local = handle->localOverrides.find(addr);
         if (local != handle->localOverrides.end()) {
             rampage::applyLocals(fd, local->second, savedLocals);

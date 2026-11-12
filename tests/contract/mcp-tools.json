@@ -618,6 +618,14 @@
           "type": "string",
           "required": true
         },
+        "rtti_class_limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "rtti_class_offset": {
+          "type": "integer|null",
+          "required": false
+        },
         "vftable_limit": {
           "type": "integer|null",
           "required": false

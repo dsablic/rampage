@@ -313,6 +313,11 @@ struct ClassEvidenceArgs {
     /// MSVC vftables per page, 1..=100 (default 16), additionally bounded to 24000 JSON bytes.
     #[schemars(range(min = 1, max = 100))]
     vftable_limit: Option<usize>,
+    /// RTTI classes to skip, for paging.
+    rtti_class_offset: Option<usize>,
+    /// RTTI classes per page, 1..=200 (default 50), additionally bounded to 16000 JSON bytes.
+    #[schemars(range(min = 1, max = 200))]
+    rtti_class_limit: Option<usize>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -2371,14 +2376,23 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "class_evidence",
-            "Bounded named Itanium vtable/RTTI evidence with validated code slots, RTTI class names and base edges \
-             (Itanium/MSVC), and one page of MSVC vftables of x86/x64 PEs (class, subobject offset, up to 64 slot \
-             targets; vftables_total, vftable_offset/vftable_limit paging, also bounded to 24000 JSON bytes, \
-             vftables_next_offset); not inferred C++ layouts.",
+            "Bounded named Itanium vtable/RTTI evidence with validated code slots; one page of RTTI classes with \
+             direct base edges (Itanium/MSVC; MSVC classes seen only as bases have rows with source rtti_base; \
+             rtti_classes_total, rtti_class_offset/rtti_class_limit paging, also bounded to 16000 JSON bytes, \
+             rtti_classes_next_offset); and one page of MSVC vftables of x86/x64 PEs (class, subobject offset, up \
+             to 64 slot targets; vftables_total, vftable_offset/vftable_limit paging, also bounded to 24000 JSON \
+             bytes, vftables_next_offset); not inferred C++ layouts.",
             |project, arguments: ClassEvidenceArgs| {
+                use crate::cpp_exceptions::ClassPage;
                 project.class_evidence(
-                    arguments.vftable_offset.unwrap_or(0),
-                    arguments.vftable_limit.unwrap_or(crate::cpp_exceptions::DEFAULT_VFTABLE_LIMIT),
+                    ClassPage {
+                        offset: arguments.vftable_offset.unwrap_or(0),
+                        limit: arguments.vftable_limit.unwrap_or(ClassPage::VFTABLES.limit),
+                    },
+                    ClassPage {
+                        offset: arguments.rtti_class_offset.unwrap_or(0),
+                        limit: arguments.rtti_class_limit.unwrap_or(ClassPage::RTTI_CLASSES.limit),
+                    },
                 )
             },
         ),

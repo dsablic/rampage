@@ -289,19 +289,37 @@ pub fn matched_symbols_checked(binary: &Binary, path: &Path) -> Result<(PdbRepor
     Ok((report, input.provenance))
 }
 
-/// Reads exact producer procedure lengths from an explicitly selected, identity-matched owned PDB.
+/// Reads exact producer procedure lengths from an explicitly selected, identity-matched owned PDB. See
+/// [`matched_procedures_reported`] for the warnings this drops.
 pub fn matched_procedures_checked(
     binary: &Binary,
     path: &Path,
 ) -> Result<(Vec<PdbProcedure>, PdbProvenance), LoadError> {
+    matched_procedures_reported(binary, path).map(|(procedures, _, provenance)| (procedures, provenance))
+}
+
+/// [`matched_procedures_checked`] with its warnings. Identical-code folding (`/OPT:ICF`) points several procedure
+/// records at one body; an address whose procedure records disagree on name or length has no range that describes
+/// it alone, so it is omitted and counted in a warning, as name import omits its name. The rest still import.
+pub fn matched_procedures_reported(
+    binary: &Binary,
+    path: &Path,
+) -> Result<(Vec<PdbProcedure>, Vec<String>, PdbProvenance), LoadError> {
     binary.validate_backing_source()?;
     let input = read_pdb_input(path, open_pdb_file)?;
     input.provenance.require_identity()?;
+    let mut warnings = Vec::new();
     let procedures = with_backing_source(binary, || {
         let mut budget = Budget { bytes: MAX_SOURCE_BYTES, work: MAX_STRUCTURAL_WORK };
         let msf = preflight_msf(&input.bytes, &mut budget)?;
         preflight_symbols(&msf, &mut budget)?;
-        let (report, mut procedures) = read_pdb_full(&input.bytes, budget, PdbReadMode::Procedures)?;
+        let (report, mut procedures, folded) = read_pdb_full(&input.bytes, budget, PdbReadMode::Procedures)?;
+        if folded != 0 {
+            warnings.push(format!(
+                "{folded} producer procedure addresses omitted: several procedure records with different names or \
+                 lengths name each one (identical-code folding)"
+            ));
+        }
         match_report(binary, || Ok(report))?;
         let parsed = object::File::parse(binary.image_bytes())?;
         for procedure in &mut procedures {
@@ -325,7 +343,7 @@ pub fn matched_procedures_checked(
         }
         Ok(procedures)
     })?;
-    Ok((procedures, input.provenance))
+    Ok((procedures, warnings, input.provenance))
 }
 
 fn with_backing_source<T>(binary: &Binary, work: impl FnOnce() -> Result<T, LoadError>) -> Result<T, LoadError> {
@@ -703,7 +721,7 @@ impl<'a> ::pdb::Source<'a> for BoundedSource<'a> {
 }
 
 fn read_pdb(bytes: &[u8], budget: Budget) -> Result<PdbReport, LoadError> {
-    read_pdb_full(bytes, budget, PdbReadMode::Names).map(|(report, _)| report)
+    read_pdb_full(bytes, budget, PdbReadMode::Names).map(|(report, _, _)| report)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -714,7 +732,13 @@ enum PdbReadMode {
     Procedures,
 }
 
-fn read_pdb_full(bytes: &[u8], budget: Budget, mode: PdbReadMode) -> Result<(PdbReport, Vec<PdbProcedure>), LoadError> {
+/// The names, the producer procedures, and how many addresses were left without a procedure because their
+/// procedure records disagree.
+fn read_pdb_full(
+    bytes: &[u8],
+    budget: Budget,
+    mode: PdbReadMode,
+) -> Result<(PdbReport, Vec<PdbProcedure>, usize), LoadError> {
     let source = BoundedSource { bytes, remaining: budget.bytes, remaining_work: budget.work };
     let mut pdb = PDB::open(source).map_err(malformed)?;
     let info = pdb.pdb_information().map_err(malformed)?;
@@ -748,7 +772,9 @@ fn read_pdb_full(bytes: &[u8], budget: Budget, mode: PdbReadMode) -> Result<(Pdb
     let globals = pdb.global_symbols().map_err(malformed)?;
     collect_procedures(globals.iter(), &sections, &mut functions, &mut names_bytes, &mut procedures, mode)?;
     let (functions, warnings) = choose_names(functions);
-    Ok((PdbReport { functions, identity: Some(identity), warnings }, procedures.into_values().collect()))
+    let folded = procedures.values().filter(|procedure| procedure.is_none()).count();
+    let procedures = procedures.into_values().flatten().collect();
+    Ok((PdbReport { functions, identity: Some(identity), warnings }, procedures, folded))
 }
 
 /// The names recorded for one function address.
@@ -857,7 +883,7 @@ fn collect_procedures(
     sections: &[::pdb::ImageSectionHeader],
     functions: &mut BTreeMap<u64, Names>,
     names_bytes: &mut usize,
-    procedures: &mut BTreeMap<u64, PdbProcedure>,
+    procedures: &mut BTreeMap<u64, Option<PdbProcedure>>,
     mode: PdbReadMode,
 ) -> Result<(), LoadError> {
     while let Some(symbol) = symbols.next().map_err(malformed)? {
@@ -903,10 +929,16 @@ fn collect_procedures(
             }
             let procedure =
                 PdbProcedure { address: u64::from(rva), size: u64::from(size), name: name.to_owned(), global };
-            if procedures.get(&procedure.address).is_some_and(|previous| previous != &procedure) {
-                return Err(malformed("conflicting producer procedure ranges"));
+            // Records that disagree at one address (identical-code folding) leave it with no procedure (`None`).
+            match procedures.get(&procedure.address) {
+                None => {
+                    procedures.insert(procedure.address, Some(procedure));
+                }
+                Some(Some(previous)) if previous != &procedure => {
+                    procedures.insert(procedure.address, None);
+                }
+                Some(_) => {}
             }
-            procedures.insert(procedure.address, procedure);
         }
         if !functions.contains_key(&u64::from(rva)) && functions.len() >= MAX_FUNCTIONS {
             return Err(malformed("function names exceed limit"));
@@ -1072,7 +1104,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_procedures_still_reject_conflicting_procedure_definitions_at_one_rva() {
+    fn typed_procedures_omit_conflicting_procedure_definitions_at_one_rva_with_a_warning() {
         let mut bytes = std::fs::read(fixture_support::fixture("fixture.pdb")).unwrap();
         let module = fixture_support::module_stream(&bytes);
         let start = fixture_support::stream_offset(&bytes, module, 0);
@@ -1082,8 +1114,18 @@ mod tests {
         let files = fixture_support::TempFiles::new();
         let path = files.write("conflicting-procedure.pdb", &bytes);
         let binary = Binary::open(fixture_support::fixture("fixture.exe")).unwrap();
-        let error = matched_procedures_checked(&binary, &path).unwrap_err();
-        assert!(error.to_string().contains("conflicting producer procedure ranges"), "{error}");
+        let (expected, _) = matched_procedures_checked(&binary, &fixture_support::fixture("fixture.pdb")).unwrap();
+        let conflicted = expected.iter().find(|procedure| procedure.address == 0x140001000).unwrap();
+        let (procedures, warnings, _) = matched_procedures_reported(&binary, &path).unwrap();
+        // Both records at the shared address go; every other procedure stays.
+        let kept: Vec<_> = expected
+            .iter()
+            .filter(|procedure| procedure.address != conflicted.address && procedure.name != "pdb_local")
+            .cloned()
+            .collect();
+        assert_eq!(procedures, kept);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].starts_with("1 producer procedure addresses omitted"), "{warnings:?}");
     }
 
     #[test]

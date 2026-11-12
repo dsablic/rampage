@@ -338,6 +338,18 @@ unsafe extern "C" {
     fn rampage_decomp_data_region(handle: *mut Opaque, first: u64, last: u64, prefix: *const c_char) -> *const c_char;
     fn rampage_decomp_callee_inference(handle: *mut Opaque, effects: u8, prototypes: u8) -> *const c_char;
     fn rampage_decomp_fold_read_only(handle: *mut Opaque, enabled: u8) -> *const c_char;
+    fn rampage_decomp_virtual_table(
+        handle: *mut Opaque,
+        address: u64,
+        complete: u64,
+        offset: i64,
+        slots: *const u64,
+        count: usize,
+        truncated: u8,
+        types: *const c_char,
+        types_length: usize,
+    ) -> *const c_char;
+    fn rampage_decomp_virtual_name(handle: *mut Opaque, address: u64, name: *const c_char) -> *const c_char;
     fn rampage_decomp_global(handle: *mut Opaque, addr: u64, text: *const c_char) -> *const c_char;
     fn rampage_decomp_parse_c(handle: *mut Opaque, text: *const c_char) -> *const c_char;
     fn rampage_decomp_error(handle: *mut Opaque) -> *const c_char;
@@ -444,6 +456,23 @@ pub struct Decompiler {
     data_organization: DataOrganization,
     language_id: String,
     address_highest: u64,
+}
+
+/// An MSVC vftable, for naming and typing virtual calls (see [`Decompiler::add_virtual_table`]).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VirtualTable {
+    /// Address of slot 0.
+    pub address: u64,
+    /// Identifies the complete class the table belongs to (its RTTI type descriptor address).
+    pub complete: u64,
+    /// Offset of the vfptr pointing here in the complete object.
+    pub offset: i64,
+    pub slots: Vec<u64>,
+    /// Later slots exist that `slots` leaves out.
+    pub truncated: bool,
+    /// Type names whose pointers point at an object whose vfptr at offset 0 is this table.
+    pub types: Vec<String>,
 }
 
 /// What the decompiler infers about a function's direct callees before decompiling it. Off by default: Ghidra then
@@ -607,6 +636,44 @@ impl Decompiler {
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: valid serialized handle; the returned error belongs to the handle.
         ffi_result(unsafe { rampage_decomp_fold_read_only(self.handle, u8::from(enabled)) })
+    }
+
+    /// Registers a vftable. Once any is registered, each decompilation finds the calls through a vfptr whose object
+    /// is known to point at one of these tables (it is the `this` of a function in a table's slots, or a pointer to
+    /// one of `types`), comments each with the slot's possible targets, and gives the call their prototype when
+    /// they all derive the same one. On 32-bit x86 a vfptr call that passes its object in ECX gets `__thiscall`.
+    pub fn add_virtual_table(&mut self, table: &VirtualTable) -> Result<(), Error> {
+        let mut types = Vec::new();
+        for name in &table.types {
+            if name.is_empty() || name.contains('\0') {
+                return Err(Error::Ghidra("invalid vftable type name".to_owned()));
+            }
+            types.extend_from_slice(name.as_bytes());
+            types.push(0);
+        }
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid serialized handle; the slot and type buffers outlive the call, which copies them.
+        ffi_result(unsafe {
+            rampage_decomp_virtual_table(
+                self.handle,
+                table.address,
+                table.complete,
+                table.offset,
+                table.slots.as_ptr(),
+                table.slots.len(),
+                u8::from(table.truncated),
+                types.as_ptr().cast(),
+                types.len(),
+            )
+        })
+    }
+
+    /// Names a virtual call target in the comments [`Decompiler::add_virtual_table`] adds.
+    pub fn set_virtual_name(&mut self, address: u64, name: &str) -> Result<(), Error> {
+        let name = CString::new(name).map_err(|_| Error::Ghidra("virtual target name contains NUL".to_owned()))?;
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid serialized handle and a live C string; the returned error belongs to the handle.
+        ffi_result(unsafe { rampage_decomp_virtual_name(self.handle, address, name.as_ptr()) })
     }
 
     /// Opts in to inference about direct callees, made before each decompilation; see [`CalleeInference`].

@@ -288,7 +288,7 @@ fn msvc_locator_signature_must_match_pointer_width() {
 
 #[test]
 fn msvc_64bit_image_base_must_be_64k_aligned() {
-    assert_eq!(msvc_64bit_derived(0x1_4000_0000).len(), 1);
+    assert_eq!(msvc_64bit_derived(0x1_4000_0000).len(), 2);
     assert!(msvc_64bit_derived(0x1_4000_8000).is_empty());
 }
 
@@ -319,8 +319,11 @@ fn msvc_single_inheritance_64bit_image_relative() {
     // Signature 1: cross-references are 32-bit RVAs, resolved against the image base recovered from the
     // locator's self RVA. The type descriptor vftable stays a full 64-bit pointer.
     let classes = msvc_64bit_derived(0x1_4000_0000);
-    assert_eq!(classes.len(), 1, "{classes:?}");
+    // Base has no locator of its own: it is listed after the located classes, from Derived's hierarchy.
+    let names: Vec<(&str, &str)> = classes.iter().map(|class| (class.name.as_str(), class.source)).collect();
+    assert_eq!(names, [("Derived", "rtti_scan"), ("Base", "rtti_base")]);
     assert_eq!(class(&classes, "Derived").bases, ["Base"]);
+    assert!(class(&classes, "Base").bases.is_empty());
     // After the 16-byte vftable stand-in and the 32-byte Base descriptor.
     assert_eq!(class(&classes, "Derived").type_info, 0x1_4000_1000 + 16 + 32);
 }
@@ -353,6 +356,14 @@ fn msvc_bases_are_direct_edges_not_the_flattened_hierarchy() {
     let classes = recover_msvc(&blob.image());
     assert_eq!(class(&classes, "C").bases, ["B"]);
     assert_eq!(class(&classes, "D").bases, ["B", "X"]);
+    // The classes seen only as bases get rows with their own direct bases, once each.
+    assert_eq!(class(&classes, "B").bases, ["A"]);
+    assert!(class(&classes, "A").bases.is_empty() && class(&classes, "X").bases.is_empty());
+    let names: Vec<(&str, &str)> = classes.iter().map(|class| (class.name.as_str(), class.source)).collect();
+    assert_eq!(
+        names,
+        [("C", "rtti_scan"), ("D", "rtti_scan"), ("B", "rtti_base"), ("A", "rtti_base"), ("X", "rtti_base")]
+    );
 }
 
 #[test]

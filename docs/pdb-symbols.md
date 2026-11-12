@@ -36,6 +36,11 @@ or invalid. Every real Microsoft C++ PDB hits that, so the reader now chooses na
   templates and lambdas), and addresses that several procedure records name differently (folded bodies) with no
   decorated alias. The rest of the PDB still imports.
 
+The producer procedure ranges the loader reads for corpus truth (`matched_procedures_checked`, with warnings from
+`matched_procedures_reported`) follow the same policy: an address whose procedure records disagree on name or
+length (a body `/OPT:ICF` folded several functions into) is omitted and counted in a warning instead of rejecting
+the PDB.
+
 Corruption, exhausted limits and identity mismatches still reject the whole PDB. Names
 at undiscovered entries or already-named addresses are preserved; metadata does not invent discovery evidence.
 The preview can include names not eligible for application. There is no dedicated UI import action.

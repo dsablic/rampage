@@ -216,6 +216,28 @@ pub enum WorkerOperation {
     FoldReadOnly {
         enabled: bool,
     },
+    /// Resolve virtual calls through these vftables (see `Decompiler::add_virtual_table`), naming their targets.
+    VirtualTables {
+        tables: Vec<crate::VirtualTable>,
+        names: Vec<(u64, String)>,
+    },
+}
+
+impl crate::Decompiler {
+    /// Applies [`WorkerOperation::VirtualTables`].
+    pub fn add_virtual_tables(
+        &mut self,
+        tables: &[crate::VirtualTable],
+        names: &[(u64, String)],
+    ) -> Result<(), crate::Error> {
+        for table in tables {
+            self.add_virtual_table(table)?;
+        }
+        for (address, name) in names {
+            self.set_virtual_name(*address, name)?;
+        }
+        Ok(())
+    }
 }
 
 fn expected_context<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
@@ -1122,6 +1144,7 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
             WorkerOperation::DataRegion { first, last, prefix } => engine.add_data_region(first, last, &prefix),
             WorkerOperation::CalleeInference { inference } => engine.set_callee_inference(inference),
             WorkerOperation::FoldReadOnly { enabled } => engine.set_read_only_folding(enabled),
+            WorkerOperation::VirtualTables { tables, names } => engine.add_virtual_tables(&tables, &names),
         };
         result.map_err(|error| format!("operation {index}: {error}"))?;
         if checks_types {

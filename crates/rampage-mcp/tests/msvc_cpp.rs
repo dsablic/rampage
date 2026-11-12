@@ -136,6 +136,35 @@ async fn msvc_functions_vftables_and_exception_handlers_match_the_pdb() {
         let rtti: BTreeSet<&str> =
             classes["rtti_classes"].as_array().unwrap().iter().map(|class| class["name"].as_str().unwrap()).collect();
         assert!(names.is_subset(&rtti), "{arch}: {names:?} vs {rtti:?}");
+        // Classes seen only as bases (no vftable of their own: abstract or never constructed) get rows too.
+        let rows = classes["rtti_classes"].as_array().unwrap();
+        assert_eq!(classes["rtti_classes_total"], 18, "{arch}");
+        let base_only: BTreeSet<&str> = rows
+            .iter()
+            .filter(|class| class["source"] == "rtti_base")
+            .map(|class| class["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            base_only,
+            BTreeSet::from(["Box<short>", "geo::Drawable", "geo::Node", "geo::Serializable"]),
+            "{arch}"
+        );
+        // RTTI classes page like vftables.
+        let mut paged = Vec::new();
+        let mut offset = Some(0);
+        while let Some(at) = offset {
+            let page = call(
+                &client,
+                "class_evidence",
+                json!({"path": exe.0, "rtti_class_offset": at, "rtti_class_limit": 5, "vftable_limit": 1}),
+            )
+            .await;
+            assert_eq!(page["rtti_classes_offset"], at);
+            assert!(page["rtti_classes"].as_array().unwrap().len() <= 5);
+            paged.extend(page["rtti_classes"].as_array().unwrap().iter().cloned());
+            offset = page["rtti_classes_next_offset"].as_u64();
+        }
+        assert_eq!(&paged, rows, "{arch}");
 
         // Paging: one function per page, exact totals.
         let first = call(&client, "exception_handlers", json!({"path": exe.0, "limit": 1})).await;
@@ -172,6 +201,68 @@ async fn msvc_functions_vftables_and_exception_handlers_match_the_pdb() {
         let preview = call(&client, "import_pdb_names", json!({"path": exe.0, "pdb": pdb, "limit": 1})).await;
         assert_eq!(preview["ok"], true, "{preview}");
         assert!(preview["preview_total"].as_u64().unwrap() >= truth.len() as u64 - 5, "{preview}");
+    }
+}
+
+#[tokio::test]
+async fn virtual_calls_name_their_slot_targets_and_pass_this() {
+    let client = connect().await;
+    for arch in ["x64", "x86"] {
+        let exe = Copy::new(&format!("msvc-cpp-{arch}.exe"));
+        let pdb = exe.0.with_extension("pdb");
+        let imported = call(&client, "import_pdb_names", json!({"path": exe.0, "pdb": pdb, "apply": true})).await;
+        assert_eq!(imported["ok"], true, "{imported}");
+        let width = if arch == "x64" { 8 } else { 4 };
+        let decompile = |at: &'static str| {
+            let path = exe.0.clone();
+            let client = &client;
+            async move {
+                call(client, "decompile", json!({"path": path, "at": at})).await["code"].as_str().unwrap().to_owned()
+            }
+        };
+
+        // A virtual method's `this` points at an object whose vfptr is one of the tables holding the method;
+        // `serialize` lives in Sprite's Serializable table and calls `name()` through the primary vfptr before it.
+        let code = decompile("geo::Sprite::serialize").await;
+        let comment = format!("Virtual call: vftable slot 3 (+{:#x}) -> geo::Sprite::name", 3 * width);
+        assert!(code.contains(&comment), "{arch}:\n{code}");
+        // `name()` ignores `this`, but the call still passes it.
+        let primary = if arch == "x64" { "param_1 + -0x20" } else { "param_1 + -0x14" };
+        let call_text = code.split(&comment).nth(1).unwrap().lines().nth(1).unwrap();
+        let arguments = call_text.rsplit_once("))(").unwrap().1;
+        assert!(arguments.contains(primary), "{arch}: {call_text}");
+
+        // Untyped, `measure`'s argument has no class; on x86 its vfptr calls still get __thiscall.
+        let code = decompile("measure").await;
+        assert!(!code.contains("Virtual call"), "{arch}:\n{code}");
+        if arch == "x86" {
+            assert_eq!(code.matches("))(param_1)").count(), 3, "{arch}:\n{code}");
+        }
+
+        // Typed with a class's name, each call names its slot's overriders (never `_purecall`) and passes `this`.
+        let at = "measure";
+        call(&client, "set_types", json!({"path": exe.0, "at": at, "text": "struct geo_Shape { int4 vfptr; };"})).await;
+        call(&client, "set_signature", json!({"path": exe.0, "at": at, "text": "int4 measure(geo_Shape *shape);"}))
+            .await;
+        let code = decompile("measure").await;
+        for (slot, targets) in [
+            (1, "geo::Rect::area, geo::Circle::area"),
+            (2, "geo::Rect::perimeter, geo::Circle::perimeter"),
+            (3, "geo::Rect::name, geo::Shape::name, geo::Square::name, geo::Circle::name, geo::Sprite::name"),
+        ] {
+            let comment = format!("vftable slot {slot} (+{:#x}) -> ", slot * width);
+            let start = code.find(&comment).unwrap_or_else(|| panic!("{arch}: no slot {slot}:\n{code}"));
+            let text: String = code[start + comment.len()..]
+                .split("*/")
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert_eq!(text, targets, "{arch}");
+        }
+        assert!(!code.contains("purecall"), "{arch}:\n{code}");
+        assert_eq!(code.matches("(shape)").count(), 3, "{arch}:\n{code}");
     }
 }
 
