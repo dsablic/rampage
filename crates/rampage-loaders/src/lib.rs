@@ -8,6 +8,7 @@ mod macho;
 mod model;
 mod raw;
 pub mod raw_pointers;
+pub mod raw_records;
 pub mod raw_vectors;
 mod slots;
 pub mod snapshot;
@@ -27,8 +28,9 @@ pub use linkage::{
 pub use load::{Binary, Embedded, ImageAt, InventorySourceContext, LoadError};
 pub use model::{Export, Format, Import, ImportSlot, Perms, Section, SectionKind, Segment, Symbol, SymbolKind};
 pub use raw::{
-    MAX_RAW_BYTES, MAX_RAW_NATIVE_BYTES, MAX_RAW_SEEDS, RawCodeImage, RawCodeOptions, RawCodeSpace,
-    RawInterpretationIdentity, RawProfile,
+    MAX_RAW_BYTES, MAX_RAW_NATIVE_BYTES, MAX_RAW_REGIONS, MAX_RAW_SEEDS, RawCodeImage, RawCodeOptions, RawCodeSpace,
+    RawImage, RawInterpretationIdentity, RawProfile, RawRecordFacts, RawRecordsEvidence, RawRegion, RawRegionInfo,
+    RawRegionKind, RawRegionSource, RawStartAddress, RawStartRefusedReason, RawStartStatus,
 };
 pub mod buildinfo;
 mod checked_snapshot;

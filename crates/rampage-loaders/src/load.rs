@@ -240,15 +240,22 @@ impl Binary {
     /// Owns one explicitly interpreted code image. No header parsing, entry inference or filesystem access.
     /// All addresses are internal byte offsets; this is not a C data-space or capture mapping.
     pub fn from_raw_code(data: Vec<u8>, options: crate::RawCodeOptions) -> Result<Self, LoadError> {
-        let raw = crate::RawCodeImage::admit(&data, options)?;
+        Self::from_raw_image(crate::RawImage { bytes: data, options, source: None, regions: Vec::new(), records: None })
+    }
+
+    /// Owns one explicitly interpreted image of a primary code region and any further analyst-stated regions
+    /// (code, constant data, RAM with or without bytes). Regions never overlap; no header parsing, entry
+    /// inference or filesystem access. The owned bytes are the backed regions' bytes in region order.
+    pub fn from_raw_image(image: crate::RawImage) -> Result<Self, LoadError> {
+        let (raw, data) = crate::RawCodeImage::admit(image)?;
         let arch = raw.profile().arch();
         let len = data.len();
         Ok(Self {
             format: Format::Raw,
             arch,
             entry: raw.entry(),
-            segments: vec![raw.segment()],
-            sections: vec![raw.section()],
+            segments: raw.segments(),
+            sections: raw.sections(),
             symbols: Vec::new(),
             imports: Vec::new(),
             import_slots: Vec::new(),
@@ -261,7 +268,7 @@ impl Binary {
             thumb: raw.thumb_ranges(),
             overlay: None,
             code_big_endian: raw.profile().code_big_endian(),
-            code_ranges: vec![raw.range()],
+            code_ranges: raw.code_ranges(),
             global_pointer: None,
             got: None,
             rebases: Vec::new(),
@@ -320,15 +327,15 @@ impl Binary {
             || self.arch != raw.profile().arch()
             || self.entry != raw.entry()
             || self.function_starts != raw.seeds()
-            || self.segments != [raw.segment()]
-            || self.sections != [raw.section()]
+            || self.segments != raw.segments()
+            || self.sections != raw.sections()
             || self.slices != [self.arch]
             || self.big_endian != raw.profile().big_endian()
             || self.code_big_endian != raw.profile().code_big_endian()
             || self.thumb != raw.thumb_ranges()
-            || self.code_ranges != [raw.range()]
+            || self.code_ranges != raw.code_ranges()
             || self.image != (0..self.data.len())
-            || self.data.len() as u64 != raw.length()
+            || self.data.len() as u64 != raw.backed_bytes()
             || !matches!(&self.data, Bytes::Owned(_))
             || self.snapshot_source.is_some()
             || self.provenance.is_some()

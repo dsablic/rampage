@@ -253,12 +253,19 @@ pub struct Summary<'a> {
 #[derive(Debug, Serialize)]
 pub struct RawSummary<'a> {
     pub profile: rampage_loaders::RawProfile,
+    /// Base address and byte count of the primary code region, `regions[0]`.
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub base_address: u64,
     pub length: u64,
     /// Discovery seeds, supplied, vector-table handlers and pointer-table targets together (the entry is counted
     /// separately).
     pub seed_count: usize,
+    /// Every mapped region, the primary code region first: kind, mapping, SHA-256 of its bytes and where they came
+    /// from (a file range, a decoder provider's receipt, record data, or nothing for unbacked RAM).
+    pub regions: &'a [rampage_loaders::RawRegionInfo],
+    /// Intel HEX or S-record input: the format, data records read and the verdict on the start-address record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub records: Option<&'a rampage_loaders::RawRecordsEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_table: Option<&'a rampage_loaders::raw_vectors::VectorTable>,
     #[serde(skip_serializing_if = "Option::is_none")]

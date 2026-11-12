@@ -709,6 +709,8 @@ impl Project {
                 base_address: raw.base(),
                 length: raw.length(),
                 seed_count: raw.seeds().len(),
+                regions: raw.regions(),
+                records: raw.records(),
                 vector_table: raw.vector_table(),
                 pointer_tables: raw.pointer_tables(),
             }),

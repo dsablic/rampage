@@ -1,10 +1,11 @@
 use rampage_decompiler::{MemoryRegion, has_reviewed_raw_c_model};
-use rampage_loaders::{Binary, Format};
+use rampage_loaders::{Binary, Format, RawRegionKind};
 
 use crate::ApiError;
 
-/// One read-only RX mapping of exactly the admitted Raw code range. Nothing else, in no other space, is mapped.
-fn raw_region(binary: &Binary) -> Result<MemoryRegion<'_>, ApiError> {
+/// Exactly the admitted Raw regions, each with its kind's permissions: code `r-x`, constant data `r--`, RAM `rw-`
+/// (zero-filled when it has no bytes). Nothing else, in no other space, is mapped.
+fn raw_regions(binary: &Binary) -> Result<Vec<MemoryRegion<'_>>, ApiError> {
     let identity = binary.raw_interpretation_identity().map_err(|error| ApiError::Invalid(error.to_string()))?;
     let raw = binary
         .raw_code_image()
@@ -16,16 +17,31 @@ fn raw_region(binary: &Binary) -> Result<MemoryRegion<'_>, ApiError> {
         return Err(ApiError::Unavailable(format!("no reviewed C model for {}", profile.language_id())));
     }
     let bytes = binary.image_bytes();
-    let range = raw.range();
-    if bytes.len() as u64 != raw.length() || range.end - range.start != raw.length() {
+    if bytes.len() as u64 != raw.backed_bytes() {
         return Err(ApiError::Invalid("Raw code bytes disagree with the admitted mapping".into()));
     }
-    Ok(MemoryRegion { base: range.start, bytes, size: raw.length(), readable: true, writable: false, executable: true })
+    raw.regions()
+        .iter()
+        .map(|region| {
+            let bytes = bytes
+                .get(region.data_range())
+                .ok_or_else(|| ApiError::Invalid("Raw region bytes disagree with the admitted mapping".into()))?;
+            let kind = region.kind;
+            Ok(MemoryRegion {
+                base: region.base_address,
+                bytes,
+                size: region.length,
+                readable: true,
+                writable: kind == RawRegionKind::Ram,
+                executable: kind == RawRegionKind::Code,
+            })
+        })
+        .collect()
 }
 
 pub(super) fn regions(binary: &Binary) -> Result<Vec<MemoryRegion<'_>>, ApiError> {
     if binary.format == Format::Raw || binary.raw_code_image().is_some() {
-        return Ok(vec![raw_region(binary)?]);
+        return raw_regions(binary);
     }
     let mut regions = Vec::new();
     for segment in &binary.segments {

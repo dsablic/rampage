@@ -11,7 +11,9 @@ pub const MAX_RAW_BYTES: usize = 128 * 1024;
 /// Input cap for the natively decoded Cortex-M profile: flash images are typically 256 KiB to 2 MiB.
 pub const MAX_RAW_NATIVE_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_RAW_SEEDS: usize = 8192;
-const IDENTITY_SCHEMA: &str = "rampage-raw-interpretation-v4";
+/// Regions one Raw project maps, the primary one included.
+pub const MAX_RAW_REGIONS: usize = 16;
+const IDENTITY_SCHEMA: &str = "rampage-raw-interpretation-v5";
 
 /// Closed set of Raw ordinary-Project profiles, admitted family by family on Project-level evidence.
 /// Every row must equal the verified native translator's metadata; the decoder factory checks this.
@@ -217,6 +219,196 @@ pub struct RawCodeOptions {
     pub pointer_tables: bool,
 }
 
+/// What an additional region holds, which fixes its permissions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RawRegionKind {
+    /// Executable bytes the program does not write (flash, or a stage copied to RAM and then run): `r-x`.
+    /// Discovery seeds may lie here, and on Cortex-M its literal pools fold as constants.
+    Code,
+    /// Constant bytes: `r--`.
+    Data,
+    /// Memory the program writes: `rw-`. With bytes they are initial values, never constants; without bytes it
+    /// is zero-filled or uninitialised RAM, or memory-mapped I/O.
+    Ram,
+}
+
+impl RawRegionKind {
+    fn name(self) -> &'static str {
+        match self {
+            RawRegionKind::Code => "code",
+            RawRegionKind::Data => "data",
+            RawRegionKind::Ram => "ram",
+        }
+    }
+
+    fn perms(self) -> Perms {
+        Perms { read: true, write: self == RawRegionKind::Ram, execute: self == RawRegionKind::Code }
+    }
+}
+
+/// Where a region's bytes came from, as the opener states it. Reported with the region and bound by the
+/// interpretation identity; the loader itself reads no file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RawRegionSource {
+    /// `length` bytes at `offset` of the opened file, mapped as they are.
+    FileRange { offset: u64, length: u64 },
+    /// The output of a decoder provider over `length` bytes at `offset` of the opened file. `receipt` is the
+    /// provider's receipt (codec, parameters, source-range and output hashes); the decoded bytes exist only in
+    /// memory.
+    Decoded { offset: u64, length: u64, receipt: serde_json::Value },
+    /// A contiguous run of data records of an Intel HEX or S-record file; the address comes from the records.
+    Records { format: crate::raw_records::RawRecordFormat },
+    /// No bytes: zero-filled or uninitialised RAM, or memory-mapped I/O.
+    Unbacked,
+}
+
+/// One additional region of a Raw project: an analyst-stated mapping of `bytes`, or of `size` unbacked bytes.
+#[derive(Debug, Clone)]
+pub struct RawRegion {
+    pub kind: RawRegionKind,
+    /// Code-space byte address of the first byte.
+    pub base: u64,
+    /// Mapped byte count; equal to the byte count when `bytes` is given.
+    pub size: u64,
+    /// The region's bytes; `None` only for an unbacked [`RawRegionKind::Ram`] region.
+    pub bytes: Option<Vec<u8>>,
+    pub source: RawRegionSource,
+}
+
+/// A record file's facts that are not region bytes.
+#[derive(Debug, Clone, Copy)]
+pub struct RawRecordFacts {
+    pub format: crate::raw_records::RawRecordFormat,
+    pub data_records: usize,
+    pub start_address: Option<u64>,
+}
+
+/// Everything one Raw project maps: the primary code region of `options`, further regions, and record facts.
+#[derive(Debug, Clone)]
+pub struct RawImage {
+    /// The primary code region's bytes, mapped at `options.base`.
+    pub bytes: Vec<u8>,
+    pub options: RawCodeOptions,
+    /// Where the primary region's bytes came from, when the opener states it.
+    pub source: Option<RawRegionSource>,
+    /// Additional regions; only the natively decoded Cortex-M profile admits any.
+    pub regions: Vec<RawRegion>,
+    pub records: Option<RawRecordFacts>,
+}
+
+/// One mapped region as admitted, the primary code region first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RawRegionInfo {
+    /// The segment and section name: `raw.code` for the primary region, `raw.<kind>.<index>` for the others.
+    pub name: String,
+    pub kind: RawRegionKind,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub base_address: u64,
+    /// Mapped bytes.
+    pub length: u64,
+    /// SHA-256 of the mapped bytes; absent for an unbacked region.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<RawRegionSource>,
+    /// Offset of the region's bytes in the project's owned bytes.
+    #[serde(skip)]
+    data_offset: u64,
+}
+
+impl RawRegionInfo {
+    pub fn range(&self) -> Range<u64> {
+        self.base_address..self.base_address + self.length
+    }
+
+    /// Whether the region has bytes; an unbacked region reads as nothing.
+    pub fn backed(&self) -> bool {
+        self.sha256.is_some()
+    }
+
+    /// The region's bytes in the project's owned bytes; empty for an unbacked region.
+    pub fn data_range(&self) -> Range<usize> {
+        let start = self.data_offset as usize;
+        start..start + if self.backed() { self.length as usize } else { 0 }
+    }
+
+    fn segment(&self) -> Segment {
+        Segment {
+            name: self.name.clone(),
+            address: self.base_address,
+            size: self.length,
+            file_offset: self.data_offset,
+            file_size: if self.backed() { self.length } else { 0 },
+            perms: self.kind.perms(),
+        }
+    }
+
+    fn section(&self) -> Section {
+        let kind = match (self.kind, self.backed()) {
+            (RawRegionKind::Code, _) => SectionKind::Code,
+            (RawRegionKind::Data, _) => SectionKind::ReadOnlyData,
+            (RawRegionKind::Ram, true) => SectionKind::Data,
+            (RawRegionKind::Ram, false) => SectionKind::UninitializedData,
+        };
+        Section {
+            name: self.name.clone(),
+            address: self.base_address,
+            size: self.length,
+            kind,
+            file_offset: self.backed().then_some(self.data_offset),
+            file_size: if self.backed() { self.length } else { 0 },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RawStartStatus {
+    /// Inside a code region: used as the entry, or as a seed when `entry` or the vector table's Reset names
+    /// another address.
+    Accepted,
+    /// Zero with no code mapped there: the record states no start address.
+    Empty,
+    /// Not used; `refused_reason` says why.
+    Refused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RawStartRefusedReason {
+    /// Outside every mapped code region.
+    OutsideCode,
+    /// Violates the profile's instruction alignment.
+    Unaligned,
+    /// Inside the vector table that was read: table words, not an instruction.
+    InVectorTable,
+}
+
+/// The start-address record of a record file and the verdict on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RawStartAddress {
+    /// The record's value as written.
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub word: u64,
+    pub status: RawStartStatus,
+    /// The instruction it names (a Thumb bit cleared), when accepted.
+    #[serde(serialize_with = "rampage_arch::hex::optional_address", skip_serializing_if = "Option::is_none")]
+    pub target: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused_reason: Option<RawStartRefusedReason>,
+}
+
+/// What a record file contributed besides region bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RawRecordsEvidence {
+    pub format: crate::raw_records::RawRecordFormat,
+    pub data_records: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_address: Option<RawStartAddress>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RawCodeImage {
     profile: RawProfile,
@@ -225,6 +417,9 @@ pub struct RawCodeImage {
     end: u64,
     entry: Option<u64>,
     seeds: Vec<u64>,
+    regions: Vec<RawRegionInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    records: Option<RawRecordsEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vector_table: Option<crate::raw_vectors::VectorTable>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -237,8 +432,15 @@ pub struct RawInterpretationIdentity {
     pub sha256: String,
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    rampage_arch::hex::bytes(&Sha256::digest(bytes))
+}
+
 impl RawCodeImage {
-    pub(crate) fn admit(bytes: &[u8], mut options: RawCodeOptions) -> Result<Self, LoadError> {
+    /// Admits `image` and returns the retained facts with the project's owned bytes: the primary region's bytes
+    /// followed by every other backed region's, in region order.
+    pub(crate) fn admit(image: RawImage) -> Result<(Self, Vec<u8>), LoadError> {
+        let RawImage { bytes, mut options, source, regions: extra, records } = image;
         let length = bytes.len();
         let max = options.profile.max_bytes();
         if length == 0 || length > max || options.seeds.len() > MAX_RAW_SEEDS {
@@ -255,13 +457,91 @@ impl RawCodeImage {
             return Err(LoadError::Malformed("Raw base violates profile instruction alignment".into()));
         }
         let end = checked_code_end(options.base, length, space.highest_byte)?;
+        let mut regions = vec![RawRegionInfo {
+            name: "raw.code".into(),
+            kind: RawRegionKind::Code,
+            base_address: options.base,
+            length,
+            sha256: Some(sha256_hex(&bytes)),
+            source,
+            data_offset: 0,
+        }];
+        let mut data = bytes;
+        if !extra.is_empty() && !options.profile.native_decoder() {
+            return Err(LoadError::Malformed(format!(
+                "Raw {} maps one code region: additional regions are defined only for ARM:LE:32:Cortex",
+                options.profile.language_id()
+            )));
+        }
+        if extra.len() >= MAX_RAW_REGIONS {
+            return Err(LoadError::Malformed(format!(
+                "Raw maps at most {MAX_RAW_REGIONS} regions, the primary one included"
+            )));
+        }
+        for (index, region) in extra.into_iter().enumerate() {
+            let name = format!("raw.{}.{}", region.kind.name(), index + 1);
+            let refuse = |message: &str| Err(LoadError::Malformed(format!("Raw region {name}: {message}")));
+            match &region.bytes {
+                Some(bytes) if bytes.len() as u64 != region.size => {
+                    return refuse("size disagrees with its bytes");
+                }
+                Some(_) if region.source == RawRegionSource::Unbacked => {
+                    return refuse("an unbacked source has no bytes");
+                }
+                None if region.kind != RawRegionKind::Ram || region.source != RawRegionSource::Unbacked => {
+                    return refuse("only a ram region may be unbacked; code and data need bytes");
+                }
+                _ => {}
+            }
+            if region.kind == RawRegionKind::Code && !region.base.is_multiple_of(alignment) {
+                return refuse("base violates profile instruction alignment");
+            }
+            if let Err(error) = checked_code_end(region.base, region.size, space.highest_byte) {
+                return refuse(&error.to_string());
+            }
+            let backed = region.bytes.as_deref().unwrap_or_default();
+            if data.len() + backed.len() > max {
+                return Err(LoadError::Malformed(format!(
+                    "Raw {} regions together hold more than {} KiB of bytes",
+                    options.profile.language_id(),
+                    max / 1024
+                )));
+            }
+            let info = RawRegionInfo {
+                name,
+                kind: region.kind,
+                base_address: region.base,
+                length: region.size,
+                sha256: region.bytes.as_deref().map(sha256_hex),
+                source: Some(region.source),
+                data_offset: data.len() as u64,
+            };
+            data.extend_from_slice(backed);
+            regions.push(info);
+        }
+        let mut by_address: Vec<&RawRegionInfo> = regions.iter().collect();
+        by_address.sort_by_key(|region| region.base_address);
+        if let Some(pair) = by_address.windows(2).find(|pair| pair[0].range().end > pair[1].base_address) {
+            return Err(LoadError::Malformed(format!(
+                "Raw regions overlap: {} {:#x}..{:#x} and {} {:#x}..{:#x}",
+                pair[0].name,
+                pair[0].base_address,
+                pair[0].range().end,
+                pair[1].name,
+                pair[1].base_address,
+                pair[1].range().end
+            )));
+        }
+        let in_code = |address: u64| {
+            regions.iter().any(|region| region.kind == RawRegionKind::Code && region.range().contains(&address))
+        };
         if options.profile.m_profile() {
             // Thumb code pointers carry bit 0; the instruction starts at the even address.
             options.entry = options.entry.map(|entry| entry & !1);
             options.seeds.iter_mut().for_each(|seed| *seed &= !1);
         }
         let check_start = |address: u64| {
-            if !address.is_multiple_of(alignment) || !(options.base..end).contains(&address) {
+            if !address.is_multiple_of(alignment) || !in_code(address) {
                 return Err(LoadError::Malformed("Raw entry/seed must be aligned and backed by code bytes".into()));
             }
             Ok(())
@@ -272,6 +552,8 @@ impl RawCodeImage {
         for &seed in &options.seeds {
             check_start(seed)?;
         }
+        // Vector and pointer tables are read from the primary region only; their targets lie inside it.
+        let primary = &data[..length as usize];
         let vector_table = match options.vector_table {
             None => None,
             Some(_) if !options.profile.m_profile() => {
@@ -280,7 +562,7 @@ impl RawCodeImage {
                 ));
             }
             Some(address) => {
-                let table = crate::raw_vectors::read(bytes, options.base, address)?;
+                let table = crate::raw_vectors::read(primary, options.base, address)?;
                 if let Some(reset) = table.reset() {
                     match options.entry {
                         None => options.entry = Some(reset),
@@ -293,13 +575,47 @@ impl RawCodeImage {
                 Some(table)
             }
         };
+        let table_words =
+            vector_table.as_ref().map(|table| table.address..table.address + 4 * table.words_read as u64);
+        let records = records.map(|facts| {
+            let start_address = facts.start_address.map(|word| {
+                let target = if options.profile.m_profile() { word & !1 } else { word };
+                let refused = if !in_code(target) {
+                    Some(RawStartRefusedReason::OutsideCode)
+                } else if !target.is_multiple_of(alignment) {
+                    Some(RawStartRefusedReason::Unaligned)
+                } else if table_words.as_ref().is_some_and(|table| table.contains(&target)) {
+                    Some(RawStartRefusedReason::InVectorTable)
+                } else {
+                    None
+                };
+                let status = match refused {
+                    None => RawStartStatus::Accepted,
+                    Some(RawStartRefusedReason::OutsideCode) if word == 0 => RawStartStatus::Empty,
+                    Some(_) => RawStartStatus::Refused,
+                };
+                RawStartAddress {
+                    word,
+                    status,
+                    target: (status == RawStartStatus::Accepted).then_some(target),
+                    refused_reason: refused.filter(|_| status == RawStartStatus::Refused),
+                }
+            });
+            RawRecordsEvidence { format: facts.format, data_records: facts.data_records, start_address }
+        });
+        if let Some(start) = records.as_ref().and_then(|records| records.start_address.as_ref()?.target) {
+            match options.entry {
+                None => options.entry = Some(start),
+                Some(entry) if entry != start => options.seeds.push(start),
+                Some(_) => {}
+            }
+        }
         let pointer_tables = if !options.pointer_tables {
             None
         } else if !options.profile.m_profile() {
             return Err(LoadError::Malformed("Raw pointer-table seeding is defined only for ARM:LE:32:Cortex".into()));
         } else {
-            let skip = vector_table.as_ref().map(|table| table.address..table.address + 4 * table.words_read as u64);
-            let tables = crate::raw_pointers::scan(bytes, options.base, skip);
+            let tables = crate::raw_pointers::scan(primary, options.base, table_words);
             let entry = options.entry;
             // Tables repeat targets (a default handler in many slots): dedupe before they meet the seed cap.
             let targets: std::collections::BTreeSet<u64> = tables.targets().collect();
@@ -313,26 +629,31 @@ impl RawCodeImage {
                 "Raw accepts at most 8192 seeds, vector-table handlers and pointer-table targets included".into(),
             ));
         }
-        Ok(Self {
+        let image = Self {
             profile: options.profile,
             base: options.base,
             length,
             end,
             entry: options.entry,
             seeds: options.seeds,
+            regions,
+            records,
             vector_table,
             pointer_tables,
-        })
+        };
+        Ok((image, data))
     }
 
     pub fn profile(&self) -> RawProfile {
         self.profile
     }
 
+    /// Base address of the primary code region.
     pub fn base(&self) -> u64 {
         self.base
     }
 
+    /// Byte count of the primary code region.
     pub fn length(&self) -> u64 {
         self.length
     }
@@ -345,6 +666,21 @@ impl RawCodeImage {
         &self.seeds
     }
 
+    /// Every mapped region, the primary code region first, then the additional ones in the order given.
+    pub fn regions(&self) -> &[RawRegionInfo] {
+        &self.regions
+    }
+
+    /// Bytes all backed regions hold together: the length of the project's owned bytes.
+    pub fn backed_bytes(&self) -> u64 {
+        self.regions.iter().filter(|region| region.backed()).map(|region| region.length).sum()
+    }
+
+    /// What a record file contributed besides region bytes, when the project was opened from one.
+    pub fn records(&self) -> Option<&RawRecordsEvidence> {
+        self.records.as_ref()
+    }
+
     /// Evidence for every vector read when vector-table seeding was requested.
     pub fn vector_table(&self) -> Option<&crate::raw_vectors::VectorTable> {
         self.vector_table.as_ref()
@@ -355,35 +691,34 @@ impl RawCodeImage {
         self.pointer_tables.as_ref()
     }
 
-    /// The Thumb-mode ranges a native decoder reads: the whole mapped range for the Cortex-M profile.
+    /// The Thumb-mode ranges a native decoder reads: every code region for the Cortex-M profile.
     pub fn thumb_ranges(&self) -> Vec<Range<u64>> {
-        if self.profile.m_profile() { vec![self.range()] } else { Vec::new() }
+        if self.profile.m_profile() { self.code_ranges() } else { Vec::new() }
     }
 
+    /// The primary code region's range.
     pub fn range(&self) -> Range<u64> {
         self.base..self.end
     }
 
-    pub(crate) fn segment(&self) -> Segment {
-        Segment {
-            name: "raw.code".into(),
-            address: self.base,
-            size: self.length,
-            file_offset: 0,
-            file_size: self.length,
-            perms: Perms { read: true, write: false, execute: true },
-        }
+    /// Every code region's range, ascending.
+    pub fn code_ranges(&self) -> Vec<Range<u64>> {
+        let mut ranges: Vec<Range<u64>> = self
+            .regions
+            .iter()
+            .filter(|region| region.kind == RawRegionKind::Code)
+            .map(RawRegionInfo::range)
+            .collect();
+        ranges.sort_by_key(|range| range.start);
+        ranges
     }
 
-    pub(crate) fn section(&self) -> Section {
-        Section {
-            name: "raw.code".into(),
-            address: self.base,
-            size: self.length,
-            kind: SectionKind::Code,
-            file_offset: Some(0),
-            file_size: self.length,
-        }
+    pub(crate) fn segments(&self) -> Vec<Segment> {
+        self.regions.iter().map(RawRegionInfo::segment).collect()
+    }
+
+    pub(crate) fn sections(&self) -> Vec<Section> {
+        self.regions.iter().map(RawRegionInfo::section).collect()
     }
 
     pub(crate) fn identity(&self, bytes: &[u8]) -> RawInterpretationIdentity {
@@ -399,9 +734,31 @@ impl RawCodeImage {
         hash.update([space.address_size, space.word_size, space.instruction_alignment]);
         hash.update(space.highest_byte.to_be_bytes());
         hash.update([u8::from(self.profile.big_endian()), u8::from(self.profile.code_big_endian())]);
-        // Schema v2 is exactly one RX code mapping, offset zero, no zero-fill or additional address spaces.
-        hash.update([1, 0, 1]);
-        for value in [self.base, self.length, self.end, 0_u64] {
+        // Schema v5 binds every region: kind, mapping, where its bytes lie in `bytes`, and the stated source.
+        hash.update((self.regions.len() as u64).to_be_bytes());
+        for region in &self.regions {
+            hash.update([region.kind as u8, u8::from(region.backed())]);
+            for value in [region.base_address, region.length, region.data_offset] {
+                hash.update(value.to_be_bytes());
+            }
+            match &region.source {
+                None => hash.update([0]),
+                Some(RawRegionSource::FileRange { offset, length }) => {
+                    hash.update([1]);
+                    hash.update(offset.to_be_bytes());
+                    hash.update(length.to_be_bytes());
+                }
+                Some(RawRegionSource::Decoded { offset, length, receipt }) => {
+                    hash.update([2]);
+                    hash.update(offset.to_be_bytes());
+                    hash.update(length.to_be_bytes());
+                    text(&mut hash, &receipt.to_string());
+                }
+                Some(RawRegionSource::Records { format }) => hash.update([3, *format as u8]),
+                Some(RawRegionSource::Unbacked) => hash.update([4]),
+            }
+        }
+        for value in [self.base, self.length, self.end] {
             hash.update(value.to_be_bytes());
         }
         hash.update((bytes.len() as u64).to_be_bytes());
@@ -420,6 +777,17 @@ impl RawCodeImage {
         hash.update(table.unwrap_or(0).to_be_bytes());
         // Schema v4 binds whether pointer tables were scanned; their evidence is a function of bytes and mapping.
         hash.update([u8::from(self.pointer_tables.is_some())]);
+        // Schema v5 binds the record format, record count and start-address word; the verdict follows from them.
+        match &self.records {
+            None => hash.update([0]),
+            Some(records) => {
+                hash.update([1, records.format as u8]);
+                hash.update((records.data_records as u64).to_be_bytes());
+                let word = records.start_address.as_ref().map(|start| start.word);
+                hash.update([u8::from(word.is_some())]);
+                hash.update(word.unwrap_or(0).to_be_bytes());
+            }
+        }
         RawInterpretationIdentity { schema: IDENTITY_SCHEMA, sha256: rampage_arch::hex::bytes(&hash.finalize()) }
     }
 }
