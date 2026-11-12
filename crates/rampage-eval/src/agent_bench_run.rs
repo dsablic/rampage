@@ -131,6 +131,10 @@ pub struct AgentBenchArgs {
     /// Why the runs are run again; recorded in the report's `rerun` block.
     #[arg(long)]
     rerun_reason: Option<String>,
+    /// Continue a pass that stopped early (cost cap or usage limit) in an existing --out-dir: recorded runs are
+    /// kept as they are and only the slots without a recorded run are run.
+    #[arg(long, conflicts_with_all = ["rescore", "rerun"])]
+    resume: bool,
     /// MAX_MCP_OUTPUT_TOKENS for every run, the same for every server.
     #[arg(long, default_value_t = 200_000)]
     max_mcp_output_tokens: u64,
@@ -265,6 +269,12 @@ pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
         }
         std::fs::remove_file(&rows_path).map_err(|error| error.to_string())?;
     }
+    if args.resume {
+        for line in read(&rows_path)?.lines().filter(|line| !line.trim().is_empty()) {
+            recorded.push(serde_json::from_str(line).map_err(|error| format!("{}: {error}", rows_path.display()))?);
+        }
+        std::fs::remove_file(&rows_path).map_err(|error| error.to_string())?;
+    }
     let mut superseded: Vec<Value> = Vec::new();
     let kept = out_dir.join("runs.before-rescore.jsonl");
     if args.rescore && rows_path.is_file() && !kept.exists() {
@@ -290,6 +300,18 @@ pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
                         stopped = Some(json!({"reason": "cost cap", "cap_usd": cap, "spent_usd": spent,
                             "completed_runs": rows.len(), "planned_runs": total}));
                         break 'runs;
+                    }
+                }
+                if args.resume {
+                    let earlier = recorded
+                        .iter()
+                        .find(|row| row.task_id == task.id && row.server == **server && row.repetition == repetition)
+                        .cloned();
+                    if let Some(row) = earlier {
+                        let line = serde_json::to_string(&row).map_err(|error| error.to_string())?;
+                        writeln!(rows_file, "{line}").map_err(|error| error.to_string())?;
+                        rows.push(row);
+                        continue;
                     }
                 }
                 if !args.rerun.is_empty() {
@@ -337,6 +359,15 @@ pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
                     out_dir: &out_dir,
                     args: &args,
                 })?;
+                if row.runner_error.as_deref().is_some_and(is_usage_limit) {
+                    // The account's usage limit, not the run: keep no row, so --resume runs this slot again.
+                    let name = format!("{}-r{repetition}", task.id);
+                    let _ = std::fs::remove_dir_all(out_dir.join("runs").join(server).join(&name));
+                    eprintln!("usage limit reached; stopping before {} {server} r{repetition}", task.id);
+                    stopped = Some(json!({"reason": "usage limit", "completed_runs": rows.len(),
+                        "planned_runs": total, "resume": "rerun with --resume and the same --out-dir"}));
+                    break 'runs;
+                }
                 eprintln!(
                     "[{}/{total}] {} {server} r{repetition}: {:?}{} calls={} wall={:.1}s",
                     rows.len() + 1,
@@ -684,5 +715,24 @@ mod tests {
         assert_eq!(server_order(&servers, 1), [&servers[0], &servers[1]]);
         assert_eq!(server_order(&servers, 2), [&servers[1], &servers[0]]);
         assert_eq!(server_order(&servers, 3), [&servers[0], &servers[1]]);
+    }
+}
+
+/// The runner reports a reply that only Claude Code itself produced (model `<synthetic>`): the account's usage
+/// limit or an API error, never an answer from the requested model.
+fn is_usage_limit(error: &str) -> bool {
+    error.starts_with("model differs from ") && error.ends_with("['<synthetic>']")
+}
+
+#[cfg(test)]
+mod usage_limit_tests {
+    use super::is_usage_limit;
+
+    #[test]
+    fn only_a_synthetic_only_reply_counts_as_the_usage_limit() {
+        assert!(is_usage_limit("model differs from claude-sonnet-5-5: ['<synthetic>']"));
+        assert!(!is_usage_limit("model differs from claude-sonnet-5-5: ['<synthetic>', 'claude-haiku-5-5']"));
+        assert!(!is_usage_limit("model differs from claude-sonnet-5-5: ['claude-haiku-5-5']"));
+        assert!(!is_usage_limit("isolation: non-built-in plugins: []"));
     }
 }

@@ -77,10 +77,12 @@ BUILTIN_TOOLS = (
 # The only built-in tool a run may use: it loads deferred MCP tool schemas and touches no file or network.
 ALLOWED_BUILTINS = ("ToolSearch",)
 
-# Claude Code's built-in plugins as of 2.1.318; any other plugin came from user configuration.
+# Claude Code's built-in plugins as of 2.1.322; any other plugin came from user configuration. A built-in plugin
+# that added a tool would still fail the run through the tools check.
 BUILTIN_PLUGINS = frozenset(
     {
         "cc-plugin-agents-md",
+        "cc-plugin-easel",
         "cc-plugin-plugin-authoring",
         "cc-plugin-privacy",
         "cc-plugin-sec-default",
