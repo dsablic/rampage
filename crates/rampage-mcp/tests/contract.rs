@@ -155,6 +155,19 @@ async fn contract_mcp_core_results() {
     // A wrong base: refused vectors and the never-applied base-address suggestion.
     let raw = json!({"profile": "cortex-m3", "offset": 0, "length": 800, "base_address": 0, "vector_table": true});
     exercise(c, o, "binary_info", json!({"path": fixtures.join("firmware/raw-cortex-m.bin"), "raw": raw})).await;
+    // Multiple regions: an LZSS-decoded second stage at its RAM base with its receipt, RAM with and without bytes.
+    let raw = json!({"profile": "cortex-m3", "offset": 0, "length": 1024, "base_address": "0x8000000",
+        "vector_table": true, "regions": [
+            {"kind": "code", "base_address": "0x20000000", "offset": "0x408", "length": 128,
+             "decode": {"codec": "lzss-4k", "expected_output_size": 128}},
+            {"kind": "ram", "base_address": "0x20000800", "offset": "0x800", "length": 8},
+            {"kind": "ram", "base_address": "0x20001000", "length": "0x4000"}]});
+    let stages = fixtures.join("firmware/raw-cortex-m-stages-lzss.bin");
+    exercise(c, o, "binary_info", json!({"path": stages, "raw": raw})).await;
+    // S-records: record runs as regions and the start-address verdict.
+    let raw = json!({"profile": "cortex-m3", "format": "srec"});
+    exercise(c, o, "binary_info", json!({"path": fixtures.join("firmware/raw-cortex-m-stages.srec"), "raw": raw}))
+        .await;
     // Pointer-table seeding: accepted and refused tables with evidence per entry.
     let tables = fixtures.join("firmware/raw-cortex-m-tables.bin");
     let length = std::fs::metadata(&tables).unwrap().len();

@@ -40,7 +40,7 @@ These may change or disappear in any minor release. Each is marked as experiment
   tools' names and arguments are stable; behaviour specific to these stubs may change once they are verified.
 - **Raw processor profiles beyond the reviewed ones:** the Sleigh profiles other than MSP430 (`default`) and AVR8
   (`gcc`), which have reviewed C models, and the Cortex-M profile (`ARM:LE:32:Cortex`) with its `vector_table`
-  and `pointer_tables` seeding. Their names, discovery behaviour and results may change. The `raw` field of `binary_info` is
+  and `pointer_tables` seeding, multiple `regions` and `ihex`/`srec` input. Their names, discovery behaviour and results may change. The `raw` field of `binary_info` is
   experimental for every Raw profile, though its fields are pinned in the contract snapshots so changes are seen.
 - **The `improve` group and the flywheel commands:** the MCP tools served with `--corpus`, the
   `--corpus`, `--flywheel-*`, `--gate`, `--require-novel-gain` and `--observations` options, the

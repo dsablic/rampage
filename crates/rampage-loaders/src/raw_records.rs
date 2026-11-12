@@ -49,7 +49,7 @@ fn hex_bytes(text: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let digit = |byte: u8| char::from(byte).to_digit(16).map(|digit| digit as u8);
-    text.chunks_exact(2).map(|pair| Some(digit(pair[0])? << 4 | digit(pair[1])?)).collect()
+    text.as_chunks::<2>().0.iter().map(|&[high, low]| Some(digit(high)? << 4 | digit(low)?)).collect()
 }
 
 fn big_endian(bytes: &[u8]) -> u64 {
@@ -58,11 +58,7 @@ fn big_endian(bytes: &[u8]) -> u64 {
 
 /// Parses `text` as `format`, admitting at most `max_data_bytes` of record data. Refuses a bad checksum, an unknown
 /// record type, a missing end record, data after it, overlapping records and addresses past 32 bits.
-pub fn parse_raw_records(
-    text: &[u8],
-    format: RawRecordFormat,
-    max_data_bytes: usize,
-) -> Result<RawRecords, LoadError> {
+pub fn parse_raw_records(text: &[u8], format: RawRecordFormat, max_data_bytes: usize) -> Result<RawRecords, LoadError> {
     if text.len() > MAX_RAW_RECORD_TEXT_BYTES {
         return Err(LoadError::Malformed(format!(
             "Raw {} record text exceeds {MAX_RAW_RECORD_TEXT_BYTES} bytes",
@@ -231,7 +227,7 @@ mod tests {
             ("0400000001020304F2\n", "not ':'"),
             (":00000006FA\n:00000001FF\n", "unknown record type"),
             (":00000001FF\n:0400000001020304F2\n", "follows the end record"),
-            (":0400000001020304F2\n:0200020009090A\n:00000001FF\n", "overlap at 0x2"),
+            (":0400000001020304F2\n:020002000909EA\n:00000001FF\n", "overlap at 0x2"),
             (":00000001FF\n", "hold no data"),
             (":0100000400FB\n:00000001FF\n", "wrong length"),
         ] {
@@ -245,7 +241,7 @@ mod tests {
     #[test]
     fn s_records_read_all_three_address_widths_and_the_start_record() {
         let parsed = srec(
-            "S00600004844521B\nS1070010010203049C\nS208010000AABBCC C5\nS30A2000000011223344552C\n\
+            "S00600004844521B\nS107001001020304DE\nS207010000AABBCCC6\nS30A200000001122334455D6\n\
              S5030003F9\nS70508000101F0\n"
                 .replace(' ', "")
                 .as_str(),
@@ -261,11 +257,11 @@ mod tests {
         );
         assert_eq!((parsed.data_records, parsed.start_address), (3, Some(0x0800_0101)));
         for (text, expected) in [
-            ("S1070010010203049D\nS9030000FC\n", "checksum mismatch"),
-            ("S1070010010203049C\n", "no end record"),
+            ("S107001001020304DF\nS9030000FC\n", "checksum mismatch"),
+            ("S107001001020304DE\n", "no end record"),
             ("S4030000FC\nS9030000FC\n", "unknown record type"),
             ("X1070010010203049C\n", "not 'S'"),
-            ("S9030000FC\nS1070010010203049C\n", "follows the end record"),
+            ("S9030000FC\nS107001001020304DE\n", "follows the end record"),
             ("S9030000FC\n", "hold no data"),
         ] {
             let error = srec(text).unwrap_err().to_string();

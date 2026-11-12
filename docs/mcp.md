@@ -396,7 +396,7 @@ decompilation for every profile except MSP430, AVR8 and Cortex-M, which have rev
 memory-only for the server session and the exact interpretation (bytes, profile, mapping, entry, seed set): no sidecar
 or log is written, changed seeds or bytes give a fresh project, and at most 32 interpretations are retained. Each tool's
 `raw` schema is a compact shape
-(about 0.5 KB); the field meanings and profile list appear once in the server instructions to keep the catalog small. See [explicit Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects).
+(about 0.7 KB); the field meanings and profile list appear once in the server instructions to keep the catalog small. See [explicit Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects).
 
 A Cortex-M flash image (experimental `ARM:LE:32:Cortex` profile) opens in one call from path, profile and base
 address, with `"vector_table": true` to read the vector table at `base_address` (or an address in its place):
@@ -435,6 +435,54 @@ point into code, tables of leaf functions only).
 
 `disassemble` with `count` up to 1000 pages through the whole image as text, data included.
 The session keeps at most 32 Raw interpretations and 64 MiB of their input bytes, evicting the least recently used.
+
+### Multiple regions, Intel HEX and S-records
+
+A Cortex-M project (experimental) may map up to 15 further regions of the same file beside the primary code region,
+so a bootloader's second stage is analysed at the address it runs from:
+
+```json
+{
+  "path": "tests/fixtures/firmware/raw-cortex-m-stages-lzss.bin",
+  "raw": {
+    "profile": "cortex-m3", "offset": 0, "length": 1024, "base_address": "0x8000000", "vector_table": true,
+    "regions": [
+      { "kind": "code", "base_address": "0x20000000", "offset": "0x408", "length": 128,
+        "decode": { "codec": "lzss-4k", "expected_output_size": 128 } },
+      { "kind": "ram", "base_address": "0x20000800", "offset": "0x800", "length": 8 },
+      { "kind": "ram", "base_address": "0x20001000", "length": "0x4000" }
+    ]
+  }
+}
+```
+
+Each region has a `kind`: `code` (r-x; seeds may lie here, and on Cortex-M its literal pools fold as constants),
+`data` (r--, constant bytes) or `ram` (rw-; its bytes, if any, are initial values the program may change, so the
+decompiler never folds loads from it). `offset`/`length` select its bytes in the same file; a `ram` region without
+`offset` has no bytes (zero-filled or uninitialised RAM, memory-mapped I/O) and `length` is its size. `decode`
+maps the in-memory output of the decoder provider over the range instead: it takes `decode_file_range`'s `codec`,
+`lzss`, `expected_output_size` (the region's size), `initial_write_offset`, `dictionary_fill` and `timeout_ms`;
+nothing is written to disk. Regions never overlap (the refusal names both), all backed regions together hold at
+most 4 MiB, and `vector_table`/`pointer_tables` read the primary region only. Discovery, data references, calls and
+the decompiler's memory image span every region, so a call from flash through a literal pool into the RAM stage,
+and back, resolves.
+
+`binary_info` lists `raw.regions`, the primary region first (`raw.code`, then `raw.<kind>.<n>`), each with `kind`,
+`base_address`, `length`, `sha256` of the mapped bytes (absent when unbacked) and `source`: `file_range`
+(`offset`, `length`), `decoded` (`offset`, `length` and the provider's `receipt`: codec, parameters, source-range
+SHA-256, output SHA-256, consumption and limits, without the path and preview), `records` (`format`) or
+`unbacked`. Each region is also a segment and section with its permissions.
+
+`"format": "ihex"` (Intel HEX) or `"srec"` (Motorola S1/S2/S3 with S7/S8/S9) reads a record file instead; omit
+`offset`, `length` and `base_address`, since every address comes from the records. Each record's checksum is
+verified; a missing end record, data after it, an unknown record type or overlapping records are refused, and
+nothing is filled across gaps. Each contiguous run of records becomes a `code` region, the lowest one the primary
+region; a `regions` entry without `offset` whose `base_address` and `length` match a later run exactly states that
+run's kind (say, `ram` for initialised data), and other `regions` entries add regions as above. `binary_info`
+reports `raw.records`: `format`, `data_records` and `start_address` (`word` as written, `status` `accepted`,
+`empty` or `refused`, `target`, `refused_reason` `outside_code`, `unaligned` or `in_vector_table`). An accepted start
+address becomes the entry unless `entry` or the vector table's Reset names another address, in which case it is a
+seed. Sleigh profiles take a record file with one contiguous run and no `regions`.
 
 ## Edits and session state
 

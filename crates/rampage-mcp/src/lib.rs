@@ -207,7 +207,17 @@ server and interpretation. Cortex-M flash (profile cortex-m): vector_table true 
 base_address (or give its address); accepted Thumb handlers become the entry and seeds, and binary_info reports \
 every word with its verdict and, for a base that misplaces the handlers, a base_address suggestion it never applies. \
 pointer_tables true also seeds functions from tables of Thumb code pointers (handler arrays, command tables) that \
-show prologue or call evidence; binary_info reports each table, accepted or refused, with evidence per entry.
+show prologue or call evidence; binary_info reports each table, accepted or refused, with evidence per entry. \
+Cortex-M only: regions (up to 15) maps more of the same file beside the primary code region, each {kind: code|data|\
+ram, base_address, offset, length, decode?}: e.g. a second stage at its RAM base \
+{\"kind\":\"code\",\"base_address\":\"0x20000000\",\"offset\":\"0x400\",\"length\":128}; ram is writable (its bytes \
+are never folded as constants) and may omit offset for unbacked RAM/MMIO; decode {codec, lzss?, \
+expected_output_size, initial_write_offset?, dictionary_fill?, timeout_ms?} maps decode_file_range's in-memory \
+output of the range instead. Overlaps are refused; references, calls and seeds cross regions; binary_info lists \
+every region with its SHA-256 and source (file range, decode receipt, records). format ihex|srec reads Intel HEX \
+or S-records instead (omit offset/length/base_address): each contiguous run is a code region, a regions entry \
+without offset matching a run exactly states its kind, and the start-address record becomes the entry, reported \
+with its verdict.
 
 Detection: detect_tools (packer/compiler/protector/installer/linker/runtime), identify_functions (library code by \
 signature, bundled databases applied; build_signatures makes a database from a binary with symbols), capabilities, \
@@ -538,6 +548,8 @@ fn compact_raw_selector() -> Value {
         }
     }
     let mut raw = tools::raw_selector_schema();
+    // Each region's shape (and its decoder-provider parameters) is stated once in the server instructions.
+    raw["properties"]["regions"] = json!({ "type": ["array", "null"], "maxItems": 15, "items": { "type": "object" } });
     strip(&mut raw);
     raw["type"] = json!(["object", "null"]);
     raw["description"] = json!("Headerless Raw project of path's byte range; see the server instructions.");

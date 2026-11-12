@@ -201,7 +201,7 @@ fn the_selector_schema_is_closed_and_self_contained() {
     assert_eq!(schema["properties"]["profile"]["enum"], json!(ids));
     let mut required: Vec<&str> = schema["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
     required.sort();
-    assert_eq!(required, ["base_address", "length", "offset", "profile"]);
+    assert_eq!(required, ["profile"]);
     let text = schema.to_string();
     assert!(!text.contains("$ref") && !text.contains("$defs"), "embeddable without definitions: {text}");
 }

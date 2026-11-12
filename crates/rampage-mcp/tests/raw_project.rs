@@ -138,9 +138,10 @@ async fn raw_selector_is_offered_only_on_raw_capable_tools() {
         if let Some(selector) = selector {
             assert_eq!(selector["additionalProperties"], false);
             assert_eq!(selector["properties"]["profile"]["type"], "string");
-            // Repeated on every raw-capable tool, so it stays compact; the instructions describe it once.
+            // Repeated on every raw-capable tool, so it stays compact; the instructions describe it (and each
+            // region's shape) once.
             let text = selector.to_string();
-            assert!(!text.contains("$ref") && text.len() < 600, "{} bytes: {text}", text.len());
+            assert!(!text.contains("$ref") && text.len() < 720, "{} bytes: {text}", text.len());
             let required = tool.input_schema["required"].as_array().unwrap();
             assert!(!required.contains(&json!("raw")) && required.contains(&json!("path")));
         }

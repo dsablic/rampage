@@ -113,7 +113,8 @@ pub struct RawRegionRequest {
     /// Internal code-space BYTE address of the region's first byte.
     pub base_address: FileOffset,
     /// Original-file BYTE offset of the region's source bytes. Omit only for a `ram` region without bytes
-    /// (zero-filled or uninitialised RAM, memory-mapped I/O).
+    /// (zero-filled or uninitialised RAM, memory-mapped I/O), or, for ihex/srec input, to state the kind of the
+    /// record run with exactly this base_address and length (runs are `code` otherwise; the first stays code).
     #[serde(default)]
     pub offset: Option<FileOffset>,
     /// Source byte count at `offset` (the encoded count when `decode` is given), or the mapped size of a `ram`
@@ -138,11 +139,14 @@ pub enum RawRegionKindRequest {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RawRegionDecode {
-    /// Required decoder selection; no codec guessing.
+    /// Required decoder selection, as decode_file_range takes it; no codec guessing.
     pub codec: crate::ContentCodec,
+    /// Every variant parameter, required for codec lzss and refused for the others, as decode_file_range.
+    #[serde(default)]
+    pub lzss: Option<crate::LzssParameters>,
     /// Analyst-supplied decoded size, which is the region's mapped size; does not prove a stream boundary.
     pub expected_output_size: FileOffset,
-    /// Initial dictionary write position 0..4095; default 4078 (0xfee).
+    /// Initial ring write position; default 4078 (0xfee) for lzss-4k, zero otherwise, as decode_file_range.
     #[serde(default)]
     pub initial_write_offset: Option<u16>,
     /// Dictionary initialization byte; default zero.
@@ -372,6 +376,14 @@ fn region_receipt(receipt: &crate::DecodeReceipt) -> Result<serde_json::Value, A
     Ok(value)
 }
 
+fn region_kind(kind: RawRegionKindRequest) -> RawRegionKind {
+    match kind {
+        RawRegionKindRequest::Code => RawRegionKind::Code,
+        RawRegionKindRequest::Data => RawRegionKind::Data,
+        RawRegionKindRequest::Ram => RawRegionKind::Ram,
+    }
+}
+
 impl RawProjectRequest {
     fn options(&self, profile: RawProfile, base: u64) -> Result<RawCodeOptions, ApiError> {
         if self.seeds.len() > MAX_RAW_SEEDS {
@@ -409,15 +421,13 @@ impl RawProjectRequest {
         let mut regions = Vec::new();
         for (index, region) in self.regions.iter().enumerate() {
             let refuse = |message: String| ApiError::Invalid(format!("Raw regions[{index}]: {message}"));
-            let kind = match region.kind {
-                RawRegionKindRequest::Code => RawRegionKind::Code,
-                RawRegionKindRequest::Data => RawRegionKind::Data,
-                RawRegionKindRequest::Ram => RawRegionKind::Ram,
-            };
+            let kind = region_kind(region.kind);
             let base = region.base_address.0;
             let Some(offset) = region.offset else {
                 if kind != RawRegionKind::Ram || region.decode.is_some() {
-                    return Err(refuse("only a ram region without decode may omit offset; code and data need bytes".into()));
+                    return Err(refuse(
+                        "only a ram region without decode may omit offset; code and data need bytes".into(),
+                    ));
                 }
                 if region.length.0 == 0 {
                     return Err(refuse("length must be at least 1".into()));
@@ -455,10 +465,13 @@ impl RawProjectRequest {
                 Some(decode) => {
                     let request = crate::DecodeFileRequest {
                         codec: decode.codec,
+                        lzss: decode.lzss,
                         offset: offset.0,
                         length,
                         expected_output_size: mapped,
-                        initial_write_offset: decode.initial_write_offset.unwrap_or(4078),
+                        initial_write_offset: decode
+                            .initial_write_offset
+                            .unwrap_or_else(|| crate::default_initial_write_offset(decode.codec)),
                         dictionary_fill: decode.dictionary_fill.unwrap_or(0),
                         timeout_ms: decode.timeout_ms.unwrap_or(3000),
                         preview_offset: 0,
@@ -505,7 +518,12 @@ impl RawProjectRequest {
         }
         let source = RangeSource::open_sized(path, 0, |size| {
             usize::try_from(size).ok().filter(|&size| (1..=MAX_RAW_RECORD_TEXT_BYTES).contains(&size)).ok_or_else(
-                || ApiError::Invalid(format!("Raw {} record files hold 1..={MAX_RAW_RECORD_TEXT_BYTES} bytes", format.name())),
+                || {
+                    ApiError::Invalid(format!(
+                        "Raw {} record files hold 1..={MAX_RAW_RECORD_TEXT_BYTES} bytes",
+                        format.name()
+                    ))
+                },
             )
         })?;
         let text = source.read()?;
@@ -514,11 +532,7 @@ impl RawProjectRequest {
         let max = profile.max_bytes();
         let records = parse_raw_records(&text, format, max).map_err(load)?;
         drop(text);
-        let facts = RawRecordFacts {
-            format,
-            data_records: records.data_records,
-            start_address: records.start_address,
-        };
+        let facts = RawRecordFacts { format, data_records: records.data_records, start_address: records.start_address };
         let total: usize = records.runs.iter().map(|(_, bytes)| bytes.len()).sum();
         let mut runs = records.runs.into_iter();
         let (base, bytes) = runs.next().ok_or_else(|| invalid("Raw records hold no data"))?;
@@ -540,7 +554,23 @@ impl RawProjectRequest {
                 regions.len() + 1
             )));
         }
-        regions.extend(self.read_regions(path, profile, max - total)?);
+        // A `regions` entry without offset whose range is exactly a later run states that run's kind (a run of
+        // writable data among the code); the others are read as usual.
+        let mut requested = self.clone();
+        requested.regions.clear();
+        for region in &self.regions {
+            let run = regions.iter_mut().find(|run| {
+                region.offset.is_none()
+                    && region.decode.is_none()
+                    && run.base == region.base_address.0
+                    && run.size == region.length.0
+            });
+            match run {
+                Some(run) => run.kind = region_kind(region.kind),
+                None => requested.regions.push(region.clone()),
+            }
+        }
+        regions.extend(requested.read_regions(path, profile, max - total)?);
         if regions.len() >= MAX_RAW_REGIONS {
             return Err(ApiError::Invalid(format!(
                 "Raw maps at most {MAX_RAW_REGIONS} regions, the primary one included; the {} records and `regions` \
@@ -550,7 +580,13 @@ impl RawProjectRequest {
             )));
         }
         let options = self.options(profile, base)?;
-        Ok(RawImage { bytes, options, source: Some(RawRegionSource::Records { format }), regions, records: Some(facts) })
+        Ok(RawImage {
+            bytes,
+            options,
+            source: Some(RawRegionSource::Records { format }),
+            regions,
+            records: Some(facts),
+        })
     }
 }
 

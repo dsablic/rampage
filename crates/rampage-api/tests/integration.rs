@@ -58,6 +58,7 @@ mod pointer_observation;
 mod project_workspace;
 mod raw;
 mod raw_project;
+mod raw_regions;
 mod raw_roster;
 mod runtime;
 mod runtime_compare;

@@ -575,8 +575,7 @@ impl RawCodeImage {
                 Some(table)
             }
         };
-        let table_words =
-            vector_table.as_ref().map(|table| table.address..table.address + 4 * table.words_read as u64);
+        let table_words = vector_table.as_ref().map(|table| table.address..table.address + 4 * table.words_read as u64);
         let records = records.map(|facts| {
             let start_address = facts.start_address.map(|word| {
                 let target = if options.profile.m_profile() { word & !1 } else { word };
@@ -703,12 +702,8 @@ impl RawCodeImage {
 
     /// Every code region's range, ascending.
     pub fn code_ranges(&self) -> Vec<Range<u64>> {
-        let mut ranges: Vec<Range<u64>> = self
-            .regions
-            .iter()
-            .filter(|region| region.kind == RawRegionKind::Code)
-            .map(RawRegionInfo::range)
-            .collect();
+        let mut ranges: Vec<Range<u64>> =
+            self.regions.iter().filter(|region| region.kind == RawRegionKind::Code).map(RawRegionInfo::range).collect();
         ranges.sort_by_key(|range| range.start);
         ranges
     }

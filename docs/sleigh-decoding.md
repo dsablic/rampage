@@ -91,8 +91,9 @@ Discovery, listing and code search use one Sleigh decoder factory. Valid instruc
 serialize `flow: "unknown"` with a `decode_gate`; they stop successor discovery and are never reported as
 fall-through, return or noreturn. A helper-gated Hexagon entry stays a valid function with an unresolved exit;
 SuperH's delay-slot gate inside a body stops successors there. Cached analysis and decompiler engines are bound to
-a `rampage-raw-interpretation-v4` identity covering bytes, profile, byte order, mapping, entry, seeds, the
-requested vector-table address and whether pointer tables were scanned; edited
+a `rampage-raw-interpretation-v5` identity covering bytes, profile, byte order, every region (kind, mapping,
+where its bytes lie and its stated source, including a decode receipt), entry, seeds, the requested vector-table
+address, whether pointer tables were scanned, and a record file's format, record count and start address; edited
 loader fields or a failed specification recheck refuse the cache instead of serving it stale.
 
 Decompilation is available for profiles with a reviewed C model: MSP430 (`default`) and AVR8 (`gcc`). It maps
@@ -102,7 +103,9 @@ never served from the code mapping. Every other profile refuses with "no reviewe
 Sleigh-decoded Raw Projects also refuse immediate/constant code search (no typed operands); every Raw Project
 refuses patch V1, capture identity and backing-source proofs. Annotations are memory-only, even when a persistent
 log is supplied. The sixteen Sleigh architectures have no legacy pointer width (`pointer_size()` is `None`) and no
-native/Capstone decoder. Multi-region maps, MMIO and HEX/SREC are not supported.
+native/Capstone decoder. Sleigh profiles map exactly one code region; Intel HEX and S-record input is accepted
+when its data form one contiguous run. Multiple regions (code, constant data, RAM and unbacked RAM/MMIO, from file
+ranges, decoder output or record runs) are Cortex-M only; see [Raw projects](mcp.md#multiple-regions-intel-hex-and-s-records).
 
 ### Cortex-M profile
 

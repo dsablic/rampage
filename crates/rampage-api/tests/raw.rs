@@ -50,7 +50,7 @@ fn raw_is_not_a_capture_or_original_source_proof() {
     assert!(rampage_analysis::capture_identity::capture_identity(&project.binary).is_none());
     assert!(project.binary.validate_backing_source().is_err());
     assert!(!project.binary.validate_available_backing_source().unwrap());
-    assert_eq!(project.binary.raw_interpretation_identity().unwrap().unwrap().schema, "rampage-raw-interpretation-v4");
+    assert_eq!(project.binary.raw_interpretation_identity().unwrap().unwrap().schema, "rampage-raw-interpretation-v5");
 }
 
 #[test]

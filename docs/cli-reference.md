@@ -250,7 +250,9 @@ language ID),
 `offset` and `length` (original-file bytes, 1..=131072, or up to 4 MiB for `ARM:LE:32:Cortex`), `base_address`,
 optional `entry` and `seeds` (internal code-space BYTE addresses), and for Cortex-M an optional `vector_table`
 (`true` for one at `base_address`, or its address) and `pointer_tables` (`true` seeds functions from tables of
-Thumb code pointers). Unknown fields are rejected. The mapping is an analyst
+Thumb code pointers), and `regions` (further code, data or RAM regions of the same file, optionally decoded
+in memory). `format` `ihex` or `srec` reads Intel HEX or S-records, whose records state every address (omit
+`offset`, `length` and `base_address`). Unknown fields are rejected. The mapping is an analyst
 assertion; see [Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects) for profiles and limits.
 
 ```sh
@@ -259,6 +261,10 @@ rampage --json --raw-json "$raw" function list code.bin
 rampage --json --raw-json "$raw" function disassemble code.bin --at 0x4400
 fw='{"profile":"cortex-m3","offset":0,"length":800,"base_address":"0x8000000","vector_table":true}'
 rampage --json --raw-json "$fw" function list tests/fixtures/firmware/raw-cortex-m.bin
+stages='{"profile":"cortex-m3","offset":0,"length":1024,"base_address":"0x8000000","vector_table":true,
+  "regions":[{"kind":"code","base_address":"0x20000000","offset":"0x400","length":128}]}'
+rampage --raw-json "$stages" function decompile tests/fixtures/firmware/raw-cortex-m-stages.bin --at 0x2000002c
+rampage --raw-json '{"profile":"cortex-m3","format":"srec"}' function list tests/fixtures/firmware/raw-cortex-m-stages.srec
 ```
 
 The two options exclude each other, `--arch` and `--image-*`. They apply only to `binary inspect`, `binary audit`,

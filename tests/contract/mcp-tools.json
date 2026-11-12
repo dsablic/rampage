@@ -28,20 +28,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -50,6 +54,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -91,20 +99,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -113,6 +125,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -344,20 +360,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -366,6 +386,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -490,20 +514,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -512,6 +540,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -1230,20 +1262,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -1252,6 +1288,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -1392,20 +1432,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -1414,6 +1458,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -1628,20 +1676,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -1650,6 +1702,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -1936,20 +1992,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -1958,6 +2018,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -2451,20 +2515,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -2473,6 +2541,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -2604,20 +2676,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -2626,6 +2702,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -3216,20 +3296,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -3238,6 +3322,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -3287,20 +3375,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -3309,6 +3401,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -3421,20 +3517,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -3443,6 +3543,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -3488,20 +3592,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -3510,6 +3618,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -3721,20 +3833,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -3743,6 +3859,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
@@ -3813,20 +3933,24 @@
           "required": false,
           "fields": {
             "base_address": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "entry": {
               "type": "integer|null|string",
               "required": false
             },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
             "length": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "offset": {
-              "type": "integer|string",
-              "required": true
+              "type": "integer|null|string",
+              "required": false
             },
             "pointer_tables": {
               "type": "boolean|null",
@@ -3835,6 +3959,10 @@
             "profile": {
               "type": "string",
               "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
             },
             "seeds": {
               "type": "array",
