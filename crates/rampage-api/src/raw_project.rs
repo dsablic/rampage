@@ -115,6 +115,7 @@ pub struct RawRegionRequest {
     /// Original-file BYTE offset of the region's source bytes. Omit only for a `ram` region without bytes
     /// (zero-filled or uninitialised RAM, memory-mapped I/O), or, for ihex/srec input, to state the kind of the
     /// record run with exactly this base_address and length (runs are `code` otherwise; the first stays code).
+    /// With ihex/srec input, regions never take offset or decode: the file is record text.
     #[serde(default)]
     pub offset: Option<FileOffset>,
     /// Source byte count at `offset` (the encoded count when `decode` is given), or the mapped size of a `ram`
@@ -569,6 +570,15 @@ impl RawProjectRequest {
                 Some(run) => run.kind = region_kind(region.kind),
                 None => requested.regions.push(region.clone()),
             }
+        }
+        // The opened file is record text, not bytes: a further region can only be unbacked RAM.
+        if let Some(index) = self.regions.iter().position(|region| region.offset.is_some() || region.decode.is_some()) {
+            return Err(ApiError::Invalid(format!(
+                "Raw regions[{index}]: format {} reads record text, so a region cannot take offset or decode from \
+                 it; give a record run's exact base_address and length to state its kind, or omit offset for \
+                 unbacked RAM",
+                format.name()
+            )));
         }
         regions.extend(requested.read_regions(path, profile, max - total)?);
         if regions.len() >= MAX_RAW_REGIONS {

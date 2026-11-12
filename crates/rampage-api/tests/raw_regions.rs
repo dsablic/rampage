@@ -184,7 +184,13 @@ fn every_region_input_changes_the_interpretation_identity() {
     assert_eq!(identity(copied()), base);
     // The same stage-2 bytes from a decoder receipt are another interpretation than from a plain file range.
     let decoded = rampage_api::open_raw_binary(&fixture("raw-cortex-m-stages-lzss.bin"), &request(decoded())).unwrap();
-    assert_ne!(decoded.raw_interpretation_identity().unwrap().unwrap().sha256, base);
+    let decoded = decoded.raw_interpretation_identity().unwrap().unwrap().sha256;
+    assert_ne!(decoded, base);
+    // The decode deadline is not part of the interpretation: the same bytes are the same project.
+    let mut slower = self::decoded();
+    slower["regions"][0]["decode"]["timeout_ms"] = json!(9000);
+    let slower = rampage_api::open_raw_binary(&fixture("raw-cortex-m-stages-lzss.bin"), &request(slower)).unwrap();
+    assert_eq!(slower.raw_interpretation_identity().unwrap().unwrap().sha256, decoded);
 }
 
 #[test]
@@ -269,6 +275,22 @@ fn intel_hex_and_s_records_map_their_record_runs_and_start_address() {
     }
     let c = call(&mut project, "decompile", json!({ "at": format!("{:#x}", truth("stage2_step")) }));
     assert!(c.contains("ram_20000800 + 1"), "{c}");
+
+    // Regions of record input never read the record text itself.
+    for region in [
+        json!({ "kind": "code", "base_address": "0x30000000", "offset": 0, "length": 16 }),
+        json!({ "kind": "code", "base_address": "0x30000000", "offset": 0, "length": 16,
+                "decode": { "codec": "lzss-4k", "expected_output_size": 16 } }),
+    ] {
+        let error = refusal(
+            &fixture("raw-cortex-m-stages.srec"),
+            json!({ "profile": "cortex-m3", "format": "srec", "regions": [region] }),
+        );
+        assert!(error.contains("regions[0]: format srec reads record text"), "{error}");
+    }
+    let unbacked = json!({ "profile": "cortex-m3", "format": "srec",
+        "regions": [{ "kind": "ram", "base_address": "0x30000000", "length": 16 }] });
+    Session::default().open_raw(&fixture("raw-cortex-m-stages.srec"), &request(unbacked)).unwrap();
 
     // Record input takes no offset/length/base_address; a refused start address is reported, not used.
     let error =

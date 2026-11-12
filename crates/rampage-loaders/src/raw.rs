@@ -747,6 +747,12 @@ impl RawCodeImage {
                     hash.update([2]);
                     hash.update(offset.to_be_bytes());
                     hash.update(length.to_be_bytes());
+                    // The deadline and the whole file's size do not change the decoded bytes.
+                    let mut receipt = receipt.clone();
+                    if let Some(object) = receipt.as_object_mut() {
+                        object.remove("decode_timeout_ms");
+                        object.remove("source_size");
+                    }
                     text(&mut hash, &receipt.to_string());
                 }
                 Some(RawRegionSource::Records { format }) => hash.update([3, *format as u8]),

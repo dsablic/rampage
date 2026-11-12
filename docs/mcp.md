@@ -478,7 +478,10 @@ SHA-256, output SHA-256, consumption and limits, without the path and preview), 
 verified; a missing end record, data after it, an unknown record type or overlapping records are refused, and
 nothing is filled across gaps. Each contiguous run of records becomes a `code` region, the lowest one the primary
 region; a `regions` entry without `offset` whose `base_address` and `length` match a later run exactly states that
-run's kind (say, `ram` for initialised data), and other `regions` entries add regions as above. `binary_info`
+run's kind (say, `ram` for initialised data); other `regions` entries may only add unbacked RAM, since
+`offset` and `decode` would read the record text itself and are refused. Toolchain HEX files often leave
+alignment gaps between sections, and each gap starts another run: an image with many gaps can reach the 16-region
+limit and is then refused (convert it to a binary and use `regions` instead). `binary_info`
 reports `raw.records`: `format`, `data_records` and `start_address` (`word` as written, `status` `accepted`,
 `empty` or `refused`, `target`, `refused_reason` `outside_code`, `unaligned` or `in_vector_table`). An accepted start
 address becomes the entry unless `entry` or the vector table's Reset names another address, in which case it is a
