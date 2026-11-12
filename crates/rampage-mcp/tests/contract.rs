@@ -43,6 +43,9 @@ fn json_of(tool: &str, result: &CallToolResult) -> Value {
     serde_json::from_str(text(result)).unwrap_or_else(|error| panic!("{tool}: {error}: {}", text(result)))
 }
 
+/// Tools outside the experimental groups whose results are experimental (docs/stability.md).
+const EXPERIMENTAL_TOOLS: [&str; 1] = ["exception_handlers"];
+
 /// Every tool `client` lists once all its groups are enabled, with its group and argument summary.
 async fn listed_tools(client: Client, tools: &mut BTreeMap<String, Value>) {
     let listing = json_of("enable_tools", &call(&client, "enable_tools", json!({ "groups": ["all"] })).await);
@@ -57,7 +60,7 @@ async fn listed_tools(client: Client, tools: &mut BTreeMap<String, Value>) {
         let group = groups.get(&name).cloned().unwrap_or_else(|| "meta".to_owned());
         let schema = Value::Object((*tool.input_schema).clone());
         let mut entry = json!({ "group": group, "arguments": contract::arguments(&schema) });
-        if group == Group::Improve.name() {
+        if group == Group::Improve.name() || EXPERIMENTAL_TOOLS.contains(&name.as_str()) {
             entry["experimental"] = json!(true);
         }
         tools.entry(name).or_insert(entry);

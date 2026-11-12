@@ -307,6 +307,16 @@ struct CarveArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct ClassEvidenceArgs {
+    /// MSVC vftables to skip, for paging.
+    vftable_offset: Option<usize>,
+    /// MSVC vftables per page, 1..=100 (default 16), additionally bounded to 24000 JSON bytes.
+    #[schemars(range(min = 1, max = 100))]
+    vftable_limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ExceptionHandlerArgs {
     /// `functions` (default) or `throws`.
     list: Option<crate::cpp_exceptions::ExceptionList>,
@@ -314,6 +324,8 @@ struct ExceptionHandlerArgs {
     function: Option<String>,
     /// Rows to skip, for paging.
     offset: Option<usize>,
+    /// With `function`: try blocks, cleanups and scopes of each row to skip, for paging a capped row.
+    detail_offset: Option<usize>,
     /// Rows per page, 1..=100 (default 50), additionally bounded to 60000 JSON bytes.
     #[schemars(range(min = 1, max = 100))]
     limit: Option<usize>,
@@ -2313,9 +2325,15 @@ pub fn tools() -> Vec<Tool> {
             Group::Core,
             "class_evidence",
             "Bounded named Itanium vtable/RTTI evidence with validated code slots, RTTI class names and base edges \
-             (Itanium/MSVC), and MSVC vftables of x86/x64 PEs (class, subobject offset, slot targets); not inferred \
-             C++ layouts.",
-            |project, _: Nothing| Ok(rampage_analysis::classes::recover(&project.binary)),
+             (Itanium/MSVC), and one page of MSVC vftables of x86/x64 PEs (class, subobject offset, up to 64 slot \
+             targets; vftables_total, vftable_offset/vftable_limit paging, also bounded to 24000 JSON bytes, \
+             vftables_next_offset); not inferred C++ layouts.",
+            |project, arguments: ClassEvidenceArgs| {
+                project.class_evidence(
+                    arguments.vftable_offset.unwrap_or(0),
+                    arguments.vftable_limit.unwrap_or(crate::cpp_exceptions::DEFAULT_VFTABLE_LIMIT),
+                )
+            },
         ),
         tool(
             Group::Types,
@@ -2556,20 +2574,24 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Formats,
             "exception_handlers",
-            "MSVC C++ exception handling of an x86/x64 PE, from its __CxxFrameHandler3 FuncInfo tables (x64 via \
-             .pdata unwind info, x86 by validated table scan tied to the function that registers the handler thunk) \
-             and __C_specific_handler scope tables: per function, try blocks (state ranges and, on x64, covered code \
-             ranges) with each catch's demangled type, by-reference/const and catch funclet, cleanup (destructor) \
-             funclets by state, and SEH scopes. list=throws pages _ThrowInfo records instead: the types a thrown \
-             object can be caught as. `function` (address or name) keeps the tables of the function containing it. \
-             Exact totals; offset/limit pages (limit 1..=100, default 50, also bounded to 60000 JSON bytes; \
-             more/next_offset). __CxxFrameHandler4 and x86 SEH are not decoded (counted in undecoded_handlers).",
+            "Experimental. MSVC C++ exception handling of an x86/x64 PE, from its __CxxFrameHandler3 FuncInfo tables \
+             (x64 via .pdata unwind info, x86 by validated table scan tied to the function that registers the \
+             handler thunk) and __C_specific_handler scope tables: per function, try blocks (state ranges and, on \
+             x64, covered code ranges) with each catch's demangled type, by-reference/const and catch funclet, \
+             cleanup (destructor) funclets by state, and SEH scopes. list=throws pages _ThrowInfo records instead. \
+             Validated on clang-cl output only: cl.exe x64 since VS2019 16.3 emits __CxxFrameHandler4 tables, which \
+             are not decoded (counted in undecoded_handlers), and cl.exe x86 places catch blocks inline. Rows cap \
+             their lists with exact totals and `truncated`; `function` (address or name) keeps the tables of the \
+             function containing it, and with it `detail_offset` pages that function's try blocks, cleanups and \
+             scopes. offset/limit page rows (limit 1..=100, default 50, also bounded to 60000 JSON bytes; \
+             more/next_offset).",
             |project, arguments: ExceptionHandlerArgs| {
                 let function = arguments.function.as_deref().map(|text| project.resolve(text)).transpose()?;
                 project.exception_handlers(
                     arguments.list.unwrap_or_default(),
                     function,
                     arguments.offset.unwrap_or(0),
+                    arguments.detail_offset.unwrap_or(0),
                     arguments.limit.unwrap_or(crate::cpp_exceptions::DEFAULT_LIMIT),
                 )
             },

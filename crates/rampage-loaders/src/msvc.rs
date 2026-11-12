@@ -3,11 +3,15 @@
 //! scope table, and `_ThrowInfo`).
 //!
 //! Everything here is structural and read from file-backed image bytes: each followed address must be mapped,
-//! every count is capped, and a record that does not validate is skipped. Names are returned as stored (`.?AV...`
-//! type-descriptor names); demangling is the caller's. The tables also name code the call graph does not reach
-//! (virtual methods, catch and cleanup funclets, handler thunks, copy constructors of thrown types), which
-//! [`code_targets`] hands to the loader as function-start hints.
+//! every count is capped, address arithmetic is checked, and a record that does not validate is skipped. One
+//! image shares one work budget and one retained-record budget across all of it, so crafted tables that share a
+//! try map or handler array cannot multiply into unbounded work or memory; running out stops the read with a
+//! warning. Names are returned as stored (`.?AV...` type-descriptor names); demangling is the caller's. The
+//! loader reads this once per image ([`Binary::msvc_metadata`]) and hands the code it names that the call graph
+//! does not reach (virtual methods, catch and cleanup funclets, handler thunks, copy constructors of thrown
+//! types) to discovery as function-start hints.
 
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use rampage_arch::Arch;
@@ -191,6 +195,15 @@ pub struct ThrowInfo {
     pub types: Vec<CatchableType>,
 }
 
+/// Everything this module reads from one image, under one shared work and retention budget.
+#[derive(Debug, Default, Serialize)]
+pub struct MsvcMetadata {
+    pub vftables: Vec<Vftable>,
+    pub exceptions: EhReport,
+    /// Set when a budget ran out, so later tables were not read; the warning is also in `exceptions.warnings`.
+    pub budget_exhausted: bool,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct EhReport {
     pub functions: Vec<EhFunction>,
@@ -201,22 +214,95 @@ pub struct EhReport {
     pub warnings: Vec<String>,
 }
 
+/// Field reads and validation steps one image may cost, across vftables, `FuncInfo` and `_ThrowInfo` parsing.
+const WORK_BUDGET: u64 = 16_000_000;
+/// Approximate bytes of parsed records (slots, unwind actions, catch handlers, ranges, catchable types and their
+/// names) one image may keep, so crafted tables that share one try map or handler array cannot multiply into
+/// memory.
+const RETAIN_BUDGET: u64 = 64 * 1024 * 1024;
+/// Approximate retained sizes of one record of each kind, names excluded.
+const SLOT_BYTES: u64 = 8;
+const TABLE_BYTES: u64 = 96;
+const UNWIND_BYTES: u64 = 24;
+const TRY_BYTES: u64 = 72;
+const CATCH_BYTES: u64 = 64;
+const RANGE_BYTES: u64 = 16;
+const SCOPE_BYTES: u64 = 56;
+
+/// The address `offset` bytes past `base`, or `None` on overflow (an image based near 2^64, or a crafted field).
+fn at(base: u64, offset: u64) -> Option<u64> {
+    base.checked_add(offset)
+}
+
+/// The address of entry `index` of `size` bytes in the array at `base`.
+fn element(base: u64, index: u64, size: u64) -> Option<u64> {
+    base.checked_add(index.checked_mul(size)?)
+}
+
+type TryMapKey = (u64, u32, u32);
+type Memo<K, V> = RefCell<HashMap<K, Option<V>>>;
+
 struct Reader<'a> {
     binary: &'a Binary,
     image_base: u64,
     /// 64-bit image: pointers are 8 bytes and table fields are image-relative.
     wide: bool,
+    work: Cell<u64>,
+    retained: Cell<u64>,
+    exhausted: Cell<bool>,
+    /// Parsed type-descriptor names, unwind maps and try maps by address, so tables that share them (as crafted
+    /// input can) are read once.
+    names: Memo<u64, String>,
+    unwind_maps: Memo<(u64, u32), Vec<UnwindAction>>,
+    try_maps: Memo<TryMapKey, Vec<TryBlock>>,
 }
 
 impl<'a> Reader<'a> {
-    fn new(binary: &'a Binary) -> Option<Self> {
+    fn new(binary: &'a Binary, work: u64, retain: u64) -> Option<Self> {
         let layout = binary.pe_layout()?;
         let wide = match binary.arch {
             Arch::X86 => false,
             Arch::X86_64 => true,
             _ => return None,
         };
-        (binary.format == Format::Pe).then_some(Reader { binary, image_base: layout.image_base, wide })
+        (binary.format == Format::Pe).then(|| Reader {
+            binary,
+            image_base: layout.image_base,
+            wide,
+            work: Cell::new(work),
+            retained: Cell::new(retain),
+            exhausted: Cell::new(false),
+            names: RefCell::default(),
+            unwind_maps: RefCell::default(),
+            try_maps: RefCell::default(),
+        })
+    }
+
+    fn take(&self, counter: &Cell<u64>, units: u64) -> Option<()> {
+        match counter.get().checked_sub(units) {
+            Some(left) if !self.exhausted.get() => {
+                counter.set(left);
+                Some(())
+            }
+            _ => {
+                self.exhausted.set(true);
+                None
+            }
+        }
+    }
+
+    /// Charges `units` of parsing work; `None` once the image's budget is spent.
+    fn spend(&self, units: u64) -> Option<()> {
+        self.take(&self.work, units)
+    }
+
+    /// Charges `bytes` of retained records; `None` once the image's budget is spent.
+    fn retain(&self, bytes: u64) -> Option<()> {
+        self.take(&self.retained, bytes)
+    }
+
+    fn exhausted(&self) -> bool {
+        self.exhausted.get()
     }
 
     fn pointer_size(&self) -> u64 {
@@ -267,34 +353,52 @@ impl<'a> Reader<'a> {
     }
 
     /// The stored name of the `TypeDescriptor` at `address`: a `.`-prefixed decorated type name after a
-    /// non-null vftable pointer and a spare word.
+    /// non-null vftable pointer and a spare word. Each descriptor is read once; each use retains a copy.
     fn type_name(&self, address: u64) -> Option<String> {
+        let cached = self.names.borrow().get(&address).cloned();
+        let name = match cached {
+            Some(name) => name,
+            None => {
+                let name = self.read_type_name(address);
+                self.names.borrow_mut().insert(address, name.clone());
+                name
+            }
+        }?;
+        self.retain(24 + name.len() as u64)?;
+        Some(name)
+    }
+
+    fn read_type_name(&self, address: u64) -> Option<String> {
+        self.spend(2)?;
         let width = self.pointer_size();
         self.pointer(address).filter(|&vftable| vftable != 0 && self.binary.read(vftable, 1).is_some())?;
-        let bytes = self.binary.read_to_segment_end(address.checked_add(2 * width)?)?;
-        let end = bytes.iter().take(MAX_NAME_BYTES).position(|&byte| byte == 0)?;
-        let name = std::str::from_utf8(&bytes[..end]).ok()?;
+        let bytes = self.binary.read_to_segment_end(at(address, 2 * width)?)?;
+        let scanned = bytes.len().min(MAX_NAME_BYTES);
+        let end = bytes[..scanned].iter().position(|&byte| byte == 0);
+        self.spend(1 + end.unwrap_or(scanned) as u64 / 64)?;
+        let name = std::str::from_utf8(&bytes[..end?]).ok()?;
         (name.len() >= 2 && name.starts_with('.') && name.bytes().all(|byte| byte.is_ascii_graphic()))
             .then(|| name.to_owned())
     }
 
     /// Validates an RTTI complete object locator, returning its subobject offset and type descriptor.
     fn locator(&self, address: u64) -> Option<(u32, u64, String)> {
+        self.spend(8)?;
         if self.u32(address)? != u32::from(self.wide) {
             return None;
         }
-        let offset = self.u32(address + 4)?;
-        let type_descriptor = self.data_reference(address + 12)?;
-        let hierarchy = self.data_reference(address + 16)?;
-        if self.wide && self.reference(address + 20)? != Some(address) {
+        let offset = self.u32(at(address, 4)?)?;
+        let type_descriptor = self.data_reference(at(address, 12)?)?;
+        let hierarchy = self.data_reference(at(address, 16)?)?;
+        if self.wide && self.reference(at(address, 20)?)? != Some(address) {
             return None;
         }
         let mangled = self.type_name(type_descriptor).filter(|name| name.starts_with(".?A"))?;
-        let bases = self.u32(hierarchy + 8)?;
+        let bases = self.u32(at(hierarchy, 8)?)?;
         if self.u32(hierarchy)? != 0 || bases == 0 || bases > MAX_BASES {
             return None;
         }
-        self.data_reference(hierarchy + 12)?;
+        self.data_reference(at(hierarchy, 12)?)?;
         Some((offset, type_descriptor, mangled))
     }
 
@@ -325,25 +429,25 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// Vftables with RTTI in a PE image, sorted by address. Empty for other formats and machines.
+/// Vftables with RTTI, sorted by address.
 ///
 /// A table is found by its header: the word before slot 0 points to a complete object locator, which is
 /// validated down to its type name. Slots are read while they hold code addresses, so a table ends at the next
 /// table's locator pointer or at any other data; an adjacent array of code pointers with no header of its own
 /// would be read as further slots.
-pub fn vftables(binary: &Binary) -> Vec<Vftable> {
-    let Some(reader) = Reader::new(binary) else { return Vec::new() };
+fn read_vftables(reader: &Reader) -> Vec<Vftable> {
+    let binary = reader.binary;
     let width = reader.pointer_size();
     let mut locators: HashMap<u64, Option<(u32, u64, String)>> = HashMap::new();
     let mut tables = Vec::new();
     // Every locator lies in a data section; anything outside their span is rejected without a lookup.
     let low = reader.data_sections().map(|(start, _)| start).min().unwrap_or(0);
-    let high = reader.data_sections().map(|(start, bytes)| start + bytes.len() as u64).max().unwrap_or(0);
-    for (start, bytes) in reader.data_sections() {
+    let high = reader.data_sections().filter_map(|(start, bytes)| at(start, bytes.len() as u64)).max().unwrap_or(0);
+    'sections: for (start, bytes) in reader.data_sections() {
         let step = width as usize;
         let mut offset = ((width - start % width) % width) as usize;
         while offset + 2 * step <= bytes.len() && tables.len() < MAX_RECORDS {
-            let here = start + offset as u64;
+            let Some(here) = at(start, offset as u64) else { break };
             let mut word = [0u8; 8];
             word[..step].copy_from_slice(&bytes[offset..offset + step]);
             offset += step;
@@ -351,15 +455,22 @@ pub fn vftables(binary: &Binary) -> Vec<Vftable> {
             if !(low..high).contains(&candidate) || candidate % 4 != 0 || !reader.is_data(candidate) {
                 continue;
             }
-            let Some((subobject, type_descriptor, mangled)) =
-                locators.entry(candidate).or_insert_with(|| reader.locator(candidate)).clone()
-            else {
-                continue;
+            let parsed = match locators.get(&candidate) {
+                Some(parsed) => parsed.clone(),
+                None => {
+                    let parsed = reader.locator(candidate);
+                    locators.insert(candidate, parsed.clone());
+                    parsed
+                }
             };
-            let address = here + width;
+            if reader.exhausted() {
+                break 'sections;
+            }
+            let Some((subobject, type_descriptor, mangled)) = parsed else { continue };
+            let Some(address) = at(here, width) else { continue };
             let mut slots = Vec::new();
             let mut truncated = false;
-            while let Some(slot) = reader.pointer(address + slots.len() as u64 * width) {
+            while let Some(slot) = element(address, slots.len() as u64, width).and_then(|entry| reader.pointer(entry)) {
                 if !binary.is_code(slot) {
                     break;
                 }
@@ -367,9 +478,15 @@ pub fn vftables(binary: &Binary) -> Vec<Vftable> {
                     truncated = true;
                     break;
                 }
+                if reader.spend(1).and_then(|()| reader.retain(SLOT_BYTES)).is_none() {
+                    break 'sections;
+                }
                 slots.push(slot);
             }
             if !slots.is_empty() {
+                if reader.retain(TABLE_BYTES + mangled.len() as u64).is_none() {
+                    break 'sections;
+                }
                 tables.push(Vftable {
                     address,
                     locator: candidate,
@@ -399,67 +516,108 @@ fn is_func_info_magic(magic: u32) -> bool {
     (0x1993_0520..=0x1993_0522).contains(&(magic & 0x1fff_ffff))
 }
 
-/// Parses and validates the `FuncInfo` at `address`: every table must be mapped data and every action or
-/// handler must be code.
-fn func_info(reader: &Reader, address: u64) -> Option<FuncInfo> {
-    if !is_func_info_magic(reader.u32(address)?) {
-        return None;
-    }
-    let max_state = reader.u32(address + 4)?;
-    let try_count = reader.u32(address + 12)?;
-    let ip_count = reader.u32(address + 20)?;
-    if max_state > MAX_STATES || try_count > MAX_TRY_BLOCKS || ip_count > MAX_IP_ENTRIES {
-        return None;
-    }
-    let table = |field: u64, count: u32| -> Option<u64> {
-        if count == 0 { Some(0) } else { reader.data_reference(address + field) }
-    };
-    let unwind_map = table(8, max_state)?;
-    let try_map = table(16, try_count)?;
-    let ip_map = if reader.wide { table(24, ip_count)? } else { 0 };
-    let in_states = |state: i32| (-1..max_state as i32).contains(&state);
-
-    let mut unwind = Vec::with_capacity(max_state as usize);
+fn unwind_map(reader: &Reader, map: u64, max_state: u32) -> Option<Vec<UnwindAction>> {
+    let mut unwind = Vec::new();
     for state in 0..max_state {
-        let entry = unwind_map + u64::from(state) * 8;
+        reader.spend(2)?;
+        let entry = element(map, u64::from(state), 8)?;
         let to_state = reader.i32(entry)?;
-        if !in_states(to_state) {
+        if !(-1..max_state as i32).contains(&to_state) {
             return None;
         }
-        unwind.push(UnwindAction { state: state as i32, to_state, action: reader.code_reference(entry + 4)? });
+        unwind.push(UnwindAction { state: state as i32, to_state, action: reader.code_reference(at(entry, 4)?)? });
     }
+    Some(unwind)
+}
 
+fn try_map(reader: &Reader, map: u64, try_count: u32, max_state: u32) -> Option<Vec<TryBlock>> {
     let handler_size = if reader.wide { 20 } else { 16 };
-    let mut try_blocks = Vec::with_capacity(try_count as usize);
+    let mut try_blocks = Vec::new();
     for index in 0..u64::from(try_count) {
-        let entry = try_map + index * 20;
-        let (try_low, try_high, catch_high) = (reader.i32(entry)?, reader.i32(entry + 4)?, reader.i32(entry + 8)?);
-        let catch_count = reader.u32(entry + 12)?;
-        let ordered = 0 <= try_low && try_low <= try_high && try_high <= catch_high && in_states(catch_high);
+        reader.spend(5)?;
+        let entry = element(map, index, 20)?;
+        let (try_low, try_high) = (reader.i32(entry)?, reader.i32(at(entry, 4)?)?);
+        let catch_high = reader.i32(at(entry, 8)?)?;
+        let catch_count = reader.u32(at(entry, 12)?)?;
+        let ordered = 0 <= try_low && try_low <= try_high && try_high <= catch_high && catch_high < max_state as i32;
         if !ordered || catch_count == 0 || catch_count > MAX_CATCHES {
             return None;
         }
-        let handlers = reader.data_reference(entry + 16)?;
-        let mut catches = Vec::with_capacity(catch_count as usize);
+        let handlers = reader.data_reference(at(entry, 16)?)?;
+        let mut catches = Vec::new();
         for catch in 0..u64::from(catch_count) {
-            let entry = handlers + catch * handler_size;
-            let type_descriptor = reader.reference(entry + 4)?;
+            reader.spend(3)?;
+            let entry = element(handlers, catch, handler_size)?;
+            let type_descriptor = reader.reference(at(entry, 4)?)?;
             let mangled = match type_descriptor {
                 Some(descriptor) => Some(reader.type_name(descriptor)?),
                 None => None,
             };
-            let handler = reader.code_reference(entry + 12)??;
+            let handler = reader.code_reference(at(entry, 12)?)??;
             catches.push(CatchHandler { adjectives: reader.u32(entry)?, type_descriptor, mangled, handler });
         }
         try_blocks.push(TryBlock { try_low, try_high, catch_high, ranges: Vec::new(), catches });
     }
+    Some(try_blocks)
+}
+
+/// Approximate retained bytes of one copy of a parsed try map, names included.
+fn try_map_units(try_blocks: &[TryBlock]) -> u64 {
+    let catch = |catch: &CatchHandler| CATCH_BYTES + catch.mangled.as_ref().map_or(0, |name| name.len() as u64);
+    try_blocks.iter().map(|block| TRY_BYTES + block.catches.iter().map(catch).sum::<u64>()).sum()
+}
+
+/// Parses and validates the `FuncInfo` at `address`: every table must be mapped data and every action or
+/// handler must be code. Unwind and try maps shared between `FuncInfo` records are parsed once, but every copy
+/// is charged to the retention budget.
+fn func_info(reader: &Reader, address: u64) -> Option<FuncInfo> {
+    reader.spend(6)?;
+    if !is_func_info_magic(reader.u32(address)?) {
+        return None;
+    }
+    let max_state = reader.u32(at(address, 4)?)?;
+    let try_count = reader.u32(at(address, 12)?)?;
+    let ip_count = reader.u32(at(address, 20)?)?;
+    if max_state > MAX_STATES || try_count > MAX_TRY_BLOCKS || ip_count > MAX_IP_ENTRIES {
+        return None;
+    }
+    let table = |field: u64, count: u32| -> Option<u64> {
+        if count == 0 { Some(0) } else { reader.data_reference(at(address, field)?) }
+    };
+    let unwind_at = table(8, max_state)?;
+    let try_at = table(16, try_count)?;
+    let ip_map = if reader.wide { table(24, ip_count)? } else { 0 };
+
+    let cached = reader.unwind_maps.borrow().get(&(unwind_at, max_state)).cloned();
+    let unwind = match cached {
+        Some(unwind) => unwind,
+        None => {
+            let unwind = unwind_map(reader, unwind_at, max_state);
+            reader.unwind_maps.borrow_mut().insert((unwind_at, max_state), unwind.clone());
+            unwind
+        }
+    }?;
+    reader.retain(unwind.len() as u64 * UNWIND_BYTES)?;
+    let key = (try_at, try_count, max_state);
+    let cached = reader.try_maps.borrow().get(&key).cloned();
+    let try_blocks = match cached {
+        Some(try_blocks) => try_blocks,
+        None => {
+            let try_blocks = try_map(reader, try_at, try_count, max_state);
+            reader.try_maps.borrow_mut().insert(key, try_blocks.clone());
+            try_blocks
+        }
+    }?;
+    reader.retain(try_map_units(&try_blocks))?;
 
     let mut ip_states = Vec::new();
     for index in 0..u64::from(if reader.wide { ip_count } else { 0 }) {
-        let entry = ip_map + index * 8;
+        reader.spend(2)?;
+        reader.retain(RANGE_BYTES)?;
+        let entry = element(ip_map, index, 8)?;
         let ip = reader.code_reference(entry)??;
-        let state = reader.i32(entry + 4)?;
-        if !in_states(state) {
+        let state = reader.i32(at(entry, 4)?)?;
+        if !(-1..max_state as i32).contains(&state) {
             return None;
         }
         ip_states.push((ip, state));
@@ -489,7 +647,7 @@ fn x64_unwind_ranges(reader: &Reader, report: &mut EhReport) -> Vec<UnwindRange>
     let table = &available[..size.min(available.len() as u64) as usize];
     let mut ranges = Vec::new();
     for entry in table.as_chunks::<12>().0 {
-        let field = |at: usize| u32::from_le_bytes(entry[at..at + 4].try_into().unwrap());
+        let field = |offset: usize| u32::from_le_bytes(entry[offset..offset + 4].try_into().unwrap());
         let (begin, end, unwind) = (field(0), field(4), field(8));
         if begin == 0 || end <= begin || unwind & 1 != 0 {
             continue;
@@ -502,16 +660,17 @@ fn x64_unwind_ranges(reader: &Reader, report: &mut EhReport) -> Vec<UnwindRange>
             continue;
         }
         let codes = u64::from(header[2]).div_ceil(2) * 4;
-        let Some(Some(handler)) = reader.code_reference(info + 4 + codes) else {
+        let (Some(handler_field), Some(data)) = (at(info, 4 + codes), at(info, 8 + codes)) else { continue };
+        let (Some(start), Some(end)) =
+            (reader.image_base.checked_add(u64::from(begin)), reader.image_base.checked_add(u64::from(end)))
+        else {
+            continue;
+        };
+        let Some(Some(handler)) = reader.code_reference(handler_field) else {
             report.undecoded_handlers += 1;
             continue;
         };
-        ranges.push(UnwindRange {
-            start: reader.image_base.saturating_add(u64::from(begin)),
-            end: reader.image_base.saturating_add(u64::from(end)),
-            handler,
-            data: info + 8 + codes,
-        });
+        ranges.push(UnwindRange { start, end, handler, data });
     }
     ranges.sort_by_key(|range| range.start);
     ranges
@@ -522,14 +681,16 @@ fn scope_table(reader: &Reader, range: &UnwindRange) -> Option<Vec<SehScope>> {
     if count == 0 || count > MAX_SCOPES {
         return None;
     }
-    let mut scopes = Vec::with_capacity(count as usize);
+    let mut scopes = Vec::new();
     for index in 0..u64::from(count) {
-        let entry = range.data + 4 + index * 16;
+        reader.spend(4)?;
+        reader.retain(SCOPE_BYTES)?;
+        let entry = element(at(range.data, 4)?, index, 16)?;
         let start = reader.code_reference(entry)??;
-        let end = reader.code_reference(entry + 4)??;
-        let handler = reader.u32(entry + 8)?;
-        let target = reader.code_reference(entry + 12)?;
-        let funclet = if handler == 1 { None } else { Some(reader.code_reference(entry + 8)??) };
+        let end = reader.code_reference(at(entry, 4)?)??;
+        let handler = reader.u32(at(entry, 8)?)?;
+        let target = reader.code_reference(at(entry, 12)?)?;
+        let funclet = if handler == 1 { None } else { Some(reader.code_reference(at(entry, 8)?)??) };
         let kind = match (target, funclet) {
             (None, Some(_)) => "finally",
             (Some(_), None) => "except_always",
@@ -542,22 +703,35 @@ fn scope_table(reader: &Reader, range: &UnwindRange) -> Option<Vec<SehScope>> {
 }
 
 /// Code ranges whose state lies in `low..=high`: each IP map entry holds until the next one or the end of the
-/// unwind range it falls in.
-fn state_ranges(ip_states: &[(u64, i32)], unwind: &[(u64, u64)], low: i32, high: i32) -> Vec<AddressRange> {
+/// unwind range it falls in. `spans` is sorted by start and does not overlap. `None` once the budget is spent.
+fn state_ranges(
+    reader: &Reader,
+    ip_states: &[(u64, i32)],
+    spans: &[(u64, u64)],
+    low: i32,
+    high: i32,
+) -> Option<Vec<AddressRange>> {
+    reader.spend(ip_states.len() as u64)?;
     let mut ranges: Vec<AddressRange> = Vec::new();
     for (index, &(start, state)) in ip_states.iter().enumerate() {
         if !(low..=high).contains(&state) {
             continue;
         }
-        let Some(&(_, limit)) = unwind.iter().find(|&&(begin, end)| (begin..end).contains(&start)) else { continue };
+        let containing = spans.partition_point(|&(begin, _)| begin <= start).checked_sub(1);
+        let Some(&(_, limit)) = containing.map(|index| &spans[index]).filter(|&&(_, end)| start < end) else {
+            continue;
+        };
         let end = ip_states.get(index + 1).map_or(limit, |&(next, _)| next.min(limit));
         match ranges.last_mut() {
             Some(last) if last.end == start => last.end = end,
-            _ if end > start => ranges.push(AddressRange { start, end }),
+            _ if end > start => {
+                reader.retain(RANGE_BYTES)?;
+                ranges.push(AddressRange { start, end });
+            }
             _ => {}
         }
     }
-    ranges
+    Some(ranges)
 }
 
 fn x64_functions(reader: &Reader, report: &mut EhReport) {
@@ -566,6 +740,9 @@ fn x64_functions(reader: &Reader, report: &mut EhReport) {
     let mut by_table: BTreeMap<u64, Vec<&UnwindRange>> = BTreeMap::new();
     let mut imports: HashMap<u64, Option<&str>> = HashMap::new();
     for range in &ranges {
+        if reader.exhausted() {
+            return;
+        }
         let import = *imports.entry(range.handler).or_insert_with(|| reader.import_thunk(range.handler));
         if import == Some("__C_specific_handler") {
             match scope_table(reader, range) {
@@ -597,7 +774,7 @@ fn x64_functions(reader: &Reader, report: &mut EhReport) {
         }
     }
     for (table, ranges) in by_table {
-        if report.functions.len() >= MAX_RECORDS {
+        if report.functions.len() >= MAX_RECORDS || reader.exhausted() {
             break;
         }
         let Some(info) = func_info(reader, table) else {
@@ -621,9 +798,13 @@ fn x64_functions(reader: &Reader, report: &mut EhReport) {
         let owner = ranges.iter().find(|range| !funclets.contains(&range.start)).unwrap_or(&ranges[0]);
         function.function = Some(owner.start);
         function.function_end = Some(owner.end);
+        // Unwind ranges of distinct functions do not overlap, so the sorted spans can be binary-searched.
         let spans: Vec<(u64, u64)> = ranges.iter().map(|range| (range.start, range.end)).collect();
         for block in &mut function.try_blocks {
-            block.ranges = state_ranges(&info.ip_states, &spans, block.try_low, block.try_high);
+            match state_ranges(reader, &info.ip_states, &spans, block.try_low, block.try_high) {
+                Some(ranges) => block.ranges = ranges,
+                None => break,
+            }
         }
         report.functions.push(function);
     }
@@ -659,16 +840,17 @@ fn x86_jump_target(reader: &Reader, address: u64) -> Option<u64> {
 /// the thunk and its registrations are then found by the addresses they encode.
 fn x86_functions(reader: &Reader, report: &mut EhReport) {
     let mut tables: BTreeMap<u64, FuncInfo> = BTreeMap::new();
-    for (start, bytes) in reader.data_sections() {
+    'sections: for (start, bytes) in reader.data_sections() {
         let skew = ((4 - start % 4) % 4) as usize;
         for (index, word) in bytes[skew.min(bytes.len())..].as_chunks::<4>().0.iter().enumerate() {
-            if tables.len() >= MAX_RECORDS {
-                break;
+            if tables.len() >= MAX_RECORDS || reader.exhausted() {
+                break 'sections;
             }
-            let address = start + (skew + index * 4) as u64;
-            if is_func_info_magic(u32::from_le_bytes(*word))
-                && let Some(info) = func_info(reader, address)
-            {
+            if !is_func_info_magic(u32::from_le_bytes(*word)) {
+                continue;
+            }
+            let Some(address) = at(start, (skew + index * 4) as u64) else { break };
+            if let Some(info) = func_info(reader, address) {
                 tables.insert(address, info);
             }
         }
@@ -689,7 +871,8 @@ fn x86_functions(reader: &Reader, report: &mut EhReport) {
         for (offset, window) in bytes.windows(6).enumerate() {
             let table = u64::from(u32::from_le_bytes(window[1..5].try_into().unwrap()));
             if window[0] == 0xb8 && matches!(window[5], 0xe9 | 0xeb | 0xff) && tables.contains_key(&table) {
-                loads.entry(table).or_insert(start + offset as u64);
+                let Some(load) = at(start, offset as u64) else { continue };
+                loads.entry(table).or_insert(load);
             }
         }
     }
@@ -701,18 +884,25 @@ fn x86_functions(reader: &Reader, report: &mut EhReport) {
         for offset in 1..bytes.len().saturating_sub(3) {
             let Some(instruction) = registration_start(&bytes[..offset]) else { continue };
             let stored = u64::from(u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()));
-            if let Some((_, &table)) = by_load.range(stored..=stored.saturating_add(X86_THUNK_PREFIX)).next() {
-                registrations.entry(table).or_default().push((start + instruction as u64, stored));
+            let Some((_, &table)) = by_load.range(stored..=stored.saturating_add(X86_THUNK_PREFIX)).next() else {
+                continue;
+            };
+            let Some(at_instruction) = at(start, instruction as u64) else { continue };
+            if reader.retain(RANGE_BYTES).is_none() {
+                break;
             }
+            registrations.entry(table).or_default().push((at_instruction, stored));
         }
     }
     for (table, info) in tables {
-        let pushes = registrations.remove(&table).unwrap_or_default();
+        let stores = registrations.remove(&table).unwrap_or_default();
         let load = loads.get(&table).copied();
-        // The thunk starts where the registering code says it does; without a registration, at the load.
-        let handler = pushes.iter().map(|&(_, pushed)| pushed).min().or(load);
+        // The thunk starts at the stored address nearest its load: a stray `push imm32` of an address further
+        // back would otherwise seed a start inside the preceding code. Without a registration, at the load.
+        let handler = stores.iter().map(|&(_, stored)| stored).max().or(load);
         let handler_import = load
-            .and_then(|load| x86_jump_target(reader, load + 5))
+            .and_then(|load| at(load, 5))
+            .and_then(|jump| x86_jump_target(reader, jump))
             .and_then(|target| reader.import_thunk(target).map(str::to_owned));
         report.functions.push(EhFunction {
             function: None,
@@ -720,7 +910,7 @@ fn x86_functions(reader: &Reader, report: &mut EhReport) {
             kind: "cxx_frame_handler3",
             handler,
             handler_import,
-            registrations: pushes.iter().map(|&(at, _)| at).collect(),
+            registrations: stores.iter().map(|&(instruction, _)| instruction).collect(),
             table,
             max_state: info.max_state,
             unwind: info.unwind,
@@ -731,28 +921,31 @@ fn x86_functions(reader: &Reader, report: &mut EhReport) {
 }
 
 fn throw_info(reader: &Reader, address: u64) -> Option<ThrowInfo> {
+    reader.spend(4)?;
     let attributes = reader.u32(address)?;
     // Bits: const, volatile, unaligned, pure (CLR), WinRT. A forward-compatibility handler is never emitted.
-    if attributes > 0x1f || reader.u32(address + 8)? != 0 {
+    if attributes > 0x1f || reader.u32(at(address, 8)?)? != 0 {
         return None;
     }
-    let array = reader.data_reference(address + 12)?;
+    let array = reader.data_reference(at(address, 12)?)?;
     let count = reader.u32(array)?;
     if count == 0 || count > MAX_CATCHABLE_TYPES {
         return None;
     }
-    let destructor = reader.code_reference(address + 4)?;
-    let mut types = Vec::with_capacity(count as usize);
+    let destructor = reader.code_reference(at(address, 4)?)?;
+    let mut types = Vec::new();
     for index in 0..u64::from(count) {
-        let entry = reader.data_reference(array + 4 + index * 4)?;
+        reader.spend(4)?;
+        let entry = reader.data_reference(element(at(array, 4)?, index, 4)?)?;
         // properties, pType, this displacement (mdisp, pdisp, vdisp), sizeOrOffset, copyFunction.
         if reader.u32(entry)? > 0x1f {
             return None;
         }
-        let type_descriptor = reader.data_reference(entry + 4)?;
+        let type_descriptor = reader.data_reference(at(entry, 4)?)?;
         let mangled = reader.type_name(type_descriptor)?;
-        let copy_function = reader.code_reference(entry + 24)?;
-        types.push(CatchableType { type_descriptor, mangled, size: reader.u32(entry + 20)?, copy_function });
+        let copy_function = reader.code_reference(at(entry, 24)?)?;
+        reader.retain(CATCH_BYTES)?;
+        types.push(CatchableType { type_descriptor, mangled, size: reader.u32(at(entry, 20)?)?, copy_function });
     }
     Some(ThrowInfo { address, attributes, destructor, types })
 }
@@ -764,7 +957,7 @@ fn throws(reader: &Reader, report: &mut EhReport) {
         for (index, record) in words.windows(4).enumerate() {
             // Cheap reject before the full parse: a small attribute bit set, no forward-compatibility handler
             // and a catchable-type array.
-            let field = |at: usize| u32::from_le_bytes(record[at]);
+            let field = |position: usize| u32::from_le_bytes(record[position]);
             if field(0) > 0x1f || field(2) != 0 || field(3) == 0 {
                 continue;
             }
@@ -772,46 +965,66 @@ fn throws(reader: &Reader, report: &mut EhReport) {
                 report.warnings.push(format!("throw-info scan stopped at its {MAX_RECORDS}-record cap"));
                 return;
             }
-            if let Some(info) = throw_info(reader, start + (skew + index * 4) as u64) {
+            if reader.exhausted() {
+                return;
+            }
+            let Some(address) = at(start, (skew + index * 4) as u64) else { return };
+            if let Some(info) = throw_info(reader, address) {
                 report.throws.push(info);
             }
         }
     }
 }
 
-/// The exception-handling tables of an x86 or x64 PE image. Empty for other formats and machines.
+/// Reads the image's vftables and exception tables under one budget. Empty for formats and machines other than
+/// x86 and x64 PE.
 ///
-/// Decoded: `FuncInfo` of `__CxxFrameHandler3` (unwind map, try blocks with typed catch handlers and, on x64,
-/// the code ranges of each try block), the `__C_specific_handler` scope table when that handler is an import
-/// thunk, and `_ThrowInfo` records. Not decoded: the compressed `__CxxFrameHandler4` tables and SEH on x86.
-pub fn exception_tables(binary: &Binary) -> EhReport {
-    let mut report = EhReport::default();
-    let Some(reader) = Reader::new(binary) else { return report };
+/// Decoded: vftables found through their RTTI complete object locators; `FuncInfo` of `__CxxFrameHandler3`
+/// (unwind map, try blocks with typed catch handlers and, on x64, the code ranges of each try block); the
+/// `__C_specific_handler` scope table when that handler is an import thunk; and `_ThrowInfo` records. Not decoded:
+/// the compressed `__CxxFrameHandler4` tables and SEH on x86.
+pub fn read(binary: &Binary) -> MsvcMetadata {
+    read_with_budget(binary, WORK_BUDGET, RETAIN_BUDGET)
+}
+
+fn read_with_budget(binary: &Binary, work: u64, retain: u64) -> MsvcMetadata {
+    let Some(reader) = Reader::new(binary, work, retain) else { return MsvcMetadata::default() };
+    let mut metadata = MsvcMetadata { vftables: read_vftables(&reader), ..MsvcMetadata::default() };
+    let report = &mut metadata.exceptions;
     if reader.wide {
-        x64_functions(&reader, &mut report);
+        x64_functions(&reader, report);
     } else {
-        x86_functions(&reader, &mut report);
+        x86_functions(&reader, report);
     }
-    throws(&reader, &mut report);
+    throws(&reader, report);
     report.functions.sort_by_key(|function| (function.function, function.table));
-    report
+    if reader.exhausted() {
+        metadata.budget_exhausted = true;
+        report.warnings.push(format!(
+            "MSVC metadata budget exhausted ({work} work units, {retain} retained bytes); later vftables and \
+             exception tables were not read"
+        ));
+    }
+    metadata
 }
 
 /// Code addresses the tables name that calls do not reach: vftable slots, funclets, x86 handler thunks, and the
 /// destructors and copy constructors of thrown types.
-pub(crate) fn code_targets(binary: &Binary) -> Vec<u64> {
-    let mut targets: Vec<u64> = vftables(binary).into_iter().flat_map(|table| table.slots).collect();
-    let report = exception_tables(binary);
-    for function in &report.functions {
+pub(crate) fn code_targets(binary: &Binary, metadata: &MsvcMetadata) -> Vec<u64> {
+    let mut targets: Vec<u64> = metadata.vftables.iter().flat_map(|table| table.slots.iter().copied()).collect();
+    for function in &metadata.exceptions.functions {
         targets.extend(function.funclets());
         // On x64 the handler is the shared frame handler, already an unwind range or import thunk.
         if binary.arch == Arch::X86 {
             targets.extend(function.handler);
         }
     }
-    for throw in &report.throws {
+    for throw in &metadata.exceptions.throws {
         targets.extend(throw.destructor);
         targets.extend(throw.types.iter().filter_map(|caught| caught.copy_function));
     }
     targets
 }
+
+#[cfg(test)]
+mod tests;

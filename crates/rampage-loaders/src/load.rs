@@ -136,6 +136,9 @@ pub struct Binary {
     /// PE only: the image base and exception directory from the headers.
     #[serde(skip)]
     pe_layout: Option<crate::msvc::PeLayout>,
+    /// x86/x64 PE only: vftables and exception tables, read once at load.
+    #[serde(skip)]
+    msvc: Option<crate::msvc::MsvcMetadata>,
     #[serde(skip)]
     image: Range<usize>,
 }
@@ -277,6 +280,7 @@ impl Binary {
             embedded: None,
             go_table: None,
             pe_layout: None,
+            msvc: None,
             go_arguments: std::collections::BTreeMap::new(),
             raw: Some(raw),
             image: 0..len,
@@ -435,6 +439,7 @@ impl Binary {
             embedded: None,
             go_table: None,
             pe_layout: None,
+            msvc: None,
             go_arguments: std::collections::BTreeMap::new(),
             raw: None,
         })
@@ -912,6 +917,7 @@ impl Binary {
             embedded: None,
             go_table: None,
             pe_layout: None,
+            msvc: None,
             go_arguments: std::collections::BTreeMap::new(),
             raw: None,
             image,
@@ -940,7 +946,9 @@ impl Binary {
             function_starts.extend(starts::pe_tls(&binary, &directory));
         }
         binary.pe_layout = pe_layout;
-        function_starts.extend(crate::msvc::code_targets(&binary));
+        let msvc = crate::msvc::read(&binary);
+        function_starts.extend(crate::msvc::code_targets(&binary, &msvc));
+        binary.msvc = (binary.format == Format::Pe).then_some(msvc);
         let (starts, warning) = starts::eh_frame(&binary);
         function_starts.extend(starts);
         binary.warnings.extend(warning);
@@ -1047,6 +1055,12 @@ impl Binary {
 
     pub(crate) fn pe_layout(&self) -> Option<crate::msvc::PeLayout> {
         self.pe_layout
+    }
+
+    /// The MSVC C++ vftables and exception tables of an x86 or x64 PE image, read once at load under a bounded
+    /// budget; `None` for other formats.
+    pub fn msvc_metadata(&self) -> Option<&crate::msvc::MsvcMetadata> {
+        self.msvc.as_ref()
     }
 
     /// The import slot at exactly `address`.

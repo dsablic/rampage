@@ -16,16 +16,22 @@ const MAX_METADATA_ITEMS: usize = 16_384;
 const MAX_LOOKUP_WORK: usize = 8_000_000;
 const MAX_NAMED_TEXT_BYTES: usize = 64 * 1024;
 
+/// Field order puts the warnings and counts before the large lists, so a cut result still shows them.
 #[derive(Debug, Serialize)]
 pub struct ClassRecovery {
+    pub warnings: Vec<String>,
+    pub limitations: Vec<String>,
+    /// All MSVC vftables found; `vftables` holds the page starting at `vftables_offset`.
+    pub vftables_total: usize,
+    pub vftables_offset: usize,
+    /// Where the next page of `vftables` starts, when more exist.
+    pub vftables_next_offset: Option<usize>,
     pub classes: Vec<ClassEvidence>,
     /// Classes recovered from RTTI data, scanned for every ELF, Mach-O and PE image whether or not symbols
     /// exist, minus any class already named in the symbol-derived `classes` above.
     pub rtti_classes: Vec<crate::rtti::RttiClass>,
     /// MSVC vftables of a PE image, each tied to its class by the complete object locator before slot 0.
     pub vftables: Vec<MsvcVftable>,
-    pub warnings: Vec<String>,
-    pub limitations: Vec<String>,
 }
 
 /// An MSVC vftable found through its RTTI complete object locator.
@@ -51,28 +57,42 @@ pub struct MsvcVftable {
     pub truncated: bool,
 }
 
-/// MSVC vftables of a PE image, bounded to [`MAX_CLASSES`] tables of [`MAX_SLOTS`] listed slots.
-pub fn msvc_vftables(binary: &Binary) -> (Vec<MsvcVftable>, bool) {
-    let tables = rampage_loaders::msvc::vftables(binary);
-    let capped = tables.len() > MAX_CLASSES;
-    let tables = tables
-        .into_iter()
-        .take(MAX_CLASSES)
+/// Longest class or stored name a vftable row carries; longer ones are cut at a character boundary.
+const MAX_VFTABLE_NAME_BYTES: usize = 512;
+
+fn bounded_name(mut name: String) -> String {
+    if name.len() > MAX_VFTABLE_NAME_BYTES {
+        let mut end = MAX_VFTABLE_NAME_BYTES;
+        while !name.is_char_boundary(end) {
+            end -= 1;
+        }
+        name.truncate(end);
+        name.push('…');
+    }
+    name
+}
+
+/// MSVC vftables of a PE image, read once at load, each listing at most [`MAX_SLOTS`] slots and 512-byte names.
+pub fn msvc_vftables(binary: &Binary) -> Vec<MsvcVftable> {
+    let Some(metadata) = binary.msvc_metadata() else { return Vec::new() };
+    metadata
+        .vftables
+        .iter()
         .map(|table| {
             let slot_count = table.slots.len();
+            let class = crate::language::msvc_type_name(&table.mangled).unwrap_or_else(|| table.mangled.clone());
             MsvcVftable {
-                class: crate::language::msvc_type_name(&table.mangled).unwrap_or_else(|| table.mangled.clone()),
-                mangled: table.mangled,
+                class: bounded_name(class),
+                mangled: bounded_name(table.mangled.clone()),
                 address: table.address,
                 locator: table.locator,
                 offset: table.offset,
                 slot_count,
-                slots: table.slots.into_iter().take(MAX_SLOTS as usize).collect(),
+                slots: table.slots.iter().copied().take(MAX_SLOTS as usize).collect(),
                 truncated: table.truncated || slot_count > MAX_SLOTS as usize,
             }
         })
-        .collect();
-    (tables, capped)
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -331,6 +351,9 @@ pub fn recover_named_bounded(binary: &Binary, max_tables: usize, max_slots: u64)
         classes: Vec::new(),
         rtti_classes: Vec::new(),
         vftables: Vec::new(),
+        vftables_total: 0,
+        vftables_offset: 0,
+        vftables_next_offset: None,
         warnings: Vec::new(),
         limitations: vec![
             format!(
@@ -354,6 +377,9 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
         classes: Vec::new(),
         rtti_classes: Vec::new(),
         vftables: Vec::new(),
+        vftables_total: 0,
+        vftables_offset: 0,
+        vftables_next_offset: None,
         warnings: Vec::new(),
         limitations: vec![
             "`classes` is named Itanium vtable evidence only; no automatic type insertion, complete class \
@@ -401,8 +427,13 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
         Err(limitation) => result.warnings.push(format!("Symbol-independent RTTI not inspected: {limitation}.")),
     }
     if binary.format == Format::Pe {
-        let (tables, capped) = msvc_vftables(binary);
-        result.vftables = tables;
+        result.vftables = msvc_vftables(binary);
+        result.vftables_total = result.vftables.len();
+        if binary.msvc_metadata().is_some_and(|metadata| metadata.budget_exhausted) {
+            result
+                .warnings
+                .push("MSVC metadata budget exhausted at load; vftables after that point were not read.".to_owned());
+        }
         result.limitations.push(
             "`vftables` (x86/x64 PE) are MSVC tables whose preceding word points to a validated RTTI complete \
              object locator; slots run to the first non-code word, so a table directly followed by another code \
@@ -410,9 +441,6 @@ pub fn recover(binary: &Binary) -> ClassRecovery {
              are code addresses, not proven function starts; adjustor thunks appear as their own targets."
                 .to_owned(),
         );
-        if capped {
-            result.warnings.push(format!("MSVC vftables capped at {MAX_CLASSES}."));
-        }
     }
     recover_named_into(binary, &mut result, MAX_CLASSES, MAX_SLOTS, None);
     let named: std::collections::BTreeSet<&str> = result.classes.iter().map(|class| class.name.as_str()).collect();

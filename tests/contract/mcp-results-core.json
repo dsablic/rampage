@@ -127,6 +127,9 @@
     "vftables[].slot_count",
     "vftables[].slots",
     "vftables[].truncated",
+    "vftables_next_offset",
+    "vftables_offset",
+    "vftables_total",
     "warnings"
   ],
   "decode_file_range": [

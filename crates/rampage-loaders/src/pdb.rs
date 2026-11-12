@@ -803,9 +803,8 @@ fn choose_names(functions: BTreeMap<u64, Names>) -> (Vec<PdbFunction>, Vec<Strin
     let mut chosen: Vec<(u64, Option<String>)> = functions
         .iter()
         .map(|(&address, names)| {
-            let primary = names
-                .primary()
-                .filter(|name| plain_identifier(name) && primary_uses.get(name.as_str()) == Some(&1));
+            let primary =
+                names.primary().filter(|name| plain_identifier(name) && primary_uses.get(name.as_str()) == Some(&1));
             let fallback = || names.decorated.first().or(names.primary());
             (address, primary.or_else(fallback).cloned())
         })
@@ -933,9 +932,10 @@ fn collect_procedures(
         } else {
             // A public that is, or decorates, the procedure's name is its linkage name; any other undecorated public
             // at the address is a folded alias, never a conflict.
-            let own = names.procedure.as_deref().is_some_and(|procedure| {
-                procedure == name || undecorated_c(name) == Some(procedure)
-            });
+            let own = names
+                .procedure
+                .as_deref()
+                .is_some_and(|procedure| procedure == name || undecorated_c(name) == Some(procedure));
             !own && names.publics.insert(name.to_owned())
         };
         if !fresh {

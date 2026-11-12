@@ -1,5 +1,5 @@
 //! A minimal PE builder for unit tests: headers, one read-write section at [`SECTION_RVA`] holding the given bytes,
-//! and the given data directories.
+//! optionally a code section after it ([`TestPe::code_rva`]), and the given data directories.
 
 pub(crate) const SECTION_RVA: u32 = 0x1000;
 pub(crate) const IMAGE_BASE_32: u64 = 0x40_0000;
@@ -14,11 +14,18 @@ pub(crate) struct TestPe {
     pub(crate) dll_characteristics: u16,
     /// The COFF Machine; `None` for x86 or x64 by `bits`.
     pub(crate) machine: Option<u16>,
+    /// Bytes of an executable `.text` section placed after the data section; none when empty.
+    pub(crate) code: Vec<u8>,
 }
 
 impl TestPe {
     pub(crate) fn new(bits: u8, section: Vec<u8>) -> Self {
-        Self { bits, section, directories: Vec::new(), dll_characteristics: 0, machine: None }
+        Self { bits, section, directories: Vec::new(), dll_characteristics: 0, machine: None, code: Vec::new() }
+    }
+
+    /// The RVA the code section starts at: the page after the data section.
+    pub(crate) fn code_rva(&self) -> u32 {
+        SECTION_RVA + (self.section.len().div_ceil(0x1000).max(1) * 0x1000) as u32
     }
 
     pub(crate) fn directory(mut self, index: usize, rva: u32, size: u32) -> Self {
@@ -32,13 +39,14 @@ impl TestPe {
         let put32 =
             |bytes: &mut Vec<u8>, at: usize, value: u32| bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
         let raw_size = self.section.len().div_ceil(0x200).max(1) * 0x200;
-        let mut bytes = vec![0; SECTION_FILE_OFFSET as usize + raw_size];
+        let code_raw_size = self.code.len().div_ceil(0x200) * 0x200;
+        let mut bytes = vec![0; SECTION_FILE_OFFSET as usize + raw_size + code_raw_size];
         bytes[..2].copy_from_slice(b"MZ");
         put32(&mut bytes, 0x3c, 0x80);
         bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
         let wide = self.bits == 64;
         put16(&mut bytes, 0x84, self.machine.unwrap_or(if wide { 0x8664 } else { 0x14c }));
-        put16(&mut bytes, 0x86, 1);
+        put16(&mut bytes, 0x86, if self.code.is_empty() { 1 } else { 2 });
         let optional_size: u16 = if wide { 240 } else { 224 };
         put16(&mut bytes, 0x94, optional_size);
         put16(&mut bytes, 0x96, if wide { 0x22 } else { 0x102 });
@@ -52,7 +60,7 @@ impl TestPe {
         }
         put32(&mut bytes, optional + 32, 0x1000);
         put32(&mut bytes, optional + 36, 0x200);
-        let image_size = SECTION_RVA + (self.section.len().div_ceil(0x1000).max(1) * 0x1000) as u32;
+        let image_size = self.code_rva() + (self.code.len().div_ceil(0x1000) * 0x1000) as u32;
         put32(&mut bytes, optional + 56, image_size);
         put32(&mut bytes, optional + 60, SECTION_FILE_OFFSET);
         put16(&mut bytes, optional + 68, 3);
@@ -73,6 +81,17 @@ impl TestPe {
         put32(&mut bytes, section + 36, 0xc000_0040);
         let start = SECTION_FILE_OFFSET as usize;
         bytes[start..start + self.section.len()].copy_from_slice(&self.section);
+        if !self.code.is_empty() {
+            let header = section + 40;
+            let file_offset = start + raw_size;
+            bytes[header..header + 8].copy_from_slice(b".text\0\0\0");
+            put32(&mut bytes, header + 8, self.code.len() as u32);
+            put32(&mut bytes, header + 12, self.code_rva());
+            put32(&mut bytes, header + 16, code_raw_size as u32);
+            put32(&mut bytes, header + 20, file_offset as u32);
+            put32(&mut bytes, header + 36, 0x6000_0020);
+            bytes[file_offset..file_offset + self.code.len()].copy_from_slice(&self.code);
+        }
         bytes
     }
 }

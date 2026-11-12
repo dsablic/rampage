@@ -5,8 +5,20 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use rampage_loaders::Binary;
-use rampage_loaders::msvc::{exception_tables, vftables};
 use rampage_loaders::pdb::matched_symbols;
+
+#[test]
+fn non_msvc_pe_fixtures_yield_no_msvc_metadata() {
+    // MinGW, Zig and Go PEs: whatever their data holds, no vftable, FuncInfo or throw info validates.
+    let bin = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin");
+    for name in ["hello-x64.exe", "pe-metadata-x64.exe", "pe-metadata-x86.exe", "tls-x64.exe", "buildinfo-go-x64.exe"] {
+        let binary = Binary::open(bin.join(name)).unwrap();
+        let metadata = binary.msvc_metadata().unwrap();
+        assert!(metadata.vftables.is_empty(), "{name}");
+        assert!(metadata.exceptions.functions.is_empty() && metadata.exceptions.throws.is_empty(), "{name}");
+        assert!(!metadata.budget_exhausted, "{name}");
+    }
+}
 
 const ARCHES: [(&str, [u64; 3]); 2] =
     [("x64", [0x1_4000_1000, 0x1_4000_3000, 0x1_4000_5000]), ("x86", [0x40_1000, 0x40_2000, 0x40_3000])];
@@ -48,7 +60,7 @@ fn vftables_match_the_pdb_vftable_symbols_slot_for_slot() {
                 (!name.contains("type_info")).then_some((address, name.as_str()))
             })
             .collect();
-        let tables = vftables(&binary);
+        let tables = &binary.msvc_metadata().unwrap().vftables;
         let found: BTreeMap<u64, _> = tables.iter().map(|table| (table.address, table)).collect();
         assert_eq!(found.keys().collect::<Vec<_>>(), expected.keys().collect::<Vec<_>>(), "{arch}");
         // Procedure names win over the decorated public names at the same address.
@@ -57,7 +69,7 @@ fn vftables_match_the_pdb_vftable_symbols_slot_for_slot() {
             .chain(&truth["code"])
             .map(|(&address, names)| (address, names[0].as_str()))
             .collect();
-        for table in &tables {
+        for table in tables {
             // `??_7Sprite@geo@@6BDrawable@1@@` belongs to the class its type descriptor names: `.?AVSprite@geo@@`.
             let symbol = expected[&table.address];
             let class = &symbol[4..symbol.rfind("6B").unwrap()];
@@ -84,7 +96,7 @@ fn frame_handler_tables_give_try_blocks_typed_catches_and_cleanups() {
         let binary = Binary::open(path(&format!("msvc-cpp-{arch}.exe"))).unwrap();
         let truth = truth(arch, sections);
         let named = |name: &str| *truth["code"].iter().find(|(_, names)| names[0] == name).unwrap().0;
-        let report = exception_tables(&binary);
+        let report = &binary.msvc_metadata().unwrap().exceptions;
         assert_eq!(report.undecoded_handlers, 0, "{arch}");
         assert_eq!(report.functions.len(), 4, "{arch}: {:#?}", report.functions);
         assert!(

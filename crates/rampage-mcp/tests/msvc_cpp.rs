@@ -107,7 +107,19 @@ async fn msvc_functions_vftables_and_exception_handlers_match_the_pdb() {
         assert!(missed.is_empty(), "{arch}: discovery misses PDB functions {missed:?}");
 
         let classes = call(&client, "class_evidence", json!({"path": exe.0})).await;
-        let tables = classes["vftables"].as_array().unwrap();
+        assert_eq!(classes["vftables_total"], 20, "{arch}");
+        assert_eq!(classes["vftables"].as_array().unwrap().len(), 16, "{arch}: default page");
+        // Page the vftables seven at a time.
+        let mut collected = Vec::new();
+        let mut offset = Some(0);
+        while let Some(at) = offset {
+            let page =
+                call(&client, "class_evidence", json!({"path": exe.0, "vftable_offset": at, "vftable_limit": 7})).await;
+            assert_eq!(page["vftables_offset"], at);
+            collected.extend(page["vftables"].as_array().unwrap().iter().cloned());
+            offset = page["vftables_next_offset"].as_u64();
+        }
+        let tables = &collected;
         assert_eq!(tables.len(), 20, "{arch}");
         let sprite: Vec<u64> = tables
             .iter()

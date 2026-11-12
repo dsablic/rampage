@@ -299,7 +299,8 @@ These read embedded metadata and containers without executing, extracting or dec
 - **PE resources and load config** (`pe_resources`, `pe_load_config`): resource leaves with decoded version
   resources and manifests, and the load config's security cookie, SafeSEH, CFG and CET settings checked against
   the header's mitigations. See [PE resources and load config](file-formats.md#pe-resources-and-load-config).
-- **MSVC C++ exception handling** (`exception_handlers`): per function, try blocks with typed catch handlers and
+- **MSVC C++ exception handling** (`exception_handlers`, experimental; validated on clang-cl
+  `__CxxFrameHandler3` output, while cl.exe x64 `__CxxFrameHandler4` tables are counted, not decoded): per function, try blocks with typed catch handlers and
   their funclets, destructor cleanups by state and SEH scopes, from `__CxxFrameHandler3` FuncInfo (x64 and x86)
   and `__C_specific_handler` scope tables, plus the catchable types of each `_ThrowInfo`. Funclets seed function
   starts. See [MSVC C++ metadata](file-formats.md#msvc-c-metadata).

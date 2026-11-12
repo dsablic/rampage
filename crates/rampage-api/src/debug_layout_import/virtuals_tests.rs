@@ -63,6 +63,9 @@ fn recovery(tables: Vec<ClassEvidence>) -> ClassRecovery {
         classes: tables,
         rtti_classes: Vec::new(),
         vftables: Vec::new(),
+        vftables_total: 0,
+        vftables_offset: 0,
+        vftables_next_offset: None,
         warnings: Vec::new(),
         limitations: Vec::new(),
     }

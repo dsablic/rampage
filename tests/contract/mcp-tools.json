@@ -585,6 +585,14 @@
         "path": {
           "type": "string",
           "required": true
+        },
+        "vftable_limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "vftable_offset": {
+          "type": "integer|null",
+          "required": false
         }
       }
     },
@@ -1680,6 +1688,10 @@
           "type": "null|string",
           "required": false
         },
+        "detail_offset": {
+          "type": "integer|null",
+          "required": false
+        },
         "function": {
           "type": "null|string",
           "required": false
@@ -1708,7 +1720,8 @@
           "type": "string",
           "required": true
         }
-      }
+      },
+      "experimental": true
     },
     "export_patched": {
       "group": "core",
