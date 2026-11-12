@@ -2,6 +2,7 @@ pub mod carve;
 pub mod container;
 mod details;
 mod entropy;
+pub mod labels;
 pub mod linkage;
 mod load;
 mod macho;

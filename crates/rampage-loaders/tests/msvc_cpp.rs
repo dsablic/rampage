@@ -154,3 +154,21 @@ fn pdb_names_cover_every_procedure_with_decorated_aliases_where_needed() {
         assert_eq!(unique.len(), names.len());
     }
 }
+
+#[test]
+fn identical_code_folding_names_folded_bodies_by_alias_or_omits_them_with_a_warning() {
+    // msvc-icf-x64 links with /OPT:ICF: `c_twice`/`c_double` (extern "C") and `cpp_triple`/`cpp_thrice` each fold
+    // into one body, so two procedure and two public records name each folded address.
+    let binary = Binary::open(path("msvc-icf-x64.exe")).unwrap();
+    let report = matched_symbols(&binary, &path("msvc-icf-x64.pdb")).unwrap();
+    let names: BTreeMap<u64, &str> =
+        report.functions.iter().map(|function| (function.address, function.name.as_str())).collect();
+    let text = 0x1_4000_1000;
+    // The C pair has no decorated name to stand in, so neither name describes the body alone.
+    assert!(!names.contains_key(&text), "{names:?}");
+    assert_eq!(names[&(text + 16)], "?cpp_thrice@@YAHH@Z");
+    assert_eq!(names[&(text + 32)], "distinct");
+    assert_eq!(names[&(text + 48)], "icf_entry");
+    assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
+    assert!(report.warnings[0].starts_with("1 addresses omitted"), "{:?}", report.warnings);
+}

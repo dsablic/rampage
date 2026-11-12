@@ -50,3 +50,13 @@ build() {
 
 build x64 x86_64-pc-windows-msvc i386:x86-64 x64 0x140000000
 build x86 i686-pc-windows-msvc i386 x86 0x400000
+
+# Identical-code folding: icf.cpp's byte-identical function pairs fold under /OPT:ICF, so its PDB names one address
+# with several procedure and public records.
+"$clang_cl" --target=x86_64-pc-windows-msvc /c /O2 /GS- /Z7 /Zl /Gy -fdebug-compilation-dir=/rampage/msvc-cpp \
+    -Xclang -object-file-name=/rampage/msvc-cpp/icf.obj -gno-codeview-command-line /Fo:icf.obj \
+    -- "$source_dir/icf.cpp"
+./lld-link icf.obj /out:msvc-icf-x64.exe /pdb:msvc-icf-x64.pdb /pdbaltpath:msvc-icf-x64.pdb \
+    /pdbsourcepath:/rampage/msvc-cpp /debug:full /nodefaultlib /entry:icf_entry /subsystem:console /machine:x64 \
+    /base:0x140000000 /opt:ref /opt:icf /Brepro /timestamp:0 /noimplib
+cp msvc-icf-x64.exe msvc-icf-x64.pdb "$source_dir/"

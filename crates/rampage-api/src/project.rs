@@ -424,13 +424,8 @@ impl Project {
     pub fn import_pdb_names(&self, path: &Path, apply: bool) -> Result<PdbImport, ApiError> {
         let preview = rampage_loaders::pdb::matched_symbols(&self.binary, path)
             .map_err(|error| ApiError::Invalid(error.to_string()))?;
-        let mut names = std::collections::BTreeSet::new();
-        for function in &preview.functions {
-            check_name(&function.name).map_err(ApiError::Invalid)?;
-            if !names.insert(&function.name) {
-                return Err(ApiError::Invalid("ambiguous PDB name at multiple addresses; nothing imported".to_owned()));
-            }
-        }
+        // The reader proposes only unique names that pass `check_name`; anything else it omits with a warning.
+        debug_assert!(preview.functions.iter().all(|function| check_name(&function.name).is_ok()));
         let entries: std::collections::BTreeSet<_> =
             self.analysis()?.program.functions.iter().map(|function| function.address).collect();
         let candidates = |annotations: &Annotations| {
@@ -484,13 +479,8 @@ impl Project {
         let image_sha256 = self.pdb_image_digest()?;
         let (report, pdb) = rampage_loaders::pdb::matched_symbols_checked(&self.binary, path)
             .map_err(|error| ApiError::Invalid(error.to_string()))?;
-        let mut names = std::collections::BTreeSet::new();
-        for function in &report.functions {
-            check_name(&function.name).map_err(ApiError::Invalid)?;
-            if !names.insert(&function.name) {
-                return Err(ApiError::Invalid("ambiguous PDB name at multiple addresses; nothing imported".to_owned()));
-            }
-        }
+        // The reader proposes only unique names that pass `check_name`; anything else it omits with a warning.
+        debug_assert!(report.functions.iter().all(|function| check_name(&function.name).is_ok()));
         self.check_pdb_backing()?;
         let analysis = self.analysis();
         self.check_pdb_backing()?;
@@ -943,37 +933,7 @@ pub struct GoLiteral {
     pub start_references: usize,
 }
 
-/// Refuses a name that is not an identifier, or that `resolve` would read as an address. `resolve` parses `0x...`
-/// and `0X...` before looking up names, so such a name could never be looked up. It looks up names before
-/// `sub_<hex>`, so naming one function `sub_401000` would shadow the default name of the function at 0x401000.
-/// Other names that merely start with `sub_` (`sub_menu_init`) are fine.
-pub(crate) fn check_name(name: &str) -> Result<(), String> {
-    // Before the identifier rules, which refuse `0x...` too but with a less helpful reason.
-    if is_address_shaped(name) {
-        return Err(format!("{name:?} looks like an address; choose another name"));
-    }
-    let valid = !name.is_empty()
-        && !name.starts_with(|c: char| c.is_ascii_digit())
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || "_.$@?:".contains(c));
-    if !valid {
-        return Err(format!("{name:?} is not a valid name: use letters, digits and _.$@?:"));
-    }
-    Ok(())
-}
-
-pub(crate) fn is_address_shaped(name: &str) -> bool {
-    hex_address_digits(name).is_some() || default_name_address(name).is_some()
-}
-
-/// The hex digits of an address written `0x...` or `0X...`, as `resolve` reads it.
-fn hex_address_digits(text: &str) -> Option<&str> {
-    text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
-}
-
-/// The address in a default function name `sub_<hex>`, as `resolve` reads it.
-pub(crate) fn default_name_address(text: &str) -> Option<u64> {
-    text.strip_prefix("sub_").and_then(|hex| u64::from_str_radix(hex, 16).ok())
-}
+pub(crate) use rampage_loaders::labels::{check_name, default_name_address, hex_address_digits, is_address_shaped};
 
 #[cfg(test)]
 #[path = "debug_layout_import/entry_replay_history_tests.rs"]

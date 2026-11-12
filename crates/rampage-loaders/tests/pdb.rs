@@ -75,14 +75,17 @@ fn pe_guid_and_age_mismatches_missing_identity_and_va_overflow_are_rejected() {
 }
 
 #[test]
-fn conflicting_public_name_and_late_corrupt_procedure_reject_the_whole_pdb() {
+fn conflicting_public_name_is_an_alias_and_a_late_corrupt_procedure_rejects_the_whole_pdb() {
     let bytes = std::fs::read(fixture("fixture.pdb")).unwrap();
     let globals = uint(&bytes, stream_offset(&bytes, 3, 20)) & 0xffff;
     let global_start = stream_offset(&bytes, globals, 0);
     let name = bytes[global_start..global_start + 512].windows(8).position(|name| name == b"pdb_mix\0").unwrap();
-    let mut corrupt = bytes.clone();
-    corrupt[global_start + name + 4] = b'f';
-    assert!(pdb_symbols_bytes(&corrupt).is_err());
+    let mut alias = bytes.clone();
+    alias[global_start + name + 4] = b'f';
+    // `pdb_mif` now names pdb_mix's address too: an identical-code-folding alias, not a conflict.
+    let report = pdb_symbols_bytes(&alias).unwrap();
+    assert!(report.functions.iter().any(|function| function.name == "pdb_mix"));
+    assert!(!report.functions.iter().any(|function| function.name == "pdb_mif"));
 
     let module = module_stream(&bytes);
     let module_start = stream_offset(&bytes, module, 0);

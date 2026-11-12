@@ -91,6 +91,24 @@ fn duplicate_function_names_in_real_pdb_name_neither_function() {
 }
 
 #[test]
+fn address_shaped_pdb_names_are_omitted_without_failing_the_import() {
+    let files = TempFiles::new();
+    let mut bytes = std::fs::read(fixture("fixture.pdb")).unwrap();
+    let module_start = stream_offset(&bytes, module_stream(&bytes), 0);
+    let local = bytes[module_start..module_start + 1024].windows(10).position(|name| name == b"pdb_local\0").unwrap();
+    // `sub_10000` would shadow the default name of the function at 0x10000, so the label contract refuses it.
+    bytes[module_start + local..module_start + local + 10].copy_from_slice(b"sub_10000\0");
+    let path = files.write("address-shaped.pdb", &bytes);
+    let project = project();
+    let imported = project.import_pdb_names(&path, true).unwrap();
+    assert!(!imported.preview.functions.iter().any(|function| function.name == "sub_10000"));
+    assert!(imported.preview.warnings.iter().any(|warning| warning.contains("not identifiers")));
+    assert_eq!(project.function_name(0x140001000), "pdb_mix");
+    let preview = project.preview_pdb_names(&path).unwrap();
+    assert!(!preview.report().functions.iter().any(|function| function.name == "sub_10000"));
+}
+
+#[test]
 fn a_user_name_already_used_elsewhere_is_never_stolen() {
     let project = project();
     project.rename(0x140001020, Some("pdb_mix")).unwrap();

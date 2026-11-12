@@ -754,16 +754,31 @@ fn read_pdb_full(bytes: &[u8], budget: Budget, mode: PdbReadMode) -> Result<(Pdb
 /// The names recorded for one function address.
 #[derive(Default)]
 struct Names {
-    /// The procedure record's name, or an undecorated public's when no procedure names the address.
-    primary: Option<String>,
+    /// The procedure record's name.
+    procedure: Option<String>,
+    /// Another procedure record named this address differently (identical-code folding); neither name is used.
+    procedure_conflict: bool,
+    /// Undecorated public names (extern "C" functions, folded aliases among them) other than the procedure's own
+    /// linkage name.
+    publics: std::collections::BTreeSet<String>,
     /// MSVC-decorated (`?`-prefixed) public names.
     decorated: std::collections::BTreeSet<String>,
 }
 
-/// Whether a name is usable as a plain label: identifier characters plus the `_.$@?:` the annotation layer admits.
+impl Names {
+    /// The name the record set proposes before uniqueness is considered: the procedure's, else the smallest
+    /// undecorated public.
+    fn primary(&self) -> Option<&String> {
+        if self.procedure_conflict {
+            return None;
+        }
+        self.procedure.as_ref().or_else(|| self.publics.first())
+    }
+}
+
+/// Whether a name is usable as a label under the annotation layer's contract.
 fn plain_identifier(name: &str) -> bool {
-    !name.starts_with(|c: char| c.is_ascii_digit())
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || "_.$@?:".contains(c))
+    crate::labels::check_name(name).is_ok()
 }
 
 /// The C name an x86 public decorates: `_name` (cdecl), `_name@8` (stdcall) and `@name@8` (fastcall).
@@ -781,7 +796,7 @@ fn undecorated_c(public: &str) -> Option<&str> {
 fn choose_names(functions: BTreeMap<u64, Names>) -> (Vec<PdbFunction>, Vec<String>) {
     let mut primary_uses: BTreeMap<&str, usize> = BTreeMap::new();
     for names in functions.values() {
-        if let Some(primary) = &names.primary {
+        if let Some(primary) = names.primary() {
             *primary_uses.entry(primary).or_default() += 1;
         }
     }
@@ -789,12 +804,17 @@ fn choose_names(functions: BTreeMap<u64, Names>) -> (Vec<PdbFunction>, Vec<Strin
         .iter()
         .map(|(&address, names)| {
             let primary = names
-                .primary
-                .as_ref()
+                .primary()
                 .filter(|name| plain_identifier(name) && primary_uses.get(name.as_str()) == Some(&1));
-            (address, primary.or_else(|| names.decorated.first()).or(names.primary.as_ref()).cloned())
+            let fallback = || names.decorated.first().or(names.primary());
+            (address, primary.or_else(fallback).cloned())
         })
         .collect();
+    let folded = chosen
+        .iter()
+        .zip(functions.values())
+        .filter(|((_, name), names)| name.is_none() && names.procedure_conflict)
+        .count();
     let mut uses: BTreeMap<String, usize> = BTreeMap::new();
     for name in chosen.iter().filter_map(|(_, name)| name.clone()) {
         *uses.entry(name).or_default() += 1;
@@ -810,6 +830,12 @@ fn choose_names(functions: BTreeMap<u64, Names>) -> (Vec<PdbFunction>, Vec<Strin
         }
     }
     let mut warnings = Vec::new();
+    if folded > 0 {
+        warnings.push(format!(
+            "{folded} addresses omitted: several procedure records with different names share each one \
+             (identical-code folding) and no decorated public name stands in"
+        ));
+    }
     if shared > 0 {
         warnings.push(format!(
             "{shared} functions omitted: their names are shared by several addresses and no decorated public name \
@@ -818,8 +844,8 @@ fn choose_names(functions: BTreeMap<u64, Names>) -> (Vec<PdbFunction>, Vec<Strin
     }
     if unusable > 0 {
         warnings.push(format!(
-            "{unusable} functions omitted: their names are not identifiers (letters, digits and _.$@?:) and no \
-             decorated public name stands in"
+            "{unusable} functions omitted: their names are not identifiers (letters, digits and _.$@?:, not \
+             address-shaped) and no decorated public name stands in"
         ));
     }
     let functions =
@@ -887,27 +913,33 @@ fn collect_procedures(
             return Err(malformed("function names exceed limit"));
         }
         let names = functions.entry(u64::from(rva)).or_default();
-        if procedure_range.is_none() && name.starts_with('?') {
-            if names.decorated.contains(name) {
-                continue;
+        let fresh = if procedure_range.is_none() && name.starts_with('?') {
+            names.decorated.insert(name.to_owned())
+        } else if procedure_range.is_some() {
+            match &names.procedure {
+                Some(previous) if previous == name => false,
+                // Identical-code folding points several procedures at one body: no name describes it alone.
+                Some(_) => {
+                    names.procedure_conflict = true;
+                    false
+                }
+                None => {
+                    names.procedure = Some(name.to_owned());
+                    // An undecorated public read earlier that decorates this name is its linkage name.
+                    names.publics.retain(|public| undecorated_c(public) != Some(name));
+                    true
+                }
             }
-            names.decorated.insert(name.to_owned());
         } else {
-            match &names.primary {
-                // A public is the procedure's own linkage name when it undecorates to it.
-                Some(previous)
-                    if previous == name
-                        || (procedure_range.is_none() && undecorated_c(name) == Some(previous.as_str())) =>
-                {
-                    continue;
-                }
-                // A procedure read after its public replaces the decorated C name.
-                Some(previous) if procedure_range.is_some() && undecorated_c(previous) == Some(name) => {
-                    names.primary = Some(name.to_owned());
-                }
-                Some(_) => return Err(malformed("conflicting function names at one RVA")),
-                None => names.primary = Some(name.to_owned()),
-            }
+            // A public that is, or decorates, the procedure's name is its linkage name; any other undecorated public
+            // at the address is a folded alias, never a conflict.
+            let own = names.procedure.as_deref().is_some_and(|procedure| {
+                procedure == name || undecorated_c(name) == Some(procedure)
+            });
+            !own && names.publics.insert(name.to_owned())
+        };
+        if !fresh {
+            continue;
         }
         *names_bytes += name.len();
         if *names_bytes > MAX_NAMES_BYTES {
@@ -1005,7 +1037,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_procedures_preserve_ranges_without_choosing_conflicting_public_alias_names() {
+    fn conflicting_public_aliases_keep_procedure_names_and_ranges() {
         let original = std::fs::read(fixture_support::fixture("fixture.pdb")).unwrap();
         let globals = fixture_support::uint(&original, fixture_support::stream_offset(&original, 3, 20)) & 0xffff;
         let start = fixture_support::stream_offset(&original, globals, 0);
@@ -1021,9 +1053,13 @@ mod tests {
             let mut bytes = original.clone();
             bytes[start + name..start + name + 8].copy_from_slice(alias);
             let path = files.write(std::str::from_utf8(&alias[..7]).unwrap(), &bytes);
-            assert!(pdb_symbols_bytes(&bytes).is_err());
-            assert!(pdb_symbols(&path).is_err());
-            assert!(matched_symbols_checked(&binary, &path).is_err());
+            // A different undecorated public at a procedure's address is a folded alias: the procedure keeps its
+            // name and the alias is never chosen.
+            for report in [pdb_symbols_bytes(&bytes).unwrap(), pdb_symbols(&path).unwrap()] {
+                assert!(report.functions.iter().any(|function| function.name == "pdb_mix"));
+                assert!(!report.functions.iter().any(|function| function.name.as_bytes() == &alias[..7]));
+            }
+            assert!(matched_symbols_checked(&binary, &path).is_ok());
             let (actual, provenance) = matched_procedures_checked(&binary, &path).unwrap();
             assert_eq!(actual, expected);
             assert!(!actual.iter().any(|procedure| procedure.name.as_bytes() == &alias[..7]));
