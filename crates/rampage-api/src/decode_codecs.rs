@@ -162,7 +162,8 @@ pub(crate) fn provider(
         }
         (ContentCodec::Lzss, Some(parameters)) => {
             let provider = parameters.provider(initial_write_offset, dictionary_fill);
-            if !provider.is_valid() {
+            // The provider keeps the literal bit as a flag, so its range is checked here.
+            if parameters.literal_bit > 1 || !provider.is_valid() {
                 return Err(invalid(
                     "invalid lzss parameters: window_bits 10..=13, min_match 2..=3, literal_bit 0..=1, \
                      initial_write_offset below the window, and initial_write_offset and dictionary_fill zero \
@@ -185,6 +186,20 @@ pub(crate) fn dictionary_size(codec: ContentCodec, lzss: Option<LzssParameters>)
         (ContentCodec::Lzss, Some(parameters)) => 1 << parameters.window_bits,
         (ContentCodec::Lz4Block, _) => 65536,
         _ => 4096,
+    }
+}
+
+/// How decoding stops. The LZSS sentence is unchanged from the original `lzss-4k` receipt.
+pub(crate) fn end_limitation(codec: ContentCodec) -> &'static str {
+    match codec {
+        ContentCodec::Lzss4k | ContentCodec::Lzss => {
+            "This codec has no end marker: expected output size is an analyst assertion, \
+             not a discovered stream boundary."
+        }
+        ContentCodec::Lz4Block => {
+            "Decoding stops at the expected output size, an analyst assertion; the block's own end is not \
+             required to coincide with it."
+        }
     }
 }
 

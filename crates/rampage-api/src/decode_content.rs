@@ -9,7 +9,7 @@ use crate::ApiError;
 pub use crate::decode_codecs::{
     ContentCodec, LzssFlagOrder, LzssOffsetMode, LzssParameters, LzssReferenceLayout, default_initial_write_offset,
 };
-use crate::decode_codecs::{dictionary_size, provider, variant_limitation};
+use crate::decode_codecs::{dictionary_size, end_limitation, provider, variant_limitation};
 use crate::range_source as source;
 
 pub const MAX_DECODE_INPUT_BYTES: usize = 8 * 1024 * 1024;
@@ -183,8 +183,7 @@ pub fn decode_file_range(path: &Path, request: &DecodeFileRequest) -> Result<Dec
         },
         limitations: vec![
             variant_limitation(request.codec),
-            "No end marker is used: expected output size is an analyst assertion, \
-             not a discovered stream boundary.",
+            end_limitation(request.codec),
             "Hashes and the additive byte sum describe observed ranges, \
              not authenticity or validated container fields.",
             "Trailing input is reported, never silently certified as consumed. \

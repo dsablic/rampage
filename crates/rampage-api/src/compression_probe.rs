@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rampage_decode::probe::{self, Codec, ProbeOptions, Verdict};
-use rampage_decode::{DecodeOptions, Decoder, Lz4Block, ScanEnd};
+use rampage_decode::{DecodeError, DecodeOptions, Decoder, Lz4Block, ScanEnd};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -22,6 +22,8 @@ pub const MAX_PROBE_STEPS: u64 = 768 * 1024 * 1024;
 pub const MAX_PROBE_CANDIDATES: usize = 16;
 pub const MAX_PROBE_PREVIEW_BYTES: usize = 128;
 const MAX_PROBE_RESULT_BYTES: usize = 60_000;
+/// The deadline shared by all of one call's candidate reproductions.
+const REPRODUCE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -242,13 +244,16 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
     source.revalidate()?;
 
     let found = report.candidates.len();
+    // Reproductions share their own deadline, so a probe that used its whole deadline still checks candidates.
+    let reproducing = Instant::now();
+    let mut reproduce_cancelled = || reproducing.elapsed() >= REPRODUCE_TIMEOUT;
     let candidates = report
         .candidates
         .iter()
         .take(limit)
         .enumerate()
         .map(|(index, candidate)| {
-            let (decode_check, sha, preview) = reproduce(&input, candidate, preview_size);
+            let (decode_check, sha, preview) = reproduce(&input, candidate, preview_size, &mut reproduce_cancelled);
             let ring = matches!(candidate.codec, Codec::Lzss(lzss) if lzss.offset_mode == rampage_decode::OffsetMode::RingPosition);
             ProbeCandidate {
                 rank: index + 1,
@@ -354,7 +359,12 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
 }
 
 /// Decodes a candidate again through the provider `decode_file_range` uses, with its budgets.
-fn reproduce(input: &[u8], candidate: &probe::Candidate, preview_size: usize) -> (String, String, Vec<u8>) {
+fn reproduce(
+    input: &[u8],
+    candidate: &probe::Candidate,
+    preview_size: usize,
+    cancelled: &mut dyn FnMut() -> bool,
+) -> (String, String, Vec<u8>) {
     let options = DecodeOptions {
         expected_output_size: candidate.output_size,
         max_output_size: MAX_DECODE_OUTPUT_BYTES,
@@ -362,8 +372,8 @@ fn reproduce(input: &[u8], candidate: &probe::Candidate, preview_size: usize) ->
         max_steps: MAX_DECODE_STEPS,
     };
     let result = match candidate.codec {
-        Codec::Lzss(lzss) => lzss.decode(input, &options, &mut || false),
-        Codec::Lz4Block => Lz4Block.decode(input, &options, &mut || false),
+        Codec::Lzss(lzss) => lzss.decode(input, &options, cancelled),
+        Codec::Lz4Block => Lz4Block.decode(input, &options, cancelled),
     };
     match result {
         Ok(decoded) if decoded.consumed == candidate.consumed => {
@@ -371,6 +381,9 @@ fn reproduce(input: &[u8], candidate: &probe::Candidate, preview_size: usize) ->
             ("reproduced".to_owned(), rampage_arch::hex::bytes(&Sha256::digest(&decoded.bytes)), preview)
         }
         Ok(_) => ("consumed a different input length when decoded".to_owned(), String::new(), Vec::new()),
+        Err(DecodeError::Cancelled) => {
+            ("not reproduced: the reproduction deadline passed".to_owned(), String::new(), Vec::new())
+        }
         Err(error) => (format!("decode_file_range would refuse: {error}"), String::new(), Vec::new()),
     }
 }

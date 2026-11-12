@@ -110,4 +110,13 @@ fn probe_rejects_native_image_selectors_and_decode_rejects_malformed_lzss_parame
         .assert()
         .failure()
         .stderr(contains("--lzss"));
+    let lzss = r#"{"window_bits":12,"min_match":3,"flag_order":"lsb_first","literal_bit":7,"reference_layout":"split_byte","offset_mode":"distance"}"#;
+    rampage()
+        .args(["binary", "decode"])
+        .arg(&input.0)
+        .args(["--codec", "lzss", "--lzss", lzss, "--offset", "0", "--length", "64"])
+        .args(["--expected-output-size", "64"])
+        .assert()
+        .failure()
+        .stderr(contains("literal_bit must be 0 or 1"));
 }

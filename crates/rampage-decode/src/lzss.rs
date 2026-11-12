@@ -175,7 +175,7 @@ impl Decoder for Lzss {
 /// Why a [`Lzss::decode_available`] or LZ4 scan stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScanEnd {
-    /// The input ended on a token boundary.
+    /// The input ended on a token boundary (LZ4: the block ended, with at most padding after it).
     InputExhausted,
     /// The input ended inside a token; `consumed` stops before it.
     PartialToken,

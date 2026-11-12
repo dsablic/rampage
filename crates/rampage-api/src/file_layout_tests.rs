@@ -457,3 +457,28 @@ fn the_default_limits_fit_the_json_budget_in_the_worst_case() {
     let size = serde_json::to_vec(&report).unwrap().len();
     assert!(size <= MAX_LAYOUT_RESULT_BYTES, "{size}");
 }
+
+fn hint(kind: &'static str, offset: u64) -> LayoutHint {
+    LayoutHint { kind, offset, evidence: Vec::new(), cortex_m: None, container: None }
+}
+
+#[test]
+fn container_hints_never_displace_vector_table_hints_and_next_offset_names_the_lowest_omitted() {
+    let vectors = (1..=6).map(|index| hint("cortex_m_vector_table_candidate", index * 0x1000));
+    let mut hints: Vec<LayoutHint> = vectors.collect();
+    let mut bound = ListBound { total: 6, returned: 6, next_offset: None };
+    let containers = [0x10, 0x1800, 0x2800, 0x9000].map(|offset| hint("compressed_component_candidate", offset));
+    merge_hints(&mut hints, &mut bound, containers.into());
+    let kinds: Vec<(&str, u64)> = hints.iter().map(|hint| (hint.kind, hint.offset)).collect();
+    assert_eq!(kinds.iter().filter(|(kind, _)| *kind == "cortex_m_vector_table_candidate").count(), 6);
+    assert_eq!(&kinds[6..], [("compressed_component_candidate", 0x10), ("compressed_component_candidate", 0x1800)]);
+    assert_eq!((bound.total, bound.returned, bound.next_offset), (10, 8, Some(0x2800)));
+
+    // Vector-table hints that were already cut keep their own first omitted offset when it is lower.
+    let mut hints: Vec<LayoutHint> =
+        (1..=8).map(|index| hint("cortex_m_vector_table_candidate", index * 0x100)).collect();
+    let mut bound = ListBound { total: 9, returned: 8, next_offset: Some(0x900) };
+    merge_hints(&mut hints, &mut bound, vec![hint("compressed_component_candidate", 0x10)]);
+    assert!(hints.iter().all(|hint| hint.kind == "cortex_m_vector_table_candidate"));
+    assert_eq!((bound.total, bound.returned, bound.next_offset), (10, 8, Some(0x10)));
+}

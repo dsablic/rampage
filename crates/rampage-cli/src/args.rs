@@ -799,7 +799,11 @@ impl DecodeFileArgs {
         let lzss = match &self.lzss {
             Some(json) => Some(
                 serde_json::from_str::<rampage_api::LzssParameters>(json)
-                    .map_err(|error| anyhow::anyhow!("--lzss is not valid lzss parameters: {error}"))?,
+                    .map_err(|error| anyhow::anyhow!("--lzss is not valid lzss parameters: {error}"))
+                    .and_then(|parameters| match parameters.literal_bit {
+                        0 | 1 => Ok(parameters),
+                        _ => Err(anyhow::anyhow!("--lzss literal_bit must be 0 or 1")),
+                    })?,
             ),
             None => None,
         };

@@ -139,3 +139,80 @@ fn retained_source_refuses_mutation_and_same_byte_path_replacement() {
     std::fs::write(fixture.input(), [1, b'X']).unwrap();
     assert!(source.revalidate().is_err());
 }
+
+/// The lzss-4k receipt is unchanged by the generic LZSS provider: every field and limitation as at 7d6ae85.
+#[test]
+fn lzss_4k_receipt_is_identical_to_the_original_provider() {
+    let input = [7, b'A', b'B', b'C'];
+    let fixture = Fixture::new(&input);
+    let decoded = decode_file_range(&fixture.input(), &request(4, 3)).unwrap();
+    let receipt = serde_json::to_value(&decoded.receipt).unwrap();
+    let expected = serde_json::json!({
+        "file_path": fixture.input(),
+        "source_size": 4,
+        "source_offset": 0,
+        "source_length": 4,
+        "source_range_sha256": rampage_arch::hex::bytes(&Sha256::digest(input)),
+        "source_byte_sum32": 7 + 65 + 66 + 67,
+        "source_observation": "revalidated_non_atomic_file_range",
+        "codec": "lzss-4k",
+        "dictionary_size": 4096,
+        "initial_write_offset": 4078,
+        "dictionary_fill": 0,
+        "expected_output_size": 3,
+        "output_size": 3,
+        "output_sha256": "b5d4045c3f466fa91fe2cc6abe79232a1a57cdf104f7a26e716e0a1e2789df78",
+        "input_consumed": 4,
+        "trailing_input_bytes": 0,
+        "input_fully_consumed": true,
+        "completion": "expected_output_size_reached",
+        "steps": 6,
+        "max_output_bytes": MAX_DECODE_OUTPUT_BYTES,
+        "max_expansion_ratio": MAX_DECODE_EXPANSION_RATIO,
+        "max_steps": 64 * 1024 * 1024,
+        "decode_timeout_ms": 3000,
+        "preview": {"coordinate_space": "decoded_byte_offset", "offset": 0, "size": 3, "hex": "414243",
+                    "ascii": "ABC", "next_offset": null},
+        "limitations": [
+            "Explicit lzss-4k variant: 4096-byte ring, LSB-first flags, 1=literal, 12-bit offset and length nibble+3.",
+            "This codec has no end marker: expected output size is an analyst assertion, \
+             not a discovered stream boundary.",
+            "Hashes and the additive byte sum describe observed ranges, \
+             not authenticity or validated container fields.",
+            "Trailing input is reported, never silently certified as consumed. \
+             A backreference cannot be cut to fit output.",
+            "Expansion budgeting uses the entire selected input range, including any trailing bytes.",
+            "Decoded offsets are not source-file offsets or load addresses. \
+             No executable format or architecture is inferred.",
+            "Bytes are transient. No extraction, file publication, recursion, native loading, \
+             annotations or execution.",
+            "Decode deadline is cooperative; regular-file reads and hash computation are not forcibly interrupted.",
+            "Descriptor/path metadata is revalidated; source reads are not atomic with concurrent file modification.",
+        ],
+    });
+    assert_eq!(receipt, expected);
+}
+
+#[test]
+fn lzss_literal_bit_outside_zero_or_one_is_refused_not_truncated() {
+    let fixture = Fixture::new(&[7, b'A', b'B', b'C']);
+    let mut lzss = LzssParameters {
+        window_bits: 12,
+        min_match: 3,
+        flag_order: LzssFlagOrder::LsbFirst,
+        literal_bit: 7,
+        reference_layout: LzssReferenceLayout::SplitByte,
+        offset_mode: LzssOffsetMode::Distance,
+    };
+    let mut query = request(4, 3);
+    query.codec = ContentCodec::Lzss;
+    query.initial_write_offset = 0;
+    query.lzss = Some(lzss);
+    let error = decode_file_range(&fixture.input(), &query).unwrap_err().to_string();
+    assert!(error.contains("literal_bit"), "{error}");
+    lzss.literal_bit = 1;
+    query.lzss = Some(lzss);
+    let decoded = decode_file_range(&fixture.input(), &query).unwrap();
+    assert_eq!(decoded.bytes(), b"ABC");
+    assert_eq!(serde_json::to_value(&decoded.receipt).unwrap()["lzss"]["literal_bit"], 1);
+}
