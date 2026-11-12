@@ -208,7 +208,7 @@ Shared API/CLI/MCP edits and builds remain coordinated; each parallel worker own
 - Static only: no updater/installer execution, flashing, emulator execution or security changes. Do not turn
   this into an automatic unpacker or a generic firmware framework before the first traced loader path.
 
-### Firmware gaps seen in an agent run on a Cortex-M image (2026-11-09, in progress)
+### Firmware gaps seen in an agent run on a Cortex-M image (2026-11-09, done 2026-11-12 except follow-ups)
 
 An agent analysing a headerless ARM Thumb (Cortex-M) firmware image fell back to
 `strings`/`xxd`, a Python wrapper around the rampage CLI for range disassembly, an entropy/0xFF-run map, and an
@@ -245,8 +245,10 @@ Verify first which of these the existing raw-window and decoder-provider slices 
   on its stripped ELF. Discovery should drop the caller's stale exploration once `f` becomes a function. Done: callers are re-explored
   once a later start appears, before shared tails are counted (generated 6,000-function image: 8,234 → 6,002
   starts, exact; other binaries unchanged). Still open: a function reached only by one tail call stays in its caller.
-- [ ] **Multi-stage images.** Load a decoded bootloader payload as a second region at its RAM base, linked to the
+- [x] **Multi-stage images.** Load a decoded bootloader payload as a second region at its RAM base, linked to the
   source range. Overlaps the dump-as-linked-target idea in the malware-analysis track.
+  Done as `raw.regions` (file-range, decoded or unbacked code/data/ram regions) plus `format` `ihex`/`srec`.
+  Open: HEX run addresses, regions from a second file, vector/pointer-table scans beyond the primary region.
 - [x] **Function discovery from pointer tables.** Discovery seeds only the entry point. Seed from tables of code
   pointers, with evidence per seed, so a raw image needs no hand-built symbol list (the Cortex-M vector table
   is done through `raw.vector_table`). Done: opt-in `raw.pointer_tables` (needs two strong targets per table;

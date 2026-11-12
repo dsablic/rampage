@@ -49,7 +49,13 @@ see the [stability policy](docs/stability.md) for what the version promises.
   unknown stream within a work budget and deadline, and ranks candidates whose `decode_arguments` pass straight to
   `decode_file_range`. A candidate is "confident" only with a supplied output size and a clear score margin.
   `decode_file_range` gains the parameterised `lzss` codec and `lz4-block`; `lzss-4k` is unchanged.
-- Raw interpretation identities move to `rampage-raw-interpretation-v4`, which also binds the pointer-table request.
+- Cortex-M Raw images can map several regions (experimental): `regions` adds up to 15 code, read-only data or
+  writable RAM regions, each backed by a file range, by bytes decoded through the decoder provider (`lzss-4k`,
+  `lzss`, `lz4-block`; nothing is written to disk) or by nothing (zero-filled RAM or MMIO). Calls, references and
+  decompilation cross regions; loads from writable RAM are never folded. `format` `ihex` and `srec` read Intel HEX
+  and Motorola S-records with every checksum verified; each contiguous run becomes a region and the start-address
+  record becomes the entry or a seed. `binary_info` reports each region's source, SHA-256 and decode receipt.
+- Raw interpretation identities move to `rampage-raw-interpretation-v5`, which binds every region and record input.
 - Decompiling a Cortex-M Raw image folds literal-pool loads to the addresses they hold, names unnamed globals by
   ARMv7-M region (`ram_`, `periph_`, `ppb_`, ...) unless the analyst renamed them, keeps caller values live across
   callees that never write a register (interprocedural register allocation), and locks callee parameter lists
