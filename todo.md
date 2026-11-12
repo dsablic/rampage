@@ -297,7 +297,12 @@ Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.m
 
 - [ ] MIPS signatures: mask `lui`/`addiu` HI/LO address pairs. Needs relocation/dataflow to avoid false matches
   (without it, a masked constant could collide two different functions); do it relocation-gated, not heuristic.
-- [ ] Verify the MSVC RTTI path against a real PE (no MSVC toolchain locally; synthetic-tested only).
+- [x] Verify the MSVC RTTI path against a real PE. Done 2026-11-12 on owned clang-cl x86/x64 fixtures with PDB truth
+  (`tests/fixtures/msvc-cpp`): RTTI already correct; vftables, `__CxxFrameHandler3` EH tables and PDB names added.
+- [ ] MSVC follow-ups, most valuable first: decode `__CxxFrameHandler4` (cl.exe x64 default; needs a cl.exe-built
+  fixture); fold catch-resume points back into parents; link virtual calls to vftable slots in the decompiler;
+  rows for base-only RTTI classes and paging for `rtti_classes`; x86 SEH (`_except_handler3/4`) and ARM64 tables;
+  PDB types; debug-type import still rejects `/OPT:ICF` procedure ranges.
 - [ ] C++ class LAYOUT reconstruction (fields/sizes), building on the RTTI name/hierarchy recovery now in place.
 
 ## Heuristic-database layer (pluggable detection DBs)

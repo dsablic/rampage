@@ -14,6 +14,13 @@ see the [stability policy](docs/stability.md) for what the version promises.
   such as Cortex-M vector-table candidates. Capped lists report totals and a continuation range. See
   [file layout](docs/file-layout.md).
 
+- MSVC C++ on x86 and x64 PE: vftables and `__CxxFrameHandler3` exception tables are read at load (bounded by a
+  per-image work and memory budget). Virtual methods and catch/cleanup funclets seed function discovery; on owned
+  clang-cl fixtures, function starts went from 33/79 (x64) and 32/79 (x86) to 79/79 against the PDB.
+  `class_evidence` adds a paged `vftables` list. New experimental `exception_handlers` (MCP `formats`) pages try
+  blocks with catch types, cleanups and thrown types. Validated on clang-cl output only; `__CxxFrameHandler4`
+  (cl.exe x64 since VS2019 16.3) is reported as undecoded.
+
 ### Firmware
 
 - Experimental Raw Project profile `ARM:LE:32:Cortex` for headerless Cortex-M (ARMv6-M/ARMv7-M Thumb) images, with
@@ -45,6 +52,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Changed
 
+- PDB name import no longer rejects a whole PDB over conflicting names. Decorated MSVC names become aliases of the
+  plain name (templates, operators and overloads keep their decorated name), identical-code-folded publics become
+  aliases, and names that collide or are not valid labels are omitted with a warning. See
+  [PDB symbols](docs/pdb-symbols.md).
 - Function discovery no longer splits a function first reached by a tail call (`b.w f`) at its internal join
   points: callers that explored such a function are re-explored once it becomes a start, before shared tails are
   counted. On a generated 6,000-function Cortex-M image this removes 2,232 bogus starts; starts on other
