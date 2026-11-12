@@ -41,6 +41,14 @@ see the [stability policy](docs/stability.md) for what the version promises.
   push of `lr`, or a decodable `bl` calling it); string-pointer arrays, switch tables and stray constants are
   refused. `binary_info` reports every table with its verdict and per-entry evidence under `raw.pointer_tables`.
   Off by default; repeat calls on the same image reuse the scan.
+- `file_layout` flags header-checked compressed components (`compressed_component_candidate`): a header word equal
+  to the following payload's length plus a verifying byte-sum or CRC-32 field, or a packed payload ending at the
+  range end or padding with a decoded-size word. Each hint names the field offsets and the checks that passed;
+  `bounds.container_search` reports when its limits stopped the search.
+- `probe_compression` (MCP `core`; CLI `binary probe-compression`) sweeps LZ4 block and 160 LZSS variants over an
+  unknown stream within a work budget and deadline, and ranks candidates whose `decode_arguments` pass straight to
+  `decode_file_range`. A candidate is "confident" only with a supplied output size and a clear score margin.
+  `decode_file_range` gains the parameterised `lzss` codec and `lz4-block`; `lzss-4k` is unchanged.
 - Raw interpretation identities move to `rampage-raw-interpretation-v4`, which also binds the pointer-table request.
 - Decompiling a Cortex-M Raw image folds literal-pool loads to the addresses they hold, names unnamed globals by
   ARMv7-M region (`ram_`, `periph_`, `ppb_`, ...) unless the analyst renamed them, keeps caller values live across
