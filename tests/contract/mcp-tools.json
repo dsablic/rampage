@@ -585,6 +585,14 @@
         "path": {
           "type": "string",
           "required": true
+        },
+        "vftable_limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "vftable_offset": {
+          "type": "integer|null",
+          "required": false
         }
       }
     },
@@ -1164,6 +1172,10 @@
           "type": "integer|string",
           "required": true
         },
+        "lzss": {
+          "type": "null|object",
+          "required": false
+        },
         "offset": {
           "type": "integer|string",
           "required": true
@@ -1669,6 +1681,48 @@
         "stage": {
           "type": "string",
           "required": false
+        }
+      },
+      "experimental": true
+    },
+    "exception_handlers": {
+      "group": "formats",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "detail_offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "function": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "list": {
+          "type": "null|string",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
         }
       },
       "experimental": true
@@ -2921,6 +2975,39 @@
         "path": {
           "type": "string",
           "required": true
+        }
+      }
+    },
+    "probe_compression": {
+      "group": "core",
+      "arguments": {
+        "candidate_limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "expected_output_size": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "length": {
+          "type": "integer|string",
+          "required": true
+        },
+        "offset": {
+          "type": "integer|string",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "preview_size": {
+          "type": "integer|null",
+          "required": false
+        },
+        "timeout_ms": {
+          "type": "integer|null",
+          "required": false
         }
       }
     },

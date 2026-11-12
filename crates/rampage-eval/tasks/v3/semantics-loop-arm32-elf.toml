@@ -1,0 +1,27 @@
+version = 1
+id = "semantics-loop-arm32-elf"
+kind = "analysis"
+question = """
+This stripped 32-bit ARM Linux executable (ARM mode, AAPCS) was compiled from C. The function at 0x2113c takes two
+32-bit unsigned integers in r0 and r1 and returns a 32-bit unsigned integer in r0. What does it return for the
+arguments 7 and 20? Return the value as result.
+"""
+truth_reference = """
+Host run of src/semantics.c (walk 7 20) at -O1 and -O0; walk = 0x2113c from the twin's symbols; derive-truth.py.
+"""
+required_capabilities = ["decompile", "semantics"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "semantics-arm32-elf"
+path = "tests/fixtures/bench-v3/bin/semantics-arm32.elf"
+sha256 = "e27af65010a9637a0013023e550be84949a7f1a48ebc0caebbdd28d33a15a72b"
+source = "tests/fixtures/bench-v3/src/semantics.c"
+build = "tests/fixtures/bench-v3/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+result = 13328

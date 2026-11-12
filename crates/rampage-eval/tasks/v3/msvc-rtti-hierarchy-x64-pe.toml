@@ -1,0 +1,29 @@
+version = 1
+id = "msvc-rtti-hierarchy-x64-pe"
+kind = "analysis"
+question = """
+This x86-64 Windows executable was compiled from C++ with the Microsoft C++ ABI, RTTI and C++ exceptions; its debug
+information is not available. Recover the inheritance hierarchy of the polymorphic classes declared in namespace
+engine; leave out the C++ runtime's own classes, which are declared in other namespaces. Return every direct
+base-to-derived relationship as a [base, derived] pair of class names without the namespace, in an array named
+edges.
+"""
+truth_reference = """
+LF_BCLASS records of the engine:: classes in the build's PDB (llvm-pdbutil), matching src/engine.cpp's class
+declarations; every class has an RTTI type descriptor in the image; derive-truth.py.
+"""
+required_capabilities = ["rtti", "class_hierarchy"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "engine-x64-pe"
+path = "target/bench/v3/msvc/engine-x64.exe"
+sha256 = "94c1b7570c19eb60d3dde5c702fac779a0962c6de242e45ef8dd80b23ef52627"
+source = "tests/fixtures/bench-v3/src/engine.cpp"
+build = "tools/agent-bench/v3/build-msvc.sh"
+
+[answer]
+kind = "tuple_set"
+field = "edges"
+values = [["Asset", "Mesh"], ["Asset", "Texture"], ["EngineError", "BudgetError"], ["EngineError", "LoadError"], ["LoadError", "FormatError"], ["Mesh", "AnimatedMesh"], ["Streamable", "AnimatedMesh"], ["Streamable", "Cache"], ["Texture", "CubeTexture"]]

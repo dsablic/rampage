@@ -1,0 +1,29 @@
+version = 1
+id = "callconv-classify-x86-pe"
+kind = "analysis"
+question = """
+This stripped 32-bit x86 Windows executable was compiled from C and C++. The functions at 0x401000, 0x401020,
+0x401040, 0x401060, 0x401090 and 0x4010b0 take only 32-bit integer parameters. For each, name the calling
+convention it was compiled with: cdecl, stdcall or fastcall. Return an array named conventions of [address,
+convention] pairs.
+"""
+truth_reference = """
+src/conv.cpp's convention attributes; the twin's PDB public names (_f, _f@N, @f@N decoration) and each function's
+return (ret or ret N) in the twin; derive-truth.py.
+"""
+required_capabilities = ["calling_conventions"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "conv-x86-pe"
+path = "tests/fixtures/bench-v3/bin/conv-x86.exe"
+sha256 = "2b9ca5cc77910c2d8d15d2c5d136eef9c0a4ab1a1d0f8094a7ce7e9dfc64d422"
+source = "tests/fixtures/bench-v3/src/conv.cpp"
+build = "tests/fixtures/bench-v3/build.sh"
+
+[answer]
+kind = "tuple_set"
+hex_integers = true
+field = "conventions"
+values = [[4198400, "cdecl"], [4198432, "stdcall"], [4198464, "fastcall"], [4198496, "cdecl"], [4198544, "stdcall"], [4198576, "fastcall"]]

@@ -1,0 +1,8 @@
+LIBRARY VCRUNTIME140.dll
+EXPORTS
+__CxxFrameHandler3
+_CxxThrowException
+_purecall
+__std_terminate
+memset
+memcpy

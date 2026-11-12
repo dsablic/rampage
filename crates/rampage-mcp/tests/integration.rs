@@ -5,6 +5,7 @@ mod archive;
 mod arm_exidx;
 mod assembly;
 mod build_info;
+mod compression;
 mod contract;
 #[path = "../../../tests/contract/support.rs"]
 mod contract_support;
@@ -21,6 +22,7 @@ mod flywheel;
 mod function_frame;
 mod inspect_sleigh;
 mod local_variables;
+mod msvc_cpp;
 mod patches;
 mod pdb;
 #[path = "../../../tests/fixtures/pdb/support.rs"]

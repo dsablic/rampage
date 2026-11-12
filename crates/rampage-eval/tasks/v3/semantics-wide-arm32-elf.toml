@@ -1,0 +1,29 @@
+version = 1
+id = "semantics-wide-arm32-elf"
+kind = "analysis"
+question = """
+This stripped 32-bit ARM Linux executable (ARM mode, AAPCS) was compiled from C. The function at 0x210e0 takes a
+64-bit unsigned integer in r0 (low word) and r1 (high word) and a 32-bit unsigned integer in r2, and returns a
+64-bit unsigned integer in r0 (low) and r1 (high). What does it return for the arguments 0x0000000100000003 and 4?
+Return the 64-bit value as result.
+"""
+truth_reference = """
+Host run of src/semantics.c (mix64 0x0000000100000003 4) at -O1 and -O0; mix64 = 0x210e0 from the twin's symbols;
+derive-truth.py.
+"""
+required_capabilities = ["decompile", "semantics", "wide_arithmetic"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "semantics-arm32-elf"
+path = "tests/fixtures/bench-v3/bin/semantics-arm32.elf"
+sha256 = "e27af65010a9637a0013023e550be84949a7f1a48ebc0caebbdd28d33a15a72b"
+source = "tests/fixtures/bench-v3/src/semantics.c"
+build = "tests/fixtures/bench-v3/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+result = 1122213597782

@@ -1,0 +1,28 @@
+version = 1
+id = "go-callers-x64-elf"
+kind = "analysis"
+question = """
+This is a large stripped Go executable for x86-64 Linux. List every function that contains at least one direct call
+to github.com/restic/restic/internal/crypto.(*Key).Open. Count closures and other compiler-generated functions too;
+indirect calls do not count. Return their full Go symbol names, as the Go runtime records them, in an array named
+callers.
+"""
+truth_reference = """
+Direct CALL sites in `go tool objdump` of the unstripped twin (go_graph.py); the callee's address is never taken;
+every name is in the stripped binary's function name table; derive-truth.py.
+"""
+required_capabilities = ["go_metadata", "xrefs", "scale"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "restic-v0173-x64-elf"
+path = "target/bench/v3/go/restic-x64-stripped.elf"
+sha256 = "b35458f9e003dd3b8a34eb10ea583e8038be78ed964ed710d467b89294994d6c"
+source = "github.com/restic/restic@v0.17.3 (Go module proxy), built with go1.23.3"
+build = "tools/agent-bench/v3/build-go.sh"
+
+[answer]
+kind = "string_set"
+field = "callers"
+values = ["github.com/restic/restic/internal/repository.(*Repository).LoadUnpacked", "github.com/restic/restic/internal/repository.(*Repository).verifyCiphertext", "github.com/restic/restic/internal/repository.(*Repository).verifyUnpacked", "github.com/restic/restic/internal/repository.(*packBlobIterator).Next", "github.com/restic/restic/internal/repository.OpenKey", "github.com/restic/restic/internal/repository/pack.List"]

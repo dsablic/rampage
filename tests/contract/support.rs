@@ -380,7 +380,9 @@ pub fn field_snapshot(observed: &BTreeMap<String, BTreeSet<String>>) -> Value {
 }
 
 /// A small headerless image that produces every `file_layout` result field: a Cortex-M-like vector table,
-/// ASCII and UTF-16LE strings, 0xff and 0x00 fill, and high-entropy bytes.
+/// ASCII and UTF-16LE strings, 0xff and 0x00 fill, and high-entropy bytes behind a header that a
+/// compressed-component candidate checks: a load-address-like word, the payload length, a larger size and the
+/// payload's 32-bit byte sum.
 pub fn layout_fixture() -> Vec<u8> {
     let mut words = vec![0x2000_2000u32, 0x0000_0101, 0x0000_0141, 0x0000_0143];
     words.extend([0; 7]);
@@ -396,12 +398,19 @@ pub fn layout_fixture() -> Vec<u8> {
     }
     bytes.extend([0xff; 512]);
     let mut state = 0x9e37_79b9_7f4a_7c15u64;
-    bytes.extend((0..1024).map(|_| {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        (state >> 24) as u8
-    }));
+    let payload: Vec<u8> = (0..1024)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 24) as u8
+        })
+        .collect();
+    let sum = payload.iter().fold(0u32, |sum, &byte| sum.wrapping_add(u32::from(byte)));
+    for word in [0x2000_0000, payload.len() as u32, 3 * payload.len() as u32, sum] {
+        bytes.extend(word.to_le_bytes());
+    }
+    bytes.extend(payload);
     bytes.extend([0; 512]);
     bytes
 }

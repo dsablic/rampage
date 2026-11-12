@@ -66,6 +66,13 @@ pub(crate) struct ExceptionDirectory {
     size: u64,
 }
 
+impl ExceptionDirectory {
+    /// The directory's absolute address and size.
+    pub(crate) fn span(&self) -> (u64, u64) {
+        (self.address, self.size)
+    }
+}
+
 pub(crate) fn pe_exception_directory(parsed: &object::File) -> Option<ExceptionDirectory> {
     if parsed.architecture() != object::Architecture::X86_64 {
         return None;

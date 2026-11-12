@@ -1,0 +1,28 @@
+version = 1
+id = "semantics-wide-x86-elf"
+kind = "analysis"
+question = """
+This stripped 32-bit x86 Linux executable was compiled from C. The function at 0x128c0 takes two 32-bit unsigned
+integer arguments on the stack (cdecl) and returns a 64-bit unsigned integer in edx:eax. What does it return when
+its first argument is 0x00012345 and its second is 0x0003000D? Return the 64-bit value as result.
+"""
+truth_reference = """
+Host run of src/semantics.c (scale64 0x00012345 0x0003000D) at -O1 and -O0; scale64 = 0x128c0 from the twin's
+symbols; derive-truth.py.
+"""
+required_capabilities = ["decompile", "semantics", "wide_arithmetic"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "semantics-x86-elf"
+path = "tests/fixtures/bench-v3/bin/semantics-x86.elf"
+sha256 = "ca50f35de1b22c04b7015eb20eccacf75245b4d075fdec4133aa3ae8881b4605"
+source = "tests/fixtures/bench-v3/src/semantics.c"
+build = "tests/fixtures/bench-v3/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+result = 149560347578

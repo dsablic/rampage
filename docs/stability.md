@@ -45,6 +45,9 @@ These may change or disappear in any minor release. Each is marked as experiment
 - **The `improve` group and the flywheel commands:** the MCP tools served with `--corpus`, the
   `--corpus`, `--flywheel-*`, `--gate`, `--require-novel-gain` and `--observations` options, the
   `report_observation` tool, and the files under `target/flywheel/`.
+- **`exception_handlers`:** the MSVC C++ exception-handling tool. Its name and arguments are pinned in the
+  contract snapshot, but its row shape may change, and `__CxxFrameHandler4` tables (cl.exe x64's default) are not
+  decoded yet.
 - **`rampage-eval`:** the evaluation and benchmark harness, its commands and its report formats.
 - **Component plugins:** the WebAssembly triage-component host (`--component`) and its WIT interface, which are
   versioned separately (`0.0.1`); see [plugins](plugins.md).

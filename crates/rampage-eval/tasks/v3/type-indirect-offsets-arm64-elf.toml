@@ -1,0 +1,33 @@
+version = 1
+id = "type-indirect-offsets-arm64-elf"
+kind = "analysis"
+question = """
+This stripped aarch64 Linux executable was compiled from C. The function at 0x1011d8c takes a pointer to a
+structure. Through the functions it calls, it makes exactly one indirect call, through a table of function pointers
+that a field of that structure points to. Give the byte offset of that table pointer within the structure as
+table_offset, the byte offset of the called function pointer within the table as slot_offset, and, as
+argument_offsets, the byte offsets within the structure of the two fields passed as the call's second and third
+arguments, in that order.
+"""
+truth_reference = """
+src/stream.c's single ops call; offsets from the twin's DWARF (twins/stream-arm64.layout.json, extracted by
+build.sh), matched to the loads in the twin's stream_emit; stream_sync = 0x1011d8c; derive-truth.py.
+"""
+required_capabilities = ["decompile", "type_propagation", "type_recovery"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "stream-arm64-elf"
+path = "tests/fixtures/bench-v3/bin/stream-arm64.elf"
+sha256 = "070ee12199a3145ab9c69ca91cd7c4a6399eb1cd29f64bdefa7a17b5dcbfcf67"
+source = "tests/fixtures/bench-v3/src/stream.c"
+build = "tests/fixtures/bench-v3/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+table_offset = 8
+slot_offset = 16
+argument_offsets = [24, 40]

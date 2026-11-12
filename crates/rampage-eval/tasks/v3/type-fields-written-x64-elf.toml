@@ -1,0 +1,31 @@
+version = 1
+id = "type-fields-written-x64-elf"
+kind = "analysis"
+question = """
+This stripped x86-64 Linux executable was compiled from C. The function at 0x1002b60 takes as its first argument a
+pointer to a structure, and passes that pointer on to other functions, directly and inside another structure.
+Directly or through the functions it calls, which fields of the first argument's structure can the function write
+on some execution path? Give each written field as an [offset, size] pair, both in bytes, with the offset counted
+from the start of the structure, in an array named fields.
+"""
+truth_reference = """
+src/jobs.c stores through job-> in job_run's call tree, cross-checked by host runs over inputs covering every path
+(the members whose bytes changed); offsets and sizes from the twin's DWARF (twins/jobs-x64.layout.json, extracted
+by build.sh); job_run = 0x1002b60 and its calls from the twin; derive-truth.py.
+"""
+required_capabilities = ["decompile", "type_propagation", "type_recovery"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "jobs-x64-elf"
+path = "tests/fixtures/bench-v3/bin/jobs-x64.elf"
+sha256 = "101bdf43eeb25311a27dbe719dc78327781ccc34633089ac7ac562f30ab3c061"
+source = "tests/fixtures/bench-v3/src/jobs.c"
+build = "tests/fixtures/bench-v3/build.sh"
+
+[answer]
+kind = "tuple_set"
+hex_integers = true
+field = "fields"
+values = [[2, 2], [4, 4], [8, 8], [44, 4], [48, 8], [60, 4]]

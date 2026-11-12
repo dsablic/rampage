@@ -43,6 +43,9 @@ fn json_of(tool: &str, result: &CallToolResult) -> Value {
     serde_json::from_str(text(result)).unwrap_or_else(|error| panic!("{tool}: {error}: {}", text(result)))
 }
 
+/// Tools outside the experimental groups whose results are experimental (docs/stability.md).
+const EXPERIMENTAL_TOOLS: [&str; 1] = ["exception_handlers"];
+
 /// Every tool `client` lists once all its groups are enabled, with its group and argument summary.
 async fn listed_tools(client: Client, tools: &mut BTreeMap<String, Value>) {
     let listing = json_of("enable_tools", &call(&client, "enable_tools", json!({ "groups": ["all"] })).await);
@@ -57,7 +60,7 @@ async fn listed_tools(client: Client, tools: &mut BTreeMap<String, Value>) {
         let group = groups.get(&name).cloned().unwrap_or_else(|| "meta".to_owned());
         let schema = Value::Object((*tool.input_schema).clone());
         let mut entry = json!({ "group": group, "arguments": contract::arguments(&schema) });
-        if group == Group::Improve.name() {
+        if group == Group::Improve.name() || EXPERIMENTAL_TOOLS.contains(&name.as_str()) {
             entry["experimental"] = json!(true);
         }
         tools.entry(name).or_insert(entry);
@@ -172,6 +175,8 @@ async fn contract_mcp_core_results() {
     exercise(c, o, "inspect_data", json!({"path": elf, "at": "main", "size": 16})).await;
     exercise(c, o, "language_metadata", json!({"path": fixture("classes-arm64.macho")})).await;
     exercise(c, o, "class_evidence", json!({"path": fixture("classes-arm64.macho")})).await;
+    // A PE adds MSVC vftables.
+    exercise(c, o, "class_evidence", json!({"path": fixtures.join("msvc-cpp/msvc-cpp-x64.exe")})).await;
     let mode = json!({"kind": "text", "encoding": "ascii", "pattern": "rampage"});
     exercise(c, o, "search", json!({"path": elf, "mode": mode})).await;
     exercise(c, o, "assemble", json!({"path": elf, "at": "main", "source": "mov eax,7\nret"})).await;
@@ -225,6 +230,18 @@ async fn contract_mcp_core_results() {
     std::fs::write(&input, [7, b'A', b'B', b'C']).unwrap();
     let decode =
         json!({"path": input, "codec": "lzss-4k", "offset": "0x0", "length": "0x4", "expected_output_size": 3});
+    exercise(c, o, "decode_file_range", decode).await;
+    // A ring-offset LZSS stream: the probe finds its parameters and decode_file_range takes them unchanged.
+    let original = rampage_decode::encode::synthetic_firmware(6000, 5);
+    let stream = rampage_decode::encode::lzss(&rampage_decode::Lzss::classic_4k(4078, 0), &original);
+    let packed = scratch.0.join("packed.bin");
+    std::fs::write(&packed, &stream).unwrap();
+    let probe = json!({"path": packed, "offset": 0, "length": stream.len(), "expected_output_size": original.len(),
+        "candidate_limit": 1, "preview_size": 8});
+    let probed = exercise(c, o, "probe_compression", probe).await;
+    let mut decode = probed["candidates"][0]["decode_arguments"].clone();
+    decode["path"] = json!(packed);
+    decode["preview_size"] = json!(8);
     exercise(c, o, "decode_file_range", decode).await;
     let raw = json!({"path": elf, "offset": "0x1910", "length": 16, "arch": "x86_64", "mode": "native",
         "code_byte_order": "little", "data_byte_order": "little", "base_address": "0x1001910"});
@@ -384,6 +401,12 @@ async fn contract_mcp_formats_results() {
     let (c, o) = (&client, &mut observed);
     exercise(c, o, "build_info", json!({"path": fixture("buildinfo-go-x64.elf")})).await;
     exercise(c, o, "pe_load_config", json!({"path": fixture("pe-metadata-x86.exe")})).await;
+    let msvc = |arch: &str| {
+        let name = format!("msvc-cpp-{arch}.exe");
+        owned(&scratch, &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/msvc-cpp").join(name))
+    };
+    exercise(c, o, "exception_handlers", json!({"path": msvc("x64"), "limit": 2})).await;
+    exercise(c, o, "exception_handlers", json!({"path": msvc("x86"), "list": "throws"})).await;
     let resources = fixture("pe-metadata-x64.exe");
     exercise(c, o, "pe_resources", json!({"path": resources})).await;
     exercise(c, o, "pe_resources", json!({"path": resources, "type": "RT_VERSION"})).await;

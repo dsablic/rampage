@@ -16,14 +16,19 @@ use sha2::{Digest, Sha256};
 
 use super::read;
 
+/// Suite v3's REA Ghidra limits when the command line sets none.
+pub const V3_REA_GHIDRA_STARTUP_TIMEOUT_MS: u64 = 3_600_000;
+pub const V3_REA_GHIDRA_MAXMEM: &str = "16G";
+
 pub const DEFAULT_RUNNER: &str = "python3 -I tools/agent-bench/claude-runner.py";
 
-/// Which task set to run: the frozen canonical manifests with `tasks/h2h/neutral.toml`, or suite v2's manifests
-/// under `tasks/v2/` with `tasks/h2h/neutral-v2.toml`.
+/// Which task set to run: the frozen canonical manifests with `tasks/h2h/neutral.toml`, or suite v2's (v3's)
+/// manifests under `tasks/v2/` (`tasks/v3/`) with `tasks/h2h/neutral-v2.toml` (`neutral-v3.toml`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Suite {
     Canonical,
     V2,
+    V3,
 }
 
 impl Suite {
@@ -32,6 +37,7 @@ impl Suite {
         match self {
             Self::Canonical => (tasks.clone(), tasks.join("h2h/neutral.toml")),
             Self::V2 => (tasks.join("v2"), tasks.join("h2h/neutral-v2.toml")),
+            Self::V3 => (tasks.join("v3"), tasks.join("h2h/neutral-v3.toml")),
         }
     }
 }
@@ -66,11 +72,11 @@ pub struct AgentBenchArgs {
     #[arg(long, default_value_t = 0.0, requires = "cost_cap_usd")]
     spent_usd: f64,
     /// REA_GHIDRA_STARTUP_TIMEOUT_MS for the REA server: how long REA lets Ghidra import and analyze before
-    /// failing (REA's own default, 330000, applies when unset).
+    /// failing (REA's own default, 330000, applies when unset; suite v3 defaults to 3600000).
     #[arg(long)]
     rea_ghidra_startup_timeout_ms: Option<u64>,
     /// GHIDRA_HEADLESS_MAXMEM for the REA server: the Java heap REA gives headless Ghidra (REA's own default,
-    /// 2G, applies when unset), such as `16G`.
+    /// 2G, applies when unset; suite v3 defaults to 16G), such as `16G`.
     #[arg(long)]
     rea_ghidra_maxmem: Option<String>,
     /// Measurements made outside the agent runs (NAME=PATH to a JSON file), embedded in the report under
@@ -125,6 +131,10 @@ pub struct AgentBenchArgs {
     /// Why the runs are run again; recorded in the report's `rerun` block.
     #[arg(long)]
     rerun_reason: Option<String>,
+    /// Continue a pass that stopped early (cost cap or usage limit) in an existing --out-dir: recorded runs are
+    /// kept as they are and only the slots without a recorded run are run.
+    #[arg(long, conflicts_with_all = ["rescore", "rerun"])]
+    resume: bool,
     /// MAX_MCP_OUTPUT_TOKENS for every run, the same for every server.
     #[arg(long, default_value_t = 200_000)]
     max_mcp_output_tokens: u64,
@@ -133,7 +143,13 @@ pub struct AgentBenchArgs {
     rea_tool_families: Option<String>,
 }
 
-pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
+pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
+    if args.suite == Suite::V3 {
+        // Suite v3's Go fixture needs more than REA's defaults (suite v2 measured 708-2,355 s imports, and an
+        // out-of-memory failure at 2G); its run recipe sets the remediations REA's own errors name.
+        args.rea_ghidra_startup_timeout_ms.get_or_insert(V3_REA_GHIDRA_STARTUP_TIMEOUT_MS);
+        args.rea_ghidra_maxmem.get_or_insert_with(|| V3_REA_GHIDRA_MAXMEM.to_owned());
+    }
     let root = args.repository_root.clone().unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
     let root = std::fs::canonicalize(&root).map_err(|error| format!("{}: {error}", root.display()))?;
     let (task_directory, suite_path) = args.suite.paths(&root);
@@ -253,6 +269,12 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
         }
         std::fs::remove_file(&rows_path).map_err(|error| error.to_string())?;
     }
+    if args.resume {
+        for line in read(&rows_path)?.lines().filter(|line| !line.trim().is_empty()) {
+            recorded.push(serde_json::from_str(line).map_err(|error| format!("{}: {error}", rows_path.display()))?);
+        }
+        std::fs::remove_file(&rows_path).map_err(|error| error.to_string())?;
+    }
     let mut superseded: Vec<Value> = Vec::new();
     let kept = out_dir.join("runs.before-rescore.jsonl");
     if args.rescore && rows_path.is_file() && !kept.exists() {
@@ -278,6 +300,18 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
                         stopped = Some(json!({"reason": "cost cap", "cap_usd": cap, "spent_usd": spent,
                             "completed_runs": rows.len(), "planned_runs": total}));
                         break 'runs;
+                    }
+                }
+                if args.resume {
+                    let earlier = recorded
+                        .iter()
+                        .find(|row| row.task_id == task.id && row.server == **server && row.repetition == repetition)
+                        .cloned();
+                    if let Some(row) = earlier {
+                        let line = serde_json::to_string(&row).map_err(|error| error.to_string())?;
+                        writeln!(rows_file, "{line}").map_err(|error| error.to_string())?;
+                        rows.push(row);
+                        continue;
                     }
                 }
                 if !args.rerun.is_empty() {
@@ -325,6 +359,15 @@ pub fn run(args: AgentBenchArgs) -> Result<ExitCode, String> {
                     out_dir: &out_dir,
                     args: &args,
                 })?;
+                if row.runner_error.as_deref().is_some_and(is_usage_limit) {
+                    // The account's usage limit, not the run: keep no row, so --resume runs this slot again.
+                    let name = format!("{}-r{repetition}", task.id);
+                    let _ = std::fs::remove_dir_all(out_dir.join("runs").join(server).join(&name));
+                    eprintln!("usage limit reached; stopping before {} {server} r{repetition}", task.id);
+                    stopped = Some(json!({"reason": "usage limit", "completed_runs": rows.len(),
+                        "planned_runs": total, "resume": "rerun with --resume and the same --out-dir"}));
+                    break 'runs;
+                }
                 eprintln!(
                     "[{}/{total}] {} {server} r{repetition}: {:?}{} calls={} wall={:.1}s",
                     rows.len() + 1,
@@ -672,5 +715,24 @@ mod tests {
         assert_eq!(server_order(&servers, 1), [&servers[0], &servers[1]]);
         assert_eq!(server_order(&servers, 2), [&servers[1], &servers[0]]);
         assert_eq!(server_order(&servers, 3), [&servers[0], &servers[1]]);
+    }
+}
+
+/// The runner reports a reply that only Claude Code itself produced (model `<synthetic>`): the account's usage
+/// limit or an API error, never an answer from the requested model.
+fn is_usage_limit(error: &str) -> bool {
+    error.starts_with("model differs from ") && error.ends_with("['<synthetic>']")
+}
+
+#[cfg(test)]
+mod usage_limit_tests {
+    use super::is_usage_limit;
+
+    #[test]
+    fn only_a_synthetic_only_reply_counts_as_the_usage_limit() {
+        assert!(is_usage_limit("model differs from claude-sonnet-5-5: ['<synthetic>']"));
+        assert!(!is_usage_limit("model differs from claude-sonnet-5-5: ['<synthetic>', 'claude-haiku-5-5']"));
+        assert!(!is_usage_limit("model differs from claude-sonnet-5-5: ['claude-haiku-5-5']"));
+        assert!(!is_usage_limit("isolation: non-built-in plugins: []"));
     }
 }

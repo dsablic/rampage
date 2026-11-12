@@ -88,6 +88,7 @@ impl RootCommand {
             Self::Binary(BinaryCommand::InspectRaw(args)) => Command::InspectRaw(args),
             Self::Binary(BinaryCommand::Decode(args)) => Command::DecodeFile(args),
             Self::Binary(BinaryCommand::Layout(args)) => Command::FileLayout(args),
+            Self::Binary(BinaryCommand::ProbeCompression(args)) => Command::ProbeCompression(args),
             Self::Binary(BinaryCommand::Triage(args)) => Command::Triage(args),
             Self::Binary(BinaryCommand::PeResources(args)) => Command::PeResources(args),
             Self::Binary(BinaryCommand::PeLoadConfig(args)) => Command::PeLoadConfig(args),
@@ -184,6 +185,8 @@ pub(crate) enum BinaryCommand {
     Decode(DecodeFileArgs),
     /// Map fill/occupied regions, block entropy, string clusters, range hashes and hints of any file, without a loader
     Layout(crate::args::LayoutArgs),
+    /// Rank LZSS and LZ4-block parameter sets for a compressed range; prints decode arguments, decodes nothing out
+    ProbeCompression(crate::args::ProbeCompressionArgs),
     /// Hashes, entropy, format details, overlay and hints of packing or weak hardening
     Triage(FileArgs),
     /// PE resource leaves (type, name, language, location), with RT_VERSION and RT_MANIFEST decoded

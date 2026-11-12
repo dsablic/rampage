@@ -124,8 +124,8 @@ fn group_summary(group: Group) -> &'static str {
         Group::DotNet => ".NET: dotnet_metadata (types, methods, P/Invokes), dotnet_il (CIL).",
         Group::Carve => "files inside files: carve (embedded executables), archive_inventory (ZIP listing).",
         Group::Formats => {
-            "build_info (Go modules, Rust dependencies), pe_resources, pe_load_config, pyinstaller_archive, \
-             wasm_module."
+            "build_info (Go modules, Rust dependencies), pe_resources, pe_load_config, exception_handlers (MSVC C++ \
+             try/catch tables), pyinstaller_archive, wasm_module."
         }
         Group::Debug => {
             "a live target via GDB remote stub: debug_connect, debug_registers, debug_read_memory, \
@@ -193,7 +193,9 @@ provides bounded linear decoding of original-file windows with an explicitly ass
 architecture/mode/orders/base, without native-image admission or target following. inspect_data provides bounded \
 native bytes/word candidates without discovery or sidecars; names resolve only through retained metadata. \
 decode_file_range instead accepts an explicit regular-file range and codec without an executable header. \
-file_layout maps any file or range (padding, entropy, string clusters, hashes, hints) as a first look at firmware. \
+file_layout maps any file or range (padding, entropy, string clusters, hashes, hints) as a first look at firmware; \
+its compressed_component_candidate hints give a payload range and decoded-size words for probe_compression, whose \
+ranked decode_arguments go to decode_file_range unchanged. \
 Its transient decoded preview uses decoded offsets, not source offsets or load addresses; supplied sizes and \
 successful decoding do not authenticate content or prove stream boundaries. Tools whose schema has a `raw` \
 object open that explicit file range as a headerless Raw project with a closed profile instead of a native image \

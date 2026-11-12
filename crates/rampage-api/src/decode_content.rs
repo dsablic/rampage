@@ -1,11 +1,15 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use rampage_decode::{DecodeOptions, Decoder, Lzss4k};
+use rampage_decode::DecodeOptions;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::ApiError;
+pub use crate::decode_codecs::{
+    ContentCodec, LzssFlagOrder, LzssOffsetMode, LzssParameters, LzssReferenceLayout, default_initial_write_offset,
+};
+use crate::decode_codecs::{dictionary_size, end_limitation, provider, variant_limitation};
 use crate::range_source as source;
 
 pub const MAX_DECODE_INPUT_BYTES: usize = 8 * 1024 * 1024;
@@ -13,27 +17,13 @@ pub const MAX_DECODE_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_DECODE_PREVIEW_BYTES: usize = 1024;
 pub const MAX_DECODE_RECEIPT_BYTES: usize = 16_384;
 pub const MAX_DECODE_EXPANSION_RATIO: usize = 128;
-const MAX_DECODE_STEPS: u64 = 64 * 1024 * 1024;
-
-#[derive(Debug, Clone, Copy, serde::Deserialize, Serialize, schemars::JsonSchema)]
-pub enum ContentCodec {
-    #[serde(rename = "lzss-4k")]
-    Lzss4k,
-}
-
-impl std::str::FromStr for ContentCodec {
-    type Err = String;
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "lzss-4k" => Ok(Self::Lzss4k),
-            _ => Err("unsupported decoder; select lzss-4k explicitly".into()),
-        }
-    }
-}
+pub(crate) const MAX_DECODE_STEPS: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct DecodeFileRequest {
     pub codec: ContentCodec,
+    /// Required for, and only for, codec `lzss`.
+    pub lzss: Option<LzssParameters>,
     pub offset: u64,
     pub length: usize,
     pub expected_output_size: usize,
@@ -67,6 +57,8 @@ pub struct DecodeReceipt {
     pub source_byte_sum32: u32,
     pub source_observation: &'static str,
     pub codec: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lzss: Option<LzssParameters>,
     pub dictionary_size: usize,
     pub initial_write_offset: u16,
     pub dictionary_fill: u8,
@@ -110,9 +102,6 @@ fn validate(request: &DecodeFileRequest) -> Result<(), ApiError> {
     if request.expected_output_size > request.length.saturating_mul(MAX_DECODE_EXPANSION_RATIO) {
         return Err(invalid("decode expected output exceeds the 128:1 expansion budget"));
     }
-    if request.initial_write_offset >= 4096 {
-        return Err(invalid("LZSS initial_write_offset must be 0..4095"));
-    }
     if !(1..=10_000).contains(&request.timeout_ms) {
         return Err(invalid("decode timeout_ms must be 1..=10000"));
     }
@@ -126,6 +115,7 @@ fn validate(request: &DecodeFileRequest) -> Result<(), ApiError> {
 /// Explicit bounded file-range decoding. The returned content is memory-owned and is never published to disk.
 pub fn decode_file_range(path: &Path, request: &DecodeFileRequest) -> Result<DecodedContent, ApiError> {
     validate(request)?;
+    let decoder = provider(request.codec, request.lzss, request.initial_write_offset, request.dictionary_fill)?;
     if serde_json::to_vec(path).map_err(|_| invalid("decode source path is not JSON-serializable"))?.len() > 4096 {
         return Err(invalid("decode source path exceeds the receipt budget"));
     }
@@ -134,11 +124,6 @@ pub fn decode_file_range(path: &Path, request: &DecodeFileRequest) -> Result<Dec
     source.revalidate()?;
     let started = Instant::now();
     let timeout = Duration::from_millis(request.timeout_ms);
-    let decoder = match request.codec {
-        ContentCodec::Lzss4k => {
-            Lzss4k { initial_write_offset: request.initial_write_offset, dictionary_fill: request.dictionary_fill }
-        }
-    };
     let options = DecodeOptions {
         expected_output_size: request.expected_output_size,
         max_output_size: MAX_DECODE_OUTPUT_BYTES,
@@ -169,7 +154,8 @@ pub fn decode_file_range(path: &Path, request: &DecodeFileRequest) -> Result<Dec
         source_byte_sum32: input.iter().fold(0u32, |sum, &byte| sum.wrapping_add(u32::from(byte))),
         source_observation: "revalidated_non_atomic_file_range",
         codec: decoder.id(),
-        dictionary_size: 4096,
+        lzss: request.lzss,
+        dictionary_size: dictionary_size(request.codec, request.lzss),
         initial_write_offset: request.initial_write_offset,
         dictionary_fill: request.dictionary_fill,
         expected_output_size: request.expected_output_size,
@@ -196,9 +182,8 @@ pub fn decode_file_range(path: &Path, request: &DecodeFileRequest) -> Result<Dec
             next_offset: (!preview.is_empty() && end < decoded.bytes.len()).then_some(end),
         },
         limitations: vec![
-            "Explicit lzss-4k variant: 4096-byte ring, LSB-first flags, 1=literal, 12-bit offset and length nibble+3.",
-            "This codec has no end marker: expected output size is an analyst assertion, \
-             not a discovered stream boundary.",
+            variant_limitation(request.codec),
+            end_limitation(request.codec),
             "Hashes and the additive byte sum describe observed ranges, \
              not authenticity or validated container fields.",
             "Trailing input is reported, never silently certified as consumed. \

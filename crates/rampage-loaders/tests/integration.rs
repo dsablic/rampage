@@ -16,6 +16,7 @@ mod embedded;
 mod gopclntab;
 mod linkage;
 mod load;
+mod msvc_cpp;
 mod objc;
 mod pdb;
 mod pdb_types;

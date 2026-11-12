@@ -284,6 +284,106 @@ fn suite_v2_covers_its_manifests_with_categories_scoring_and_neutral_prompts() {
     }
 }
 
+const NEUTRAL_V3: &str = include_str!("../tasks/h2h/neutral-v3.toml");
+
+#[test]
+fn suite_v3_covers_its_manifests_with_categories_scoring_and_neutral_prompts() {
+    let suite = NeutralSuite::from_toml(NEUTRAL_V3).unwrap();
+    let tasks = load_tasks(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tasks/v3")).unwrap();
+    assert_eq!(tasks.len(), 21);
+    suite.check_against(&tasks, &servers()).unwrap();
+    assert_eq!(suite.system, NeutralSuite::from_toml(NEUTRAL).unwrap().system, "same system prompt as v1");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut categories = std::collections::BTreeMap::<&str, usize>::new();
+    for task in &tasks {
+        assert_eq!(task.kind, TaskKind::Analysis, "{}", task.id);
+        assert!(task.fixture.companions.is_empty(), "{}", task.id);
+        let neutral = &suite.tasks[&task.id];
+        let category = neutral.category.as_deref().unwrap_or_default();
+        assert!(
+            ["symbols", "semantics", "typing", "switch", "callconv", "go", "msvc"].contains(&category),
+            "{}: {category}",
+            task.id
+        );
+        *categories.entry(category).or_default() += 1;
+        assert!(neutral.scoring.as_deref().is_some_and(|text| !text.trim().is_empty()), "{}", task.id);
+        assert_eq!(neutral.question.trim(), task.question.trim(), "{}: the manifest holds the asked wording", task.id);
+        let prompt = suite.prompt(task, "/tmp/work/fixture.bin").to_lowercase();
+        // Neither server's tool names or concepts: rampage's, then REA's.
+        for word in [
+            "rampage",
+            "enable_tools",
+            "class_evidence",
+            "language_metadata",
+            "find_main",
+            "xrefs_to",
+            "rea ",
+            "ghidra",
+            "procedure",
+            "open_binary",
+            "inspect_",
+            "rizin",
+            "decompile",
+        ] {
+            assert!(!prompt.contains(word), "{}: {word}", task.id);
+        }
+        // Owned fixtures are committed with their digests; the pinned and MSVC-ABI fixtures are built into target/
+        // by their scripts, which must exist.
+        if task.fixture.path.starts_with("target") {
+            assert!(root.join(&task.fixture.build).is_file(), "{}", task.id);
+        } else {
+            let bytes = std::fs::read(root.join(&task.fixture.path)).unwrap();
+            assert_eq!(
+                rampage_arch::hex::bytes(&<sha2::Sha256 as sha2::Digest>::digest(&bytes)),
+                task.fixture.sha256,
+                "{}",
+                task.id
+            );
+        }
+        if category == "go" {
+            assert!(neutral.timeout_s.is_some_and(|timeout| timeout >= 1800), "{}", task.id);
+        }
+    }
+    assert!(categories.len() == 7 && categories.values().all(|count| *count >= 2), "{categories:?}");
+}
+
+#[test]
+fn declared_spellings_count_only_in_the_lenient_variant() {
+    let suite = NeutralSuite::from_toml(NEUTRAL_V3).unwrap();
+    let tasks = load_tasks(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tasks/v3")).unwrap();
+    let task = tasks.iter().find(|task| task.id == "callconv-member-x86-pe").unwrap();
+    let row = |answer: &str| score(task, &suite, "rea", 1, 0, &result(answer, "ok")).unwrap();
+    let exact = row(r#"{"convention":"thiscall","parameters":3}"#);
+    assert_eq!(exact.outcome, TaskOutcome::AnswerMatches);
+    let spelled = row(r#"{"convention":"__THISCALL","parameters":3}"#);
+    assert_eq!(spelled.outcome, TaskOutcome::AnswerMismatch);
+    assert!(spelled.lenient);
+    let both = row(r#"{"status":"ok","convention":"__thiscall","parameters":3}"#);
+    assert!(both.lenient);
+    assert!(!row(r#"{"convention":"__stdcall","parameters":3}"#).lenient, "a variant of another answer");
+    assert!(!row(r#"{"convention":"this call","parameters":3}"#).lenient, "only declared variants");
+    let other = tasks.iter().find(|task| task.id == "switch-pic-x64-so").unwrap();
+    assert!(suite.tasks[&other.id].lenient_spellings.is_empty());
+    let hierarchy = tasks.iter().find(|task| task.id == "msvc-rtti-hierarchy-x64-pe").unwrap();
+    let mut edges: Vec<Value> = match &hierarchy.answer {
+        rampage_eval::parity_tasks::AnswerContract::TupleSet { values, .. } => {
+            values.iter().map(|edge| json!(edge)).collect()
+        }
+        _ => unreachable!(),
+    };
+    edges[0] = json!(
+        edges[0]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|name| format!("engine::{}", name.as_str().unwrap()))
+            .collect::<Vec<_>>()
+    );
+    let qualified = score(hierarchy, &suite, "rea", 1, 0, &result(&json!({"edges": edges}).to_string(), "ok")).unwrap();
+    assert_eq!(qualified.outcome, TaskOutcome::AnswerMismatch);
+    assert!(qualified.lenient);
+}
+
 #[test]
 fn canonical_prompts_are_unchanged_by_companion_support() {
     let suite = NeutralSuite::from_toml(NEUTRAL).unwrap();

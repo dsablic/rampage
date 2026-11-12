@@ -1,0 +1,72 @@
+{
+ "stream": {
+  "size": 56,
+  "members": {
+   "id": [
+    0,
+    4
+   ],
+   "mode": [
+    4,
+    4
+   ],
+   "ops": [
+    8,
+    8
+   ],
+   "window": [
+    16,
+    8
+   ],
+   "scratch": [
+    24,
+    8
+   ],
+   "window_len": [
+    32,
+    4
+   ],
+   "scratch_len": [
+    36,
+    4
+   ],
+   "pending": [
+    40,
+    4
+   ],
+   "limit": [
+    44,
+    4
+   ],
+   "cookie": [
+    48,
+    8
+   ]
+  }
+ },
+ "stream_ops": {
+  "size": 40,
+  "members": {
+   "open": [
+    0,
+    8
+   ],
+   "fill": [
+    8,
+    8
+   ],
+   "drain": [
+    16,
+    8
+   ],
+   "seek": [
+    24,
+    8
+   ],
+   "close": [
+    32,
+    8
+   ]
+  }
+ }
+}

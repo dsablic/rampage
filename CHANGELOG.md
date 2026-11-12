@@ -14,6 +14,13 @@ see the [stability policy](docs/stability.md) for what the version promises.
   such as Cortex-M vector-table candidates. Capped lists report totals and a continuation range. See
   [file layout](docs/file-layout.md).
 
+- MSVC C++ on x86 and x64 PE: vftables and `__CxxFrameHandler3` exception tables are read at load (bounded by a
+  per-image work and memory budget). Virtual methods and catch/cleanup funclets seed function discovery; on owned
+  clang-cl fixtures, function starts went from 33/79 (x64) and 32/79 (x86) to 79/79 against the PDB.
+  `class_evidence` adds a paged `vftables` list. New experimental `exception_handlers` (MCP `formats`) pages try
+  blocks with catch types, cleanups and thrown types. Validated on clang-cl output only; `__CxxFrameHandler4`
+  (cl.exe x64 since VS2019 16.3) is reported as undecoded.
+
 ### Firmware
 
 - Experimental Raw Project profile `ARM:LE:32:Cortex` for headerless Cortex-M (ARMv6-M/ARMv7-M Thumb) images, with
@@ -34,6 +41,14 @@ see the [stability policy](docs/stability.md) for what the version promises.
   push of `lr`, or a decodable `bl` calling it); string-pointer arrays, switch tables and stray constants are
   refused. `binary_info` reports every table with its verdict and per-entry evidence under `raw.pointer_tables`.
   Off by default; repeat calls on the same image reuse the scan.
+- `file_layout` flags header-checked compressed components (`compressed_component_candidate`): a header word equal
+  to the following payload's length plus a verifying byte-sum or CRC-32 field, or a packed payload ending at the
+  range end or padding with a decoded-size word. Each hint names the field offsets and the checks that passed;
+  `bounds.container_search` reports when its limits stopped the search.
+- `probe_compression` (MCP `core`; CLI `binary probe-compression`) sweeps LZ4 block and 160 LZSS variants over an
+  unknown stream within a work budget and deadline, and ranks candidates whose `decode_arguments` pass straight to
+  `decode_file_range`. A candidate is "confident" only with a supplied output size and a clear score margin.
+  `decode_file_range` gains the parameterised `lzss` codec and `lz4-block`; `lzss-4k` is unchanged.
 - Raw interpretation identities move to `rampage-raw-interpretation-v4`, which also binds the pointer-table request.
 - Decompiling a Cortex-M Raw image folds literal-pool loads to the addresses they hold, names unnamed globals by
   ARMv7-M region (`ram_`, `periph_`, `ppb_`, ...) unless the analyst renamed them, keeps caller values live across
@@ -45,6 +60,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Changed
 
+- PDB name import no longer rejects a whole PDB over conflicting names. Decorated MSVC names become aliases of the
+  plain name (templates, operators and overloads keep their decorated name), identical-code-folded publics become
+  aliases, and names that collide or are not valid labels are omitted with a warning. See
+  [PDB symbols](docs/pdb-symbols.md).
 - Function discovery no longer splits a function first reached by a tail call (`b.w f`) at its internal join
   points: callers that explored such a function are re-explored once it becomes a start, before shared tails are
   counted. On a generated 6,000-function Cortex-M image this removes 2,232 bogus starts; starts on other

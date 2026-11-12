@@ -143,6 +143,8 @@ enum Command {
     WasmModule(args::WasmModuleArgs),
     #[command(skip)]
     FileLayout(args::LayoutArgs),
+    #[command(skip)]
+    ProbeCompression(args::ProbeCompressionArgs),
     #[command(hide = true)]
     QueryDebugger(QueryDebuggerArgs),
     /// Run bounded workflows and selected decompilations as one multi-architecture analysis report
@@ -325,6 +327,7 @@ fn main() -> ExitCode {
             | Command::PyInstallerArchive(..)
             | Command::WasmModule(..)
             | Command::FileLayout(..)
+            | Command::ProbeCompression(..)
     ) && (cli.arch.is_some() || cli.image_offset.is_some() || cli.image_length.is_some())
     {
         let name = match &command {
@@ -333,6 +336,7 @@ fn main() -> ExitCode {
             Command::PyInstallerArchive(..) => "pyinstaller-archive",
             Command::WasmModule(..) => "wasm-module",
             Command::FileLayout(..) => "layout",
+            Command::ProbeCompression(..) => "probe-compression",
             _ => "archive-inventory",
         };
         eprintln!("rampage: binary {name} does not accept --arch, --image-offset or --image-length");
@@ -396,6 +400,7 @@ fn main() -> ExitCode {
             commands::wasm_module(&mut out, &args.file, args.list, args.offset, args.limit as usize, &options)
         }
         Command::FileLayout(args) => commands::file_layout(&mut out, &args.file, &args.request(), &options),
+        Command::ProbeCompression(args) => commands::probe_compression(&mut out, &args.file, &args.request(), &options),
         Command::QueryDebugger(args) => debugger_query(&mut out, args),
         Command::Analyze(args) => analyze::analyze(&mut out, &args, &options),
         Command::Info(args::ViewedFileArgs { file, view }) => commands::info(&mut out, &file, view, &options),
@@ -655,6 +660,7 @@ fn without_one_image(command: &Command) -> Option<&'static str> {
         Command::PyInstallerArchive(..) => "binary pyinstaller-archive",
         Command::WasmModule(..) => "binary wasm-module",
         Command::FileLayout(..) => "binary layout",
+        Command::ProbeCompression(..) => "binary probe-compression",
         Command::DecodeFile(..) => "binary decode",
         Command::InspectRaw(..) => "binary inspect-raw",
         Command::Packs { .. } => "packs",

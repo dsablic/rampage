@@ -76,6 +76,51 @@ entry. Findings note where the load config disagrees with the DllCharacteristics
 CFG instrumentation without `GUARD_CF` or an x86 image with neither SafeSEH nor `NO_SEH`. Table contents other than
 SafeSEH handlers, CHPE, hot-patch, enclave and volatile metadata are not decoded.
 
+## MSVC C++ metadata
+
+In x86 and x64 PE images the loader reads the Microsoft C++ ABI's structural metadata once, at load, from
+file-backed bytes: every followed address is checked against the image, address arithmetic is checked, every count
+is capped, and one image shares one work budget and one retained-memory budget (about 64 MiB) across all of it, so
+crafted tables that share a try map or handler array cannot multiply into unbounded work. Running out stops the
+read with a warning in both tools. The tables name code that no call reaches, so they also seed function starts:
+vftable slots (virtual methods and adjustor thunks), catch and cleanup funclets, x86 exception-handler thunks, and
+the destructors and copy constructors of thrown types.
+
+**Validation so far:** clang-cl and lld-link output using `__CxxFrameHandler3` only. MSVC `cl.exe` x64 builds
+since Visual Studio 2019 16.3 default to `__CxxFrameHandler4` (`/d2FH4`), whose compressed tables are not decoded
+and are counted in `undecoded_handlers`; `cl.exe` x86 places catch blocks inline in the parent function rather
+than as separate funclets, which is untested.
+
+- **Vftables** (`class_evidence` fields `vftables_total` and `vftables`, one page of 16 by default, paged with
+  `vftable_offset`/`vftable_limit` and bounded to 24,000 JSON bytes): a table is found by the word before slot 0,
+  which must point to an RTTI complete object locator whose signature, self reference (x64), type descriptor name
+  and class hierarchy validate. Each table reports the demangled class, the locator, the subobject offset
+  (non-zero for the tables of a second or virtual base) and up to 64 slot targets; slots run to the first non-code
+  word. Classes built without RTTI (`/GR-`) have no locator and are not found.
+- **Exception handling** (`exception_handlers`, formats group, **experimental**: its row shape may change): on x64, the unwind info of each `.pdata` entry
+  names its language handler; entries whose handler is the `__CxxFrameHandler3` import (or an unnamed, statically
+  linked handler whose data starts with a valid FuncInfo) are grouped by FuncInfo, and the entry that is not one of
+  its own funclets is the function. On x86 there is no unwind directory: FuncInfo tables are found by their version
+  stamp (`0x19930520`-`0x19930522`) and full validation, and tied to the function that stores the per-function
+  handler thunk (`mov eax, FuncInfo; jmp __CxxFrameHandler3`) into its registration record, by `push imm32` (MSVC)
+  or `mov [ebp+disp], imm32` (clang-cl). A FuncInfo yields the unwind map (each state's destructor funclet), the
+  try blocks with their catch handlers (caught type from its RTTI type descriptor, by-reference and const
+  adjectives, catch funclet) and, on x64, the code each try block covers from the IP-to-state map. x64
+  `__C_specific_handler` scope tables give `__try` ranges with their filter or `__finally` funclets. `list=throws`
+  pages `_ThrowInfo` records: each throw's catchable types, most derived first, with the thrown object's
+  destructor and copy constructors. Each row caps its try blocks, catches, code ranges, cleanups and scopes, with
+  exact `*_total` counts and `truncated`; type names are cut at 256 bytes. With `function` set, `detail_offset`
+  pages that function's try blocks, cleanups and scopes.
+
+Not decoded: `__CxxFrameHandler4` (see above), x86 SEH (`_except_handler3/4`) and ARM64 tables. Funclets become
+their own functions, and the continuation addresses a catch funclet returns can appear as small functions inside
+their parent, so try/catch structure is reported as evidence beside the decompiled parent rather than inside it.
+
+Owned fixtures built with clang-cl and lld-link (`tests/fixtures/msvc-cpp`, rebuilt by its `build.sh`) pin this
+against their PDBs: every PDB procedure and thunk is discovered, all 20 vftables per architecture are found with
+every slot resolving to a PDB function, and the four functions with C++ exception state report their three try
+blocks, seven catch handlers and seven cleanup funclets.
+
 ## Managed assemblies
 
 ECMA-335 metadata includes assembly identity, references, entry point and one paged list:

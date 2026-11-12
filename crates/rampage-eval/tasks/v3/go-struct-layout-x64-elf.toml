@@ -1,0 +1,29 @@
+version = 1
+id = "go-struct-layout-x64-elf"
+kind = "analysis"
+question = """
+This is a large stripped Go executable for x86-64 Linux. The Go struct type
+github.com/restic/restic/internal/restic.Snapshot is described by the binary's runtime type information. Give every
+field it declares, exported or not, as a [name, offset] pair with the byte offset from the start of the struct.
+Return the pairs in an array named fields.
+"""
+truth_reference = """
+DW_TAG_member offsets of the struct in the unstripped twin's DWARF; the stripped binary keeps the type's name and
+every field name; derive-truth.py.
+"""
+required_capabilities = ["go_metadata", "go_types", "scale"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "restic-v0173-x64-elf"
+path = "target/bench/v3/go/restic-x64-stripped.elf"
+sha256 = "b35458f9e003dd3b8a34eb10ea583e8038be78ed964ed710d467b89294994d6c"
+source = "github.com/restic/restic@v0.17.3 (Go module proxy), built with go1.23.3"
+build = "tools/agent-bench/v3/build-go.sh"
+
+[answer]
+kind = "tuple_set"
+hex_integers = true
+field = "fields"
+values = [["Excludes", 104], ["GID", 100], ["Hostname", 64], ["Original", 152], ["Parent", 24], ["Paths", 40], ["ProgramVersion", 160], ["Summary", 176], ["Tags", 128], ["Time", 0], ["Tree", 32], ["UID", 96], ["Username", 80], ["id", 184]]

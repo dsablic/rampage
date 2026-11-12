@@ -12,7 +12,31 @@ one undoable annotation batch, preserving existing user, symbol, export and entr
 annotations are refreshed under the shared log lock before application.
 
 Eligibility requires an already-discovered function entry and an unused name valid for the annotation identifier
-contract. Ambiguous or invalid names reject the import rather than being sanitized into different names. Names
+contract. Names are never sanitized into different names: the reader omits, with a counted warning, any function
+whose name several functions share or that is not an identifier, when no decorated public name stands in.
+
+### Name choice (changed in this release)
+
+Earlier releases rejected the whole PDB whenever two records named one address differently, or a name was shared
+or invalid. Every real Microsoft C++ PDB hits that, so the reader now chooses names instead:
+
+- A Microsoft C++ PDB names most functions twice: the procedure record (`S_GPROC32`/`S_LPROC32`) carries the
+  undecorated qualified name (`geo::Rect::area`, `Box<int>::get`) and the public record (`S_PUB32`) the decorated
+  linkage name, often with several decorated aliases at one address (scalar and vector deleting destructors).
+  Decorated (`?`-prefixed) publics are aliases, not conflicts.
+- Undecorated publics are aliases too: the procedure's own linkage name (`name`, or x86 `_name`, `_name@8`,
+  `@name@8`), and the names of other functions that identical-code folding (`/OPT:ICF`, the release default)
+  merged into the same body.
+- Each function gets its procedure name (else its smallest undecorated public) when that passes the annotation
+  label contract (letters, digits and `_.$@?:`, not empty, not address-shaped such as `sub_401000`) and no other
+  function uses it; otherwise its smallest decorated alias. Templates and operators need characters outside
+  labels, and overloads share one undecorated name.
+- What is left without a usable unique name is omitted and counted in a warning, never renamed: names several
+  functions share with no decorated alias, names outside the label contract with no decorated alias (local
+  templates and lambdas), and addresses that several procedure records name differently (folded bodies) with no
+  decorated alias. The rest of the PDB still imports.
+
+Corruption, exhausted limits and identity mismatches still reject the whole PDB. Names
 at undiscovered entries or already-named addresses are preserved; metadata does not invent discovery evidence.
 The preview can include names not eligible for application. There is no dedicated UI import action.
 

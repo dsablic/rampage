@@ -1,0 +1,29 @@
+version = 1
+id = "switch-pic-x64-so"
+kind = "analysis"
+question = """
+This stripped x86-64 Linux shared library (position-independent) was compiled from C. Its exported function
+vm_dispatch dispatches on its first argument through a jump table. Which values of vm_dispatch's first argument
+make it reach the code that calls op_jump? Count every value that reaches that code through the jump table, and
+only those. Return them in ascending order, as an array of integers named values.
+"""
+truth_reference = """
+Host run of src/opcodes.c (VARIANT=2) over every opcode, cross-checked against the twin's table of 32-bit
+table-relative offsets; derive-truth.py.
+"""
+required_capabilities = ["switch_tables", "decompile"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "libopcodes-x64-so"
+path = "tests/fixtures/bench-v3/bin/libopcodes-x64.so"
+sha256 = "466b8da585197bda2fdf5baa8ca23994a7eb982f256fe304b8460d76b8078e71"
+source = "tests/fixtures/bench-v3/src/opcodes.c"
+build = "tests/fixtures/bench-v3/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+values = [22, 27, 30]

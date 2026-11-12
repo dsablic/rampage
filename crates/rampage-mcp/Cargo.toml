@@ -15,6 +15,7 @@ tokio.workspace = true
 
 [dev-dependencies]
 rampage-debug = { workspace = true, features = ["fake-stub"] }
+rampage-decode.workspace = true
 rmcp = { workspace = true, features = ["client"] }
 tokio = { workspace = true, features = ["sync", "time"] }
 

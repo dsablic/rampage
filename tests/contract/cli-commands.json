@@ -1382,6 +1382,11 @@
           "repeated": false,
           "required": true
         },
+        "--lzss": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
         "--offset": {
           "type": "value",
           "repeated": false,
@@ -2228,6 +2233,81 @@
           "required": false
         },
         "--type": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
+    "rampage binary probe-compression": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--candidate-limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--expected-output-size": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--length": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--preview-size": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--timeout-ms": {
           "type": "value",
           "repeated": false,
           "required": false
@@ -3206,6 +3286,11 @@
           "type": "value",
           "repeated": false,
           "required": true
+        },
+        "--lzss": {
+          "type": "value",
+          "repeated": false,
+          "required": false
         },
         "--offset": {
           "type": "value",

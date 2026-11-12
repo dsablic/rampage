@@ -29,13 +29,15 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 ## Formats and instruction decoding
 
 - [File layout](file-layout.md) maps any file or range of up to 64 MiB in one call: padding and occupied
-  regions with hashes, block entropy, string clusters and labelled hints. Limits: statistics and heuristic
-  candidates only; no format, architecture or compression detection.
+  regions with hashes, block entropy, string clusters and labelled hints, including header-checked
+  compressed-component candidates. Limits: statistics and heuristic
+  candidates only; no format or architecture detection, and a compressed-component candidate names no codec.
 - Bounded [raw-code windows](raw-code.md) accept explicit ranges and asserted architecture/mode/order/base
   through MCP without a native executable header. Limits: little-endian x86/x64/ARM/AArch64, linear decoding
   only; no code detection, function discovery or execution.
 - [Native data inspection](data-inspection.md) links bounded stored words to metadata candidates, while
-  [explicit decoding](decoding.md) provides a built-in LZSS-4K provider and transient previews. Limits: pointer
+  [explicit decoding](decoding.md) provides LZSS (classic 4K and every explicit variant) and LZ4-block providers,
+  transient previews and a bounded probe that ranks parameter sets for an unknown variant. Limits: pointer
   links are suppressed on loader warnings; decoding is not extraction, authentication or a load mapping.
 - ELF, PE and Mach-O, including universal Mach-O binaries and explicitly selected embedded executable images.
 - x86 and x86-64 use [iced-x86](https://github.com/icedland/iced).
@@ -116,8 +118,12 @@ without replacing analyst signatures. Named Itanium and MSVC vtables provide bou
 the C++ class name, not inferred object layouts. For stripped binaries, Itanium and MSVC RTTI scanning recovers
 class names and base-class edges, following Mach-O chained rebases and accepting chained binds to the C++
 runtime's typeinfo vtables, as arm64 images linked with the default chained fixups store them (see
-[debug signature import](debug-signatures.md)). MCP serves this evidence as `class_evidence`, and demangled names with Objective-C classes, superclasses, methods and properties as
-`language_metadata`; both are core tools, listed without enabling a group.
+[debug signature import](debug-signatures.md)). In x86 and x64 PE images, MSVC vftables are found through the RTTI
+complete object locator before slot 0 and reported with their class, subobject offset and slot targets; every slot
+also seeds a function start, so virtual methods reached through no direct call are discovered. MCP serves this
+evidence as `class_evidence`, and demangled names with Objective-C classes, superclasses, methods and properties as
+`language_metadata`; both are core tools, listed without enabling a group. See
+[MSVC C++ metadata](file-formats.md#msvc-c-metadata).
 
 Types-group [`edit_variable`](local-variables.md) persists local/parameter names and types by native storage
 identity and returns refreshed C in one call, with undo/replay. Limits: single whole register/stack mappings
@@ -295,6 +301,11 @@ These read embedded metadata and containers without executing, extracting or dec
 - **PE resources and load config** (`pe_resources`, `pe_load_config`): resource leaves with decoded version
   resources and manifests, and the load config's security cookie, SafeSEH, CFG and CET settings checked against
   the header's mitigations. See [PE resources and load config](file-formats.md#pe-resources-and-load-config).
+- **MSVC C++ exception handling** (`exception_handlers`, experimental; validated on clang-cl
+  `__CxxFrameHandler3` output, while cl.exe x64 `__CxxFrameHandler4` tables are counted, not decoded): per function, try blocks with typed catch handlers and
+  their funclets, destructor cleanups by state and SEH scopes, from `__CxxFrameHandler3` FuncInfo (x64 and x86)
+  and `__C_specific_handler` scope tables, plus the catchable types of each `_ThrowInfo`. Funclets seed function
+  starts. See [MSVC C++ metadata](file-formats.md#msvc-c-metadata).
 - **Managed assemblies** (`dotnet_metadata`, `dotnet_il`): ECMA-335 metadata (types, P/Invokes, custom
   attributes, resources) and ILDasm-style CIL for one method. CIL is reported as managed code, never as native
   instructions. See [managed assemblies](file-formats.md#managed-assemblies).

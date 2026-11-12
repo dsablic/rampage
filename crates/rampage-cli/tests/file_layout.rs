@@ -44,6 +44,9 @@ fn binary_layout_json_matches_the_mcp_report_and_text_lists_the_map() {
     let api = serde_json::to_value(rampage_api::file_layout(&input.0, &request).unwrap()).unwrap();
     assert_eq!(cli, api, "the CLI prints the same report as the MCP tool");
     assert_eq!(cli["hints"][0]["kind"], "cortex_m_vector_table_candidate");
+    let whole = rampage_api::file_layout(&input.0, &rampage_api::FileLayoutRequest::default()).unwrap();
+    let kinds: Vec<&str> = whole.hints.iter().map(|hint| hint.kind).collect();
+    assert_eq!(kinds, ["cortex_m_vector_table_candidate", "compressed_component_candidate"]);
 
     rampage()
         .args(["binary", "layout"])

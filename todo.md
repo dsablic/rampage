@@ -219,9 +219,11 @@ Verify first which of these the existing raw-window and decoder-provider slices 
   clusters and range hashes in one call. Extends the byte/ASCII triage slice above. Done: `file_layout` (MCP
   `core`) and `binary layout`, up to 64 MiB per call with capped lists and a continuation range, plus labelled
   Cortex-M vector-table candidate hints (evidence only; the Raw selector's `vector_table` does the seeding).
-- [ ] **Unknown-compression probe.** Try LZSS/LZ4/LZ77 variants and a bit-order/length-encoding sweep against a
+- [x] **Unknown-compression probe.** Try LZSS/LZ4/LZ77 variants and a bit-order/length-encoding sweep against a
   supplied or expected output size or an entropy drop, and return candidate decoder-provider parameters. Builds
   on the explicit LZSS-4K provider; the agent re-derived this by hand.
+  Done: `probe_compression` (LZ4 block + 160 LZSS variants; confident only with an expected size). Open: ring fill
+  byte often undecidable, deflate/LZMA/LZO/LZ4 frames, arch-aware output checks, a run on a real image.
 - [x] **Cortex-M vector table and entry detection.** Reset/SP/handler candidates with evidence, so the first
   load needs no trial and error. Pairs with the ARM/Thumb Raw profile item under the benchmark follow-ups. Done:
   `raw.vector_table` seeds entry and handlers and reports each word's verdict in `binary_info`, with a labelled
@@ -262,9 +264,11 @@ Verify first which of these the existing raw-window and decoder-provider slices 
   an index). Done: the slow path was a full-image hash per xref row (binding check); now once per query. The
   22 s listing did not reproduce on the Cortex-M profile; re-time the original Sleigh workflow. Open: one image
   hash per call remains (cache the raw identity in `rampage-loaders`).
-- [ ] **Container recognition.** Triage and `carve` do not flag a proprietary compressed container, i.e. a
+- [x] **Container recognition.** Triage and `carve` do not flag a proprietary compressed container, i.e. a
   header with load address, sizes and a byte-sum around an LZSS stream. Report "header-checked
   compressed-component candidate" with extents, so the compression probe has a starting range.
+  Done as the `file_layout` hint `compressed_component_candidate` (size + byte-sum/CRC-32 or packed payload at a
+  boundary with a decoded-size word); triage and `carve` unchanged.
 - [x] **MCP tools in subagent sessions.** The agent had no rampage MCP tools and fell back to the CLI. Find out
   why (server config, permissions or startup), and document how to expose them to agents. Done: configuration, not
   a server fault. On the machine that ran it, `rampage` was neither installed on `PATH` nor registered at any
@@ -297,7 +301,12 @@ Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.m
 
 - [ ] MIPS signatures: mask `lui`/`addiu` HI/LO address pairs. Needs relocation/dataflow to avoid false matches
   (without it, a masked constant could collide two different functions); do it relocation-gated, not heuristic.
-- [ ] Verify the MSVC RTTI path against a real PE (no MSVC toolchain locally; synthetic-tested only).
+- [x] Verify the MSVC RTTI path against a real PE. Done 2026-11-12 on owned clang-cl x86/x64 fixtures with PDB truth
+  (`tests/fixtures/msvc-cpp`): RTTI already correct; vftables, `__CxxFrameHandler3` EH tables and PDB names added.
+- [ ] MSVC follow-ups, most valuable first: decode `__CxxFrameHandler4` (cl.exe x64 default; needs a cl.exe-built
+  fixture); fold catch-resume points back into parents; link virtual calls to vftable slots in the decompiler;
+  rows for base-only RTTI classes and paging for `rtti_classes`; x86 SEH (`_except_handler3/4`) and ARM64 tables;
+  PDB types; debug-type import still rejects `/OPT:ICF` procedure ranges.
 - [ ] C++ class LAYOUT reconstruction (fields/sizes), building on the RTTI name/hierarchy recovery now in place.
 
 ## Heuristic-database layer (pluggable detection DBs)
