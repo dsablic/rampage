@@ -218,14 +218,28 @@ impl Budget<'_> {
         if self.stopped.is_some() {
             return None;
         }
-        match decode(self.remaining, self.cancelled) {
-            Ok(scan) => {
-                self.remaining -= scan.steps;
-                self.used += scan.steps;
-                Some(scan)
-            }
+        // Every work step polls cancellation once, so the polls count a failed decode's steps too.
+        let mut polls = 0u64;
+        let cancelled = &mut *self.cancelled;
+        let result = decode(self.remaining, &mut || {
+            polls += 1;
+            cancelled()
+        });
+        let steps = match &result {
+            Ok(scan) => scan.steps,
+            Err(_) => polls.min(self.remaining),
+        };
+        self.remaining -= steps;
+        self.used += steps;
+        match result {
+            Ok(scan) => Some(scan),
             Err(error) => {
-                self.stopped = Some(if error == DecodeError::Cancelled { "cancelled" } else { "work_budget" });
+                self.stopped = Some(match error {
+                    DecodeError::Cancelled => "cancelled",
+                    DecodeError::WorkLimitExceeded => "work_budget",
+                    DecodeError::AllocationFailure => "allocation_failure",
+                    _ => "decoder_error",
+                });
                 None
             }
         }
@@ -369,6 +383,8 @@ fn parse_keys() -> impl Iterator<Item = Lzss> {
 /// The best of parse-equivalent candidates is clear when the next has at least twice its extendable matches
 /// plus this many.
 pub const MIN_EXTENDABLE_GAP: u64 = 2;
+/// The score by which a confident first candidate must beat any passing candidate with a different parse.
+pub const MIN_SCORE_MARGIN: f64 = 0.05;
 
 fn fingerprint(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| (hash ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3))
@@ -430,6 +446,14 @@ fn rank(candidates: &mut Vec<Candidate>, sized: bool) {
     // Group members have the same tokens, so their counts compare directly.
     let clear =
         tied <= 1 || candidates[1].extendable_matches >= 2 * candidates[0].extendable_matches + MIN_EXTENDABLE_GAP;
+    // A passing candidate with another parse must also score clearly lower.
+    let group_score = candidates[..tied].iter().map(|candidate| candidate.score).fold(f64::MIN, f64::max);
+    let rival = candidates[tied..]
+        .iter()
+        .filter(|candidate| candidate.passes_checks)
+        .map(|candidate| candidate.score)
+        .fold(f64::MIN, f64::max);
+    let clear = clear && group_score - rival >= MIN_SCORE_MARGIN;
     for (index, candidate) in candidates.iter_mut().enumerate() {
         candidate.parse_equivalents = if index < tied { tied - 1 } else { 0 };
         candidate.verdict = match candidate.passes_checks {
@@ -463,6 +487,20 @@ pub fn probe(input: &[u8], options: &ProbeOptions, cancelled: &mut dyn FnMut() -
         stopped_early: None,
     };
 
+    // LZ4 first: one decode, so a budget or deadline spent on the LZSS sweep cannot skip it.
+    if let Some(scan) = budget.scan(|steps, cancelled| Lz4Block.decode_available(input, limit, steps, cancelled)) {
+        report.full_decodes += 1;
+        let sized = options.expected_output_size.is_none_or(|expected| scan.bytes.len() == expected);
+        let covered = scan.consumed * 10 >= input.len() * 9 || padding_like(&input[scan.consumed..]);
+        if sized && covered && scan.stats.references >= MIN_REFERENCES {
+            let mut found = candidate(Codec::Lz4Block, input, &scan, 1);
+            judge(&mut found, options.expected_output_size);
+            report.candidates.push(found);
+        } else if !sized {
+            report.size_mismatches += 1;
+        }
+    }
+
     // With a supplied size, a token walk (no copying) keeps only the parses that reach it exactly.
     let fits = options.expected_output_size.map(|expected| {
         let mut fits = Vec::new();
@@ -473,7 +511,8 @@ pub fn probe(input: &[u8], options: &ProbeOptions, cancelled: &mut dyn FnMut() -
             }
             let (consumed, tokens) = key.measure(input, expected);
             report.size_walks += 1;
-            budget.remaining = budget.remaining.saturating_sub(tokens);
+            let tokens = tokens.min(budget.remaining);
+            budget.remaining -= tokens;
             budget.used += tokens;
             if budget.remaining == 0 {
                 budget.stopped = Some("work_budget");
@@ -588,21 +627,12 @@ pub fn probe(input: &[u8], options: &ProbeOptions, cancelled: &mut dyn FnMut() -
         }
     }
 
-    if let Some(scan) = budget.scan(|steps, cancelled| Lz4Block.decode_available(input, limit, steps, cancelled)) {
-        report.full_decodes += 1;
-        let sized = options.expected_output_size.is_none_or(|expected| scan.bytes.len() == expected);
-        let covered = scan.consumed * 10 >= input.len() * 9;
-        if sized && covered && scan.stats.references >= MIN_REFERENCES {
-            let mut found = candidate(Codec::Lz4Block, input, &scan, 1);
-            judge(&mut found, options.expected_output_size);
-            report.candidates.push(found);
-        } else if !sized {
-            report.size_mismatches += 1;
-        }
-    }
-
     rank(&mut report.candidates, options.expected_output_size.is_some());
     report.steps = budget.used;
     report.stopped_early = budget.stopped;
     report
 }
+
+#[cfg(test)]
+#[path = "probe_tests.rs"]
+mod tests;

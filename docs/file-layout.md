@@ -62,7 +62,8 @@ Every `offset` and `length` in the result is an integer count of original-file b
   where they are.
 - `hints`: heuristic candidates, labelled by `hint_interpretation: heuristic_candidates_not_mappings`. Each has a
   `kind`, an `offset`, its `evidence` and an object named for the kind. Vector-table and compressed-component
-  hints share the cap of 8, in offset order.
+  hints share the cap of 8. Vector-table hints come first and are never displaced; compressed-component hints
+  fill the remaining places. Each kind is listed in offset order.
 
   `cortex_m_vector_table_candidate` has a `cortex_m` object (`initial_sp`, `reset_handler`,
   `handler_words_checked`, `handler_words_plausible`). It is checked at the start of each occupied region and at
@@ -90,8 +91,10 @@ Every `offset` and `length` in the result is an integer count of original-file b
   decoded-size word. No codec is named and nothing is decoded: hand `payload_offset`, `payload_length` and a
   decoded-size candidate to `probe_compression` ([decoding](decoding.md#probing-an-unknown-variant)). Not
   checked: checksums over the header or the decoded bytes, checksums other than these three, and fields wider
-  or narrower than 32 bits other than 16-bit sums. Payload entropy is measured over its first 64 KiB. CRC-32 is
-  tried only for payloads that end at a boundary or are at most 64 KiB, and over at most 64 MiB per call. On
+  or narrower than 32 bits other than 16-bit sums. Payload entropy is measured over its first 64 KiB. Byte sums
+  are always checked. CRC-32 is tried only for a packed payload that ends at a boundary or has a decoded-size
+  word, and over at most 64 MiB per call. `bounds.container_search` reports the seeds examined, the CRC bytes,
+  and whether the seed limit or the CRC budget was reached, in which case candidates may be missing. On
   64 MiB of concatenated executables the search adds about 0.1 s of CPU to the layout (release build, 2026-11-12).
 
 ## Bounds and continuation
@@ -109,8 +112,8 @@ the whole selection.
 
 Two lists do not move the continuation. Entropy spans are capped at `block_limit` and at most 128: they summarise
 `entropy.blocks`, which is complete up to its own cut, so spans past their cap can be read from the block values.
-Hints are a sample of at most 8: `bounds.hints` says how many there were and where the first omitted one is;
-call again from that offset to see more.
+Hints are a sample of at most 8: `bounds.hints` says how many there were and the lowest offset of any omitted
+hint, which may lie below returned hints of another kind; call again from that offset to see more.
 
 When the blocks were cut off, `entropy.suggested_block_size` is the smallest power of two that fits every block in
 `block_limit`, or 16 MiB, the largest block size, when none does (only a 64 MiB selection with a `block_limit`

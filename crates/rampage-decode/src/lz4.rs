@@ -60,6 +60,7 @@ impl From<DecodeError> for Fault {
 struct State<'a> {
     input: &'a [u8],
     target: usize,
+    exact: bool,
     max_steps: u64,
     bytes: Vec<u8>,
     consumed: usize,
@@ -106,6 +107,10 @@ impl State<'_> {
         if self.bytes.len() == self.target || self.consumed == self.input.len() {
             return Ok(true);
         }
+        // Without a size, a block that ends with these literals may be followed by padding (one repeated byte).
+        if !self.exact && padding(&self.input[self.consumed..]) {
+            return Ok(true);
+        }
         let low = self.byte()?;
         let high = self.byte()?;
         let distance = usize::from(low) | (usize::from(high) << 8);
@@ -127,6 +132,11 @@ impl State<'_> {
     }
 }
 
+/// Whether `bytes` is a run of one repeated byte, as padding after a stream is. Empty counts.
+pub(crate) fn padding(bytes: &[u8]) -> bool {
+    bytes.iter().all(|&byte| byte == bytes[0])
+}
+
 fn run(
     input: &[u8],
     target: usize,
@@ -134,12 +144,22 @@ fn run(
     max_steps: u64,
     cancelled: &mut dyn FnMut() -> bool,
 ) -> Result<Scan, DecodeError> {
-    let mut state =
-        State { input, target, max_steps, bytes: Vec::new(), consumed: 0, steps: 0, stats: ScanStats::default() };
+    let mut state = State {
+        input,
+        target,
+        exact,
+        max_steps,
+        bytes: Vec::new(),
+        consumed: 0,
+        steps: 0,
+        stats: ScanStats::default(),
+    };
     if exact {
         state.bytes.try_reserve_exact(target).map_err(|_| DecodeError::AllocationFailure)?;
     }
     let mut sequence_end = 0;
+    // Output and literal count at `sequence_end`: a sequence that fails leaves nothing behind in a scan.
+    let (mut output_end, mut literals_end) = (0, 0);
     let mut end = ScanEnd::OutputLimit;
     while state.bytes.len() < target {
         take_step(&mut state.steps, max_steps, cancelled)?;
@@ -150,6 +170,7 @@ fn run(
         match state.sequence(cancelled) {
             Ok(last) => {
                 sequence_end = state.consumed;
+                (output_end, literals_end) = (state.bytes.len(), state.stats.literals);
                 if last {
                     if state.bytes.len() < target {
                         // The input ended with these literals. Exact decoding needed more output.
@@ -165,6 +186,8 @@ fn run(
             Err(Fault::Stop(_, error)) if exact => return Err(error),
             Err(Fault::Stop(stop, _)) => {
                 end = stop;
+                state.bytes.truncate(output_end);
+                state.stats.literals = literals_end;
                 break;
             }
         }

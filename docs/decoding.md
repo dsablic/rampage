@@ -117,14 +117,17 @@ decoded-size candidates.
 
 The sweep, within 768 Mi work steps and the deadline:
 
-1. With an expected size, a token walk over the whole input (no copying) for each of the 160 parses (window,
+1. The LZ4 block format is tried first, once on the whole range, so a spent budget or deadline cannot skip it.
+   Without an expected size, a block that ends with literals followed only by padding (one repeated byte) ends
+   there; a sequence that fails leaves none of its literals in the output.
+2. With an expected size, a token walk over the whole input (no copying) for each of the 160 parses (window,
    minimum match, flag order, literal bit, reference layout) keeps those that reach the size exactly.
-2. Each remaining LZSS variant decodes the first 16 KiB of input, in distance, biased-distance and ring modes. For
+3. Each remaining LZSS variant decodes the first 16 KiB of input, in distance, biased-distance and ring modes. For
    ring offsets, the starts tried are `window - max_match` and zero, plus the starts that best explain the first
    references when neither does. Each is scored on parse statistics: skewed length fields, references close
    behind the output end, references that read written data, and an entropy drop.
-3. The best variants decode the whole range. A ring variant whose output reads the initial fill is also decoded
-   with fills 0x00, 0x20 and 0xff. The LZ4 block format is tried once on the whole range.
+4. The best variants decode the whole range. A ring variant whose output reads the initial fill is also decoded
+   with fills 0x00, 0x20 and 0xff.
 
 Each candidate has a `verdict`, `score`, `decode_arguments` (pass to `decode_file_range` with `path`), output
 size and SHA-256, consumed and trailing input, `stream_end`, literal and reference counts, `metrics`, named
@@ -147,13 +150,17 @@ references whose next output byte equals the byte after their source, which a gr
 have extended. The right parameters have almost none, and shifted ones have many. Output entropy breaks ties.
 
 `confident` needs every check, the supplied size and a first candidate with clearly fewer extendable matches
-than any parse-equivalent rival: at least two fewer and less than half as many. Otherwise passing candidates are
+than any parse-equivalent rival: at least two fewer and less than half as many. It must also score at least 0.05
+above every passing candidate with a different parse. Otherwise passing candidates are
 `plausible` and the others `weak`. Without an expected size nothing is confident. An exercised ring fill is
 often undecidable from the stream, since every fill decodes self-consistently; the first is then `plausible`
 and its rivals are listed.
 
 `sweep` reports the families and parameter space, counts of variants, walks, sample and full decodes, size
-mismatches, steps, and `stopped_early` (`work_budget` or `cancelled`) when the space was not fully tried.
+mismatches, steps (including those of a decode that ran out of budget or was cancelled), and `stopped_early` when
+the space was not fully tried: `work_budget`, `cancelled` (the deadline), `allocation_failure` or
+`decoder_error`. Each candidate's `decode_check` reproduction shares a separate 10 s deadline per call; one that
+passes it says `not reproduced`.
 `not_tried` lists what is outside the sweep: other LZSS token shapes and end markers; variable-length LZ77 codes,
 LZO, LZMA, deflate, zstd, Brotli and LZ4 frames; streams not starting at the offset; and architecture-aware
 plausibility.

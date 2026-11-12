@@ -266,6 +266,9 @@ pub struct LayoutBounds {
     pub entropy_spans: ListBound,
     pub string_clusters: ListBound,
     pub hints: ListBound,
+    /// How far the compressed-component search went, when hints were requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_search: Option<crate::layout_containers::ContainerSearch>,
 }
 
 /// Arguments for a follow-up call covering what this one left out.
@@ -353,8 +356,16 @@ pub(crate) fn layout(
 
     let (regions, mut hints, boundaries) = regions_and_hints(bytes, offset, parameters, &mut summary, &mut bounds);
     if parameters.hints {
-        let found = crate::layout_containers::candidates(bytes, offset, &boundaries.occupied, &boundaries.fill);
-        merge_hints(&mut hints, &mut bounds.hints, found.into_iter().map(crate::layout_containers::hint));
+        let (found, mut search) = crate::layout_containers::candidates(
+            bytes,
+            offset,
+            &boundaries.occupied,
+            &boundaries.fill,
+            crate::layout_containers::SearchLimits::default(),
+        );
+        search.seed_limit_reached |= boundaries.occupied_truncated;
+        bounds.container_search = Some(search);
+        merge_hints(&mut hints, &mut bounds.hints, found.into_iter().map(crate::layout_containers::hint).collect());
     }
     let entropy = entropy_report(bytes, offset, parameters, &mut summary, &mut bounds);
     let string_clusters = clusters(bytes, offset, parameters, &mut summary, &mut bounds.string_clusters);
@@ -418,20 +429,22 @@ pub(crate) fn layout(
 #[derive(Default)]
 struct Boundaries {
     occupied: Vec<usize>,
+    /// More occupied regions than [`MAX_CONTAINER_SEEDS`] started in the range.
+    occupied_truncated: bool,
     fill: std::collections::BTreeSet<usize>,
 }
 
-/// Adds `extra` hints to the capped, offset-ordered `hints`, keeping at most [`MAX_HINTS`].
-fn merge_hints(hints: &mut Vec<LayoutHint>, bound: &mut ListBound, extra: impl Iterator<Item = LayoutHint>) {
+/// Appends offset-ordered `extra` hints after the vector-table `hints`, which keep their places: hints are ordered
+/// by kind, then offset, each kind a prefix of its own candidates. At most [`MAX_HINTS`] are kept; `next_offset`
+/// is the lowest offset left out of any kind, so a call from it sees every omitted hint again.
+fn merge_hints(hints: &mut Vec<LayoutHint>, bound: &mut ListBound, extra: Vec<LayoutHint>) {
     for hint in extra {
         bound.total += 1;
-        hints.push(hint);
-    }
-    hints.sort_by_key(|hint| hint.offset);
-    if hints.len() > MAX_HINTS {
-        let first_omitted = hints[MAX_HINTS].offset;
-        bound.next_offset = Some(bound.next_offset.map_or(first_omitted, |next| next.min(first_omitted)));
-        hints.truncate(MAX_HINTS);
+        if hints.len() < MAX_HINTS {
+            hints.push(hint);
+        } else {
+            bound.next_offset = Some(bound.next_offset.map_or(hint.offset, |next| next.min(hint.offset)));
+        }
     }
     bound.returned = hints.len();
 }
@@ -452,6 +465,8 @@ fn regions_and_hints(
             boundaries.fill.insert(start);
         } else if boundaries.occupied.len() < MAX_CONTAINER_SEEDS {
             boundaries.occupied.push(start);
+        } else {
+            boundaries.occupied_truncated = true;
         }
         let length = (end - start) as u64;
         match fill {

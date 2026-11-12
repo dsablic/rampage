@@ -1,6 +1,9 @@
 use rampage_decode::Lzss;
 use rampage_decode::encode::{self, Random};
 
+use std::collections::BTreeSet;
+
+use super::{SearchLimits, candidates};
 use crate::FileLayoutRequest;
 use crate::file_layout::{LayoutParameters, layout};
 
@@ -61,22 +64,61 @@ fn chained_checksummed_components_after_a_loader_are_reported_with_extents_and_d
     assert_eq!(found[1].container.as_ref().unwrap().payload_end, "fill_run");
 }
 
-#[test]
-fn crc32_and_big_endian_headers_verify_without_a_fill_boundary_check() {
-    let payload = encode::lzss(&Lzss::classic_4k(4078, 0), &encode::synthetic_firmware(6000, 4));
+/// A big-endian header with a decoded-size word and a CRC-32 of the payload, followed by more code.
+fn crc_component(seed: u64) -> Vec<u8> {
+    let original = encode::synthetic_firmware(6000, seed);
+    let payload = encode::lzss(&Lzss::classic_4k(4078, 0), &original);
     let mut crc = flate2::Crc::new();
     crc.update(&payload);
+    let mut bytes = Vec::new();
+    for word in [0x0800_4000u32, payload.len() as u32, original.len() as u32, crc.sum()] {
+        bytes.extend(word.to_be_bytes());
+    }
+    bytes.extend(&payload);
+    bytes.extend(encode::synthetic_firmware(2000, seed + 1));
+    bytes
+}
+
+#[test]
+fn crc32_and_big_endian_headers_verify_without_a_fill_boundary_check() {
     let mut image = vec![0xff; 128];
-    image.extend(0x0800_4000u32.to_be_bytes());
-    image.extend((payload.len() as u32).to_be_bytes());
-    image.extend(crc.sum().to_be_bytes());
-    image.extend(&payload);
-    image.extend(encode::synthetic_firmware(2000, 5));
+    image.extend(crc_component(4));
     let found = hints(&image);
     assert_eq!(found.len(), 1, "{found:#?}");
     let container = found[0].container.as_ref().unwrap();
     assert_eq!((container.byte_order, container.checksum_field.unwrap().kind), ("big", "crc32"));
     assert_eq!(container.payload_end, "none");
+}
+
+#[test]
+fn crc_and_seed_limits_are_reported_instead_of_silently_missing_components() {
+    let mut image = vec![0xff; 128];
+    let first = image.len();
+    image.extend(crc_component(4));
+    image.extend([0xff; 128]);
+    let second = image.len();
+    image.extend(crc_component(6));
+    let fill: BTreeSet<usize> = [0, first + crc_component(4).len()].into();
+    let seeds = [first, second];
+    let (found, full) = candidates(&image, 0, &seeds, &fill, SearchLimits::default());
+    assert_eq!((found.len(), full.crc_budget_exhausted, full.seed_limit_reached), (2, false, false));
+    // Half the CRC-32 work: the second component is missed, and the report says why.
+    let tight = SearchLimits { max_crc_bytes: full.crc_bytes as usize / 2, ..SearchLimits::default() };
+    let (found, search) = candidates(&image, 0, &seeds, &fill, tight);
+    assert!(found.len() < 2 && search.crc_budget_exhausted, "{found:#?} {search:?}");
+    assert!(search.crc_bytes <= full.crc_bytes / 2);
+    let (_, search) = candidates(&image, 0, &seeds, &fill, SearchLimits { max_seeds: 1, ..SearchLimits::default() });
+    assert!(search.seed_limit_reached);
+}
+
+#[test]
+fn byte_sums_do_not_spend_the_crc_budget_on_unsupported_size_words() {
+    // Tables of small words: many fit as sizes and as decoded sizes, but nothing behind them is packed.
+    let mut random = Random(12);
+    let mut image = vec![0xff; 128];
+    image.extend((0..16 << 10).flat_map(|_| (random.below(4096) as u32).to_le_bytes()));
+    let (_, search) = candidates(&image, 0, &[128], &[0].into(), SearchLimits::default());
+    assert_eq!(search.crc_bytes, 0, "{search:?}");
 }
 
 #[test]

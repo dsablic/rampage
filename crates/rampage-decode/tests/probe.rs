@@ -1,6 +1,6 @@
 use rampage_decode::encode::{self, Random};
 use rampage_decode::probe::{Codec, ProbeOptions, Verdict, probe};
-use rampage_decode::{DecodeOptions, Decoder, FlagOrder, Lz4Block, Lzss, OffsetMode, ReferenceLayout};
+use rampage_decode::{DecodeOptions, Decoder, FlagOrder, Lz4Block, Lzss, OffsetMode, ReferenceLayout, ScanEnd};
 
 fn options(expected: Option<usize>) -> ProbeOptions {
     ProbeOptions { expected_output_size: expected, max_output_size: expected.unwrap_or(1 << 22), max_steps: 1 << 28 }
@@ -96,11 +96,56 @@ fn work_budget_and_cancellation_end_the_sweep_early_and_say_so() {
     let original = encode::synthetic_firmware(8 << 10, 4);
     let stream = encode::lzss(&Lzss::classic_4k(4078, 0), &original);
     let tight = ProbeOptions { max_steps: 50_000, ..options(None) };
-    assert_eq!(probe(&stream, &tight, &mut || false).stopped_early, Some("work_budget"));
+    let report = probe(&stream, &tight, &mut || false);
+    // A decode that runs out of budget counts its steps too.
+    assert_eq!((report.stopped_early, report.steps), (Some("work_budget"), 50_000));
     let mut polls = 0;
     let report = probe(&stream, &options(None), &mut || {
         polls += 1;
         polls > 1000
     });
     assert_eq!(report.stopped_early, Some("cancelled"));
+    assert!(report.steps > 0 && report.steps <= 1000, "{}", report.steps);
+}
+
+#[test]
+fn an_lz4_block_followed_by_padding_is_found_without_a_size() {
+    let original = encode::synthetic_firmware(16 << 10, 8);
+    let mut stream = encode::lz4_block(&original);
+    let block = stream.len();
+    stream.extend([0; 300]);
+    let scan = Lz4Block.decode_available(&stream, 1 << 22, u64::MAX, &mut || false).unwrap();
+    assert_eq!((scan.bytes.len(), scan.consumed), (original.len(), block));
+    let report = probe(&stream, &options(None), &mut || false);
+    let lz4 = report.candidates.iter().find(|candidate| candidate.codec == Codec::Lz4Block).expect("an LZ4 candidate");
+    assert_eq!((lz4.output_size, lz4.consumed), (original.len(), block));
+    for name in ["input_consumed", "block_ends_with_input"] {
+        assert!(lz4.checks.iter().any(|check| check.name == name && check.passed), "{name}: {:#?}", lz4.checks);
+    }
+    assert!(decodes_to(lz4.codec, &stream, &original));
+}
+
+#[test]
+fn a_rejected_lz4_sequence_leaves_no_literals_behind_in_a_scan() {
+    // A sequence of four literals and a four-byte match, then one whose literals precede a zero distance.
+    let mut stream = vec![0x40, b'a', b'b', b'c', b'd', 4, 0];
+    stream.extend([0x30, b'x', b'y', b'z', 0, 0, 0x55]);
+    let scan = Lz4Block.decode_available(&stream, 1 << 20, u64::MAX, &mut || false).unwrap();
+    assert_eq!((scan.bytes.as_slice(), scan.consumed, scan.end), (&b"abcdabcd"[..], 7, ScanEnd::InvalidToken));
+    assert_eq!(scan.stats.literals, 4);
+}
+
+#[test]
+fn a_deadline_during_the_lzss_sweep_still_leaves_the_lz4_attempt() {
+    let original = encode::synthetic_firmware(8 << 10, 3);
+    let stream = encode::lz4_block(&original);
+    let lz4_steps = Lz4Block.decode_available(&stream, 1 << 22, u64::MAX, &mut || false).unwrap().steps;
+    let mut polls = 0;
+    let report = probe(&stream, &options(Some(original.len())), &mut || {
+        polls += 1;
+        polls > lz4_steps + 100
+    });
+    assert_eq!(report.stopped_early, Some("cancelled"));
+    assert_eq!(report.candidates[0].codec, Codec::Lz4Block);
+    assert!(decodes_to(report.candidates[0].codec, &stream, &original));
 }

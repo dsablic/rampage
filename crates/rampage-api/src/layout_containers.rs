@@ -25,8 +25,6 @@ const SUM_BLOCK: usize = 32;
 const ENTROPY_SAMPLE: usize = 64 << 10;
 /// Payload bytes CRC-32 is computed over in one call; past this, only byte sums are checked.
 const MAX_CRC_BYTES: usize = 64 << 20;
-/// The largest payload checked for a CRC-32 when its end is not at a boundary.
-const MAX_UNBOUNDED_CRC_PAYLOAD: usize = 64 << 10;
 
 /// One header word, with its file offset and value.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -77,10 +75,12 @@ struct Sums<'a> {
     bytes: &'a [u8],
     prefix: Vec<u32>,
     crc_budget: std::cell::Cell<usize>,
+    crc_bytes: std::cell::Cell<u64>,
+    crc_exhausted: std::cell::Cell<bool>,
 }
 
 impl<'a> Sums<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
+    fn new(bytes: &'a [u8], max_crc_bytes: usize) -> Self {
         let mut prefix = Vec::with_capacity(bytes.len() / SUM_BLOCK + 1);
         let mut total = 0u32;
         prefix.push(0);
@@ -88,13 +88,23 @@ impl<'a> Sums<'a> {
             total = block.iter().fold(total, |sum, &byte| sum.wrapping_add(u32::from(byte)));
             prefix.push(total);
         }
-        Self { bytes, prefix, crc_budget: std::cell::Cell::new(MAX_CRC_BYTES) }
+        Self {
+            bytes,
+            prefix,
+            crc_budget: std::cell::Cell::new(max_crc_bytes),
+            crc_bytes: std::cell::Cell::new(0),
+            crc_exhausted: std::cell::Cell::new(false),
+        }
     }
 
-    /// The CRC-32 of `start..end`, or `None` once the call's CRC budget is spent.
+    /// The CRC-32 of `start..end`, or `None` when the call's CRC budget cannot cover it.
     fn crc32(&self, start: usize, end: usize) -> Option<u32> {
-        let left = self.crc_budget.get().checked_sub(end - start)?;
+        let Some(left) = self.crc_budget.get().checked_sub(end - start) else {
+            self.crc_exhausted.set(true);
+            return None;
+        };
         self.crc_budget.set(left);
+        self.crc_bytes.set(self.crc_bytes.get() + (end - start) as u64);
         let mut crc = flate2::Crc::new();
         crc.update(&self.bytes[start..end]);
         Some(crc.sum())
@@ -110,6 +120,11 @@ impl<'a> Sums<'a> {
     fn range(&self, start: usize, end: usize) -> u32 {
         self.up_to(end).wrapping_sub(self.up_to(start))
     }
+}
+
+/// Entropy of the payload's first [`ENTROPY_SAMPLE`] bytes.
+fn sample_entropy(bytes: &[u8], payload: usize, end: usize) -> f64 {
+    entropy(&bytes[payload..end.min(payload + ENTROPY_SAMPLE)])
 }
 
 fn read(bytes: &[u8], at: usize, big: bool) -> Option<u32> {
@@ -129,16 +144,20 @@ pub(crate) fn candidates(
     offset: u64,
     seeds: &[usize],
     fill_starts: &BTreeSet<usize>,
-) -> Vec<ContainerCandidate> {
-    let sums = Sums::new(bytes);
-    // A header may start exactly at a region start or at the aligned word holding it.
-    let mut queue: Vec<usize> = seeds.iter().flat_map(|&seed| [seed & !3, seed]).collect();
+    limits: SearchLimits,
+) -> (Vec<ContainerCandidate>, ContainerSearch) {
+    let sums = Sums::new(bytes, limits.max_crc_bytes);
+    // A header may start exactly at a region start or at the aligned word holding it. The range start goes last,
+    // so it is examined first.
+    let mut queue: Vec<usize> = seeds.iter().rev().flat_map(|&seed| [seed, seed & !3]).collect();
     queue.push(0);
     let mut seen = BTreeSet::new();
     let mut found: Vec<ContainerCandidate> = Vec::new();
     let mut covered = 0usize;
+    let mut seed_limit_reached = false;
     while let Some(seed) = queue.pop() {
-        if seen.len() >= MAX_SEEDS {
+        if seen.len() >= limits.max_seeds {
+            seed_limit_reached = !seen.contains(&seed) || queue.iter().any(|seed| !seen.contains(seed));
             break;
         }
         if !seen.insert(seed) || seed < covered && found.iter().any(|c| inside(c, offset, seed)) {
@@ -163,7 +182,39 @@ pub(crate) fn candidates(
             candidate.checks_passed.push("payload_end_at_next_candidate");
         }
     }
-    found
+    let search = ContainerSearch {
+        seeds_examined: seen.len(),
+        seed_limit_reached,
+        crc_bytes: sums.crc_bytes.get(),
+        crc_budget_exhausted: sums.crc_exhausted.get(),
+    };
+    (found, search)
+}
+
+/// Work limits of one container search.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SearchLimits {
+    pub max_seeds: usize,
+    pub max_crc_bytes: usize,
+}
+
+impl Default for SearchLimits {
+    fn default() -> Self {
+        Self { max_seeds: MAX_SEEDS, max_crc_bytes: MAX_CRC_BYTES }
+    }
+}
+
+/// How far the compressed-component search went. A reached limit means candidates may be missing.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct ContainerSearch {
+    /// Offsets a header was looked for at: region starts, their aligned words, the range start, payload ends.
+    pub seeds_examined: usize,
+    /// Seeds were left unexamined (at most 4096 per call; occupied regions past the 4096th are not seeds).
+    pub seed_limit_reached: bool,
+    /// Payload bytes CRC-32 was computed over.
+    pub crc_bytes: u64,
+    /// A CRC-32 was skipped because the 64 MiB per-call budget could not cover it; byte sums were still checked.
+    pub crc_budget_exhausted: bool,
 }
 
 fn inside(candidate: &ContainerCandidate, offset: u64, at: usize) -> bool {
@@ -200,8 +251,17 @@ fn at_seed(
                 } else {
                     "none"
                 };
-                // CRC-32 costs a pass over the payload, so only payloads that end at a boundary or are small get one.
-                let try_crc = boundary != "none" || size as usize <= MAX_UNBOUNDED_CRC_PAYLOAD;
+                // Byte sums are cheap and always checked. CRC-32 costs a pass over the payload, so it is tried only
+                // when other evidence already supports this size word: a boundary or a decoded-size word, and a
+                // packed payload. Code is full of small words that fit as sizes, so these filters come first.
+                let has_decoded = (window..payload).step_by(4).filter(|&at| at != size_at).any(|at| {
+                    read(bytes, at, big).is_some_and(|value| {
+                        u64::from(value) > u64::from(size) && u64::from(value) <= u64::from(size) * MAX_RATIO
+                    })
+                });
+                let mut packed = None;
+                let mut packed_entropy = || *packed.get_or_insert_with(|| sample_entropy(bytes, payload, end));
+                let try_crc = (boundary != "none" || has_decoded) && packed_entropy() >= PACKED_ENTROPY;
                 let checksum = checksum(bytes, offset, window, payload, size_at, end, sums, big, try_crc);
                 if checksum.is_none() && boundary == "none" {
                     continue;
@@ -224,7 +284,7 @@ fn at_seed(
                 if checksum.is_none() && decoded.is_empty() {
                     continue;
                 }
-                let packed = entropy(&bytes[payload..end.min(payload + ENTROPY_SAMPLE)]);
+                let packed = packed_entropy();
                 let packed_ok = packed >= PACKED_ENTROPY;
                 // A 16-bit sum matches by chance too often to stand alone.
                 if checksum.is_some_and(|field| field.kind == "byte_sum16") && boundary == "none" && !packed_ok {
@@ -295,9 +355,7 @@ fn checksum(
     let fields = || (window..payload).step_by(2).filter(|&at| at + 4 <= size_at || at >= size_at + 4);
     let field = |at: usize, kind, value: u32| ChecksumField { offset: offset + at as u64, kind, value: value.into() };
     let word_equal = |value: u32| {
-        fields()
-            .filter(|&at| (at - window).is_multiple_of(4))
-            .find(|&at| read(bytes, at, big) == Some(value))
+        fields().filter(|&at| (at - window).is_multiple_of(4)).find(|&at| read(bytes, at, big) == Some(value))
     };
     if sum > 0xffff
         && let Some(at) = word_equal(sum)
