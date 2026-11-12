@@ -124,8 +124,8 @@ fn group_summary(group: Group) -> &'static str {
         Group::DotNet => ".NET: dotnet_metadata (types, methods, P/Invokes), dotnet_il (CIL).",
         Group::Carve => "files inside files: carve (embedded executables), archive_inventory (ZIP listing).",
         Group::Formats => {
-            "build_info (Go modules, Rust dependencies), pe_resources, pe_load_config, pyinstaller_archive, \
-             wasm_module."
+            "build_info (Go modules, Rust dependencies), pe_resources, pe_load_config, exception_handlers (MSVC C++ \
+             try/catch tables), pyinstaller_archive, wasm_module."
         }
         Group::Debug => {
             "a live target via GDB remote stub: debug_connect, debug_registers, debug_read_memory, \

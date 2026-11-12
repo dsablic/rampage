@@ -118,7 +118,8 @@ A default session lists 42 tools: the 41 in `core` plus `enable_tools`. Enabling
 - `diagnostics`: `analysis_diagnostics`, `entry_diagnostics`, `inspect_jump_table`.
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
 - `carve`: `carve`, `archive_inventory`.
-- `formats`: `build_info`, `pe_resources`, `pe_load_config`, `pyinstaller_archive`, `wasm_module`.
+- `formats`: `build_info`, `pe_resources`, `pe_load_config`, `exception_handlers`, `pyinstaller_archive`,
+  `wasm_module`.
 - `debug`, only on a server started with a debug endpoint: `debug_connect`, `debug_bind`, `debug_status`,
   `debug_registers`, `debug_read_memory`, `debug_modules`, `debug_snapshot`, `debug_continue`, `debug_wait`,
   `debug_interrupt`, `debug_step`, `debug_breakpoints`, `debug_evidence`, `debug_disconnect`; with the

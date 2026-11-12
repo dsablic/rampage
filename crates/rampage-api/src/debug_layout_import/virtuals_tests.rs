@@ -59,7 +59,13 @@ fn table(header: HeaderClassification, targets: &[u64]) -> ClassEvidence {
 }
 
 fn recovery(tables: Vec<ClassEvidence>) -> ClassRecovery {
-    ClassRecovery { classes: tables, rtti_classes: Vec::new(), warnings: Vec::new(), limitations: Vec::new() }
+    ClassRecovery {
+        classes: tables,
+        rtti_classes: Vec::new(),
+        vftables: Vec::new(),
+        warnings: Vec::new(),
+        limitations: Vec::new(),
+    }
 }
 
 #[test]

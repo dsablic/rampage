@@ -116,8 +116,12 @@ without replacing analyst signatures. Named Itanium and MSVC vtables provide bou
 the C++ class name, not inferred object layouts. For stripped binaries, Itanium and MSVC RTTI scanning recovers
 class names and base-class edges, following Mach-O chained rebases and accepting chained binds to the C++
 runtime's typeinfo vtables, as arm64 images linked with the default chained fixups store them (see
-[debug signature import](debug-signatures.md)). MCP serves this evidence as `class_evidence`, and demangled names with Objective-C classes, superclasses, methods and properties as
-`language_metadata`; both are core tools, listed without enabling a group.
+[debug signature import](debug-signatures.md)). In x86 and x64 PE images, MSVC vftables are found through the RTTI
+complete object locator before slot 0 and reported with their class, subobject offset and slot targets; every slot
+also seeds a function start, so virtual methods reached through no direct call are discovered. MCP serves this
+evidence as `class_evidence`, and demangled names with Objective-C classes, superclasses, methods and properties as
+`language_metadata`; both are core tools, listed without enabling a group. See
+[MSVC C++ metadata](file-formats.md#msvc-c-metadata).
 
 Types-group [`edit_variable`](local-variables.md) persists local/parameter names and types by native storage
 identity and returns refreshed C in one call, with undo/replay. Limits: single whole register/stack mappings
@@ -295,6 +299,10 @@ These read embedded metadata and containers without executing, extracting or dec
 - **PE resources and load config** (`pe_resources`, `pe_load_config`): resource leaves with decoded version
   resources and manifests, and the load config's security cookie, SafeSEH, CFG and CET settings checked against
   the header's mitigations. See [PE resources and load config](file-formats.md#pe-resources-and-load-config).
+- **MSVC C++ exception handling** (`exception_handlers`): per function, try blocks with typed catch handlers and
+  their funclets, destructor cleanups by state and SEH scopes, from `__CxxFrameHandler3` FuncInfo (x64 and x86)
+  and `__C_specific_handler` scope tables, plus the catchable types of each `_ThrowInfo`. Funclets seed function
+  starts. See [MSVC C++ metadata](file-formats.md#msvc-c-metadata).
 - **Managed assemblies** (`dotnet_metadata`, `dotnet_il`): ECMA-335 metadata (types, P/Invokes, custom
   attributes, resources) and ILDasm-style CIL for one method. CIL is reported as managed code, never as native
   instructions. See [managed assemblies](file-formats.md#managed-assemblies).

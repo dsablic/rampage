@@ -133,6 +133,9 @@ pub struct Binary {
     pub go_arguments: std::collections::BTreeMap<u64, crate::gopclntab::GoArguments>,
     #[serde(skip_serializing_if = "Option::is_none")]
     raw: Option<crate::RawCodeImage>,
+    /// PE only: the image base and exception directory from the headers.
+    #[serde(skip)]
+    pe_layout: Option<crate::msvc::PeLayout>,
     #[serde(skip)]
     image: Range<usize>,
 }
@@ -273,6 +276,7 @@ impl Binary {
             snapshot_target: None,
             embedded: None,
             go_table: None,
+            pe_layout: None,
             go_arguments: std::collections::BTreeMap::new(),
             raw: Some(raw),
             image: 0..len,
@@ -430,6 +434,7 @@ impl Binary {
             snapshot_target: None,
             embedded: None,
             go_table: None,
+            pe_layout: None,
             go_arguments: std::collections::BTreeMap::new(),
             raw: None,
         })
@@ -861,6 +866,10 @@ impl Binary {
         let be8 = arch == Arch::Arm && be8_flag(parsed.flags());
         let code_big_endian = big_endian && !be8;
         let exception_directory = starts::pe_exception_directory(&parsed);
+        let pe_layout = (format == Format::Pe).then(|| crate::msvc::PeLayout {
+            image_base: parsed.relative_address_base(),
+            exception_directory: exception_directory.as_ref().map(starts::ExceptionDirectory::span),
+        });
         let tls_directory = starts::pe_tls_directory(&parsed);
         let arm_exidx_tables = starts::arm_exidx_tables(&parsed, &mut warnings);
         let import_slots = crate::slots::collect(&parsed, image_bytes, &mut warnings);
@@ -902,6 +911,7 @@ impl Binary {
             snapshot_target: None,
             embedded: None,
             go_table: None,
+            pe_layout: None,
             go_arguments: std::collections::BTreeMap::new(),
             raw: None,
             image,
@@ -929,6 +939,8 @@ impl Binary {
         if let Some(directory) = tls_directory {
             function_starts.extend(starts::pe_tls(&binary, &directory));
         }
+        binary.pe_layout = pe_layout;
+        function_starts.extend(crate::msvc::code_targets(&binary));
         let (starts, warning) = starts::eh_frame(&binary);
         function_starts.extend(starts);
         binary.warnings.extend(warning);
@@ -1031,6 +1043,10 @@ impl Binary {
     fn code_range_containing(&self, address: u64) -> Option<&Range<u64>> {
         let index = self.code_ranges.partition_point(|range| range.end <= address);
         self.code_ranges.get(index).filter(|range| range.contains(&address))
+    }
+
+    pub(crate) fn pe_layout(&self) -> Option<crate::msvc::PeLayout> {
+        self.pe_layout
     }
 
     /// The import slot at exactly `address`.

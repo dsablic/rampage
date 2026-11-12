@@ -6,6 +6,7 @@ pub mod linkage;
 mod load;
 mod macho;
 mod model;
+pub mod msvc;
 mod raw;
 pub mod raw_pointers;
 pub mod raw_vectors;

@@ -21,6 +21,7 @@ mod flywheel;
 mod function_frame;
 mod inspect_sleigh;
 mod local_variables;
+mod msvc_cpp;
 mod patches;
 mod pdb;
 #[path = "../../../tests/fixtures/pdb/support.rs"]

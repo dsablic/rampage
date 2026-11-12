@@ -43,6 +43,24 @@ fn demangle_msvc(name: &str) -> Option<String> {
     (!demangled.is_empty() && demangled != name && demangled.len() <= 4096).then_some(demangled)
 }
 
+/// Demangles the stored name of an MSVC RTTI type descriptor (`.?AVRect@geo@@`, `.H`) to the type it names
+/// (`geo::Rect`, `int`), dropping the `class`/`struct` keyword.
+pub fn msvc_type_name(raw: &str) -> Option<String> {
+    let decorated = raw.strip_prefix('.')?;
+    if !decorated.starts_with("?A") {
+        // A fundamental or pointer type (`.H`, `.PEAD`) reads as the parameter of a dummy function.
+        let demangled = demangle(&format!("?f@@YAX{decorated}@Z"))?;
+        let name = demangled.strip_prefix("f(")?.strip_suffix(')')?;
+        return (!name.is_empty()).then(|| name.to_owned());
+    }
+    let demangled = demangle(&format!("??_R0{decorated}@8"))?;
+    let name = demangled
+        .strip_suffix("::`RTTI Type Descriptor'")
+        .or_else(|| demangled.strip_suffix(" `RTTI Type Descriptor'"))?;
+    let name = ["class ", "struct ", "union ", "enum "].iter().find_map(|k| name.strip_prefix(k)).unwrap_or(name);
+    (!name.is_empty()).then(|| name.trim().to_owned())
+}
+
 #[derive(Debug, Serialize)]
 pub struct LanguageMetadata {
     pub symbols: Vec<LanguageSymbol>,
@@ -211,6 +229,16 @@ mod tests {
         assert_eq!(vtable_class("{vtable(Foo::Bar)}").as_deref(), Some("Foo::Bar"));
         assert_eq!(vtable_class("Foo::`vftable'").as_deref(), Some("Foo"));
         assert_eq!(vtable_class("Foo::bar(int)"), None);
+    }
+
+    #[test]
+    fn msvc_type_descriptor_names_demangle_to_types() {
+        assert_eq!(msvc_type_name(".?AVRect@geo@@").as_deref(), Some("geo::Rect"));
+        assert_eq!(msvc_type_name(".?AUError@@").as_deref(), Some("Error"));
+        assert_eq!(msvc_type_name(".?AV?$Box@H@@").as_deref(), Some("Box<int>"));
+        assert_eq!(msvc_type_name(".H").as_deref(), Some("int"));
+        assert_eq!(msvc_type_name(".PEAD").as_deref(), Some("char *"));
+        assert_eq!(msvc_type_name("?AUError@@"), None);
     }
 
     #[test]

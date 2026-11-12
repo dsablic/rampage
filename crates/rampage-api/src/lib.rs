@@ -10,6 +10,7 @@ mod build_info;
 mod capabilities;
 mod carve;
 mod correlation;
+mod cpp_exceptions;
 mod data;
 mod debug_control;
 mod debug_correlation;

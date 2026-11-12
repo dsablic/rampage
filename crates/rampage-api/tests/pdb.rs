@@ -74,7 +74,7 @@ fn mismatched_and_truncated_real_pdb_inputs_leave_all_annotations_unchanged() {
 }
 
 #[test]
-fn duplicate_function_names_in_real_pdb_do_not_partially_apply() {
+fn duplicate_function_names_in_real_pdb_name_neither_function() {
     let files = TempFiles::new();
     let mut bytes = std::fs::read(fixture("fixture.pdb")).unwrap();
     let module_start = stream_offset(&bytes, module_stream(&bytes), 0);
@@ -82,9 +82,12 @@ fn duplicate_function_names_in_real_pdb_do_not_partially_apply() {
     bytes[module_start + local..module_start + local + 10].copy_from_slice(b"pdb_mix\0\0\0");
     let path = files.write("ambiguous.pdb", &bytes);
     let project = project();
-    let error = project.import_pdb_names(&path, true).unwrap_err();
-    assert!(error.to_string().contains("ambiguous PDB name"), "{error}");
-    assert!(project.annotation_list().names.is_empty());
+    // A name two functions share names neither; the PDB's other names still apply, with a warning.
+    let imported = project.import_pdb_names(&path, true).unwrap();
+    assert!(imported.preview.warnings.iter().any(|warning| warning.starts_with("2 functions omitted")));
+    assert!(!imported.preview.functions.iter().any(|function| function.name == "pdb_mix"));
+    assert!(project.resolve("pdb_mix").is_err());
+    assert!(imported.preview.functions.iter().any(|function| function.name == "pdb_entry"));
 }
 
 #[test]
@@ -524,7 +527,7 @@ mod checked {
     }
 
     #[test]
-    fn checked_preview_rejects_ambiguous_invalid_and_panic_prone_names_without_touching_state_or_history() {
+    fn checked_preview_omits_ambiguous_and_invalid_names_and_rejects_panic_prone_ones_without_touching_state() {
         let original = std::fs::read(fixture("fixture.pdb")).unwrap();
         let start = stream_offset(&original, module_stream(&original), 0);
         let name = original[start..start + 1024].windows(10).position(|name| name == b"pdb_local\0").unwrap();
@@ -533,19 +536,22 @@ mod checked {
         let mut invalid = original.clone();
         invalid[start + name..start + name + 10].copy_from_slice(b"bad local\0");
         let numeric = support::corrupt_local_constant_numeric_prefix(&original, 0x1107, 0xffff);
-        for (bytes, reason) in [
-            (ambiguous, "ambiguous PDB name"),
-            (invalid, "not a valid name"),
-            (numeric, "unsupported constant numeric prefix"),
-        ] {
+        // Shared and non-identifier names are omitted with a warning, not offered.
+        for (bytes, omitted) in [(ambiguous, "pdb_mix"), (invalid, "bad local")] {
             let files = TempFiles::new();
-            let pdb = files.write("invalid.pdb", &bytes);
-            let log = files.write("invalid-preview.rampage", b"");
-            let project = logged(&log);
-            seed_history(&project);
-            let error = assert_unchanged_rejection(&project, &log, || project.preview_pdb_names(&pdb));
-            assert!(error.contains(reason), "{error}");
+            let pdb = files.write("omitted.pdb", &bytes);
+            let project = logged(&files.write("omitted-preview.rampage", b""));
+            let receipt = project.preview_pdb_names(&pdb).unwrap();
+            assert!(!receipt.report().functions.iter().any(|function| function.name == omitted));
+            assert!(!receipt.report().warnings.is_empty());
         }
+        let files = TempFiles::new();
+        let pdb = files.write("invalid.pdb", &numeric);
+        let log = files.write("invalid-preview.rampage", b"");
+        let project = logged(&log);
+        seed_history(&project);
+        let error = assert_unchanged_rejection(&project, &log, || project.preview_pdb_names(&pdb));
+        assert!(error.contains("unsupported constant numeric prefix"), "{error}");
     }
 
     #[test]

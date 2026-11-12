@@ -12,7 +12,19 @@ one undoable annotation batch, preserving existing user, symbol, export and entr
 annotations are refreshed under the shared log lock before application.
 
 Eligibility requires an already-discovered function entry and an unused name valid for the annotation identifier
-contract. Ambiguous or invalid names reject the import rather than being sanitized into different names. Names
+contract. Names are never sanitized into different names: the reader omits, with a counted warning, any function
+whose name several functions share or that is not an identifier, when no decorated public name stands in.
+
+A Microsoft C++ PDB names most functions twice: the procedure record (`S_GPROC32`/`S_LPROC32`) carries the
+undecorated qualified name (`geo::Rect::area`, `Box<int>::get`) and the public record (`S_PUB32`) the decorated
+linkage name, often with several decorated aliases at one address (scalar and vector deleting destructors). The
+reader treats decorated (`?`-prefixed) publics, and x86 C publics that undecorate to the procedure name (`_name`,
+`_name@8`, `@name@8`), as aliases rather than conflicts. Each function gets its procedure name when that is a plain
+identifier (letters, digits and `_.$@?:`) used by no other function, and otherwise its smallest decorated alias:
+templates and operators need characters outside identifiers, and overloads share one undecorated name. A name
+that several functions share with no decorated alias to tell them apart names none of them, and a non-identifier
+name without one (a local template or lambda) is left out too; the report counts both in warnings instead of
+rejecting the PDB. Two different undecorated names at one address still reject it. Names
 at undiscovered entries or already-named addresses are preserved; metadata does not invent discovery evidence.
 The preview can include names not eligible for application. There is no dedicated UI import action.
 

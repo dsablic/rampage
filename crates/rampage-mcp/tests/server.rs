@@ -101,6 +101,7 @@ async fn lists_all_tools_with_instructions() {
         "edit_variable",
         "enable_tools",
         "entry_diagnostics",
+        "exception_handlers",
         "export_patched",
         "file_layout",
         "find_crypto",

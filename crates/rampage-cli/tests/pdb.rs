@@ -8,7 +8,7 @@ use std::process::Output;
 use assert_cmd::Command;
 use rampage_api::{Project, Session};
 use serde_json::{Value, json};
-use support::{TempFiles, fixture, module_stream, rsds_offset, stream_offset};
+use support::{TempFiles, fixture, rsds_offset};
 
 fn command() -> Command {
     let mut command = Command::cargo_bin("rampage").unwrap();
@@ -127,21 +127,11 @@ fn mismatched_guid_and_malformed_explicit_pdb_inputs_return_failure_receipts_wit
     let pdb = std::fs::read(fixture("fixture.pdb")).unwrap();
     let truncated = files.write("truncated.pdb", &pdb[..pdb.len() - 1]);
     let garbage = files.write("garbage.pdb", b"not a PDB");
-    let mut ambiguous = pdb.clone();
-    let start = stream_offset(&pdb, module_stream(&pdb), 0);
-    let local = pdb[start..start + 1024].windows(10).position(|name| name == b"pdb_local\0").unwrap();
-    ambiguous[start + local..start + local + 10].copy_from_slice(b"pdb_mix\0\0\0");
-    let ambiguous = files.write("ambiguous.pdb", &ambiguous);
     let missing = truncated.with_file_name("missing.pdb");
-    for (index, (image, pdb)) in [
-        (&mismatch, fixture("fixture.pdb")),
-        (&image, truncated),
-        (&image, garbage),
-        (&image, ambiguous),
-        (&image, missing),
-    ]
-    .into_iter()
-    .enumerate()
+    for (index, (image, pdb)) in
+        [(&mismatch, fixture("fixture.pdb")), (&image, truncated), (&image, garbage), (&image, missing)]
+            .into_iter()
+            .enumerate()
     {
         let name = format!("rejected-{index}.exe");
         let path = files.write(&name, image);

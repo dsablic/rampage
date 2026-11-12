@@ -118,6 +118,15 @@
     "rtti_classes[].name",
     "rtti_classes[].source",
     "rtti_classes[].type_info",
+    "vftables",
+    "vftables[].address",
+    "vftables[].class",
+    "vftables[].locator",
+    "vftables[].mangled",
+    "vftables[].offset",
+    "vftables[].slot_count",
+    "vftables[].slots",
+    "vftables[].truncated",
     "warnings"
   ],
   "decode_file_range": [

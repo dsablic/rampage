@@ -307,6 +307,20 @@ struct CarveArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct ExceptionHandlerArgs {
+    /// `functions` (default) or `throws`.
+    list: Option<crate::cpp_exceptions::ExceptionList>,
+    /// Only the tables of the function containing this address or name (functions list only).
+    function: Option<String>,
+    /// Rows to skip, for paging.
+    offset: Option<usize>,
+    /// Rows per page, 1..=100 (default 50), additionally bounded to 60000 JSON bytes.
+    #[schemars(range(min = 1, max = 100))]
+    limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PyInstallerArchiveArgs {
     /// Path to any regular file, such as a PyInstaller-built executable; it is not opened as a project.
     path: std::path::PathBuf,
@@ -2298,7 +2312,9 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "class_evidence",
-            "Bounded named Itanium vtable/RTTI evidence with validated code slots; not inferred C++ layouts.",
+            "Bounded named Itanium vtable/RTTI evidence with validated code slots, RTTI class names and base edges \
+             (Itanium/MSVC), and MSVC vftables of x86/x64 PEs (class, subobject offset, slot targets); not inferred \
+             C++ layouts.",
             |project, _: Nothing| Ok(rampage_analysis::classes::recover(&project.binary)),
         ),
         tool(
@@ -2535,6 +2551,27 @@ pub fn tools() -> Vec<Tool> {
                     limit: page_limit(args.limit),
                 };
                 project.pe_resources(&query)
+            },
+        ),
+        tool(
+            Group::Formats,
+            "exception_handlers",
+            "MSVC C++ exception handling of an x86/x64 PE, from its __CxxFrameHandler3 FuncInfo tables (x64 via \
+             .pdata unwind info, x86 by validated table scan tied to the function that registers the handler thunk) \
+             and __C_specific_handler scope tables: per function, try blocks (state ranges and, on x64, covered code \
+             ranges) with each catch's demangled type, by-reference/const and catch funclet, cleanup (destructor) \
+             funclets by state, and SEH scopes. list=throws pages _ThrowInfo records instead: the types a thrown \
+             object can be caught as. `function` (address or name) keeps the tables of the function containing it. \
+             Exact totals; offset/limit pages (limit 1..=100, default 50, also bounded to 60000 JSON bytes; \
+             more/next_offset). __CxxFrameHandler4 and x86 SEH are not decoded (counted in undecoded_handlers).",
+            |project, arguments: ExceptionHandlerArgs| {
+                let function = arguments.function.as_deref().map(|text| project.resolve(text)).transpose()?;
+                project.exception_handlers(
+                    arguments.list.unwrap_or_default(),
+                    function,
+                    arguments.offset.unwrap_or(0),
+                    arguments.limit.unwrap_or(crate::cpp_exceptions::DEFAULT_LIMIT),
+                )
             },
         ),
         tool(

@@ -172,6 +172,8 @@ async fn contract_mcp_core_results() {
     exercise(c, o, "inspect_data", json!({"path": elf, "at": "main", "size": 16})).await;
     exercise(c, o, "language_metadata", json!({"path": fixture("classes-arm64.macho")})).await;
     exercise(c, o, "class_evidence", json!({"path": fixture("classes-arm64.macho")})).await;
+    // A PE adds MSVC vftables.
+    exercise(c, o, "class_evidence", json!({"path": fixtures.join("msvc-cpp/msvc-cpp-x64.exe")})).await;
     let mode = json!({"kind": "text", "encoding": "ascii", "pattern": "rampage"});
     exercise(c, o, "search", json!({"path": elf, "mode": mode})).await;
     exercise(c, o, "assemble", json!({"path": elf, "at": "main", "source": "mov eax,7\nret"})).await;
@@ -384,6 +386,12 @@ async fn contract_mcp_formats_results() {
     let (c, o) = (&client, &mut observed);
     exercise(c, o, "build_info", json!({"path": fixture("buildinfo-go-x64.elf")})).await;
     exercise(c, o, "pe_load_config", json!({"path": fixture("pe-metadata-x86.exe")})).await;
+    let msvc = |arch: &str| {
+        let name = format!("msvc-cpp-{arch}.exe");
+        owned(&scratch, &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/msvc-cpp").join(name))
+    };
+    exercise(c, o, "exception_handlers", json!({"path": msvc("x64"), "limit": 2})).await;
+    exercise(c, o, "exception_handlers", json!({"path": msvc("x86"), "list": "throws"})).await;
     let resources = fixture("pe-metadata-x64.exe");
     exercise(c, o, "pe_resources", json!({"path": resources})).await;
     exercise(c, o, "pe_resources", json!({"path": resources, "type": "RT_VERSION"})).await;
