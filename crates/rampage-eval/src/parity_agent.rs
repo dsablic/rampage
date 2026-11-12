@@ -782,6 +782,7 @@ fn allowed_name(name: &str, config: &AgentConfig) -> bool {
                 | "read_data"
                 | "decode_file_range"
                 | "file_layout"
+                | "probe_compression"
                 | "archive_inventory"
                 | "carve"
                 | "build_info"

@@ -193,7 +193,9 @@ provides bounded linear decoding of original-file windows with an explicitly ass
 architecture/mode/orders/base, without native-image admission or target following. inspect_data provides bounded \
 native bytes/word candidates without discovery or sidecars; names resolve only through retained metadata. \
 decode_file_range instead accepts an explicit regular-file range and codec without an executable header. \
-file_layout maps any file or range (padding, entropy, string clusters, hashes, hints) as a first look at firmware. \
+file_layout maps any file or range (padding, entropy, string clusters, hashes, hints) as a first look at firmware; \
+its compressed_component_candidate hints give a payload range and decoded-size words for probe_compression, whose \
+ranked decode_arguments go to decode_file_range unchanged. \
 Its transient decoded preview uses decoded offsets, not source offsets or load addresses; supplied sizes and \
 successful decoding do not authenticate content or prove stream boundaries. Tools whose schema has a `raw` \
 object open that explicit file range as a headerless Raw project with a closed profile instead of a native image \

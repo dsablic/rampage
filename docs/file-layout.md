@@ -61,8 +61,10 @@ Every `offset` and `length` in the result is an integer count of original-file b
   at most 48 characters, with `truncated` set when cut. `list_strings` returns every string; this is a map of
   where they are.
 - `hints`: heuristic candidates, labelled by `hint_interpretation: heuristic_candidates_not_mappings`. Each has a
-  `kind`, an `offset`, its `evidence` and an object named for the kind. The one kind so far is
-  `cortex_m_vector_table_candidate`, with a `cortex_m` object (`initial_sp`, `reset_handler`,
+  `kind`, an `offset`, its `evidence` and an object named for the kind. Vector-table and compressed-component
+  hints share the cap of 8, in offset order.
+
+  `cortex_m_vector_table_candidate` has a `cortex_m` object (`initial_sp`, `reset_handler`,
   `handler_words_checked`, `handler_words_plausible`). It is checked at the start of each occupied region and at
   the word-aligned offset just before it, since a table whose first byte equals the preceding fill byte starts
   inside the fill run. It needs a word-aligned initial SP in the SRAM (0x20000000..0x3ffffffc) or CCM
@@ -72,6 +74,25 @@ Every `offset` and `length` in the result is an integer count of original-file b
   gets no hint; lower `min_fill_run`, or open the range as a Cortex-M Raw Project with `vector_table` set to its
   address. A candidate establishes no architecture, load base or entry point; [raw-code windows](raw-code.md) and
   [Sleigh decoding](sleigh-decoding.md) take those as explicit analyst assertions.
+
+  `compressed_component_candidate` is a header-checked compressed-component candidate: a small header whose
+  words agree with the bytes after it. Its `container` object has `header_offset` (the first field matched; the
+  header may start earlier), `payload_offset`, `payload_length`, `payload_entropy_bits_per_byte`, `byte_order`
+  of the matched words, `size_field` (the word equal to the payload length), `checksum_field` when one verifies
+  (`kind` `byte_sum32`, `byte_sum16` or `crc32`, with its `offset` and `value`), `payload_end` (`range_end`,
+  `fill_run`, `next_candidate` or `none`), `decoded_size_candidates` (header words 1 to 128 times the payload
+  length), `other_header_words` (uninterpreted; a load address or flags may be among them) and `checks_passed`.
+  Headers are looked for where a payload starts at most 128 bytes after the start of the range, of an occupied
+  region (the first 4096), or of the previous candidate's payload end (so back-to-back components chain). Fields are 32-bit words,
+  little or big endian, within the 64 bytes before the payload. A candidate needs a size word of at least 64 that
+  fits in the range, and either a checksum over exactly the payload (a 16-bit sum also needs a boundary or a
+  packed payload) or a payload of at least 6.5 bits per byte that ends at the range end or a fill run, with a
+  decoded-size word. No codec is named and nothing is decoded: hand `payload_offset`, `payload_length` and a
+  decoded-size candidate to `probe_compression` ([decoding](decoding.md#probing-an-unknown-variant)). Not
+  checked: checksums over the header or the decoded bytes, checksums other than these three, and fields wider
+  or narrower than 32 bits other than 16-bit sums. Payload entropy is measured over its first 64 KiB. CRC-32 is
+  tried only for payloads that end at a boundary or are at most 64 KiB, and over at most 64 MiB per call. On
+  64 MiB of concatenated executables the search adds about 0.1 s of CPU to the layout (release build, 2026-11-12).
 
 ## Bounds and continuation
 
@@ -107,6 +128,6 @@ every list is full of long entries, such as escape-heavy string previews and alt
 - Random data contains short printable runs by chance, so high-entropy regions show chance string clusters (of
   short strings, density up to about 0.5 with the defaults). Read clusters against the entropy spans, or raise
   `min_string_length`.
-- No format, architecture or compression detection: [`carve`](cli-reference.md) finds embedded headers,
-  [explicit decoding](decoding.md) decompresses a range with supplied parameters, and `binary triage` reports
+- No format, architecture or codec detection (a compressed-component candidate names no codec): [`carve`](cli-reference.md) finds embedded headers,
+  [explicit decoding](decoding.md) decompresses a range with supplied or probed parameters, and `binary triage` reports
   whole-file entropy of loadable formats.

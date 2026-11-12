@@ -3,6 +3,14 @@
 use std::error::Error;
 use std::fmt;
 
+pub mod encode;
+mod lz4;
+mod lzss;
+pub mod probe;
+
+pub use lz4::Lz4Block;
+pub use lzss::{FlagOrder, Lzss, OffsetMode, ReferenceLayout, Scan, ScanEnd, ScanStats};
+
 pub trait Decoder {
     fn id(&self) -> &'static str;
 
@@ -24,6 +32,29 @@ pub struct DecodeOptions {
     pub max_steps: u64,
 }
 
+impl DecodeOptions {
+    /// Rejects budgets that cannot hold the expected output, before any allocation or cancellation poll.
+    /// `max_token_output` is the most output one token (one work step of token overhead) can emit.
+    pub(crate) fn preflight(&self, input: &[u8], max_token_output: usize) -> Result<(), DecodeError> {
+        if self.max_expansion_ratio == 0 {
+            return Err(DecodeError::InvalidBudget);
+        }
+        let expected = self.expected_output_size;
+        if expected > self.max_output_size {
+            return Err(DecodeError::OutputLimitExceeded);
+        }
+        if expected != 0 && (input.is_empty() || expected.div_ceil(input.len()) > self.max_expansion_ratio) {
+            return Err(DecodeError::ExpansionLimitExceeded);
+        }
+        let minimum_steps = expected as u128 + expected.div_ceil(max_token_output) as u128;
+        if minimum_steps > u128::from(self.max_steps) {
+            return Err(DecodeError::WorkLimitExceeded);
+        }
+        Ok(())
+    }
+}
+
+/// The classic 4 KiB ring variant: [`Lzss::classic_4k`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Lzss4k {
     /// Initial ring write position, in 0..4096 (4096 itself is invalid).
@@ -47,6 +78,7 @@ pub enum DecodeError {
     ExpansionLimitExceeded,
     TruncatedInput,
     OutputSizeMismatch,
+    InvalidReference,
     WorkLimitExceeded,
     Cancelled,
     AllocationFailure,
@@ -61,6 +93,7 @@ impl fmt::Display for DecodeError {
             Self::ExpansionLimitExceeded => "expected output exceeds the expansion limit",
             Self::TruncatedInput => "truncated decoder input",
             Self::OutputSizeMismatch => "token exceeds the expected output size",
+            Self::InvalidReference => "reference outside the decoded output",
             Self::WorkLimitExceeded => "decoder work limit exceeded",
             Self::Cancelled => "decoding cancelled",
             Self::AllocationFailure => "decoder output allocation failed",
@@ -70,10 +103,6 @@ impl fmt::Display for DecodeError {
 }
 
 impl Error for DecodeError {}
-
-const RING_SIZE: usize = 4096;
-const RING_MASK: usize = RING_SIZE - 1;
-const MAX_REFERENCE_LENGTH: usize = 18;
 
 impl Decoder for Lzss4k {
     fn id(&self) -> &'static str {
@@ -86,70 +115,7 @@ impl Decoder for Lzss4k {
         options: &DecodeOptions,
         cancelled: &mut dyn FnMut() -> bool,
     ) -> Result<Decoded, DecodeError> {
-        if usize::from(self.initial_write_offset) >= RING_SIZE {
-            return Err(DecodeError::InvalidParameters);
-        }
-        if options.max_expansion_ratio == 0 {
-            return Err(DecodeError::InvalidBudget);
-        }
-        let expected = options.expected_output_size;
-        if expected > options.max_output_size {
-            return Err(DecodeError::OutputLimitExceeded);
-        }
-        if expected != 0 && (input.is_empty() || expected.div_ceil(input.len()) > options.max_expansion_ratio) {
-            return Err(DecodeError::ExpansionLimitExceeded);
-        }
-        // Every token emits at most 18 bytes. Reject impossible work budgets before reserving output.
-        let minimum_steps = expected as u128 + expected.div_ceil(MAX_REFERENCE_LENGTH) as u128;
-        if minimum_steps > u128::from(options.max_steps) {
-            return Err(DecodeError::WorkLimitExceeded);
-        }
-        check_cancelled(cancelled)?;
-        let mut bytes = Vec::new();
-        bytes.try_reserve_exact(expected).map_err(|_| DecodeError::AllocationFailure)?;
-        let mut ring = [self.dictionary_fill; RING_SIZE];
-        let mut write_position = usize::from(self.initial_write_offset);
-        let mut consumed = 0;
-        let mut steps = 0;
-        let mut flags = 0u8;
-        let mut remaining_flags = 0;
-
-        while bytes.len() < expected {
-            take_step(&mut steps, options.max_steps, cancelled)?;
-            if remaining_flags == 0 {
-                flags = read_byte(input, &mut consumed)?;
-                remaining_flags = 8;
-            }
-            let literal = flags & 1 != 0;
-            flags >>= 1;
-            remaining_flags -= 1;
-
-            if literal {
-                let byte = read_byte(input, &mut consumed)?;
-                take_step(&mut steps, options.max_steps, cancelled)?;
-                bytes.push(byte);
-                ring[write_position] = byte;
-                write_position = (write_position + 1) & RING_MASK;
-            } else {
-                let low = read_byte(input, &mut consumed)?;
-                let high = read_byte(input, &mut consumed)?;
-                let mut read_position = usize::from(low) | (usize::from(high & 0xf0) << 4);
-                let length = usize::from(high & 0x0f) + 3;
-                if length > expected - bytes.len() {
-                    return Err(DecodeError::OutputSizeMismatch);
-                }
-                for _ in 0..length {
-                    take_step(&mut steps, options.max_steps, cancelled)?;
-                    let byte = ring[read_position];
-                    bytes.push(byte);
-                    ring[write_position] = byte;
-                    read_position = (read_position + 1) & RING_MASK;
-                    write_position = (write_position + 1) & RING_MASK;
-                }
-            }
-        }
-
-        Ok(Decoded { bytes, consumed, steps })
+        Lzss::classic_4k(self.initial_write_offset, self.dictionary_fill).decode(input, options, cancelled)
     }
 }
 

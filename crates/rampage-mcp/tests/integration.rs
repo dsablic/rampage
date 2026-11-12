@@ -5,6 +5,7 @@ mod archive;
 mod arm_exidx;
 mod assembly;
 mod build_info;
+mod compression;
 mod contract;
 #[path = "../../../tests/contract/support.rs"]
 mod contract_support;

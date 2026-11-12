@@ -3,5 +3,10 @@ name = "rampage-decode"
 version.workspace = true
 edition.workspace = true
 license = "Apache-2.0"
+autotests = false
 
 [dependencies]
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

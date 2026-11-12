@@ -5,6 +5,7 @@ mod analyze;
 mod archive;
 mod assembly;
 mod cli;
+mod compression;
 mod contract;
 #[path = "../../../tests/contract/support.rs"]
 mod contract_support;

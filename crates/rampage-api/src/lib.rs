@@ -9,6 +9,7 @@ mod branch_observation;
 mod build_info;
 mod capabilities;
 mod carve;
+mod compression_probe;
 mod correlation;
 mod data;
 mod debug_control;
@@ -19,6 +20,7 @@ pub(crate) mod debug_type_import;
 mod debug_writes;
 mod debugger;
 mod debugger_capture;
+mod decode_codecs;
 mod decode_content;
 mod decoder;
 mod decompile;
@@ -36,6 +38,7 @@ mod fuzzy_signatures;
 mod graph;
 mod import_types;
 mod jumptable;
+pub mod layout_containers;
 mod listing;
 mod module_references;
 mod offset;
@@ -94,6 +97,7 @@ pub use benchmark::{Comparison, ReferenceAnalysis};
 pub use branch_observation::{BranchObservation, BranchSlotStatus};
 pub use build_info::{BuildInfo, BuildInfoQuery, GoBuildInfo, PclntabCheck, RustAudit};
 pub use carve::{CarvingPage, MAX_CARVE_PAGE, carve, carve_page};
+pub use compression_probe::{ProbeCompressionReport, ProbeCompressionRequest, probe_compression};
 pub use correlation::RuntimeCorrelation;
 pub use data::{
     DataImport, DataInspection, DataQuery, DataSpan, DataStatus, DataTarget, DataWord, MAX_DATA_BYTES,
@@ -129,8 +133,9 @@ pub use debugger_capture::{
     read_debugger_capture_publication,
 };
 pub use decode_content::{
-    ContentCodec, DecodeFileRequest, DecodePreview, DecodeReceipt, DecodedContent, MAX_DECODE_INPUT_BYTES,
-    MAX_DECODE_OUTPUT_BYTES, MAX_DECODE_PREVIEW_BYTES, decode_file_range,
+    ContentCodec, DecodeFileRequest, DecodePreview, DecodeReceipt, DecodedContent, LzssFlagOrder, LzssOffsetMode,
+    LzssParameters, LzssReferenceLayout, MAX_DECODE_INPUT_BYTES, MAX_DECODE_OUTPUT_BYTES, MAX_DECODE_PREVIEW_BYTES,
+    decode_file_range, default_initial_write_offset,
 };
 pub use decoder::DecoderInitializationError;
 pub use decompile::{

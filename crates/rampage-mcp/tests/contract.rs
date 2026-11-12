@@ -226,6 +226,18 @@ async fn contract_mcp_core_results() {
     let decode =
         json!({"path": input, "codec": "lzss-4k", "offset": "0x0", "length": "0x4", "expected_output_size": 3});
     exercise(c, o, "decode_file_range", decode).await;
+    // A ring-offset LZSS stream: the probe finds its parameters and decode_file_range takes them unchanged.
+    let original = rampage_decode::encode::synthetic_firmware(6000, 5);
+    let stream = rampage_decode::encode::lzss(&rampage_decode::Lzss::classic_4k(4078, 0), &original);
+    let packed = scratch.0.join("packed.bin");
+    std::fs::write(&packed, &stream).unwrap();
+    let probe = json!({"path": packed, "offset": 0, "length": stream.len(), "expected_output_size": original.len(),
+        "candidate_limit": 1, "preview_size": 8});
+    let probed = exercise(c, o, "probe_compression", probe).await;
+    let mut decode = probed["candidates"][0]["decode_arguments"].clone();
+    decode["path"] = json!(packed);
+    decode["preview_size"] = json!(8);
+    exercise(c, o, "decode_file_range", decode).await;
     let raw = json!({"path": elf, "offset": "0x1910", "length": 16, "arch": "x86_64", "mode": "native",
         "code_byte_order": "little", "data_byte_order": "little", "base_address": "0x1001910"});
     exercise(c, o, "inspect_raw_code", raw).await;

@@ -29,13 +29,15 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 ## Formats and instruction decoding
 
 - [File layout](file-layout.md) maps any file or range of up to 64 MiB in one call: padding and occupied
-  regions with hashes, block entropy, string clusters and labelled hints. Limits: statistics and heuristic
-  candidates only; no format, architecture or compression detection.
+  regions with hashes, block entropy, string clusters and labelled hints, including header-checked
+  compressed-component candidates. Limits: statistics and heuristic
+  candidates only; no format or architecture detection, and a compressed-component candidate names no codec.
 - Bounded [raw-code windows](raw-code.md) accept explicit ranges and asserted architecture/mode/order/base
   through MCP without a native executable header. Limits: little-endian x86/x64/ARM/AArch64, linear decoding
   only; no code detection, function discovery or execution.
 - [Native data inspection](data-inspection.md) links bounded stored words to metadata candidates, while
-  [explicit decoding](decoding.md) provides a built-in LZSS-4K provider and transient previews. Limits: pointer
+  [explicit decoding](decoding.md) provides LZSS (classic 4K and every explicit variant) and LZ4-block providers,
+  transient previews and a bounded probe that ranks parameter sets for an unknown variant. Limits: pointer
   links are suppressed on loader warnings; decoding is not extraction, authentication or a load mapping.
 - ELF, PE and Mach-O, including universal Mach-O binaries and explicitly selected embedded executable images.
 - x86 and x86-64 use [iced-x86](https://github.com/icedland/iced).
