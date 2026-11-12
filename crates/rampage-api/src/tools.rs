@@ -456,9 +456,11 @@ pub fn file_tools() -> Vec<FileTool> {
             group: Group::Core,
             name: "decode_file_range",
             description: "Decode an explicit regular-file range with a named built-in decoder, without requiring \
-                an executable header. First provider: lzss-4k, LSB-first flags (1=literal), 12-bit references, \
-                lengths nibble+3; dictionary start/fill are explicit parameters. Expected output size is supplied, \
-                not discovered: no end marker, auto-detection, recursion, extraction, file publication or execution. \
+                an executable header. Codecs: lzss-4k (LSB-first flags, 1=literal, 12-bit references, lengths \
+                nibble+3; ring start default 4078 and fill explicit), lzss (every variant parameter explicit in an \
+                lzss object, as probe_compression's decode_arguments give it) and lz4-block. Expected output size \
+                is supplied, not discovered: no end marker, auto-detection, recursion, extraction, file publication \
+                or execution. \
                 Return range/output hashes, consumed/trailing counts and a bounded decoded-offset preview. \
                 Limits: 8 MiB input, 16 MiB output, 128:1 against selected input, cooperative decode deadline. \
                 File I/O/hash phases are not forcibly timed out. Unix regular-file checks only. \
@@ -471,11 +473,14 @@ pub fn file_tools() -> Vec<FileTool> {
                 let args: DecodeFileArgs = arguments(input)?;
                 let request = crate::DecodeFileRequest {
                     codec: args.codec,
+                    lzss: args.lzss,
                     offset: args.offset.0,
                     length: usize::try_from(args.length.0).map_err(|_| "decode length exceeds host width")?,
                     expected_output_size: usize::try_from(args.expected_output_size.0)
                         .map_err(|_| "decoded length exceeds host width")?,
-                    initial_write_offset: args.initial_write_offset.unwrap_or(4078),
+                    initial_write_offset: args
+                        .initial_write_offset
+                        .unwrap_or_else(|| crate::default_initial_write_offset(args.codec)),
                     dictionary_fill: args.dictionary_fill.unwrap_or(0),
                     timeout_ms: args.timeout_ms.unwrap_or(3000),
                     preview_offset: usize::try_from(args.preview_offset.unwrap_or(crate::FileOffset(0)).0)
@@ -488,14 +493,43 @@ pub fn file_tools() -> Vec<FileTool> {
         },
         FileTool {
             group: Group::Core,
+            name: "probe_compression",
+            description: "Find decoder parameters for a compressed stream of unknown variant in an explicit \
+                regular-file range (at most 8 MiB), such as a file_layout compressed_component_candidate's payload. \
+                Sweeps LZSS (window 10..13 bits, min match 2/3, flag bit order and polarity, five 16-bit reference \
+                layouts, distance or ring offsets with ring start and fill) and the LZ4 block format, within a work \
+                budget and deadline. Supply expected_output_size when a header gives one: only then can the first \
+                candidate be confident. Each ranked candidate has decode_arguments to pass to decode_file_range \
+                unchanged, the decoded size and SHA-256, consumed and trailing input, parse metrics, entropy drop, \
+                named checks, ambiguity counts and a short preview. The sweep summary and not_tried say what was \
+                and was not attempted. Evidence, not identification; nothing is extracted, published or executed.",
+            input_schema: probe_compression_schema(),
+            handler: |_, mut input| {
+                if input.to_string().len() > 16_384 {
+                    return Err("probe arguments exceed the input budget".into());
+                }
+                let object = input.as_object_mut().ok_or("probe arguments must be an object")?;
+                let path = object
+                    .remove("path")
+                    .and_then(|value| value.as_str().map(std::path::PathBuf::from))
+                    .ok_or("probe path must be a string")?;
+                let request: crate::ProbeCompressionRequest = arguments(input)?;
+                let report = crate::probe_compression(&path, &request).map_err(|error| error_chain(&error))?;
+                serde_json::to_value(report).map_err(|error| error.to_string())
+            },
+        },
+        FileTool {
+            group: Group::Core,
             name: "file_layout",
             description: "Map any regular file, such as headerless firmware, without a loader: in one call, regions \
                 (runs of 0xff, 0x00 or another repeated byte of at least min_fill_run bytes, default 64, versus \
                 occupied bytes) with a SHA-256 and entropy per occupied region; Shannon entropy per block \
                 (block_size, default 4096) with high (>=7.2 bits/byte) and low (<=2.0) spans; dense clusters of \
                 printable ASCII (and with utf16, UTF-16LE) strings with a few previews; the whole range's SHA-256; \
-                and labelled hints such as Cortex-M vector-table candidates (initial SP in SRAM, odd reset address), \
-                which are evidence, not a mapping. Whole file or offset/length, at most 64 MiB per call. Lists are \
+                and labelled hints such as Cortex-M vector-table candidates (initial SP in SRAM, odd reset address) \
+                and header-checked compressed-component candidates (a header word equal to the following payload's \
+                length, and a byte sum or CRC-32 of it, or a packed payload ending at a boundary, with decoded-size \
+                words for probe_compression), which are evidence, not a mapping. Whole file or offset/length, at most 64 MiB per call. Lists are \
                 capped (region_limit, block_limit, cluster_limit); bounds give totals and the first omitted offset, \
                 continuation gives the offset/length of a follow-up call, and entropy.suggested_block_size a \
                 coarser block size. Offsets are original-file offsets. Use list_strings for every string, \
@@ -740,6 +774,16 @@ fn file_layout_schema() -> Value {
         serde_json::json!({ "type": "string", "description": "Explicit regular input file; no native loader is used." }),
     );
     value["required"] = serde_json::json!(["path"]);
+    value
+}
+
+fn probe_compression_schema() -> Value {
+    let mut value = schema::<crate::ProbeCompressionRequest>();
+    value["properties"].as_object_mut().expect("probe request properties").insert(
+        "path".into(),
+        serde_json::json!({ "type": "string", "description": "Explicit regular input file; no native loader is used." }),
+    );
+    value["required"].as_array_mut().expect("required probe fields").push(Value::String("path".into()));
     value
 }
 
@@ -1015,15 +1059,18 @@ struct DecodeFileArgs {
     path: std::path::PathBuf,
     /// Required decoder selection; no codec guessing.
     codec: crate::ContentCodec,
+    /// Every variant parameter, required for codec lzss and refused for the others.
+    lzss: Option<crate::LzssParameters>,
     /// Byte offset in the original file, not a native-image or decoded address.
     offset: crate::FileOffset,
     /// Encoded range length, 1..=8388608 bytes.
     length: crate::FileOffset,
     /// Analyst-supplied stopping size, 1..=16777216 bytes; does not prove a stream boundary.
     expected_output_size: crate::FileOffset,
-    /// Initial dictionary write position 0..4095; default 4078 (0xfee).
+    /// Initial ring write position below the window; default 4078 (0xfee) for lzss-4k, zero otherwise.
+    /// Only ring_position offsets use it.
     initial_write_offset: Option<u16>,
-    /// Dictionary initialization byte; default zero.
+    /// Dictionary initialization byte; default zero. Only ring offsets use it.
     dictionary_fill: Option<u8>,
     /// Cooperative decoder-phase timeout, default 3000 ms, at most 10000; excludes I/O/hash phases.
     timeout_ms: Option<u64>,

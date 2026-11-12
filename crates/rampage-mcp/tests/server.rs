@@ -136,6 +136,7 @@ async fn lists_all_tools_with_instructions() {
         "pe_load_config",
         "pe_resources",
         "persistence_surface",
+        "probe_compression",
         "propagate_types",
         "pyinstaller_archive",
         "query_debugger",

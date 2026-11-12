@@ -203,6 +203,24 @@ pub fn file_layout(
                 vectors.handler_words_checked
             )?;
         }
+        if let Some(container) = &hint.container {
+            write!(
+                out,
+                ": payload {:#x} +{} ({:.2} bits/byte), size word at {:#x}",
+                container.payload_offset,
+                container.payload_length,
+                container.payload_entropy_bits_per_byte,
+                container.size_field.offset
+            )?;
+            if let Some(checksum) = &container.checksum_field {
+                write!(out, ", {} at {:#x} verified", checksum.kind, checksum.offset)?;
+            }
+            let sizes: Vec<String> =
+                container.decoded_size_candidates.iter().map(|word| word.value.to_string()).collect();
+            if !sizes.is_empty() {
+                write!(out, ", decoded-size candidates {}", sizes.join(", "))?;
+            }
+        }
         writeln!(out)?;
     }
     let bounds = &report.bounds;
@@ -226,6 +244,94 @@ pub fn file_layout(
     }
     if let Some(continuation) = &report.continuation {
         writeln!(out, "continue with --offset {:#x} --length {}", continuation.offset, continuation.length)?;
+    }
+    for note in &report.limitations {
+        writeln!(out, "note: {note}")?;
+    }
+    Ok(())
+}
+
+pub fn probe_compression(
+    out: &mut impl Write,
+    path: &Path,
+    request: &rampage_api::ProbeCompressionRequest,
+    options: &Options,
+) -> Result<()> {
+    let report = rampage_api::probe_compression(path, request)?;
+    if options.json {
+        return write_json(out, &report);
+    }
+    writeln!(
+        out,
+        "{:#x} +{} of {} bytes; SHA-256 {}; entropy {:.2} bits/byte",
+        report.source_offset,
+        report.source_length,
+        report.source_size,
+        report.source_range_sha256,
+        report.input_entropy_bits_per_byte
+    )?;
+    match report.expected_output_size {
+        Some(size) => writeln!(out, "expected output size {size}")?,
+        None => writeln!(out, "no expected output size: candidates can be plausible at best")?,
+    }
+    if report.candidates.is_empty() {
+        writeln!(out, "no candidate decoded enough references to rank")?;
+    }
+    for candidate in &report.candidates {
+        let arguments = &candidate.decode_arguments;
+        writeln!(
+            out,
+            "\n#{} {} (score {}): {} bytes from {} consumed, {} trailing; output entropy {:.2}",
+            candidate.rank,
+            candidate.verdict,
+            candidate.score,
+            candidate.output_size,
+            candidate.input_consumed,
+            candidate.trailing_input_bytes,
+            candidate.metrics.output_entropy
+        )?;
+        let failed: Vec<&str> = candidate.checks.iter().filter(|check| !check.passed).map(|check| check.name).collect();
+        if !failed.is_empty() {
+            writeln!(out, "  failed checks: {}", failed.join(", "))?;
+        }
+        if candidate.parse_equivalents > 0 {
+            writeln!(out, "  {} parse-equivalent alternatives decode different bytes", candidate.parse_equivalents)?;
+        }
+        write!(
+            out,
+            "  rampage binary decode {} --codec {} --offset {:#x} --length {} --expected-output-size {}",
+            path.display(),
+            serde_json::to_value(arguments.codec)?.as_str().unwrap_or_default(),
+            arguments.offset,
+            arguments.length,
+            arguments.expected_output_size
+        )?;
+        if let Some(lzss) = &arguments.lzss {
+            write!(out, " --lzss '{}'", serde_json::to_string(lzss)?)?;
+        }
+        if let (Some(start), Some(fill)) = (arguments.initial_write_offset, arguments.dictionary_fill) {
+            write!(out, " --initial-write-offset {start} --dictionary-fill {fill}")?;
+        }
+        writeln!(out)?;
+        writeln!(out, "  decode check: {}; SHA-256 {}", candidate.decode_check, candidate.output_sha256)?;
+        writeln!(out, "  {}", candidate.preview_ascii)?;
+    }
+    let sweep = &report.sweep;
+    writeln!(
+        out,
+        "\nswept {} LZSS variants ({} sample decodes, {} size walks, {} whole-range decodes), {} of {} steps",
+        sweep.lzss_variants_sampled,
+        sweep.sample_decodes,
+        sweep.size_walks,
+        sweep.full_decodes,
+        sweep.steps,
+        sweep.max_steps
+    )?;
+    if let Some(reason) = sweep.stopped_early {
+        writeln!(out, "stopped early: {reason}; the space was not fully tried")?;
+    }
+    for item in &report.not_tried {
+        writeln!(out, "not tried: {item}")?;
     }
     for note in &report.limitations {
         writeln!(out, "note: {note}")?;

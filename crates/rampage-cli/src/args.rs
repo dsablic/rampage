@@ -722,11 +722,52 @@ impl LayoutArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct ProbeCompressionArgs {
+    pub(crate) file: PathBuf,
+    /// Original-file offset where the encoded stream is thought to start, in hex or decimal
+    #[arg(long, value_parser = rampage_api::parse_file_offset)]
+    pub(crate) offset: u64,
+    /// Encoded bytes, at most 8 MiB
+    #[arg(long, value_parser = rampage_api::parse_file_offset)]
+    pub(crate) length: u64,
+    /// The decoded size when known, at most 16 MiB; without it no candidate is confident
+    #[arg(long, value_parser = rampage_api::parse_file_offset)]
+    pub(crate) expected_output_size: Option<u64>,
+    /// Candidates listed (1..=16, default 5)
+    #[arg(long)]
+    pub(crate) candidate_limit: Option<usize>,
+    /// Cooperative sweep deadline (1..=30000 ms, default 15000)
+    #[arg(long)]
+    pub(crate) timeout_ms: Option<u64>,
+    /// Decoded preview bytes per candidate (0..=128, default 48)
+    #[arg(long)]
+    pub(crate) preview_size: Option<usize>,
+}
+
+impl ProbeCompressionArgs {
+    pub(crate) fn request(&self) -> rampage_api::ProbeCompressionRequest {
+        rampage_api::ProbeCompressionRequest {
+            offset: rampage_api::FileOffset(self.offset),
+            length: rampage_api::FileOffset(self.length),
+            expected_output_size: self.expected_output_size.map(rampage_api::FileOffset),
+            candidate_limit: self.candidate_limit,
+            timeout_ms: self.timeout_ms,
+            preview_size: self.preview_size,
+        }
+    }
+}
+
+#[derive(Args)]
 pub(crate) struct DecodeFileArgs {
     pub(crate) file: PathBuf,
-    /// Explicit decoder selection: lzss-4k (no format guessing)
+    /// Explicit decoder selection: lzss-4k, lzss (with --lzss) or lz4-block (no format guessing)
     #[arg(long)]
     pub(crate) codec: rampage_api::ContentCodec,
+    /// Codec lzss only: every variant parameter as JSON, as probe-compression prints it, e.g.
+    /// {"window_bits":12,"min_match":3,"flag_order":"lsb_first","literal_bit":1,"reference_layout":"split_byte",
+    /// "offset_mode":"ring_position"}
+    #[arg(long)]
+    pub(crate) lzss: Option<String>,
     /// Original-file byte offset, in hex or decimal
     #[arg(long, value_parser = rampage_api::parse_file_offset)]
     pub(crate) offset: u64,
@@ -736,9 +777,9 @@ pub(crate) struct DecodeFileArgs {
     /// Analyst-supplied decoded stopping size, at most 16 MiB (not a discovered stream boundary)
     #[arg(long, value_parser = rampage_api::parse_file_offset)]
     pub(crate) expected_output_size: u64,
-    /// Initial 4 KiB dictionary write position, default 4078 (0xfee)
-    #[arg(long, default_value_t = 4078)]
-    pub(crate) initial_write_offset: u16,
+    /// Initial ring write position; default 4078 (0xfee) for lzss-4k, zero otherwise
+    #[arg(long)]
+    pub(crate) initial_write_offset: Option<u16>,
     /// Dictionary initialization byte
     #[arg(long, default_value_t = 0)]
     pub(crate) dictionary_fill: u8,
@@ -755,13 +796,23 @@ pub(crate) struct DecodeFileArgs {
 
 impl DecodeFileArgs {
     pub(crate) fn request(&self) -> anyhow::Result<rampage_api::DecodeFileRequest> {
+        let lzss = match &self.lzss {
+            Some(json) => Some(
+                serde_json::from_str::<rampage_api::LzssParameters>(json)
+                    .map_err(|error| anyhow::anyhow!("--lzss is not valid lzss parameters: {error}"))?,
+            ),
+            None => None,
+        };
         Ok(rampage_api::DecodeFileRequest {
             codec: self.codec,
+            lzss,
             offset: self.offset,
             length: usize::try_from(self.length).map_err(|_| anyhow::anyhow!("decode length exceeds host width"))?,
             expected_output_size: usize::try_from(self.expected_output_size)
                 .map_err(|_| anyhow::anyhow!("decoded length exceeds host width"))?,
-            initial_write_offset: self.initial_write_offset,
+            initial_write_offset: self
+                .initial_write_offset
+                .unwrap_or_else(|| rampage_api::default_initial_write_offset(self.codec)),
             dictionary_fill: self.dictionary_fill,
             timeout_ms: self.timeout_ms,
             preview_offset: usize::try_from(self.preview_offset)

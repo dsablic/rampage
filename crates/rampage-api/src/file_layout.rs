@@ -30,6 +30,8 @@ const MAX_BLOCK_SIZE: u64 = 16 << 20;
 /// Spans summarise `blocks`, so they are capped at `block_limit` and at most this many.
 const MAX_SPANS: usize = 128;
 const MAX_HINTS: usize = 8;
+/// Occupied-region starts searched for compressed-component headers.
+const MAX_CONTAINER_SEEDS: usize = 4096;
 /// Exception words after the reset vector that a vector-table hint needs within the range.
 const MIN_HANDLER_WORDS: usize = 4;
 const PREVIEWS_PER_CLUSTER: usize = 3;
@@ -231,6 +233,8 @@ pub struct LayoutHint {
     pub evidence: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cortex_m: Option<CortexMVectors>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container: Option<crate::layout_containers::ContainerCandidate>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -347,7 +351,11 @@ pub(crate) fn layout(
     let mut summary = LayoutSummary::default();
     let mut bounds = LayoutBounds::default();
 
-    let (regions, hints) = regions_and_hints(bytes, offset, parameters, &mut summary, &mut bounds);
+    let (regions, mut hints, boundaries) = regions_and_hints(bytes, offset, parameters, &mut summary, &mut bounds);
+    if parameters.hints {
+        let found = crate::layout_containers::candidates(bytes, offset, &boundaries.occupied, &boundaries.fill);
+        merge_hints(&mut hints, &mut bounds.hints, found.into_iter().map(crate::layout_containers::hint));
+    }
     let entropy = entropy_report(bytes, offset, parameters, &mut summary, &mut bounds);
     let string_clusters = clusters(bytes, offset, parameters, &mut summary, &mut bounds.string_clusters);
 
@@ -398,9 +406,34 @@ pub(crate) fn layout(
             "Entropy flags are statistics, not proof of compression or encryption; low entropy is not proof of padding.",
             "String clusters are dense printable runs, not a full string list; use list_strings for every string.",
             "Hints are heuristic candidates. A vector-table candidate proves no architecture, base address or entry.",
+            "A compressed-component candidate is a header whose words agree with the bytes after it (a size, and a \
+             byte sum or CRC-32, or a packed payload ending at a boundary); field roles are inferred, not known, and \
+             nothing is decoded. Hand its payload range and decoded-size candidates to probe_compression.",
             "Hashes bind the selected bytes as read; reads are not atomic and are not an authenticity proof.",
         ],
     }
+}
+
+/// Range-relative starts of every occupied region and fill run, listed or not.
+#[derive(Default)]
+struct Boundaries {
+    occupied: Vec<usize>,
+    fill: std::collections::BTreeSet<usize>,
+}
+
+/// Adds `extra` hints to the capped, offset-ordered `hints`, keeping at most [`MAX_HINTS`].
+fn merge_hints(hints: &mut Vec<LayoutHint>, bound: &mut ListBound, extra: impl Iterator<Item = LayoutHint>) {
+    for hint in extra {
+        bound.total += 1;
+        hints.push(hint);
+    }
+    hints.sort_by_key(|hint| hint.offset);
+    if hints.len() > MAX_HINTS {
+        let first_omitted = hints[MAX_HINTS].offset;
+        bound.next_offset = Some(bound.next_offset.map_or(first_omitted, |next| next.min(first_omitted)));
+        hints.truncate(MAX_HINTS);
+    }
+    bound.returned = hints.len();
 }
 
 fn regions_and_hints(
@@ -409,11 +442,17 @@ fn regions_and_hints(
     parameters: &LayoutParameters,
     summary: &mut LayoutSummary,
     bounds: &mut LayoutBounds,
-) -> (Vec<LayoutRegion>, Vec<LayoutHint>) {
+) -> (Vec<LayoutRegion>, Vec<LayoutHint>, Boundaries) {
     let mut regions = Vec::new();
     let mut hints = Vec::new();
+    let mut boundaries = Boundaries::default();
     let mut last_hint_check = None;
     let mut emit = |start: usize, end: usize, fill: Option<u8>| {
+        if fill.is_some() {
+            boundaries.fill.insert(start);
+        } else if boundaries.occupied.len() < MAX_CONTAINER_SEEDS {
+            boundaries.occupied.push(start);
+        }
         let length = (end - start) as u64;
         match fill {
             Some(0xff) => summary.fill_ff_bytes += length,
@@ -478,7 +517,7 @@ fn regions_and_hints(
         region.sha256 = Some(rampage_arch::hex::bytes(&Sha256::digest(slice)));
         region.entropy_bits_per_byte = Some(entropy(slice));
     }
-    (regions, hints)
+    (regions, hints, boundaries)
 }
 
 /// Keeps `item` when fewer than `limit` are kept, and counts it either way.
@@ -529,6 +568,7 @@ fn cortex_m_candidate(bytes: &[u8], index: usize, offset: u64) -> Option<LayoutH
                 handlers.len()
             ),
         ],
+        container: None,
         cortex_m: Some(CortexMVectors {
             initial_sp: sp.into(),
             reset_handler: reset.into(),

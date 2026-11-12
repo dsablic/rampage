@@ -106,7 +106,7 @@ A default session lists 42 tools: the 41 in `core` plus `enable_tools`. Enabling
   `annotate_batch`, `batch`, `check_names`, `undo`, `redo`, `discard_undo`, `list_annotations`, `record_finding`,
   `list_findings`, `triage_report`,
   `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`, `inspect_data`,
-  `decode_file_range`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`, `language_metadata`,
+  `decode_file_range`, `probe_compression`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`, `language_metadata`,
   `class_evidence`; with --observations (or RAMPAGE_OBSERVATIONS), also `report_observation`.
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
   `capa_detect`, `find_crypto`, `list_packs`.
@@ -140,7 +140,7 @@ improve group alone; see [the flywheel](#flywheel-improve).
 Workflow reports name the `group` of suggested next tools. The [desktop assistant](desktop-ui.md) uses the same
 tools without group gating, plus the interactive `show_address`, which is not an MCP tool because the server has
 no listing to navigate. It does not offer the file tools (`carve`, `archive_inventory`, `list_packs`,
-`query_debugger`, `inspect_data`, `decode_file_range`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`,
+`query_debugger`, `inspect_data`, `decode_file_range`, `probe_compression`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`,
 `pyinstaller_archive`, `wasm_module`) or the `debug` tools.
 
 ## Flywheel (improve)
@@ -258,7 +258,9 @@ contracts; see [decoding](decoding.md) and [data inspection](data-inspection.md)
 `file_layout` maps any regular file, or an explicit range of at most 64 MiB, in one call and without a loader:
 fill (0xff, 0x00, other repeated byte) and occupied regions with per-region SHA-256 and entropy, block entropy
 with high and low spans, printable-string clusters with previews, the range's SHA-256, and labelled heuristic
-hints such as Cortex-M vector-table candidates, which are evidence, not mappings. Capped lists report totals and
+hints such as Cortex-M vector-table and header-checked compressed-component candidates, which are evidence, not
+mappings. `probe_compression` ranks LZSS and LZ4-block parameter sets for such a payload and returns
+`decode_arguments` for `decode_file_range`; see [decoding](decoding.md#probing-an-unknown-variant). Capped lists report totals and
 the first omitted offset, and `continuation` gives the next call's range. See [file layout](file-layout.md).
 
 With `contains`, `list_strings` rows carry `match_address`, where the text matches inside the string. Go string

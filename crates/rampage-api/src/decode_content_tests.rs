@@ -34,6 +34,7 @@ impl Drop for Fixture {
 fn request(length: usize, expected_output_size: usize) -> DecodeFileRequest {
     DecodeFileRequest {
         codec: ContentCodec::Lzss4k,
+        lzss: None,
         offset: 0,
         length,
         expected_output_size,
