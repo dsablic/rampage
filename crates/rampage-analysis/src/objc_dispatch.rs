@@ -358,6 +358,24 @@ where
     dispatch
 }
 
+/// Names for the arm64 selector stubs in `__objc_stubs`, `_objc_msgSend$<selector>` as the linker's own symbols
+/// name them, so a stripped image's stubs read as they do unstripped.
+pub fn selector_stub_names(binary: &Binary) -> Vec<(u64, String)> {
+    let has_stubs = binary.sections.iter().any(|section| section.name == "__objc_stubs" && section.size > 0);
+    if binary.format != Format::MachO || !has_stubs {
+        return Vec::new();
+    }
+    let Some(abi) = Abi::of(binary.arch) else { return Vec::new() };
+    let refs = rampage_loaders::objc::refs(binary);
+    let new_decoder = || binary.decoder().ok();
+    let Some(mut model) = Model::new(binary, abi, &ObjcReport::default(), &refs, &new_decoder) else {
+        return Vec::new();
+    };
+    let Some(mut decoder) = new_decoder() else { return Vec::new() };
+    let stubs = model.selector_stubs(decoder.as_mut());
+    stubs.into_iter().map(|(address, selector)| (address, format!("_objc_msgSend${selector}"))).collect()
+}
+
 impl<'a> Model<'a> {
     fn new<F>(
         binary: &'a Binary,

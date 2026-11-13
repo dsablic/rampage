@@ -78,6 +78,7 @@ rampage binary analyze module.dylib --all-architectures --workflow triage-report
 | `function batch FILE [OPTIONS]` | `batch` | Atomic checked rename/comment/signature/type/global operations from JSON |
 | `string list FILE [--min-len N] [--contains TEXT]` | `strings` | ASCII and UTF-16LE strings; minimum defaults to 4 |
 | `language inspect FILE` | `metadata` | Demangled symbols, named RTTI/vtables and ObjC metadata |
+| `language objc-sends FILE [--at ADDRESS] [--selector SEL]` | | Objective-C sends resolved to methods ([details](objc-dispatch.md)) |
 
 Noun labels do not narrow the queries: disassembly is not function-bounded, and xrefs can name data or an
 instruction. `compare` compares function starts, not decompiled semantics. The hidden `export-cfg FILE`

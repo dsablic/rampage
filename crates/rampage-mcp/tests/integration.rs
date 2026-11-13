@@ -23,6 +23,7 @@ mod function_frame;
 mod inspect_sleigh;
 mod local_variables;
 mod msvc_cpp;
+mod objc;
 mod patches;
 mod pdb;
 #[path = "../../../tests/fixtures/pdb/support.rs"]

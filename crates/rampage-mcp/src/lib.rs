@@ -104,7 +104,7 @@ fn group_summary(group: Group) -> &'static str {
         Group::Core => {
             "triage_report (start here), list_functions, decompile, disassemble, xrefs, search, list_strings, \
              list_imports; classes: language_metadata (Objective-C classes and superclasses, demangled names), \
-             class_evidence (C++ vtables/RTTI); notes: rename, annotate_batch, record_finding, undo; patch_bytes; \
+             objc_sends (objc_msgSend call sites resolved to methods), class_evidence (C++ vtables/RTTI); notes: rename, annotate_batch, record_finding, undo; patch_bytes; \
              workflows find_main, network_surface, persistence_surface, string_decoding, diff_builds."
         }
         Group::Detection => {

@@ -590,6 +590,24 @@ pub(crate) struct ImportDebugLayoutsArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct ObjcSendsArgs {
+    #[arg(value_name = "IMAGE")]
+    pub(crate) file: PathBuf,
+    /// Only the sends of the function containing this address or name
+    #[arg(long)]
+    pub(crate) at: Option<String>,
+    /// Only sends of this selector, such as `initWithFrame:`
+    #[arg(long)]
+    pub(crate) selector: Option<String>,
+    /// Sends to skip
+    #[arg(long, default_value_t = 0)]
+    pub(crate) offset: usize,
+    /// Sends per page (1 to 500)
+    #[arg(long, default_value_t = 100, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=500))]
+    pub(crate) limit: usize,
+}
+
+#[derive(Args)]
 pub(crate) struct TypeLayoutArgs {
     #[arg(value_name = "IMAGE")]
     pub(crate) file: PathBuf,

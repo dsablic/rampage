@@ -107,6 +107,8 @@ pub struct Project {
     pub(crate) go_prototypes: OnceLock<crate::decompile::GoPrototypes>,
     /// Go static string headers, read once from data on first use.
     go_strings: OnceLock<crate::go_strings::GoStrings>,
+    /// Objective-C message sends resolved to method implementations, derived once from the analysis.
+    objc_dispatch: OnceLock<rampage_analysis::objc_dispatch::Dispatch>,
     /// Embedded DWARF name → DIE index, skimmed once on the first DWARF type lookup.
     dwarf_types: OnceLock<Result<Arc<rampage_loaders::debug::DwarfTypeIndex>, String>>,
     go_types: OnceLock<Result<Arc<rampage_loaders::gotypes::GoTypeIndex>, String>>,
@@ -367,6 +369,7 @@ impl Project {
             packs: RwLock::default(),
             go_prototypes: OnceLock::new(),
             go_strings: OnceLock::new(),
+            objc_dispatch: OnceLock::new(),
             dwarf_types: OnceLock::new(),
             go_types: OnceLock::new(),
             analysis_store: RwLock::new(crate::AnalysisStore::from_env()),
@@ -955,6 +958,24 @@ impl Project {
         self.binary.go_table.is_some().then(|| {
             self.go_strings.get_or_init(|| crate::go_strings::read(&self.binary, program, self.scanned_strings()))
         })
+    }
+
+    /// The Objective-C sends of this project's functions, resolved on first use. Images other than Mach-O with
+    /// Objective-C metadata have none, and cost nothing.
+    pub(crate) fn objc_dispatch(&self) -> Result<&rampage_analysis::objc_dispatch::Dispatch, ApiError> {
+        if let Some(dispatch) = self.objc_dispatch.get() {
+            return Ok(dispatch);
+        }
+        if self.binary.format != rampage_loaders::Format::MachO {
+            return Ok(self.objc_dispatch.get_or_init(Default::default));
+        }
+        let program = &self.analysis()?.program;
+        Ok(self.objc_dispatch.get_or_init(|| {
+            let report = rampage_loaders::objc::parse(&self.binary);
+            rampage_analysis::objc_dispatch::resolve(&self.binary, program, &report, || {
+                crate::decoder::decoder_for_project(&self.binary).ok()
+            })
+        }))
     }
 
     /// The embedded DWARF type index, built on first use; the error says why there is none.

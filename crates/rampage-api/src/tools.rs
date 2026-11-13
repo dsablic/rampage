@@ -324,6 +324,20 @@ struct ClassEvidenceArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct ObjcSendsArgs {
+    /// Only the sends of the function containing this address or name (default: the whole binary).
+    at: Option<String>,
+    /// Only sends of this selector, such as `initWithFrame:`.
+    selector: Option<String>,
+    /// Sends to skip, for paging.
+    offset: Option<usize>,
+    /// Sends per page, 1..=500 (default 100).
+    #[schemars(range(min = 1, max = 500))]
+    limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ExceptionHandlerArgs {
     /// `functions` (default) or `throws`.
     list: Option<crate::cpp_exceptions::ExceptionList>,
@@ -2543,6 +2557,24 @@ pub fn tools() -> Vec<Tool> {
             "Demangled symbols, named Itanium vtables/RTTI, Objective-C selector strings and Objective-C classes and \
              categories (superclasses, methods with implementations, ivars, properties, protocols), with limits.",
             |project, _: Nothing| Ok(rampage_analysis::language::metadata(&project.binary)),
+        ),
+        tool(
+            Group::Core,
+            "objc_sends",
+            "Objective-C message sends (objc_msgSend and variants, arm64 objc_msgSend$selector stubs, objc_alloc/\
+             objc_alloc_init/objc_opt_new) resolved on arm64 and x86-64 Mach-O: selector, receiver class where \
+             statically evident (class refs, self, super, +alloc/-init results) and the implementations reached, \
+             with confidence resolved | ambiguous (subclass override/categories) | framework (inherited from \
+             outside the binary) | candidates (unknown receiver: the selector's implementations here, up to 8) | \
+             unknown_receiver | unknown_selector. summary counts every selected send; PAGED (offset, limit \
+             1..=500, default 100). The same edges appear in xrefs/function_summary with an `objc` field.",
+            |project, arguments: ObjcSendsArgs| {
+                if arguments.limit.is_some_and(|limit| !(1..=500).contains(&limit)) {
+                    return Err(ApiError::Invalid("objc_sends limit must be 1..=500".to_owned()));
+                }
+                let at = arguments.at.as_deref().map(|at| project.resolve(at)).transpose()?;
+                project.objc_sends(at, arguments.selector.as_deref(), arguments.offset, arguments.limit)
+            },
         ),
         tool(
             Group::Core,

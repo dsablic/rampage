@@ -2092,6 +2092,65 @@ mod debug_layout_output_tests {
     }
 }
 
+pub fn objc_sends(out: &mut impl Write, args: &crate::args::ObjcSendsArgs, options: &Options) -> Result<()> {
+    let project = open(&args.file, options)?;
+    let mut input = serde_json::json!({ "offset": args.offset, "limit": args.limit });
+    if let Some(at) = &args.at {
+        input["at"] = at.clone().into();
+    }
+    if let Some(selector) = &args.selector {
+        input["selector"] = selector.clone().into();
+    }
+    let (text, failed) = rampage_api::tools::call(&rampage_api::tools::tools(), &project, "objc_sends", input);
+    let result: serde_json::Value = serde_json::from_str(&text)?;
+    if failed {
+        anyhow::bail!("{}", result["error"].as_str().unwrap_or(&text));
+    }
+    if options.json {
+        out.write_all(text.as_bytes())?;
+        writeln!(out)?;
+        return Ok(());
+    }
+    let summary = &result["summary"];
+    writeln!(
+        out,
+        "{} sends: {} with selector, {} with receiver class; {} resolved, {} ambiguous, {} framework, {} candidates, \
+         {} unknown receiver, {} unknown selector",
+        summary["sends"],
+        summary["with_selector"],
+        summary["with_receiver_class"],
+        summary["resolved"],
+        summary["ambiguous"],
+        summary["framework"],
+        summary["candidates"],
+        summary["unknown_receiver"],
+        summary["unknown_selector"]
+    )?;
+    for send in result["sends"]["items"].as_array().into_iter().flatten() {
+        let receiver = match &send["receiver"] {
+            serde_json::Value::Null => "?".to_owned(),
+            receiver if receiver["class_object"] == true => receiver["class"].as_str().unwrap_or("?").to_owned(),
+            receiver => format!("({} *)", receiver["class"].as_str().unwrap_or("?")),
+        };
+        let targets: Vec<&str> =
+            send["targets"].as_array().into_iter().flatten().filter_map(|target| target["name"].as_str()).collect();
+        writeln!(
+            out,
+            "{}  {}  [{receiver} {}]  {}{}",
+            send["site"].as_str().unwrap_or_default(),
+            send["function"].as_str().unwrap_or_default(),
+            send["selector"].as_str().unwrap_or("?"),
+            send["confidence"].as_str().unwrap_or_default(),
+            if targets.is_empty() { String::new() } else { format!(" -> {}", targets.join(" | ")) },
+        )?;
+    }
+    let total = result["sends"]["total"].as_u64().unwrap_or(0) as usize;
+    if args.offset + args.limit < total {
+        writeln!(out, "... {} more (--offset {})", total - args.offset - args.limit, args.offset + args.limit)?;
+    }
+    Ok(())
+}
+
 pub fn type_layout(out: &mut impl Write, args: &crate::args::TypeLayoutArgs, options: &Options) -> Result<()> {
     let project = open(&args.file, options)?;
     let mut input =

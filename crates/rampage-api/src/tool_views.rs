@@ -1452,6 +1452,7 @@ mod tests {
                 kind: rampage_analysis::discover::XrefKind::Call,
                 from_function: Some("github.com/gohugoio/hugo/resources/images.DecodeImageConfig".into()),
                 to_name: Some(name(index as usize)),
+                objc: None,
             })
             .collect();
         let mut summary: Value = native_function_summary();

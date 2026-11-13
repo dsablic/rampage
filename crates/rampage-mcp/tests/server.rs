@@ -130,6 +130,7 @@ async fn lists_all_tools_with_instructions() {
         "list_strings",
         "list_types",
         "network_surface",
+        "objc_sends",
         "observe_indirect_branch",
         "observe_pointer",
         "patch_bytes",
@@ -201,6 +202,7 @@ async fn lists_core_tools_and_enable_tools_by_default() {
         "record_finding",
         "list_findings",
         "language_metadata",
+        "objc_sends",
         "class_evidence",
     ] {
         assert!(names.iter().any(|name| name == tool), "{tool}");

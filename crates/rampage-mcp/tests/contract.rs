@@ -187,6 +187,9 @@ async fn contract_mcp_core_results() {
     exercise(c, o, "xrefs", json!({"path": elf, "from": "main"})).await;
     exercise(c, o, "inspect_data", json!({"path": elf, "at": "main", "size": 16})).await;
     exercise(c, o, "language_metadata", json!({"path": fixture("classes-arm64.macho")})).await;
+    let objc = fixture("objc-dispatch-arm64-stripped.macho");
+    exercise(c, o, "objc_sends", json!({"path": objc, "limit": 3})).await;
+    exercise(c, o, "xrefs", json!({"path": objc, "to": "-[Shape describe]"})).await;
     exercise(c, o, "class_evidence", json!({"path": fixture("classes-arm64.macho")})).await;
     // A PE adds MSVC vftables.
     exercise(c, o, "class_evidence", json!({"path": fixtures.join("msvc-cpp/msvc-cpp-x64.exe")})).await;

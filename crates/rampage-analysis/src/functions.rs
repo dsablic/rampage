@@ -235,7 +235,8 @@ impl Names {
         for symbol in &binary.symbols {
             names.entry(symbol.address).or_insert_with(|| symbol.name.clone());
         }
-        for (address, name) in stub_names(binary).into_iter().chain(thunk_names(binary)) {
+        let stubs = stub_names(binary).into_iter().chain(thunk_names(binary));
+        for (address, name) in stubs.chain(crate::objc_dispatch::selector_stub_names(binary)) {
             names.entry(address).or_insert(name);
         }
         for slot in &binary.import_slots {

@@ -36,6 +36,7 @@ Analysis and decompilation:
 
 - [Search](search.md), [tool views and annotation batches](tool-views.md).
 - [Build matching and annotation transfer](build-diffing.md) between versions of a program.
+- [Objective-C message sends](objc-dispatch.md) resolved to the methods they reach.
 - [Exact-entry analysis](entry-analysis.md) and its [desktop window](exact-entry-ui.md).
 - [ARM ELF unwind candidates](arm-unwind-starts.md).
 - [Decompiler reference](../crates/rampage-decompiler/README.md): compiler models, worker supervision and

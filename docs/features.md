@@ -124,7 +124,11 @@ complete object locator before slot 0 and reported with their class, subobject o
 also seeds a function start, so virtual methods reached through no direct call are discovered. MCP serves this
 evidence as `class_evidence`, and demangled names with Objective-C classes, superclasses, methods and properties as
 `language_metadata`; both are core tools, listed without enabling a group. See
-[MSVC C++ metadata](file-formats.md#msvc-c-metadata).
+[MSVC C++ metadata](file-formats.md#msvc-c-metadata). Objective-C message sends (`objc_msgSend` and its variants,
+arm64 selector stubs, `objc_alloc_init`) are resolved to their selector and, where the receiver class is evident
+(class references, `self`, `super`, `+alloc` results), to the method implementations they reach, with an explicit
+confidence; `objc_sends` lists them and they become call edges in `xrefs`, `function_summary` and decompiled-C
+comments (see [Objective-C message sends](objc-dispatch.md)).
 
 Types-group [`edit_variable`](local-variables.md) persists local/parameter names and types by native storage
 identity and returns refreshed C in one call, with undo/replay. Limits: single whole register/stack mappings

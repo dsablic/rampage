@@ -96,7 +96,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 that answer common first questions, such as `language_metadata` and `class_evidence` for class names and
 hierarchies, are in `core` so that a client deferring schemas still sees their names.
 
-A default session lists 43 tools: the 42 in `core` plus `enable_tools`. Enabling every group lists 86. The
+A default session lists 44 tools: the 43 in `core` plus `enable_tools`. Enabling every group lists 87. The
 `debug` group adds 14 tools (16 with `--debug-writes`), `--observations` adds `report_observation`, and a
 `--corpus` server lists `enable_tools` and the 4 `improve` tools only.
 
@@ -107,7 +107,7 @@ A default session lists 43 tools: the 42 in `core` plus `enable_tools`. Enabling
   `list_findings`, `transfer_annotations`, `triage_report`,
   `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`, `inspect_data`,
   `decode_file_range`, `probe_compression`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`, `language_metadata`,
-  `class_evidence`; with --observations (or RAMPAGE_OBSERVATIONS), also `report_observation`.
+  `objc_sends`, `class_evidence`; with --observations (or RAMPAGE_OBSERVATIONS), also `report_observation`.
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
   `capa_detect`, `find_crypto`, `list_packs`.
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_debug_layouts`,

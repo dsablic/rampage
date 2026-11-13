@@ -45,6 +45,7 @@ mod jumptable;
 pub mod layout_containers;
 mod listing;
 mod module_references;
+mod objc;
 mod offset;
 mod operand_types;
 pub mod pack_archive;
@@ -275,7 +276,8 @@ pub use wasm::{MAX_WASM_PAGE, WasmList, WasmModulePage, wasm_module};
 pub use workflows::{
     Confidence as FindingConfidence, Excerpt, Finding, NextStep, ReportLimits, ReportTarget, Section, WorkflowReport,
 };
-pub use xrefs::{XrefQuery, XrefRow};
+pub use objc::{ObjcSendRow, ObjcSendSummary, ObjcSends, ObjcTarget};
+pub use xrefs::{ObjcEdge, XrefQuery, XrefRow};
 
 /// How many instructions a disassembly shows unless asked for another count.
 pub const DEFAULT_INSTRUCTIONS: usize = 40;

@@ -21,6 +21,37 @@ pub struct XrefRow {
     pub kind: XrefKind,
     pub from_function: Option<String>,
     pub to_name: Option<String>,
+    /// For a call edge from an Objective-C message send to a method implementation it may reach: the send's
+    /// selector, receiver class and how certain the edge is. Absent on every other reference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objc: Option<ObjcEdge>,
+}
+
+/// How an Objective-C send reaches the implementation an xref row points at.
+#[derive(Debug, Clone, Serialize)]
+pub struct ObjcEdge {
+    pub selector: Option<String>,
+    /// The receiver's class, `+` prefixed when the receiver is the class object (a class method send).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receiver: Option<String>,
+    /// `resolved` (the one implementation), `ambiguous` (one of several a subclass override or category makes
+    /// reachable) or `candidates` (receiver class unknown: one of the selector's implementations in the binary).
+    pub confidence: &'static str,
+    /// How many implementations the send may reach, this one included.
+    pub alternatives: usize,
+}
+
+impl ObjcEdge {
+    pub(crate) fn of(send: &rampage_analysis::objc_dispatch::Send) -> Self {
+        ObjcEdge {
+            selector: send.selector.clone(),
+            receiver: send.receiver.as_ref().map(|receiver| {
+                if receiver.class_object { format!("+{}", receiver.class) } else { receiver.class.clone() }
+            }),
+            confidence: send.confidence.as_str(),
+            alternatives: send.targets.len(),
+        }
+    }
 }
 
 impl Project {
@@ -39,24 +70,45 @@ impl Project {
             let last = by_source.partition_point(|&index| xrefs[index].from < end);
             by_source[first..last].iter().map(|&index| xrefs[index])
         };
-        let mut selected: Vec<Xref> = match query {
-            XrefQuery::To(address) => analysis.program.xrefs_to(address).to_vec(),
+        let dispatch = self.objc_dispatch()?;
+        let ranges: Vec<(u64, u64)> = match query {
+            XrefQuery::To(_) => Vec::new(),
             XrefQuery::From(address) => match analysis.program.function_at(address) {
-                Some(function) => function.blocks.iter().flat_map(|block| from_range(block.start, block.end)).collect(),
-                None => from_range(address, address.saturating_add(1)).collect(),
+                Some(function) => function.blocks.iter().map(|block| (block.start, block.end)).collect(),
+                None => vec![(address, address.saturating_add(1))],
             },
         };
-        selected.sort_unstable_by_key(|xref| (xref.from, xref.to, xref.kind));
-        selected.dedup();
+        let mut selected: Vec<(Xref, Option<&rampage_analysis::objc_dispatch::Send>)> = match query {
+            XrefQuery::To(address) => analysis.program.xrefs_to(address).iter().map(|&xref| (xref, None)).collect(),
+            XrefQuery::From(_) => {
+                ranges.iter().flat_map(|&(start, end)| from_range(start, end)).map(|xref| (xref, None)).collect()
+            }
+        };
+        // Objective-C sends add call edges to the implementations they may reach.
+        let sends: Vec<&rampage_analysis::objc_dispatch::Send> = match query {
+            XrefQuery::To(address) => dispatch.sends.iter().filter(|send| send.targets.contains(&address)).collect(),
+            XrefQuery::From(_) => ranges.iter().flat_map(|&(start, end)| dispatch.sends_in(start, end)).collect(),
+        };
+        for send in sends.into_iter().filter(|send| send.confidence.has_edges()) {
+            for &target in &send.targets {
+                if matches!(query, XrefQuery::To(address) if address != target) {
+                    continue;
+                }
+                selected.push((Xref { to: target, from: send.site, kind: XrefKind::Call }, Some(send)));
+            }
+        }
+        selected.sort_unstable_by_key(|(xref, _)| (xref.from, xref.to, xref.kind));
+        selected.dedup_by_key(|(xref, _)| *xref);
         let page = Page::of(selected, offset, limit);
         let mut rows = Vec::with_capacity(page.items.len());
-        for xref in &page.items {
+        for (xref, send) in &page.items {
             rows.push(XrefRow {
                 from: xref.from,
                 to: xref.to,
                 kind: xref.kind,
                 from_function: analysis.function_containing(xref.from).map(|function| self.function_name(function)),
                 to_name: self.name_at(xref.to),
+                objc: send.map(ObjcEdge::of),
             });
         }
         Ok(Page { total: page.total, offset: page.offset, items: rows })

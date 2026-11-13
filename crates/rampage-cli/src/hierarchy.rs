@@ -120,6 +120,7 @@ impl RootCommand {
             Self::Function(FunctionCommand::InspectTable(args)) => Command::JumpTable(args),
             Self::String(StringCommand::List(args)) => Command::Strings(args),
             Self::Language(LanguageCommand::Inspect(args)) => Command::Metadata(args),
+            Self::Language(LanguageCommand::ObjcSends(args)) => Command::ObjcSends(args),
             Self::Annotation(AnnotationCommand::List(args)) => Command::Annotations(args),
             Self::Annotation(AnnotationCommand::Rename(args)) => Command::Rename(args),
             Self::Annotation(AnnotationCommand::Comment(args)) => Command::Comment(args),
@@ -265,6 +266,8 @@ pub(crate) enum StringCommand {
 pub(crate) enum LanguageCommand {
     /// Demangled symbols, named vtables/RTTI and Objective-C selector strings
     Inspect(FileArgs),
+    /// Objective-C message sends resolved to the method implementations they reach (arm64/x86-64 Mach-O)
+    ObjcSends(crate::args::ObjcSendsArgs),
 }
 
 #[derive(Subcommand)]

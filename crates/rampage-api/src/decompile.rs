@@ -452,7 +452,19 @@ impl Project {
         self.decompile_cancellable(address, &std::sync::atomic::AtomicBool::new(false))
     }
 
+    /// [`Project::decompile`], stopping early once `cancellation` is set. Objective-C send sites gain a comment
+    /// naming the selector and the implementations it reaches.
     pub fn decompile_cancellable(
+        &self,
+        address: u64,
+        cancellation: &std::sync::atomic::AtomicBool,
+    ) -> Result<Decompilation, ApiError> {
+        let mut decompilation = self.decompile_native_cancellable(address, cancellation)?;
+        self.annotate_objc_sends(&mut decompilation);
+        Ok(decompilation)
+    }
+
+    fn decompile_native_cancellable(
         &self,
         address: u64,
         cancellation: &std::sync::atomic::AtomicBool,
