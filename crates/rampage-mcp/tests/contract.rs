@@ -530,6 +530,7 @@ async fn contract_mcp_types_results() {
     let typed = owned(&scratch, &data("typed-data-x64.snapshot.json"));
     let propagation = owned(&scratch, &data("type-propagation-x64.snapshot.json"));
     let debug = owned(&scratch, &fixture("debug-x64.elf"));
+    let go = owned(&scratch, &fixture("gotypes-go1.20-x64.elf"));
     let pdb_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/pdb");
     let exe = owned(&scratch, &pdb_dir.join("fixture.exe"));
     let pdb = owned(&scratch, &pdb_dir.join("fixture.pdb"));
@@ -580,6 +581,16 @@ async fn contract_mcp_types_results() {
     exercise(c, o, "import_debug_layouts", json!({"path": debug, "limit": 2})).await;
     exercise(c, o, "get_type", json!({"path": debug, "name": "debug_pair", "byte_offset": 5})).await;
     exercise(c, o, "get_type", json!({"path": debug, "name": "debug_pair", "source": "dwarf", "limit": 1})).await;
+    // Go runtime type metadata on a stripped Go binary: a struct with a selection, an interface, a pointer's methods.
+    exercise(c, o, "get_type", json!({"path": go, "name": "main.Record", "member": "Inner.Ratio", "limit": 2})).await;
+    exercise(c, o, "get_type", json!({"path": go, "name": "main.Shape", "source": "go"})).await;
+    exercise(c, o, "get_type", json!({"path": go, "name": "*main.Error", "source": "go"})).await;
+    exercise(c, o, "get_type", json!({"path": go, "name": "main.Index", "source": "go"})).await;
+    exercise(c, o, "get_type", json!({"path": go, "name": "main.Record", "byte_offset": 60})).await;
+    for name in ["func(int, string) (bool, error)", "[4]uint8", "chan<- int"] {
+        exercise(c, o, "get_type", json!({"path": go, "name": name, "source": "go"})).await;
+    }
+    exercise(c, o, "list_types", json!({"path": go, "contains": "main.", "limit": 2})).await;
     exercise(c, o, "import_pdb_names", json!({"path": exe, "pdb": pdb, "limit": 2})).await;
     exercise(c, o, "import_pdb_names", json!({"path": exe, "pdb": pdb, "limit": 2, "apply": true})).await;
     check_group(client, "types", &observed, &[]).await;

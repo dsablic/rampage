@@ -14,6 +14,7 @@ mod debug_layouts;
 mod dotnet;
 mod embedded;
 mod gopclntab;
+mod gotypes;
 mod linkage;
 mod load;
 mod msvc_cpp;

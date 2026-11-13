@@ -251,6 +251,20 @@ lookup then reads only the requested type and what its members name (at most 65,
 entries), whatever the image size. Use it where the whole-image `import_debug_types`/`import_debug_layouts`
 previews stop at their budgets.
 
+On a Go binary (go1.16 and later), `get_type` falls back to Go runtime type metadata when neither the library
+nor DWARF has the name, or reads it directly with `source: "go"`. These are the descriptors Go keeps for
+reflection and interfaces, so they survive `-ldflags "-s -w"`. Results carry `source: "go_runtime"` and
+`caveats`. Names are runtime type strings (`restic.Snapshot`, `*restic.Node`, `[]string`) or named types qualified
+by import path (`github.com/restic/restic/internal/restic.Snapshot`). A definition gives the kind, size and
+alignment, struct fields (offset, size, type, `embedded`, `exported`, struct tag), interface methods with
+signatures, a named type's methods (pointer-receiver methods are on the `*T` type) with entry addresses where the
+linker kept them, and the key, element, length or direction of composite types. `member` (promoted fields
+included), `byte_offset`, `depth` and paging behave as they do for DWARF. Only types that have descriptors are
+present: those reachable from the module's typelinks, itabs or other descriptors (go1.27 and later: every emitted
+descriptor). The first lookup walks the descriptors once (about 20 ms and 16,000 types on a 26 MB binary). After
+that, each lookup decodes only the requested type and the types its fields name, at most 200,000 reads.
+`list_types` lists the named Go types when the project library is empty, or with `source: "go"`.
+
 `edit_variable` accepts one current display name or complete native storage object, with name/type changes or
 clear flags. It atomically persists the changes and returns complete refreshed C, diagnostics and variable
 descriptors within the tool budget. Limits: one whole register/stack mapping and same-size types; invalid or

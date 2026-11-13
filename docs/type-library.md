@@ -6,8 +6,8 @@ by the native decompiler using that target's data organization; analyst declarat
 | Tool | Inputs | Result |
 | --- | --- | --- |
 | `declare_types` | `declarations`/`header`, `profiles`, `packing`, `replace` | Atomic edit receipt |
-| `list_types` | Optional `contains`, `offset`, `limit` | Paged project inventory |
-| `get_type` | Exact type `name` | Native layout, fields, aliases and related type details |
+| `list_types` | Optional `contains`, `offset`, `limit`, `source` (`auto`, `library`, `go`) | Paged project inventory, or named Go runtime types |
+| `get_type` | Exact type `name`; optional `source` (`auto`, `library`, `dwarf`, `go`), `member`, `byte_offset`, `depth`, `offset`, `limit` | Native layout, fields, aliases and related type details; DWARF or Go runtime layouts when the library lacks the name |
 | `delete_type` | Exact project type `name` | Dependency-checked deletion receipt |
 
 ## Declaration inputs
