@@ -1002,11 +1002,23 @@ def crt_start(signature: dict[str, Any]) -> bool:
     )
 
 
-def peid_copy(signature: dict[str, Any], peid: set[str]) -> bool:
+# DIE often inherits a PeID pattern truncated: a DIE pattern of at least this many bytes that is a prefix of a PeID
+# pattern counts as copied. A DIE pattern that extends a shorter PeID stub is DIE's own work and stays.
+PEID_PREFIX_BYTES = 16
+
+
+def peid_prefixes(peid: set[str]) -> set[str]:
+    """The strict prefixes of PeID patterns that are at least PEID_PREFIX_BYTES long, normalized."""
+    return {pattern[:end] for pattern in peid for end in range(2 * PEID_PREFIX_BYTES, len(pattern), 2)}
+
+
+def peid_copy(signature: dict[str, Any], peid: set[str], prefixes: set[str]) -> bool:
+    """Whether an entry pattern equals a PeID userdb pattern, or is a truncated one: a prefix (from
+    `peid_prefixes`) at least PEID_PREFIX_BYTES long without DIE's relative jumps, which PeID never has."""
     for condition in signature["conditions"]:
         if "entry" in condition:
             mine = normalize(condition["entry"])
-            if mine in peid:
+            if mine in peid or ("$" not in mine and mine in prefixes):
                 return True
     return False
 
@@ -1016,6 +1028,7 @@ def convert(root: Path) -> tuple[dict[str, Any], list[str]]:
     commit = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True,
                             check=False).stdout.strip()
     peid = load_peid_patterns(root)
+    prefixes = peid_prefixes(peid)
     signatures: list[dict[str, Any]] = []
     report: list[str] = []
     files = Counter()
@@ -1050,8 +1063,8 @@ def convert(root: Path) -> tuple[dict[str, Any], list[str]]:
                 if crt_start(signature):
                     path_reasons[(file_type, "entry pattern is glibc's crt1 _start")] += 1
                     continue
-                if peid_copy(signature, peid):
-                    path_reasons[(file_type, "entry pattern equals a PeID userdb entry")] += 1
+                if peid_copy(signature, peid, prefixes):
+                    path_reasons[(file_type, "entry pattern equals or truncates a PeID userdb entry")] += 1
                     continue
                 kept.append(signature)
             for reason, count in converted.skipped_paths.items():

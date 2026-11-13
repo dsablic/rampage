@@ -1147,18 +1147,6 @@
   {
    "conditions": [
     {
-     "entry": "6A ?? 68 ?? ?? ?? ?? E8 ?? ?? ?? ?? BF ?? ?? ?? ?? 8B C7 E8 ?? ?? ?? ?? 89 65 ?? 8B F4 89 3E 56 FF"
-    }
-   ],
-   "die_type": "compiler",
-   "file": "PE/compiler_EP.MSVC.4.sg",
-   "format": "pe",
-   "kind": "compiler",
-   "name": "Microsoft Visual C/C++"
-  },
-  {
-   "conditions": [
-    {
      "entry": "83 7C 24 ?? ?? 0F 84 $4 E8 $4 55 8B EC 83 EC ?? A1 ?? ?? ?? ?? 83 65 ?? ?? 83 65 ?? ?? 53 57 BF ?? ?? ?? ?? 3B C7"
     }
    ],
@@ -1862,32 +1850,6 @@
   {
    "conditions": [
     {
-     "entry": "68 FF 64 24 F0 68 58 58 58 58 90 FF D4 50 8B 40 F2 05 B0 95 F6 95 0F 85 01 81 BB FF"
-    }
-   ],
-   "die_type": "cryptor",
-   "file": "PE/cryptor_ABC_Cryptor.2.sg",
-   "format": "pe",
-   "kind": "cryptor",
-   "name": "ABC Cryptor",
-   "version": "1.0"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "55 8B EC 83 C4 F0 53 B8 A0 3E 00 10 E8 93 DE FF FF 68 F8 42 00 10 E8 79 DF FF FF 68 00 43 00 10"
-    }
-   ],
-   "die_type": "cryptor",
-   "file": "PE/cryptor_Aase_Crypter.2.sg",
-   "format": "pe",
-   "kind": "cryptor",
-   "name": "Aase Crypter",
-   "version": "1.0"
-  },
-  {
-   "conditions": [
-    {
      "entry": "60 B9 ?? ?? ?? ?? BA ?? ?? ?? ?? BE ?? ?? ?? ?? 02 38 40 4E 75 FA 8B C2 8A 18 32 DF C0 CB"
     }
    ],
@@ -1896,30 +1858,6 @@
    "format": "pe",
    "kind": "cryptor",
    "name": "AcidCrypt"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "55 8B EC 83 C4 F0 53 56 B8 38 17 05 10 E8 5A 45 FB FF 33 C0 55 68 21 1C 05 10 64 FF 30 64 89 20"
-    }
-   ],
-   "die_type": "cryptor",
-   "file": "PE/cryptor_Anslym_Crypter.2.sg",
-   "format": "pe",
-   "kind": "cryptor",
-   "name": "Anslym Crypter"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "E9 97 00 00 00 0D 0A 53 69 6C 65 6E 74 20 54 65 61 6D 20 41 70 70 20 50 72 6F 74 65 63 74 6F 72"
-    }
-   ],
-   "die_type": "cryptor",
-   "file": "PE/cryptor_App_Encryptor.2.sg",
-   "format": "pe",
-   "kind": "cryptor",
-   "name": "App Encryptor"
   },
   {
    "conditions": [
@@ -1977,32 +1915,6 @@
   {
    "conditions": [
     {
-     "entry": "53 56 57 55 BB 2C ?? ?? 44 BE 00 30 44 44 BF 20 ?? ?? 44 80 7B 28 00 75 16 83 3F 00 74 11 8B 17 89 D0 33 D2 89 17 8B"
-    }
-   ],
-   "die_type": "cryptor",
-   "file": "PE/cryptor_Fly-Crypter.2.sg",
-   "format": "pe",
-   "kind": "cryptor",
-   "name": "Fly-Crypter",
-   "version": "1.0"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "55 8B EC 83 C4 F0 53 B8 18 22 44 44 E8 7F F7 FF FF E8 0A F1 FF FF B8 09 00 00 00 E8 5C F1 FF FF 8B D8 85 DB 75 05"
-    }
-   ],
-   "die_type": "cryptor",
-   "file": "PE/cryptor_Fly-Crypter.2.sg",
-   "format": "pe",
-   "kind": "cryptor",
-   "name": "Fly-Crypter",
-   "version": "1.0"
-  },
-  {
-   "conditions": [
-    {
      "entry": "33 D2 90 1E 68 ?? ?? ?? ?? 0F A0 1F 8B 02 90 50 54 8F 02 90 90 8E 64 24 08 FF E2 58 50 33 D2 52 83 F8 01 9B 40 8A 10 89 14 24"
     }
    ],
@@ -2012,50 +1924,6 @@
    "kind": "cryptor",
    "name": "FreeCryptor",
    "version": "0.2 build 002"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "8B 04 24 40 90 83 C0 07 80 38 90 90 74 02 EB FF"
-    },
-    {
-     "entry": "?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? 68"
-    }
-   ],
-   "die_type": "cryptor",
-   "file": "PE/cryptor_FreeCryptor.2.sg",
-   "format": "pe",
-   "kind": "cryptor",
-   "name": "FreeCryptor",
-   "version": "0.1 build 001"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "8B 04 24 40 90 83 C0 07 80 38 90 90 74 02 EB FF"
-    },
-    {
-     "entry": "?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? 90 68"
-    }
-   ],
-   "die_type": "cryptor",
-   "file": "PE/cryptor_FreeCryptor.2.sg",
-   "format": "pe",
-   "kind": "cryptor",
-   "name": "FreeCryptor",
-   "version": "0.1 build 002"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "8B 04 24 40 90 83 C0 07 80 38 90 90 74 02 EB FF"
-    }
-   ],
-   "die_type": "cryptor",
-   "file": "PE/cryptor_FreeCryptor.2.sg",
-   "format": "pe",
-   "kind": "cryptor",
-   "name": "FreeCryptor"
   },
   {
    "conditions": [
@@ -2084,19 +1952,6 @@
    "name": "Hyperion",
    "options": "x86",
    "version": "1.1"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "60 64 A1 30 00 00 00 8B 40 0C 8B 40 0C 8D 58 20 C7 03 00 00 00 00 E8 00 00 00 00 5D 81 ED"
-    }
-   ],
-   "die_type": "cryptor",
-   "file": "PE/cryptor_INCrypter.2.sg",
-   "format": "pe",
-   "kind": "cryptor",
-   "name": "INCrypter",
-   "version": "0.3"
   },
   {
    "authors": "hypn0",
@@ -2137,19 +1992,6 @@
    "kind": "cryptor",
    "name": "RDG Tejon Crypter",
    "version": "0.7"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "68 2C 11 40 00 E8 F0 FF FF FF 00 00 00 00 00 00 30 00 00 00 38 00 00 00 00 00 00 00 37 BB 71 EC A4 E1 98 4C 9B FE 8F 0F FA 6A 07 F6"
-    }
-   ],
-   "die_type": "cryptor",
-   "file": "PE/cryptor_STUD.2.sg",
-   "format": "pe",
-   "kind": "cryptor",
-   "name": "ScanTime UnDetectable",
-   "version": "RC4 1.0"
   },
   {
    "conditions": [
@@ -2373,23 +2215,6 @@
    "conditions": [
     {
      "entry": "6A ?? 68 ?? ?? ?? ?? E8 $4 68 ?? ?? ?? ?? 64 A1 ?? ?? ?? ?? 50 8B 44 24 ?? 89 6C 24 ?? 8D 6C 24 ?? 2B E0 53 56 57 8B 45 ?? 89 65 ?? 50 8B 45 ?? C7"
-    },
-    {
-     "overlay_bytes": "50 4B 03 04"
-    }
-   ],
-   "die_type": "installer",
-   "file": "PE/installer_Acronis_installer.1.sg",
-   "format": "pe",
-   "kind": "installer",
-   "name": "Acronis installer",
-   "options": "ZIP"
-  },
-  {
-   "authors": "hypn0",
-   "conditions": [
-    {
-     "entry": "6A ?? 68 ?? ?? ?? ?? E8 ?? ?? ?? ?? BF ?? ?? ?? ?? 8B C7 E8 ?? ?? ?? ?? 89 65 ?? 8B F4 89 3E 56 FF 15"
     },
     {
      "overlay_bytes": "50 4B 03 04"
@@ -3351,23 +3176,6 @@
    "authors": "hypn0",
    "conditions": [
     {
-     "entry": "6A ?? 68 ?? ?? ?? ?? E8 ?? ?? ?? ?? BF ?? ?? ?? ?? 8B C7 E8 ?? ?? ?? ?? 89 65 ?? 8B F4 89 3E 56 FF 15"
-    },
-    {
-     "overlay_bytes": "54 47 43 46"
-    }
-   ],
-   "die_type": "installer",
-   "file": "PE/installer_Setup-Specialist.1.sg",
-   "format": "pe",
-   "kind": "installer",
-   "name": "Setup-Specialist",
-   "version": "4.0.X"
-  },
-  {
-   "authors": "hypn0",
-   "conditions": [
-    {
      "entry": "A1 ?? ?? ?? ?? C1 E0 ?? A3 ?? ?? ?? ?? 57 51 33 C0 BF ?? ?? ?? ?? B9 ?? ?? ?? ?? 3B CF 76"
     },
     {
@@ -3397,37 +3205,6 @@
    "kind": "installer",
    "name": "Setup Factory",
    "version": "9.5"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "55 8B EC 6A FF 68 ?? 61 40 00 68 ?? 43 40 00 64 A1 00 00 00 00 50 64 89 25 00 00 00 00"
-    },
-    {
-     "entry": "?? ?? ?? ?? ?? ?? 90 61 40 00"
-    }
-   ],
-   "die_type": "installer",
-   "file": "PE/installer_Setup_Factory.1.sg",
-   "format": "pe",
-   "kind": "installer",
-   "name": "Setup Factory",
-   "version": "6.0.0.3"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "55 8B EC 6A FF 68 ?? 61 40 00 68 ?? 43 40 00 64 A1 00 00 00 00 50 64 89 25 00 00 00 00"
-    }
-   ],
-   "die_type": "installer",
-   "file": "PE/installer_Setup_Factory.1.sg",
-   "format": "pe",
-   "kind": "installer",
-   "name": "Setup Factory",
-   "version": "6.X"
   },
   {
    "authors": "horsicq",
@@ -4046,35 +3823,6 @@
    "authors": "horsicq",
    "conditions": [
     {
-     "entry": "E9 95 02 00 00 64 A1 00 00 00 00 83 38 FF 74 04 8B 00 EB F7 8B 40 04 C3 55 8B EC B8 00 00 00 00 8B 75 08 81 E6 00 00 FF FF"
-    }
-   ],
-   "die_type": "joiner",
-   "file": "PE/joiner_ExeSplitter.1.sg",
-   "format": "pe",
-   "kind": "joiner",
-   "name": "ExeSplitter",
-   "version": "1.2"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "E9 FE 01 00 00 ?? ?? ?? ?? ?? ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 73 76 63 45 72 30 31 31 2E 74 6D 70 00"
-    }
-   ],
-   "die_type": "joiner",
-   "file": "PE/joiner_ExeSplitter.1.sg",
-   "format": "pe",
-   "kind": "joiner",
-   "name": "ExeSplitter",
-   "options": "Split Method",
-   "version": "1.3"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
      "entry": "50 32 ?? 66 8B C3 58 E8 ?? FD FF FF 6A 00 E8 0D 00 00 00 CC FF 25 ?? ?? ?? ?? FF 25 ?? ?? ?? ?? FF 25 ?? ?? ?? ?? FF 25"
     }
    ],
@@ -4154,20 +3902,6 @@
    "kind": "joiner",
    "name": "FreeJoiner",
    "version": "Small build 017"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "86 D6 90 86 F2 B9 93 60 08 FE 90 86 D6 90 86 F2 B9 9D 13 45 01 86 D6 90 86 F2 81 C2 93 60 08 FE 33 C9 B9 30 74 4D"
-    }
-   ],
-   "die_type": "joiner",
-   "file": "PE/joiner_FreeJoiner.1.sg",
-   "format": "pe",
-   "kind": "joiner",
-   "name": "FreeJoiner",
-   "version": "1.5.3 Stub engine 1.7.1"
   },
   {
    "authors": "horsicq",
@@ -4299,34 +4033,6 @@
    "authors": "horsicq",
    "conditions": [
     {
-     "entry": "55 8B EC 81 EC 0C 01 00 00 8D 85 F4 FE FF FF 56 50 68 04 01 00 00 FF 15"
-    }
-   ],
-   "die_type": "joiner",
-   "file": "PE/joiner_RJoiner.1.sg",
-   "format": "pe",
-   "kind": "joiner",
-   "name": "RJoiner",
-   "version": "1.2a"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "55 8B EC 81 EC 0C 02 00 00 8D 85 F4 FD FF FF 56 50 68 04 01 00 00 FF 15"
-    }
-   ],
-   "die_type": "joiner",
-   "file": "PE/joiner_RJoiner.1.sg",
-   "format": "pe",
-   "kind": "joiner",
-   "name": "RJoiner",
-   "version": "1.2"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
      "entry": "E8 03 FD FF FF 6A 00 E8 0C 00 00 00 FF 25 ?? ?? ?? ?? FF 25 ?? ?? ?? ?? FF 25"
     }
    ],
@@ -4395,19 +4101,6 @@
    "kind": "packer",
    "name": "Advanced BAT to EXE Converter",
    "version": "2.X-4.X"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "55 8B EC 83 C4 F0 53 B8 88 1D 00 10 E8 C7 FA FF FF 6A 0A 68 20 1E 00 10 A1 14 31 00 10 50"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_Anskya_NTPacker_Generator.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "Anskya NTPacker Generator"
   },
   {
    "authors": "horsicq",
@@ -4515,21 +4208,6 @@
    "authors": "horsicq",
    "conditions": [
     {
-     "entry": "0F BE C1 EB 01 0E 8D 35 C3 BE B6 22 F7 D1 68 43 ?? ?? 22 EB 02 B5 15 5F C1 F1 15 33 F7 80"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_FSG.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "FSG",
-   "options": "Borland Delphi/Borland C++",
-   "version": "1.20"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
      "entry": "1B DB E8 02 00 00 00 1A 0D 5B 68 ?? ?? ?? ?? E8 01 00 00 00 EA 5A 58 EB 02 CD 20 68 F4 00"
     }
    ],
@@ -4555,21 +4233,6 @@
    "name": "FSG",
    "options": "Borland C++",
    "version": "1.10"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "33 C2 2C FB 8D 3D 7E 45 B4 80 E8 02 00 00 00 8A 45 58 68 02 ?? 8C 7F EB 02 CD 20 5E 80 C9"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_FSG.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "FSG",
-   "options": "MASM32/TASM32",
-   "version": "1.20"
   },
   {
    "authors": "horsicq",
@@ -4913,20 +4576,6 @@
    "authors": "horsicq",
    "conditions": [
     {
-     "entry": "55 8B EC 6A FF 68 ?? ?? ?? ?? 68 ?? ?? ?? ?? 64 A1 00 00 00 00 50 64 89 25 00 00 00 00 ?? ?? ?? E8 01 00 00 00"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_JDPack.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "JDPack",
-   "version": "2.00"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
      "entry": "60 E8 00 00 00 00 5D 8B D5 81 ED ?? ?? ?? ?? 2B 95 ?? ?? ?? ?? 81 EA 06 ?? ?? ?? 89 95 ?? ?? ?? ?? 83 BD"
     }
    ],
@@ -4952,20 +4601,6 @@
    "format": "pe",
    "kind": "packer",
    "name": "Jexepack"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "60 E8 00 00 00 00 5E 83 EE 0A 8B 06 03 C2 8B 08 89 4E F3 83 EE 0F 56 52 8B F0 AD AD 03 C2 8B D8 6A 04 BF 00 10 00 00"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_KByS.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "KByS",
-   "version": "0.28b"
   },
   {
    "authors": "horsicq",
@@ -5408,48 +5043,6 @@
    "authors": "horsicq",
    "conditions": [
     {
-     "entry": "BF ?? ?? ?? ?? BE ?? ?? ?? ?? E8 9D 00 00 00 B8 ?? ?? ?? ?? 8B 30 8B 78 04 BB"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_Packanoid.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "Packanoid",
-   "version": "1.0"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "0F 85 ?? FF FF FF 8D B3 ?? ?? ?? ?? EB 3D 8B 46 0C 03 C3 50 FF 55 00 56 8B 36"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_Packman.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "Packman",
-   "version": "0.0.0.1"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "60 E8 00 00 00 00 58 8D ?? ?? ?? ?? ?? 8D ?? ?? ?? ?? ?? 8D"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_Packman.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "Packman",
-   "version": "0.0.0.1"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
      "entry": "E9 $4 60 E8 $4 83 C4 04 E8"
     }
    ],
@@ -5692,20 +5285,6 @@
    "kind": "packer",
    "name": "Simple Pack",
    "version": "1.2X"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "E8 00 00 00 00 81 2C 24 AA 1A 41 00 5D E8 00 00 00 00 83 2C 24 6E 8B 85 5D 1A 41 00"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_Software_Compress.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "Software Compress",
-   "version": "1.4 LITE"
   },
   {
    "authors": "hypn0",
@@ -5991,20 +5570,6 @@
    "authors": "horsicq",
    "conditions": [
     {
-     "entry": "E8 00 00 00 00 5D 83 ED 05 6A 00 FF 95 E1 0E 00 00 89 85 85 0E 00 00 8B 58 3C 03 D8 81 C3 F8 00 00 00"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_hmimys.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "hmimys",
-   "version": "0.1"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
      "entry": "E8 BA 00 00 00 ?? 00 00 00 00 ?? ?? 00 ?? ?? ?? ?? ?? ?? ?? 00 ?? ?? ?? 00 00 ?? ?? 00 ?? ?? ?? 00 ?? ?? ?? 00 ?? ?? ?? 00 ?? ?? ?? 00 ?? ?? ?? 00 ?? 00 00 00 00 00 00 00 ?? ?? ?? 00 00 00 00 00 00 00 00 00 ?? ?? ?? 00 ?? ?? ?? 00 00 00 00 00 00 00 00 00"
     }
    ],
@@ -6050,20 +5615,6 @@
    "authors": "horsicq",
    "conditions": [
     {
-     "entry": "BD ?? ?? ?? ?? C7 45 ?? ?? ?? ?? ?? FF 4D 08 C6 45 0C 05 8D 7D 14 31 C0 B4 04 89 C1 F3 AB BF"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_kkrunchy.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "kkrunchy",
-   "version": "0.2X"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
      "entry": "BD ?? ?? ?? ?? C7 ?? ?? ?? ?? ?? ?? FC FF 4D 08 31 D2 8D 7D 30 BE"
     }
    ],
@@ -6088,34 +5639,6 @@
    "name": "kkrunchy"
   },
   {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "55 8B EC 83 ?? ?? 33 C0 89 45 F0 B8 ?? ?? ?? ?? E8 67 C4 FF FF 33 C0 55 68 ?? ?? ?? ?? 64 FF 30 64 89 20 8D 55 F0 33 C0 E8 93 C8 FF FF"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_mPack.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "mPack",
-   "version": "0.0.3"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "E9 00 00 00 00 60 E8 14 00 00 00 5D 81 ED 00 00 00 00 6A 45 E8 A3 00 00 00 68 00 00 00 00 E8 58 61 E8 AA 00 00 00 4E"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_mPack.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "mPack",
-   "version": "0.0.2"
-  },
-  {
    "authors": "hypn0",
    "conditions": [
     {
@@ -6127,34 +5650,6 @@
    "format": "pe",
    "kind": "packer",
    "name": "mkfPack"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "25 ?? ?? ?? ?? 61 87 CC 55 45 45 55 81 ED CA 00 00 00 55 A4 B3 02 FF 14 24 73 F8 33 C9 FF 14 24 73 18 33 C0 FF 14 24 73 1F B3"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_yzPack.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "yzPack",
-   "version": "2.0"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "5A 52 45 60 83 EC 18 8B EC 8B FC 33 C0 64 8B 40 30 78 0C 8B 40 0C 8B 70 1C AD 8B 40 08 EB 09 8B 40 34 83 C0 7C 8B 40 3C AB E9"
-    }
-   ],
-   "die_type": "packer",
-   "file": "PE/packer_yzPack.2.sg",
-   "format": "pe",
-   "kind": "packer",
-   "name": "yzPack",
-   "version": "1.12"
   },
   {
    "authors": "ajax",
@@ -6296,19 +5791,6 @@
   {
    "conditions": [
     {
-     "entry": "60 E8 01 00 00 00 C7 83 C4 04 33 C9 E8 01 00 00 00 68 83 C4 04 E8 01 00 00 00 68 83 C4 04"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_Alex_Protector.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "Alex Protector",
-   "version": "0.4 beta 1"
-  },
-  {
-   "conditions": [
-    {
      "entry": "9C 60 E8 02 ?? ?? ?? 33 C0 8B C4 83 C0 04 93 8B E3 8B 5B FC 81 EB ?? ?? ?? ?? 87 DD 6A 04 68 00 10 00 00 68 00 ?? 00 00 6A 00 FF 95 ?? ?? ?? ?? 0B"
     }
    ],
@@ -6323,62 +5805,6 @@
    "authors": "horsicq",
    "conditions": [
     {
-     "entry": "68 69 D6 00 00 E8 C6 FD FF FF 68 69 D6 00 00 E8 BC FD FF FF 83 C4 08 E8 A4 FF FF FF 84 C0 74"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_AntiDote.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "AntiDote",
-   "version": "1.2 Beta"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "68 90 03 00 00 E8 C6 FD FF FF 68 90 03 00 00 E8 BC FD FF FF 68 90 03 00 00 E8 B2 FD FF FF 50"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_AntiDote.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "AntiDote",
-   "version": "1.4 SE"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "68 95 01 00 00 E8 D0 FD FF FF 68 95 01 00 00 E8 C3 FD FF FF 68 90 03 00 00 E8 BC FD FF FF 68"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_AntiDote.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "AntiDote",
-   "version": "1.4 osCE"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "68 ?? ?? 00 00 E8 ?? FD FF FF 68 ?? ?? 00 00 E8 ?? FD FF FF 68 90 03 00 00 E8 ?? FD FF FF"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_AntiDote.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "AntiDote",
-   "version": "1.X"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
      "entry": "E8 $4 E8 00 00 00 00 58 53 51 56 57 50 8B 1C 24 81"
     }
    ],
@@ -6388,76 +5814,6 @@
    "kind": "protector",
    "name": "AntiDote",
    "version": "1.2 Demo"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "E8 BB FF FF FF 84 C0 74 2F 68 04 01 00 00 68 C0 23 60 00 6A 00 FF 15 08 10 60 00 E8 40 FF FF FF 50"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_AntiDote.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "AntiDote",
-   "version": "1.0 Beta"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "E8 F7 FE FF FF 05 CB 22 00 00 FF E0 E8 EB FE FF FF 05 BB 19 00 00 FF E0 E8 BD 00 00 00 08 B2"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_AntiDote.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "AntiDote",
-   "version": "1.2 Demo"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "EB 10 66 62 3A 43 2B 2B 48 4F 4F 4B 90 E9 08 32 90 90 90 90 90 90 90 90 90 90 80 7C 24 08 01"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_AntiDote.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "AntiDote",
-   "version": "1.2 Demo"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "60 ?? ?? ?? ?? ?? ?? ?? ?? ?? E8 01 00 00 00 ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? 00 00 ?? ?? ?? 04"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_Anticrack_Software.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "AntiCrack Software Basic",
-   "version": "1.09"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 E9 01 12 00"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_Berio.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "Berio",
-   "version": "1.00 beta"
   },
   {
    "conditions": [
@@ -6536,20 +5892,6 @@
    "kind": "protector",
    "name": "CodeSafe",
    "version": "2.0"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "60 9C FC E8 00 00 00 00 5F 81 EF ?? ?? ?? ?? 8B C7 81 C7 ?? ?? ?? ?? 3B 47 2C 75 02 EB 2E 89 47 2C B9 A7 00 00 00 EB 05 01 44 8F"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_Code_Virtualizer.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "Code Virtualizer",
-   "version": "1.3.1.0"
   },
   {
    "authors": "horsicq",
@@ -6635,36 +5977,6 @@
    "authors": "horsicq",
    "conditions": [
     {
-     "entry": "68 ?? ?? ?? ?? 6A 01 6A 00 FF 15 ?? ?? ?? ?? A3 ?? ?? ?? ?? FF 15 ?? ?? ?? ?? 33 C9 3D B7 00 00 00 A1"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_DS.Sentinel_SuperPro.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "Sentinel SuperPro",
-   "options": "Automatic Protection",
-   "version": "6.4.0"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "A1 ?? ?? ?? ?? 55 8B ?? ?? ?? 85 C0 74 ?? 85 ED 75 ?? A1 ?? ?? ?? ?? 50 55 FF 15 ?? ?? ?? ?? 8B 0D"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_DS.Sentinel_SuperPro.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "Sentinel SuperPro",
-   "options": "Automatic Protection",
-   "version": "6.4.1"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
      "entry": "A1 ?? ?? ?? ?? 85 C0 0F 85 ?? ?? ?? ?? C7 05 ?? ?? ?? ?? ?? ?? ?? ?? 33 C0 50 C7 04 85 ?? ?? ?? ?? ?? ?? ?? ?? E8"
     }
    ],
@@ -6744,33 +6056,6 @@
    "format": "pe",
    "kind": "protector",
    "name": "DirTy CrYpt0r"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "BF ?? ?? ?? ?? 83 C9 FF 33 C0 68 ?? ?? ?? ?? F2 AE F7 D1 49 51 68 ?? ?? ?? ?? E8 11 0A 00 00 83 C4 0C 68"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_DragonArmor.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "DragonArmor",
-   "version": "0.0.4.1"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "50 83 C0 17 8B F0 97 33 C0 33 C9 B1 24 AC 86 C4 AC AA 86 C4 AA E2 F6 00 B8 40 00 03 00 3C 40 D2 33 8B 66 14 50 70 8B 8D 34 02 44 8B 18 10 48 70 03 BA"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_EP.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "EP",
-   "version": "1.0"
   },
   {
    "conditions": [
@@ -6870,34 +6155,6 @@
    "name": "ExeSmasher"
   },
   {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "55 8B EC 83 C4 D0 53 56 57 8D 75 FC 8B 44 24 30 25 00 00 FF FF 81 38 4D 5A 90 00 74 07 2D 00 10 00 00 EB F1 89 45 FC E8 C8 FF FF FF 2D B2 04 00 00"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_Exe_Guarder.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "Exe Guarder",
-   "version": "1.8"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "64 A1 18 00 00 00 EB 02 C3 11 8B 40 30 EB 01 0F 0F B6 40 02 83 F8 01 74 FE EB 01 E8 90 C0 FF FF EB 03 BD F4 B5 64 A1 30 00 00 00 0F"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_FakeNinja.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "FakeNinja",
-   "options": "Anti-Debug",
-   "version": "2.8"
-  },
-  {
    "conditions": [
     {
      "entry": "BA ?? ?? ?? ?? FF E2 ?? ?? ?? ?? FF 35 ?? ?? ?? ?? E8 40"
@@ -6926,33 +6183,6 @@
    "kind": "protector",
    "name": "FishPE Shield",
    "version": "2.0.1"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "60 E8 ?? ?? ?? ?? C3 90 09 00 00 00 2C 00 00 00 ?? ?? ?? ?? C4 03 00 00 BC A0 00 00 00 40 01 00"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_FishPE_Shield.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "FishPE Shield",
-   "version": "1.0X"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "55 E8 00 00 00 00 5D 81 ED ?? ?? 00 00 BE 00 ?? 00 00 03 F5 BA 00 00 ?? ?? 2B D5 8B DD 33 C0 AC 3C 00 74 3D 3C 01 74 0E"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_FixupPak.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "FixupPak",
-   "version": "1.20"
   },
   {
    "authors": "hypn0",
@@ -7025,19 +6255,6 @@
   {
    "conditions": [
     {
-     "entry": "55 8B EC 83 C4 EC 53 56 57 33 C0 89 45 EC B8 70 3B 00 10 E8 3C FA FF FF 33 C0 55 68 6C 3C 00"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_ICrypt.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "ICrypt",
-   "version": "1.0"
-  },
-  {
-   "conditions": [
-    {
      "entry": "60 E8 00 00 00 00 5D 81 ED ?? ?? ?? ?? B9 ?? ?? ?? ?? 81 E9 ?? ?? ?? ?? 89 EA 81 C2 ?? ?? ?? ?? 8D 3A 89 FE 31 C0 E9 D3 02 00 00 CC CC CC CC E9 CA 02 00 00 43 3A 5C 57 69 6E 64 6F 77 73 5C 53 6F 66 74 57 61 72 65 50 72 6F 74 65 63 74 6F 72 5C"
     }
    ],
@@ -7047,56 +6264,6 @@
    "kind": "protector",
    "name": "ID Application Protector (NoNamePacker)",
    "version": "1.2"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? 46 78 4C 69 62 2E 64 6C 6C 00"
-    },
-    {
-     "entry": "EB 33 2E 46 55 58 4C 6F 61 64 4C 69 62 72 61 72 79 41 00"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_IProtect.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "IProtect",
-   "options": "FxLib.dll mode",
-   "version": "1.0"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? 46 78 53 75 62 2E 64 6C 6C 00"
-    },
-    {
-     "entry": "EB 33 2E 46 55 58 4C 6F 61 64 4C 69 62 72 61 72 79 41 00"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_IProtect.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "IProtect",
-   "options": "FxSub.dll mode",
-   "version": "1.0"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "EB 33 2E 46 55 58 4C 6F 61 64 4C 69 62 72 61 72 79 41 00"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_IProtect.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "IProtect",
-   "version": "1.0"
   },
   {
    "authors": "hypn0",
@@ -7238,47 +6405,6 @@
    "name": "MSLRH",
    "options": "fake PEtite 2.1",
    "version": "0.32a"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "60 E8 00 00 00 00 5D 81 ED 25 14 40 00 8B BD 77 14 40 00 8B 8D 7F 14 40 00 EB 28 83 7F 1C 07 75 1E 8B 77 0C 03 B5 7B 14"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_MZ-Crypt.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "MZ-Crypt",
-   "version": "1.0"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "EB CA 89 03 83 C3 04 87 FE 32 C0 AE 75 FD 87 FE 80 3E FF 75 E2 46 5B 83 C3 04 53 8B 1B 80 3F FF 75 C9 8B E5 61 68"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_MZ0oPE.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "MZ0oPE",
-   "version": "1.0.6b"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "55 89 E5 53 56 57 8B 75 0C 8B 5D 10 83 FE 01 74 05 83 FE 02 75 12 53 56 FF 75 08 E8 6E FF FF FF 09 C0 75 04 31 C0 EB 21 53 56 FF 75 08 E8"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_Metrowerks_CodeWarrior.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "Metrowerks CodeWarrior",
-   "version": "2.0"
   },
   {
    "authors": "horsicq",
@@ -7577,20 +6703,6 @@
    "authors": "horsicq",
    "conditions": [
     {
-     "entry": "55 8B EC 83 C4 D0 53 56 57 8D 75 FC 8B 44 24 30 25 00 00 FF FF 81 38 4D 5A 90 00 74 07 2D 00 10 00 00 EB F1 89 45 FC"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_PE_Encrypt.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "PE Encrypt",
-   "version": "1.0"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
      "entry": "8B 04 24 9C 60 E8 ?? ?? ?? ?? 5D 81 ED ?? ?? ?? ?? 80 BD ?? ?? ?? ?? ?? 0F 85 48"
     }
    ],
@@ -7614,34 +6726,6 @@
    "kind": "protector",
    "name": "PELOCKnt",
    "version": "2.04"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "55 57 56 52 51 53 E8 00 00 00 00 5D 8B D5 81 ED"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_PE_Lock_Phantasm_by_Ding_Boy.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "PE Lock Phantasm by Ding Boy",
-   "version": "0.07/0.8"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "9C 55 57 56 52 51 53 9C FA E8 00 00 00 00 5D 81 ED"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_PE_Lock_Phantasm_by_Ding_Boy.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "PE Lock Phantasm by Ding Boy",
-   "version": "1.5b3"
   },
   {
    "authors": "horsicq",
@@ -7740,32 +6824,6 @@
    "kind": "protector",
    "name": "PEnguinCrypt",
    "version": "1.0"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "8B C0 60 9C E8 01 00 00 00 C3 53 E8 72 00 00 00 50 E8 1C 03 00 00 8B D8 FF D3 5B C3"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_Pe123.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "Pe123",
-   "version": "2006.4.12"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "8B C0 EB 01 34 60 EB 01 2A 9C EB 02 EA C8 E8 0F 00 00 00 EB 03 3D 23 23 EB 01 4A EB 01 5B C3"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_Pe123.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "Pe123",
-   "version": "2006.4.4"
   },
   {
    "authors": "hypn0",
@@ -8030,19 +7088,6 @@
    "authors": "horsicq",
    "conditions": [
     {
-     "entry": "EB 01 E3 60 E8 03 ?? ?? ?? D2 EB 0B 58 EB 01 48 40 EB 01 35 FF E0 E7 61 60 E8 03"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_SoftProtect.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "SoftProtect"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
      "entry": "55 8B EC 83 EC ?? 53 56 57 E9"
     },
     {
@@ -8148,20 +7193,6 @@
    "authors": "horsicq",
    "conditions": [
     {
-     "entry": "55 8B EC ?? 00 BD 46 00 8B ?? B9 ?? 00 00 00 80 ?? ?? 51"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_UPolyX.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "UPolyX",
-   "version": "0.5"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
      "entry": "83 EC 04 89 ?? 24 59 ?? ?? 00 00 00"
     }
    ],
@@ -8213,20 +7244,6 @@
    "kind": "protector",
    "name": "UPolyX",
    "version": "0.5"
-  },
-  {
-   "authors": "horsicq",
-   "conditions": [
-    {
-     "entry": "83 EC 04 C7 04 24 00 ?? ?? ?? C3 00 ?? ?? 00 00 00 00 00 00 00 00 00 00 00 00 ?? ?? 00 10 00 00 00 02 00 00 01"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_UltraPro.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "UltraPro",
-   "version": "1.03-1.10"
   },
   {
    "authors": "A.S.L",
@@ -8435,19 +7452,6 @@
    "kind": "protector",
    "name": "k.kryptor",
    "version": "3"
-  },
-  {
-   "conditions": [
-    {
-     "entry": "E8 24 00 00 00 8B 4C 24 0C C7 01 17 00 01 00 C7 81 B8 00 00 00 00 00 00 00 31 C0 89 41 14 89 41 18 80 6A 00"
-    }
-   ],
-   "die_type": "protector",
-   "file": "PE/protector_muckis_protector.2.sg",
-   "format": "pe",
-   "kind": "protector",
-   "name": "mucki's protector",
-   "version": "II"
   },
   {
    "authors": "hypn0",
@@ -8675,24 +7679,6 @@
    "format": "pe",
    "kind": "sfx",
    "name": "Blizzard MPQ"
-  },
-  {
-   "authors": "LinXP",
-   "conditions": [
-    {
-     "entry": "60 BE ?? ?? ?? ?? 8D BE ?? ?? ?? ?? 57 89 E5 8D 9C 24 ?? ?? ?? ?? 31 C0 50 39 DC 75"
-    },
-    {
-     "overlay_bytes": "AE 01 4E 61 6E 6F 5A 69 70 20 30 2E 30 39 20 61 6C 70 68 61"
-    }
-   ],
-   "die_type": "sfx",
-   "file": "PE/sfx_NanoZip.1.sg",
-   "format": "pe",
-   "kind": "sfx",
-   "name": "NanoZip",
-   "options": "nz_w32c.sfx",
-   "version": "0.09a"
   },
   {
    "authors": "horsicq",

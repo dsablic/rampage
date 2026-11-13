@@ -207,7 +207,16 @@ fn detect_it_easy_signatures_fire_only_where_expected_across_every_fixture() {
         }
     }
     found.sort();
-    assert_eq!(found, ["bin/buildinfo-go-x64.elf: Go", "bin/hello-go-arm64.elf: Go", "bin/hello-go-x64.elf: Go"]);
+    let expected = [
+        "bin/buildinfo-go-x64.elf: Go",
+        "bin/gotypes-go1.16-x86.elf: Go",
+        "bin/gotypes-go1.20-x64.elf: Go",
+        "bin/gotypes-go1.26-x86.elf: Go",
+        "bin/gotypes-go1.27-s390x.elf: Go",
+        "bin/hello-go-arm64.elf: Go",
+        "bin/hello-go-x64.elf: Go",
+    ];
+    assert_eq!(found, expected);
 }
 
 /// `host` with each of `payloads` appended, written to a fresh temporary file and loaded.

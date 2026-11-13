@@ -196,6 +196,20 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(convert(guarded)[0]["conditions"],
                          [{"bits": 64}, {"entry": "48 83 EC 28 E8 ?? ?? ?? ?? 48 83 C4 28"}])
 
+    def test_peid_copies_and_truncations_are_detected(self) -> None:
+        peid = {die.normalize("60 E8 00 00 00 00 5D 81 ED ?? ?? ?? ?? B8 ?? ?? ?? ?? 03 C5 2B 85")}
+        prefixes = die.peid_prefixes(peid)
+
+        def copied(entry: str) -> bool:
+            return die.peid_copy({"conditions": [{"entry": entry}]}, peid, prefixes)
+
+        self.assertTrue(copied("60 E8 00 00 00 00 5D 81 ED ?? ?? ?? ?? B8 ?? ?? ?? ?? 03 C5 2B 85"))
+        # Truncated to 16 bytes or more: inherited from PeID.
+        self.assertTrue(copied("60 E8 00 00 00 00 5D 81 ED ?? ?? ?? ?? B8 ?? ??"))
+        # Shorter truncations are too generic to call copies, and a DIE extension of a PeID stub is DIE's own.
+        self.assertFalse(copied("60 E8 00 00 00 00 5D 81 ED ?? ?? ?? ?? B8 ??"))
+        self.assertFalse(copied("60 E8 00 00 00 00 5D 81 ED ?? ?? ?? ?? B8 ?? ?? ?? ?? 03 C5 2B 85 90"))
+
     def test_authors_are_read_from_the_header(self) -> None:
         self.assertEqual(die.authors(FSG), "horsicq")
         self.assertEqual(die.authors("// Authors: hypn0, BJNFNE\n"), "hypn0, BJNFNE")

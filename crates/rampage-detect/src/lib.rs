@@ -47,8 +47,10 @@
 //! exports; overlay presence; and PE32/PE32+ pointer width. A converted signature is never broader than DIE's own
 //! condition; scripts that need more (loops, helper functions, string searches, .NET metadata, ...) are skipped
 //! and counted in the converter's report. DIE's library, tool, game-engine and format types describe content, not
-//! the producing tool, and stay out; so do entry patterns identical to an entry of the PeID `userdb.txt` files
-//! DIE carries, and scripts that matched clean binaries in the false-positive sweep. When several branches of one
+//! the producing tool, and stay out. So do entry patterns copied from the PeID `userdb.txt` files DIE carries
+//! (identical to an entry, or a truncation of one at least 16 bytes long; a DIE pattern that extends a shorter
+//! PeID stub is DIE's own work and stays), and scripts that matched clean binaries in the false-positive sweep.
+//! When several branches of one
 //! DIE script match, every branch's version is listed, where DIE would report the first.
 //!
 //! [Detect It Easy]: https://github.com/horsicq/Detect-It-Easy
