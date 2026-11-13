@@ -232,12 +232,9 @@ async fn virtual_calls_name_their_slot_targets_and_pass_this() {
         let arguments = call_text.rsplit_once("))(").unwrap().1;
         assert!(arguments.contains(primary), "{arch}: {call_text}");
 
-        // Untyped, `measure`'s argument has no class; on x86 its vfptr calls still get __thiscall.
+        // Untyped, `measure`'s argument has no class: its calls keep Ghidra's default.
         let code = decompile("measure").await;
         assert!(!code.contains("Virtual call"), "{arch}:\n{code}");
-        if arch == "x86" {
-            assert_eq!(code.matches("))(param_1)").count(), 3, "{arch}:\n{code}");
-        }
 
         // Typed with a class's name, each call names its slot's overriders (never `_purecall`) and passes `this`.
         let at = "measure";
@@ -264,6 +261,33 @@ async fn virtual_calls_name_their_slot_targets_and_pass_this() {
         assert!(!code.contains("purecall"), "{arch}:\n{code}");
         assert_eq!(code.matches("(shape)").count(), 3, "{arch}:\n{code}");
     }
+}
+
+#[tokio::test]
+async fn operations_tables_and_unknown_objects_keep_the_default_indirect_call() {
+    // `ctx->ops->fn(ctx)` loads twice like a virtual call, but no class is known for `ctx`: its decompilation is the
+    // same as before virtual call resolution existed, though the image has vftables. So is a vfptr call through
+    // an untyped pointer.
+    let client = connect().await;
+    let exe = Copy::new("msvc-ops-x86.exe");
+    let pdb = exe.0.with_extension("pdb");
+    call(&client, "import_pdb_names", json!({"path": exe.0, "pdb": pdb, "apply": true})).await;
+    let decompile = |at: &'static str| {
+        let path = exe.0.clone();
+        let client = &client;
+        async move { call(client, "decompile", json!({"path": path, "at": at})).await["code"].as_str().unwrap().to_owned() }
+    };
+    let code = decompile("run_operations").await;
+    for line in [
+        "  iVar1 = (**(code **)*param_1)(param_1,4);",
+        "  iVar2 = (**(code **)(*param_1 + 4))(param_1,param_2,8);",
+        "  (**(code **)(*param_1 + 8))(param_1);",
+    ] {
+        assert!(code.lines().any(|text| text == line), "{line}\n{code}");
+    }
+    let code = decompile("count_twice").await;
+    assert_eq!(code.matches("(**(code **)(*param_1 + 4))();").count(), 2, "{code}");
+    assert!(!code.contains("Virtual call"), "{code}");
 }
 
 #[tokio::test]

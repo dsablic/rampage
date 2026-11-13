@@ -641,7 +641,7 @@ impl Decompiler {
     /// Registers a vftable. Once any is registered, each decompilation finds the calls through a vfptr whose object
     /// is known to point at one of these tables (it is the `this` of a function in a table's slots, or a pointer to
     /// one of `types`), comments each with the slot's possible targets, and gives the call their prototype when
-    /// they all derive the same one. On 32-bit x86 a vfptr call that passes its object in ECX gets `__thiscall`.
+    /// they all derive the same one. On 32-bit x86 such a call otherwise gets `__thiscall` when ECX holds its object.
     pub fn add_virtual_table(&mut self, table: &VirtualTable) -> Result<(), Error> {
         let mut types = Vec::new();
         for name in &table.types {

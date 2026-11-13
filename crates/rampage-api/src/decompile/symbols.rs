@@ -149,9 +149,31 @@ fn virtual_tables(project: &Project, annotations: &Annotations) -> Option<Worker
     if metadata.vftables.is_empty() {
         return None;
     }
+    let tables = virtual_table_records(&metadata.vftables);
+    let targets: std::collections::BTreeSet<u64> =
+        tables.iter().flat_map(|table| table.slots.iter().copied()).collect();
+    // Target names past 16 MiB are left out; those targets are named by address.
+    const MAX_NAME_BYTES: usize = 16 << 20;
+    let mut name_bytes = 0usize;
+    let names = targets
+        .into_iter()
+        .map(|address| (address, project.function_name_in(annotations, address)))
+        .filter(|(_, name)| !name.contains('\0'))
+        .take_while(|(_, name)| {
+            name_bytes += name.len();
+            name_bytes <= MAX_NAME_BYTES
+        })
+        .collect();
+    Some(WorkerOperation::VirtualTables { tables, names })
+}
+
+/// The engine's records of `vftables`, bounded to its limits and to a supervised worker request (at most 128 MiB):
+/// tables past the 65,536th or past a million slots are left out, so calls through them stay unresolved, and a
+/// table keeps at most 1024 slots, the rest marked truncated.
+fn virtual_table_records(vftables: &[rampage_loaders::msvc::Vftable]) -> Vec<rampage_decompiler::VirtualTable> {
     let mut type_names: BTreeMap<u64, Vec<String>> = BTreeMap::new();
     let mut short: BTreeMap<String, std::collections::BTreeSet<u64>> = BTreeMap::new();
-    for (descriptor, mangled) in metadata.vftables.iter().flat_map(|table| &table.subobjects) {
+    for (descriptor, mangled) in vftables.iter().flat_map(|table| &table.subobjects) {
         if type_names.contains_key(descriptor) {
             continue;
         }
@@ -167,21 +189,18 @@ fn virtual_tables(project: &Project, annotations: &Annotations) -> Option<Worker
             names.truncate(1);
         }
     }
-    // Bounds the operation (a supervised worker request is at most 128 MiB): tables past a million slots, and target
-    // names past 16 MiB, are left out; such calls stay unresolved or name their targets by address.
+    const MAX_TABLES: usize = 65_536;
+    const MAX_TABLE_SLOTS: usize = 1024;
     const MAX_SLOTS: usize = 1 << 20;
-    const MAX_NAME_BYTES: usize = 16 << 20;
     let mut slots = 0usize;
-    let mut targets = std::collections::BTreeSet::new();
-    let tables = metadata
-        .vftables
+    vftables
         .iter()
+        .take(MAX_TABLES)
         .take_while(|table| {
-            slots += table.slots.len();
+            slots += table.slots.len().min(MAX_TABLE_SLOTS);
             slots <= MAX_SLOTS
         })
         .map(|table| {
-            targets.extend(table.slots.iter().copied());
             let mut types: Vec<String> = table
                 .subobjects
                 .iter()
@@ -193,23 +212,12 @@ fn virtual_tables(project: &Project, annotations: &Annotations) -> Option<Worker
                 address: table.address,
                 complete: table.type_descriptor,
                 offset: i64::from(table.offset),
-                slots: table.slots.clone(),
-                truncated: table.truncated,
+                slots: table.slots.iter().copied().take(MAX_TABLE_SLOTS).collect(),
+                truncated: table.truncated || table.slots.len() > MAX_TABLE_SLOTS,
                 types,
             }
         })
-        .collect();
-    let mut name_bytes = 0usize;
-    let names = targets
-        .into_iter()
-        .map(|address| (address, project.function_name_in(annotations, address)))
-        .filter(|(_, name)| !name.contains('\0'))
-        .take_while(|(_, name)| {
-            name_bytes += name.len();
-            name_bytes <= MAX_NAME_BYTES
-        })
-        .collect();
-    Some(WorkerOperation::VirtualTables { tables, names })
+        .collect()
 }
 
 /// The C type names a class serves: its whole name as an identifier, then its last component when that differs.
@@ -489,6 +497,32 @@ pub(crate) fn stub_targets(project: &Project, slot: u64) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn virtual_tables_stay_within_the_engine_limits() {
+        let table = |index: u64, slots: usize| rampage_loaders::msvc::Vftable {
+            address: 0x1000 + index * 8,
+            locator: 0,
+            type_descriptor: index,
+            mangled: String::new(),
+            offset: 0,
+            slots: vec![0x40_0000; slots],
+            truncated: false,
+            subobjects: Vec::new(),
+        };
+        let many: Vec<_> = (0..70_000).map(|index| table(index, 1)).collect();
+        let records = virtual_table_records(&many);
+        assert_eq!(records.len(), 65_536);
+        let wide = virtual_table_records(&[table(0, 1500)]);
+        assert_eq!((wide[0].slots.len(), wide[0].truncated), (1024, true));
+        let mut engine = Decompiler::open(
+            rampage_arch::Arch::X86,
+            false,
+            &[rampage_decompiler::Segment { base: 0x40_0000, bytes: &[0xc3], writable: false }],
+        )
+        .unwrap();
+        engine.add_virtual_tables(&records, &[]).unwrap();
+    }
 
     #[test]
     fn class_type_names_are_identifiers_with_the_last_component_after() {

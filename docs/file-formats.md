@@ -113,10 +113,12 @@ than as separate funclets, which is untested.
   matches a table whose vfptr sits at that class's offset 0 in its complete object, through non-virtual bases. When
   every target's own decompilation derives the same parameters, the call takes that prototype, so arguments are
   not dropped; `this` is always passed even to a target that ignores it. On x86, MSVC passes `this` in ECX
-  (`__thiscall`), which Ghidra's default for an indirect call leaves out: every vfptr call in an image with
-  vftables is given `__thiscall` unless ECX holds something other than the object (a COM `__stdcall` method takes
-  `this` on the stack). Bases reached through a virtual base, and constructor-stored vftables in a caller, are not
-  used.
+  (`__thiscall`), which Ghidra's default for an indirect call leaves out: a resolved call whose targets agree on no
+  prototype is given `__thiscall` unless ECX holds something other than the object (a COM `__stdcall` method takes
+  `this` on the stack). A method's `this` on x86 is ECX; a stack `this` is used only from a locked `__stdcall`
+  signature. Calls whose object has no known class (C operations tables `ctx->ops->fn(ctx)`, callbacks behind
+  pointer fields, untyped pointers) keep Ghidra's default. Bases reached through a virtual base, and
+  constructor-stored vftables in a caller, are not used.
 - **Exception handling** (`exception_handlers`, formats group, **experimental**: its row shape may change): on x64, the unwind info of each `.pdata` entry
   names its language handler; entries whose handler is the `__CxxFrameHandler3` import (or an unnamed, statically
   linked handler whose data starts with a valid FuncInfo) are grouped by FuncInfo, and the entry that is not one of

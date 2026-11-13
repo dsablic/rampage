@@ -60,3 +60,13 @@ build x86 i686-pc-windows-msvc i386 x86 0x400000
     /pdbsourcepath:/rampage/msvc-cpp /debug:full /nodefaultlib /entry:icf_entry /subsystem:console /machine:x64 \
     /base:0x140000000 /opt:ref /opt:icf /Brepro /timestamp:0 /noimplib
 cp msvc-icf-x64.exe msvc-icf-x64.pdb "$source_dir/"
+
+# A C operations table called through a struct beside one polymorphic class (x86): a double-load indirect call
+# that virtual call resolution must leave alone.
+"$clang_cl" --target=i686-pc-windows-msvc /c /O2 /GS- /GR /Z7 /Zl /Gy -fdebug-compilation-dir=/rampage/msvc-cpp \
+    -Xclang -object-file-name=/rampage/msvc-cpp/ops.obj -gno-codeview-command-line /Fo:ops.obj \
+    -- "$source_dir/ops.cpp"
+./lld-link ops.obj /out:msvc-ops-x86.exe /pdb:msvc-ops-x86.pdb /pdbaltpath:msvc-ops-x86.pdb \
+    /pdbsourcepath:/rampage/msvc-cpp /debug:full /nodefaultlib /entry:ops_entry /subsystem:console /machine:x86 \
+    /base:0x400000 /opt:ref /opt:noicf /safeseh:no /Brepro /timestamp:0 /noimplib
+cp msvc-ops-x86.exe msvc-ops-x86.pdb "$source_dir/"

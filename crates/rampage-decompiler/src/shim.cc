@@ -1139,7 +1139,8 @@ void deriveCalleePrototypes(Handle *handle, Funcdata *function) {
 // pass names the slot's possible targets in a comment at the call and gives the call the targets' prototype
 // when they all agree, so arguments the call-site heuristics drop (an argument passed through untouched) are
 // kept. On 32-bit x86, where MSVC passes `this` in ECX (__thiscall) but an indirect call defaults to __cdecl,
-// a vfptr call whose ECX holds the object pointer gets __thiscall. Everything is per call site and is undone
+// such a call whose targets agree on no prototype gets __thiscall when its ECX holds the object pointer. Calls whose
+// object has no known class are left alone. Everything is per call site and is undone
 // before the next top-level decompilation.
 constexpr size_t virtualSiteLimit = 64;
 constexpr size_t virtualCommentNames = 6;
@@ -1199,15 +1200,13 @@ bool virtualShape(const PcodeOp *call, VirtualShape &shape) {
 
 // The vftables that can be the vfptr at `vfptr` bytes past an object pointer, given tables at its offset 0.
 std::vector<size_t> tablesAt(const Handle *handle, const std::vector<size_t> &bases, intb vfptr) {
-    std::vector<size_t> result;
+    std::set<size_t> result;
     for (size_t index : bases) {
         const VirtualTable &table = handle->vtables[index];
         auto found = handle->vtablesBySubobject.find({table.complete, table.offset + vfptr});
-        if (found != handle->vtablesBySubobject.end()
-            && std::find(result.begin(), result.end(), found->second) == result.end())
-            result.push_back(found->second);
+        if (found != handle->vtablesBySubobject.end()) result.insert(found->second);
     }
-    return result;
+    return std::vector<size_t>(result.begin(), result.end());
 }
 
 // The tables `shape`'s vfptr can hold in `function`: from the object pointer's class type, else from the function
@@ -1221,13 +1220,17 @@ std::vector<size_t> virtualTables(const Handle *handle, Funcdata *function, cons
     if (!shape.object->isInput()) return {};
     auto member = handle->vtablesByMember.find(function->getAddress().getOffset());
     if (member == handle->vtablesByMember.end()) return {};
+    // `this` is RCX on x64 and ECX (__thiscall) on x86, recovered as a parameter or not. On x86 a method that
+    // never reads ECX recovers its first stack argument as parameter 0, which is not `this`; a stack `this` is
+    // taken only from a locked __stdcall prototype (a COM method the analyst declared).
     const FuncProto &proto = function->getFuncProto();
-    bool self = proto.numParams() > 0 && proto.getParam(0)->getAddress() == shape.object->getAddr();
-    if (!self && shape.object->getSpace()->getType() == IPTR_PROCESSOR) {
-        // An unrecovered __thiscall `this`: ECX on x86, RCX on x64.
+    bool self = false;
+    if (shape.object->getSpace()->getType() == IPTR_PROCESSOR) {
         std::string name = handle->arch->translate->getRegisterName(shape.object->getSpace(),
             shape.object->getOffset(), shape.object->getSize());
         self = name == "ECX" || name == "RCX";
+    } else if (proto.numParams() > 0 && proto.getParam(0)->getAddress() == shape.object->getAddr()) {
+        self = proto.isInputLocked() && proto.getModelName() == "__stdcall";
     }
     return self ? tablesAt(handle, member->second, shape.vfptr) : std::vector<size_t>{};
 }
@@ -1377,23 +1380,20 @@ void resolveVirtualCalls(Handle *handle, Funcdata *function, const Address &low,
         if (shape.vfptr == 0 && type != nullptr && type->getMetatype() == TYPE_PTR) site.self = type;
         if (shape.slot >= 0 && shape.slot % width == 0) {
             size_t slot = shape.slot / width;
+            std::set<uintb> targets;
             for (size_t index : virtualTables(handle, function, shape)) {
                 const VirtualTable &table = handle->vtables[index];
                 if (slot < table.slots.size()) {
-                    if (!pureVirtual(handle, table.slots[slot])
-                        && std::find(site.targets.begin(), site.targets.end(), table.slots[slot]) == site.targets.end())
-                        site.targets.push_back(table.slots[slot]);
+                    if (!pureVirtual(handle, table.slots[slot])) targets.insert(table.slots[slot]);
                 } else if (table.truncated) {
                     site.partial = true;
                 }
             }
+            site.targets.assign(targets.begin(), targets.end());
         }
-        if (!site.targets.empty()) {
-            std::sort(site.targets.begin(), site.targets.end());
-            sites.push_back(std::move(site));
-        } else if (thiscall != nullptr) {
-            fallbacks.push_back(op->getAddr());
-        }
+        // A call whose object has no known class keeps Ghidra's default: a double load is also a C operations
+        // table (`ctx->ops->fn(ctx)`) or a callback behind a pointer field.
+        if (!site.targets.empty()) sites.push_back(std::move(site));
     }
     if (sites.empty() && fallbacks.empty()) return;
     Address entry = function->getAddress();
