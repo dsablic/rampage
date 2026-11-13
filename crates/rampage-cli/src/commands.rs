@@ -1256,11 +1256,16 @@ pub fn disasm(
         }
         // The user's comment first, then what the instruction refers to.
         let comments: Vec<&str> = [line.note.as_deref(), line.comment.as_deref()].into_iter().flatten().collect();
+        // ARM immediates in hex stay with the instruction, as objdump prints them, apart from the comments.
+        let text = match &line.immediates_hex {
+            Some(values) => format!("{} ; {values}", line.text),
+            None => line.text.clone(),
+        };
         if comments.is_empty() {
-            writeln!(out, "  {:#018x}  {:<24} {}", line.address, line.bytes, line.text)?;
+            writeln!(out, "  {:#018x}  {:<24} {text}", line.address, line.bytes)?;
         } else {
             let comments = comments.join(" | ");
-            writeln!(out, "  {:#018x}  {:<24} {:<40} ; {comments}", line.address, line.bytes, line.text)?;
+            writeln!(out, "  {:#018x}  {:<24} {text:<40} ; {comments}", line.address, line.bytes)?;
         }
     }
     Ok(())

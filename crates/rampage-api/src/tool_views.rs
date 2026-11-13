@@ -867,6 +867,7 @@ fn validate_instruction(value: &Value, path: &str) -> Result<(), ApiError> {
             ("data_ref", String),
             ("accesses", Bool),
             ("immediate", String),
+            ("immediates_hex", String),
             ("label", String),
             ("comment", String),
             ("note", String),
@@ -1040,7 +1041,7 @@ fn instruction_summary(value: &Value, path: &str, projection: &mut Projection) -
             .as_object()
             .ok_or_else(|| invalid("instruction is not an object"))?
             .iter()
-            .filter(|(key, _)| !matches!(key.as_str(), "text" | "bytes"))
+            .filter(|(key, _)| !matches!(key.as_str(), "text" | "bytes" | "immediates_hex"))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect();
         let flow_kind =
@@ -1128,6 +1129,7 @@ mod tests {
             data_ref: None,
             accesses: false,
             immediate: None,
+            immediates_hex: None,
             label: None,
             comment: None,
             note: None,

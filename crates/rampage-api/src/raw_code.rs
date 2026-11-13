@@ -84,6 +84,15 @@ pub struct RawCodeReport {
 /// (`movt r1, #1934 ; 0x78e`), so a `movw`/`movt` pair or an offset reads without converting by hand. Immediates
 /// below 10 read the same in both bases and get none.
 pub(crate) fn with_hex_immediates(text: String) -> String {
+    match hex_immediates(&text) {
+        Some(values) => format!("{text} ; {values}"),
+        None => text,
+    }
+}
+
+/// The decimal `#` immediates of ARM or AArch64 text in hex, comma-separated (`0x78e` for `movt r1, #1934`);
+/// `None` when it has none of 10 or more.
+pub(crate) fn hex_immediates(text: &str) -> Option<String> {
     let mut values = Vec::new();
     for (index, _) in text.match_indices('#') {
         let rest = &text[index + 1..];
@@ -99,7 +108,7 @@ pub(crate) fn with_hex_immediates(text: String) -> String {
             values.push(if negative { format!("-{value:#x}") } else { format!("{value:#x}") });
         }
     }
-    if values.is_empty() { text } else { format!("{text} ; {}", values.join(", ")) }
+    (!values.is_empty()).then(|| values.join(", "))
 }
 
 fn invalid(message: &str) -> ApiError {

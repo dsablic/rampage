@@ -37,8 +37,6 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   address works.
 - Byte searches with wildcards charge their pattern length for every candidate start, so they cover less of a
   large image than exact searches do.
-- `disassemble` prints ARM and Thumb immediates in decimal (`movt r1, #1934`); only `inspect_raw_code` adds the
-  hex value.
 - The Cortex-M Raw profile (`ARM:LE:32:Cortex`) maps one code region of at most 4 MiB: RAM, peripherals and
   other flash banks stay unmapped, and its base address is the analyst's assertion. A-profile ARM code has no Raw
   profile; `inspect_raw_code` reads it, without functions, cross-references or decompilation.
@@ -47,8 +45,9 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   starts were such splits, the same on the stripped ELF.
 - An odd address formed into a Cortex-M image that does not start a printable NUL-terminated run is still taken
   as a Thumb code pointer; odd-aligned binary constants can become false function starts.
-- Go string literals referenced only through static `{ptr, len}` headers in data, not by code, have no
-  `go_literal` bounds.
+- Go string literal bounds come from code references and pointer-aligned static `{ptr, len}` headers in data
+  that point into the printable string blob. A literal that starts with a non-printable byte, or is reached only
+  through a header the image builds at run time, still ends at the next referenced literal.
 - `function_graph` refuses a view too large for one result; `function_summary` pages its blocks instead.
 - Not built yet: DEX/JVM, Intel HEX/SREC and multi-region firmware maps, object-file relocation, Swift metadata,
   C++ layout recovery beyond RTTI evidence, and incremental analysis or a persistent database for very large

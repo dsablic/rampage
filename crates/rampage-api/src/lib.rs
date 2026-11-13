@@ -36,6 +36,7 @@ mod findings;
 pub mod flywheel;
 mod frame;
 mod fuzzy_signatures;
+mod go_strings;
 mod graph;
 mod import_types;
 mod jumptable;

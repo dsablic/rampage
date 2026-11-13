@@ -250,7 +250,9 @@ oversized results do not persist. See [local variables](local-variables.md) for 
 and data byte orders, and base VA; it returns range hashes, source offsets and bounded linear observations.
 Limits: 4096 bytes, 256 instructions, little endian only; no target following or validated code identity.
 ARM, Thumb and AArch64 rows print decimal `#` immediates of 10 or more in hex too, as GNU objdump does
-(`movt r1, #1934 ; 0x78e`). A native binary tool on a file with no recognised header says how to read it as
+(`movt r1, #1934 ; 0x78e`). `disassemble` and `function_graph` rows on ARM and AArch64 images keep `text` as
+the decoder renders it (operand globs match it) and carry those hex values in `immediates_hex` (`"0x78e"`); the
+CLI listing prints them after the instruction as `; 0x78e`, before the comment column. A native binary tool on a file with no recognised header says how to read it as
 headerless code: `inspect_raw_code` for ARM/Thumb, AArch64 and x86, or the `raw` selector for the Raw profiles.
 See [raw-code windows](raw-code.md). `decode_file_range` and `inspect_data` have separate source/coordinate
 contracts; see [decoding](decoding.md) and [data inspection](data-inspection.md).
@@ -265,9 +267,11 @@ the first omitted offset, and `continuation` gives the next call's range. See [f
 
 With `contains`, `list_strings` rows carry `match_address`, where the text matches inside the string. Go string
 data is not NUL-terminated, so in a Go image a run that code references at more than one address carries a
-`note`, and a match its `go_literal` bounds: the last address code references at or before the match (with
-`start_is_match` saying whether that is the match itself, since otherwise it may begin an earlier literal), the
-first one after it (or the run's end), and how many references the start has. Do not count offsets into such a
+`note`, and a match its `go_literal` bounds: the last address code or a static `{ptr, len}` string header in data
+references at or before the match (with `start_is_match` saying whether that is the match itself, since
+otherwise it may begin an earlier literal), the first one after it (or the run's end), and how many references
+the start has. When a header gives the start's length, `header_length` carries it and `end` is exact. String
+references in `search` (`functions_referencing`) end a Go literal the same way. Do not count offsets into such a
 run by hand. Listing strings in a Go image runs the cached whole-program analysis.
 
 `function_summary` with `view=summary` or `view=code` adds `callees` (distinct call targets with names and call

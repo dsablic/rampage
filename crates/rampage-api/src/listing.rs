@@ -21,6 +21,9 @@ pub struct DisassemblyLine {
     /// The instruction loads from or stores to `data_ref` rather than forming it, so it is data, not code.
     pub accesses: bool,
     pub immediate: Option<u64>,
+    /// ARM and AArch64 only: the decimal `#` immediates of `text` in hex, comma-separated (`0x78e` for
+    /// `movt r1, #1934`), as GNU objdump prints them after `;`. `text` itself stays as the decoder renders it.
+    pub immediates_hex: Option<String>,
     /// Symbol or function name at this address, when there is one.
     pub label: Option<String>,
     /// What the instruction refers to: the name of its branch target or data reference, or the string there.
@@ -65,6 +68,9 @@ impl Serialize for DisassemblyLine {
         }
         if let Some(address) = self.immediate {
             map.serialize_entry("immediate", &format!("{address:#x}"))?;
+        }
+        if let Some(values) = &self.immediates_hex {
+            map.serialize_entry("immediates_hex", values)?;
         }
         for (key, value) in [("label", &self.label), ("comment", &self.comment), ("note", &self.note)] {
             if let Some(value) = value {
@@ -169,6 +175,8 @@ impl Project {
             .ok_or_else(|| ApiError::Invalid(format!("address {start:#x} is not backed by file data")))?;
         let limit = usize::try_from(end.saturating_sub(start)).unwrap_or(usize::MAX).min(code.len());
 
+        // LLVM prints ARM and AArch64 immediates in decimal; their hex goes in a separate field.
+        let arm = matches!(self.binary.arch, rampage_arch::Arch::Arm | rampage_arch::Arch::Aarch64);
         let mut lines = Vec::with_capacity(count.min(4096));
         let mut offset = 0;
         while lines.len() < count && offset < limit {
@@ -180,19 +188,22 @@ impl Project {
             let operand_annotations =
                 operands.map(|context| context.display(self, address, bytes)).transpose()?.unwrap_or_default();
             let comment = with_operand_comments(self.describe_reference(&insn), &operand_annotations);
+            let text = if decode_gate.is_some() {
+                decoder.format(&code[offset..], address)
+            } else {
+                decoder.format(bytes, address)
+            };
+            let immediates_hex = arm.then(|| crate::raw_code::hex_immediates(&text)).flatten();
             lines.push(DisassemblyLine {
                 address,
                 bytes: rampage_arch::hex::bytes(bytes),
-                text: if decode_gate.is_some() {
-                    decoder.format(&code[offset..], address)
-                } else {
-                    decoder.format(bytes, address)
-                },
+                text,
                 flow: insn.flow,
                 data_ref: insn.data_ref,
                 decode_gate,
                 accesses: insn.accesses,
                 immediate: insn.immediate,
+                immediates_hex,
                 label: self.name_at(address),
                 note: self.comment_at(address),
                 comment,

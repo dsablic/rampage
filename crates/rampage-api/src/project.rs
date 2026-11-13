@@ -105,6 +105,8 @@ pub struct Project {
     packs: RwLock<Arc<Packs>>,
     /// Go register-ABI prototypes, derived once on first decompilation.
     pub(crate) go_prototypes: OnceLock<crate::decompile::GoPrototypes>,
+    /// Go static string headers, read once from data on first use.
+    go_strings: OnceLock<crate::go_strings::GoStrings>,
 }
 
 /// Rechecks the frozen view after acquiring the authority read lock. Selecting a lock before a first patch
@@ -348,6 +350,7 @@ impl Project {
             decompiler: std::sync::Mutex::new(crate::decompile::DecompilerState::default()),
             packs: RwLock::default(),
             go_prototypes: OnceLock::new(),
+            go_strings: OnceLock::new(),
         }
     }
 
@@ -852,6 +855,13 @@ impl Project {
         self.strings.get_or_init(|| strings::scan(&self.binary, DEFAULT_STRING_LENGTH))
     }
 
+    /// The static `{ptr, len}` string headers of a Go image, read once; `None` outside Go images.
+    pub(crate) fn go_strings(&self, program: &Program) -> Option<&crate::go_strings::GoStrings> {
+        self.binary.go_table.is_some().then(|| {
+            self.go_strings.get_or_init(|| crate::go_strings::read(&self.binary, program, self.scanned_strings()))
+        })
+    }
+
     pub fn strings(&self, query: &StringsQuery) -> Page<FoundString> {
         let min_len = query.min_len.unwrap_or(DEFAULT_STRING_LENGTH);
         let matcher = Matcher::new(query.contains.as_deref());
@@ -871,8 +881,10 @@ impl Project {
     pub fn string_rows(&self, query: &StringsQuery) -> Page<StringRow> {
         let go = self.binary.go_table.is_some();
         let needle = query.contains.as_deref().map(str::to_lowercase).filter(|needle| !needle.is_empty());
-        // Go runs are split by the addresses code references, so a Go image needs its (cached) analysis.
+        // Go runs are split by the addresses code and static string headers reference, so a Go image needs its
+        // (cached) analysis.
         let program = if go { self.analysis().ok().map(|analysis| &analysis.program) } else { None };
+        let headers = program.and_then(|program| self.go_strings(program));
         self.strings(query).map(|string| {
             let unit = if string.encoding == strings::Encoding::Utf16Le { 2 } else { 1 };
             let match_address = needle.as_deref().and_then(|needle| {
@@ -880,34 +892,46 @@ impl Project {
                 Some(string.address + (string.text[..at].chars().count() * unit) as u64)
             });
             let end = string.address + (string.text.chars().count() * unit) as u64;
-            // A run joins several literals when code references more than one address inside it.
-            let referenced_starts = program.map_or(0, |program| {
+            // A run joins several literals when code or headers reference more than one address inside it.
+            let starts: Vec<u64> = program.map_or_else(Vec::new, |program| {
                 let first = program.xrefs.partition_point(|xref| xref.to < string.address);
                 let last = program.xrefs.partition_point(|xref| xref.to < end);
-                let mut targets: Vec<u64> = program.xrefs[first..last]
+                let mut starts: Vec<u64> = program.xrefs[first..last]
                     .iter()
                     .filter(|xref| xref.kind == XrefKind::Data)
                     .map(|xref| xref.to)
+                    .chain(
+                        headers
+                            .into_iter()
+                            .flat_map(|headers| headers.in_range(string.address, end))
+                            .map(|header| header.start),
+                    )
                     .collect();
-                targets.dedup();
-                targets.len()
+                starts.sort_unstable();
+                starts.dedup();
+                starts
             });
+            let referenced_starts = starts.len();
             let literal = program.zip(match_address).map(|(program, matched)| {
-                // Data references are sorted by target: the last referenced address at or before the match, and
-                // the first after it, bound the literal the match is in.
-                let first = program.xrefs.partition_point(|xref| xref.to < string.address);
-                let after = program.xrefs.partition_point(|xref| xref.to <= matched);
-                let start = program.xrefs[first..after].iter().rev().find(|xref| xref.kind == XrefKind::Data);
-                let next = program.xrefs[after..]
-                    .iter()
-                    .take_while(|xref| xref.to < end)
-                    .find(|xref| xref.kind == XrefKind::Data)
-                    .map_or(end, |xref| xref.to);
+                // The last referenced address at or before the match, and the first after it, bound the literal
+                // the match is in; a header's length bounds it exactly.
+                let after = starts.partition_point(|&start| start <= matched);
+                let start = after.checked_sub(1).map(|index| starts[index]);
+                let next = starts.get(after).copied().unwrap_or(end);
+                let header = start.and_then(|start| headers?.header(start));
+                let header_length = header.map(|header| header.length);
+                let end = match (start, header_length) {
+                    (Some(start), Some(length)) if start + length > matched => start + length,
+                    _ => next,
+                };
                 GoLiteral {
-                    start: start.map(|xref| xref.to),
-                    start_is_match: start.is_some_and(|xref| xref.to == matched),
-                    end: next,
-                    start_references: start.map_or(0, |xref| program.xrefs_to(xref.to).len()),
+                    start,
+                    start_is_match: start == Some(matched),
+                    end,
+                    start_references: start.map_or(0, |start| {
+                        program.xrefs_to(start).len() + header.map_or(0, |header| header.references)
+                    }),
+                    header_length,
                 }
             });
             let blob = referenced_starts > 1;
@@ -923,7 +947,8 @@ impl Project {
 
 const GO_BLOB_NOTE: &str = "Go string data is not NUL-terminated: code references several addresses inside this \
                             run, so it joins several literals. Do not count offsets by hand: use match_address, \
-                            go_literal (bounded by addresses code references; when start_is_match is false, start \
+                            go_literal (bounded by addresses code or static string headers reference, exactly by header_length \
+                            when a header gives one; when start_is_match is false, start \
                             may begin an earlier literal), or the address and length a referencing instruction or \
                             string header gives.";
 
@@ -951,11 +976,16 @@ pub struct GoLiteral {
     /// Whether `start` is the match itself. Otherwise the match is inside a literal whose own start is not
     /// referenced by code, and `start` may begin an earlier literal.
     pub start_is_match: bool,
-    /// The first referenced address after the match inside the run, else the run's end (exclusive).
+    /// The first referenced address after the match inside the run, else the run's end (exclusive); with
+    /// `header_length` covering the match, `start` plus that length.
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub end: u64,
-    /// How many references target `start`.
+    /// How many references target `start`: instructions and static string headers.
     pub start_references: usize,
+    /// The length a static `{ptr, len}` string header in data gives for `start`; `end` is then `start` plus this
+    /// length when the match lies inside it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header_length: Option<u64>,
 }
 
 pub(crate) use rampage_loaders::labels::{check_name, default_name_address, hex_address_digits, is_address_shaped};

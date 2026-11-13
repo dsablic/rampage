@@ -1298,14 +1298,14 @@ fn import_targets(
 }
 
 /// Where the UTF-8 text at `target` ends in a Go image: Go string data is not NUL-terminated, so literals run
-/// together, and the next address code references as data begins another literal (the `go_literal` bound that
-/// list_strings reports). `None` outside Go images and for UTF-16 queries, which keep NUL/bound termination.
+/// together. A static string header's length ends the literal exactly; otherwise the next address code or a
+/// header references begins another literal (the `go_literal` bound that list_strings reports). `None` outside
+/// Go images and for UTF-16 queries, which keep NUL/bound termination.
 fn go_literal_end(project: &Project, program: &Program, target: u64, source: &SourceString) -> Option<u64> {
-    if project.binary.go_table.is_none() || !matches!(source.encoding, SourceStringEncoding::Utf8) {
+    if !matches!(source.encoding, SourceStringEncoding::Utf8) {
         return None;
     }
-    let after = program.xrefs.partition_point(|xref| xref.to <= target);
-    program.xrefs[after..].iter().find(|xref| xref.kind == XrefKind::Data).map(|xref| xref.to)
+    crate::go_strings::literal_end(program, project.go_strings(program)?, target)
 }
 
 fn source_matches(
@@ -1675,7 +1675,10 @@ mod tests {
         let mut targets: Vec<u64> =
             program.xrefs.iter().filter(|xref| xref.kind == XrefKind::Data).map(|xref| xref.to).collect();
         targets.dedup();
-        // Two adjacent referenced literals, the earlier one's bytes running into a distinctive later one.
+        let headers = project.go_strings(program).unwrap();
+        let end = |target| crate::go_strings::literal_end(program, headers, target);
+        // Two adjacent referenced literals, the earlier one's bytes running into a distinctive later one, which no
+        // static string header splits or bounds.
         let (earlier, later, needle) = targets
             .windows(3)
             .find_map(|window| {
@@ -1684,6 +1687,8 @@ mod tests {
                 let text = std::str::from_utf8(run).ok()?;
                 let needle = &text[(later - earlier) as usize..];
                 (later - earlier < 64
+                    && end(earlier) == Some(later)
+                    && end(later) == Some(next)
                     && needle.len() >= 8
                     && !text.contains('\0')
                     && needle.bytes().all(|byte| byte.is_ascii_alphanumeric())
@@ -1701,6 +1706,47 @@ mod tests {
         let matched: BTreeSet<u64> = report.hits.iter().filter_map(|hit| hit.evidence.target).collect();
         assert!(matched.contains(&later), "{needle:?} at {later:#x}: {report:?}");
         assert!(!matched.contains(&earlier), "{needle:?}: {earlier:#x} is another literal");
+    }
+
+    /// A literal referenced only from a static `{ptr, len}` header in data gets a start and its exact length: the
+    /// code-referenced literal before it ends at its start, and its own text ends at the header length.
+    #[test]
+    fn go_header_literals_bound_string_references() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-go-x64.elf");
+        let project = Project::new(Binary::open(&path).unwrap());
+        let program = &project.analysis().unwrap().program;
+        let headers = project.go_strings(program).expect("Go image");
+        let code: BTreeSet<u64> =
+            program.xrefs.iter().filter(|xref| xref.kind == XrefKind::Data).map(|xref| xref.to).collect();
+        // A header-only literal right after a code-referenced one, its text distinctive and absent before it.
+        let (earlier, header) = headers
+            .in_range(0, u64::MAX)
+            .iter()
+            .filter(|header| !code.contains(&header.start))
+            .find_map(|header| {
+                let earlier = *code.range(..header.start).next_back()?;
+                let text = std::str::from_utf8(project.binary.read(header.start, header.length)?).ok()?;
+                let before = std::str::from_utf8(project.binary.read(earlier, header.start - earlier)?).ok()?;
+                (header.start - earlier < 256
+                    && text.len() >= 6
+                    && text.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                    && !before.contains(text)
+                    && !before.contains('\0'))
+                .then_some((earlier, *header))
+            })
+            .expect("fixture has a header-only Go literal after a code-referenced one");
+        assert_eq!(crate::go_strings::literal_end(program, headers, earlier), Some(header.start));
+        assert_eq!(crate::go_strings::literal_end(program, headers, header.start), Some(header.start + header.length));
+        let needle = std::str::from_utf8(project.binary.read(header.start, header.length).unwrap()).unwrap();
+        let query = CodeSearchQuery::new(CodeSearchKind::FunctionsReferencing(CodeReference::String(
+            SourceString::new(needle, SourceStringEncoding::Utf8).unwrap(),
+        )))
+        .unwrap()
+        .with_page(0, 1000)
+        .unwrap();
+        let report = project.search_code(&query).unwrap();
+        let matched: BTreeSet<u64> = report.hits.iter().filter_map(|hit| hit.evidence.target).collect();
+        assert!(!matched.contains(&earlier), "{needle:?}: {earlier:#x} ends at {:#x}", header.start);
     }
 
     #[test]

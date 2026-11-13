@@ -309,6 +309,7 @@ mod tests {
                     data_ref: None,
                     accesses: false,
                     immediate: None,
+                    immediates_hex: None,
                     label: None,
                     comment: None,
                     note: None,

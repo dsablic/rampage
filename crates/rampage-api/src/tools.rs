@@ -2809,7 +2809,8 @@ pub fn tools() -> Vec<Tool> {
             "Disassemble instructions from an address/name with native bytes, control flow and annotations. \
              view=full (default) and code preserve the original complete listing; summary omits text/bytes with \
              bounds/counts and explicit omission receipts, retaining non-rendering control/annotation evidence. \
-             Oversized views refuse; reduce count or choose summary. No string truncation.",
+             ARM and AArch64 rows also give decimal immediates in hex, in immediates_hex. Oversized views refuse; \
+             reduce count or choose summary. No string truncation.",
             |project, arguments: ViewedDisassembleArgs| {
                 let count = arguments.listing.count.unwrap_or(crate::DEFAULT_INSTRUCTIONS).min(1000);
                 let value = serde_json::to_value(project.disassemble(arguments.listing.at.as_deref(), count)?)
@@ -2854,8 +2855,8 @@ pub fn tools() -> Vec<Tool> {
             "list_strings",
             "Printable strings with their addresses. Filter with `contains`; paginated. With `contains`, \
              match_address is where the text matches inside each string. Go string data is not NUL-terminated, so \
-             in a Go image a run that code references at several addresses carries a note, and a match its \
-             go_literal bounds from those references; never count offsets into a run by hand. In a Go image the \
+             in a Go image a run that code or static string headers reference at several addresses carries a \
+             note, and a match its go_literal bounds from those references (exact when header_length is set); never count offsets into a run by hand. In a Go image the \
              listing runs the (cached) whole-program analysis.",
             |project, mut query: StringsQuery| {
                 query.limit = page_limit(query.limit);

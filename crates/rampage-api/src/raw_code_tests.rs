@@ -1,5 +1,32 @@
 use super::*;
 
+/// The native listing keeps the decoder's text, which operand globs match, and carries ARM and AArch64 immediates
+/// in hex in their own field; x86 listings get none.
+#[test]
+fn native_listings_carry_arm_immediates_in_hex_apart_from_the_text() {
+    let fixture = |name: &str| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin").join(name);
+        crate::Project::new(rampage_loaders::Binary::open(&path).unwrap())
+    };
+    for name in ["hello-thumb.elf", "hello-arm.elf", "hello-arm64.elf"] {
+        let project = fixture(name);
+        let lines = project.disassemble(None, 400).unwrap();
+        let mut carried = 0;
+        for line in &lines {
+            assert_eq!(line.immediates_hex, hex_immediates(&line.text), "{name}: {}", line.text);
+            assert!(!line.text.contains(" ; "), "{name}: {}", line.text);
+            if let Some(values) = &line.immediates_hex {
+                carried += 1;
+                assert_eq!(serde_json::to_value(line).unwrap()["immediates_hex"], values.as_str());
+            }
+        }
+        assert!(carried > 0, "{name}: no decimal immediates in {} lines", lines.len());
+    }
+    let lines = fixture("hello-x64.elf").disassemble(None, 400).unwrap();
+    assert!(lines.iter().all(|line| line.immediates_hex.is_none()));
+    assert!(!serde_json::to_string(&lines).unwrap().contains("immediates_hex"));
+}
+
 /// Benchmark v2 validation: an agent misread `movt r1, #1934` from the blinky Cortex-M3 image, computing
 /// 0x038e3ad1 instead of 0x078e3ad1. The same movw/movt pair and store, with the immediates also in hex.
 #[test]
