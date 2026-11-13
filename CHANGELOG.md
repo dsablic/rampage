@@ -8,6 +8,13 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Added
 
+- Encrypted or packed code detection. Code is measured in 4 KiB windows; a stretch of at least 8 KiB with entropy
+  ≥ 7.6 bits/byte and no more than 97% valid instructions is reported as `encrypted_or_packed_code` in `triage`,
+  `triage_report` and `binary_info`, and function discovery stops at it, so a protected binary no longer lists
+  thousands of noise functions. Clear code (a packer's stub, a firmware loader before a compressed stage) is still
+  explored from the entry point. `list_functions` reports skipped stretches as `unexplored_code`; `decompile`
+  refuses addresses inside them unless `explore_encrypted: true`. No fixture's normal code comes close to the
+  thresholds. A Mach-O protector signature for PACE (Eden/Fusion) is added to the bundled detection database.
 - `transfer_annotations` (MCP; CLI `rampage annotation transfer`) carries an analysed build's annotations to a new
   build. Functions are matched one-to-one by exact bytes, symbol names, masked hashes, unique strings, call-graph
   position and neighbourhood, each with a confidence; ambiguous pairs are reported, never guessed. Preview is the
