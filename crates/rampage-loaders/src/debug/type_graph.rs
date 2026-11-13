@@ -278,7 +278,7 @@ pub fn producer_type_graph(binary: &Binary) -> Result<DebugProducerReport, LoadE
     }
     match read_nodes(&dwarf, &mut Budget::default()) {
         Ok(nodes) => build_report(&nodes, |address| binary.is_code(address), &mut report),
-        Err(error) => report.warn(format!("DWARF producer graph stopped: {error}")),
+        Err(error) => report.warn(format!("DWARF producer graph stopped: {error}; {}", super::DWARF_LOOKUP_HINT)),
     }
     Ok(report)
 }

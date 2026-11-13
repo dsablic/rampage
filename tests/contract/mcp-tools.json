@@ -2099,6 +2099,14 @@
           "type": "null|string",
           "required": false
         },
+        "byte_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "depth": {
+          "type": "integer|null",
+          "required": false
+        },
         "image_length": {
           "type": "integer|null|string",
           "required": false
@@ -2107,13 +2115,29 @@
           "type": "integer|null|string",
           "required": false
         },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "member": {
+          "type": "null|string",
+          "required": false
+        },
         "name": {
           "type": "string",
           "required": true
         },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
         "path": {
           "type": "string",
           "required": true
+        },
+        "source": {
+          "type": "null|string",
+          "required": false
         }
       }
     },

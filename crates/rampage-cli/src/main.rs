@@ -24,7 +24,7 @@ use crate::args::{
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
     DisasmArgs, DotnetArgs, ExportsArgs, FileArgs, FuncsArgs, IdentifyArgs, ImportPdbNamesArgs, ImportsArgs,
     JumpTableArgs, McpArgs, ObserveIndirectBranchArgs, PseudocodeArgs, QueryDebuggerArgs, RenameArgs, ReportArgs,
-    SignaturesArgs, StringsArgs, XrefsArgs, YaraArgs,
+    SignaturesArgs, StringsArgs, TypeLayoutArgs, XrefsArgs, YaraArgs,
 };
 use crate::commands::Options;
 use crate::hierarchy::RootCommand;
@@ -276,6 +276,8 @@ enum Command {
     DebugTypes(DebugTypesArgs),
     #[command(skip)]
     ImportPdbNames(ImportPdbNamesArgs),
+    #[command(skip)]
+    TypeLayout(TypeLayoutArgs),
     #[command(skip)]
     ImportDebugLayouts(ImportDebugLayoutsArgs),
     /// Run a guided investigation workflow and print its bounded, evidence-backed report
@@ -607,6 +609,7 @@ fn main() -> ExitCode {
         Command::ListFindings(args) => commands::list_findings(&mut out, &args, &options),
         Command::DebugTypes(DebugTypesArgs { file, apply }) => commands::debug_types(&mut out, &file, apply, &options),
         Command::ImportPdbNames(args) => commands::import_pdb_names(&mut out, &args, &options),
+        Command::TypeLayout(args) => commands::type_layout(&mut out, &args, &options),
         Command::ImportDebugLayouts(args) => commands::import_debug_layouts(&mut out, &args, &options),
         Command::Report(ReportArgs {
             workflow,

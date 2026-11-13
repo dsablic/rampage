@@ -271,7 +271,7 @@ pub fn layout_signatures(binary: &Binary) -> Result<DebugLayoutReport, LoadError
     let nodes = match read_layout_nodes(&dwarf) {
         Ok(nodes) => nodes,
         Err(error) => {
-            report.warn(format!("DWARF layout preview stopped: {error}"));
+            report.warn(format!("DWARF layout preview stopped: {error}; {}", super::DWARF_LOOKUP_HINT));
             return Ok(report);
         }
     };

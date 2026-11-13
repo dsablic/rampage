@@ -18,6 +18,9 @@ impl ClientHandler for Client {
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
+        Self::with("owned.snapshot.json", include_bytes!("../../../tests/data/local-variables-x64.snapshot.json"))
+    }
+    fn with(name: &str, bytes: &[u8]) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let directory = std::env::temp_dir().join(format!(
             "rampage-type-library-mcp-{}-{}",
@@ -25,20 +28,16 @@ impl Fixture {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir(&directory).unwrap();
-        std::fs::write(
-            directory.join("owned.snapshot.json"),
-            include_bytes!("../../../tests/data/local-variables-x64.snapshot.json"),
-        )
-        .unwrap();
-        Self(directory)
+        std::fs::write(directory.join(name), bytes).unwrap();
+        Self(directory.join(name))
     }
     fn path(&self) -> PathBuf {
-        self.0.join("owned.snapshot.json")
+        self.0.clone()
     }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).unwrap();
+        std::fs::remove_dir_all(self.0.parent().unwrap()).unwrap();
     }
 }
 
@@ -242,4 +241,68 @@ async fn source_header_matches_compiler_sizeof_and_offsetof_table_including_forw
     invoke(&client, &fixture, "undo", json!({}), true).await;
     assert_eq!(invoke(&client, &fixture, "get_type", json!({"name":"TypeLibraryRecord"}), true).await["size"], 32);
     client.cancel().await.unwrap();
+}
+
+/// `get_type` falls back to embedded DWARF when the library lacks a name, and selects members by path or offset.
+#[tokio::test]
+async fn get_type_reads_dwarf_layouts_without_importing() {
+    let fixture = Fixture::with("debug-x64.elf", include_bytes!("../../../tests/fixtures/bin/debug-x64.elf"));
+    let client = connect().await;
+    enable(&client).await;
+    let layout = invoke(&client, &fixture, "get_type", json!({"name": "debug_pair"}), true).await;
+    assert_eq!(layout["source"], "dwarf", "{layout}");
+    assert_eq!(layout["ambiguous"], false);
+    let definition = &layout["definitions"][0];
+    assert_eq!(
+        (definition["type_name"].as_str(), definition["byte_size"].as_u64()),
+        (Some("struct debug_pair"), Some(8))
+    );
+    let members: Vec<_> = definition["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|member| {
+            (
+                member["name"].as_str().unwrap(),
+                member["offset"].as_u64().unwrap(),
+                member["type_name"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(members, [("first", 0, "int"), ("second", 4, "int")]);
+    assert!(layout["work"]["dies_read"].as_u64().unwrap() > 0);
+
+    let at =
+        invoke(&client, &fixture, "get_type", json!({"name": "struct debug_pair", "byte_offset": "0x5"}), true).await;
+    let selection = &at["definitions"][0]["selection"];
+    assert_eq!(
+        (selection["path"].as_str(), selection["offset"].as_u64(), selection["within"].as_u64()),
+        (Some("second"), Some(4), Some(1))
+    );
+    assert!(at["definitions"][0].get("members").is_none(), "selection alone pages no members: {at}");
+
+    let member = invoke(
+        &client,
+        &fixture,
+        "get_type",
+        json!({"name": "debug_pair", "member": "second", "source": "dwarf"}),
+        true,
+    )
+    .await;
+    assert_eq!(member["definitions"][0]["selection"]["byte_size"], 4);
+
+    let paged =
+        invoke(&client, &fixture, "get_type", json!({"name": "debug_pair", "offset": 1, "limit": 1}), true).await;
+    assert_eq!(paged["definitions"][0]["members"][0]["name"], "second");
+    assert_eq!(paged["definitions"][0]["total"], 2);
+
+    invoke(&client, &fixture, "get_type", json!({"name": "debug_pair", "member": "third"}), false).await;
+    invoke(&client, &fixture, "get_type", json!({"name": "debug_pair", "byte_offset": 8}), false).await;
+    invoke(&client, &fixture, "get_type", json!({"name": "no_such_type"}), false).await;
+    invoke(&client, &fixture, "get_type", json!({"name": "debug_pair", "source": "library"}), false).await;
+    invoke(&client, &fixture, "get_type", json!({"name": "debug_pair", "source": "library", "member": "first"}), false)
+        .await;
+    // Nothing was imported: the library is still empty.
+    let listed = invoke(&client, &fixture, "list_types", json!({}), true).await;
+    assert!(listed["types"].as_array().unwrap().iter().all(|ty| ty["name"] != "debug_pair"), "{listed}");
 }

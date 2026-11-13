@@ -137,6 +137,7 @@ which also conflicts with `--contains`/`--parent-token`. IL `--at` requires `--i
 | `type import-debug FILE [--apply]` | `debug-types` |
 | `type import-pdb-names FILE --pdb PDB [--apply]` | — |
 | `type import-debug-layouts IMAGE [--apply --review-sha256 SHA]` | — |
+| `type layout IMAGE NAME [--member PATH \| --byte-offset N] [--depth D] [--offset N] [--limit N]` | — |
 | `annotation record-finding FILE --kind KIND --text TEXT [--id N] [--address A] [--function A] [--evidence TOOL=DETAIL]... [--confidence C] [--status S] [--resolution TEXT]` | — |
 | `annotation list-findings FILE [--kind K] [--status S] [--address A] [--function A] [--contains TEXT] [--offset N] [--limit N]` | — |
 

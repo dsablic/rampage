@@ -1182,6 +1182,89 @@ struct DeclareTypesArgs {
 struct TypeNameArgs {
     /// Exact named type or alias. Named type inspection uses the target's native data organization.
     name: String,
+    /// `auto` (default): the project type library, else embedded DWARF when the library has no such name or a
+    /// member/byte_offset/depth is given. `library` or `dwarf` pick one.
+    source: Option<TypeSource>,
+    /// DWARF: a dotted member path such as `init.busy` or `aDb[1].pBt`; returns its offset from the start of
+    /// the type, size and type.
+    member: Option<String>,
+    /// DWARF: a byte offset (number or "0x80") into the type; returns the innermost member covering it.
+    byte_offset: Option<OffsetArg>,
+    /// DWARF: levels of by-value struct/union members to expand inline (0-4, default 0).
+    depth: Option<usize>,
+    /// DWARF: first member (or enumerator) of the page.
+    offset: Option<usize>,
+    /// DWARF: members per page (default 128, or 0 when member/byte_offset is given; at most 512).
+    limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum TypeSource {
+    Auto,
+    Library,
+    Dwarf,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum OffsetArg {
+    Number(u64),
+    Text(String),
+}
+
+impl OffsetArg {
+    fn value(&self) -> Result<u64, ApiError> {
+        match self {
+            OffsetArg::Number(value) => Ok(*value),
+            OffsetArg::Text(text) => {
+                let text = text.trim();
+                match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+                    Some(hex) => u64::from_str_radix(hex, 16),
+                    None => text.parse(),
+                }
+                .map_err(|_| ApiError::Invalid(format!("byte_offset {text:?} is not a number")))
+            }
+        }
+    }
+}
+
+fn get_type(project: &crate::Project, args: TypeNameArgs) -> Result<Value, ApiError> {
+    let source = args.source.unwrap_or(TypeSource::Auto);
+    let dwarf_only = args.member.is_some()
+        || args.byte_offset.is_some()
+        || args.depth.is_some()
+        || args.offset.is_some()
+        || args.limit.is_some();
+    if source == TypeSource::Library && dwarf_only {
+        return Err(ApiError::Invalid("member, byte_offset, depth, offset and limit read DWARF; omit source".into()));
+    }
+    let library_error = if source == TypeSource::Dwarf || dwarf_only {
+        None
+    } else {
+        match project.get_type(&args.name) {
+            Ok(entry) => return type_library_view(&entry),
+            Err(ApiError::NotFound(message)) if source == TypeSource::Auto => Some(message),
+            Err(error) => return Err(error),
+        }
+    };
+    let selecting = args.member.is_some() || args.byte_offset.is_some();
+    let request = rampage_loaders::debug::DwarfTypeRequest {
+        name: args.name,
+        member: args.member,
+        byte_offset: args.byte_offset.as_ref().map(OffsetArg::value).transpose()?,
+        depth: args.depth.unwrap_or(0),
+        offset: args.offset.unwrap_or(0),
+        limit: args.limit.unwrap_or(if selecting { 0 } else { 128 }),
+    };
+    match project.dwarf_type_layout(&request) {
+        Ok(lookup) => type_library_view(&lookup),
+        Err(ApiError::NotFound(dwarf)) => Err(ApiError::NotFound(match library_error {
+            Some(library) => format!("{library}; {dwarf}"),
+            None => dwarf,
+        })),
+        Err(error) => Err(error),
+    }
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -3066,10 +3149,13 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Types,
             "get_type",
-            "Inspect one native named type: target size/alignment, packing, fields and offsets, aliases, enum \
-             values and function-pointer detail where present. Incomplete types remain explicitly incomplete; \
-             declarations are analyst interpretation, not evidence of the original producer's ABI.",
-            |project, args: TypeNameArgs| type_library_view(&project.get_type(&args.name)?),
+            "Inspect one named type: target size/alignment, packing, fields and offsets, aliases, enum values and \
+             function-pointer detail where present. Library declarations are analyst interpretation, not \
+             evidence of the producer's ABI. When the library lacks the name (or source=dwarf), reads the \
+             producer layout from embedded DWARF without importing anything: size, members with offsets/sizes/\
+             types, typedef chain, distinct definitions across units (ambiguous=true), paged members. Answer \
+             'which member is at offset X' with byte_offset and 'where is a.b' with member, in one call.",
+            |project, args: TypeNameArgs| get_type(project, args),
         ),
         tool(
             Group::Types,

@@ -566,6 +566,29 @@ pub(crate) struct ImportDebugLayoutsArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct TypeLayoutArgs {
+    #[arg(value_name = "IMAGE")]
+    pub(crate) file: PathBuf,
+    /// Type name, optionally `struct NAME`; a typedef resolves to what it names
+    pub(crate) name: String,
+    /// Dotted member path such as `init.busy` or `aDb[1].pBt`; prints its offset, size and type
+    #[arg(long, conflicts_with = "byte_offset")]
+    pub(crate) member: Option<String>,
+    /// Byte offset into the type (hex 0x... or decimal); prints the innermost member covering it
+    #[arg(long)]
+    pub(crate) byte_offset: Option<String>,
+    /// Levels of by-value struct/union members to expand inline (0 to 4)
+    #[arg(long, default_value_t = 0, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(0..=4))]
+    pub(crate) depth: usize,
+    /// Members to skip
+    #[arg(long, default_value_t = 0)]
+    pub(crate) offset: usize,
+    /// Members per page (0 to 512); defaults to 128, or 0 with --member/--byte-offset
+    #[arg(long, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(0..=512))]
+    pub(crate) limit: Option<usize>,
+}
+
+#[derive(Args)]
 pub(crate) struct ImportPdbNamesArgs {
     pub(crate) file: PathBuf,
     /// Explicit PDB file; no recorded path, sidecar discovery, symbol server or download is used

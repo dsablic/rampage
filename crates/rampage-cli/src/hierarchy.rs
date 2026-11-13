@@ -12,7 +12,7 @@ use crate::args::{
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
     DisasmArgs, DotnetArgs, ExportsArgs, FileArgs, FuncsArgs, IdentifyArgs, ImportPdbNamesArgs, ImportsArgs,
     JumpTableArgs, McpArgs, ObserveIndirectBranchArgs, PseudocodeArgs, QueryDebuggerArgs, RenameArgs, ReportArgs,
-    SignaturesArgs, StringsArgs, XrefsArgs, YaraArgs,
+    SignaturesArgs, StringsArgs, TypeLayoutArgs, XrefsArgs, YaraArgs,
 };
 use crate::args::{ListFindingsArgs, RecordFindingArgs};
 use crate::{Command, PacksCommand};
@@ -130,6 +130,7 @@ impl RootCommand {
             Self::Type(TypeCommand::Debug(args)) => Command::DebugTypes(args),
             Self::Type(TypeCommand::DebugLayouts(args)) => Command::ImportDebugLayouts(args),
             Self::Type(TypeCommand::PdbNames(args)) => Command::ImportPdbNames(args),
+            Self::Type(TypeCommand::Layout(args)) => Command::TypeLayout(args),
             Self::Runtime(RuntimeCommand::Pointer(PointerCommand::Observe(args))) => Command::ObservePointer(args),
             Self::Runtime(RuntimeCommand::Pointer(PointerCommand::Compare(args))) => Command::ComparePointers(args),
             Self::Runtime(RuntimeCommand::Branch(BranchCommand::Inspect(args))) => Command::ObserveIndirectBranch(args),
@@ -295,6 +296,9 @@ pub(crate) enum TypeCommand {
     /// Preview names from an explicit identity-matched PDB, or apply all eligible names as one atomic annotation batch
     #[command(name = "import-pdb-names")]
     PdbNames(ImportPdbNamesArgs),
+    /// Read one type's layout from embedded DWARF (members, offsets, sizes) without importing anything
+    #[command(name = "layout")]
+    Layout(TypeLayoutArgs),
 }
 
 #[derive(Subcommand)]

@@ -9,13 +9,23 @@ use crate::warnings::CappedWarnings;
 use crate::{Binary, Format, LoadError};
 
 mod layouts;
+mod lookup;
 mod type_graph;
 pub use layouts::{
     DebugLayoutField, DebugLayoutLeaf, DebugLayoutMethod, DebugLayoutParameter, DebugLayoutReport, DebugLayoutScalar,
     DebugLayoutScalarKind, DebugLayoutSignature, DebugLayoutSource, DebugLayoutTypeId, DebugLayoutValue,
     DebugStructLayout, layout_signatures,
 };
+pub use lookup::{
+    DwarfEnumerator, DwarfIndexStats, DwarfLookupWork, DwarfMember, DwarfMemberSelection, DwarfSelectionStep,
+    DwarfTypeDefinition, DwarfTypeIndex, DwarfTypeLookup, DwarfTypeRequest, MAX_LOOKUP_CANDIDATES, MAX_LOOKUP_DEPTH,
+    MAX_LOOKUP_DIES, MAX_LOOKUP_LIMIT, dwarf_type_index,
+};
 pub use type_graph::*;
+
+/// Appended where a whole-image DWARF preview stops at its budget: the targeted lookup has no whole-image budget.
+pub const DWARF_LOOKUP_HINT: &str =
+    "for one type's producer layout at any image size, use get_type with source \"dwarf\" (member/byte_offset select)";
 
 const MAX_DEBUG_BYTES: usize = 64 * 1024 * 1024;
 const MAX_UNITS: usize = 256;
