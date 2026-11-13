@@ -10,7 +10,6 @@ cpp_demangle = "0.5.1"
 rustc-demangle = "0.1.28"
 rampage-arch.workspace = true
 rayon.workspace = true
-rampage-capabilities.workspace = true
 rampage-loaders.workspace = true
 serde.workspace = true
 md-5.workspace = true

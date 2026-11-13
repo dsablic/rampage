@@ -330,9 +330,9 @@ impl Registers {
         }
         self.same[to] = copies;
         self.zero_extended[to] = self.zero_extended[from];
-        for other in 0..REGISTERS {
-            if self.zero_extended[other] & (1 << from) != 0 {
-                self.zero_extended[other] |= 1 << to;
+        for extended in &mut self.zero_extended {
+            if *extended & (1 << from) != 0 {
+                *extended |= 1 << to;
             }
         }
     }

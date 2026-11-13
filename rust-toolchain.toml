@@ -1,3 +1,4 @@
 [toolchain]
-channel = "stable"
+# Pinned so a new stable release cannot change lints under CI; bump deliberately.
+channel = "1.100.0"
 components = ["rustfmt", "clippy"]

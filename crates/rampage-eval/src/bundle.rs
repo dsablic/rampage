@@ -1132,7 +1132,7 @@ mod tests {
         let original = decoded(&gz);
 
         // --patch-only: the gate passes, the patch is written and the tree is left as it was.
-        run(args(Some(pack.clone()), None, "patch", true)).unwrap();
+        assert_eq!(run(args(Some(pack.clone()), None, "patch", true)).unwrap(), ExitCode::SUCCESS);
         let summary: Value =
             serde_json::from_str(&std::fs::read_to_string(flywheel.join("bundle/patch/summary.json")).unwrap())
                 .unwrap();
@@ -1156,7 +1156,7 @@ mod tests {
         assert!(check.status.success(), "{}", String::from_utf8_lossy(&check.stderr));
 
         // Without it, the change stays in the tree, commit-ready, with the gate's delta recorded per entry.
-        run(args(Some(pack.clone()), None, "apply", false)).unwrap();
+        assert_eq!(run(args(Some(pack.clone()), None, "apply", false)).unwrap(), ExitCode::SUCCESS);
         let source = load_source(&repo).unwrap();
         assert_eq!(source.entries.len(), bundled + 1);
         let synthetic = source.entries.iter().find(|entry| entry.id == "rv-synthetic").unwrap();
@@ -1169,7 +1169,7 @@ mod tests {
         commit(&repo, "bundle rv-synthetic");
 
         // --remove takes it out by provenance id and restores the database.
-        run(args(None, Some("rv-synthetic".to_owned()), "remove", false)).unwrap();
+        assert_eq!(run(args(None, Some("rv-synthetic".to_owned()), "remove", false)).unwrap(), ExitCode::SUCCESS);
         assert_eq!(load_source(&repo).unwrap().entries.len(), bundled);
         assert_eq!(decoded(&gz), original);
         assert!(run(args(None, Some("rv-synthetic".to_owned()), "again", false)).is_err(), "nothing left to remove");
