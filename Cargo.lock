@@ -4540,7 +4540,6 @@ dependencies = [
  "md-5 0.11.0",
  "msvc-demangler",
  "rampage-arch",
- "rampage-capabilities",
  "rampage-loaders",
  "rayon",
  "rustc-demangle",
