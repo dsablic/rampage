@@ -338,7 +338,7 @@ impl Project {
         }
         let index =
             self.dwarf_types().map_err(|reason| ApiError::NotFound(format!("no DWARF type information: {reason}")))?;
-        let lookup = index.lookup(request).map_err(ApiError::Invalid)?;
+        let lookup = index.lookup(self.binary.image_bytes(), request).map_err(ApiError::Invalid)?;
         if lookup.definitions.is_empty() {
             if let Some(warning) = lookup.warnings.first() {
                 return Err(ApiError::Invalid(warning.clone()));

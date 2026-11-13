@@ -6,8 +6,9 @@
 //! types in the image. Nothing is imported, applied or checked against a native layout: this is producer
 //! evidence, read-only.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
+use std::ops::Range;
 
 use gimli::{AttributeValue, Dwarf, EndianSlice, RunTimeEndian, Unit, UnitOffset};
 use object::{CompressionFormat, Object, ObjectKind, ObjectSection};
@@ -32,22 +33,55 @@ pub const MAX_LOOKUP_DEPTH: usize = 4;
 pub const MAX_LOOKUP_LIMIT: usize = 512;
 const MAX_OUTPUT_MEMBERS: usize = 1024;
 const MAX_SUGGESTIONS: usize = 16;
+/// Longest namespace prefix the index descends into; deeper or longer scopes are skipped.
+const MAX_PREFIX: usize = 1024;
+/// Total bytes of qualified index keys.
+const MAX_KEY_BYTES: usize = 128 * 1024 * 1024;
+/// Cached or not, DIE and child-list visits one lookup may make; bounds walks over cyclic or self-similar types.
+const MAX_LOOKUP_STEPS: usize = 4_000_000;
+/// A `DW_AT_type` the lookup cannot follow (a `DW_FORM_ref_sig8` type-unit signature).
+const UNRESOLVED: usize = usize::MAX;
 
-/// The DWARF sections a lookup reads, owned so that compressed sections are inflated once.
+/// One DWARF section: a range of the image it was loaded from, or inflated bytes kept for the index's lifetime.
+#[derive(Debug)]
+enum SectionData {
+    Image(Range<usize>),
+    Owned(Vec<u8>),
+}
+
+impl Default for SectionData {
+    fn default() -> Self {
+        SectionData::Owned(Vec::new())
+    }
+}
+
+impl SectionData {
+    fn bytes<'a>(&'a self, image: &'a [u8]) -> &'a [u8] {
+        match self {
+            SectionData::Image(range) => image.get(range.clone()).unwrap_or_default(),
+            SectionData::Owned(data) => data,
+        }
+    }
+}
+
+/// The DWARF sections a lookup reads; compressed sections are inflated once, the rest borrow the image.
 #[derive(Debug, Default)]
 struct Sections {
     big_endian: bool,
-    info: Vec<u8>,
-    abbrev: Vec<u8>,
-    str: Vec<u8>,
-    line_str: Vec<u8>,
-    str_offsets: Vec<u8>,
-    addr: Vec<u8>,
+    /// Length of the image the ranges index, checked on every lookup.
+    image_len: usize,
+    info: SectionData,
+    abbrev: SectionData,
+    str: SectionData,
+    line_str: SectionData,
+    str_offsets: SectionData,
+    addr: SectionData,
 }
 
 impl Sections {
-    fn load(object: &object::File<'_>) -> Result<Self, String> {
-        let mut sections = Sections { big_endian: !object.is_little_endian(), ..Sections::default() };
+    fn load(object: &object::File<'_>, image: &[u8]) -> Result<Self, String> {
+        let mut sections =
+            Sections { big_endian: !object.is_little_endian(), image_len: image.len(), ..Sections::default() };
         let mut total = 0u64;
         for (id, slot) in [
             (gimli::SectionId::DebugInfo, &mut sections.info),
@@ -71,7 +105,15 @@ impl Sections {
                 .filter(|&total| total <= MAX_SECTION_BYTES)
                 .ok_or("DWARF sections exceed the 512 MiB lookup limit")?;
             *slot = match compressed.format {
-                CompressionFormat::None => compressed.data.to_vec(),
+                CompressionFormat::None => {
+                    let start = (compressed.data.as_ptr() as usize).wrapping_sub(image.as_ptr() as usize);
+                    let range =
+                        start..start.checked_add(compressed.data.len()).ok_or("DWARF section range overflow")?;
+                    if image.get(range.clone()).is_none_or(|bytes| bytes != compressed.data) {
+                        return Err(format!("{}: section data is not inside the image", id.name()));
+                    }
+                    SectionData::Image(range)
+                }
                 CompressionFormat::Zlib => {
                     let size = usize::try_from(compressed.uncompressed_size).map_err(|_| "DWARF size overflow")?;
                     let mut data = Vec::with_capacity(size);
@@ -82,7 +124,7 @@ impl Sections {
                     if data.len() != size {
                         return Err(format!("{}: decompressed size differs from its header", id.name()));
                     }
-                    data
+                    SectionData::Owned(data)
                 }
                 _ => return Err(format!("{}: unsupported DWARF section compression", id.name())),
             };
@@ -90,18 +132,18 @@ impl Sections {
         Ok(sections)
     }
 
-    fn dwarf(&self) -> Dwarf<DebugReader<'_>> {
+    fn dwarf<'a>(&'a self, image: &'a [u8]) -> Dwarf<DebugReader<'a>> {
         let endian = if self.big_endian { RunTimeEndian::Big } else { RunTimeEndian::Little };
         fn slice(data: &[u8], endian: RunTimeEndian) -> DebugReader<'_> {
             EndianSlice::new(data, endian)
         }
         Dwarf {
-            debug_info: slice(&self.info, endian).into(),
-            debug_abbrev: slice(&self.abbrev, endian).into(),
-            debug_str: slice(&self.str, endian).into(),
-            debug_line_str: slice(&self.line_str, endian).into(),
-            debug_str_offsets: slice(&self.str_offsets, endian).into(),
-            debug_addr: slice(&self.addr, endian).into(),
+            debug_info: slice(self.info.bytes(image), endian).into(),
+            debug_abbrev: slice(self.abbrev.bytes(image), endian).into(),
+            debug_str: slice(self.str.bytes(image), endian).into(),
+            debug_line_str: slice(self.line_str.bytes(image), endian).into(),
+            debug_str_offsets: slice(self.str_offsets.bytes(image), endian).into(),
+            debug_addr: slice(self.addr.bytes(image), endian).into(),
             ..Dwarf::default()
         }
     }
@@ -115,7 +157,7 @@ pub struct DwarfIndexStats {
     pub skipped_units: usize,
     pub dies_skimmed: usize,
     pub named_types: usize,
-    /// The index stopped at its entry limit; later names are missing.
+    /// Some names are missing: the index reached its entry or key-byte limit, or skipped an over-long scope.
     pub truncated: bool,
 }
 
@@ -130,7 +172,22 @@ struct IndexEntry {
 pub struct DwarfTypeIndex {
     sections: Sections,
     units: Vec<usize>,
+    /// Entries per qualified name, in ascending DIE order.
     names: BTreeMap<String, Vec<IndexEntry>>,
+    /// Namespace prefixes (`a::b::`) and, for each namespaced indexed DIE, its prefix.
+    prefixes: Vec<String>,
+    scopes: BTreeMap<usize, u32>,
+    stats: DwarfIndexStats,
+}
+
+#[derive(Default)]
+struct Skim {
+    names: BTreeMap<String, Vec<IndexEntry>>,
+    prefixes: Vec<String>,
+    prefix_ids: BTreeMap<String, u32>,
+    scopes: BTreeMap<usize, u32>,
+    key_bytes: usize,
+    full: bool,
     stats: DwarfIndexStats,
 }
 
@@ -140,11 +197,11 @@ pub fn dwarf_type_index(binary: &Binary) -> Result<DwarfTypeIndex, String> {
     if object.kind() == ObjectKind::Relocatable {
         return Err("DWARF type lookup does not apply relocations; relocatable objects are unsupported".into());
     }
-    let sections = Sections::load(&object)?;
-    if sections.info.is_empty() {
+    let sections = Sections::load(&object, binary.image_bytes())?;
+    if sections.info.bytes(binary.image_bytes()).is_empty() {
         return Err("no embedded DWARF .debug_info; external debug files are not searched".into());
     }
-    DwarfTypeIndex::build(sections)
+    DwarfTypeIndex::build(sections, binary.image_bytes())
 }
 
 fn indexed_tag(tag: gimli::DwTag) -> bool {
@@ -169,14 +226,11 @@ fn rank(tag: gimli::DwTag, declaration: bool) -> u8 {
 }
 
 impl DwarfTypeIndex {
-    fn build(sections: Sections) -> Result<Self, String> {
-        let mut index =
-            DwarfTypeIndex { sections, units: Vec::new(), names: BTreeMap::new(), stats: DwarfIndexStats::default() };
-        let mut names = BTreeMap::new();
+    fn build(sections: Sections, image: &[u8]) -> Result<Self, String> {
+        let mut skim = Skim::default();
         let mut units = Vec::new();
-        let mut stats = DwarfIndexStats::default();
         {
-            let dwarf = index.sections.dwarf();
+            let dwarf = sections.dwarf(image);
             let mut headers = dwarf.units();
             loop {
                 let header = match headers.next() {
@@ -186,32 +240,36 @@ impl DwarfTypeIndex {
                         if units.is_empty() {
                             return Err(format!("DWARF unit header: {error}"));
                         }
-                        stats.skipped_units += 1;
+                        skim.stats.skipped_units += 1;
                         break;
                     }
                 };
-                stats.units += 1;
+                skim.stats.units += 1;
                 units.push(header.offset().0);
                 if !matches!(header.type_(), gimli::UnitType::Compilation | gimli::UnitType::Partial) {
-                    stats.skipped_units += 1;
+                    skim.stats.skipped_units += 1;
                     continue;
                 }
                 let Ok(unit) = signature_unit(&dwarf, header) else {
-                    stats.skipped_units += 1;
+                    skim.stats.skipped_units += 1;
                     continue;
                 };
-                if skim_unit(&dwarf, &unit, &mut names, &mut stats).is_err() {
-                    stats.skipped_units += 1;
+                if skim_unit(&dwarf, &unit, &mut skim).is_err() {
+                    skim.stats.skipped_units += 1;
                 }
-                if stats.truncated {
+                if skim.full {
                     break;
                 }
             }
         }
-        index.names = names;
-        index.units = units;
-        index.stats = stats;
-        Ok(index)
+        Ok(DwarfTypeIndex {
+            sections,
+            units,
+            names: skim.names,
+            prefixes: skim.prefixes,
+            scopes: skim.scopes,
+            stats: skim.stats,
+        })
     }
 
     pub fn stats(&self) -> &DwarfIndexStats {
@@ -230,7 +288,11 @@ impl DwarfTypeIndex {
     }
 
     /// Reads one named type's layout(s). Work is bounded by [`MAX_LOOKUP_DIES`] and [`MAX_LOOKUP_CANDIDATES`].
-    pub fn lookup(&self, request: &DwarfTypeRequest) -> Result<DwarfTypeLookup, String> {
+    /// `image` is the image the index was built from.
+    pub fn lookup(&self, image: &[u8], request: &DwarfTypeRequest) -> Result<DwarfTypeLookup, String> {
+        if image.len() != self.sections.image_len {
+            return Err("DWARF index belongs to a different image".into());
+        }
         if request.member.is_some() && request.byte_offset.is_some() {
             return Err("pass member or byte_offset, not both".into());
         }
@@ -242,7 +304,7 @@ impl DwarfTypeIndex {
         }
         let (keyword, name) = split_keyword(request.name.trim());
         let entries: Vec<IndexEntry> = self.names.get(name).cloned().unwrap_or_default();
-        let dwarf = self.sections.dwarf();
+        let dwarf = self.sections.dwarf(image);
         let mut reader = DieReader::new(&dwarf, self);
         let mut result = DwarfTypeLookup {
             source: "dwarf",
@@ -320,51 +382,75 @@ fn split_keyword(name: &str) -> (Option<gimli::DwTag>, &str) {
     (None, name)
 }
 
-fn skim_unit(
-    dwarf: &Dwarf<DebugReader<'_>>,
-    unit: &Unit<DebugReader<'_>>,
-    names: &mut BTreeMap<String, Vec<IndexEntry>>,
-    stats: &mut DwarfIndexStats,
-) -> gimli::Result<()> {
+fn skim_unit(dwarf: &Dwarf<DebugReader<'_>>, unit: &Unit<DebugReader<'_>>, skim: &mut Skim) -> gimli::Result<()> {
     let mut tree = unit.entries_tree(None)?;
     let root = tree.root()?;
-    skim_children(dwarf, unit, root.children(), "", 0, names, stats)
+    skim_children(dwarf, unit, root.children(), None, 0, skim)
 }
 
 fn skim_children(
     dwarf: &Dwarf<DebugReader<'_>>,
     unit: &Unit<DebugReader<'_>>,
     mut children: gimli::EntriesTreeIter<'_, '_, DebugReader<'_>>,
-    prefix: &str,
+    scope: Option<u32>,
     depth: usize,
-    names: &mut BTreeMap<String, Vec<IndexEntry>>,
-    stats: &mut DwarfIndexStats,
+    skim: &mut Skim,
 ) -> gimli::Result<()> {
     while let Some(child) = children.next()? {
-        stats.dies_skimmed += 1;
+        skim.stats.dies_skimmed += 1;
         let entry = child.entry();
         let tag = entry.tag();
         let name = entry
             .attr_value(gimli::DW_AT_name)
             .and_then(|value| bounded_name_limit(dwarf, unit, value, MAX_NAME).ok())
             .map(|name| String::from_utf8_lossy(name.slice()).into_owned());
-        if tag == gimli::DW_TAG_namespace && depth < MAX_NAMESPACE_DEPTH {
+        let prefix = scope.map_or("", |scope| skim.prefixes[scope as usize].as_str());
+        if tag == gimli::DW_TAG_namespace {
             let nested = format!("{prefix}{}::", name.as_deref().unwrap_or("(anonymous namespace)"));
-            skim_children(dwarf, unit, child.children(), &nested, depth + 1, names, stats)?;
+            if depth >= MAX_NAMESPACE_DEPTH || nested.len() > MAX_PREFIX {
+                skim.stats.truncated = true;
+                continue;
+            }
+            let id = match skim.prefix_ids.get(&nested) {
+                Some(&id) => id,
+                None => {
+                    let id = u32::try_from(skim.prefixes.len()).map_err(|_| gimli::Error::TooManyIterations)?;
+                    skim.key_bytes = skim.key_bytes.saturating_add(2 * nested.len());
+                    skim.prefix_ids.insert(nested.clone(), id);
+                    skim.prefixes.push(nested);
+                    id
+                }
+            };
+            skim_children(dwarf, unit, child.children(), Some(id), depth + 1, skim)?;
+            if skim.full {
+                return Ok(());
+            }
             continue;
         }
         if !indexed_tag(tag) {
             continue;
         }
         let Some(name) = name.filter(|name| !name.is_empty()) else { continue };
-        if stats.named_types >= MAX_INDEX_ENTRIES {
-            stats.truncated = true;
+        let key = format!("{prefix}{name}");
+        if skim.stats.named_types >= MAX_INDEX_ENTRIES || skim.key_bytes.saturating_add(key.len()) > MAX_KEY_BYTES {
+            skim.stats.truncated = true;
+            skim.full = true;
             return Ok(());
         }
         let declaration = matches!(entry.attr_value(gimli::DW_AT_declaration), Some(AttributeValue::Flag(true)));
         let die = entry.offset().0 + unit.header.offset().0;
-        names.entry(format!("{prefix}{name}")).or_default().push(IndexEntry { die, rank: rank(tag, declaration) });
-        stats.named_types += 1;
+        if let Some(scope) = scope {
+            skim.scopes.insert(die, scope);
+        }
+        let entries = match skim.names.get_mut(&key) {
+            Some(entries) => entries,
+            None => {
+                skim.key_bytes += key.len();
+                skim.names.entry(key).or_default()
+            }
+        };
+        entries.push(IndexEntry { die, rank: rank(tag, declaration) });
+        skim.stats.named_types += 1;
     }
     Ok(())
 }
@@ -531,10 +617,13 @@ struct DieReader<'d, 'a> {
     dies: BTreeMap<usize, Die>,
     children: BTreeMap<usize, (Vec<Die>, bool)>,
     work: DwarfLookupWork,
+    steps: usize,
     output: usize,
 }
 
 type Candidate = (DwarfTypeDefinition, usize, String);
+/// An array DIE, its dimension counts, and the size of one innermost element.
+type ArrayShape = (Die, Vec<Option<u64>>, Option<u64>);
 
 impl<'d, 'a> DieReader<'d, 'a> {
     fn new(dwarf: &'d Dwarf<DebugReader<'a>>, index: &'d DwarfTypeIndex) -> Self {
@@ -545,6 +634,7 @@ impl<'d, 'a> DieReader<'d, 'a> {
             dies: BTreeMap::new(),
             children: BTreeMap::new(),
             work: DwarfLookupWork::default(),
+            steps: 0,
             output: 0,
         }
     }
@@ -554,7 +644,15 @@ impl<'d, 'a> DieReader<'d, 'a> {
     }
 
     fn exhausted(&self) -> bool {
-        self.work.dies_read >= MAX_LOOKUP_DIES
+        self.work.dies_read >= MAX_LOOKUP_DIES || self.steps >= MAX_LOOKUP_STEPS
+    }
+
+    fn step(&mut self) -> Result<(), String> {
+        self.steps += 1;
+        if self.steps > MAX_LOOKUP_STEPS {
+            return Err(format!("lookup made its {MAX_LOOKUP_STEPS} type-walk steps"));
+        }
+        Ok(())
     }
 
     fn spend(&mut self) -> Result<(), String> {
@@ -579,6 +677,10 @@ impl<'d, 'a> DieReader<'d, 'a> {
     }
 
     fn die(&mut self, offset: usize) -> Result<Die, String> {
+        self.step()?;
+        if offset == UNRESOLVED {
+            return Err("type signature reference (DW_FORM_ref_sig8) is unresolved".into());
+        }
         if let Some(die) = self.dies.get(&offset) {
             return Ok(die.clone());
         }
@@ -592,6 +694,7 @@ impl<'d, 'a> DieReader<'d, 'a> {
     }
 
     fn children(&mut self, offset: usize) -> Result<(Vec<Die>, bool), String> {
+        self.step()?;
         if let Some(children) = self.children.get(&offset) {
             return Ok(children.clone());
         }
@@ -640,7 +743,7 @@ impl<'d, 'a> DieReader<'d, 'a> {
             {
                 chain.push(name.clone());
             }
-            let Some(target) = die.target else {
+            let Some(target) = die.target.filter(|&target| target != UNRESOLVED) else {
                 return Ok((die, chain));
             };
             die = self.die(target)?;
@@ -653,8 +756,16 @@ impl<'d, 'a> DieReader<'d, 'a> {
         if !die.declaration || !record_tag(die.tag) && die.tag != gimli::DW_TAG_enumeration_type {
             return Ok(die);
         }
-        let Some(name) = die.name.clone() else { return Ok(die) };
-        let Some(entries) = self.index.names.get(&name) else { return Ok(die) };
+        let Some(name) = die.name.as_deref() else { return Ok(die) };
+        // Only an indexed declaration has a known scope; its definition must carry the same qualified name.
+        let key = match self.index.scopes.get(&die.offset) {
+            Some(&scope) => format!("{}{name}", self.index.prefixes[scope as usize]),
+            None => name.to_owned(),
+        };
+        let Some(entries) = self.index.names.get(&key) else { return Ok(die) };
+        if entries.binary_search_by_key(&die.offset, |entry| entry.die).is_err() {
+            return Ok(die);
+        }
         for entry in entries.iter().filter(|entry| entry.rank == 0).take(MAX_LOOKUP_CANDIDATES) {
             let candidate = self.die(entry.die)?;
             if candidate.tag == die.tag && !candidate.declaration {
@@ -672,6 +783,9 @@ impl<'d, 'a> DieReader<'d, 'a> {
             let Some(offset) = next else {
                 return Ok(format!("{prefix}void{suffix}"));
             };
+            if offset == UNRESOLVED {
+                return Ok(format!("{prefix}<unresolved>{suffix}"));
+            }
             let die = self.die(offset)?;
             match die.tag {
                 gimli::DW_TAG_pointer_type => suffix.insert_str(0, " *"),
@@ -707,14 +821,26 @@ impl<'d, 'a> DieReader<'d, 'a> {
     }
 
     fn size(&mut self, target: Option<usize>) -> Result<Option<u64>, String> {
-        let Some(offset) = target else { return Ok(None) };
+        self.size_at(target, 0)
+    }
+
+    fn size_at(&mut self, target: Option<usize>, depth: usize) -> Result<Option<u64>, String> {
+        let Some(offset) = target.filter(|&target| target != UNRESOLVED) else { return Ok(None) };
         let die = self.die(offset)?;
         let (die, _) = self.strip(die)?;
         let die = self.complete(die)?;
-        self.size_of(&die)
+        self.size_of_at(&die, depth)
     }
 
     fn size_of(&mut self, die: &Die) -> Result<Option<u64>, String> {
+        self.size_of_at(die, 0)
+    }
+
+    /// `depth` counts nested array element types, so a self-referencing array chain stops.
+    fn size_of_at(&mut self, die: &Die, depth: usize) -> Result<Option<u64>, String> {
+        if depth >= MAX_TYPE_CHAIN {
+            return Err("array element type chain too deep".into());
+        }
         if let Some(size) = die.byte_size {
             return Ok(Some(size));
         }
@@ -725,7 +851,7 @@ impl<'d, 'a> DieReader<'d, 'a> {
             | gimli::DW_TAG_ptr_to_member_type => Some(u64::from(die.address_size)),
             gimli::DW_TAG_array_type => {
                 let (dimensions, _) = self.dimensions(die)?;
-                let element = self.size(die.target)?;
+                let element = self.size_at(die.target, depth + 1)?;
                 let mut size = element;
                 for count in dimensions {
                     size = size.zip(count).and_then(|(size, count)| size.checked_mul(count));
@@ -772,7 +898,7 @@ impl<'d, 'a> DieReader<'d, 'a> {
 
     /// The record a by-value member names, if any.
     fn record_of(&mut self, target: Option<usize>) -> Result<Option<Die>, String> {
-        let Some(offset) = target else { return Ok(None) };
+        let Some(offset) = target.filter(|&target| target != UNRESOLVED) else { return Ok(None) };
         let die = self.die(offset)?;
         let (die, _) = self.strip(die)?;
         let die = self.complete(die)?;
@@ -901,6 +1027,20 @@ impl<'d, 'a> DieReader<'d, 'a> {
         Ok(Some((definition, resolved.offset, fingerprint)))
     }
 
+    /// The array a type names (through typedefs/qualifiers): the array DIE, its dimensions, and the size of one
+    /// innermost element.
+    fn array_shape(&mut self, target: Option<usize>) -> Result<Option<ArrayShape>, String> {
+        let Some(offset) = target.filter(|&target| target != UNRESOLVED) else { return Ok(None) };
+        let die = self.die(offset)?;
+        let (array, _) = self.strip(die)?;
+        if array.tag != gimli::DW_TAG_array_type {
+            return Ok(None);
+        }
+        let (dimensions, _) = self.dimensions(&array)?;
+        let element = self.size(array.target)?;
+        Ok(Some((array, dimensions, element)))
+    }
+
     fn select_path(&mut self, record: &Die, path: &str) -> Result<DwarfMemberSelection, String> {
         let mut current = record.clone();
         let mut base = 0u64;
@@ -919,36 +1059,44 @@ impl<'d, 'a> DieReader<'d, 'a> {
                     .ok_or_else(|| format!("{:?} is not a struct, union or class", chain_path(&chain)))?;
             }
             let (offset, member, die) = self
-                .find_member(&current, name, 0)?
+                .find_member(&current, name, &mut BTreeSet::new())?
                 .ok_or_else(|| format!("no member {name:?} in {}", spelled(&current)))?;
-            base += offset;
+            base = checked_add(base, offset)?;
             let mut member = member;
             let mut target = die.target;
             let mut label = name.to_owned();
+            // The array being indexed, its dimensions, how many are consumed, and its element size.
+            let mut array: Option<(ArrayShape, usize)> = None;
             for index in indices {
-                let array = target.map(|offset| self.die(offset)).transpose()?;
-                let array = match array {
-                    Some(array) => self.strip(array)?.0,
-                    None => return Err(format!("{label} is not an array")),
-                };
-                if array.tag != gimli::DW_TAG_array_type {
-                    return Err(format!("{label} is not an array"));
+                if array.as_ref().is_none_or(|((_, dimensions, _), used)| *used == dimensions.len()) {
+                    let (die, dimensions, element) =
+                        self.array_shape(target)?.ok_or_else(|| format!("{label} is not an array"))?;
+                    array = Some(((die, dimensions, element), 0));
                 }
-                let element = self.size(array.target)?.ok_or_else(|| format!("{label}: element size unknown"))?;
-                let (dimensions, _) = self.dimensions(&array)?;
-                if let Some(Some(count)) = dimensions.first()
-                    && index >= *count
+                let ((die, dimensions, element), used) = array.as_mut().expect("array set above");
+                if dimensions.is_empty() {
+                    return Err(format!("{label} has no array dimensions"));
+                }
+                let stride = stride(*element, &dimensions[*used + 1..])
+                    .ok_or_else(|| format!("{label}: element size unknown"))?;
+                if let Some(count) = dimensions[*used]
+                    && index >= count
                 {
                     return Err(format!("{label}[{index}] is out of bounds ({count} elements)"));
                 }
-                base += element * index;
+                base = checked_add(base, checked_mul(stride, index)?)?;
                 label = format!("{label}[{index}]");
-                target = array.target;
+                *used += 1;
+                let element_type = die.target;
+                let remaining = dimensions_suffix(&dimensions[*used..]);
+                if *used == dimensions.len() {
+                    target = element_type;
+                }
                 member = DwarfMember {
                     name: Some(label.clone()),
                     offset: Some(base),
-                    byte_size: Some(element),
-                    type_name: self.type_name(array.target)?,
+                    byte_size: Some(stride),
+                    type_name: format!("{}{remaining}", self.type_name(element_type)?),
                     bit_size: None,
                     bit_offset: None,
                     inheritance: false,
@@ -983,25 +1131,26 @@ impl<'d, 'a> DieReader<'d, 'a> {
         &mut self,
         record: &Die,
         name: &str,
-        depth: usize,
+        visited: &mut BTreeSet<usize>,
     ) -> Result<Option<(u64, DwarfMember, Die)>, String> {
+        // Each record is searched once per lookup, so self-similar anonymous members cannot multiply the work.
+        if !visited.insert(record.offset) || visited.len() > MAX_MEMBERS {
+            return Ok(None);
+        }
         let (members, _) = self.members(record)?;
         for (die, member) in &members {
             if member.name.as_deref() == Some(name) {
                 return Ok(Some((member.offset.unwrap_or(0), member.clone(), die.clone())));
             }
         }
-        if depth >= MAX_SELECTION_DEPTH {
-            return Ok(None);
-        }
         for (die, member) in members {
             if member.name.is_some() {
                 continue;
             }
             if let Some(nested) = self.record_of(die.target)?
-                && let Some((offset, found, found_die)) = self.find_member(&nested, name, depth + 1)?
+                && let Some((offset, found, found_die)) = self.find_member(&nested, name, visited)?
             {
-                return Ok(Some((member.offset.unwrap_or(0) + offset, found, found_die)));
+                return Ok(Some((checked_add(member.offset.unwrap_or(0), offset)?, found, found_die)));
             }
         }
         Ok(None)
@@ -1023,7 +1172,7 @@ impl<'d, 'a> DieReader<'d, 'a> {
                 .filter(|(_, member)| {
                     let Some(offset) = member.offset else { return false };
                     let size = member.byte_size.or(member.bit_size.map(|bits| bits.div_ceil(8))).unwrap_or(0);
-                    remaining >= offset && remaining < offset + size.max(1)
+                    remaining >= offset && remaining < offset.saturating_add(size.max(1))
                 })
                 .collect();
             let (die, member, padding) = match covering.first() {
@@ -1041,26 +1190,35 @@ impl<'d, 'a> DieReader<'d, 'a> {
             };
             let offset = member.offset.unwrap_or(0);
             let mut label = member.name.clone().unwrap_or_else(|| "(anonymous)".into());
-            let mut step_offset = base + offset;
+            let mut step_offset = checked_add(base, offset)?;
             let mut step_size = member.byte_size;
             let mut step_type = member.type_name.clone();
             let mut target = die.target;
             let mut inner = remaining - offset;
-            // Arrays: select the element, then continue into it.
-            if !padding && let Some(array_offset) = target {
-                let array = self.die(array_offset)?;
-                let (array, _) = self.strip(array)?;
-                if array.tag == gimli::DW_TAG_array_type
-                    && let Some(element) = self.size(array.target)?.filter(|&size| size > 0)
-                {
-                    let index = inner / element;
-                    label = format!("{label}[{index}]");
-                    step_offset += index * element;
-                    step_size = Some(element);
-                    step_type = self.type_name(array.target)?;
-                    inner -= index * element;
-                    target = array.target;
+            // Arrays: select the element along every dimension, then continue into it.
+            for _ in 0..MAX_TYPE_CHAIN {
+                if padding {
+                    break;
                 }
+                let Some((array, dimensions, Some(element))) = self.array_shape(target)? else { break };
+                if element == 0 || dimensions.is_empty() {
+                    break;
+                }
+                for used in 0..dimensions.len() {
+                    let Some(stride) = stride(Some(element), &dimensions[used + 1..]).filter(|&stride| stride > 0)
+                    else {
+                        break;
+                    };
+                    let index = inner / stride;
+                    label = format!("{label}[{index}]");
+                    let skipped = checked_mul(index, stride)?;
+                    step_offset = checked_add(step_offset, skipped)?;
+                    inner -= skipped;
+                    step_size = Some(stride);
+                    step_type =
+                        format!("{}{}", self.type_name(array.target)?, dimensions_suffix(&dimensions[used + 1..]));
+                }
+                target = array.target;
             }
             chain.push(DwarfSelectionStep {
                 name: label,
@@ -1090,6 +1248,23 @@ impl<'d, 'a> DieReader<'d, 'a> {
         }
         Ok(selection)
     }
+}
+
+fn checked_add(left: u64, right: u64) -> Result<u64, String> {
+    left.checked_add(right).ok_or_else(|| "member offset overflows 64 bits".to_owned())
+}
+
+fn checked_mul(left: u64, right: u64) -> Result<u64, String> {
+    left.checked_mul(right).ok_or_else(|| "array offset overflows 64 bits".to_owned())
+}
+
+/// Bytes between consecutive indices of the dimension before `rest`: the element size times every later count.
+fn stride(element: Option<u64>, rest: &[Option<u64>]) -> Option<u64> {
+    rest.iter().try_fold(element?, |size, count| size.checked_mul((*count)?))
+}
+
+fn dimensions_suffix(dimensions: &[Option<u64>]) -> String {
+    dimensions.iter().map(|count| count.map_or_else(|| "[]".to_owned(), |count| format!("[{count}]"))).collect()
 }
 
 fn chain_path(chain: &[DwarfSelectionStep]) -> String {
@@ -1160,6 +1335,7 @@ fn read_die(
     let reference = |value: AttributeValue<DebugReader<'_>>| match value {
         AttributeValue::UnitRef(offset) => Some(start + offset.0),
         AttributeValue::DebugInfoRef(offset) => Some(offset.0),
+        AttributeValue::DebugTypesRef(_) => Some(UNRESOLVED),
         _ => None,
     };
     let mut die = Die {
@@ -1246,6 +1422,22 @@ mod tests {
         4, 0x24, 0, 0x03, 0x08, 0x0b, 0x0b, 0x3e, 0x0b, 0, 0, //
         // 5: typedef, no children, name string, type ref4
         5, 0x16, 0, 0x03, 0x08, 0x49, 0x13, 0, 0, //
+        // 6: array_type, children, type ref4
+        6, 0x01, 1, 0x49, 0x13, 0, 0, //
+        // 7: subrange_type, count data1
+        7, 0x21, 0, 0x37, 0x0b, 0, 0, //
+        // 8: namespace, children, name string
+        8, 0x39, 1, 0x03, 0x08, 0, 0, //
+        // 9: structure_type declaration, name string, declaration flag_present
+        9, 0x13, 0, 0x03, 0x08, 0x3c, 0x19, 0, 0, //
+        // 10: anonymous member, type ref4, data_member_location data1
+        10, 0x0d, 0, 0x49, 0x13, 0x38, 0x0b, 0, 0, //
+        // 11: member, name string, type ref_sig8, data_member_location data1
+        11, 0x0d, 0, 0x03, 0x08, 0x49, 0x20, 0x38, 0x0b, 0, 0, //
+        // 12: subrange_type without a count (flexible array)
+        12, 0x21, 0, 0, 0, //
+        // 13: array_type without children, type ref4
+        13, 0x01, 0, 0x49, 0x13, 0, 0, //
         0,
     ];
 
@@ -1304,8 +1496,7 @@ mod tests {
             let structs: Vec<(&str, usize)> = names.iter().map(|name| (name.as_str(), 2 + filler % 5)).collect();
             unit(&mut info, &structs);
         }
-        let sections = Sections { info, abbrev: ABBREV.to_vec(), ..Sections::default() };
-        DwarfTypeIndex::build(sections).unwrap()
+        built(info)
     }
 
     fn request(name: &str) -> DwarfTypeRequest {
@@ -1320,8 +1511,8 @@ mod tests {
         assert_eq!(large.stats().units, 401);
         assert!(large.stats().named_types > 200 * 40);
         for name in ["target", "target_t", "struct target"] {
-            let small = small.lookup(&request(name)).unwrap();
-            let large = large.lookup(&request(name)).unwrap();
+            let small = small.lookup(&[], &request(name)).unwrap();
+            let large = large.lookup(&[], &request(name)).unwrap();
             assert_eq!(small.definitions.len(), 1, "{name}");
             assert_eq!(large.definitions.len(), 1, "{name}");
             assert_eq!(large.definitions[0].members.len(), 8);
@@ -1330,7 +1521,7 @@ mod tests {
             assert_eq!(small.work.units_opened, 1);
             assert_eq!(large.work.units_opened, 1);
         }
-        let selected = large.lookup(&DwarfTypeRequest { byte_offset: Some(13), ..request("target_t") }).unwrap();
+        let selected = large.lookup(&[], &DwarfTypeRequest { byte_offset: Some(13), ..request("target_t") }).unwrap();
         let selection = selected.definitions[0].selection.as_ref().unwrap();
         assert_eq!((selection.path.as_str(), selection.offset, selection.within), ("f3", 12, Some(1)));
         assert_eq!(selected.definitions[0].via_typedef.as_deref(), Some("target_t -> struct target"));
@@ -1339,7 +1530,7 @@ mod tests {
     #[test]
     fn identical_definitions_merge_and_different_ones_are_ambiguous() {
         let large = index(3);
-        let lookup = large.lookup(&request("filler0")).unwrap();
+        let lookup = large.lookup(&[], &request("filler0")).unwrap();
         assert_eq!(lookup.matches, 6);
         // Filler sizes cycle: (1, 2, 3) fields before, (2, 3, 4) after.
         assert!(lookup.ambiguous);
@@ -1350,17 +1541,224 @@ mod tests {
     #[test]
     fn member_paths_and_errors() {
         let index = index(0);
-        let lookup = index.lookup(&DwarfTypeRequest { member: Some("f5".into()), ..request("target") }).unwrap();
+        let lookup = index.lookup(&[], &DwarfTypeRequest { member: Some("f5".into()), ..request("target") }).unwrap();
         let selection = lookup.definitions[0].selection.as_ref().unwrap();
         assert_eq!((selection.offset, selection.byte_size, selection.type_name.as_str()), (20, Some(4), "int"));
         assert!(
             index
-                .lookup(&DwarfTypeRequest { member: Some("nope".into()), ..request("target") })
+                .lookup(&[], &DwarfTypeRequest { member: Some("nope".into()), ..request("target") })
                 .is_ok_and(|lookup| lookup.definitions.is_empty() && lookup.warnings[0].contains("no member \"nope\""))
         );
-        assert!(index.lookup(&request("missing")).unwrap().definitions.is_empty());
+        assert!(index.lookup(&[], &request("missing")).unwrap().definitions.is_empty());
         assert_eq!(index.suggestions("targ"), vec!["target".to_owned(), "target_t".to_owned()]);
         assert_eq!(parse_segment("a[1][0x2]").unwrap(), ("a", vec![1, 2]));
         assert!(parse_segment("a[").is_err());
+    }
+
+    fn built(info: Vec<u8>) -> DwarfTypeIndex {
+        let sections = Sections {
+            info: SectionData::Owned(info),
+            abbrev: SectionData::Owned(ABBREV.to_vec()),
+            ..Sections::default()
+        };
+        DwarfTypeIndex::build(sections, &[]).unwrap()
+    }
+
+    /// A DWARF 4 unit assembled DIE by DIE, with unit-relative ref4 fixups by label.
+    struct Asm {
+        body: Vec<u8>,
+        labels: BTreeMap<&'static str, usize>,
+        fixups: Vec<(usize, &'static str)>,
+    }
+
+    impl Asm {
+        fn new() -> Self {
+            let mut asm = Asm { body: Vec::new(), labels: BTreeMap::new(), fixups: Vec::new() };
+            asm.code(1).text("unit.c");
+            asm
+        }
+        fn label(&mut self, label: &'static str) -> &mut Self {
+            self.labels.insert(label, 11 + self.body.len());
+            self
+        }
+        fn code(&mut self, code: u8) -> &mut Self {
+            self.body.push(code);
+            self
+        }
+        fn text(&mut self, text: &str) -> &mut Self {
+            cstr(&mut self.body, text);
+            self
+        }
+        fn to(&mut self, label: &'static str) -> &mut Self {
+            self.fixups.push((self.body.len(), label));
+            self.body.extend_from_slice(&[0; 4]);
+            self
+        }
+        fn int(&mut self) -> &mut Self {
+            self.label("int").code(4).text("int").code(4).code(5)
+        }
+        fn finish(mut self, info: &mut Vec<u8>) {
+            self.body.push(0);
+            for (at, label) in &self.fixups {
+                let target = u32::try_from(self.labels[label]).unwrap();
+                self.body[*at..*at + 4].copy_from_slice(&target.to_le_bytes());
+            }
+            info.extend_from_slice(&u32::try_from(self.body.len() + 7).unwrap().to_le_bytes());
+            info.extend_from_slice(&4u16.to_le_bytes());
+            info.extend_from_slice(&0u32.to_le_bytes());
+            info.push(8);
+            info.extend_from_slice(&self.body);
+        }
+    }
+
+    fn one(asm: Asm) -> DwarfTypeIndex {
+        let mut info = Vec::new();
+        asm.finish(&mut info);
+        built(info)
+    }
+
+    #[test]
+    fn self_referencing_array_types_stop_instead_of_recursing() {
+        let mut asm = Asm::new();
+        asm.int();
+        // `loop1` is an array of itself; `loop2` is an array of a typedef of itself.
+        asm.label("loop1").code(13).to("loop1");
+        asm.label("loop2").code(6).to("alias").code(7).code(2).code(0);
+        asm.label("alias").code(5).text("alias").to("loop2");
+        asm.code(2).text("cyclic").code(8);
+        asm.code(3).text("a").to("loop1").code(0);
+        asm.code(3).text("b").to("loop2").code(4);
+        asm.code(0);
+        let lookup = one(asm).lookup(&[], &request("cyclic")).unwrap();
+        assert!(lookup.definitions.is_empty());
+        assert!(lookup.warnings[0].contains("too deep"), "{:?}", lookup.warnings);
+    }
+
+    #[test]
+    fn self_similar_anonymous_members_are_searched_once() {
+        let mut asm = Asm::new();
+        asm.int();
+        asm.label("self").code(2).text("selfish").code(4);
+        asm.code(3).text("x").to("int").code(0);
+        for _ in 0..12 {
+            asm.code(10).to("self").code(0);
+        }
+        asm.code(0);
+        let index = one(asm);
+        let started = std::time::Instant::now();
+        let lookup =
+            index.lookup(&[], &DwarfTypeRequest { member: Some("nope".into()), ..request("selfish") }).unwrap();
+        assert!(lookup.warnings[0].contains("no member \"nope\""), "{:?}", lookup.warnings);
+        assert!(lookup.work.dies_read < 64, "{:?}", lookup.work);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn multi_dimensional_arrays_index_every_dimension() {
+        let mut asm = Asm::new();
+        asm.int();
+        asm.label("grid").code(6).to("int").code(7).code(3).code(7).code(4).code(0);
+        asm.code(2).text("matrix").code(52);
+        asm.code(3).text("head").to("int").code(0);
+        asm.code(3).text("a").to("grid").code(4);
+        asm.code(0);
+        let index = one(asm);
+        let select = |member: Option<&str>, byte_offset: Option<u64>| {
+            let request = DwarfTypeRequest { member: member.map(str::to_owned), byte_offset, ..request("matrix") };
+            let lookup = index.lookup(&[], &request).unwrap();
+            assert!(lookup.warnings.is_empty(), "{:?}", lookup.warnings);
+            lookup.definitions[0].selection.clone().unwrap()
+        };
+        let cell = select(Some("a[2][3]"), None);
+        assert_eq!(
+            (cell.path.as_str(), cell.offset, cell.byte_size, cell.type_name.as_str()),
+            ("a[2][3]", 48, Some(4), "int")
+        );
+        let row = select(Some("a[1]"), None);
+        assert_eq!((row.offset, row.byte_size, row.type_name.as_str()), (20, Some(16), "int[4]"));
+        let at = select(None, Some(49));
+        assert_eq!((at.path.as_str(), at.offset, at.within), ("a[2][3]", 48, Some(1)));
+        let at = select(None, Some(24));
+        assert_eq!((at.path.as_str(), at.offset), ("a[1][1]", 24));
+        let out = index.lookup(&[], &DwarfTypeRequest { member: Some("a[0][4]".into()), ..request("matrix") }).unwrap();
+        assert!(out.warnings[0].contains("out of bounds (4 elements)"), "{:?}", out.warnings);
+    }
+
+    #[test]
+    fn namespaced_declarations_complete_from_the_same_qualified_name() {
+        let mut info = Vec::new();
+        let mut first = Asm::new();
+        first.int();
+        first.code(2).text("Foo").code(8).code(3).text("g").to("int").code(0).code(0);
+        first.code(8).text("ns").label("decl").code(9).text("Foo").code(0);
+        first.code(2).text("Holder").code(12).code(3).text("f").to("decl").code(0).code(0);
+        first.finish(&mut info);
+        let mut second = Asm::new();
+        second.int();
+        second.code(8).text("ns").code(2).text("Foo").code(12);
+        second.code(3).text("n").to("int").code(8).code(0).code(0);
+        second.finish(&mut info);
+        let index = built(info);
+        let holder = index.lookup(&[], &request("Holder")).unwrap();
+        assert_eq!(holder.definitions[0].members[0].byte_size, Some(12), "{:?}", holder.definitions[0].members);
+        assert_eq!(holder.definitions[0].members[0].type_name, "struct Foo");
+        let qualified = index.lookup(&[], &request("ns::Foo")).unwrap();
+        assert_eq!(qualified.definitions[0].byte_size, Some(12));
+        assert_eq!(index.lookup(&[], &request("Foo")).unwrap().definitions[0].byte_size, Some(8));
+    }
+
+    #[test]
+    fn offset_arithmetic_overflow_is_an_error() {
+        let mut asm = Asm::new();
+        asm.label("char").code(4).text("char").code(1).code(6);
+        asm.label("flex").code(6).to("char").code(12).code(0);
+        asm.code(2).text("packet").code(8);
+        asm.code(3).text("len").to("char").code(0);
+        asm.code(3).text("data").to("flex").code(8);
+        asm.code(0);
+        let index = one(asm);
+        let lookup = index
+            .lookup(&[], &DwarfTypeRequest { member: Some("data[0xffffffffffffffff]".into()), ..request("packet") })
+            .unwrap();
+        assert!(lookup.warnings[0].contains("overflows 64 bits"), "{:?}", lookup.warnings);
+        let lookup =
+            index.lookup(&[], &DwarfTypeRequest { member: Some("data[3]".into()), ..request("packet") }).unwrap();
+        assert_eq!(lookup.definitions[0].selection.as_ref().unwrap().offset, 11);
+    }
+
+    #[test]
+    fn over_long_namespace_scopes_are_skipped_and_reported() {
+        let long = "n".repeat(500);
+        let mut asm = Asm::new();
+        asm.int();
+        asm.code(8).text(&long).code(8).text(&long).code(8).text(&long);
+        asm.code(2).text("deep").code(4).code(3).text("x").to("int").code(0).code(0);
+        asm.code(0).code(0).code(0);
+        asm.code(2).text("shallow").code(4).code(3).text("x").to("int").code(0).code(0);
+        let index = one(asm);
+        assert!(index.stats().truncated);
+        assert!(index.names.keys().all(|key| key.len() <= MAX_PREFIX + MAX_NAME));
+        let shallow = index.lookup(&[], &request("shallow")).unwrap();
+        assert_eq!(
+            shallow.definitions.len(),
+            1,
+            "{shallow:?} {:?}",
+            index.names.keys().map(String::len).collect::<Vec<_>>()
+        );
+        assert!(!index.names.keys().any(|key| key.ends_with("deep")));
+    }
+
+    #[test]
+    fn type_signature_references_render_as_unresolved() {
+        let mut asm = Asm::new();
+        asm.int();
+        asm.code(2).text("signed_ref").code(16);
+        asm.code(11).text("remote");
+        asm.body.extend_from_slice(&0x1234_5678_9abc_def0u64.to_le_bytes());
+        asm.code(0);
+        asm.code(3).text("x").to("int").code(8).code(0);
+        let lookup = one(asm).lookup(&[], &request("signed_ref")).unwrap();
+        let remote = &lookup.definitions[0].members[0];
+        assert_eq!((remote.type_name.as_str(), remote.byte_size), ("<unresolved>", None));
     }
 }
