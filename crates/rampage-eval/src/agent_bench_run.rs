@@ -91,6 +91,10 @@ pub struct AgentBenchArgs {
     /// The `rampage` CLI whose `mcp` command is benchmarked (default: target/release/rampage).
     #[arg(long)]
     rampage_bin: Option<PathBuf>,
+    /// RAMPAGE_ANALYSIS_CACHE for the rampage server. Off by default, so every run analyses from scratch and timings
+    /// stay comparable across runs and with suites measured before the persistent analysis store existed.
+    #[arg(long, default_value = "off")]
+    rampage_analysis_cache: String,
     /// REA's `scripts/rea.mjs` (default: target/bench/rea/src/scripts/rea.mjs).
     #[arg(long)]
     rea_entry: Option<PathBuf>,
@@ -182,13 +186,15 @@ pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
             "rampage" => {
                 let binary = absolute(args.rampage_bin.as_ref(), "target/release/rampage")?;
                 let config = json!({"mcpServers": {"rampage": {"type": "stdio",
-                    "command": binary, "args": ["mcp"], "env": {}}}});
+                    "command": binary, "args": ["mcp"],
+                    "env": {"RAMPAGE_ANALYSIS_CACHE": args.rampage_analysis_cache}}}});
                 let worker = binary.with_file_name("rampage-worker");
                 (
                     config,
                     json!({
                         "binary_sha256": hash_file(&binary)?,
                         "worker_beside_binary": worker.is_file(),
+                        "analysis_cache": args.rampage_analysis_cache,
                         "commit": git(&root, &["rev-parse", "HEAD"]),
                         "worktree_dirty": git(&root, &["-c", "core.fsmonitor=false", "status", "--porcelain"])
                             .map(|status| !status.is_empty()),
