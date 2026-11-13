@@ -216,7 +216,9 @@ fn check(image: &impl Image, unanchored: &Unanchored, condition: &Condition) -> 
         Condition::FileBytes { offset, pattern } => {
             let start = usize::try_from(*offset).ok()?;
             let bytes = image.image_bytes().get(start..)?;
-            pattern.matches_at(bytes).then(|| format!("file bytes at offset {offset:#x} match {}-byte pattern", pattern.len()))
+            pattern
+                .matches_at(bytes)
+                .then(|| format!("file bytes at offset {offset:#x} match {}-byte pattern", pattern.len()))
         }
         Condition::OverlayBytes(pattern) => pattern
             .matches_at(image.overlay_bytes()?)
@@ -241,9 +243,7 @@ fn check(image: &impl Image, unanchored: &Unanchored, condition: &Condition) -> 
                 None => format!("imports function {function}"),
             }),
         Condition::Export(name) => image.exports(name).then(|| format!("exports {name}")),
-        Condition::PointerBits(bits) => {
-            (image.pointer_bits() == Some(*bits)).then(|| format!("{bits}-bit image"))
-        }
+        Condition::PointerBits(bits) => (image.pointer_bits() == Some(*bits)).then(|| format!("{bits}-bit image")),
         Condition::SectionName(name) => find_section(image, name).is_some().then(|| format!("section {name} present")),
         Condition::AnySectionName(names) | Condition::UniqueSectionName(names) => {
             names.iter().find(|name| find_section(image, name).is_some()).map(|name| format!("section {name} present"))
@@ -1056,7 +1056,8 @@ mod tests {
                 _ => continue,
             };
             let image = Fake { format: Some(format), entry, ..Fake::default() };
-            let found = evaluate(&image, signature).unwrap_or_else(|| panic!("{} misses its own bytes", signature.name));
+            let found =
+                evaluate(&image, signature).unwrap_or_else(|| panic!("{} misses its own bytes", signature.name));
             assert_eq!(found.sources, [Source::DetectItEasy]);
             assert_eq!(found.versions, signature.version.iter().cloned().collect::<Vec<_>>());
             assert!(found.evidence[0].starts_with("Detect It Easy "), "{:?}", found.evidence);
@@ -1082,9 +1083,6 @@ mod tests {
         assert_eq!(detections.len(), 1);
         assert_eq!(detections[0].sources, [Source::Rampage, Source::DetectItEasy]);
         assert_eq!(detections[0].versions, ["3.96"]);
-        assert_eq!(
-            detections[0].evidence,
-            ["section UPX0 present", "Detect It Easy PE/x.sg: section UPX1 present"]
-        );
+        assert_eq!(detections[0].evidence, ["section UPX0 present", "Detect It Easy PE/x.sg: section UPX1 present"]);
     }
 }

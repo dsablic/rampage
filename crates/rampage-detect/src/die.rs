@@ -124,7 +124,8 @@ fn condition(value: &Value) -> Result<Condition, String> {
     };
     let keys: Vec<&str> = object.keys().map(String::as_str).collect();
     Ok(match keys.as_slice() {
-        ["entry"] => match JumpPattern::parse(&text("entry")?).map_err(|error| format!("entry: {error}"))?.into_plain() {
+        ["entry"] => match JumpPattern::parse(&text("entry")?).map_err(|error| format!("entry: {error}"))?.into_plain()
+        {
             Ok(pattern) => Condition::Entry { pattern, ep_only: true },
             Err(jumps) => Condition::EntryJumps(jumps),
         },

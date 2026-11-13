@@ -234,7 +234,12 @@ impl JumpPattern {
     }
 
     /// Matches starting at `address`, reading memory through `read(address, len)` (file-backed bytes only).
-    pub fn matches_from(&self, mut address: u64, big_endian: bool, read: impl Fn(u64, usize) -> Option<Vec<u8>>) -> bool {
+    pub fn matches_from(
+        &self,
+        mut address: u64,
+        big_endian: bool,
+        read: impl Fn(u64, usize) -> Option<Vec<u8>>,
+    ) -> bool {
         for piece in &self.pieces {
             match piece {
                 JumpPiece::Bytes(pattern) => {
@@ -254,9 +259,8 @@ impl JumpPattern {
                         (_, false) => i64::from(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
                         (_, true) => i64::from(i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
                     };
-                    let Some(next) = address
-                        .checked_add(u64::from(*size))
-                        .and_then(|after| after.checked_add_signed(displacement))
+                    let Some(next) =
+                        address.checked_add(u64::from(*size)).and_then(|after| after.checked_add_signed(displacement))
                     else {
                         return false;
                     };

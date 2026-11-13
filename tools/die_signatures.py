@@ -990,6 +990,18 @@ def normalize(pattern: str) -> str:
     return re.sub(r"\s+", "", pattern).upper().replace("..", "??")
 
 
+# glibc's crt1.o `_start` (x86-64 with and without endbr64, i386): every glibc program starts with it whatever
+# compiler built it, so an entry pattern that opens with it names no compiler. Found by the false-positive sweep
+# (gcc-built programs reported as Go and TinyCC).
+CRT_START = ("31 ED 49 89 D1 5E", "F3 0F 1E FA 31 ED 49 89 D1 5E", "31 ED 5E 89 E1")
+
+
+def crt_start(signature: dict[str, Any]) -> bool:
+    return signature["format"] == "elf" and any(
+        condition.get("entry", "").startswith(CRT_START) for condition in signature["conditions"]
+    )
+
+
 def peid_copy(signature: dict[str, Any], peid: set[str]) -> bool:
     for condition in signature["conditions"]:
         if "entry" in condition:
@@ -1034,6 +1046,10 @@ def convert(root: Path) -> tuple[dict[str, Any], list[str]]:
                 continue
             kept = []
             for signature in converted.signatures:
+                signature["format"] = format_name
+                if crt_start(signature):
+                    path_reasons[(file_type, "entry pattern is glibc's crt1 _start")] += 1
+                    continue
                 if peid_copy(signature, peid):
                     path_reasons[(file_type, "entry pattern equals a PeID userdb entry")] += 1
                     continue
@@ -1042,12 +1058,11 @@ def convert(root: Path) -> tuple[dict[str, Any], list[str]]:
                 path_reasons[(file_type, reason)] += count
             if not kept:
                 files[(file_type, "skipped")] += 1
-                skip_reasons[(file_type, "every detection was a PeID userdb entry")] += 1
-                report.append(f"skip {relative}: every detection was a PeID userdb entry")
+                skip_reasons[(file_type, "every detection was a PeID userdb entry or crt1 _start")] += 1
+                report.append(f"skip {relative}: every detection was a PeID userdb entry or crt1 _start")
                 continue
             files[(file_type, "converted")] += 1
             for signature in kept:
-                signature["format"] = format_name
                 signature["file"] = relative
                 written_by = authors(text)
                 if written_by:

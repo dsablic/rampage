@@ -86,20 +86,6 @@
    "authors": "fernandom - menteb.in",
    "conditions": [
     {
-     "entry": "31 ED 49 89 D1 5E 48 89 E2 48 83 E4 ?? 50 54 49 C7 C0 ?? ?? ?? ?? 48 C7 C1 ?? ?? ?? ?? 48 C7 C7"
-    }
-   ],
-   "die_type": "compiler",
-   "file": "ELF/compiler_Go.4.sg",
-   "format": "elf",
-   "kind": "compiler",
-   "name": "Go",
-   "version": "1.24.1"
-  },
-  {
-   "authors": "fernandom - menteb.in",
-   "conditions": [
-    {
      "entry": "48 31 ED 48 89 E7 48 8D 35 ?? ?? ?? ?? 48 83 E4 ?? E8 ?? ?? ?? ?? 8B 37 48 8D 57 ?? 49 C7 C0"
     }
    ],
@@ -734,20 +720,6 @@
    "kind": "compiler",
    "name": "TinyCC",
    "options": "nostdlib",
-   "version": "0.9.27"
-  },
-  {
-   "authors": "BJNFNE",
-   "conditions": [
-    {
-     "entry": "F3 0F 1E FA 31 ED 49 89 D1 5E 48 89 E2 48 83 E4 F0 50 54"
-    }
-   ],
-   "die_type": "compiler",
-   "file": "ELF/compiler_TinyCC.4.sg",
-   "format": "elf",
-   "kind": "compiler",
-   "name": "TinyCC",
    "version": "0.9.27"
   },
   {

@@ -178,7 +178,13 @@ using pefile's algorithm without its ordinal-name tables. Format details include
 
 Hints identify likely packing and missing hardening. Permissive default databases are bundled; additional
 databases are supplied at runtime. Detection databases name likely packers, compilers,
-protectors, installers, linkers and runtimes; user PeID `userdb.txt` files are accepted, with warnings for
+protectors, cryptors, installers, SFX stubs, joiners, linkers and runtimes. Besides rampage's own rules, the
+bundled database carries several hundred signatures converted from the [Detect It Easy](https://github.com/horsicq/Detect-It-Easy)
+database (MIT, pinned commit), limited to the conditions rampage tests exactly as DIE does (entry-point code,
+following relative jumps; bytes at a file offset or the overlay start; section, library, import and export names;
+pointer width). Each detection lists its `sources` (`rampage`, `detect_it_easy`) and the `versions` its rules
+name, and DIE-derived evidence names the DIE script and its authors. `tools/die_signatures.py` regenerates the
+data and reports every script it skipped and why. User PeID `userdb.txt` files are accepted, with warnings for
 malformed entries that are skipped. YARA runs through embedded yara-x, while Mandiant capa rules use imports,
 exports and strings only: file-scope features, not instruction/function-level capa analysis. Built-in
 [capability rules](capabilities.md) use corroborated evidence. Every hit is a triage signal, not proof.

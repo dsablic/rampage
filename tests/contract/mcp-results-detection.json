@@ -24,6 +24,7 @@
     "detections[].evidence",
     "detections[].kind",
     "detections[].name",
+    "detections[].sources",
     "warnings"
   ],
   "find_crypto": [
