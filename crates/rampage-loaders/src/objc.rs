@@ -154,6 +154,61 @@ pub fn parse(binary: &Binary) -> ObjcReport {
     parser.report
 }
 
+/// The reference slots code loads a message send's operands from: `__objc_selrefs` (selector strings),
+/// `__objc_classrefs` (classes, local or imported) and `__objc_superrefs` (the class whose superclass a `super`
+/// send starts at), keyed by slot address. Classes are named as [`ObjcClass::name`] names them, without the
+/// `_OBJC_CLASS_$_` prefix of an imported class.
+#[derive(Debug, Default)]
+pub struct ObjcRefs {
+    pub selectors: HashMap<u64, String>,
+    pub classes: HashMap<u64, String>,
+    pub supers: HashMap<u64, String>,
+    /// Local class structures by address, for code that forms a class's address directly (`lea`, `adrp`+`add`).
+    pub class_addresses: HashMap<u64, String>,
+    pub warnings: Vec<String>,
+}
+
+/// Reads the image's selector, class and super reference slots. Images without them yield empty tables.
+pub fn refs(binary: &Binary) -> ObjcRefs {
+    let mut refs = ObjcRefs::default();
+    if binary.format != Format::MachO {
+        return refs;
+    }
+    let mut report = ObjcReport::default();
+    let Some(size) = objc_pointer_size(binary.arch.default_pointer_size(), &mut report) else {
+        refs.warnings = report.warnings;
+        return refs;
+    };
+    let mut parser = Parser { binary, size: u64::from(size), budget: MAX_ENTRIES, names: HashMap::new(), report };
+    for (at, target) in parser.slots("__objc_selrefs") {
+        if let Pointer::Local(string) = target
+            && let Some(selector) = parser.string(string)
+        {
+            refs.selectors.insert(at, selector);
+        }
+    }
+    for (at, target) in parser.slots("__objc_classrefs") {
+        if let Some(name) = parser.link_name(target) {
+            if let Pointer::Local(class) = target {
+                refs.class_addresses.insert(class, name.clone());
+            }
+            refs.classes.insert(at, name);
+        }
+    }
+    for (at, target) in parser.slots("__objc_superrefs") {
+        if let Some(name) = parser.link_name(target) {
+            refs.supers.insert(at, name);
+        }
+    }
+    for class in parser.list_section("__objc_classlist") {
+        if let Some(name) = parser.class_name(class) {
+            refs.class_addresses.insert(class, name);
+        }
+    }
+    refs.warnings = parser.report.warnings;
+    refs
+}
+
 impl Binary {
     /// Names unnamed Objective-C method implementations `-[Class selector]` from the image's class and category
     /// metadata, attaching them as `SymbolKind::Function` symbols. Like [`Binary::recover_go_symbols`] this is
@@ -217,6 +272,23 @@ impl<'a> Parser<'a> {
             }
         }
         targets
+    }
+
+    /// Every pointer slot of the reference sections named `name`, with what each holds once loaded.
+    fn slots(&mut self, name: &str) -> Vec<(u64, Pointer<'a>)> {
+        let sections: Vec<_> = self.binary.sections.iter().filter(|section| section.name == name).collect();
+        let mut slots = Vec::new();
+        for section in sections {
+            let count = (section.size / self.size).min(MAX_LIST_ENTRIES * 4);
+            let start = section.address.next_multiple_of(self.size);
+            for index in 0..count {
+                let Some(at) = index.checked_mul(self.size).and_then(|offset| start.checked_add(offset)) else { break };
+                if let Some(target) = self.pointer(at) {
+                    slots.push((at, target));
+                }
+            }
+        }
+        slots
     }
 
     fn class(&mut self, address: u64) -> Option<ObjcClass> {

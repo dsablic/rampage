@@ -9,6 +9,7 @@ pub mod functions;
 pub mod language;
 pub mod memory;
 pub mod noreturn;
+pub mod objc_dispatch;
 pub mod pseudocode;
 mod reaching_store;
 pub mod rtti;

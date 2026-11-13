@@ -12,6 +12,7 @@ mod entry_audit;
 mod fixtures;
 mod integer_families;
 mod metadata;
+mod objc_dispatch;
 mod pseudocode;
 mod reaching_store;
 mod rtti;
