@@ -2370,13 +2370,16 @@ pub fn tools() -> Vec<Tool> {
             "Carry the saved annotations (names, comments, signatures, types, globals) of an analyzed build `from` \
              over to this build. Functions are matched one-to-one with a method and confidence each: exact_bytes \
              1.0, symbol_name 0.95, masked_hash 0.9, unique_string 0.8, call_graph 0.75 (propagation from matched \
-             callers), neighbourhood 0.6; evidence that fits several counterparts is reported as ambiguous, never \
-             guessed. Preview by default: per annotation its old -> new address, method, confidence and status \
-             (transfer, already_present, conflict with this build's annotations, below_threshold, not_transferred \
-             with a reason). apply=true writes the transfers as one undoable batch (per 1000) with a provenance \
-             entry in the findings ledger (source SHA-256, threshold, methods). min_confidence (default 0.7) picks \
-             the methods. list pages transfers, matches, changed (matched but different), added, removed or \
-             ambiguous functions.",
+             callers), call_position 0.6 (a non-calling callee placed by call position alone), neighbourhood 0.6; \
+             derived matches build only on matches at least as confident; evidence that fits several \
+             counterparts is reported as ambiguous, never guessed. Preview by default: per annotation its old -> \
+             new address, method, confidence and status (transfer, already_present, conflict with this build's \
+             annotations or symbols, below_threshold, not_transferred with a reason). apply=true writes the \
+             transfers as undoable batches of at most 1000 (each one undo step; the first also records a \
+             provenance entry in the findings ledger: source SHA-256, threshold, methods), refusing a batch whose \
+             targets changed since matching. min_confidence (default 0.7) picks the methods. list pages transfers, \
+             matches, changed (matched but different), added, removed or ambiguous functions. Analysis and \
+             matching are reused while the source file and this build stay the same, so paging is cheap.",
             |project, request: crate::TransferRequest| project.transfer_annotations(&request),
         )
         .annotates(),

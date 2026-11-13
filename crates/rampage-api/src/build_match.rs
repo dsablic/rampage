@@ -9,9 +9,14 @@
 //! 4. then, repeated until nothing changes (bounded by [`MAX_ROUNDS`]):
 //!    - a string referenced by exactly one unmatched function in each build;
 //!    - call-graph propagation from the matched functions ([`rampage_signatures::CallGraph`], two-sided and
-//!      anchored: the old build is the "training" side and each matched function's identity its name);
-//!    - the call-graph neighbourhood: the same matched callers and callees, found once in each build, for bodies of
-//!      comparable size.
+//!      anchored: the old build is the "training" side and each matched function's identity its name), for bodies
+//!      of comparable size; a callee that makes no calls and whose masked hash differs is placed by its call
+//!      position alone and scored as such (`call_position`);
+//!    - only when those match nothing more: the call-graph neighbourhood, the same matched callers and callees,
+//!      found once in each build, for bodies of comparable size.
+//!
+//! A derived stage only builds on matches at least as confident as itself (strings on strings and better,
+//! propagation on call-graph matches and better), so a weak match never yields a stronger-scored one.
 //!
 //! A match says whether the function changed: equal bytes or masked hash means unchanged at signature level.
 
@@ -45,16 +50,18 @@ pub enum MatchMethod {
     MaskedHash,
     UniqueString,
     CallGraph,
+    CallPosition,
     Neighbourhood,
 }
 
 impl MatchMethod {
-    pub const ALL: [MatchMethod; 6] = [
+    pub const ALL: [MatchMethod; 7] = [
         MatchMethod::ExactBytes,
         MatchMethod::SymbolName,
         MatchMethod::MaskedHash,
         MatchMethod::UniqueString,
         MatchMethod::CallGraph,
+        MatchMethod::CallPosition,
         MatchMethod::Neighbourhood,
     ];
 
@@ -65,6 +72,7 @@ impl MatchMethod {
             MatchMethod::MaskedHash => "masked_hash",
             MatchMethod::UniqueString => "unique_string",
             MatchMethod::CallGraph => "call_graph",
+            MatchMethod::CallPosition => "call_position",
             MatchMethod::Neighbourhood => "neighbourhood",
         }
     }
@@ -77,6 +85,7 @@ impl MatchMethod {
             MatchMethod::MaskedHash => 0.9,
             MatchMethod::UniqueString => 0.8,
             MatchMethod::CallGraph => 0.75,
+            MatchMethod::CallPosition => 0.6,
             MatchMethod::Neighbourhood => 0.6,
         }
     }
@@ -230,6 +239,11 @@ impl State<'_> {
         true
     }
 
+    /// Whether old function `old` is matched with at least `method`'s confidence: an anchor `method` may build on.
+    fn anchors(&self, old: usize, method: MatchMethod) -> bool {
+        self.old_to_new.get(&old).is_some_and(|&(_, by)| by.confidence() >= method.confidence())
+    }
+
     fn ambiguous(&mut self, old: &[usize], new: &[usize], reason: &'static str) {
         let addresses = |side: &Side, indices: &[usize]| -> Vec<u64> {
             let mut addresses: Vec<u64> = indices.iter().map(|&index| side.functions[index].address).collect();
@@ -286,8 +300,8 @@ impl State<'_> {
         pairs.into_iter().filter(|&(old, new)| self.pair(old, new, method)).count()
     }
 
-    /// Strings referenced by exactly one unmatched function on each side pair those functions, unless another such
-    /// string pairs either of them with a different function.
+    /// Strings referenced by exactly one function on each side, among those not matched at least as confidently,
+    /// pair those functions when both are unmatched, unless another such string pairs either with a different one.
     fn unique_strings(&mut self) -> usize {
         fn referencing<'a>(side: &'a Side, matched: &dyn Fn(usize) -> bool) -> HashMap<&'a str, Vec<usize>> {
             let mut by_text: HashMap<&str, Vec<usize>> = HashMap::new();
@@ -298,8 +312,9 @@ impl State<'_> {
             }
             by_text
         }
-        let old = referencing(self.old, &|index| self.old_to_new.contains_key(&index));
-        let new = referencing(self.new, &|index| self.new_to_old.contains_key(&index));
+        let method = MatchMethod::UniqueString;
+        let old = referencing(self.old, &|index| self.anchors(index, method));
+        let new = referencing(self.new, &|index| self.new_to_old.get(&index).is_some_and(|&o| self.anchors(o, method)));
         let mut offered_old: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
         let mut offered_new: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
         for (text, olds) in &old {
@@ -330,12 +345,15 @@ impl State<'_> {
     }
 
     /// Call-graph propagation through [`CallGraph::propagate`]: the old build's call sequences, with each function
-    /// named by its address, are the training side; the matched new functions carry their old counterpart's name.
+    /// named by its address, are the training side; the new functions matched at least as confidently as a
+    /// call-graph match carry their old counterpart's name. Bodies must be of comparable size; a callee that makes
+    /// no calls and differs in masked hash is placed only by its call position, which scores lower.
     fn call_graph(&mut self, graph: &CallGraph) -> usize {
         let token = |address: u64| format!("{address:x}");
         let names: BTreeMap<u64, String> = self
             .old_to_new
             .iter()
+            .filter(|(old, _)| self.anchors(**old, MatchMethod::CallGraph))
             .map(|(&old, &(new, _))| (self.new.functions[new].address, token(self.old.functions[old].address)))
             .collect();
         let added = graph.propagate(GRAPH_ARCH, &self.new.calls, &names, None);
@@ -345,7 +363,14 @@ impl State<'_> {
             let (Some(&old), Some(&new)) = (self.old.index.get(&old_address), self.new.index.get(&new_address)) else {
                 continue;
             };
-            if self.pair(old, new, MatchMethod::CallGraph) {
+            let (a, b) = (&self.old.functions[old], &self.new.functions[new]);
+            if !comparable(a.size, b.size) {
+                continue;
+            }
+            let leaf = self.new.calls.get(&new_address).is_none_or(Vec::is_empty);
+            let same_hash = a.masked.is_some() && a.masked == b.masked;
+            let method = if leaf && !same_hash { MatchMethod::CallPosition } else { MatchMethod::CallGraph };
+            if self.pair(old, new, method) {
                 paired += 1;
             }
         }
@@ -406,8 +431,7 @@ impl State<'_> {
         }
         let mut paired = 0;
         for (o, n) in pairs {
-            let (a, b) = (self.old.functions[o].size.max(1), self.new.functions[n].size.max(1));
-            if a.max(b) > 2 * a.min(b) {
+            if !comparable(self.old.functions[o].size, self.new.functions[n].size) {
                 continue;
             }
             if self.pair(o, n, MatchMethod::Neighbourhood) {
@@ -416,6 +440,12 @@ impl State<'_> {
         }
         paired
     }
+}
+
+/// Body sizes within a factor of two of each other.
+fn comparable(a: u64, b: u64) -> bool {
+    let (a, b) = (a.max(1), b.max(1));
+    a.max(b) <= 2 * a.min(b)
 }
 
 /// Matches the functions of `old` with those of `new`. See the module documentation.
@@ -600,5 +630,59 @@ mod tests {
         let matching = match_sides(&old, &new);
         assert_eq!(methods(&matching)[1], (0x20, 0x120, MatchMethod::Neighbourhood));
         assert_eq!(matching.added, vec![0x170]);
+    }
+
+    #[test]
+    fn a_neighbourhood_match_never_seeds_a_call_graph_match() {
+        // api's call sequence changed shape, so 0x20 pairs only by neighbourhood; its callee 0x30 (which calls the
+        // exactly matched 0x40) must not then be scored as a call-graph match derived from it.
+        let old = side(
+            vec![
+                function(0x10, 32, Some(1), Some("api")),
+                function(0x20, 32, Some(2), None),
+                function(0x30, 32, Some(3), None),
+                function(0x40, 32, Some(4), None),
+                function(0x60, 32, Some(6), None),
+            ],
+            &[(0x10, &[0x20]), (0x20, &[0x30]), (0x30, &[0x40])],
+        );
+        let new = side(
+            vec![
+                function(0x110, 32, Some(9), Some("api")),
+                function(0x120, 36, Some(7), None),
+                function(0x130, 36, Some(8), None),
+                function(0x140, 32, Some(4), None),
+                function(0x160, 32, Some(6), None),
+            ],
+            &[(0x110, &[0x160, 0x120]), (0x120, &[0x130]), (0x130, &[0x140])],
+        );
+        let matching = match_sides(&old, &new);
+        for matched in &matching.matches {
+            if matched.method.confidence() < MatchMethod::CallGraph.confidence() {
+                continue;
+            }
+            assert!(![0x20, 0x30].contains(&matched.old), "{:?}", methods(&matching));
+        }
+        assert!(methods(&matching).contains(&(0x20, 0x120, MatchMethod::Neighbourhood)));
+    }
+
+    #[test]
+    fn a_leaf_placed_by_call_position_alone_scores_below_call_graph() {
+        let leaf = |size| {
+            let old = side(
+                vec![function(0x10, 32, Some(1), Some("api")), function(0x20, 32, Some(2), None)],
+                &[(0x10, &[0x20])],
+            );
+            let new = side(
+                vec![function(0x110, 32, Some(9), Some("api")), function(0x120, size, Some(7), None)],
+                &[(0x110, &[0x120])],
+            );
+            methods(&match_sides(&old, &new))
+        };
+        // A replaced helper of similar size: matched, but only as a call position (below the 0.7 default).
+        assert_eq!(leaf(40)[1], (0x20, 0x120, MatchMethod::CallPosition));
+        assert!(MatchMethod::CallPosition.confidence() < 0.7);
+        // Of very different size: not matched at all.
+        assert_eq!(leaf(400).len(), 1);
     }
 }

@@ -68,7 +68,8 @@ pub struct TransferRequest {
     #[serde(default)]
     pub apply: bool,
     /// Lowest match confidence whose annotations transfer, 0 to 1 (default 0.7). Methods: exact_bytes 1.0,
-    /// symbol_name 0.95, masked_hash 0.9, unique_string 0.8, call_graph 0.75, neighbourhood 0.6.
+    /// symbol_name 0.95, masked_hash 0.9, unique_string 0.8, call_graph 0.75, call_position 0.6,
+    /// neighbourhood 0.6.
     #[schemars(range(min = 0.0, max = 1.0))]
     pub min_confidence: Option<f64>,
     /// Rows to page: transfers (default), matches, changed, added, removed or ambiguous.
@@ -129,18 +130,25 @@ pub struct TransferCounts {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TransferApplied {
-    /// Annotations the batches changed.
+    /// Annotations the written batches changed.
     pub changed: usize,
-    /// Batches written; each is one undo step (the last also records the provenance entry).
+    /// Batches written, each one undo step (N batches take N undos); the first also records the provenance entry.
     pub batches: usize,
+    /// Batches the transfer needed; more than `batches` only when `error` stopped it.
+    pub batches_needed: usize,
     /// The findings-ledger entry recording the source build, threshold and methods.
     pub provenance_finding: Option<u64>,
+    /// Why a later batch was refused; the batches before it stay written (undo them one by one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TransferReport {
-    /// `preview` or `applied`.
+    /// `preview`, `applied`, or `partially_applied` when a later batch was refused (see `applied.error`).
     pub status: &'static str,
+    /// The source build and the matching were reused from the previous call on the same pair of builds.
+    pub reused_matching: bool,
     pub source_path: String,
     pub source: ReportTarget,
     pub target: ReportTarget,
@@ -192,6 +200,19 @@ fn field_name(field: Field) -> &'static str {
         Field::Unknown => "unknown",
     }
 }
+
+/// The source build, both builds' match inputs and the matching, kept for the latest pair of builds so that
+/// paging and a following apply do not analyse and match again.
+struct Prepared {
+    /// The target image's SHA-256, the source file's SHA-256 and its path.
+    key: (String, String, std::path::PathBuf),
+    source: Project,
+    old: Side,
+    new: Side,
+    matching: BuildMatching,
+}
+
+static PREPARED: std::sync::Mutex<Option<std::sync::Arc<Prepared>>> = std::sync::Mutex::new(None);
 
 /// The source build at `path` with its saved annotations, read only.
 fn open_source(target: &Project, path: &Path) -> Result<Project, ApiError> {
@@ -254,18 +275,23 @@ impl Project {
         if !(1..=MAX_PAGE).contains(&limit) {
             return Err(ApiError::Invalid(format!("limit must be 1..={MAX_PAGE}")));
         }
-        let path = Path::new(&request.from);
-        let source = open_source(self, path)?;
-        let (old, new) = (Side::of(&source)?, Side::of(self)?);
-        let matching = match_sides(&old, &new);
-        let mut planned = self.plan_transfer(&source, &old, &new, &matching, min_confidence)?;
+        let (prepared, reused_matching) = self.prepared(Path::new(&request.from))?;
+        let Prepared { source, old, new, matching, .. } = &*prepared;
+        let mut planned = self.plan_transfer(source, old, new, matching, min_confidence)?;
 
         let mut applied = None;
         if request.apply {
-            applied = Some(self.apply_transfer(&source, &request.from, &planned, min_confidence)?);
-            for entry in planned.iter_mut().filter(|entry| entry.status == TransferStatus::Transfer) {
-                entry.reason = Some("written".to_owned());
+            let (outcome, written) = self.apply_transfer(source, &request.from, &planned, min_confidence)?;
+            let error = outcome.error.clone();
+            for (index, entry) in
+                planned.iter_mut().filter(|entry| entry.status == TransferStatus::Transfer).enumerate()
+            {
+                entry.reason = Some(match &error {
+                    Some(error) if index >= written => format!("not written: {error}"),
+                    _ => "written".to_owned(),
+                });
             }
+            applied = Some(outcome);
         }
 
         let mut counts = TransferCounts { source_annotations: planned.len(), ..TransferCounts::default() };
@@ -304,12 +330,17 @@ impl Project {
         };
 
         let list = request.list.unwrap_or_default();
-        let rows = self.rows(&source, &old, &new, &matching, &planned, list);
+        let rows = self.rows(source, old, new, matching, &planned, list);
         let offset = request.offset.unwrap_or(0);
         let mut report = TransferReport {
-            status: if request.apply { "applied" } else { "preview" },
+            status: match &applied {
+                None => "preview",
+                Some(applied) if applied.error.is_some() => "partially_applied",
+                Some(_) => "applied",
+            },
+            reused_matching,
             source_path: request.from.clone(),
-            source: ReportTarget::of(&source),
+            source: ReportTarget::of(source),
             target: ReportTarget::of(self),
             min_confidence,
             matching: summary,
@@ -351,6 +382,33 @@ impl Project {
             report.next_offset = Some(offset + report.returned);
         }
         Ok(report)
+    }
+
+    /// The prepared source and matching for the build at `path`, from the cache when this target, that file's
+    /// bytes and path are the same as last time (its annotations are then re-read), else freshly computed.
+    fn prepared(&self, path: &Path) -> Result<(std::sync::Arc<Prepared>, bool), ApiError> {
+        let bytes = std::fs::read(path).map_err(|error| ApiError::Load {
+            path: path.to_owned(),
+            source: LoadError::Io { path: path.to_owned(), source: error },
+        })?;
+        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        let key = (
+            self.triage().image_hashes.sha256.clone(),
+            rampage_arch::hex::bytes(&<[u8; 32]>::from(Sha256::digest(&bytes))),
+            canonical,
+        );
+        drop(bytes);
+        let cached = PREPARED.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
+        if let Some(prepared) = cached.filter(|prepared| prepared.key == key) {
+            prepared.source.refresh_annotations()?;
+            return Ok((prepared, true));
+        }
+        let source = open_source(self, path)?;
+        let (old, new) = (Side::of(&source)?, Side::of(self)?);
+        let matching = match_sides(&old, &new);
+        let prepared = std::sync::Arc::new(Prepared { key, source, old, new, matching });
+        *PREPARED.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(std::sync::Arc::clone(&prepared));
+        Ok((prepared, false))
     }
 
     fn plan_transfer(
@@ -505,9 +563,16 @@ impl Project {
                 None => {}
             }
             if entry.field == Field::Name {
-                if existing.is_none() && self.symbol_name(to) == Some(entry.value.as_str()) {
-                    entry.status = TransferStatus::AlreadyPresent;
-                    continue;
+                match self.symbol_name(to) {
+                    Some(symbol) if symbol == entry.value => {
+                        entry.status = TransferStatus::AlreadyPresent;
+                        continue;
+                    }
+                    Some(symbol) => {
+                        conflict(entry, format!("it would hide this build's symbol `{symbol}` there"));
+                        continue;
+                    }
+                    None => {}
                 }
                 if let Err(problem) = crate::project::check_name(&entry.value) {
                     conflict(entry, problem);
@@ -541,35 +606,26 @@ impl Project {
         }
     }
 
+    /// Writes the planned transfers as batches of at most [`MAX_BATCH`], the first with the provenance entry. Each
+    /// batch re-checks, under the log lock, that its targets still hold no other value. Returns the outcome and how
+    /// many transfers were written; a refused first batch writes nothing and is an error.
     fn apply_transfer(
         &self,
         source: &Project,
         source_path: &str,
         planned: &[Planned],
         min_confidence: f64,
-    ) -> Result<TransferApplied, ApiError> {
-        let entries: Vec<AnnotationBatchEntry> = planned
-            .iter()
-            .filter(|entry| entry.status == TransferStatus::Transfer)
-            .filter_map(|entry| {
-                let at = format!("{:#x}", entry.new?);
-                let value = Some(entry.value.clone());
-                Some(match entry.field {
-                    Field::Name => AnnotationBatchEntry::Rename { at, value },
-                    Field::Comment => AnnotationBatchEntry::Comment { at, value },
-                    Field::Signature => AnnotationBatchEntry::Signature { at, value },
-                    Field::Types => AnnotationBatchEntry::Types { at, value },
-                    Field::Global => AnnotationBatchEntry::Global { at, value },
-                    _ => return None,
-                })
-            })
-            .collect();
-        if entries.is_empty() {
-            return Ok(TransferApplied { changed: 0, batches: 0, provenance_finding: None });
+    ) -> Result<(TransferApplied, usize), ApiError> {
+        let transfers: Vec<&Planned> =
+            planned.iter().filter(|entry| entry.status == TransferStatus::Transfer && entry.new.is_some()).collect();
+        if transfers.is_empty() {
+            let outcome =
+                TransferApplied { changed: 0, batches: 0, batches_needed: 0, provenance_finding: None, error: None };
+            return Ok((outcome, 0));
         }
         let mut methods: BTreeMap<&'static str, usize> = BTreeMap::new();
         let mut fields: BTreeMap<&'static str, usize> = BTreeMap::new();
-        for entry in planned.iter().filter(|entry| entry.status == TransferStatus::Transfer) {
+        for entry in &transfers {
             *fields.entry(field_name(entry.field)).or_default() += 1;
             if let Some(method) = entry.method {
                 *methods.entry(method.name()).or_default() += 1;
@@ -580,11 +636,13 @@ impl Project {
         };
         let source_target = ReportTarget::of(source);
         let shown_path: String = source_path.chars().take(300).collect();
+        let chunks: Vec<&[&Planned]> = transfers.chunks(MAX_BATCH).collect();
         let text = format!(
             "transfer_annotations: {} annotations transferred from build sha256 {} ({shown_path}) to this build at \
-             min_confidence {min_confidence}. By match method: {}. By field: {}.",
-            entries.len(),
+             min_confidence {min_confidence}, in {} batch(es). By match method: {}. By field: {}.",
+            transfers.len(),
             source_target.sha256,
+            chunks.len(),
             tally(&methods),
             tally(&fields),
         );
@@ -592,15 +650,50 @@ impl Project {
             tool: "transfer_annotations".to_owned(),
             detail: format!("from sha256 {}, min_confidence {min_confidence}", source_target.sha256),
         }];
-        let chunks: Vec<&[AnnotationBatchEntry]> = entries.chunks(MAX_BATCH).collect();
-        let mut changed = 0;
-        let mut provenance = None;
+        let mut outcome = TransferApplied {
+            changed: 0,
+            batches: 0,
+            batches_needed: chunks.len(),
+            provenance_finding: None,
+            error: None,
+        };
+        let mut written = 0;
         for (index, chunk) in chunks.iter().enumerate() {
-            let last = index + 1 == chunks.len();
+            let entries: Vec<AnnotationBatchEntry> = chunk
+                .iter()
+                .map(|entry| {
+                    let at = format!("{:#x}", entry.new.unwrap_or_default());
+                    let value = Some(entry.value.clone());
+                    match entry.field {
+                        Field::Name => AnnotationBatchEntry::Rename { at, value },
+                        Field::Comment => AnnotationBatchEntry::Comment { at, value },
+                        Field::Signature => AnnotationBatchEntry::Signature { at, value },
+                        Field::Types => AnnotationBatchEntry::Types { at, value },
+                        _ => AnnotationBatchEntry::Global { at, value },
+                    }
+                })
+                .collect();
+            let mut provenance = None;
             let result = self.batch_annotations_with_extra(
-                chunk,
+                &entries,
                 |current| {
-                    if !last {
+                    for entry in chunk.iter() {
+                        let to = entry.new.unwrap_or_default();
+                        let existing = match entry.field {
+                            Field::Name => current.names().get(&to),
+                            Field::Comment => current.comments().get(&to),
+                            Field::Signature => current.signatures().get(&to),
+                            Field::Types => current.types().get(&to),
+                            _ => current.globals().get(&to),
+                        };
+                        if existing.is_some_and(|value| *value != entry.value) {
+                            return Err(ApiError::Invalid(format!(
+                                "the {} at {to:#x} changed after matching; call transfer_annotations again",
+                                field_name(entry.field)
+                            )));
+                        }
+                    }
+                    if index > 0 {
                         return Ok(Vec::new());
                     }
                     let (id, change) = crate::findings::provenance_entry(current, &text, &evidence)?;
@@ -608,10 +701,25 @@ impl Project {
                     Ok(vec![change])
                 },
                 |_| Ok(()),
-            )?;
-            changed += result.entries.iter().filter(|entry| entry.changed && entry.field != Field::Finding).count();
+            );
+            match result {
+                Ok(result) => {
+                    outcome.changed +=
+                        result.entries.iter().filter(|entry| entry.changed && entry.field != Field::Finding).count();
+                    outcome.batches += 1;
+                    if provenance.is_some() {
+                        outcome.provenance_finding = provenance;
+                    }
+                    written += chunk.len();
+                }
+                Err(error) if index == 0 => return Err(error),
+                Err(error) => {
+                    outcome.error = Some(format!("batch {} of {} was refused: {error}", index + 1, chunks.len()));
+                    break;
+                }
+            }
         }
-        Ok(TransferApplied { changed, batches: chunks.len(), provenance_finding: provenance })
+        Ok((outcome, written))
     }
 
     fn rows(
@@ -691,3 +799,7 @@ impl Project {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "transfer_tests.rs"]
+mod tests;

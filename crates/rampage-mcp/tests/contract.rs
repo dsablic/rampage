@@ -207,7 +207,11 @@ async fn contract_mcp_core_results() {
 
     // Notes on the copy: names, comments, both batch tools, undo and redo, and the ledger.
     exercise(c, o, "check_names", json!({"path": elf, "names": ["compat_main", "main"]})).await;
-    exercise(c, o, "rename", json!({"path": elf, "at": "main", "name": "compat_main"})).await;
+    let renamed = exercise(c, o, "rename", json!({"path": elf, "at": "main", "name": "compat_main"})).await;
+    // A label inside main, where the receiving copy has no symbol, so its name transfers.
+    let main = u64::from_str_radix(renamed["address"].as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+    let label = json!({"path": elf, "at": format!("{:#x}", main + 4), "name": "compat_label"});
+    json_of("rename", &call(c, "rename", label).await);
     exercise(c, o, "set_comment", json!({"path": elf, "at": "compat_main", "text": "entry"})).await;
     let entries = json!([{"at": "add", "name": "compat_add", "comment": "adds"}]);
     exercise(c, o, "annotate_batch", json!({"path": elf, "entries": entries})).await;
