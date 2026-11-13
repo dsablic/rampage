@@ -213,6 +213,12 @@ async fn contract_mcp_core_results() {
     exercise(c, o, "annotate_batch", json!({"path": elf, "entries": entries})).await;
     let entries = json!([{"operation": "comment", "at": "compat_add", "value": "adds two ints"}]);
     exercise(c, o, "batch", json!({"path": elf, "entries": entries})).await;
+    // Those notes carried over to a second copy: preview, a matches page, then apply.
+    let receiver = scratch.0.join("receiver.elf");
+    std::fs::copy(fixture("hello-x64.elf"), &receiver).unwrap();
+    exercise(c, o, "transfer_annotations", json!({"path": receiver, "from": elf})).await;
+    exercise(c, o, "transfer_annotations", json!({"path": receiver, "from": elf, "list": "matches", "limit": 2})).await;
+    exercise(c, o, "transfer_annotations", json!({"path": receiver, "from": elf, "apply": true})).await;
     exercise(c, o, "list_annotations", json!({"path": elf})).await;
     exercise(c, o, "undo", json!({"path": elf})).await;
     exercise(c, o, "redo", json!({"path": elf})).await;

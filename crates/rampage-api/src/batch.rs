@@ -10,6 +10,9 @@ use crate::decompile::DecompilerState;
 use crate::project::{Project, check_name, is_address_shaped};
 use rampage_decompiler::DecompilerOptions;
 
+/// One field's new value at one address (or ledger id), as a batch writes it.
+pub(crate) type AnnotationChange = (Field, u64, Option<String>);
+
 /// The most entries one batch, or one name check, takes.
 pub const MAX_BATCH: usize = 1000;
 
@@ -161,6 +164,17 @@ impl Project {
         entries: &[AnnotationBatchEntry],
         preflight: impl FnOnce(&AnnotationBatchResult) -> Result<(), ApiError>,
     ) -> Result<AnnotationBatchResult, ApiError> {
+        self.batch_annotations_with_extra(entries, |_| Ok(Vec::new()), preflight)
+    }
+
+    /// [`Project::batch_annotations_with_preflight`] with further changes, made from the locked current annotations
+    /// (such as a provenance ledger entry), in the same batch and undo step.
+    pub(crate) fn batch_annotations_with_extra(
+        &self,
+        entries: &[AnnotationBatchEntry],
+        extra: impl FnOnce(&Annotations) -> Result<Vec<AnnotationChange>, ApiError>,
+        preflight: impl FnOnce(&AnnotationBatchResult) -> Result<(), ApiError>,
+    ) -> Result<AnnotationBatchResult, ApiError> {
         check_size(entries.len(), "entries")?;
         let state = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());
         let options = state.options.clone().unwrap_or_else(|| crate::decompile::default_options(&self.binary));
@@ -171,7 +185,8 @@ impl Project {
             crate::debug_layout_import::validate_replay_source(self, current)?;
             crate::debug_type_import::validate_replay_source(self, current)?;
             crate::debug_type_import::validate_options(current, &options)?;
-            let changes = self.annotation_batch_changes(current, entries)?;
+            let mut changes = self.annotation_batch_changes(current, entries)?;
+            changes.extend(extra(current)?);
             let outcomes: Vec<_> = changes
                 .iter()
                 .map(|(field, address, value)| {
@@ -181,6 +196,7 @@ impl Project {
                         Field::Signature => current.signatures().get(address),
                         Field::Types => current.types().get(address),
                         Field::Global => current.globals().get(address),
+                        Field::Finding => current.findings().get(address),
                         _ => unreachable!("public annotation batch fields"),
                     };
                     AnnotationBatchOutcome {

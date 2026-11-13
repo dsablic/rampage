@@ -3799,6 +3799,51 @@
         }
       }
     },
+    "transfer_annotations": {
+      "group": "core",
+      "arguments": {
+        "apply": {
+          "type": "boolean",
+          "required": false
+        },
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "from": {
+          "type": "string",
+          "required": true
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "list": {
+          "type": "null|string",
+          "required": false
+        },
+        "min_confidence": {
+          "type": "null|number",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
     "triage": {
       "group": "core",
       "arguments": {

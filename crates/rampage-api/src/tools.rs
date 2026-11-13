@@ -2366,6 +2366,22 @@ pub fn tools() -> Vec<Tool> {
         .annotates(),
         tool(
             Group::Core,
+            "transfer_annotations",
+            "Carry the saved annotations (names, comments, signatures, types, globals) of an analyzed build `from` \
+             over to this build. Functions are matched one-to-one with a method and confidence each: exact_bytes \
+             1.0, symbol_name 0.95, masked_hash 0.9, unique_string 0.8, call_graph 0.75 (propagation from matched \
+             callers), neighbourhood 0.6; evidence that fits several counterparts is reported as ambiguous, never \
+             guessed. Preview by default: per annotation its old -> new address, method, confidence and status \
+             (transfer, already_present, conflict with this build's annotations, below_threshold, not_transferred \
+             with a reason). apply=true writes the transfers as one undoable batch (per 1000) with a provenance \
+             entry in the findings ledger (source SHA-256, threshold, methods). min_confidence (default 0.7) picks \
+             the methods. list pages transfers, matches, changed (matched but different), added, removed or \
+             ambiguous functions.",
+            |project, request: crate::TransferRequest| project.transfer_annotations(&request),
+        )
+        .annotates(),
+        tool(
+            Group::Core,
             "assemble",
             "Assemble literal source into a read-only byte proposal for this binary's current target. \
              at is a numeric address string or resolvable name; only the base address resolves names. \

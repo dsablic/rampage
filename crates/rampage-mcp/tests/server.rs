@@ -151,6 +151,7 @@ async fn lists_all_tools_with_instructions() {
         "set_signature",
         "set_types",
         "string_decoding",
+        "transfer_annotations",
         "triage",
         "triage_report",
         "undo",
