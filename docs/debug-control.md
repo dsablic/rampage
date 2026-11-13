@@ -10,7 +10,8 @@ set breakpoints and watchpoints. With a project bound to the target, it can also
 or static address, see stops and register values in the project's terms, and step over calls or out of functions.
 
 GDB remote stubs are live-verified against QEMU (Cortex-M3). The macOS `debugserver` and Windows paths are
-*experimental*: they are tested against protocol transcripts but [not live-verified](#what-is-not-live-verified).
+*experimental*: they are tested against protocol transcripts. `debugserver` has also passed a live acceptance run on
+arm64 macOS; the Windows path is [not live-verified](#what-is-not-live-verified).
 The design is in the [debugger design](plans/2026-10-29-debugger-control.md). rampage never launches or attaches to a
 process, delivers a signal or enters non-stop mode, and the protocol client keeps every such packet off the wire.
 It writes registers or memory, or kills a target, only when a tool asks for it and the operator started it with
@@ -641,7 +642,8 @@ QEMU in system mode exits the emulator when killed through its stub (it answers 
 
 ## macOS and debugserver
 
-*Experimental: not live-verified.* Apple's `debugserver` speaks the GDB remote protocol with LLDB's extensions. rampage launches and
+*Experimental.* The live acceptance passed on arm64 macOS on 2026-11-11 (break, step out, watch, interrupt and
+snapshot on one owned program). Apple's `debugserver` speaks the GDB remote protocol with LLDB's extensions. rampage launches and
 attaches nothing: the operator starts debugserver on a program or a pid (see [Setup](#setup)) and lists its endpoint.
 
 ### Prerequisites
@@ -781,8 +783,8 @@ debugserver supports `vCont` (`vCont;c;C;s;S`), so continues and steps use `vCon
   split across two watchpoint registers. A hit can therefore come from an access next to the requested range; the
   stop's `watch.accessed` says where. Ranges it cannot cover are refused (`E09`, reported as `target_error`).
   Prefer 1, 2, 4 or 8 bytes, aligned.
-- These follow debugserver's source and are not live-verified; the live acceptance (see [Acceptance](#acceptance))
-  checks them on a real target.
+- These follow debugserver's source; the live acceptance (see [Acceptance](#acceptance)) exercises breakpoints and
+  a watchpoint on a real arm64 target.
 
 ## Windows (gdbserver and lldb-server)
 

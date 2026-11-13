@@ -6,7 +6,7 @@ issue.
 
 ## Build and test
 
-You need a Rust toolchain with edition 2024 (`rust-toolchain.toml` selects stable), a native C/C++ compiler and
+You need a Rust toolchain through rustup (`rust-toolchain.toml` pins 1.100.0, edition 2024), a native C/C++ compiler and
 zlib development files for the embedded decompiler. See [Supported hosts](README.md#supported-hosts).
 
 ```sh

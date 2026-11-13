@@ -36,12 +36,16 @@ These are covered by the rules in [What counts as breaking](#what-counts-as-brea
 These may change or disappear in any minor release. Each is marked as experimental where it is documented.
 
 - **The desktop UI** (`rampage-ui`): its views, keys, local manifests and window behaviour.
-- **The macOS `debugserver` and Windows-target debugging paths:** implemented but not live-verified. The `debug`
-  tools' names and arguments are stable; behaviour specific to these stubs may change once they are verified.
+- **The macOS `debugserver` and Windows-target debugging paths:** implemented and tested against protocol
+  transcripts; `debugserver` has passed one live acceptance run (arm64 macOS), and the Windows path has not run
+  against a live target. The `debug` tools' names and arguments are stable; behaviour specific to these stubs may
+  change as they are verified further.
 - **Raw processor profiles beyond the reviewed ones:** the Sleigh profiles other than MSP430 (`default`) and AVR8
   (`gcc`), which have reviewed C models, and the Cortex-M profile (`ARM:LE:32:Cortex`) with its `vector_table`
-  and `pointer_tables` seeding, multiple `regions` and `ihex`/`srec` input. Their names, discovery behaviour and results may change. The `raw` field of `binary_info` is
-  experimental for every Raw profile, though its fields are pinned in the contract snapshots so changes are seen.
+  and `pointer_tables` seeding, multiple `regions` and `ihex`/`srec` input. Their names, discovery behaviour and
+  results may change, and so may the `raw` selector's `vector_table`, `pointer_tables`, `regions` and `format`
+  fields. The `raw` field of `binary_info` is experimental for every Raw profile, though its fields
+  are pinned in the contract snapshots so changes are seen.
 - **The `improve` group and the flywheel commands:** the MCP tools served with `--corpus`, the
   `--corpus`, `--flywheel-*`, `--gate`, `--require-novel-gain` and `--observations` options, the
   `report_observation` tool, and the files under `target/flywheel/`.
@@ -75,9 +79,12 @@ These are not breaking:
 
 - adding a tool, group, command, optional argument, flag or result field (clients must ignore fields they do not
   know);
-- adding a value to an open-ended string set such as an error kind or a finding category;
+- adding a value to an open-ended string set such as an error kind, a finding category, a `file_layout` hint
+  kind or a detection `sources` entry;
 - changing tool descriptions, server instructions, error message text, limitations text or the order of fields;
-- changing analysis results: better discovery, decompilation or names are improvements, not API changes;
+- changing analysis results: better discovery, decompilation or names are improvements, not API changes, and so
+  are changes to detections, heuristic hints (`file_layout`, `probe_compression` candidates), message-send
+  resolutions and build matches;
 - refusing to decompile an address that analysis judges to lie in encrypted or packed code (see
   [known limits](known-limits.md#analysis)). That judgement is an analysis result, and `explore_encrypted=true`
   (CLI `--explore-encrypted`) still decompiles there, with a warning;

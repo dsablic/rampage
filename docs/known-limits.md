@@ -32,17 +32,14 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 
 ## Analysis
 
-- On very large images (the 50 MB Go binary of the benchmark), `search` for the functions referencing a string
-  stops on its work budget before finding them. A text search for the string followed by `xrefs` to its
-  address works.
-- Byte searches with wildcards charge their pattern length for every candidate start, so they cover less of a
-  large image than exact searches do.
-- The Cortex-M Raw profile (`ARM:LE:32:Cortex`) maps one code region of at most 4 MiB: RAM, peripherals and
-  other flash banks stay unmapped, and its base address is the analyst's assertion. A-profile ARM code has no Raw
-  profile; `inspect_raw_code` reads it, without functions, cross-references or decompilation.
-- Without symbols, a function first reached by another function's tail call (`b.w f`) before its own call is
-  seen can split at an internal join point: on a generated 1 MiB Cortex-M image, 1,773 of 6,030 reported
-  starts were such splits, the same on the stripped ELF.
+- `search` runs under work budgets. Reference search decodes only the blocks that hold a matching reference, and
+  wildcard byte patterns scan for their longest fixed run first, so both complete on a 26 MB stripped Go binary;
+  a wildcard pattern whose fixed runs are short or common still covers less of a large image than an exact
+  search, and a stopped search says so.
+- The Cortex-M Raw profile (`ARM:LE:32:Cortex`) is experimental. Its primary code region holds at most 4 MiB,
+  and up to 15 further regions (code, read-only data, RAM or MMIO) are mapped only when the analyst lists them;
+  base addresses are the analyst's assertion. A-profile ARM code has no Raw profile; `inspect_raw_code` reads
+  it, without functions, cross-references or decompilation.
 - An odd address formed into a Cortex-M image that does not start a printable NUL-terminated run is still taken
   as a Thumb code pointer; odd-aligned binary constants can become false function starts.
 - Go string literal bounds come from code references and pointer-aligned static `{ptr, len}` headers in data
@@ -59,10 +56,11 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   (CLI `--explore-encrypted`). The judgement needs both signals: high-entropy code on an architecture where nearly
   every byte sequence decodes (8-bit microcontrollers) is never judged, and runs under 8 KiB are not judged. The
   edges of a judged stretch are placed to within 512 bytes, so a little clear code next to it may be left out.
-- `function_graph` refuses a view too large for one result; `function_summary` pages its blocks instead.
-- Not built yet: DEX/JVM, Intel HEX/SREC and multi-region firmware maps, object-file relocation, Swift metadata,
-  C++ layout recovery beyond RTTI evidence, and incremental analysis or a persistent database for very large
-  binaries (analysis runs again in each session).
+- The [persistent analysis store](mcp.md#persistent-analysis-store) (experimental) saves function discovery
+  only (on by default in release builds): other derived results are recomputed on each open, runtime captures and
+  byte-patched views are never stored, and an annotation edit does not trigger incremental re-analysis.
+- Not built yet: DEX/JVM, object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and
+  vftable evidence, `__CxxFrameHandler4` and Itanium exception tables, and incremental re-analysis after edits.
 
 ## Library identification
 
@@ -79,7 +77,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 
 - rampage never launches or attaches to a process: it connects only to a GDB remote stub the operator started.
 - Apple `debugserver` and Windows targets through `gdbserver.exe` or `lldb-server` are *experimental*: tested
-  against protocol transcripts, not yet against live targets.
+  against protocol transcripts. `debugserver` also passed a live acceptance run on arm64 macOS (2026-11-11:
+  break, step out, watch, interrupt and snapshot); the Windows path has not run against a live target.
 
 ## Data disclosure
 

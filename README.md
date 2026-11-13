@@ -21,8 +21,8 @@ Why it matters:
 - **Heuristics as data.** Library signatures, detection rules, capa and YARA rules and crypto constants are data
   packs, which can be added, exported and checked without rebuilding rampage.
 
-rampage is Apache-2.0. The [changelog](CHANGELOG.md) describes the first public release and the
-[stability policy](docs/stability.md) what it promises. Use rampage on files and processes you own or are allowed
+rampage is Apache-2.0. The [changelog](CHANGELOG.md) describes each release and the
+[stability policy](docs/stability.md) what 1.x promises. Use rampage on files and processes you own or are allowed
 to inspect.
 
 ## Evidence: agent head-to-head
@@ -58,7 +58,8 @@ with a `.sha256` file. Download both into one
 directory and run `tools/install.sh --archive rampage-<version>-<target>.tar.gz` from a checkout; it verifies the
 checksum before installing. To build from source instead, you need:
 
-- a Rust toolchain through [rustup](https://rustup.rs) (`rust-toolchain.toml` selects stable, edition 2024);
+- a Rust toolchain through [rustup](https://rustup.rs) (`rust-toolchain.toml` pins Rust 1.100.0, edition 2024,
+  and rustup installs it on the first build);
 - a C/C++ compiler and zlib development files, for the embedded decompiler:
   - macOS: the Xcode Command Line Tools (`xcode-select --install`);
   - Debian or Ubuntu: `sudo apt install build-essential zlib1g-dev clang`.
@@ -140,31 +141,46 @@ Areas marked *experimental* may change in any release; see the [stability policy
 
 - **Analysis:** recursive-descent function discovery, control-flow graphs, cross-references, strings, imports
   and exports; stripped Go function names from the pclntab; C++ class names and base classes from RTTI and
-  vtables; Objective-C classes, methods and properties; guided reports (`triage_report`, `find_main`,
+  vtables; MSVC vftables and exception tables in PE images, with virtual calls annotated by slot in decompiled C;
+  Objective-C classes, methods and properties, and message sends resolved to their selector and, where the
+  receiver's class is evident, the method that runs (`objc_sends`); guided reports (`triage_report`, `find_main`,
   `network_surface`, `persistence_surface`, `string_decoding` and `diff_builds` in `core`, `find_crypto` in
   `detection`).
+- **Build matching:** `transfer_annotations` matches functions one-to-one with an analysed earlier build, each
+  match with a confidence and ambiguity reported rather than guessed, and previews or applies its names, comments,
+  signatures, types and globals as an undoable batch. See [build diffing](docs/build-diffing.md).
 - **Decompilation:** C from the embedded Ghidra decompiler, with address-linked tokens and recovery diagnostics,
   run in a supervised worker with time, memory and output limits when `rampage-worker` is installed, and
   in-process otherwise.
 - **Typing:** rename and retype locals and parameters by storage, a project type library with C declarations and
   bundled libc/POSIX/Win32 basics, types on data and operands, stack frames, type propagation across calls, and
-  checked DWARF and PDB type import.
+  checked DWARF and PDB type import. `get_type` also reads layouts straight from a binary's DWARF, and from the
+  Go runtime type descriptors of stripped Go binaries, by member path or byte offset.
 - **Search and patching:** byte, text, regex, immediate, instruction and reference search; an assembler for an
   x86/x64/AArch64 subset; checked byte patches kept in the annotation log and exported to a new file.
 - **Formats:** ELF, PE and Mach-O (including universal binaries and embedded images), .NET metadata and CIL, Go
   build info, cargo-auditable data, PE resources and load config, PyInstaller archives, WebAssembly module
-  summaries, ZIP inventory, embedded-file carving and raw firmware windows.
+  summaries, ZIP inventory, embedded-file carving, raw firmware windows, and a [file layout](docs/file-layout.md)
+  of any file (padding, entropy, string clusters, hashes and labelled hints).
 - **Processors:** x86 and x86-64; AArch64, ARM and Thumb from Arm's machine-readable specification; MIPS,
   PowerPC, RISC-V, SPARC, s390x and m68k through Capstone; sixteen more families (MSP430, AVR8, 8051, Z80,
-  Xtensa, eBPF, LoongArch and others) as Raw Projects through Ghidra's Sleigh. Profiles other than MSP430 and AVR8
+  Xtensa, eBPF, LoongArch and others) as Raw Projects through Ghidra's Sleigh. Sleigh profiles other than MSP430 and AVR8
   are *experimental* and disassemble without decompiling.
+- **Firmware** (*experimental*): a Cortex-M Raw profile for headerless Thumb images that discovers, decompiles
+  and seeds from the vector table and from code-pointer tables; up to 15 further code, data or RAM regions, backed
+  by file ranges, decompressed bytes or nothing; Intel HEX and Motorola S-record input; and `probe_compression`
+  for unknown LZSS and LZ4 variants.
 - **Library identification and detection:** FLIRT/FunctionID-style signatures with bundled databases, user PAT
-  and Ghidra FID input, fuzzy candidates, packer/compiler detection, YARA, a capa subset, capability tags and
-  crypto constants, all extendable with data packs.
+  and Ghidra FID input, fuzzy candidates, packer/compiler detection (including signatures converted from Detect It
+  Easy), encrypted or packed code detection that keeps discovery out of it, YARA, a capa subset, capability tags
+  and crypto constants, all extendable with data packs.
+- **Persistent analysis store** (*experimental*): release builds save function discovery per user and reuse it
+  when the same binary is opened again with the same inputs. See [the store](docs/mcp.md#persistent-analysis-store).
 - **Debugging:** connect to an operator-started GDB remote stub (gdbserver, QEMU, OpenOCD), read state, control
   execution, set breakpoints by function name, and bind the session to a static project. Memory and register
-  writes and kill need explicit operator flags. Apple `debugserver` and Windows-target stubs are *experimental*
-  and not yet live-verified. rampage never launches or attaches to a process itself.
+  writes and kill need explicit operator flags. Apple `debugserver` and Windows-target stubs are *experimental*:
+  `debugserver` passed a live acceptance run on arm64 macOS, and the Windows path is not yet live-verified.
+  rampage never launches or attaches to a process itself.
 - **Findings ledger:** `record_finding` and `list_findings` keep what an agent established, what it does not know
   and its open questions, with evidence and confidence, in the annotation log beside the binary.
 - **Heuristic flywheel** (*experimental*): an agent proposes library signatures through a restricted MCP server,
@@ -201,8 +217,9 @@ targets debugged through an RSP stub, from a macOS or Linux host.
   its model provider. Make sure you may disclose that material; see
   [data disclosure](docs/mcp.md#authorization-and-data-disclosure).
 - Bundled library signatures match the library builds they were made from, not every version.
-- Not yet built: DEX/JVM, Intel HEX/SREC and multi-region firmware maps, object-file relocation, Swift metadata,
-  C++ layout recovery beyond RTTI evidence, and incremental analysis for very large binaries.
+- Encrypted or packed code is detected, not unpacked: discovery and decompilation stay out of it unless asked.
+- Not yet built: DEX/JVM, object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and vftable
+  evidence, decoding of `__CxxFrameHandler4` exception tables, and incremental re-analysis after edits.
 - The benchmarks above use one model and one client; they are not general accuracy guarantees.
 
 [Known limits](docs/known-limits.md) has the full list, and the

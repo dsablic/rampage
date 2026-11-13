@@ -10,8 +10,8 @@ Every result shown here is real output from rampage on the fixture used, shorten
 - A supported host (see [supported hosts](../README.md#supported-hosts)):
   - macOS on Apple silicon: tested. Intel macOS is untested.
   - Linux x64 and Linux ARM64 (Ubuntu 24.04): supported; CI builds and tests the whole workspace on both.
-- A Rust toolchain through [rustup](https://rustup.rs). The repository's `rust-toolchain.toml` selects stable, with
-  edition 2024.
+- A Rust toolchain through [rustup](https://rustup.rs). The repository's `rust-toolchain.toml` pins Rust 1.100.0
+  (edition 2024), which rustup installs on the first build.
 - A C/C++ compiler and zlib development files, for the embedded decompiler:
   - macOS: the Xcode Command Line Tools (`xcode-select --install`).
   - Debian or Ubuntu: `sudo apt install build-essential zlib1g-dev clang`.

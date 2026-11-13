@@ -4,28 +4,32 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
-## Unreleased
+## 1.0.0
+
+The first stable release. From here a breaking change to the stable surface in the
+[stability policy](docs/stability.md) needs a new major version. The surface is the one rc.1 froze, extended since
+rc.2 only by additions the policy allows: the core tools `file_layout`, `objc_sends`, `probe_compression` and
+`transfer_annotations`, the experimental `exception_handlers`, and new optional arguments and result fields. No
+tool, argument or result field was removed, renamed or made required, and no tool changed group.
+
+Highlights since rc.2:
+
+- Annotation transfer between builds: `transfer_annotations` matches functions one-to-one and carries names,
+  comments, signatures, types and globals to a new build.
+- A persistent analysis store: re-opening an analysed binary skips function discovery (experimental).
+- Type layouts for stripped Go binaries from the Go runtime type descriptors, and DWARF layout lookup through
+  `get_type`, by member path or byte offset.
+- MSVC C++ PE metadata: vftables, exception tables and virtual-call slots in decompiled C.
+- Objective-C message sends resolved to their selector and, where the receiver class is evident, the method that
+  runs (`objc_sends`).
+- Encrypted or packed code detection, and 544 packer, protector and compiler signatures converted from Detect It
+  Easy.
+- Cortex-M firmware (experimental): a headerless Raw profile with vector-table and pointer-table seeding, multiple
+  regions, Intel HEX and S-record input, `file_layout` with compressed-container hints, and `probe_compression`.
+- `search` completes on large images where it used to stop on its work budget, and the Rust toolchain is pinned.
 
 ### Added
 
-- Objective-C message sends resolve to their selector and, where the receiver's class is evident from the code, to
-  the method that runs: class references, `self`, `super` and `+alloc` results, looked up through categories and
-  the superclass chain like the runtime does. Local overrides make a send `ambiguous`, an unknown receiver lists
-  `candidates`, and a single target is never guessed. New `objc_sends` tool (CLI `rampage language objc-sends`);
-  `xrefs` gains call rows for resolved and ambiguous sends, and listings and decompiled C name the selector and
-  target at each send. On the owned fixtures every selector resolves and no send resolves to a wrong method.
-- 544 packer, protector, cryptor, compiler, installer, linker and SFX signatures converted from Detect It Easy (MIT,
-  pinned commit, authors credited per signature) join the bundled detection database. Only conditions rampage can
-  test exactly are converted (entry patterns that follow jumps, bytes at file offsets or the overlay, exact
-  library/import/export names, bit width); patterns copied or truncated from PeID's database are dropped. Matches
-  name their source and the DIE script. `tools/die_signatures.py` regenerates the data and reports what it skips.
-- Encrypted or packed code detection. Code is measured in 4 KiB windows; a stretch of at least 8 KiB with entropy
-  ≥ 7.6 bits/byte and no more than 97% valid instructions is reported as `encrypted_or_packed_code` in `triage`,
-  `triage_report` and `binary_info`, and function discovery stops at it, so a protected binary no longer lists
-  thousands of noise functions. Clear code (a packer's stub, a firmware loader before a compressed stage) is still
-  explored from the entry point. `list_functions` reports skipped stretches as `unexplored_code`; `decompile`
-  refuses addresses inside them unless `explore_encrypted: true`. No fixture's normal code comes close to the
-  thresholds. A Mach-O protector signature for PACE (Eden/Fusion) is added to the bundled detection database.
 - `transfer_annotations` (MCP; CLI `rampage annotation transfer`) carries an analysed build's annotations to a new
   build. Functions are matched one-to-one by exact bytes, symbol names, masked hashes, unique strings, call-graph
   position and neighbourhood, each with a confidence; ambiguous pairs are reported, never guessed. Preview is the
@@ -33,12 +37,23 @@ see the [stability policy](docs/stability.md) for what the version promises.
   in the target are reported as conflicts, never overwritten. It also lists changed, added and removed functions.
   On zlib 1.2.13 → 1.3, stripped, every build had zero false matches; shared libraries transferred 100% of
   unchanged functions' names and static builds about 90%. See [build diffing](docs/build-diffing.md).
-- `file_layout` (MCP, `core`) and `binary layout` map any regular file, or a range of up to 64 MiB, without a
-  loader: 0xff/0x00/repeated-byte fill and occupied regions with per-region SHA-256 and entropy, per-block
-  entropy with high and low spans, printable-string clusters, the range's SHA-256, and labelled heuristic hints
-  such as Cortex-M vector-table candidates. Capped lists report totals and a continuation range. See
-  [file layout](docs/file-layout.md).
-
+- Objective-C message sends resolve to their selector and, where the receiver's class is evident from the code, to
+  the method that runs: class references, `self`, `super` and `+alloc` results, looked up through categories and
+  the superclass chain like the runtime does. Local overrides make a send `ambiguous`, an unknown receiver lists
+  `candidates`, and a single target is never guessed. New `objc_sends` tool (CLI `rampage language objc-sends`);
+  `xrefs` gains call rows for resolved and ambiguous sends, and listings and decompiled C name the selector and
+  target at each send. On the owned fixtures every selector resolves and no send resolves to a wrong method.
+- Stripped Go binaries (Go 1.16–1.27) have type layouts: `get_type` and `list_types` read the Go runtime type
+  descriptors (`source: "go"`; `auto` falls back to them after the type library and DWARF). Structs come back with
+  field names, offsets, tags and embedded fields, interfaces with their method sets, and named types with their
+  methods; `member` follows promoted fields shallowest-first like Go. On a stripped 26 MB Go binary all 3,824 named
+  structs that its unstripped twin's DWARF also describes match exactly. When nothing is found, `get_type` now names
+  the sources it tried.
+- `get_type` falls back to the binary's own DWARF when the type library has no such name (`source`: `auto`,
+  `library`, `dwarf`), and can select a member by path (`init.busy`, `aDb[1].pBt`) or by `byte_offset`. A name index
+  is built once per project and each lookup reads only the requested type and what it references, so the work per
+  request does not grow with the binary: on a 7.9 MB SQLite build both previews used to stop on their budgets, and a
+  lookup now answers in under 0.1 s. Nothing is imported. CLI: `rampage type layout`.
 - Decompiling an MSVC C++ PE resolves virtual calls through recovered vftables when the object's class is known (a
   method's own `this`, or an analyst type named after the class): the call is annotated with its slot and candidate
   methods and keeps their shared prototype. On x86 such calls pass `this` in ECX (`__thiscall`); calls through C
@@ -49,88 +64,48 @@ see the [stability policy](docs/stability.md) for what the version promises.
   `class_evidence` adds a paged `vftables` list. New experimental `exception_handlers` (MCP `formats`) pages try
   blocks with catch types, cleanups and thrown types. Validated on clang-cl output only; `__CxxFrameHandler4`
   (cl.exe x64 since VS2019 16.3) is reported as undecoded.
-
-### Firmware
-
-- Experimental Raw Project profile `ARM:LE:32:Cortex` for headerless Cortex-M (ARMv6-M/ARMv7-M Thumb) images, with
-  aliases such as `cortex-m4`, `thumb` and `armv7m`. It uses the native ARM decoder in Thumb mode, so listing,
-  cross-references, search and decompilation (ARM v8 Thumb with its reviewed C model) work as for ARM ELF. Input
-  may be up to 4 MiB for this profile; Sleigh profiles keep 128 KiB.
-- `"vector_table": true` (or an address) in the `raw` selector reads the Cortex-M vector table: Reset becomes the
-  entry and the other Thumb handlers seeds, and `binary_info` reports every word with its verdict under
-  `raw.vector_table`, with a labelled, never applied base-address suggestion when the handlers fall outside the
-  asserted mapping. One call with path, profile and base address now opens a firmware image.
-- The Cortex-M profile decodes the M-profile instruction set: `MRS`/`MSR` special registers (`msp`, `psp`,
-  `primask`, `basepri`, `basepri_max`, `faultmask`, `control`, ...), which used to stop discovery as invalid
-  instructions, and no A32 state or A-profile-only instructions (BLX to A32, Advanced SIMD, SETEND, ERET, ...).
-  Odd-aligned string literals are not taken for Thumb function pointers. `inspect_raw_code` stays A-profile.
-- The session's Raw project cache is also bounded by 64 MiB of input bytes.
-- `"pointer_tables": true` in the Cortex-M `raw` selector seeds discovery from tables of code pointers (plain
-  arrays and 8/12/16-byte struct arrays). A table needs at least two distinct targets with strong evidence (a
-  push of `lr`, or a decodable `bl` calling it); string-pointer arrays, switch tables and stray constants are
-  refused. `binary_info` reports every table with its verdict and per-entry evidence under `raw.pointer_tables`.
-  Off by default; repeat calls on the same image reuse the scan.
-- `file_layout` flags header-checked compressed components (`compressed_component_candidate`): a header word equal
-  to the following payload's length plus a verifying byte-sum or CRC-32 field, or a packed payload ending at the
-  range end or padding with a decoded-size word. Each hint names the field offsets and the checks that passed;
-  `bounds.container_search` reports when its limits stopped the search.
-- `probe_compression` (MCP `core`; CLI `binary probe-compression`) sweeps LZ4 block and 160 LZSS variants over an
-  unknown stream within a work budget and deadline, and ranks candidates whose `decode_arguments` pass straight to
-  `decode_file_range`. A candidate is "confident" only with a supplied output size and a clear score margin.
-  `decode_file_range` gains the parameterised `lzss` codec and `lz4-block`; `lzss-4k` is unchanged.
-- Cortex-M Raw images can map several regions (experimental): `regions` adds up to 15 code, read-only data or
-  writable RAM regions, each backed by a file range, by bytes decoded through the decoder provider (`lzss-4k`,
-  `lzss`, `lz4-block`; nothing is written to disk) or by nothing (zero-filled RAM or MMIO). Calls, references and
-  decompilation cross regions; loads from writable RAM are never folded. `format` `ihex` and `srec` read Intel HEX
-  and Motorola S-records with every checksum verified; each contiguous run becomes a region and the start-address
-  record becomes the entry or a seed. `binary_info` reports each region's source, SHA-256 and decode receipt.
-- Raw interpretation identities move to `rampage-raw-interpretation-v5`, which binds every region and record input.
-- Decompiling a Cortex-M Raw image folds literal-pool loads to the addresses they hold, names unnamed globals by
-  ARMv7-M region (`ram_`, `periph_`, `ppb_`, ...) unless the analyst renamed them, keeps caller values live across
-  callees that never write a register (interprocedural register allocation), and locks callee parameter lists
-  derived from the callees themselves, so call arguments are no longer dropped. Derived locks and caches are reset
-  before each decompile, so output does not depend on earlier requests. This applies to Cortex-M Raw images only;
-  the worker protocol is now 10. Shift-and-mask forms such as `ubfx` stay in
-  Ghidra's equivalent `(x & 0xffff) >> 4` shape; see [Sleigh decoding](docs/sleigh-decoding.md).
+- Encrypted or packed code detection. Code is measured in 4 KiB windows; a stretch of at least 8 KiB with entropy
+  ≥ 7.6 bits/byte and no more than 97% valid instructions is reported as `encrypted_or_packed_code` in `triage`,
+  `triage_report` and `binary_info`, and function discovery stops at it, so a protected binary no longer lists
+  thousands of noise functions. Clear code (a packer's stub, a firmware loader before a compressed stage) is still
+  explored from the entry point. `list_functions` reports skipped stretches as `unexplored_code`; `decompile`
+  refuses addresses inside them unless `explore_encrypted: true`. No fixture's normal code comes close to the
+  thresholds. A Mach-O protector signature for PACE (Eden/Fusion) is added to the bundled detection database.
+- 544 packer, protector, cryptor, compiler, installer, linker and SFX signatures converted from Detect It Easy (MIT,
+  pinned commit, authors credited per signature) join the bundled detection database. Only conditions rampage can
+  test exactly are converted (entry patterns that follow jumps, bytes at file offsets or the overlay, exact
+  library/import/export names, bit width); patterns copied or truncated from PeID's database are dropped. Matches
+  name their source and the DIE script. `tools/die_signatures.py` regenerates the data and reports what it skips.
+- `file_layout` (MCP, `core`) and `binary layout` map any regular file, or a range of up to 64 MiB, without a
+  loader: 0xff/0x00/repeated-byte fill and occupied regions with per-region SHA-256 and entropy, per-block
+  entropy with high and low spans, printable-string clusters, the range's SHA-256, and labelled heuristic hints
+  such as Cortex-M vector-table candidates. Capped lists report totals and a continuation range. See
+  [file layout](docs/file-layout.md).
 
 ### Changed
 
-- Stripped Go binaries (Go 1.16–1.27) have type layouts: `get_type` and `list_types` read the Go runtime type
-  descriptors (`source: "go"`; `auto` falls back to them after the type library and DWARF). Structs come back with
-  field names, offsets, tags and embedded fields, interfaces with their method sets, and named types with their
-  methods; `member` follows promoted fields shallowest-first like Go. On a stripped 26 MB Go binary all 3,824 named
-  structs that its unstripped twin's DWARF also describes match exactly. When nothing is found, `get_type` now names
-  the sources it tried.
-- 32-bit x86 ELF PIC PLT stubs (`jmp [ebx+disp]`) are named `name@plt` through `.got.plt`, so decompiled
-  dispatchers in i386 shared objects show the called import instead of `sub_…`.
-- MCP accepts unambiguous argument aliases (`address`/`addr`/`ea` for `at`, `length`/`len` for `size`,
-  `file`/`file_path`/`filename`/`binary` for `path`) and decimal or `0x` strings for integer arguments, so a client
-  that calls a tool before loading its schema no longer needs a retry. `xrefs` with `at` still asks for `to` or
-  `from`.
-- Release builds keep a persistent analysis store: function discovery (functions, blocks, cross-references and
-  related facts) is saved to an SQLite file under the user cache directory (`rampage/analysis/`, owner-only) and
-  reused when the same image is opened with the same analysis inputs by the same rampage build. Re-opening a 26 MB
-  Go binary takes 0.13 s instead of about 1.7 s. Entries are verified before use and anything that does not
-  verify is analysed fresh; `binary_info` reports `analysis_store` (hit, miss, rejected, disabled). Disable with
-  `RAMPAGE_ANALYSIS_CACHE=off`; `RAMPAGE_ANALYSIS_CACHE_MAX_MB` bounds its size (1024 by default). Experimental.
-- `get_type` falls back to the binary's own DWARF when the type library has no such name (`source`: `auto`,
-  `library`, `dwarf`), and can select a member by path (`init.busy`, `aDb[1].pBt`) or by `byte_offset`. A name index
-  is built once per project and each lookup reads only the requested type and what it references, so the work per
-  request does not grow with the binary: on a 7.9 MB SQLite build both previews used to stop on their budgets, and a
-  lookup now answers in under 0.1 s. Nothing is imported. CLI: `rampage type layout`.
-- Go images: string headers (`{ptr, len}` pairs) in data give literals referenced only from data their own start
-  and length. `list_strings` reports `header_length`, and string matching ends a literal at its header length when
-  code references agree with it. On a 26 MB Go binary, literal starts went from 10,709 to 17,700.
-- ARM and AArch64 `disassemble` and `function_graph` rows carry `immediates_hex` (for example `0x78e` beside
-  `#1934`); the CLI and desktop listings append it as `; 0x78e`. Instruction text, and so operand-glob search, is
-  unchanged.
 - `search` scales to large images: `functions_referencing` a string finds the string first and decodes only the
   blocks holding a matching reference, and wildcard byte patterns prefilter on their longest fixed run. On a 26 MB
   stripped Go binary both used to stop on their work budget; they now complete. In Go images a string target's text
   ends where the next code-referenced literal begins, so packed literals no longer match each other's text.
 - `function_graph` pages oversized functions by whole blocks (`block_offset`, `blocks_next_offset`) instead of
   refusing them; edges keep whole-function block indices.
+- 32-bit x86 ELF PIC PLT stubs (`jmp [ebx+disp]`) are named `name@plt` through `.got.plt`, so decompiled
+  dispatchers in i386 shared objects show the called import instead of `sub_…`.
+- MCP accepts unambiguous argument aliases (`address`/`addr`/`ea` for `at`, `length`/`len` for `size`,
+  `file`/`file_path`/`filename`/`binary` for `path`) and decimal or `0x` strings for integer arguments, so a client
+  that calls a tool before loading its schema no longer needs a retry. `xrefs` with `at` still asks for `to` or
+  `from`.
+- Go images: string headers (`{ptr, len}` pairs) in data give literals referenced only from data their own start
+  and length. `list_strings` reports `header_length`, and string matching ends a literal at its header length when
+  code references agree with it. On a 26 MB Go binary, literal starts went from 10,709 to 17,700.
+- ARM and AArch64 `disassemble` and `function_graph` rows carry `immediates_hex` (for example `0x78e` beside
+  `#1934`); the CLI and desktop listings append it as `; 0x78e`. Instruction text, and so operand-glob search, is
+  unchanged.
 - Raw projects hash their image once per open instead of on every call; drift checks still run per call.
+- Raw projects check their analysis binding once per query rather than once per result row: `xrefs --to` with
+  5,000 rows on a Sleigh Raw image dropped from about 100 s to under 2 s. Search, call context, tracing, string
+  decoding and batch signatures use the same path.
 - `class_evidence` pages `rtti_classes` (`rtti_class_offset`/`rtti_class_limit`, 50 by default) and lists classes
   seen only as bases (`source: "rtti_base"`); a client that read the whole list must follow
   `rtti_classes_next_offset`.
@@ -146,15 +121,66 @@ see the [stability policy](docs/stability.md) for what the version promises.
   binaries are unchanged.
 - Decompiler output on every format names otherwise unnamed globals from a unique data symbol of the binary
   (`__hwcap` instead of `xRam00031248`).
-- Raw projects check their analysis binding once per query rather than once per result row: `xrefs --to` with
-  5,000 rows on a Sleigh Raw image dropped from about 100 s to under 2 s. Search, call context, tracing, string
-  decoding and batch signatures use the same path.
+- `rust-toolchain.toml` pins Rust 1.100.0, with the `llvm-tools` component and the `wasm32-unknown-unknown` target
+  CI needs, so a new stable release cannot change lints under CI. rustup installs that toolchain for a source
+  build.
 
-## 1.0.0 (unreleased)
+### Firmware
 
-The first stable release. The stable surface in the [stability policy](docs/stability.md) is the one rc.1 froze;
-no contract snapshot changed through either release candidate, and from here a change to it needs a new major
-version. The code is rc.2's.
+The Cortex-M Raw profile and everything its `raw` selector adds are experimental, like every Raw profile other
+than MSP430 and AVR8.
+
+- Experimental Raw Project profile `ARM:LE:32:Cortex` for headerless Cortex-M (ARMv6-M/ARMv7-M Thumb) images, with
+  aliases such as `cortex-m4`, `thumb` and `armv7m`. It uses the native ARM decoder in Thumb mode, so listing,
+  cross-references, search and decompilation (ARM v8 Thumb with its reviewed C model) work as for ARM ELF. Input
+  may be up to 4 MiB for this profile; Sleigh profiles keep 128 KiB.
+- `"vector_table": true` (or an address) in the `raw` selector reads the Cortex-M vector table: Reset becomes the
+  entry and the other Thumb handlers seeds, and `binary_info` reports every word with its verdict under
+  `raw.vector_table`, with a labelled, never applied base-address suggestion when the handlers fall outside the
+  asserted mapping. One call with path, profile and base address now opens a firmware image.
+- The Cortex-M profile decodes the M-profile instruction set: `MRS`/`MSR` special registers (`msp`, `psp`,
+  `primask`, `basepri`, `basepri_max`, `faultmask`, `control`, ...), which used to stop discovery as invalid
+  instructions, and no A32 state or A-profile-only instructions (BLX to A32, Advanced SIMD, SETEND, ERET, ...).
+  Odd-aligned string literals are not taken for Thumb function pointers. `inspect_raw_code` stays A-profile.
+- `"pointer_tables": true` in the Cortex-M `raw` selector seeds discovery from tables of code pointers (plain
+  arrays and 8/12/16-byte struct arrays). A table needs at least two distinct targets with strong evidence (a
+  push of `lr`, or a decodable `bl` calling it); string-pointer arrays, switch tables and stray constants are
+  refused. `binary_info` reports every table with its verdict and per-entry evidence under `raw.pointer_tables`.
+  Off by default; repeat calls on the same image reuse the scan.
+- Cortex-M Raw images can map several regions (experimental): `regions` adds up to 15 code, read-only data or
+  writable RAM regions, each backed by a file range, by bytes decoded through the decoder provider (`lzss-4k`,
+  `lzss`, `lz4-block`; nothing is written to disk) or by nothing (zero-filled RAM or MMIO). Calls, references and
+  decompilation cross regions; loads from writable RAM are never folded. `format` `ihex` and `srec` read Intel HEX
+  and Motorola S-records with every checksum verified; each contiguous run becomes a region and the start-address
+  record becomes the entry or a seed. `binary_info` reports each region's source, SHA-256 and decode receipt.
+- Raw interpretation identities move to `rampage-raw-interpretation-v5`, which binds every region and record input.
+- The session's Raw project cache is also bounded by 64 MiB of input bytes.
+- Decompiling a Cortex-M Raw image folds literal-pool loads to the addresses they hold, names unnamed globals by
+  ARMv7-M region (`ram_`, `periph_`, `ppb_`, ...) unless the analyst renamed them, keeps caller values live across
+  callees that never write a register (interprocedural register allocation), and locks callee parameter lists
+  derived from the callees themselves, so call arguments are no longer dropped. Derived locks and caches are reset
+  before each decompile, so output does not depend on earlier requests. This applies to Cortex-M Raw images only;
+  the worker protocol is now 10. Shift-and-mask forms such as `ubfx` stay in
+  Ghidra's equivalent `(x & 0xffff) >> 4` shape; see [Sleigh decoding](docs/sleigh-decoding.md).
+- `file_layout` flags header-checked compressed components (`compressed_component_candidate`): a header word equal
+  to the following payload's length plus a verifying byte-sum or CRC-32 field, or a packed payload ending at the
+  range end or padding with a decoded-size word. Each hint names the field offsets and the checks that passed;
+  `bounds.container_search` reports when its limits stopped the search.
+- `probe_compression` (MCP `core`; CLI `binary probe-compression`) sweeps LZ4 block and 160 LZSS variants over an
+  unknown stream within a work budget and deadline, and ranks candidates whose `decode_arguments` pass straight to
+  `decode_file_range`. A candidate is "confident" only with a supplied output size and a clear score margin.
+  `decode_file_range` gains the parameterised `lzss` codec and `lz4-block`; `lzss-4k` is unchanged.
+
+### Experimental
+
+- Release builds keep a persistent analysis store: function discovery (functions, blocks, cross-references and
+  related facts) is saved to an SQLite file under the user cache directory (`rampage/analysis/`, owner-only) and
+  reused when the same image is opened with the same analysis inputs by the same rampage build. Re-opening a 26 MB
+  Go binary takes 0.13 s instead of about 1.7 s. Entries are verified before use and anything that does not
+  verify is analysed fresh; `binary_info` reports `analysis_store` (hit, miss, rejected, disabled). Disable with
+  `RAMPAGE_ANALYSIS_CACHE=off`; `RAMPAGE_ANALYSIS_CACHE_MAX_MB` bounds its size (1024 by default). Experimental.
+- `exception_handlers` (MCP `formats`) is experimental: its row shape may change, and `__CxxFrameHandler4` tables
+  are not decoded yet.
 
 ### Stability
 

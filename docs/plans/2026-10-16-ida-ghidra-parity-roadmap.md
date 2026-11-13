@@ -25,19 +25,28 @@ Consequences for every milestone below:
 
 ## Where we are
 
-### Status (2026-11-06)
+### Status (2026-11-13)
 
 Taken from `todo.md`, the plans and the published benchmarks; the 2026-10-16 assessment below is kept as written.
+1.0.0-rc.1 (2026-11-06) and rc.2 (2026-11-09) were published; 1.0.0 is next.
 
 - **Phases 0–3 and 4.1:** implemented. Open gates: the live Phase 1 reconstruction (call bound N), the Phase 2
   library-recall target, and the Phase 3.3 live token/call improvement.
-- **Phase 4.2–4.4:** 4.2 has only the single-image Raw slice; 4.3 is open; 4.4 has a partial WebAssembly
-  module summary (`wasm_module`) and no DEX/JVM.
-- **Phases 5–8:** not started as phases. Suite v2 follow-ups added Mach-O chained-fixup RTTI (Phase 5) and linear
-  exact-text search with a resume cursor (Phase 6); the rest of the follow-ups are open in `todo.md`.
-- **Phase 9:** design approved 2026-10-29. 9.1–9.4 done with live QEMU acceptance; 9.5 (macOS `debugserver`) and
-  9.6a (Windows through RSP stubs) implemented, live acceptance pending. See the
-  [design's phase table](2026-10-29-debugger-control.md#phased-delivery).
+- **Phase 4.2–4.4:** 4.2 done for Cortex-M (experimental): vector-table and pointer-table seeding, multi-region
+  images and Intel HEX/SREC input, through the `raw` selector rather than a TOML memory map. 4.3 is open; 4.4 has
+  a partial WebAssembly module summary (`wasm_module`) and no DEX/JVM.
+- **Phase 5:** items done or partial, not finished as a phase: MSVC C++ PE metadata (vftables, virtual-call slots
+  in decompiled C, `__CxxFrameHandler3` exception tables; item 2, partial), Objective-C message-send resolution
+  (item 3, `objc_msgSend` half), Go runtime type layouts and DWARF layout lookup through `get_type`, and Mach-O
+  chained-fixup RTTI.
+- **Phase 6:** the first half of 6.2 is done: an experimental persistent analysis store that reuses function
+  discovery across processes. Reference search and wildcard byte search now complete on a 26 MB stripped Go
+  binary. 6.1 large-binary targets, incremental re-analysis and 6.3 are open.
+- **Phase 7:** done: `transfer_annotations` meets the zlib 1.2.13 → 1.3 acceptance with zero false matches.
+- **Phase 8:** not started.
+- **Phase 9:** design approved 2026-10-29. 9.1–9.4 done with live QEMU acceptance; 9.5 (macOS `debugserver`)
+  done, its live acceptance passed 2026-11-11; 9.6a (Windows through RSP stubs) implemented, live acceptance
+  pending. See the [design's phase table](2026-10-29-debugger-control.md#phased-delivery).
 - **Outside the phase order:**
   - The REA gap-closing wave (2026-10-29) added the `formats` tool group and the findings ledger.
   - The flywheel fast loop ([plan](2026-11-05-flywheel-fast-loop.md)) built the `improve` group, a deterministic
@@ -54,13 +63,16 @@ Taken from `todo.md`, the plans and the published benchmarks; the 2026-10-16 ass
   38/43; core only (C++, typing, investigation) 29/30 against 25/28. Median server calls per run 3 against 6.
   The tasks lean towards what rampage was built around, and REA ran without Rizin; the core-only view is the
   fairer one. The report ranks rampage's own gaps (search budgets at scale, raw-image ergonomics, argument
-  handling); `todo.md` tracks what is fixed and open.
+  handling); all three have since been addressed, and `todo.md` tracks what is fixed and open.
+- Suite v3 (tasks where Ghidra is strong) is built (`tests/fixtures/bench-v3`); its published run and report will
+  follow. A development pass on it drove the DWARF lookup, Go runtime types, i386 PLT names and argument aliases.
 
 This is measured progress against the goal below for one model and one client, not a general parity claim.
 
 Gaps from the list below that are closed or narrowed: 1 (Phase 1 implemented; live sign-off open), 2 (Phase 2.1
 corpus databases; recall target unmet), 3 (Phases 3.1 and 3.2), 4 (sixteen Sleigh families open as Raw Projects
-in 4.1) and 7 (Phase 9). 5 is narrowed by the Raw slice and the `formats` tools.
+in 4.1) and 7 (Phase 9). 5 is narrowed by the Raw slice, the Cortex-M work in 4.2 (Intel HEX/SREC included)
+and the `formats` tools; 6 by the Phase 5 items above.
 
 ### Assessment (2026-10-16)
 
@@ -278,8 +290,12 @@ and AVR8 decompile; the other fourteen refuse C until their models are reviewed.
 **4.2 Raw and firmware loader.** Explicit base address/arch/endianness/entry points; multiple memory regions
 (flash/RAM/MMIO) from a small TOML memory map; Intel HEX and Motorola SREC; vector-table-based entry seeding for
 Cortex-M. This also completes the "raw-code windows" slice of the unknown-firmware track in `todo.md`.
-*Status (2026-10-21):* the single-image Raw slice (explicit base, profile, entry and seeds for one code region)
-shipped with 4.1. Multi-region memory maps, Intel HEX/SREC and vector-table seeding are open.
+*Status (2026-11-13): done for Cortex-M, experimental.* The single-image Raw slice (explicit base, profile, entry
+and seeds for one code region) shipped with 4.1. Since then the `ARM:LE:32:Cortex` profile added vector-table and
+code-pointer-table seeding, up to 15 further regions (file-backed, decoded through a decoder provider, or
+unbacked RAM/MMIO) and Intel HEX and Motorola S-record input with every checksum verified; see
+[Raw projects](../mcp.md#raw-projects). Regions are given in the `raw` selector, not a TOML memory map, and
+multi-region maps exist only for the Cortex-M profile.
 
 **4.3 Object files and archives.** ELF relocatable `.o`, COFF `.obj`, `.a`/`.lib` archives with relocation
 application (also improves signature building: relocations give exact masks, fixing MIPS HI/LO masking).
@@ -318,8 +334,14 @@ Order by what the agent-task suite shows as failures; default order:
 **Acceptance:** per-item scorecard rows (e.g. vtable call resolution rate on the C++ corpus, ObjC selector
 resolution rate on Mach-O fixtures).
 
-*Status (2026-11-06):* not started as a phase. Mach-O chained-fixup RTTI was added after suite v2 showed
-`class_evidence` returning nothing on a default-linked arm64 Mach-O. Item 3 (2026-11-13): `objc_msgSend` call
+*Status (2026-11-13):* items done or partial; not finished as a phase. Mach-O chained-fixup RTTI was added after
+suite v2 showed `class_evidence` returning nothing on a default-linked arm64 Mach-O. Item 2, partial: MSVC x86/x64
+PE vftables and `__CxxFrameHandler3` exception tables are read at load and seed discovery (function starts on the
+owned clang-cl fixtures went from 33/79 and 32/79 to 79/79 against the PDB), and decompiled virtual calls on a
+known class carry their slot and candidate methods ([MSVC C++ metadata](../file-formats.md#msvc-c-metadata)); no
+class layouts from constructors, no Itanium exception tables, and `__CxxFrameHandler4` is not decoded. Beyond the
+list: stripped Go binaries (1.16–1.27) get type layouts from the Go runtime type descriptors, and `get_type` reads
+DWARF layouts per request without importing. Item 3 (2026-11-13): `objc_msgSend` call
 resolution landed ([objc-dispatch.md](../objc-dispatch.md)): on the owned arm64/x86-64 fixtures every send's
 selector resolves, 21 of 30 in-binary targets resolve exactly on arm64 (20 on x86-64) and all 30 are among the
 reported targets, with 0 false resolutions; macOS system apps resolve the selector at 99.9-100% of sends.
@@ -342,9 +364,14 @@ runs incrementally after annotation edits instead of from scratch.
 **Acceptance:** scorecard rows for the large binaries; full-workspace test gate completes within its time
 budget (fix the currently recorded timeout).
 
-*Status (2026-11-06):* not started as a phase. Suite v2's 49.2 MB Go binary opened and analysed in 12.9 s (one
-run); exact-text search now runs in linear time with a resume cursor, while reference search and wildcard byte
-patterns still stop on their work budget at that size (`todo.md`).
+*Status (2026-11-13):* 6.2's first half is done; 6.1 and 6.3 are open. Suite v2's 49.2 MB Go binary opened and
+analysed in 12.9 s (one run). An experimental persistent analysis store
+([reference](../mcp.md#persistent-analysis-store)) saves function discovery to a per-user SQLite file keyed by
+every analysis input and the rampage build: re-opening a 26 MB Go binary takes 0.13 s instead of about 1.7 s.
+Incremental re-analysis after edits, and storing other derived results, are open. Search at scale: exact-text
+search runs in linear time with a resume cursor; reference search decodes only the blocks holding a matching
+reference and wildcard byte patterns prefilter on their longest fixed run, so both complete on a 26 MB stripped Go
+binary where they used to stop on their work budget. `function_graph` pages oversized functions.
 
 ---
 
@@ -384,7 +411,7 @@ OpenOCD/embedded probes, many emulators) then LLDB, then Windows; breakpoints, s
 write, module tracking; MCP tools with explicit operator consent per session. Do not start implementation until
 the design is approved.
 
-*Status (2026-11-05):* design approved 2026-10-29 as
+*Status (2026-11-11):* design approved 2026-10-29 as
 [`2026-10-29-debugger-control.md`](2026-10-29-debugger-control.md). 9.1–9.5 done (9.5 live acceptance passed 2026-11-11); 9.6a (Windows through RSP stubs, Option A of
 [`2026-11-05-debugger-windows.md`](2026-11-05-debugger-windows.md)) implemented, live acceptance pending. See the
 [phase table](2026-10-29-debugger-control.md#phased-delivery) and [debug control](../debug-control.md).

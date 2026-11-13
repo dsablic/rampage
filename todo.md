@@ -1,16 +1,22 @@
 # To do
 
-## Status (2026-11-09)
+## Status (2026-11-13)
 
-- Release: 1.0.0-rc.1 (2026-11-06) and rc.2 (2026-11-09) are published as pre-releases; 1.0.0 is being prepared.
-  Contract snapshots pin every stable MCP group. Linux ARM64 host support shipped in rc.1 (archived).
+- Release: 1.0.0-rc.1 (2026-11-06) and rc.2 (2026-11-09) are published as pre-releases; there is no rc.3, and
+  1.0.0 is tagged next from `main` (its changelog section is ready to date). Contract snapshots pin every stable
+  MCP group; everything since rc.2 changed them only additively. Linux ARM64 host support shipped in rc.1
+  (archived).
 - Parity roadmap: Phases 0–3 and 4.1 implemented; live Phase 1 sign-off, the Phase 2 recall target and the
-  Phase 3.3 live improvement gate are open. Phase 4.2 is next in roadmap order.
+  Phase 3.3 live improvement gate are open. 4.2 done for Cortex-M (experimental: vector and pointer tables,
+  multi-region, HEX/SREC). Phase 5 partial (MSVC C++ metadata, Objective-C sends, Go runtime types, DWARF lookup).
+  Phase 6: persistent analysis store (6.2, first half) and search at scale done. Phase 7 (annotation transfer)
+  done. 4.3, the rest of Phase 5, 6.1/6.3 and Phase 8 are open.
 - Debugger (Phase 9): 9.1–9.5 done (9.5's live macOS `debugserver` acceptance passed 2026-11-11); 9.6a (Windows through
   RSP stubs) implemented, live acceptance pending (experimental in 1.0). See `docs/plans/2026-10-29-debugger-control.md`.
 - REA gap-closing wave 1 (2026-10-29): `formats` tools and the findings ledger done; log compaction open.
 - Head-to-head with REA: suite v1 and suite v2 published (`docs/benchmarks/`); follow-ups below. Suite v3
-  (tasks where Ghidra is strong) and a second model or client are not run yet.
+  (tasks where Ghidra is strong) is built in `tests/fixtures/bench-v3`, and a Haiku development pass drove the
+  follow-ups below; its published run and report will follow. A second model or client is not run yet.
 - Flywheel fast loop (`docs/plans/2026-11-05-flywheel-fast-loop.md`): the deterministic arm (exact rows, operand
   wildcarding) and call-graph propagation ship in the bundled databases; fuzzy matching failed the final split on
   both corpora and stays suggestion-only. The AI proposer has made no promotion a deterministic generator could

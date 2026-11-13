@@ -61,7 +61,7 @@ Formats and raw code:
   [explicit content decoding](decoding.md), [native data inspection](data-inspection.md),
   [ZIP32 inventory](archive-inventory.md).
 - [File formats](file-formats.md): Go and Rust build info, PyInstaller archives, WebAssembly modules, PE resources
-  and load config, and .NET metadata.
+  and load config, MSVC C++ metadata (vftables and exception tables), and .NET metadata.
 
 Library identification, detection and data packs:
 

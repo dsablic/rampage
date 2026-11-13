@@ -40,6 +40,12 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   [explicit decoding](decoding.md) provides LZSS (classic 4K and every explicit variant) and LZ4-block providers,
   transient previews and a bounded probe that ranks parameter sets for an unknown variant. Limits: pointer
   links are suppressed on loader warnings; decoding is not extraction, authentication or a load mapping.
+- [Raw Projects](sleigh-decoding.md) open headerless images with an asserted profile and base address: sixteen
+  Sleigh families, and the *experimental* Cortex-M profile (`ARM:LE:32:Cortex`), which decodes Thumb natively,
+  decompiles, seeds from the vector table and optional code-pointer tables, maps up to 15 further code, data or
+  RAM regions (from file ranges, decoded bytes or zero fill), and reads Intel HEX and Motorola S-records. See
+  [Raw Projects in MCP](mcp.md#multiple-regions-intel-hex-and-s-records). Limits: base addresses and regions are
+  the analyst's assertion; Sleigh profiles other than MSP430 and AVR8 do not decompile.
 - ELF, PE and Mach-O, including universal Mach-O binaries and explicitly selected embedded executable images.
 - x86 and x86-64 use [iced-x86](https://github.com/icedland/iced).
 - AArch64 and 32-bit ARM decode natively from Arm's
@@ -57,7 +63,8 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   evaluate expressions or write target memory; observations remain non-atomic and separate from snapshot identity.
 - [Debug sessions](debug-control.md) (MCP `debug` group, only with an operator-allowed endpoint): inspection,
   snapshots, all-stop execution control and project correlation over GDB remote stubs, Apple's `debugserver` and
-  Windows RSP stubs (the last two not yet live-verified); writes and kill only behind operator flags.
+  Windows RSP stubs (both *experimental*; `debugserver` has passed a live run, Windows has not); writes and kill
+  only behind operator flags.
 
 Decoder accuracy against `llvm-mc` and real arm64 code is recorded in the
 [benchmarks](benchmarks.md#earlier-measurements).
@@ -90,6 +97,11 @@ command mark these calls `listed` or `inferred`; the decompiler receives the sam
 source. Bounded register/memory SSA exposes predecessor-indexed phi nodes and 32-bit result truncation.
 Unsupported instruction semantics are explicit barriers, not inferred no-ops. Partial ARM64 SSA pseudocode
 also retains explicit unknowns. See the [ARM64 development track](arm64-development.md) for validation and limits.
+
+*Experimental.* Release builds keep a [persistent analysis store](mcp.md#persistent-analysis-store): each completed
+function discovery is saved in a per-user SQLite file, keyed by every analysis input and the rampage build, and
+reused when any process opens the same binary again; entries that fail verification are analysed afresh.
+Annotations stay in their own log. Limits: discovery only; no incremental re-analysis after edits.
 
 ## Decompilation and persistent types
 
@@ -168,6 +180,11 @@ it does not widen the scalar-only CLI/MCP importer or infer stripped-binary clas
 CLI/MCP and UI actions bind approval to the complete preview fingerprint before atomic application. A bounded C++
 extension projects producer-described base-free, non-polymorphic records and exact mutable `this` methods; it does
 not infer vptr storage, inheritance or virtual-call targets.
+`get_type` reads a type straight from the binary without importing it: from embedded DWARF when the project
+library has no such name, and on stripped Go binaries (go1.16 and later) from the Go runtime type descriptors,
+which survive `-ldflags "-s -w"`. Each lookup reads only the requested type and what it references, and selects
+a member by path or the member covering a byte offset; `list_types` lists the named Go types. See the
+[MCP reference](mcp.md#inputs-paging-and-decompiler-tokens) under `get_type`.
 An explicit [PDB name import API](pdb-symbols.md) matches PE/PDB GUID and age, then previews or applies names to
 already-discovered unnamed entries without replacing existing labels. PDB types/layouts and undiscovered starts
 are not imported; no PDB sidecar is opened automatically.
@@ -348,8 +365,9 @@ memory maps, writes snapshots, controls execution in all-stop mode with breakpoi
 session to a static project so breakpoints take function names and stops are reported in the project's terms.
 Memory and register writes need `--debug-writes`, and kill needs `--debug-kill`. rampage never launches or
 attaches to a process. Live acceptance has run against QEMU (Cortex-M3). Apple's `debugserver` and Windows targets
-through `gdbserver.exe` or `lldb-server` are *experimental*: implemented and tested against protocol transcripts,
-not yet live-verified. See [debug sessions](debug-control.md). The read-only [LLDB query bridge](lldb-query.md)
+through `gdbserver.exe` or `lldb-server` are *experimental*: implemented and tested against protocol transcripts;
+`debugserver` has also passed a live acceptance run on arm64 macOS, while the Windows path is not yet
+live-verified. See [debug sessions](debug-control.md). The read-only [LLDB query bridge](lldb-query.md)
 and [runtime snapshots](runtime-snapshots.md) are separate.
 
 ## Heuristic flywheel

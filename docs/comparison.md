@@ -16,7 +16,7 @@ nobody has measured.
 | Written in | Rust, with Ghidra's C++ decompiler embedded | Java, with a C++ decompiler | C/C++ | TypeScript on Node, driving headless Ghidra (and optionally Rizin, Hopper or IDA) |
 | Primary interface | MCP server; CLI and desktop UI share its API | GUI; headless analyzer; Java and Python scripting | GUI; IDAPython and C++ SDK | MCP server |
 | Decompiler | Ghidra's, in a supervised worker process when `rampage-worker` is installed, otherwise in-process | Ghidra's | Hex-Rays (licensed per architecture) | Ghidra's (through Ghidra) |
-| Analysis state | Loaded and analysed on first use per session; annotations in a JSON Lines log beside the binary | Project database | `.idb`/`.i64` database | Ghidra project, per REA session |
+| Analysis state | Analysed on first use; function discovery reused from a per-user store on later opens (experimental); annotations in a JSON Lines log beside the binary | Project database | `.idb`/`.i64` database | Ghidra project, per REA session |
 | Heuristics | Data: signature JSON, data packs, YARA, capa, constants | Analyzers in Java; FunctionID databases | FLIRT signatures, type libraries, plugins | Those of the backing tool |
 | Scripting API | None by design; features land as MCP tools | Yes | Yes | Through the backing tool |
 
@@ -57,7 +57,8 @@ on fixtures built by the rampage project (function starts, CFG edges, call edges
 
 These are design facts, not measured advantages.
 
-- **Startup.** rampage analyses a binary on first use within the MCP session; there is no project import step.
+- **Startup.** rampage analyses a binary on first use; there is no project import step, and release builds reuse
+  a binary's stored function discovery when it is opened again.
   REA waits for Ghidra's import and auto-analysis.
 - **Output shaped for context.** Every rampage tool has a size cap, pages large results with explicit cursors
   and totals, and declares a result size Claude Code will display whole. Tools are grouped, so a session lists
@@ -76,16 +77,18 @@ Compared with Ghidra and IDA, rampage does not have:
 
 - a scripting API (IDAPython, Ghidra scripts); new capabilities are added as MCP tools instead;
 - a mature interactive GUI: its desktop UI is experimental and has no type or struct editor;
-- DEX/APK or JVM class files, Intel HEX or Motorola SREC, multi-region firmware memory maps, or relocation of
-  object files and static archives;
-- Swift metadata, C++ class-layout recovery beyond RTTI and vtable evidence, or exception-table recovery;
+- DEX/APK or JVM class files, or relocation of object files and static archives;
+- Swift metadata, C++ class-layout recovery beyond RTTI and vtable evidence, or exception-table recovery beyond
+  MSVC `__CxxFrameHandler3` tables (experimental);
 - full version tracking: [annotation transfer](build-diffing.md) moves names, comments, signatures, types and
   globals between builds, but not local variables, data types or patches, and has no interactive review UI;
-- a persistent analysis database for very large binaries: analysis runs again in each session;
-- decompilation for most of its Sleigh processor profiles (only MSP430 and AVR8 have reviewed C models);
+- a full project database: the experimental [analysis store](mcp.md#persistent-analysis-store) keeps only
+  function discovery, and analysis does not run incrementally after edits;
+- decompilation for most of its Sleigh processor profiles (only MSP430 and AVR8 have reviewed C models; the
+  experimental Cortex-M profile decompiles with the ARM v8 Thumb model);
 - a Windows host build;
-- process launch or attach: debugging connects only to a stub the operator started, and macOS `debugserver` and
-  Windows targets are not yet live-verified;
+- process launch or attach: debugging connects only to a stub the operator started; macOS `debugserver` has
+  passed one live acceptance run and Windows targets are not yet live-verified, so both stay experimental;
 - the breadth of processor modules, file loaders, plugins and community tooling that both Ghidra and IDA have
   built up over many years.
 
