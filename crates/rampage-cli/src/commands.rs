@@ -1185,14 +1185,15 @@ pub fn graph(
     path: &Path,
     at: &str,
     view: Option<crate::args::OutputView>,
+    block_offset: usize,
     options: &Options,
 ) -> Result<()> {
     let project = open(path, options)?;
     let graph = project.function_graph(project.resolve(at)?)?;
-    let value = rampage_api::project_tool_view(
+    let value = rampage_api::project_function_graph(
         serde_json::to_value(graph)?,
-        rampage_api::ToolViewKind::FunctionGraph,
         view.map(Into::into).unwrap_or_default(),
+        block_offset,
     )?;
     writeln!(out, "{value}")?;
     Ok(())

@@ -57,6 +57,19 @@ pub(crate) struct ViewedAtArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct GraphArgs {
+    pub(crate) file: PathBuf,
+    #[arg(long)]
+    pub(crate) at: String,
+    /// Select full JSON, summary with exact omission receipts, or code with native control evidence
+    #[arg(long, value_enum)]
+    pub(crate) view: Option<OutputView>,
+    /// summary/code views: first block of a page (the previous page's blocks_next_offset)
+    #[arg(long, default_value_t = 0)]
+    pub(crate) block_offset: usize,
+}
+
+#[derive(Args)]
 pub(crate) struct AnnotationBatchArgs {
     pub(crate) file: PathBuf,
     /// Bounded regular JSON request file: {"entries":[{"operation":"rename","at":"name","value":"new"}]}

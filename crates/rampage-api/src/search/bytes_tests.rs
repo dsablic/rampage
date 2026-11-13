@@ -403,6 +403,57 @@ fn exact_text_work_is_linear_in_the_haystack_and_a_stopped_scan_can_resume() {
     assert_eq!(addresses(&project.search(&query).unwrap()), [0x1000 + at as u64]);
 }
 
+/// Benchmark v2: wildcard byte patterns charged their length per candidate start, so a 50 MB image needed far
+/// more than the default budget. The longest fully fixed run is found linearly and only its occurrences are
+/// compared, so the work is one unit per start plus the pattern length per literal occurrence.
+#[test]
+fn wildcard_patterns_search_their_longest_literal_and_compare_only_its_occurrences() {
+    let mut data = vec![b'x'; 8 * 1024 * 1024];
+    let at = data.len() - 1000;
+    data[at..at + 6].copy_from_slice(&[0x48, 0x8d, 0x05, 0x11, 0x62, 0x63]);
+    // Near misses: the literal without the rest of the pattern, and the rest without the literal.
+    data[4096..4100].copy_from_slice(&[0x48, 0x8d, 0x05, 0x11]);
+    data[8192..8195].copy_from_slice(&[0x11, 0x62, 0x63]);
+    let project = Project::new(snapshot(&[(0x1000, &data)]));
+    let mut query = bytes("48 8d 05 ?? 6? 63");
+    // Less than the old per-start charge of the pattern length (8 MiB x 6), more than one unit per start.
+    query.budget.match_work = 9 * 1024 * 1024;
+    let report = project.search(&query).unwrap();
+    assert_eq!(addresses(&report), [0x1000 + at as u64]);
+    assert_eq!(report.stop_reason, SearchStopReason::Complete);
+    assert!(report.total_is_exact && report.resume_at.is_none());
+    let starts = (data.len() - 6 + 1) as u64;
+    assert_eq!(report.budget.match_work, starts + 2 * 6);
+    assert_eq!(report.scanned_bytes, data.len() as u64);
+
+    // A stop between the starts and a literal's comparison resumes at that candidate.
+    query.budget.match_work = starts + 6;
+    let report = project.search(&query).unwrap();
+    assert_eq!((report.total, report.stop_reason), (0, SearchStopReason::MatchWorkBudget));
+    assert_eq!(report.resume_at, Some(0x1000 + at as u64));
+}
+
+#[test]
+fn literal_prefiltered_wildcards_match_a_brute_force_scan() {
+    let data: Vec<u8> = (0u32..4096).map(|index| (index.wrapping_mul(2_654_435_761) >> 13) as u8 & 0x37).collect();
+    let project = Project::new(snapshot(&[(0x1000, &data), (0x1000 + data.len() as u64, b"\x05\x05\x05\x05")]));
+    for pattern in ["05 ?? 05", "?? 05 05 ??", "0? 05", "1? 2? ?? 33", "05", "?5 0?", "05 05"] {
+        let parsed = rampage_detect::BytePattern::parse(pattern).unwrap();
+        let mut whole = data.clone();
+        whole.extend_from_slice(b"\x05\x05\x05\x05");
+        let expected: Vec<u64> = (0..=whole.len() - parsed.len())
+            .filter(|&offset| parsed.matches_at(&whole[offset..]))
+            .map(|offset| 0x1000 + offset as u64)
+            .collect();
+        let mut query = bytes(pattern);
+        query.limit = 1000;
+        let report = project.search(&query).unwrap();
+        assert_eq!(report.total, expected.len(), "{pattern}");
+        assert_eq!(addresses(&report), expected[..expected.len().min(1000)], "{pattern}");
+        assert_eq!(report.stop_reason, SearchStopReason::Complete, "{pattern}");
+    }
+}
+
 #[test]
 fn unscanned_ranges_are_bounded_and_counted() {
     let regions: Vec<(u64, &[u8])> = (0..40u64).map(|index| (0x1000 + index * 0x1000, b"abcd".as_slice())).collect();

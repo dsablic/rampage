@@ -1,7 +1,9 @@
 //! The analysis tools AI models call, shared by the MCP server and the UI's assistant: each has a name, a
 //! description, a JSON schema for its input, and a handler that runs it against a project.
 
-use crate::tool_views::{SummaryPages, ToolView, ToolViewKind, project_function_summary, project_tool_view};
+use crate::tool_views::{
+    SummaryPages, ToolView, ToolViewKind, project_function_graph, project_function_summary, project_tool_view,
+};
 use crate::workflows::{WORKFLOWS, Workflow};
 use crate::{ApiError, FunctionsQuery, ListQuery, Packs, Project, StringsQuery, WorkflowReport, XrefQuery};
 use schemars::JsonSchema;
@@ -941,11 +943,14 @@ struct ViewArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct ViewedAt {
+struct FunctionGraphArgs {
     /// Numeric address string or existing symbol, import, export, analyst or sub_<hex> name.
     at: String,
     #[serde(default)]
     view: ToolView,
+    /// summary/code views: first block of a fitted page (the previous page's blocks_next_offset).
+    #[serde(default)]
+    block_offset: usize,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -2821,11 +2826,13 @@ pub fn tools() -> Vec<Tool> {
              fall-through edge; its line says why in `noreturn`: `listed` (the callee is documented never to \
               return) or `inferred` (no path through the callee returns). view=full (default) preserves original JSON; \
               code keeps instructions/bytes/labels and control evidence; summary omits line rendering with counts \
-              and explicit omission receipts. Oversized views refuse, never truncate strings.",
-            |project, arguments: ViewedAt| {
+              and explicit omission receipts. view=full refuses when oversized; summary and code page a large \
+              graph as whole blocks with the edges leaving them (block_offset; blocks_next_offset says where the \
+              next page starts; edges keep whole-function block indices) and never truncate strings.",
+            |project, arguments: FunctionGraphArgs| {
                 let value = serde_json::to_value(project.function_graph(project.resolve(&arguments.at)?)?)
                     .map_err(|error| ApiError::Invalid(error.to_string()))?;
-                project_tool_view(value, ToolViewKind::FunctionGraph, arguments.view)
+                project_function_graph(value, arguments.view, arguments.block_offset)
             },
         ),
         tool(

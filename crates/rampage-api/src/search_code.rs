@@ -8,6 +8,7 @@ use rampage_analysis::discover::{Block, Program, XrefKind};
 use rampage_arch::{Flow, Insn, OperandEvidence, OperandKind};
 use serde::Serialize;
 
+use crate::project::Analysis;
 use crate::search::{SearchControl, SearchStopReason};
 use crate::{ApiError, Project};
 
@@ -332,7 +333,7 @@ impl Project {
         if control.cancelled() {
             return Ok(cancelled_report(query, "Cancelled immediately after native analysis initialization."));
         }
-        let report = search_program(self, &analysis.program, &analysis.xrefs_by_source, query, control)?;
+        let report = search_program(self, analysis, query, control)?;
         crate::search::bytes_source_check(&self.binary)?;
         Ok(report)
     }
@@ -381,11 +382,12 @@ fn native_search_address_bits(
 
 fn search_program(
     project: &Project,
-    program: &Program,
-    xrefs_by_source: &[usize],
+    analysis: &Analysis,
     query: &CodeSearchQuery,
     control: &SearchControl<'_>,
 ) -> Result<CodeSearchReport, ApiError> {
+    let program = &analysis.program;
+    let xrefs_by_source = analysis.xrefs_by_source.as_slice();
     if control.cancelled() {
         return Ok(cancelled_report(query, "Cancelled before metadata preparation."));
     }
@@ -404,15 +406,15 @@ fn search_program(
     let mut source_bytes = 0;
     let mut unknown_gates = 0;
     let mut source_truncated = false;
-    let mut source_cache = BTreeMap::new();
     let mut references_read = 0;
-    let prepared = prepare_search(project, program, xrefs_by_source, query, control, &mut work, &mut references_read);
-    let (blocks, import_targets) = match prepared {
+    let mut inspection = SourceInspection { bytes: &mut source_bytes, truncated: &mut source_truncated };
+    let prepared = prepare_search(project, analysis, query, control, &mut work, &mut references_read, &mut inspection);
+    let Prepared { blocks, import_targets, string_targets } = match prepared {
         Ok(prepared) => prepared,
         Err(reason) => {
             incomplete = true;
             stop_reason = reason;
-            (BTreeMap::new(), BTreeSet::new())
+            Prepared::default()
         }
     };
     if !incomplete {
@@ -695,55 +697,20 @@ fn search_program(
                             CodeReference::Import { .. } if import_targets.contains(&xref.to) => {
                                 matched = Some(evidence("import_xref", Some(xref.to), None));
                             }
-                            CodeReference::String(source) if xref.kind == XrefKind::Data => {
-                                let matches = if let Some(&matched) = source_cache.get(&xref.to) {
-                                    matched
-                                } else {
-                                    if source_bytes >= MAX_SOURCE_BYTES || source_cache.len() == MAX_HITS {
-                                        incomplete = true;
-                                        stop_reason = SearchStopReason::MatchWorkBudget;
-                                        break 'blocks;
-                                    }
-                                    let before = source_bytes;
-                                    if let Err(reason) = charge_work(
-                                        query,
-                                        control,
-                                        &mut work,
-                                        (project.binary.segments.len() as u64).saturating_mul(2),
-                                    ) {
-                                        incomplete = true;
-                                        stop_reason = reason;
-                                        break 'blocks;
-                                    }
-                                    let remaining = (query.max_work - work)
-                                        .min(query.max_bytes - decoded_bytes - source_bytes as u64)
-                                        as usize;
-                                    if remaining == 0 {
-                                        incomplete = true;
-                                        stop_reason = if work == query.max_work {
-                                            SearchStopReason::MatchWorkBudget
-                                        } else {
-                                            SearchStopReason::ScanByteBudget
-                                        };
-                                        break 'blocks;
-                                    }
-                                    let matched = source_matches(
-                                        project,
-                                        xref.to,
-                                        source,
-                                        &mut source_bytes,
-                                        &mut source_truncated,
-                                        remaining,
-                                    );
-                                    work += (source_bytes - before) as u64;
-                                    source_cache.insert(xref.to, matched);
-                                    matched
-                                };
-                                if matches {
-                                    let mut found = evidence("string_xref", Some(xref.to), None);
-                                    found.source_encoding = Some(source.encoding);
-                                    matched = Some(found);
+                            CodeReference::String(source)
+                                if xref.kind == XrefKind::Data && string_targets.contains(&xref.to) =>
+                            {
+                                // Preparation verified every matching target's source text; charge the lookup.
+                                if let Err(reason) =
+                                    charge_work(query, control, &mut work, tree_work(string_targets.len()))
+                                {
+                                    incomplete = true;
+                                    stop_reason = reason;
+                                    break 'blocks;
                                 }
+                                let mut found = evidence("string_xref", Some(xref.to), None);
+                                found.source_encoding = Some(source.encoding);
+                                matched = Some(found);
                             }
                             _ => {}
                         }
@@ -909,54 +876,209 @@ fn immediate_evidence(
 
 type PreparedBlocks<'a> = BTreeMap<(u64, u64, u64, usize), (&'a Block, u64)>;
 
+#[derive(Default)]
+struct Prepared<'a> {
+    blocks: PreparedBlocks<'a>,
+    import_targets: BTreeSet<u64>,
+    /// Data-xref targets whose source text contains the queried string (string references only).
+    string_targets: BTreeSet<u64>,
+}
+
+/// Charged source-string inspection, shared by preparation and the report.
+struct SourceInspection<'a> {
+    bytes: &'a mut usize,
+    truncated: &'a mut bool,
+}
+
 /// Preparation is all-or-nothing: a partial inventory cannot establish the global address order.
 /// Entries and conservative tree-comparison work are charged before retention; there is no unbounded sort.
+/// String and address references visit only the blocks holding a retained xref that can match, so their
+/// cost follows the matching references rather than the size of the program.
 fn prepare_search<'a>(
     project: &Project,
-    program: &'a Program,
-    xrefs_by_source: &[usize],
+    analysis: &'a Analysis,
     query: &CodeSearchQuery,
     control: &SearchControl<'_>,
     work: &mut u64,
     references: &mut usize,
-) -> Result<(PreparedBlocks<'a>, BTreeSet<u64>), SearchStopReason> {
+    inspection: &mut SourceInspection<'_>,
+) -> Result<Prepared<'a>, SearchStopReason> {
+    let program = &analysis.program;
     charge_work(query, control, work, 0)?;
-    let targets = match &query.kind {
-        CodeSearchKind::FunctionsReferencing(CodeReference::Import { name, library }) => import_targets(
-            project,
-            program,
-            xrefs_by_source,
-            name,
-            library.as_deref(),
-            query,
-            control,
-            work,
-            references,
-        )?,
-        _ => BTreeSet::new(),
+    let mut prepared = Prepared::default();
+    let sources = match &query.kind {
+        CodeSearchKind::FunctionsReferencing(CodeReference::Import { name, library }) => {
+            prepared.import_targets = import_targets(
+                project,
+                program,
+                &analysis.xrefs_by_source,
+                name,
+                library.as_deref(),
+                query,
+                control,
+                work,
+                references,
+            )?;
+            None
+        }
+        CodeSearchKind::FunctionsReferencing(CodeReference::Address(target)) => {
+            Some(reference_sources(program, &BTreeSet::from([*target]), None, query, control, work)?)
+        }
+        CodeSearchKind::FunctionsReferencing(CodeReference::String(source)) => {
+            prepared.string_targets = string_targets(project, program, source, query, control, work, inspection)?;
+            Some(reference_sources(program, &prepared.string_targets, Some(XrefKind::Data), query, control, work)?)
+        }
+        _ => None,
     };
-    let mut blocks = BTreeMap::new();
     let mut entries = 0;
-    for function in &program.functions {
+    let mut count = |work: &mut u64| -> Result<(), SearchStopReason> {
         charge_work(query, control, work, 1)?;
         entries += 1;
         if entries > MAX_INSTRUCTIONS {
             return Err(SearchStopReason::MatchWorkBudget);
         }
+        Ok(())
+    };
+    let retain = |prepared: &mut Prepared<'a>,
+                  function: u64,
+                  index: usize,
+                  block: &'a Block,
+                  work: &mut u64|
+     -> Result<(), SearchStopReason> {
+        if query.range.as_ref().is_some_and(|range| block.start >= range.end || range.start >= block.end) {
+            return Ok(());
+        }
+        charge_work(query, control, work, tree_work(prepared.blocks.len()))?;
+        prepared.blocks.insert((block.start, block.end, function, index), (block, function));
+        Ok(())
+    };
+    if let Some(sources) = sources {
+        for source in sources {
+            charge_work(query, control, work, tree_work(analysis.block_count()))?;
+            for (function, index) in analysis.blocks_containing(source) {
+                count(work)?;
+                charge_work(query, control, work, tree_work(program.functions.len()))?;
+                let Some(function) = program.function_at(function) else { continue };
+                retain(&mut prepared, function.address, index, &function.blocks[index], work)?;
+            }
+        }
+        return Ok(prepared);
+    }
+    for function in &program.functions {
+        count(work)?;
         for (index, block) in function.blocks.iter().enumerate() {
-            charge_work(query, control, work, 1)?;
-            entries += 1;
-            if entries > MAX_INSTRUCTIONS {
-                return Err(SearchStopReason::MatchWorkBudget);
-            }
-            if query.range.as_ref().is_some_and(|range| block.start >= range.end || range.start >= block.end) {
-                continue;
-            }
-            charge_work(query, control, work, tree_work(blocks.len()))?;
-            blocks.insert((block.start, block.end, function.address, index), (block, function.address));
+            count(work)?;
+            retain(&mut prepared, function.address, index, block, work)?;
         }
     }
-    Ok((blocks, targets))
+    Ok(prepared)
+}
+
+/// The sources of retained xrefs (of `kind`, when given) to any of `targets`, read through the target-ordered
+/// xref table.
+fn reference_sources(
+    program: &Program,
+    targets: &BTreeSet<u64>,
+    kind: Option<XrefKind>,
+    query: &CodeSearchQuery,
+    control: &SearchControl<'_>,
+    work: &mut u64,
+) -> Result<BTreeSet<u64>, SearchStopReason> {
+    let mut sources = BTreeSet::new();
+    for &target in targets {
+        charge_work(query, control, work, tree_work(program.xrefs.len()))?;
+        for xref in program.xrefs_to(target) {
+            charge_work(query, control, work, 1)?;
+            if kind.is_some_and(|kind| xref.kind != kind) {
+                continue;
+            }
+            if sources.len() == MAX_INSTRUCTIONS {
+                return Err(SearchStopReason::MatchWorkBudget);
+            }
+            charge_work(query, control, work, tree_work(sources.len()))?;
+            sources.insert(xref.from);
+        }
+    }
+    Ok(sources)
+}
+
+/// Data-xref targets whose source text contains `source`. The encoded needle is found first by one linear
+/// substring scan of each segment holding a data-xref target (one work unit per candidate start, like exact
+/// text search); only targets close enough before an occurrence to reach it within the source-string bound
+/// are then decoded and tested, with the same rules as before.
+fn string_targets(
+    project: &Project,
+    program: &Program,
+    source: &SourceString,
+    query: &CodeSearchQuery,
+    control: &SearchControl<'_>,
+    work: &mut u64,
+    inspection: &mut SourceInspection<'_>,
+) -> Result<BTreeSet<u64>, SearchStopReason> {
+    let needle: Vec<u8> = match source.encoding {
+        SourceStringEncoding::Utf8 => source.text.as_bytes().to_vec(),
+        SourceStringEncoding::Utf16Le => source.text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+        SourceStringEncoding::Utf16Be => source.text.encode_utf16().flat_map(u16::to_be_bytes).collect(),
+    };
+    let finder = memchr::memmem::Finder::new(&needle);
+    let xrefs = &program.xrefs;
+    let mut candidates = BTreeSet::new();
+    for segment in &project.binary.segments {
+        charge_work(query, control, work, 1 + tree_work(xrefs.len()))?;
+        let start = segment.address;
+        let end = start.saturating_add(segment.file_size);
+        let mut cursor = xrefs.partition_point(|xref| xref.to < start);
+        if xrefs.get(cursor).is_none_or(|xref| xref.to >= end) {
+            continue;
+        }
+        let Some(bytes) = project.binary.read(start, segment.file_size) else { continue };
+        charge_work(query, control, work, bytes.len() as u64)?;
+        for found in finder.find_iter(bytes) {
+            let at = start + found as u64;
+            // A target can match only when its bounded source text reaches past this occurrence.
+            let low = (at + needle.len() as u64).saturating_sub(MAX_SOURCE_STRING as u64).max(start);
+            while cursor < xrefs.len() && xrefs[cursor].to < low {
+                charge_work(query, control, work, 1)?;
+                cursor += 1;
+            }
+            while cursor < xrefs.len() && xrefs[cursor].to <= at {
+                charge_work(query, control, work, 1)?;
+                let xref = &xrefs[cursor];
+                cursor += 1;
+                if xref.kind != XrefKind::Data || candidates.contains(&xref.to) {
+                    continue;
+                }
+                if candidates.len() == MAX_HITS {
+                    return Err(SearchStopReason::MatchWorkBudget);
+                }
+                charge_work(query, control, work, tree_work(candidates.len()))?;
+                candidates.insert(xref.to);
+            }
+        }
+    }
+    let mut matched = BTreeSet::new();
+    for target in candidates {
+        if *inspection.bytes >= MAX_SOURCE_BYTES {
+            return Err(SearchStopReason::MatchWorkBudget);
+        }
+        charge_work(query, control, work, (project.binary.segments.len() as u64).saturating_mul(2))?;
+        let remaining = (query.max_work - *work).min(query.max_bytes - *inspection.bytes as u64) as usize;
+        if remaining == 0 {
+            return Err(if *work == query.max_work {
+                SearchStopReason::MatchWorkBudget
+            } else {
+                SearchStopReason::ScanByteBudget
+            });
+        }
+        let before = *inspection.bytes;
+        let found = source_matches(project, target, source, inspection.bytes, inspection.truncated, remaining);
+        *work += (*inspection.bytes - before) as u64;
+        if found {
+            charge_work(query, control, work, tree_work(matched.len()))?;
+            matched.insert(target);
+        }
+    }
+    Ok(matched)
 }
 
 fn tree_work(entries: usize) -> u64 {
@@ -1472,6 +1594,57 @@ mod tests {
         }
     }
 
+    /// Benchmark v2: functions_referencing a string stopped on match_work with nothing scanned on a 50 MB image,
+    /// because preparation charged every block of the program and then decoded every instruction. The string's
+    /// occurrences are found first and only blocks holding a data xref to a matching target are decoded, so the
+    /// same query on a program with thousands more functions costs the same decoding and nearly the same work.
+    #[test]
+    fn string_and_address_references_decode_only_referencing_blocks_whatever_the_program_size() {
+        let text = "needle in the data";
+        let data = rampage_arch::hex::bytes(&text.bytes().chain([0]).chain(*b"other\0").collect::<Vec<_>>());
+        let report = |extra_functions: u64, reference: CodeReference| {
+            // 0x1000 references the string; 0x2000 references "other"; the extra functions reference nothing.
+            let filler = "c3".repeat(extra_functions as usize);
+            let mut regions = vec![
+                (0x1000, "r-x", "488d05f91f0000488d0df21f0000c3"),
+                (0x2000, "r-x", "488d050c100000c3"),
+                (0x3000, "r--", data.as_str()),
+            ];
+            if extra_functions != 0 {
+                regions.push((0x10000, "r-x", filler.as_str()));
+            }
+            let seeds: Vec<u64> =
+                [0x1000, 0x2000].into_iter().chain((0..extra_functions).map(|i| 0x10000 + i)).collect();
+            let project = Project::new(snapshot("x86_64", &regions, &seeds));
+            let blocks: usize =
+                project.analysis().unwrap().program.functions.iter().map(|function| function.blocks.len()).sum();
+            assert!(blocks as u64 >= 2 + extra_functions);
+            let query = CodeSearchQuery::new(CodeSearchKind::FunctionsReferencing(reference)).unwrap();
+            project.search_code(&query).unwrap()
+        };
+        let string = || CodeReference::String(SourceString::new("in the", SourceStringEncoding::Utf8).unwrap());
+        let (small, large) = (report(0, string()), report(20_000, string()));
+        for report in [&small, &large] {
+            assert_eq!(sites(report), [0x1000], "{report:?}");
+            assert_eq!(report.hits[0].evidence.kind, "string_xref");
+            assert_eq!(report.hits[0].evidence.target, Some(0x3000));
+            assert!(report.scan_complete && report.stop_reason == SearchStopReason::Complete);
+        }
+        // One block decoded (three instructions), not the 20 000 others.
+        assert_eq!((small.decoded_instructions, large.decoded_instructions), (3, 3));
+        // Old preparation alone charged at least two units per block (40 000 here); now only log-sized lookups grow.
+        assert!(large.match_work < small.match_work + 1_000, "{} vs {}", large.match_work, small.match_work);
+
+        let (small, large) =
+            (report(0, CodeReference::Address(0x3013)), report(20_000, CodeReference::Address(0x3013)));
+        for report in [&small, &large] {
+            assert_eq!(sites(report), [0x2000], "{report:?}");
+            assert_eq!(report.hits[0].evidence.kind, "address_xref");
+        }
+        assert_eq!((small.decoded_instructions, large.decoded_instructions), (2, 2));
+        assert!(large.match_work < small.match_work + 1_000, "{} vs {}", large.match_work, small.match_work);
+    }
+
     #[test]
     fn import_references_follow_slot_linked_stubs_and_keep_library_identity() {
         let mut binary = snapshot(
@@ -1506,10 +1679,8 @@ mod tests {
         assert_eq!(sites(&project.search_code(&query).unwrap()), [0x4000]);
     }
 
-    fn retained_search(project: &Project, program: &Program, query: &CodeSearchQuery) -> CodeSearchReport {
-        let mut sources: Vec<_> = (0..program.xrefs.len()).collect();
-        sources.sort_unstable_by_key(|&index| (program.xrefs[index].from, program.xrefs[index].to));
-        search_program(project, program, &sources, query, &SearchControl::default()).unwrap()
+    fn retained_search(project: &Project, analysis: &Analysis, query: &CodeSearchQuery) -> CodeSearchReport {
+        search_program(project, analysis, query, &SearchControl::default()).unwrap()
     }
 
     fn function(address: u64, end: u64) -> DiscoveredFunction {
@@ -1525,11 +1696,11 @@ mod tests {
     fn retained_learned_thumb_mode_controls_instruction_boundaries() {
         let project = Project::new(snapshot("arm", &[(0x1000, "r-x", "2a207047")], &[0x1000]));
         assert!(project.binary.thumb.is_empty());
-        let program = Program {
+        let program = Analysis::new(Program {
             functions: vec![function(0x1000, 0x1004)],
             code_modes: vec![(0x1000, true)],
             ..Default::default()
-        };
+        });
         let query = CodeSearchQuery::new(CodeSearchKind::Instruction {
             mnemonic: CodePattern::new("mov*").unwrap(),
             operands: Some(CodePattern::new("r0,*").unwrap()),
@@ -1548,11 +1719,11 @@ mod tests {
     #[test]
     fn retained_a64_indirect_call_flow_is_applied_without_fabricating_operand_evidence() {
         let project = Project::new(snapshot("aarch64", &[(0x1000, "r-x", "00003fd6c0035fd6")], &[0x1000]));
-        let program = Program {
+        let program = Analysis::new(Program {
             functions: vec![function(0x1000, 0x1008)],
             resolved_flows: vec![ResolvedFlow { function: 0x1000, address: 0x1000, flow: Flow::Call(0x2000) }],
             ..Default::default()
-        };
+        });
         let mut value = constant(CodeValue::Unsigned(0x2000));
         value.include_addresses = true;
         let report = retained_search(&project, &program, &immediate(value));
@@ -1659,7 +1830,7 @@ mod tests {
             let report = project.search_code(&first_instruction_query()).unwrap();
             assert_eq!(report.hits[0].flow, Flow::Next, "{arch}: {report:?}");
             let end = 0x1000 + 4 * (1 + u64::from(project.binary.arch.delay_slots()));
-            let program = Program { functions: vec![function(0x1000, end)], ..Default::default() };
+            let program = Analysis::new(Program { functions: vec![function(0x1000, end)], ..Default::default() });
             let report = retained_search(&project, &program, &first_instruction_query());
             assert_eq!(report.hits[0].flow, Flow::Next, "{arch}: {report:?}");
             assert!(report.inspected_code_bytes <= 20);
@@ -1784,7 +1955,7 @@ mod tests {
         }))
         .unwrap();
         // Model cancellation arriving as analysis returns, before calling any preparation helper.
-        let report = search_program(&project, &analysis.program, &analysis.xrefs_by_source, &query, &control).unwrap();
+        let report = search_program(&project, analysis, &query, &control).unwrap();
         assert!(report.cancelled);
         assert_eq!(report.stop_reason, SearchStopReason::Cancelled);
         assert_eq!((report.match_work, report.examined_references, report.decoded_instructions), (0, 0, 0));
@@ -1873,7 +2044,7 @@ mod tests {
         ));
         let mut first = function(0x1000, 0x1004);
         first.blocks.push(Block { start: 0x2000, end: 0x2004 });
-        let program = Program { functions: vec![first, function(0x1800, 0x1804)], ..Default::default() };
+        let program = Analysis::new(Program { functions: vec![first, function(0x1800, 0x1804)], ..Default::default() });
         let query = CodeSearchQuery::new(CodeSearchKind::Instruction {
             mnemonic: CodePattern::new("nop").unwrap(),
             operands: None,

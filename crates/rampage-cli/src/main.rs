@@ -114,7 +114,7 @@ enum Command {
     AnnotationBatch(args::AnnotationBatchArgs),
     /// Native control-flow graph with an explicit full/summary/code JSON view
     #[command(hide = true)]
-    Graph(args::ViewedAtArgs),
+    Graph(args::GraphArgs),
     #[command(hide = true)]
     PatchBytes(args::PatchBytesArgs),
     #[command(hide = true)]
@@ -536,7 +536,9 @@ fn main() -> ExitCode {
         Command::Search(args) => commands::search(&mut out, &args, &options),
         Command::InspectSleigh(args) => commands::inspect_sleigh(&mut out, &args, &options),
         Command::AnnotationBatch(args) => commands::annotation_batch(&mut out, &args, &options),
-        Command::Graph(args::ViewedAtArgs { file, at, view }) => commands::graph(&mut out, &file, &at, view, &options),
+        Command::Graph(args::GraphArgs { file, at, view, block_offset }) => {
+            commands::graph(&mut out, &file, &at, view, block_offset, &options)
+        }
         Command::Assemble(args) => commands::assemble(&mut out, &args, &options),
         Command::Signatures(SignaturesArgs { file, output, fuzzy_request }) => {
             commands::signatures(&mut out, &file, output.as_deref(), fuzzy_request.as_deref(), &options)

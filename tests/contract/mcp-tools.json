@@ -1983,6 +1983,10 @@
           "type": "string",
           "required": true
         },
+        "block_offset": {
+          "type": "integer",
+          "required": false
+        },
         "image_length": {
           "type": "integer|null|string",
           "required": false

@@ -228,7 +228,7 @@ pub(crate) enum FunctionCommand {
     /// Atomically apply checked rename/comment/signature/types/global operations from explicit JSON
     Batch(crate::args::AnnotationBatchArgs),
     /// Native control-flow graph with complete instructions or an explicit summary projection
-    Graph(crate::args::ViewedAtArgs),
+    Graph(crate::args::GraphArgs),
     /// Discover functions by recursive descent from symbols, exports, the entry point and unwind metadata
     List(FuncsArgs),
     /// Disassemble instructions

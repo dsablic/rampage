@@ -432,6 +432,12 @@ pub struct RawInterpretationIdentity {
     pub sha256: String,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Whole-image identity hashes computed on this thread.
+    pub(crate) static IDENTITY_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     rampage_arch::hex::bytes(&Sha256::digest(bytes))
 }
@@ -717,6 +723,8 @@ impl RawCodeImage {
     }
 
     pub(crate) fn identity(&self, bytes: &[u8]) -> RawInterpretationIdentity {
+        #[cfg(test)]
+        IDENTITY_HASHES.with(|count| count.set(count.get() + 1));
         let mut hash = Sha256::new();
         let text = |hash: &mut Sha256, text: &str| {
             hash.update((text.len() as u64).to_be_bytes());

@@ -4147,6 +4147,11 @@
           "repeated": false,
           "required": true
         },
+        "--block-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
         "--image-length": {
           "type": "value",
           "repeated": false,
@@ -4551,6 +4556,11 @@
           "type": "value",
           "repeated": false,
           "required": true
+        },
+        "--block-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
         },
         "--image-length": {
           "type": "value",

@@ -310,12 +310,27 @@ impl Scan<'_> {
     /// Exact needles: a linear substring search charging one unit of match work per candidate start, so the
     /// default budget covers a whole large image instead of a few MiB of `length`-byte comparisons.
     fn exact(&mut self, view: &VirtualBytes<'_>, size: usize, needle: &[u8], alignment: usize) {
-        let length = needle.len();
+        self.prefiltered(view, size, needle.len(), (0, needle), None, alignment);
+    }
+
+    /// A linear search for `literal` (found at `literal_offset` inside every match of `length` bytes), charging
+    /// one unit of match work per candidate start. When `verify` is given, each literal occurrence is a
+    /// candidate whose whole pattern is then compared, charging `length` more; otherwise the literal is the
+    /// whole match.
+    fn prefiltered(
+        &mut self,
+        view: &VirtualBytes<'_>,
+        size: usize,
+        length: usize,
+        (literal_offset, literal): (usize, &[u8]),
+        verify: Option<&BytePattern>,
+        alignment: usize,
+    ) {
         if size < length {
             self.report.scanned_bytes += size as u64;
             return;
         }
-        let finder = memchr::memmem::Finder::new(needle);
+        let finder = memchr::memmem::Finder::new(literal);
         let starts = size - length + 1;
         let mut scratch = Vec::new();
         let mut next = 0;
@@ -332,13 +347,26 @@ impl Scan<'_> {
             }
             self.report.budget.match_work += chunk as u64;
             let window = view.window(next, chunk + length - 1, &mut scratch);
+            // Literal positions whose candidate start lies in this chunk.
+            let haystack = &window[literal_offset..literal_offset + chunk + literal.len() - 1];
             let mut from = 0;
             let mut stopped_at = None;
-            while let Some(found) = finder.find(&window[from..]) {
-                let offset = next + from + found;
-                from += found + 1;
+            let mut unaffordable = None;
+            while let Some(found) = finder.find(&haystack[from..]) {
+                let candidate = from + found;
+                let offset = next + candidate;
+                from = candidate + 1;
                 if alignment == 2 && !(view.address() + offset as u64).is_multiple_of(2) {
                     continue;
+                }
+                if let Some(pattern) = verify {
+                    if !self.charge(length as u64) {
+                        unaffordable = Some(offset);
+                        break;
+                    }
+                    if !pattern.matches_at(&window[candidate..candidate + length]) {
+                        continue;
+                    }
                 }
                 if !self.hit(view, offset, length) {
                     stopped_at = Some(offset);
@@ -349,6 +377,11 @@ impl Scan<'_> {
                 // A result-cap stop examined the bytes through the capped match, not the whole chunk.
                 self.report.scanned_bytes += (offset + length) as u64;
                 return;
+            }
+            if let Some(offset) = unaffordable {
+                // Resume at the candidate whose comparison could not be afforded.
+                next = offset;
+                break;
             }
             next += chunk;
         }
@@ -361,8 +394,16 @@ impl Scan<'_> {
     }
 
     fn literals(&mut self, view: &VirtualBytes<'_>, size: usize, matcher: &Matcher, length: usize) {
-        if let Matcher::Exact { needle, alignment } = matcher {
-            return self.exact(view, size, needle, *alignment as usize);
+        match matcher {
+            Matcher::Exact { needle, alignment } => return self.exact(view, size, needle, *alignment as usize),
+            // Wildcard patterns with a fully fixed run search that run linearly and compare only its occurrences.
+            Matcher::Bytes(pattern) => {
+                if let Some((offset, literal)) = pattern.longest_literal() {
+                    let verify = (literal.len() != length).then_some(pattern);
+                    return self.prefiltered(view, size, length, (offset, &literal), verify, 1);
+                }
+            }
+            _ => {}
         }
         if size < length {
             self.report.scanned_bytes += size as u64;

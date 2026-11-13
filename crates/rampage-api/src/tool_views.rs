@@ -187,43 +187,121 @@ fn fitted_list(
     (rows, offset, more.then_some(next), more)
 }
 
-fn fit_summary(mut value: Value, view: ToolView, pages: SummaryPages) -> Result<Value, ApiError> {
-    let blocks = take_list(&mut value, &["graph", "blocks"]);
-    // Each block is paged with the edges that leave it, which keep their whole-function block indices.
+/// Takes the blocks and edges out of the graph object at `graph`: each block paired with the edges leaving it
+/// (which keep their whole-function block indices), and the edges that leave no listed block.
+fn graph_units(value: &mut Value, graph: &[&str]) -> (Vec<Value>, Vec<Value>) {
+    let path = |list: &'static str| graph.iter().copied().chain([list]).collect::<Vec<_>>();
+    let blocks = take_list(value, &path("blocks"));
     let mut outgoing: Vec<Vec<Value>> = vec![Vec::new(); blocks.len()];
     let mut stray_edges = Vec::new();
-    for edge in take_list(&mut value, &["graph", "edges"]) {
+    for edge in take_list(value, &path("edges")) {
         match edge.get("from").and_then(Value::as_u64).and_then(|from| outgoing.get_mut(from as usize)) {
             Some(edges) => edges.push(edge),
             None => stray_edges.push(edge),
         }
     }
-    let blocks: Vec<Value> =
+    let units =
         blocks.into_iter().zip(outgoing).map(|(block, edges)| Value::Array(vec![block, Value::Array(edges)])).collect();
-    let references = take_list(&mut value, &["references", "items"]);
-    let callees = take_list(&mut value, &["callees"]);
-    // A summary view records one omission receipt per block; a paged result sums them into one.
-    if let Some(omissions) = value.pointer_mut("/view_projection/omissions").and_then(Value::as_array_mut) {
-        let per_block =
-            |receipt: &Value| receipt["path"].as_str().is_some_and(|path| path.starts_with("/graph/blocks/"));
-        let (blocks_count, bytes, items) = omissions.iter().filter(|receipt| per_block(receipt)).fold(
-            (0u64, 0u64, 0u64),
-            |(count, bytes, items), receipt| {
-                (
-                    count + 1,
-                    bytes + receipt["json_bytes"].as_u64().unwrap_or(0),
-                    items + receipt["items"].as_u64().unwrap_or(0),
-                )
-            },
-        );
-        if blocks_count != 0 {
-            omissions.retain(|receipt| !per_block(receipt));
-            omissions.push(json!({
-                "path": "/graph/blocks/*/lines", "blocks": blocks_count, "items": items, "json_bytes": bytes,
-                "reason": "instruction text/bytes omitted; bounds, counts and non-rendering evidence retained",
-            }));
+    (units, stray_edges)
+}
+
+/// A summary view records one omission receipt per graph block under `blocks` (e.g. `/graph/blocks/`); a paged
+/// result sums them into one.
+fn merge_block_receipts(value: &mut Value, blocks: &str) {
+    let Some(omissions) = value.pointer_mut("/view_projection/omissions").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let per_block = |receipt: &Value| receipt["path"].as_str().is_some_and(|path| path.starts_with(blocks));
+    let (blocks_count, bytes, items) = omissions.iter().filter(|receipt| per_block(receipt)).fold(
+        (0u64, 0u64, 0u64),
+        |(count, bytes, items), receipt| {
+            (
+                count + 1,
+                bytes + receipt["json_bytes"].as_u64().unwrap_or(0),
+                items + receipt["items"].as_u64().unwrap_or(0),
+            )
+        },
+    );
+    if blocks_count != 0 {
+        omissions.retain(|receipt| !per_block(receipt));
+        omissions.push(json!({
+            "path": format!("{blocks}*/lines"), "blocks": blocks_count, "items": items, "json_bytes": bytes,
+            "reason": "instruction text/bytes omitted; bounds, counts and non-rendering evidence retained",
+        }));
+    }
+}
+
+/// Puts one page of [`graph_units`] back into `graph` with its offsets; every page repeats the stray edges.
+fn insert_graph_page(
+    graph: &mut Map<String, Value>,
+    units: Vec<Value>,
+    stray_edges: &[Value],
+    offset: usize,
+    next: Option<usize>,
+) {
+    let (mut page_blocks, mut page_edges) = (Vec::new(), stray_edges.to_vec());
+    for unit in units {
+        if let Value::Array(mut parts) = unit {
+            if let Some(Value::Array(edges)) = parts.pop() {
+                page_edges.extend(edges);
+            }
+            page_blocks.extend(parts.pop());
         }
     }
+    graph.insert("edges".into(), Value::Array(page_edges));
+    graph.insert("blocks".into(), Value::Array(page_blocks));
+    graph.insert("blocks_offset".into(), json!(offset));
+    graph.insert("blocks_next_offset".into(), json!(next));
+}
+
+/// Projects a function graph like [`project_tool_view`]. A summary or code view too large for the byte budget, or
+/// asked for a later page (`block_offset`), is paged instead of refused: whole blocks with the edges leaving them,
+/// `blocks_offset`/`blocks_next_offset`, and a `fitted` receipt. Edges index blocks by their position in the whole
+/// function, so every page's edges stay valid. view=full keeps its exact-or-refuse contract.
+pub fn project_function_graph(value: Value, view: ToolView, block_offset: usize) -> Result<Value, ApiError> {
+    if view == ToolView::Full {
+        return project_tool_view(value, ToolViewKind::FunctionGraph, view);
+    }
+    let mut value = project(value, ToolViewKind::FunctionGraph, view)?;
+    if block_offset == 0 && fits(&value) {
+        return Ok(value);
+    }
+    let (blocks, stray_edges) = graph_units(&mut value, &[]);
+    merge_block_receipts(&mut value, "/blocks/");
+    let mut slack = SUMMARY_PAGING_SLACK;
+    loop {
+        let mut budget = MAX_TOOL_VIEW_BYTES.saturating_sub(json_bytes(&value) + slack);
+        let (units, offset, next, byte_capped) = fitted_list(blocks.clone(), block_offset, budget, &mut budget);
+        if units.is_empty() && next.is_some() {
+            return Err(invalid(&format!(
+                "function_graph {view:?} view: block {offset} alone exceeds the tool JSON byte budget; retry with \
+                 view=summary or use disassemble with a smaller count"
+            )));
+        }
+        let mut page = value.clone();
+        let graph = object(&mut page, "function graph")?;
+        insert_graph_page(graph, units, &stray_edges, offset, next);
+        graph.insert(
+            "fitted".into(),
+            json!({
+                "byte_budget": MAX_TOOL_VIEW_BYTES,
+                "byte_capped": byte_capped,
+                "continue_with": "pass block_offset set to blocks_next_offset for the next page; a page holds the \
+                                  edges leaving its blocks, which index blocks by their position in the whole function",
+            }),
+        );
+        if fits(&page) || slack >= MAX_TOOL_VIEW_BYTES {
+            return checked(page, ToolViewKind::FunctionGraph, view);
+        }
+        slack *= 2;
+    }
+}
+
+fn fit_summary(mut value: Value, view: ToolView, pages: SummaryPages) -> Result<Value, ApiError> {
+    let (blocks, stray_edges) = graph_units(&mut value, &["graph"]);
+    let references = take_list(&mut value, &["references", "items"]);
+    let callees = take_list(&mut value, &["callees"]);
+    merge_block_receipts(&mut value, "/graph/blocks/");
     // Bulky optional analyses go, largest first, only while the result without its lists still does not fit.
     let mut omitted = Vec::new();
     while json_bytes(&value) + SUMMARY_PAGING_SLACK > MAX_TOOL_VIEW_BYTES {
@@ -270,19 +348,7 @@ fn fit_summary(mut value: Value, view: ToolView, pages: SummaryPages) -> Result<
             references_object.insert("items_next_offset".into(), json!(references.2));
         }
         if let Some(graph) = object.get_mut("graph").and_then(Value::as_object_mut) {
-            let (mut page_blocks, mut page_edges) = (Vec::new(), stray_edges.clone());
-            for unit in blocks.0 {
-                if let Value::Array(mut parts) = unit {
-                    if let Some(Value::Array(edges)) = parts.pop() {
-                        page_edges.extend(edges);
-                    }
-                    page_blocks.extend(parts.pop());
-                }
-            }
-            graph.insert("edges".into(), Value::Array(page_edges));
-            graph.insert("blocks".into(), Value::Array(page_blocks));
-            graph.insert("blocks_offset".into(), json!(blocks.1));
-            graph.insert("blocks_next_offset".into(), json!(blocks.2));
+            insert_graph_page(graph, blocks.0, &stray_edges, blocks.1, blocks.2);
         }
         object.insert(
             "fitted".into(),
@@ -1290,6 +1356,70 @@ mod tests {
             validated_indirect_targets: Vec::new(),
         };
         serde_json::to_value(result).unwrap()
+    }
+
+    /// function_graph refused oversized summary/code views; it now pages whole blocks with the edges leaving them.
+    #[test]
+    fn oversized_function_graphs_are_paged_not_refused() {
+        let mut graph = native_graph();
+        graph.blocks = (0..300u64)
+            .map(|block| crate::GraphBlock {
+                start: 0x1000 + block * 0x100,
+                lines: (0..8u64)
+                    .map(|line| {
+                        let address = 0x1000 + block * 0x100 + line * 4;
+                        let mut call = native_line(address, Flow::Call(0x9000 + block * 8 + line));
+                        call.comment = Some(format!("github.com/example/module/package.(*Type).callee_{block:04}"));
+                        call
+                    })
+                    .collect(),
+            })
+            .collect();
+        // Every block falls through, and the last jumps back to the first.
+        graph.edges =
+            (0..300).map(|from| crate::Edge { from, to: (from + 1) % 300, kind: crate::EdgeKind::Taken }).collect();
+        let graph = serde_json::to_value(graph).unwrap();
+        for view in [ToolView::Summary, ToolView::Code] {
+            assert!(project_tool_view(graph.clone(), ToolViewKind::FunctionGraph, view).is_err());
+            let (mut offset, mut blocks, mut pages) = (0, 0, 0);
+            loop {
+                let page = project_function_graph(graph.clone(), view, offset).unwrap();
+                assert!(serde_json::to_vec(&page).unwrap().len() <= MAX_TOOL_VIEW_BYTES);
+                assert_eq!(page["blocks_offset"], json!(offset));
+                assert_eq!(page["blocks_count"], json!(300), "{view:?}");
+                let page_blocks = page["blocks"].as_array().unwrap();
+                assert!(!page_blocks.is_empty());
+                assert_eq!(page_blocks[0]["start"], graph["blocks"][offset]["start"]);
+                // A page carries exactly the edges leaving its blocks, by whole-function index.
+                let edges: Vec<(u64, u64)> = page["edges"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|edge| (edge["from"].as_u64().unwrap(), edge["to"].as_u64().unwrap()))
+                    .collect();
+                let first = offset as u64;
+                let expected: Vec<(u64, u64)> =
+                    (first..first + page_blocks.len() as u64).map(|from| (from, (from + 1) % 300)).collect();
+                assert_eq!(edges, expected, "{view:?}");
+                blocks += page_blocks.len();
+                pages += 1;
+                match page["blocks_next_offset"].as_u64() {
+                    Some(next) => offset = next as usize,
+                    None => break,
+                }
+            }
+            assert_eq!(blocks, 300, "{view:?}");
+            assert!(pages > 1, "{view:?}");
+        }
+        // A graph that fits is the plain projection; full keeps exact-or-refuse.
+        let small = serde_json::to_value(native_graph()).unwrap();
+        for view in [ToolView::Summary, ToolView::Code, ToolView::Full] {
+            assert_eq!(
+                project_function_graph(small.clone(), view, 0).unwrap(),
+                project_tool_view(small.clone(), ToolViewKind::FunctionGraph, view).unwrap()
+            );
+        }
+        assert!(project_function_graph(graph, ToolView::Full, 0).is_err());
     }
 
     /// Benchmark v2: function_summary on Hugo's `images.DecodeImageConfig` (94 blocks, 747 instructions, long Go

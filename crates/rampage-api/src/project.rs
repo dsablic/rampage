@@ -152,11 +152,54 @@ struct BlockSpan {
     start: u64,
     end: u64,
     function: u64,
+    /// The block's position in its function's `blocks`.
+    index: usize,
     /// The furthest end of this block and every block that starts before it.
     reach: u64,
 }
 
 impl Analysis {
+    pub(crate) fn new(program: Program) -> Self {
+        let mut blocks: Vec<BlockSpan> = program
+            .functions
+            .iter()
+            .flat_map(|function| {
+                function.blocks.iter().enumerate().map(|(index, block)| BlockSpan {
+                    start: block.start,
+                    end: block.end,
+                    function: function.address,
+                    index,
+                    reach: 0,
+                })
+            })
+            .collect();
+        blocks.sort_unstable_by_key(|block| (block.start, block.end, block.function, block.index));
+        let mut reach = 0;
+        for block in &mut blocks {
+            reach = reach.max(block.end);
+            block.reach = reach;
+        }
+        let mut xrefs_by_source: Vec<usize> = (0..program.xrefs.len()).collect();
+        xrefs_by_source.sort_unstable_by_key(|&index| (program.xrefs[index].from, program.xrefs[index].to));
+        Self { program, xrefs_by_source, blocks }
+    }
+
+    pub(crate) fn block_count(&self) -> usize {
+        self.blocks.len()
+    }
+
+    /// Every block containing `address`, as `(function, block index)`, latest-starting first. The scan visits
+    /// only blocks that start at or before `address` and whose cumulative reach still covers it.
+    pub(crate) fn blocks_containing(&self, address: u64) -> impl Iterator<Item = (u64, usize)> + '_ {
+        let candidates = self.blocks.partition_point(|block| block.start <= address);
+        self.blocks[..candidates]
+            .iter()
+            .rev()
+            .take_while(move |block| block.reach > address)
+            .filter(move |block| address < block.end)
+            .map(|block| (block.function, block.index))
+    }
+
     /// The start of the function whose block contains `address`, preferring the latest-starting block. Callers
     /// that look up many addresses use this on one checked analysis rather than [`Project::function_containing`],
     /// which rechecks the analysis binding (for a Raw project, a hash of the whole image) on every call.
@@ -718,27 +761,7 @@ impl Project {
                 ))));
             }
             self.analysis_binding.get_or_init(|| binding);
-            let mut blocks: Vec<BlockSpan> = program
-                .functions
-                .iter()
-                .flat_map(|function| {
-                    function.blocks.iter().map(|block| BlockSpan {
-                        start: block.start,
-                        end: block.end,
-                        function: function.address,
-                        reach: 0,
-                    })
-                })
-                .collect();
-            blocks.sort_unstable_by_key(|block| (block.start, block.end, block.function));
-            let mut reach = 0;
-            for block in &mut blocks {
-                reach = reach.max(block.end);
-                block.reach = reach;
-            }
-            let mut xrefs_by_source: Vec<usize> = (0..program.xrefs.len()).collect();
-            xrefs_by_source.sort_unstable_by_key(|&index| (program.xrefs[index].from, program.xrefs[index].to));
-            Ok(Analysis { program, xrefs_by_source, blocks })
+            Ok(Analysis::new(program))
         });
         let analysis = analysis.as_ref().map_err(DecoderInitializationError::to_api_error)?;
         self.validate_cached_analysis_binding()?;
@@ -1151,7 +1174,13 @@ mod tests {
                     ..Default::default()
                 },
                 xrefs_by_source: vec![],
-                blocks: vec![BlockSpan { start: address, end: address + 2, function: address, reach: address + 2 }],
+                blocks: vec![BlockSpan {
+                    start: address,
+                    end: address + 2,
+                    function: address,
+                    index: 0,
+                    reach: address + 2,
+                }],
             }))
             .ok()
             .unwrap();

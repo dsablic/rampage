@@ -94,7 +94,7 @@ impl BytePattern {
 
     /// The longest run of fully fixed bytes and its offset in the pattern, or `None` when no byte is fully fixed.
     /// Ties go to the run with fewer `00`/`ff` bytes, which are common filler and so make poor search keys.
-    pub(crate) fn longest_literal(&self) -> Option<(usize, Vec<u8>)> {
+    pub fn longest_literal(&self) -> Option<(usize, Vec<u8>)> {
         let filler = |run: &[MaskedByte]| run.iter().filter(|byte| matches!(byte.value, 0x00 | 0xff)).count();
         let mut best: Option<(usize, &[MaskedByte])> = None;
         let mut offset = 0;

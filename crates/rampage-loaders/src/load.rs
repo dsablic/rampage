@@ -141,6 +141,9 @@ pub struct Binary {
     msvc: Option<crate::msvc::MsvcMetadata>,
     #[serde(skip)]
     image: Range<usize>,
+    /// The Raw interpretation identity, hashed once: `raw` and the owned image bytes never change after load.
+    #[serde(skip)]
+    raw_identity: std::sync::OnceLock<crate::RawInterpretationIdentity>,
 }
 
 #[derive(Debug)]
@@ -289,6 +292,7 @@ impl Binary {
             pe_layout: None,
             msvc: None,
             go_arguments: std::collections::BTreeMap::new(),
+            raw_identity: std::sync::OnceLock::new(),
             raw: Some(raw),
             image: 0..len,
         })
@@ -354,7 +358,8 @@ impl Binary {
         {
             return Err(LoadError::Malformed("Raw interpretation differs from retained admission facts".into()));
         }
-        Ok(Some(raw.identity(self.image_bytes())))
+        // The checks above cover the public fields that can drift; the hashed facts and bytes cannot.
+        Ok(Some(self.raw_identity.get_or_init(|| raw.identity(self.image_bytes())).clone()))
     }
 
     /// Bounded linkage evidence from this retained image, without opening dependency paths.
@@ -448,6 +453,7 @@ impl Binary {
             pe_layout: None,
             msvc: None,
             go_arguments: std::collections::BTreeMap::new(),
+            raw_identity: std::sync::OnceLock::new(),
             raw: None,
         })
     }
@@ -926,6 +932,7 @@ impl Binary {
             pe_layout: None,
             msvc: None,
             go_arguments: std::collections::BTreeMap::new(),
+            raw_identity: std::sync::OnceLock::new(),
             raw: None,
             image,
         };
@@ -1840,6 +1847,31 @@ mod tests {
         let ordinary = Binary::open(&path).unwrap();
         assert!(ordinary.go_table.is_some());
         OPTIONAL_RECOVERY_ENTRIES.with(|count| assert_eq!(count.get(), 2));
+    }
+
+    /// Every API call on a Raw project validates its analysis binding; the whole image is hashed once per load.
+    #[test]
+    fn raw_identity_hashes_the_owned_image_once_however_often_it_is_checked() {
+        let options = crate::RawCodeOptions {
+            profile: crate::RawProfile::Msp430,
+            base: 0x1000,
+            entry: None,
+            seeds: vec![],
+            vector_table: None,
+            pointer_tables: false,
+        };
+        let binary = Binary::from_raw_code(vec![0x30, 0x41], options.clone()).unwrap();
+        crate::raw::IDENTITY_HASHES.with(|count| count.set(0));
+        let first = binary.raw_interpretation_identity().unwrap().unwrap();
+        for _ in 0..100 {
+            assert_eq!(binary.raw_interpretation_identity().unwrap().unwrap(), first);
+        }
+        crate::raw::IDENTITY_HASHES.with(|count| assert_eq!(count.get(), 1));
+        // Facts outside the cached identity still drift-check on every call.
+        let mut drifted = Binary::from_raw_code(vec![0x30, 0x41], options).unwrap();
+        assert_eq!(drifted.raw_interpretation_identity().unwrap().unwrap(), first);
+        drifted.function_starts.push(0x1000);
+        assert!(drifted.raw_interpretation_identity().is_err());
     }
 
     #[test]
