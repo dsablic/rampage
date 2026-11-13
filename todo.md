@@ -95,6 +95,13 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
 - [x] `go-nested-field` took 20–26 rampage calls against REA's 14: no Go runtime type metadata. Done (`get_type`
   Go source). Open: Go before 1.16, position-independent Go ELF (pointers filled in at load time).
 
+## Objective-C dispatch (2026-11-13)
+
+- [x] `objc_msgSend` resolution (selectors, receiver classes, method lookup, `objc_sends`, xref rows, comments).
+- [ ] Receiver classes from ivar and property types (only ~40% of sends in installed apps get one today).
+- [ ] Follow selectors and receivers through stack slots (most x86-64 and `-O0` unknowns).
+- [ ] Rewrite decompiled sends as `[obj sel]` instead of a comment; Swift metadata.
+
 ## Protected and packed code (2026-11-13)
 
 - [x] Encrypted/packed code regions detected per window; discovery skips them; PACE protector signature; real

@@ -8,6 +8,12 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Added
 
+- Objective-C message sends resolve to their selector and, where the receiver's class is evident from the code, to
+  the method that runs: class references, `self`, `super` and `+alloc` results, looked up through categories and
+  the superclass chain like the runtime does. Local overrides make a send `ambiguous`, an unknown receiver lists
+  `candidates`, and a single target is never guessed. New `objc_sends` tool (CLI `rampage language objc-sends`);
+  `xrefs` gains call rows for resolved and ambiguous sends, and listings and decompiled C name the selector and
+  target at each send. On the owned fixtures every selector resolves and no send resolves to a wrong method.
 - 544 packer, protector, cryptor, compiler, installer, linker and SFX signatures converted from Detect It Easy (MIT,
   pinned commit, authors credited per signature) join the bundled detection database. Only conditions rampage can
   test exactly are converted (entry patterns that follow jumps, bytes at file offsets or the overlay, exact
