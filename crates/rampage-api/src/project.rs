@@ -109,6 +109,7 @@ pub struct Project {
     go_strings: OnceLock<crate::go_strings::GoStrings>,
     /// Embedded DWARF name → DIE index, skimmed once on the first DWARF type lookup.
     dwarf_types: OnceLock<Result<Arc<rampage_loaders::debug::DwarfTypeIndex>, String>>,
+    go_types: OnceLock<Result<Arc<rampage_loaders::gotypes::GoTypeIndex>, String>>,
     /// The persistent analysis store consulted before discovery, if any.
     analysis_store: RwLock<Option<Arc<crate::AnalysisStore>>>,
     /// What the persistent store did when analysis ran.
@@ -367,6 +368,7 @@ impl Project {
             go_prototypes: OnceLock::new(),
             go_strings: OnceLock::new(),
             dwarf_types: OnceLock::new(),
+            go_types: OnceLock::new(),
             analysis_store: RwLock::new(crate::AnalysisStore::from_env()),
             analysis_store_status: OnceLock::new(),
             analysis_store_pending: std::sync::Mutex::new(None),
@@ -495,6 +497,11 @@ impl Project {
     }
 
     /// The address a name refers to apart from the user's names.
+    /// The symbol, export, stub or import-slot name at `address`, ignoring the user's names.
+    pub(crate) fn symbol_name(&self, address: u64) -> Option<&str> {
+        self.names.get(address)
+    }
+
     pub(crate) fn symbol_address(&self, name: &str) -> Option<u64> {
         self.names
             .address_of(name)
@@ -951,6 +958,14 @@ impl Project {
     }
 
     /// The embedded DWARF type index, built on first use; the error says why there is none.
+    /// The Go runtime type index, built on first use from the type descriptors a Go binary keeps for reflection.
+    pub(crate) fn go_types(&self) -> Result<&Arc<rampage_loaders::gotypes::GoTypeIndex>, &str> {
+        self.go_types
+            .get_or_init(|| rampage_loaders::gotypes::go_type_index(&self.binary).map(Arc::new))
+            .as_ref()
+            .map_err(String::as_str)
+    }
+
     pub(crate) fn dwarf_types(&self) -> Result<&Arc<rampage_loaders::debug::DwarfTypeIndex>, &str> {
         self.dwarf_types
             .get_or_init(|| rampage_loaders::debug::dwarf_type_index(&self.binary).map(Arc::new))

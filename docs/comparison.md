@@ -79,7 +79,8 @@ Compared with Ghidra and IDA, rampage does not have:
 - DEX/APK or JVM class files, Intel HEX or Motorola SREC, multi-region firmware memory maps, or relocation of
   object files and static archives;
 - Swift metadata, C++ class-layout recovery beyond RTTI and vtable evidence, or exception-table recovery;
-- version tracking or annotation transfer between builds beyond its `diff_builds` report;
+- full version tracking: [annotation transfer](build-diffing.md) moves names, comments, signatures, types and
+  globals between builds, but not local variables, data types or patches, and has no interactive review UI;
 - a persistent analysis database for very large binaries: analysis runs again in each session;
 - decompilation for most of its Sleigh processor profiles (only MSP430 and AVR8 have reviewed C models);
 - a Windows host build;

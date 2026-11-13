@@ -14,7 +14,7 @@ use crate::args::{
     JumpTableArgs, McpArgs, ObserveIndirectBranchArgs, PseudocodeArgs, QueryDebuggerArgs, RenameArgs, ReportArgs,
     SignaturesArgs, StringsArgs, TypeLayoutArgs, XrefsArgs, YaraArgs,
 };
-use crate::args::{ListFindingsArgs, RecordFindingArgs};
+use crate::args::{ListFindingsArgs, RecordFindingArgs, TransferAnnotationsArgs};
 use crate::{Command, PacksCommand};
 
 pub(crate) fn with_pack_arguments(command: clap::Command) -> clap::Command {
@@ -127,6 +127,7 @@ impl RootCommand {
             Self::Annotation(AnnotationCommand::CheckNames(args)) => Command::CheckNames(args),
             Self::Annotation(AnnotationCommand::RecordFinding(args)) => Command::RecordFinding(args),
             Self::Annotation(AnnotationCommand::ListFindings(args)) => Command::ListFindings(args),
+            Self::Annotation(AnnotationCommand::Transfer(args)) => Command::TransferAnnotations(args),
             Self::Type(TypeCommand::Debug(args)) => Command::DebugTypes(args),
             Self::Type(TypeCommand::DebugLayouts(args)) => Command::ImportDebugLayouts(args),
             Self::Type(TypeCommand::PdbNames(args)) => Command::ImportPdbNames(args),
@@ -283,6 +284,8 @@ pub(crate) enum AnnotationCommand {
     RecordFinding(RecordFindingArgs),
     /// Page the investigation ledger, with open/resolved counts per kind
     ListFindings(ListFindingsArgs),
+    /// Match functions with an analyzed earlier build and carry its annotations over (preview unless --apply)
+    Transfer(TransferAnnotationsArgs),
 }
 
 #[derive(Subcommand)]

@@ -1182,19 +1182,21 @@ struct DeclareTypesArgs {
 struct TypeNameArgs {
     /// Exact named type or alias. Named type inspection uses the target's native data organization.
     name: String,
-    /// `auto` (default): the project type library, else embedded DWARF when the library has no such name or a
-    /// member/byte_offset/depth is given. `library` or `dwarf` pick one.
+    /// `auto` (default): the project type library, else embedded DWARF, else (Go binaries) Go runtime type
+    /// metadata, when the earlier source has no such name or a member/byte_offset/depth is given. `library`,
+    /// `dwarf` or `go` pick one. Go names: `restic.Snapshot`, `*restic.Node`, or the package-path-qualified
+    /// `github.com/restic/restic/internal/restic.Snapshot`.
     source: Option<TypeSource>,
-    /// DWARF: a dotted member path such as `init.busy` or `aDb[1].pBt`; returns its offset from the start of
+    /// DWARF/Go: a dotted member path such as `init.busy` or `aDb[1].pBt`; returns its offset from the start of
     /// the type, size and type.
     member: Option<String>,
-    /// DWARF: a byte offset (number or "0x80") into the type; returns the innermost member covering it.
+    /// DWARF/Go: a byte offset (number or "0x80") into the type; returns the innermost member covering it.
     byte_offset: Option<OffsetArg>,
-    /// DWARF: levels of by-value struct/union members to expand inline (0-4, default 0).
+    /// DWARF/Go: levels of by-value struct/union members to expand inline (0-4, default 0).
     depth: Option<usize>,
-    /// DWARF: first member (or enumerator) of the page.
+    /// DWARF/Go: first member (or enumerator) of the page.
     offset: Option<usize>,
-    /// DWARF: members per page (default 128, or 0 when member/byte_offset is given; at most 512).
+    /// DWARF/Go: members per page (default 128, or 0 when member/byte_offset is given; at most 512).
     limit: Option<usize>,
 }
 
@@ -1204,6 +1206,7 @@ enum TypeSource {
     Auto,
     Library,
     Dwarf,
+    Go,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -1218,7 +1221,9 @@ impl OffsetArg {
         match self {
             OffsetArg::Number(value) => Ok(*value),
             OffsetArg::Text(text) => {
+                // Some clients send the JSON string already quoted ("\"0x80\""); accept one layer of quotes.
                 let text = text.trim();
+                let text = text.strip_prefix('"').and_then(|text| text.strip_suffix('"')).unwrap_or(text).trim();
                 match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
                     Some(hex) => u64::from_str_radix(hex, 16),
                     None => text.parse(),
@@ -1237,34 +1242,61 @@ fn get_type(project: &crate::Project, args: TypeNameArgs) -> Result<Value, ApiEr
         || args.offset.is_some()
         || args.limit.is_some();
     if source == TypeSource::Library && dwarf_only {
-        return Err(ApiError::Invalid("member, byte_offset, depth, offset and limit read DWARF; omit source".into()));
+        return Err(ApiError::Invalid(
+            "member, byte_offset, depth, offset and limit read DWARF or Go metadata; omit source".into(),
+        ));
+    }
+    let selecting = args.member.is_some() || args.byte_offset.is_some();
+    let byte_offset = args.byte_offset.as_ref().map(OffsetArg::value).transpose()?;
+    let go_request = rampage_loaders::gotypes::GoTypeRequest {
+        name: args.name.clone(),
+        member: args.member.clone(),
+        byte_offset,
+        depth: args.depth.unwrap_or(0),
+        offset: args.offset.unwrap_or(0),
+        limit: args.limit.unwrap_or(if selecting { 0 } else { 128 }),
+    };
+    if source == TypeSource::Go {
+        return type_library_view(&project.go_type_layout(&go_request)?);
     }
     let library_error = if source == TypeSource::Dwarf || dwarf_only {
         None
     } else {
         match project.get_type(&args.name) {
             Ok(entry) => return type_library_view(&entry),
-            Err(ApiError::NotFound(message)) if source == TypeSource::Auto => Some(message),
+            Err(ApiError::NotFound(_)) if source == TypeSource::Auto => {
+                Some(format!("the project type library has no type named {:?}", args.name))
+            }
             Err(error) => return Err(error),
         }
     };
-    let selecting = args.member.is_some() || args.byte_offset.is_some();
     let request = rampage_loaders::debug::DwarfTypeRequest {
         name: args.name,
         member: args.member,
-        byte_offset: args.byte_offset.as_ref().map(OffsetArg::value).transpose()?,
-        depth: args.depth.unwrap_or(0),
-        offset: args.offset.unwrap_or(0),
-        limit: args.limit.unwrap_or(if selecting { 0 } else { 128 }),
+        byte_offset,
+        depth: go_request.depth,
+        offset: go_request.offset,
+        limit: go_request.limit,
     };
-    match project.dwarf_type_layout(&request) {
-        Ok(lookup) => type_library_view(&lookup),
-        Err(ApiError::NotFound(dwarf)) => Err(ApiError::NotFound(match library_error {
-            Some(library) => format!("{library}; {dwarf}"),
-            None => dwarf,
-        })),
-        Err(error) => Err(error),
+    let dwarf = match project.dwarf_type_layout(&request) {
+        Ok(lookup) => return type_library_view(&lookup),
+        Err(ApiError::NotFound(dwarf)) => dwarf,
+        Err(error) => return Err(error),
+    };
+    let mut missing: Vec<String> = library_error.into_iter().chain([dwarf]).collect();
+    if source == TypeSource::Auto && project.binary.go_table.is_some() {
+        match project.go_type_layout(&go_request) {
+            Ok(lookup) => return type_library_view(&lookup),
+            Err(ApiError::NotFound(go)) => missing.push(go),
+            // Entries matched but none decoded (or the selection failed): keep the chain of sources tried.
+            Err(ApiError::Invalid(go)) => missing.push(format!("Go runtime metadata: {go}")),
+            Err(error) => return Err(error),
+        }
     }
+    Err(ApiError::NotFound(format!(
+        "{}. Next: list_types (contains=...) to browse names, or declare_types to define the type",
+        missing.join("; ")
+    )))
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -1378,10 +1410,42 @@ pub(crate) fn data_typing_view(result: &impl Serialize) -> Result<Value, ApiErro
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ListTypesArgs {
-    /// Case-sensitive substring of the native type name.
+    /// Case-sensitive substring of the native type name (Go: of the qualified or runtime name).
     contains: Option<String>,
+    /// `auto` (default): the project type library, or Go runtime types when the library has none and the binary
+    /// is Go. `library` or `go` pick one.
+    source: Option<ListTypeSource>,
     offset: Option<usize>,
     limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ListTypeSource {
+    Auto,
+    Library,
+    Go,
+}
+
+fn list_types(project: &crate::Project, args: ListTypesArgs) -> Result<Value, ApiError> {
+    let (contains, offset) = (args.contains.as_deref(), args.offset.unwrap_or(0));
+    let limit = page_limit(args.limit).unwrap_or(DEFAULT_PAGE);
+    let source = args.source.unwrap_or(ListTypeSource::Auto);
+    if source != ListTypeSource::Go {
+        let page = project.list_types(contains, offset, limit)?;
+        if source == ListTypeSource::Library || page.total > 0 || project.binary.go_table.is_none() {
+            return type_library_view(&page);
+        }
+        if contains.is_some() && project.list_types(None, 0, 1)?.total > 0 {
+            return type_library_view(&page);
+        }
+        // Auto falls back to Go only when the Go index builds; an unsupported or unreadable Go image keeps the
+        // (empty) library page rather than turning a listing into an error.
+        if project.go_types().is_err() {
+            return type_library_view(&page);
+        }
+    }
+    type_library_view(&project.list_go_types(contains, offset, limit)?)
 }
 
 fn type_library_view(result: &impl Serialize) -> Result<Value, ApiError> {
@@ -2366,6 +2430,25 @@ pub fn tools() -> Vec<Tool> {
         .annotates(),
         tool(
             Group::Core,
+            "transfer_annotations",
+            "Carry the saved annotations (names, comments, signatures, types, globals) of an analyzed build `from` \
+             over to this build. Functions are matched one-to-one with a method and confidence each: exact_bytes \
+             1.0, symbol_name 0.95, masked_hash 0.9, unique_string 0.8, call_graph 0.75 (propagation from matched \
+             callers), call_position 0.6 (a non-calling callee placed by call position alone), neighbourhood 0.6; \
+             derived matches build only on matches at least as confident; evidence that fits several \
+             counterparts is reported as ambiguous, never guessed. Preview by default: per annotation its old -> \
+             new address, method, confidence and status (transfer, already_present, conflict with this build's \
+             annotations or symbols, below_threshold, not_transferred with a reason). apply=true writes the \
+             transfers as undoable batches of at most 1000 (each one undo step; the first also records a \
+             provenance entry in the findings ledger: source SHA-256, threshold, methods), refusing a batch whose \
+             targets changed since matching. min_confidence (default 0.7) picks the methods. list pages transfers, \
+             matches, changed (matched but different), added, removed or ambiguous functions. Analysis and \
+             matching are reused while the source file and this build stay the same, so paging is cheap.",
+            |project, request: crate::TransferRequest| project.transfer_annotations(&request),
+        )
+        .annotates(),
+        tool(
+            Group::Core,
             "assemble",
             "Assemble literal source into a read-only byte proposal for this binary's current target. \
              at is a numeric address string or resolvable name; only the base address resolves names. \
@@ -3139,14 +3222,10 @@ pub fn tools() -> Vec<Tool> {
             Group::Types,
             "list_types",
             "List the selected project's named type library with bounded paging. Use get_type for native field \
-             offsets and alias/enum/callback detail. This does not infer producer layout from analyst declarations.",
-            |project, args: ListTypesArgs| {
-                type_library_view(&project.list_types(
-                    args.contains.as_deref(),
-                    args.offset.unwrap_or(0),
-                    page_limit(args.limit).unwrap_or(DEFAULT_PAGE),
-                )?)
-            },
+             offsets and alias/enum/callback detail. This does not infer producer layout from analyst declarations. \
+             On a Go binary whose library is empty (or source=go), lists the named Go types recovered from runtime \
+             type metadata instead (source: go_runtime), which survives stripping.",
+            list_types,
         ),
         tool(
             Group::Types,
@@ -3155,7 +3234,9 @@ pub fn tools() -> Vec<Tool> {
              function-pointer detail where present. Library declarations are analyst interpretation, not \
              evidence of the producer's ABI. When the library lacks the name (or source=dwarf), reads the \
              producer layout from embedded DWARF without importing anything: size, members with offsets/sizes/\
-             types, typedef chain, distinct definitions across units (ambiguous=true), paged members. Answer \
+             types, typedef chain, distinct definitions across units (ambiguous=true), paged members. On a Go \
+             binary without DWARF (stripped), falls back to Go runtime type metadata (source: go_runtime): struct \
+             fields with offsets, embedded and unexported fields, interface and named-type methods. Answer \
              'which member is at offset X' with byte_offset and 'where is a.b' with member, in one call.",
             |project, args: TypeNameArgs| get_type(project, args),
         ),

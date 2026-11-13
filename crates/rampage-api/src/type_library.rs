@@ -354,6 +354,50 @@ impl Project {
         Ok(lookup)
     }
 
+    /// Reads one type's layout from Go runtime type metadata (the reflect descriptors a Go binary keeps even when
+    /// stripped). Only the first call walks the descriptors; each lookup then decodes just the requested type.
+    pub fn go_type_layout(
+        &self,
+        request: &rampage_loaders::gotypes::GoTypeRequest,
+    ) -> Result<rampage_loaders::gotypes::GoTypeLookup, ApiError> {
+        if request.name.trim().is_empty() {
+            return Err(ApiError::Invalid("type name is empty".into()));
+        }
+        let index = self
+            .go_types()
+            .map_err(|reason| ApiError::NotFound(format!("no Go runtime type information: {reason}")))?;
+        let lookup = index.lookup(self.binary.image_bytes(), request).map_err(ApiError::Invalid)?;
+        if lookup.definitions.is_empty() {
+            if let Some(warning) = lookup.warnings.first() {
+                return Err(ApiError::Invalid(warning.clone()));
+            }
+            let suggestions = index.suggestions(request.name.trim());
+            let hint = if suggestions.is_empty() {
+                String::new()
+            } else {
+                format!("; similar Go type names: {}", suggestions.join(", "))
+            };
+            return Err(ApiError::NotFound(format!("no Go runtime type named {:?}{hint}", request.name)));
+        }
+        Ok(lookup)
+    }
+
+    /// Named Go runtime types, filtered by a substring of the qualified or runtime name.
+    pub fn list_go_types(
+        &self,
+        contains: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<rampage_loaders::gotypes::GoTypePage, ApiError> {
+        if limit == 0 || limit > MAX_DECLARATIONS || contains.is_some_and(|text| text.len() > 256) {
+            return Err(ApiError::Invalid("type page limit must be 1..=256; filter is at most 256 bytes".to_owned()));
+        }
+        let index = self
+            .go_types()
+            .map_err(|reason| ApiError::NotFound(format!("no Go runtime type information: {reason}")))?;
+        Ok(index.list(contains, offset, limit))
+    }
+
     pub fn declare_types(&self, request: &DeclareTypesRequest) -> Result<TypeLibraryEdit, ApiError> {
         self.declare_types_with_preflight(request, |_| Ok(()))
     }

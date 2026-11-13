@@ -16,6 +16,7 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 | Triage and detection | Hashes, entropy, hardening, packer/compiler detection, YARA, capa, capabilities, crypto constants | [Triage and detection](#triage-and-detection) |
 | Agent ergonomics | Compact views and atomic annotation batches | [Tool views and annotation batching](#tool-views-and-annotation-batching) |
 | Findings ledger | Findings, unknowns and questions with evidence, kept in the annotation log | [Investigation ledger](#investigation-ledger) |
+| Build matching | One-to-one function matching with another build and annotation transfer | [Annotation transfer](#annotation-transfer) |
 | Patching | Assembler subset, checked patches, export to a new file | [Checked patches and assembly](#checked-patches-and-assembly) |
 | Search | Bytes, text, regex, immediates, instructions, references | [Search](#search) |
 | Library identification | Bundled signatures, PAT and FunctionID inputs, fuzzy candidates | [Library identification](#library-identification) |
@@ -208,6 +209,14 @@ live in the annotation log, so they survive the session, replay on reopen, undo 
 shared with other processes under the log's lock; ids are stable and not reused within the log. Entries made on
 another build of the binary are kept and flagged. Its size limits, which keep it from crowding out other edits,
 are in [MCP edits](mcp.md#edits-and-session-state).
+
+## Annotation transfer
+
+`transfer_annotations` matches functions one-to-one with an analyzed earlier build (exact bytes, symbols, masked
+hashes, unique strings, call-graph propagation and neighbourhood, each with a confidence; ambiguity is reported,
+not guessed), reports changed, added and removed functions, and previews or applies the source's names, comments,
+signatures, types and globals as an undoable batch with a provenance ledger entry. See
+[build matching and annotation transfer](build-diffing.md).
 
 ## Checked patches and assembly
 

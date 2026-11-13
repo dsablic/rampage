@@ -136,6 +136,8 @@ enum Command {
     #[command(skip)]
     ListFindings(args::ListFindingsArgs),
     #[command(skip)]
+    TransferAnnotations(args::TransferAnnotationsArgs),
+    #[command(skip)]
     BuildInfo(args::BuildInfoArgs),
     #[command(skip)]
     PyInstallerArchive(args::PyInstallerArchiveArgs),
@@ -607,6 +609,7 @@ fn main() -> ExitCode {
         Command::Annotations(FileArgs { file }) => commands::annotations(&mut out, &file, &options),
         Command::RecordFinding(args) => commands::record_finding(&mut out, &args, &options),
         Command::ListFindings(args) => commands::list_findings(&mut out, &args, &options),
+        Command::TransferAnnotations(args) => commands::transfer_annotations(&mut out, &args, &options),
         Command::DebugTypes(DebugTypesArgs { file, apply }) => commands::debug_types(&mut out, &file, apply, &options),
         Command::ImportPdbNames(args) => commands::import_pdb_names(&mut out, &args, &options),
         Command::TypeLayout(args) => commands::type_layout(&mut out, &args, &options),

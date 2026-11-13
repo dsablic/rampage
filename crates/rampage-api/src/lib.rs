@@ -8,6 +8,7 @@ mod batch;
 mod benchmark;
 mod branch_observation;
 mod build_info;
+pub mod build_match;
 mod capabilities;
 mod carve;
 mod compression_probe;
@@ -73,6 +74,7 @@ pub mod sleigh_window;
 mod summary;
 pub mod tool_views;
 pub mod tools;
+mod transfer;
 mod type_headers;
 mod type_library;
 mod typed_data;
@@ -257,6 +259,10 @@ pub use signatures::{CALL_GRAPH, SignatureApplication, SignatureMatch, USER_SIGN
 pub use summary::FunctionSummary;
 pub use tool_views::{
     SummaryPages, ToolView, ToolViewKind, project_function_graph, project_function_summary, project_tool_view,
+};
+pub use transfer::{
+    DEFAULT_MIN_CONFIDENCE, MatchSummary, TransferApplied, TransferCounts, TransferList, TransferReport,
+    TransferRequest, TransferStatus,
 };
 pub use type_headers::{HeaderBundle, HeaderDeclaration, HeaderProvenance, PreparedHeader};
 pub use type_library::{DeclareTypesRequest, TypeLibraryEdit, TypeLibraryEntry, TypeLibraryPage};

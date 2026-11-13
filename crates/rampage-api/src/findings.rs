@@ -245,6 +245,40 @@ impl StoredFinding {
     }
 }
 
+/// A new open `finding` entry for `annotations`, as the change that records it, for a write that keeps its
+/// provenance in the ledger within its own batch. Checked like `record_finding`'s entries.
+pub(crate) fn provenance_entry(
+    annotations: &Annotations,
+    text: &str,
+    evidence: &[LedgerEvidence],
+) -> Result<(u64, crate::batch::AnnotationChange), ApiError> {
+    let text = bounded_text("text", text, MAX_LEDGER_TEXT)?;
+    let evidence = validate_evidence(evidence)?;
+    if annotations.findings().len() >= MAX_LEDGER_ENTRIES {
+        return Err(invalid(format!("the ledger holds its maximum of {MAX_LEDGER_ENTRIES} entries")));
+    }
+    let id = annotations.next_finding_id().ok_or_else(|| invalid("the ledger has used every id"))?;
+    let entry = StoredFinding {
+        kind: LedgerKind::Finding,
+        status: LedgerStatus::Open,
+        text,
+        address: None,
+        function: None,
+        evidence,
+        confidence: Some(LedgerConfidence::High),
+        resolution: None,
+        image: None,
+    };
+    let value = entry.encode();
+    let total = annotations.findings().values().map(String::len).sum::<usize>() + value.len();
+    if total > MAX_LEDGER_BYTES {
+        return Err(invalid(format!("the ledger's entries would hold {total} bytes, past {MAX_LEDGER_BYTES}")));
+    }
+    let edit = Edit { field: Field::Finding, address: id, value: Some(value), previous: None };
+    annotations.ledger_headroom(&edit).map_err(ApiError::Invalid)?;
+    Ok((id, (Field::Finding, id, edit.value)))
+}
+
 impl Project {
     /// Records a new ledger entry, or updates the entry `request.id`, as one undo step.
     pub fn record_finding(&self, request: &LedgerRequest) -> Result<LedgerRecord, ApiError> {

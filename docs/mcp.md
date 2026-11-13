@@ -96,7 +96,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 that answer common first questions, such as `language_metadata` and `class_evidence` for class names and
 hierarchies, are in `core` so that a client deferring schemas still sees their names.
 
-A default session lists 42 tools: the 41 in `core` plus `enable_tools`. Enabling every group lists 85. The
+A default session lists 43 tools: the 42 in `core` plus `enable_tools`. Enabling every group lists 86. The
 `debug` group adds 14 tools (16 with `--debug-writes`), `--observations` adds `report_observation`, and a
 `--corpus` server lists `enable_tools` and the 4 `improve` tools only.
 
@@ -104,7 +104,7 @@ A default session lists 42 tools: the 41 in `core` plus `enable_tools`. Enabling
   `assemble`, `patch_bytes`, `revert_patch`, `list_patches`, `export_patched`,
   `function_summary`, `xrefs`, `search`, `list_strings`, `list_imports`, `list_exports`, `rename`, `set_comment`,
   `annotate_batch`, `batch`, `check_names`, `undo`, `redo`, `discard_undo`, `list_annotations`, `record_finding`,
-  `list_findings`, `triage_report`,
+  `list_findings`, `transfer_annotations`, `triage_report`,
   `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`, `inspect_data`,
   `decode_file_range`, `probe_compression`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`, `language_metadata`,
   `class_evidence`; with --observations (or RAMPAGE_OBSERVATIONS), also `report_observation`.
@@ -250,6 +250,20 @@ included). The first DWARF lookup on an image skims each unit's top-level DIEs o
 lookup then reads only the requested type and what its members name (at most 65,536 DIEs and 16 same-named
 entries), whatever the image size. Use it where the whole-image `import_debug_types`/`import_debug_layouts`
 previews stop at their budgets.
+
+On a Go binary (go1.16 and later), `get_type` falls back to Go runtime type metadata when neither the library
+nor DWARF has the name, or reads it directly with `source: "go"`. These are the descriptors Go keeps for
+reflection and interfaces, so they survive `-ldflags "-s -w"`. Results carry `source: "go_runtime"` and
+`caveats`. Names are runtime type strings (`restic.Snapshot`, `*restic.Node`, `[]string`) or named types qualified
+by import path (`github.com/restic/restic/internal/restic.Snapshot`). A definition gives the kind, size and
+alignment, struct fields (offset, size, type, `embedded`, `exported`, struct tag), interface methods with
+signatures, a named type's methods (pointer-receiver methods are on the `*T` type) with entry addresses where the
+linker kept them, and the key, element, length or direction of composite types. `member` (promoted fields
+included), `byte_offset`, `depth` and paging behave as they do for DWARF. Only types that have descriptors are
+present: those reachable from the module's typelinks, itabs or other descriptors (go1.27 and later: every emitted
+descriptor). The first lookup walks the descriptors once (about 20 ms and 16,000 types on a 26 MB binary). After
+that, each lookup decodes only the requested type and the types its fields name, at most 200,000 reads.
+`list_types` lists the named Go types when the project library is empty, or with `source: "go"`.
 
 `edit_variable` accepts one current display name or complete native storage object, with name/type changes or
 clear flags. It atomically persists the changes and returns complete refreshed C, diagnostics and variable
@@ -513,6 +527,9 @@ and explicit null clears; it does not expose raw patch or export operations. See
 Types/signatures/globals also persist, with dependency checks rather than inferred class layouts.
 The explicit [PDB name-import tool](pdb-symbols.md#shared-tool-and-mcp) previews by default and applies eligible
 names as one undoable batch only with `apply: true`. Detail pagination does not restrict the batch's writes.
+`transfer_annotations` matches functions with an analyzed earlier build (`from`) and previews, or with
+`apply: true` writes, its annotations here as an undoable batch with a provenance ledger entry; see
+[build matching and annotation transfer](build-diffing.md).
 
 `record_finding` keeps an investigation ledger in the same log: `kind` (`finding`, `unknown` or `question`), `text`
 (at most 2000 bytes), optional `address`, `function` (stored as the containing function's start), up to 8

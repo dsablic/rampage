@@ -8,6 +8,13 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Added
 
+- `transfer_annotations` (MCP; CLI `rampage annotation transfer`) carries an analysed build's annotations to a new
+  build. Functions are matched one-to-one by exact bytes, symbol names, masked hashes, unique strings, call-graph
+  position and neighbourhood, each with a confidence; ambiguous pairs are reported, never guessed. Preview is the
+  default; `apply: true` writes undoable batches with a provenance entry, and existing annotations or real symbols
+  in the target are reported as conflicts, never overwritten. It also lists changed, added and removed functions.
+  On zlib 1.2.13 → 1.3, stripped, every build had zero false matches; shared libraries transferred 100% of
+  unchanged functions' names and static builds about 90%. See [build diffing](docs/build-diffing.md).
 - `file_layout` (MCP, `core`) and `binary layout` map any regular file, or a range of up to 64 MiB, without a
   loader: 0xff/0x00/repeated-byte fill and occupied regions with per-region SHA-256 and entropy, per-block
   entropy with high and low spans, printable-string clusters, the range's SHA-256, and labelled heuristic hints
@@ -70,6 +77,12 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Changed
 
+- Stripped Go binaries (Go 1.16–1.27) have type layouts: `get_type` and `list_types` read the Go runtime type
+  descriptors (`source: "go"`; `auto` falls back to them after the type library and DWARF). Structs come back with
+  field names, offsets, tags and embedded fields, interfaces with their method sets, and named types with their
+  methods; `member` follows promoted fields shallowest-first like Go. On a stripped 26 MB Go binary all 3,824 named
+  structs that its unstripped twin's DWARF also describes match exactly. When nothing is found, `get_type` now names
+  the sources it tried.
 - 32-bit x86 ELF PIC PLT stubs (`jmp [ebx+disp]`) are named `name@plt` through `.got.plt`, so decompiled
   dispatchers in i386 shared objects show the called import instead of `sub_…`.
 - MCP accepts unambiguous argument aliases (`address`/`addr`/`ea` for `at`, `length`/`len` for `size`,
