@@ -3846,7 +3846,9 @@ mod tests {
             harness
                 .get_by_label(&format!("Module 1 · image · {} · x86_64-apple-macosx", TEST_UUID.to_uppercase()))
                 .click_accesskit();
-            harness.run();
+            // Clicking the row leaves a blinking text-selection cursor that keeps requesting repaints; run a fixed
+            // number of frames instead of waiting for the UI to go idle.
+            harness.run_steps(4);
             let threads = controlled_response(
                 "list_threads",
                 serde_json::json!({
