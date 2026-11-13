@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 /// Bump whenever discovery, the loaders it reads, or anything else changes a [`Program`] for the same input
 /// bytes. `analysis_cache_golden` (tests/integration) records each fixture's analysis digest under this
 /// version and fails when the output changes but the version did not.
-pub const ANALYSIS_VERSION: u32 = 1;
+pub const ANALYSIS_VERSION: u32 = 2;
 /// The store's table layout and payload encoding; part of the file name, so other layouts never share a file.
 const SCHEMA: &str = "rampage-analysis-store-v1";
 /// The default bound on stored payload bytes; the least recently used entries are evicted beyond it.

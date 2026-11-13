@@ -473,6 +473,12 @@ impl Project {
         crate::debug_layout_import::validate_replay_source(self, &annotations)?;
         let start = self.function_containing(address)?.unwrap_or(address);
         crate::debug_layout_import::validate_replay_source(self, &annotations)?;
+        if let Some(region) = self.encrypted_region_at(start) {
+            return Err(ApiError::Invalid(format!(
+                "{start:#x} lies in code judged encrypted or packed, so decompiling it would only produce noise: {}",
+                region.explain()
+            )));
+        }
         if self.binary.code_from(start).is_none() {
             return Err(ApiError::Invalid("decompilation requires a file-backed code address".to_owned()));
         }

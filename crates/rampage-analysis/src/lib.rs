@@ -1,5 +1,6 @@
 pub mod capture_identity;
 pub mod classes;
+pub mod code_integrity;
 pub mod control;
 pub mod dataflow;
 pub mod diagnostics;

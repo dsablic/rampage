@@ -1310,13 +1310,17 @@ pub fn funcs(
         return Ok(());
     }
 
-    let rows = project.functions(query)?.items;
+    let page = project.functions_page(query)?;
+    let rows = page.page.items;
     if options.json {
         return write_json(out, &rows);
     }
     writeln!(out, "{:<18} {:>8} {:>6} {:>6}  name", "address", "size", "blocks", "insns")?;
     for row in &rows {
         writeln!(out, "{:#018x} {:>8} {:>6} {:>6}  {}", row.address, row.size, row.blocks, row.instructions, row.name)?;
+    }
+    for unexplored in &page.unexplored_code {
+        writeln!(out, "note: {} ({} known entry points inside)", unexplored.note, unexplored.known_entry_points)?;
     }
     Ok(())
 }

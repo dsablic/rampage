@@ -2880,10 +2880,11 @@ pub fn tools() -> Vec<Tool> {
             Group::Core,
             "list_functions",
             "Functions found by analysis, sorted by address, with size, blocks and instruction counts. Filter with \
-             name_contains; paginated with offset and limit (default 100).",
+             name_contains; paginated with offset and limit (default 100). unexplored_code lists code regions \
+             judged encrypted or packed, which discovery skips.",
             |project, mut query: FunctionsQuery| {
                 query.limit = page_limit(query.limit);
-                project.functions(&query)
+                project.functions_page(&query)
             },
         ),
         tool(

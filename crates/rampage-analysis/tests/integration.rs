@@ -3,6 +3,7 @@
 
 mod capture_identity;
 mod classes_named_bounded;
+mod code_integrity;
 mod compiled_classes;
 mod compiled_switches;
 mod control;

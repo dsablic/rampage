@@ -113,6 +113,14 @@ fn protectors() -> Vec<Signature> {
             .with_note("Themida/WinLicense section names"),
         Signature::new("Enigma", Kind::Protector, vec![unique_section(&[".enigma1", ".enigma2"])])
             .with_note("Enigma Protector section names"),
+        // The wrapper adds __TEXT-like and __DATA-like segments of its own (__POVERTEXT, __POVERDDATA) holding
+        // __povertext and __poverdata, and a __pbootstrap section in __DATA; Mach-O sections are matched by name.
+        Signature::new(
+            "PACE (Eden/Fusion)",
+            Kind::Protector,
+            vec![format(Format::MachO), unique_section(&["__povertext", "__poverdata", "__pbootstrap"])],
+        )
+        .with_note("PACE Eden/Fusion protection wrapper Mach-O section names"),
     ]
 }
 

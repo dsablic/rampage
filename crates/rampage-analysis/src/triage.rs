@@ -3,6 +3,8 @@
 use md5::{Digest, Md5};
 use rampage_loaders::{Binary, Details, Embedded, Format, SectionKind};
 use serde::Serialize;
+
+use crate::code_integrity::{self, CodeRegion};
 use sha1::Sha1;
 use sha2::Sha256;
 
@@ -31,6 +33,10 @@ pub struct Triage {
     /// Entropy of consecutive equal slices of the image, for spotting packed or encrypted regions.
     pub entropy_profile: Vec<f64>,
     pub sections: Vec<SectionTriage>,
+    /// Code regions judged encrypted or packed, with the entropy and decode evidence for each (see
+    /// [`crate::code_integrity`]). Discovery does not explore them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub encrypted_or_packed_code: Vec<CodeRegion>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overlay: Option<OverlayTriage>,
     /// The PE import hash (pefile's algorithm), which groups samples built from the same import table.
@@ -112,7 +118,14 @@ const PACKER_SECTIONS: [(&str, &str); 17] = [
     (".enigma1", "Enigma"),
 ];
 
+/// [`triage_with_code`], judging code regions with the binary's own decoder.
 pub fn triage(binary: &Binary) -> Triage {
+    triage_with_code(binary, &code_integrity::assess(binary, || binary.decoder()))
+}
+
+/// The first look at `binary`, with `regions` from [`code_integrity::assess`] (measured with whichever decoder the
+/// caller analyses with).
+pub fn triage_with_code(binary: &Binary, regions: &[CodeRegion]) -> Triage {
     let image = binary.image_bytes();
     let file = binary.file_bytes();
     let sliced = image.len() != file.len();
@@ -164,6 +177,7 @@ pub fn triage(binary: &Binary) -> Triage {
         entropy: image_entropy,
         entropy_profile,
         sections,
+        encrypted_or_packed_code: regions.iter().filter(|region| region.verdict.is_some()).cloned().collect(),
         overlay,
         imphash: match &binary.details {
             Details::Pe(pe) => pe.imphash.clone(),
@@ -192,9 +206,16 @@ fn hints(binary: &Binary, triage: &Triage) -> Vec<String> {
             ));
         }
     }
+    for region in &triage.encrypted_or_packed_code {
+        hints.push(format!(
+            "code is likely encrypted or packed, so it was not explored for functions: {}",
+            region.explain()
+        ));
+    }
     for section in &triage.sections {
         let executable = section.perms.contains('x') || section.kind == SectionKind::Code;
-        if executable && section.file_size >= 512 && section.entropy > HIGH_ENTROPY {
+        let judged = triage.encrypted_or_packed_code.iter().any(|region| region.address == section.address);
+        if executable && !judged && section.file_size >= 512 && section.entropy > HIGH_ENTROPY {
             hints.push(format!(
                 "code section {} has entropy {:.2}: packed or encrypted code is likely",
                 section.name, section.entropy
