@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 /// Bump whenever discovery, the loaders it reads, or anything else changes a [`Program`] for the same input
 /// bytes. `analysis_cache_golden` (tests/integration) records each fixture's analysis digest under this
 /// version and fails when the output changes but the version did not.
-pub const ANALYSIS_VERSION: u32 = 1;
+pub const ANALYSIS_VERSION: u32 = 2;
 /// The store's table layout and payload encoding; part of the file name, so other layouts never share a file.
 const SCHEMA: &str = "rampage-analysis-store-v1";
 /// The default bound on stored payload bytes; the least recently used entries are evicted beyond it.
@@ -126,9 +126,22 @@ impl AnalysisStore {
     fn connect(&self, timeout: Duration) -> rusqlite::Result<Connection> {
         let flags =
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_NOFOLLOW;
-        let connection = Connection::open_with_flags(&self.path, flags)?;
+        let connection = Connection::open_with_flags(self.resolved_path()?, flags)?;
         connection.busy_timeout(timeout)?;
         Ok(connection)
+    }
+
+    /// The store path with its directory resolved. SQLite's no-follow open refuses a symbolic link anywhere in the
+    /// path, and ordinary cache locations often sit below one (macOS `/var` → `/private/var`, a linked home or
+    /// `XDG_CACHE_HOME`); only the store file itself must not be a link, which the no-follow open still enforces.
+    fn resolved_path(&self) -> rusqlite::Result<PathBuf> {
+        let invalid = || rusqlite::Error::InvalidPath(self.path.clone());
+        let name = self.path.file_name().ok_or_else(invalid)?;
+        let parent = match self.path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            Some(parent) => parent.to_path_buf(),
+            None => PathBuf::from("."),
+        };
+        Ok(std::fs::canonicalize(parent).map_err(|_| invalid())?.join(name))
     }
 
     /// Creates the store's directory (private when new, and always when it is rampage's own default directory)
@@ -437,6 +450,20 @@ mod tests {
         std::os::unix::fs::symlink(&target, linked.path()).unwrap();
         assert!(linked.store("k", &Program::default()).is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_store_below_a_linked_directory_works() {
+        let root = std::env::temp_dir().join(format!("rampage-store-link-{}", std::process::id()));
+        let real = root.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("link")).unwrap();
+        let store = AnalysisStore::at(root.join("link/cache/store.sqlite"), 1 << 30);
+        store.store("k", &Program::default()).unwrap();
+        assert!(matches!(store.load("k"), Lookup::Hit(_)));
+        assert!(real.join("cache/store.sqlite").is_file());
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

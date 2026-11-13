@@ -79,8 +79,18 @@ VENDORED = [
             "crates/rampage-api/resources/type-headers/DISCLAIMER.PD.mingw-w64",
         ],
     ),
+    (
+        "Detect It Easy signature database",
+        "MIT",
+        "https://github.com/horsicq/Detect-It-Easy/tree/7eaa31a972932113aa982cc0ebfa3352a1cd07fe/db",
+        "Packer, protector, cryptor, compiler, linker, installer, SFX and joiner signatures in\n"
+        "crates/rampage-detect/data/die-signatures.json are converted by tools/die_signatures.py from the\n"
+        "Detect It Easy db/ scripts at commit 7eaa31a972932113aa982cc0ebfa3352a1cd07fe. Each converted\n"
+        "signature records the script it came from and that script's authors.",
+        ["crates/rampage-detect/data/LICENSE.detect-it-easy"],
+    ),
 ]
-COPYLEFT = re.compile(r"\b(A?GPL|LGPL|MPL|EPL|CDDL|EUPL|OSL|CECILL)", re.IGNORECASE)
+COPYLEFT =re.compile(r"\b(A?GPL|LGPL|MPL|EPL|CDDL|EUPL|OSL|CECILL)", re.IGNORECASE)
 # The pristine Apache-2.0 text (template appendix, no project copyright), used when a package ships no file.
 APACHE_TEXT_PATH = "crates/rampage-decompiler/vendor/ghidra/LICENSE"
 

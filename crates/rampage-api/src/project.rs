@@ -96,6 +96,8 @@ pub struct Project {
     analysis: OnceLock<Result<Analysis, DecoderInitializationError>>,
     analysis_binding: OnceLock<Option<String>>,
     triage: OnceLock<Triage>,
+    /// Code regions measured for encryption or packing, computed once with the project's decoder.
+    code_regions: OnceLock<Vec<rampage_analysis::code_integrity::CodeRegion>>,
     /// Strings of at least `DEFAULT_STRING_LENGTH` characters, scanned once.
     strings: OnceLock<Vec<FoundString>>,
     /// The embedded decompiler, built once over the executable segments on first use. Behind a mutex because
@@ -364,6 +366,7 @@ impl Project {
             analysis: OnceLock::new(),
             analysis_binding: OnceLock::new(),
             triage: OnceLock::new(),
+            code_regions: OnceLock::new(),
             strings: OnceLock::new(),
             decompiler: std::sync::Mutex::new(crate::decompile::DecompilerState::default()),
             packs: RwLock::default(),
@@ -848,7 +851,38 @@ impl Project {
                 pointer_tables: raw.pointer_tables(),
             }),
             analysis_store: self.analysis_store_status(),
+            encrypted_or_packed_code: self.encrypted_regions().cloned().collect(),
         }
+    }
+
+    /// The code regions judged encrypted or packed.
+    pub fn encrypted_regions(&self) -> impl Iterator<Item = &rampage_analysis::code_integrity::CodeRegion> {
+        self.code_regions().iter().filter(|region| region.verdict.is_some())
+    }
+
+    /// [`Self::functions`], with the code regions discovery left unexplored and the metadata entry points in each.
+    pub fn functions_page(&self, query: &FunctionsQuery) -> Result<crate::rows::FunctionsPage, ApiError> {
+        let page = self.functions(query)?;
+        let starts: Vec<u64> = functions::from_symbols(&self.binary)
+            .iter()
+            .map(|function| function.address)
+            .chain(self.binary.function_starts.iter().copied())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let unexplored_code = self
+            .encrypted_regions()
+            .map(|region| crate::rows::UnexploredCode {
+                region: region.clone(),
+                known_entry_points: starts.iter().filter(|&&start| region.contains(start)).count(),
+                note: format!(
+                    "not explored for functions: {}. Its symbols, exports and function starts are real entry points \
+                     whose bytes only become code at run time; decompiling there is refused",
+                    region.explain()
+                ),
+            })
+            .collect();
+        Ok(crate::rows::FunctionsPage { page, unexplored_code })
     }
 
     pub(crate) fn analysis(&self) -> Result<&Analysis, ApiError> {
@@ -916,7 +950,20 @@ impl Project {
 
     /// Hashes, entropy, format details and hints, computed once per project.
     pub fn triage(&self) -> &Triage {
-        self.triage.get_or_init(|| triage::triage(&self.binary))
+        self.triage.get_or_init(|| triage::triage_with_code(&self.binary, self.code_regions()))
+    }
+
+    /// Every code region with its entropy and decode evidence, measured once with the decoder discovery uses, so
+    /// a region judged encrypted or packed here is one discovery did not explore.
+    pub fn code_regions(&self) -> &[rampage_analysis::code_integrity::CodeRegion] {
+        self.code_regions.get_or_init(|| {
+            rampage_analysis::code_integrity::assess(&self.binary, || crate::decoder::decoder_for_project(&self.binary))
+        })
+    }
+
+    /// The code region judged encrypted or packed that holds `address`, if any.
+    pub fn encrypted_region_at(&self, address: u64) -> Option<&rampage_analysis::code_integrity::CodeRegion> {
+        self.code_regions().iter().find(|region| region.verdict.is_some() && region.contains(address))
     }
 
     pub fn imports(&self, query: &ListQuery) -> Page<ImportRow> {

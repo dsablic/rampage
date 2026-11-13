@@ -81,6 +81,13 @@ impl Project {
         for hint in &triage.hints {
             overview.push(Finding::new("triage", Confidence::Medium, format!("triage hint: {hint}")));
         }
+        for region in &triage.encrypted_or_packed_code {
+            report.limitation(format!(
+                "Code region {} is likely encrypted or packed and only becomes code at run time: function discovery \
+                 skipped it and decompilation refuses it, so the functions listed here do not cover it.",
+                region.name
+            ));
+        }
         report.sections.push(overview);
 
         let detections = self.detect_tools(None)?.detections;

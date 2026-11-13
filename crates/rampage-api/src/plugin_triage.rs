@@ -166,6 +166,10 @@ pub fn prepare_plugin_triage(
                     rampage_detect::Kind::Linker => contract::DetectionKind::Linker,
                     rampage_detect::Kind::Runtime => contract::DetectionKind::Runtime,
                     rampage_detect::Kind::Unknown => contract::DetectionKind::Unknown,
+                    // The plugin contract's kinds predate these; each maps to its nearest contract kind.
+                    rampage_detect::Kind::Cryptor => contract::DetectionKind::Packer,
+                    rampage_detect::Kind::Sfx => contract::DetectionKind::Installer,
+                    rampage_detect::Kind::Joiner => contract::DetectionKind::Unknown,
                 },
                 confidence: match row.confidence {
                     rampage_detect::Confidence::Strong => contract::DetectionConfidence::Strong,

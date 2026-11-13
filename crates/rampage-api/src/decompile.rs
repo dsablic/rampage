@@ -459,15 +459,25 @@ impl Project {
         address: u64,
         cancellation: &std::sync::atomic::AtomicBool,
     ) -> Result<Decompilation, ApiError> {
-        let mut decompilation = self.decompile_native_cancellable(address, cancellation)?;
+        let mut decompilation = self.decompile_guarded(address, cancellation, false)?;
         self.annotate_objc_sends(&mut decompilation);
         Ok(decompilation)
     }
 
-    fn decompile_native_cancellable(
+    /// [`Self::decompile`], also inside code judged encrypted or packed, which it otherwise refuses. The result is
+    /// then whatever those bytes decode to, which is noise unless the judgement was wrong.
+    pub fn decompile_encrypted(&self, address: u64) -> Result<Decompilation, ApiError> {
+        let mut decompilation =
+            self.decompile_guarded(address, &std::sync::atomic::AtomicBool::new(false), true)?;
+        self.annotate_objc_sends(&mut decompilation);
+        Ok(decompilation)
+    }
+
+    fn decompile_guarded(
         &self,
         address: u64,
         cancellation: &std::sync::atomic::AtomicBool,
+        allow_encrypted: bool,
     ) -> Result<Decompilation, ApiError> {
         if cancellation.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(ApiError::Unavailable("decompilation cancelled".to_owned()));
@@ -485,6 +495,13 @@ impl Project {
         crate::debug_layout_import::validate_replay_source(self, &annotations)?;
         let start = self.function_containing(address)?.unwrap_or(address);
         crate::debug_layout_import::validate_replay_source(self, &annotations)?;
+        if let Some(region) = self.encrypted_region_at(start).filter(|_| !allow_encrypted) {
+            return Err(ApiError::Invalid(format!(
+                "{start:#x} lies in code judged encrypted or packed, so decompiling it would only produce noise: {}. \
+                 Pass explore_encrypted=true (CLI --explore-encrypted) to decompile it anyway",
+                region.explain()
+            )));
+        }
         if self.binary.code_from(start).is_none() {
             return Err(ApiError::Invalid("decompilation requires a file-backed code address".to_owned()));
         }

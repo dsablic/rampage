@@ -113,6 +113,9 @@ pub fn kind_tag(kind: Kind) -> &'static str {
         Kind::Protector => "protector",
         Kind::Installer => "installer",
         Kind::Linker => "linker",
+        Kind::Cryptor => "cryptor",
+        Kind::Joiner => "joiner",
+        Kind::Sfx => "sfx",
         Kind::Runtime => "runtime",
         Kind::Unknown => "unknown",
     }
@@ -358,9 +361,18 @@ mod tests {
 
     #[test]
     fn kind_tags_are_the_detection_json_spelling() {
-        for kind in
-            [Kind::Packer, Kind::Compiler, Kind::Protector, Kind::Installer, Kind::Linker, Kind::Runtime, Kind::Unknown]
-        {
+        for kind in [
+            Kind::Packer,
+            Kind::Compiler,
+            Kind::Protector,
+            Kind::Cryptor,
+            Kind::Installer,
+            Kind::Sfx,
+            Kind::Joiner,
+            Kind::Linker,
+            Kind::Runtime,
+            Kind::Unknown,
+        ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), kind_tag(kind));
         }
     }

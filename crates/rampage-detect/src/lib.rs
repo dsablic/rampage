@@ -4,8 +4,8 @@
 //!
 //! # What a signature is
 //!
-//! A [`Signature`] names one tool, carries a [`Kind`] (packer, compiler, protector, installer, linker or
-//! runtime), and holds a list of [`Condition`]s that must all hold (logical AND) for it to match. Conditions test:
+//! A [`Signature`] names one tool, carries a [`Kind`] (packer, compiler, protector, cryptor, installer, SFX, joiner,
+//! linker or runtime), and holds a list of [`Condition`]s that must all hold (logical AND) for it to match. Conditions test:
 //!
 //! - the container format (PE, ELF, Mach-O), which narrows the others but is no evidence itself,
 //! - an entry-point byte pattern (hex with `?` nibble and `??` byte wildcards; see [`BytePattern`]),
@@ -31,20 +31,45 @@
 //! (linkers; GNU ld leaves no mark to key on); MinGW-w64, glibc and musl (runtimes); and NSIS and Inno Setup
 //! (installers).
 //!
+//! # Signatures from Detect It Easy
+//!
+//! The bundled database also carries signatures converted from the [Detect It Easy] (DIE) database by
+//! `tools/die_signatures.py`, stored as data in `data/die-signatures.json` with the pinned DIE commit they came
+//! from. DIE is MIT-licensed (Copyright (c) 2012-2026 hors and the DIE contributors; the licence is in
+//! `data/LICENSE.detect-it-easy` and THIRD-PARTY-NOTICES). Each such [`Signature`] has [`Source::DetectItEasy`],
+//! keeps DIE's name and version strings (`version`, options in parentheses), and names its DIE script and that
+//! script's authors in `origin`, which prefixes its evidence lines. A [`Detection`] lists every source that fired
+//! in `sources` and the versions the matching rules name in `versions`.
+//!
+//! The converter reads DIE's scripts without running them and keeps only what rampage tests exactly as DIE does:
+//! entry-point patterns, including DIE's relative jumps (see [`JumpPattern`]) and compares at an offset; bytes at
+//! a file offset or at the start of the overlay; section names; linked library names; imported functions;
+//! exports; overlay presence; and PE32/PE32+ pointer width. A converted signature is never broader than DIE's own
+//! condition; scripts that need more (loops, helper functions, string searches, .NET metadata, ...) are skipped
+//! and counted in the converter's report. DIE's library, tool, game-engine and format types describe content, not
+//! the producing tool, and stay out. So do entry patterns copied from the PeID `userdb.txt` files DIE carries
+//! (identical to an entry, or a truncation of one at least 16 bytes long; a DIE pattern that extends a shorter
+//! PeID stub is DIE's own work and stays), and scripts that matched clean binaries in the false-positive sweep.
+//! When several branches of one
+//! DIE script match, every branch's version is listed, where DIE would report the first.
+//!
+//! [Detect It Easy]: https://github.com/horsicq/Detect-It-Easy
+//!
 //! # User-supplied databases
 //!
 //! [`SignatureDb::load_peid`] parses the public PeID `userdb.txt` format so users can bring their own
 //! signatures. We ship the parser, not a database.
 
 mod bundled;
+mod die;
 mod matcher;
 mod model;
 mod pattern;
 mod peid;
 
 pub use matcher::identify;
-pub use model::{Condition, Confidence, Detection, Kind, Signature, SignatureDb};
-pub use pattern::{BytePattern, MAX_PATTERN_BYTES, MIN_DISTINCTIVE_NIBBLES, PatternError};
+pub use model::{Condition, Confidence, Detection, Kind, Signature, SignatureDb, Source};
+pub use pattern::{BytePattern, JumpPattern, JumpPiece, MAX_PATTERN_BYTES, MIN_DISTINCTIVE_NIBBLES, PatternError};
 pub use peid::{PeidError, PeidWarning};
 
 impl SignatureDb {

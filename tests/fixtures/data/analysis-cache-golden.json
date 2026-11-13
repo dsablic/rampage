@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "digests": {
     "bin/Microsoft.Bcl.HashCode.dll": "34cf5f70907d8f26f0751ad9d4eeb847b5692b35c253fdfcc7cb914ca9bf74ff",
     "bin/auditable-arm64.macho": "1e7bf58bbc621b8957fc1e68a29cb6ec7d57e9beb67bb63f89eb733f7d5dabe9",

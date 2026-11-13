@@ -5,6 +5,7 @@ use rampage_arch::{Flow, UnsupportedArch};
 use rampage_loaders::{Binary, Format, SectionKind, SymbolKind};
 use serde::Serialize;
 
+use crate::code_integrity;
 use crate::discover::{Program, try_discover_with_noreturn};
 use crate::noreturn::return_facts_with_stub_names;
 
@@ -69,7 +70,13 @@ where
     seeds.extend(stub_seeds(binary, &stubs));
     seeds.extend(thunk_seeds(binary));
     let facts = return_facts_with_stub_names(binary, stubs);
-    try_discover_with_noreturn(binary, new_decoder, &seeds, &facts)
+    // Code regions judged encrypted or packed are not explored: what they decode to is noise, not functions.
+    let excluded = code_integrity::flagged_ranges(&code_integrity::assess(binary, &new_decoder));
+    if excluded.is_empty() {
+        return try_discover_with_noreturn(binary, new_decoder, &seeds, &facts);
+    }
+    let memory = code_integrity::ExcludingMemory { inner: binary, excluded: &excluded };
+    try_discover_with_noreturn(&memory, new_decoder, &seeds, &facts)
 }
 
 /// Function entries in the stub sections: each section's first stub (the ELF PLT[0] resolver) and every named

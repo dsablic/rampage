@@ -930,6 +930,9 @@ pub(crate) struct DecompileArgs {
     /// Treat --at as an exact entry with bounded local context, not a containing-function query
     #[arg(long)]
     pub(crate) exact_entry: bool,
+    /// Decompile even inside code judged encrypted or packed, which is refused by default
+    #[arg(long)]
+    pub(crate) explore_encrypted: bool,
     /// Structured JSON: full (default), code with native evidence, or summary with explicit omissions
     #[arg(long, value_enum)]
     pub(crate) view: Option<OutputView>,
