@@ -2030,6 +2030,103 @@ mod debug_layout_output_tests {
     }
 }
 
+pub fn type_layout(out: &mut impl Write, args: &crate::args::TypeLayoutArgs, options: &Options) -> Result<()> {
+    let project = open(&args.file, options)?;
+    let mut input =
+        serde_json::json!({ "name": args.name, "source": "dwarf", "depth": args.depth, "offset": args.offset });
+    if let Some(member) = &args.member {
+        input["member"] = member.clone().into();
+    }
+    if let Some(byte_offset) = &args.byte_offset {
+        input["byte_offset"] = byte_offset.clone().into();
+    }
+    if let Some(limit) = args.limit {
+        input["limit"] = limit.into();
+    }
+    let (text, failed) = rampage_api::tools::call(&rampage_api::tools::tools(), &project, "get_type", input);
+    let result: serde_json::Value = serde_json::from_str(&text)?;
+    if failed {
+        anyhow::bail!("{}", result["error"].as_str().unwrap_or(&text));
+    }
+    if options.json {
+        out.write_all(text.as_bytes())?;
+        return Ok(());
+    }
+    if result["ambiguous"] == true {
+        writeln!(
+            out,
+            "{} distinct definitions of {}",
+            result["definitions"].as_array().map_or(0, Vec::len),
+            args.name
+        )?;
+    }
+    for definition in result["definitions"].as_array().into_iter().flatten() {
+        let size = definition["byte_size"].as_u64().map_or_else(|| "?".to_owned(), |size| format!("{size:#x}"));
+        write!(
+            out,
+            "{} size {size} at DIE {}",
+            definition["type_name"].as_str().unwrap_or("?"),
+            definition["die_offset"].as_str().unwrap_or("?")
+        )?;
+        if let Some(via) = definition["via_typedef"].as_str() {
+            write!(out, " (typedef {via})")?;
+        }
+        if definition["occurrences"].as_u64().is_some_and(|count| count > 1) {
+            write!(out, " x{}", definition["occurrences"])?;
+        }
+        writeln!(out)?;
+        if let Some(selection) = definition["selection"].as_object() {
+            let size = selection["byte_size"].as_u64().map_or_else(|| "?".to_owned(), |size| size.to_string());
+            write!(
+                out,
+                "  {} at {:#x} size {size} {}",
+                selection["path"].as_str().unwrap_or("?"),
+                selection["offset"].as_u64().unwrap_or(0),
+                selection["type_name"].as_str().unwrap_or("?"),
+            )?;
+            if let Some(within) =
+                selection.get("within").and_then(serde_json::Value::as_u64).filter(|&within| within > 0)
+            {
+                write!(out, " (+{within})")?;
+            }
+            if selection.get("padding") == Some(&serde_json::Value::Bool(true)) {
+                write!(out, " (padding after)")?;
+            }
+            writeln!(out)?;
+        }
+        fn members(out: &mut impl Write, list: &serde_json::Value, indent: usize) -> Result<()> {
+            for member in list.as_array().into_iter().flatten() {
+                let offset = member["offset"].as_u64().map_or_else(|| "?".to_owned(), |offset| format!("{offset:#x}"));
+                let size = member["byte_size"].as_u64().map_or_else(|| "?".to_owned(), |size| size.to_string());
+                let name = member["name"].as_str().unwrap_or("(anonymous)");
+                write!(
+                    out,
+                    "{:indent$}{offset:>6} {size:>4} {name}: {}",
+                    "",
+                    member["type_name"].as_str().unwrap_or("?")
+                )?;
+                if let Some(bits) = member["bit_size"].as_u64() {
+                    write!(out, " :{bits}")?;
+                }
+                writeln!(out)?;
+                members(out, &member["members"], indent + 2)?;
+            }
+            Ok(())
+        }
+        members(out, &definition["members"], 2)?;
+        for enumerator in definition["enumerators"].as_array().into_iter().flatten() {
+            writeln!(out, "  {} = {}", enumerator["name"].as_str().unwrap_or("?"), enumerator["value"])?;
+        }
+        if let Some(next) = definition["next_offset"].as_u64() {
+            writeln!(out, "  ... {} members, next --offset {next}", definition["total"])?;
+        }
+    }
+    for warning in result["warnings"].as_array().into_iter().flatten() {
+        writeln!(out, "warning: {}", warning.as_str().unwrap_or_default())?;
+    }
+    Ok(())
+}
+
 pub fn import_pdb_names(out: &mut impl Write, args: &crate::args::ImportPdbNamesArgs, options: &Options) -> Result<()> {
     let result = serde_json::to_value(&args.pdb)
         .map_err(|error| {

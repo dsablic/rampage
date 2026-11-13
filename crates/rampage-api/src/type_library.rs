@@ -327,6 +327,33 @@ impl Project {
         }
     }
 
+    /// Reads one type's producer layout from embedded DWARF without importing or applying anything. Only the
+    /// first call skims the image; each lookup then reads just the requested type and what its members name.
+    pub fn dwarf_type_layout(
+        &self,
+        request: &rampage_loaders::debug::DwarfTypeRequest,
+    ) -> Result<rampage_loaders::debug::DwarfTypeLookup, ApiError> {
+        if request.name.trim().is_empty() {
+            return Err(ApiError::Invalid("type name is empty".into()));
+        }
+        let index =
+            self.dwarf_types().map_err(|reason| ApiError::NotFound(format!("no DWARF type information: {reason}")))?;
+        let lookup = index.lookup(request).map_err(ApiError::Invalid)?;
+        if lookup.definitions.is_empty() {
+            if let Some(warning) = lookup.warnings.first() {
+                return Err(ApiError::Invalid(warning.clone()));
+            }
+            let suggestions = index.suggestions(request.name.trim().rsplit(' ').next().unwrap_or_default());
+            let hint = if suggestions.is_empty() {
+                String::new()
+            } else {
+                format!("; similar DWARF names: {}", suggestions.join(", "))
+            };
+            return Err(ApiError::NotFound(format!("no DWARF type named {:?}{hint}", request.name)));
+        }
+        Ok(lookup)
+    }
+
     pub fn declare_types(&self, request: &DeclareTypesRequest) -> Result<TypeLibraryEdit, ApiError> {
         self.declare_types_with_preflight(request, |_| Ok(()))
     }

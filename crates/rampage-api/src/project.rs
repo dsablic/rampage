@@ -107,6 +107,8 @@ pub struct Project {
     pub(crate) go_prototypes: OnceLock<crate::decompile::GoPrototypes>,
     /// Go static string headers, read once from data on first use.
     go_strings: OnceLock<crate::go_strings::GoStrings>,
+    /// Embedded DWARF name → DIE index, skimmed once on the first DWARF type lookup.
+    dwarf_types: OnceLock<Result<Arc<rampage_loaders::debug::DwarfTypeIndex>, String>>,
 }
 
 /// Rechecks the frozen view after acquiring the authority read lock. Selecting a lock before a first patch
@@ -351,6 +353,7 @@ impl Project {
             packs: RwLock::default(),
             go_prototypes: OnceLock::new(),
             go_strings: OnceLock::new(),
+            dwarf_types: OnceLock::new(),
         }
     }
 
@@ -860,6 +863,14 @@ impl Project {
         self.binary.go_table.is_some().then(|| {
             self.go_strings.get_or_init(|| crate::go_strings::read(&self.binary, program, self.scanned_strings()))
         })
+    }
+
+    /// The embedded DWARF type index, built on first use; the error says why there is none.
+    pub(crate) fn dwarf_types(&self) -> Result<&Arc<rampage_loaders::debug::DwarfTypeIndex>, &str> {
+        self.dwarf_types
+            .get_or_init(|| rampage_loaders::debug::dwarf_type_index(&self.binary).map(Arc::new))
+            .as_ref()
+            .map_err(String::as_str)
     }
 
     pub fn strings(&self, query: &StringsQuery) -> Page<FoundString> {

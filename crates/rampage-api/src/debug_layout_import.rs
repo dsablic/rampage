@@ -41,6 +41,10 @@ const MAX_SIGNATURE_BYTES: usize = 8192;
 const MAX_NAME_WORK: usize = 1024 * 1024;
 const MAX_CHECKED_IMAGE_BYTES: usize = 128 * 1024 * 1024;
 
+fn budget_exceeded(message: &str) -> ApiError {
+    invalid(&format!("{message}; {}", rampage_loaders::debug::DWARF_LOOKUP_HINT))
+}
+
 fn invalid(message: &str) -> ApiError {
     ApiError::Invalid(format!("checked debug layout: {message}"))
 }
@@ -65,7 +69,7 @@ pub(crate) fn image_digest(project: &Project) -> Result<[u8; 32], ApiError> {
     check_backing(project)?;
     let bytes = project.binary.image_bytes();
     if bytes.len() > MAX_CHECKED_IMAGE_BYTES {
-        return Err(invalid("selected image exceeds the checked hash/native-work byte budget"));
+        return Err(budget_exceeded("selected image exceeds the checked hash/native-work byte budget"));
     }
     let digest = Sha256::digest(bytes).into();
     check_backing(project)?;
@@ -130,7 +134,7 @@ fn validate_native_work(project: &Project) -> Result<(), ApiError> {
 fn validate_native_source_work(project: &Project, work: ReplayWork) -> Result<(), ApiError> {
     let binary = &project.binary;
     if binary.image_bytes().len() > MAX_CHECKED_IMAGE_BYTES {
-        return Err(invalid("selected image exceeds the checked hash/native-work byte budget"));
+        return Err(budget_exceeded("selected image exceeds the checked hash/native-work byte budget"));
     }
     if binary.symbols.len() > 8192
         || binary.exports.len() > 8192
@@ -139,7 +143,7 @@ fn validate_native_source_work(project: &Project, work: ReplayWork) -> Result<()
         || binary.import_slots.len() > 1024
         || binary.segments.len() > 256
     {
-        return Err(invalid("image metadata exceeds the checked native-work budget"));
+        return Err(budget_exceeded("image metadata exceeds the checked native-work budget"));
     }
     let mut mapped_bytes = 0usize;
     for segment in &binary.segments {
@@ -172,7 +176,7 @@ fn validate_native_source_work(project: &Project, work: ReplayWork) -> Result<()
                 || analysis.program.functions.len().saturating_mul(binary.symbols.len().max(1)) > 262_144
         })
     {
-        return Err(invalid("symbol/function resolution exceeds the checked native-work budget"));
+        return Err(budget_exceeded("symbol/function resolution exceeds the checked native-work budget"));
     }
     Ok(())
 }

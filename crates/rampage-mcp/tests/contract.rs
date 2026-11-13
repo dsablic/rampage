@@ -578,6 +578,8 @@ async fn contract_mcp_types_results() {
     exercise(c, o, "import_debug_signatures", json!({"path": debug, "apply": true})).await;
     exercise(c, o, "import_debug_types", json!({"path": debug, "limit": 2})).await;
     exercise(c, o, "import_debug_layouts", json!({"path": debug, "limit": 2})).await;
+    exercise(c, o, "get_type", json!({"path": debug, "name": "debug_pair", "byte_offset": 5})).await;
+    exercise(c, o, "get_type", json!({"path": debug, "name": "debug_pair", "source": "dwarf", "limit": 1})).await;
     exercise(c, o, "import_pdb_names", json!({"path": exe, "pdb": pdb, "limit": 2})).await;
     exercise(c, o, "import_pdb_names", json!({"path": exe, "pdb": pdb, "limit": 2, "apply": true})).await;
     check_group(client, "types", &observed, &[]).await;

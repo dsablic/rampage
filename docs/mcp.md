@@ -241,6 +241,16 @@ target layout inspection and checked undo/replay. Inline headers and minimal bun
 system files or invoke a host preprocessor. Deletion is dependency checked; multi-name groups require an explicit
 flag. See the [type-library reference](type-library.md) for input limits and packing behavior.
 
+`get_type` also reads producer layouts from embedded DWARF, read-only and without importing: when the library has
+no such name, or with `source: "dwarf"`, it returns the type's size, members (offset, size, type name), typedef
+chain and every distinct definition across compilation units (`ambiguous` when they differ), with members paged
+by `offset`/`limit` and by-value records expanded to `depth`. `member: "init.busy"` returns that member's offset
+from the start of the type; `byte_offset: "0x80"` returns the innermost member covering it (array elements
+included). The first DWARF lookup on an image skims each unit's top-level DIEs once into a name index; each
+lookup then reads only the requested type and what its members name (at most 65,536 DIEs and 16 same-named
+entries), whatever the image size. Use it where the whole-image `import_debug_types`/`import_debug_layouts`
+previews stop at their budgets.
+
 `edit_variable` accepts one current display name or complete native storage object, with name/type changes or
 clear flags. It atomically persists the changes and returns complete refreshed C, diagnostics and variable
 descriptors within the tool budget. Limits: one whole register/stack mapping and same-size types; invalid or
