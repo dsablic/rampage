@@ -1626,6 +1626,68 @@ pub fn record_finding(out: &mut impl Write, args: &crate::args::RecordFindingArg
     write_finding(out, &record.finding)
 }
 
+pub fn transfer_annotations(
+    out: &mut impl Write,
+    args: &crate::args::TransferAnnotationsArgs,
+    options: &Options,
+) -> Result<()> {
+    let from = args.from.to_str().ok_or_else(|| anyhow::anyhow!("--from must be a UTF-8 path"))?;
+    let request = rampage_api::TransferRequest {
+        from: from.to_owned(),
+        apply: args.apply,
+        min_confidence: args.min_confidence,
+        list: args.list,
+        offset: args.offset,
+        limit: args.limit,
+    };
+    let report = open(&args.file, options)?.transfer_annotations(&request)?;
+    if options.json {
+        return write_json(out, &report);
+    }
+    let matching = &report.matching;
+    writeln!(
+        out,
+        "{} functions in {}, {} here: {} matched ({} unchanged, {} changed), {} added, {} removed, {} ambiguous",
+        matching.source_functions,
+        report.source_path,
+        matching.target_functions,
+        matching.matched,
+        matching.unchanged,
+        matching.changed,
+        matching.added,
+        matching.removed,
+        matching.ambiguous
+    )?;
+    let methods: Vec<String> = matching.by_method.iter().map(|(method, count)| format!("{method} {count}")).collect();
+    writeln!(out, "matched by: {}", methods.join(", "))?;
+    let counts = &report.annotations;
+    writeln!(
+        out,
+        "{} annotations at min confidence {}: {} {}, {} already present, {} conflicts, {} below threshold, {} not \
+         transferred",
+        counts.source_annotations,
+        report.min_confidence,
+        counts.transfer,
+        if report.applied.is_some() { "written" } else { "would transfer" },
+        counts.already_present,
+        counts.conflict,
+        counts.below_threshold,
+        counts.not_transferred
+    )?;
+    if let Some(applied) = &report.applied {
+        let finding = applied.provenance_finding.map_or_else(String::new, |id| format!(", provenance finding {id}"));
+        writeln!(out, "applied: {} changed in {} batch(es){finding}", applied.changed, applied.batches)?;
+    }
+    writeln!(out, "{} ({} of {} from {}):", report.list, report.returned, report.total, report.offset)?;
+    for row in &report.rows {
+        writeln!(out, "  {row}")?;
+    }
+    if let Some(next) = report.next_offset {
+        writeln!(out, "more: --offset {next}")?;
+    }
+    Ok(())
+}
+
 pub fn list_findings(out: &mut impl Write, args: &crate::args::ListFindingsArgs, options: &Options) -> Result<()> {
     let query = rampage_api::LedgerQuery {
         kind: args.kind,

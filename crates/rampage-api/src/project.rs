@@ -500,6 +500,11 @@ impl Project {
     }
 
     /// The address a name refers to apart from the user's names.
+    /// The symbol, export, stub or import-slot name at `address`, ignoring the user's names.
+    pub(crate) fn symbol_name(&self, address: u64) -> Option<&str> {
+        self.names.get(address)
+    }
+
     pub(crate) fn symbol_address(&self, name: &str) -> Option<u64> {
         self.names
             .address_of(name)

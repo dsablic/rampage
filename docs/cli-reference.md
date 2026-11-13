@@ -140,6 +140,7 @@ which also conflicts with `--contains`/`--parent-token`. IL `--at` requires `--i
 | `type layout IMAGE NAME [--member PATH \| --byte-offset N] [--depth D] [--offset N] [--limit N]` | — |
 | `annotation record-finding FILE --kind KIND --text TEXT [--id N] [--address A] [--function A] [--evidence TOOL=DETAIL]... [--confidence C] [--status S] [--resolution TEXT]` | — |
 | `annotation list-findings FILE [--kind K] [--status S] [--address A] [--function A] [--contains TEXT] [--offset N] [--limit N]` | — |
+| `annotation transfer FILE --from OLD [--apply] [--min-confidence C] [--list L] [--offset N] [--limit N]` | — |
 
 Rename/comment take positional operands, not `--at`. `--clear` replaces the new name/text operand and cannot
 be combined with it. A batch is a JSON array of `{at, name?, comment?}` entries, at most 1000, applied all or
@@ -153,6 +154,10 @@ after the CLI exits. `--offset` (default 0) and `--limit` (default 100, range 1�
 select details only; byte caps can shorten them further. JSON output retains whole-operation identity, totals and
 success status. Rejections return a failing exit status and, with `--json`, a bounded JSON receipt. Global image
 selectors apply to `FILE`, not the PDB. See [PDB name import](pdb-symbols.md#cli).
+
+`annotation transfer` matches `FILE`'s functions with the analyzed build `--from` and previews (or with `--apply`
+writes) its annotations here; `--list` pages transfers, matches, changed, added, removed or ambiguous functions.
+See [build matching and annotation transfer](build-diffing.md).
 
 ### Persistence and shared edits
 

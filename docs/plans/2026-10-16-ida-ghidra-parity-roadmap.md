@@ -355,7 +355,11 @@ changed functions. This replaces IDA's Lumina/BinDiff and Ghidra Version Trackin
 **Acceptance:** on two versions of an open-source library (e.g. zlib 1.2.13 vs 1.3), ≥ 90% of unchanged
 functions matched and their annotations transferred.
 
-*Status (2026-11-05): not started.*
+*Status (2026-11-13): implemented as `transfer_annotations` / `annotation transfer`
+([reference](../build-diffing.md)). Acceptance on zlib 1.2.13 -> 1.3, stripped: 100% of unchanged functions
+matched and named on the x86-64 and AArch64 shared libraries, 90.3% on symbol-less static executables (the rest
+are byte-identical twins reported as ambiguous), 0 false matches. `diff_builds` still uses its own simpler
+pairing.*
 
 ---
 

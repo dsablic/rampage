@@ -665,6 +665,81 @@
       },
       "subcommand_required": false
     },
+    "rampage annotation transfer": {
+      "arguments": {
+        "--apply": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--from": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--limit": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--list": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--min-confidence": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
     "rampage annotations": {
       "arguments": {
         "--arch": {

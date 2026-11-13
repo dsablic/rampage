@@ -8,6 +8,13 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Added
 
+- `transfer_annotations` (MCP; CLI `rampage annotation transfer`) carries an analysed build's annotations to a new
+  build. Functions are matched one-to-one by exact bytes, symbol names, masked hashes, unique strings, call-graph
+  position and neighbourhood, each with a confidence; ambiguous pairs are reported, never guessed. Preview is the
+  default; `apply: true` writes undoable batches with a provenance entry, and existing annotations or real symbols
+  in the target are reported as conflicts, never overwritten. It also lists changed, added and removed functions.
+  On zlib 1.2.13 → 1.3, stripped, every build had zero false matches; shared libraries transferred 100% of
+  unchanged functions' names and static builds about 90%. See [build diffing](docs/build-diffing.md).
 - `file_layout` (MCP, `core`) and `binary layout` map any regular file, or a range of up to 64 MiB, without a
   loader: 0xff/0x00/repeated-byte fill and occupied regions with per-region SHA-256 and entropy, per-block
   entropy with high and low spans, printable-string clusters, the range's SHA-256, and labelled heuristic hints

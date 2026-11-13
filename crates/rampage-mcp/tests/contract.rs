@@ -207,12 +207,22 @@ async fn contract_mcp_core_results() {
 
     // Notes on the copy: names, comments, both batch tools, undo and redo, and the ledger.
     exercise(c, o, "check_names", json!({"path": elf, "names": ["compat_main", "main"]})).await;
-    exercise(c, o, "rename", json!({"path": elf, "at": "main", "name": "compat_main"})).await;
+    let renamed = exercise(c, o, "rename", json!({"path": elf, "at": "main", "name": "compat_main"})).await;
+    // A label inside main, where the receiving copy has no symbol, so its name transfers.
+    let main = u64::from_str_radix(renamed["address"].as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+    let label = json!({"path": elf, "at": format!("{:#x}", main + 4), "name": "compat_label"});
+    json_of("rename", &call(c, "rename", label).await);
     exercise(c, o, "set_comment", json!({"path": elf, "at": "compat_main", "text": "entry"})).await;
     let entries = json!([{"at": "add", "name": "compat_add", "comment": "adds"}]);
     exercise(c, o, "annotate_batch", json!({"path": elf, "entries": entries})).await;
     let entries = json!([{"operation": "comment", "at": "compat_add", "value": "adds two ints"}]);
     exercise(c, o, "batch", json!({"path": elf, "entries": entries})).await;
+    // Those notes carried over to a second copy: preview, a matches page, then apply.
+    let receiver = scratch.0.join("receiver.elf");
+    std::fs::copy(fixture("hello-x64.elf"), &receiver).unwrap();
+    exercise(c, o, "transfer_annotations", json!({"path": receiver, "from": elf})).await;
+    exercise(c, o, "transfer_annotations", json!({"path": receiver, "from": elf, "list": "matches", "limit": 2})).await;
+    exercise(c, o, "transfer_annotations", json!({"path": receiver, "from": elf, "apply": true})).await;
     exercise(c, o, "list_annotations", json!({"path": elf})).await;
     exercise(c, o, "undo", json!({"path": elf})).await;
     exercise(c, o, "redo", json!({"path": elf})).await;

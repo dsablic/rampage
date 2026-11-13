@@ -497,6 +497,30 @@ pub(crate) struct RecordFindingArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct TransferAnnotationsArgs {
+    /// The new build that receives the annotations
+    pub(crate) file: PathBuf,
+    /// The analyzed build whose saved annotations are carried over (same architecture; its log is only read)
+    #[arg(long, required = true)]
+    pub(crate) from: PathBuf,
+    /// Write the transfers as an undoable batch with a provenance ledger entry; omitted only previews
+    #[arg(long)]
+    pub(crate) apply: bool,
+    /// Lowest match confidence whose annotations transfer, 0 to 1 (default 0.7)
+    #[arg(long)]
+    pub(crate) min_confidence: Option<f64>,
+    /// Rows to page: transfers, matches, changed, added, removed or ambiguous
+    #[arg(long, value_parser = ledger_value::<rampage_api::TransferList>)]
+    pub(crate) list: Option<rampage_api::TransferList>,
+    /// Rows to skip
+    #[arg(long)]
+    pub(crate) offset: Option<usize>,
+    /// Rows per page (1..=1000, default 100)
+    #[arg(long)]
+    pub(crate) limit: Option<usize>,
+}
+
+#[derive(Args)]
 pub(crate) struct ListFindingsArgs {
     pub(crate) file: PathBuf,
     /// finding, unknown or question
