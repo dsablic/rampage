@@ -305,10 +305,11 @@ Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.m
   (without it, a masked constant could collide two different functions); do it relocation-gated, not heuristic.
 - [x] Verify the MSVC RTTI path against a real PE. Done 2026-11-12 on owned clang-cl x86/x64 fixtures with PDB truth
   (`tests/fixtures/msvc-cpp`): RTTI already correct; vftables, `__CxxFrameHandler3` EH tables and PDB names added.
-- [ ] MSVC follow-ups, most valuable first: decode `__CxxFrameHandler4` (cl.exe x64 default; needs a cl.exe-built
-  fixture); fold catch-resume points back into parents; link virtual calls to vftable slots in the decompiler;
-  rows for base-only RTTI classes and paging for `rtti_classes`; x86 SEH (`_except_handler3/4`) and ARM64 tables;
-  PDB types; debug-type import still rejects `/OPT:ICF` procedure ranges.
+- [ ] MSVC follow-ups, most valuable first: decode `__CxxFrameHandler4` (cl.exe x64 default; needs a real cl.exe
+  FH4 fixture, e.g. via msvc-wine: clang-cl always emits FH3); fold catch-resume points back into parents; x86 SEH
+  (`_except_handler3/4`) and ARM64 tables; PDB types; virtual calls through virtual bases or vftables stored by a
+  constructor in the caller. Done 2026-11-13: virtual call → vftable slot in decompilation, paged `rtti_classes`
+  with base-only rows, `/OPT:ICF` in debug-type import.
 - [ ] C++ class LAYOUT reconstruction (fields/sizes), building on the RTTI name/hierarchy recovery now in place.
 
 ## Heuristic-database layer (pluggable detection DBs)

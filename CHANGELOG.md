@@ -14,6 +14,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
   such as Cortex-M vector-table candidates. Capped lists report totals and a continuation range. See
   [file layout](docs/file-layout.md).
 
+- Decompiling an MSVC C++ PE resolves virtual calls through recovered vftables when the object's class is known (a
+  method's own `this`, or an analyst type named after the class): the call is annotated with its slot and candidate
+  methods and keeps their shared prototype. On x86 such calls pass `this` in ECX (`__thiscall`); calls through C
+  operation tables and other unresolved double loads keep the decompiler's default.
 - MSVC C++ on x86 and x64 PE: vftables and `__CxxFrameHandler3` exception tables are read at load (bounded by a
   per-image work and memory budget). Virtual methods and catch/cleanup funclets seed function discovery; on owned
   clang-cl fixtures, function starts went from 33/79 (x64) and 32/79 (x86) to 79/79 against the PDB.
@@ -66,6 +70,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Changed
 
+- `class_evidence` pages `rtti_classes` (`rtti_class_offset`/`rtti_class_limit`, 50 by default) and lists classes
+  seen only as bases (`source: "rtti_base"`); a client that read the whole list must follow
+  `rtti_classes_next_offset`.
+- Debug-type import accepts PDBs linked with identical-code folding (`/OPT:ICF`): procedure records that disagree at
+  one address are omitted with a warning instead of failing the import.
 - PDB name import no longer rejects a whole PDB over conflicting names. Decorated MSVC names become aliases of the
   plain name (templates, operators and overloads keep their decorated name), identical-code-folded publics become
   aliases, and names that collide or are not valid labels are omitted with a warning. See
