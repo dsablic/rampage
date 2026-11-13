@@ -1071,7 +1071,9 @@ fn string_targets(
             });
         }
         let before = *inspection.bytes;
-        let found = source_matches(project, target, source, inspection.bytes, inspection.truncated, remaining);
+        charge_work(query, control, work, tree_work(xrefs.len()))?;
+        let end = go_literal_end(project, program, target, source);
+        let found = source_matches(project, target, end, source, inspection.bytes, inspection.truncated, remaining);
         *work += (*inspection.bytes - before) as u64;
         if found {
             charge_work(query, control, work, tree_work(matched.len()))?;
@@ -1295,15 +1297,32 @@ fn import_targets(
     Ok(targets)
 }
 
+/// Where the UTF-8 text at `target` ends in a Go image: Go string data is not NUL-terminated, so literals run
+/// together, and the next address code references as data begins another literal (the `go_literal` bound that
+/// list_strings reports). `None` outside Go images and for UTF-16 queries, which keep NUL/bound termination.
+fn go_literal_end(project: &Project, program: &Program, target: u64, source: &SourceString) -> Option<u64> {
+    if project.binary.go_table.is_none() || !matches!(source.encoding, SourceStringEncoding::Utf8) {
+        return None;
+    }
+    let after = program.xrefs.partition_point(|xref| xref.to <= target);
+    program.xrefs[after..].iter().find(|xref| xref.kind == XrefKind::Data).map(|xref| xref.to)
+}
+
 fn source_matches(
     project: &Project,
     address: u64,
+    end: Option<u64>,
     query: &SourceString,
     inspected: &mut usize,
     truncated: &mut bool,
     work_remaining: usize,
 ) -> bool {
     let Some(bytes) = project.binary.read_to_segment_end(address) else { return false };
+    // A literal end is a terminator like the segment end: text past it belongs to another literal.
+    let bytes = match end {
+        Some(end) => &bytes[..bytes.len().min(usize::try_from(end - address).unwrap_or(usize::MAX))],
+        None => bytes,
+    };
     let limit = bytes.len().min(MAX_SOURCE_STRING).min(MAX_SOURCE_BYTES - *inspected).min(work_remaining);
     *truncated |= limit < bytes.len() && limit < MAX_SOURCE_STRING;
     let bytes = &bytes[..limit];
@@ -1643,6 +1662,45 @@ mod tests {
         }
         assert_eq!((small.decoded_instructions, large.decoded_instructions), (2, 2));
         assert!(large.match_work < small.match_work + 1_000, "{} vs {}", large.match_work, small.match_work);
+    }
+
+    /// Go string data is not NUL-terminated: the text at an earlier referenced literal runs on into the next one.
+    /// A string reference matches only the literal holding the text, bounded by the next referenced literal.
+    #[test]
+    fn go_string_references_stop_at_the_next_referenced_literal() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-go-x64.elf");
+        let project = Project::new(Binary::open(&path).unwrap());
+        assert!(project.binary.go_table.is_some());
+        let program = &project.analysis().unwrap().program;
+        let mut targets: Vec<u64> =
+            program.xrefs.iter().filter(|xref| xref.kind == XrefKind::Data).map(|xref| xref.to).collect();
+        targets.dedup();
+        // Two adjacent referenced literals, the earlier one's bytes running into a distinctive later one.
+        let (earlier, later, needle) = targets
+            .windows(3)
+            .find_map(|window| {
+                let (earlier, later, next) = (window[0], window[1], window[2]);
+                let run = project.binary.read(earlier, next - earlier)?;
+                let text = std::str::from_utf8(run).ok()?;
+                let needle = &text[(later - earlier) as usize..];
+                (later - earlier < 64
+                    && needle.len() >= 8
+                    && !text.contains('\0')
+                    && needle.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                    && !text[..(later - earlier) as usize].contains(needle))
+                .then(|| (earlier, later, needle.to_owned()))
+            })
+            .expect("fixture has adjacent referenced Go literals");
+        let query = CodeSearchQuery::new(CodeSearchKind::FunctionsReferencing(CodeReference::String(
+            SourceString::new(&needle, SourceStringEncoding::Utf8).unwrap(),
+        )))
+        .unwrap()
+        .with_page(0, 1000)
+        .unwrap();
+        let report = project.search_code(&query).unwrap();
+        let matched: BTreeSet<u64> = report.hits.iter().filter_map(|hit| hit.evidence.target).collect();
+        assert!(matched.contains(&later), "{needle:?} at {later:#x}: {report:?}");
+        assert!(!matched.contains(&earlier), "{needle:?}: {earlier:#x} is another literal");
     }
 
     #[test]
