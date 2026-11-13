@@ -493,7 +493,8 @@ seed. Sleigh profiles take a record file with one contiguous run and no `regions
 
 ## Edits and session state
 
-Analysis runs once per binary when first needed and is cached for the session. Annotations share the
+Analysis runs once per binary when first needed and is cached for the session, and across processes by the
+[persistent analysis store](#persistent-analysis-store). Annotations share the
 [persistent logs](cli-reference.md#persistence-and-shared-edits) used by CLI and UI; the UI reflects incoming edits.
 `annotate_batch` validates all entries before applying one undo step; `check_names` pre-flights candidate names.
 `batch` extends the same transaction/history path with typed name/comment/signature/types/global operations
@@ -536,6 +537,56 @@ ledger entries. Builds with the ledger skip edits of fields they do not know in 
 so earlier steps can be undone. It refuses a step that undo could still revert unless `force: true` is explicit.
 `build_signatures` writes a database to its requested output path; `identify_functions` and
 `import_debug_signatures` persist changes only when `apply: true` is requested.
+
+## Persistent analysis store
+
+Function discovery (functions, blocks, switch tables, cross-references, noreturn facts) is nearly all of the time
+it takes to open and analyse a binary: loading, string scanning and triage are tens of milliseconds even on large
+binaries. rampage keeps each completed discovery in a per-user SQLite store and loads it the next time any process
+(an MCP server, a CLI call, the UI) analyses the same input, so re-opening an already-analysed binary skips
+discovery. The result is identical to a fresh analysis. Annotations are not stored there: they stay in their own
+log and apply over a stored analysis exactly as over a fresh one.
+
+| Setting | Effect |
+|---|---|
+| `RAMPAGE_ANALYSIS_CACHE` unset | Release builds use the default file; debug builds (tests, `cargo run`) keep the store off. |
+| `RAMPAGE_ANALYSIS_CACHE=off` (or `0`, `false`, `no`, empty) | No store: every process analyses afresh. |
+| `RAMPAGE_ANALYSIS_CACHE=on` (or `1`, `true`, `yes`) | The default file, also in debug builds. |
+| `RAMPAGE_ANALYSIS_CACHE=/path/file.sqlite` | That file. |
+| `RAMPAGE_ANALYSIS_CACHE_MAX_MB=N` | Size bound in MiB (default 1024). |
+
+The default file is `rampage/rampage-analysis-store-v1.sqlite` under `$XDG_CACHE_HOME` when set, else `~/.cache`
+(where the bundled Sleigh specifications are materialized too), else `%LOCALAPPDATA%`; its directory is created
+private to the user. Nothing is written next to the analysed binary, which often sits in a read-only or shared
+directory; the store is keyed by content, so a copy of a binary under another path hits too. Deleting the file is
+always safe.
+
+`binary_info` (and `binary inspect --json`) report the store's part as `analysis_store`: `state` is `pending` (a
+store is configured but analysis has not run in this process), `hit` (discovery loaded from the store), `miss`
+(analysed fresh; `detail` says whether it was stored), `rejected` (an entry or the file failed validation, see
+`detail`; analysed fresh), `disabled`, or `unsupported` (runtime captures and byte-patched views are never stored).
+Once analysis ran with a store, `key` is the entry key.
+
+**Key.** SHA-256 over every input discovery reads: the whole source file's SHA-256, the loaded image's offset and
+length in it, format and architecture slice; for a Raw Project its decoder binding (interpretation identity:
+bytes, profile, mapping, entry, seeds, vector and pointer tables, regions; plus the bundled Sleigh manifest); the
+store schema, rampage version and `ANALYSIS_VERSION`; and the running executable's path, size and modification
+time, so a rebuilt rampage never reads what an earlier build stored. Data packs, annotations and decompiler options
+do not affect discovery and are not in the key. A golden test records each fixture's analysis digest under
+`ANALYSIS_VERSION` and fails when discovery output changes without a version bump (see
+[development](development.md#analysis-store-version)).
+
+**Untrusted file.** An entry is used only when its payload's stored SHA-256 matches, the key embedded in the
+payload equals the key looked up, and the payload decodes completely: counts bounded by the bytes left, tags and
+strings checked, no trailing bytes, sorted orders revalidated. A file with another schema is neither read nor
+written. A truncated, corrupt or foreign file or entry is reported as `rejected` and the binary is analysed fresh;
+it never fails an open or yields a partial analysis. The checksums establish consistency, not authorship.
+
+**Concurrency and size.** Several processes may open the same binary at once. The store uses SQLite's write-ahead
+log; a reader reads an entry in one statement, so it sees a committed entry whole or not at all, and writers
+serialize on SQLite's lock (waiting up to five seconds, then skipping the write). After each write the least
+recently used entries beyond the size bound are evicted; an entry larger than half the bound is not stored.
+Entries are delta-encoded varints, a few bytes per block and cross-reference.
 
 ## Authorization and data disclosure
 

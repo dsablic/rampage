@@ -51,6 +51,15 @@ VENDORED = [
         ],
     ),
     (
+        "SQLite",
+        "blessing",
+        "https://sqlite.org/copyright.html",
+        "The SQLite amalgamation bundled in the libsqlite3-sys crate is compiled into the binaries for the persistent\n"
+        "analysis store. SQLite is in the public domain: its authors have dedicated the code to the public domain and\n"
+        "disclaim copyright, so no license text applies.",
+        [],
+    ),
+    (
         "musl minimal C and Linux/POSIX type declarations",
         "MIT",
         "https://git.musl-libc.org/cgit/musl/tree/?h=v1.2.5",

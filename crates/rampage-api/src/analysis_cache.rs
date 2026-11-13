@@ -64,6 +64,9 @@ impl AnalysisStoreStatus {
     }
 }
 
+/// A stored payload and its SHA-256.
+type Row = (Vec<u8>, Vec<u8>);
+
 pub(crate) enum Lookup {
     Hit(Program),
     Absent,
@@ -127,7 +130,7 @@ impl AnalysisStore {
             Ok(metadata) if !metadata.is_file() => return Lookup::Rejected("store is not a regular file".into()),
             Ok(_) => {}
         }
-        let read = || -> rusqlite::Result<Result<Option<(Vec<u8>, Vec<u8>)>, String>> {
+        let read = || -> rusqlite::Result<Result<Option<Row>, String>> {
             let connection = self.connect(false)?;
             match check_schema(&connection)? {
                 Ok(()) => {}

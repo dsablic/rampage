@@ -30,6 +30,8 @@
     "entries[].value"
   ],
   "binary_info": [
+    "analysis_store",
+    "analysis_store.state",
     "arch",
     "entry",
     "exports",

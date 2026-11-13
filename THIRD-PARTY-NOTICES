@@ -296,6 +296,13 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR
 OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 DAMAGE.
 
+SQLite
+License: blessing
+Source: https://sqlite.org/copyright.html
+The SQLite amalgamation bundled in the libsqlite3-sys crate is compiled into the binaries for the persistent
+analysis store. SQLite is in the public domain: its authors have dedicated the code to the public domain and
+disclaim copyright, so no license text applies.
+
 musl minimal C and Linux/POSIX type declarations
 License: MIT
 Source: https://git.musl-libc.org/cgit/musl/tree/?h=v1.2.5
@@ -589,7 +596,7 @@ crates/rampage-api/resources/type-headers/DISCLAIMER.PD.mingw-w64
  */
 
 ==============================================================================
-PART 2. RUST CRATES (577)
+PART 2. RUST CRATES (580)
 ==============================================================================
 
 Format: name version | license | repository | license texts in part 3
@@ -753,308 +760,311 @@ event-listener 5.4.2 | Apache-2.0 OR MIT | https://github.com/smol-rs/event-list
 event-listener-strategy 0.5.4 | Apache-2.0 OR MIT | https://github.com/smol-rs/event-listener-strategy | #2, #6
 fallible-iterator 0.2.0 | MIT/Apache-2.0 | https://github.com/sfackler/rust-fallible-iterator | #15, #104
 fallible-iterator 0.3.0 | MIT/Apache-2.0 | https://github.com/sfackler/rust-fallible-iterator | #15, #104
+fallible-streaming-iterator 0.1.9 | MIT/Apache-2.0 | https://github.com/sfackler/fallible-streaming-iterator | #15, #105
 fastrand 2.5.0 | Apache-2.0 OR MIT | https://github.com/smol-rs/fastrand | #2, #6
-fax 0.2.7 | MIT | https://github.com/pdf-rs/fax | #105
+fax 0.2.7 | MIT | https://github.com/pdf-rs/fax | #106
 fdeflate 0.3.7 | MIT OR Apache-2.0 | https://github.com/image-rs/fdeflate | #1, #11
-fearless_simd 0.4.1 | Apache-2.0 OR MIT | https://github.com/linebender/fearless_simd | #1, #106
-ff 0.13.1 | MIT/Apache-2.0 | https://github.com/zkcrypto/ff | #2, #107
-flate2 1.1.10 | MIT OR Apache-2.0 | https://github.com/rust-lang/flate2-rs | #2, #108
-fnv 1.0.7 | Apache-2.0 / MIT | https://github.com/servo/rust-fnv | #2, #109
-foldhash 0.2.0 | Zlib | https://github.com/orlp/foldhash | #110
-font-types 0.12.6 | MIT OR Apache-2.0 | https://github.com/googlefonts/fontations | #111, #112
-foreign-types 0.5.0 | MIT/Apache-2.0 | https://github.com/sfackler/foreign-types | #15, #113
-foreign-types-shared 0.3.1 | MIT/Apache-2.0 | https://github.com/sfackler/foreign-types | #15, #113
-form_urlencoded 1.2.2 | MIT OR Apache-2.0 | https://github.com/servo/rust-url | #2, #114
-funty 2.0.0 | MIT | https://github.com/myrrlyn/funty | #115
-futures 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #116, #117
-futures-channel 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #116, #117
-futures-core 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #116, #117
-futures-executor 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #116, #117
-futures-io 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #116, #117
+fearless_simd 0.4.1 | Apache-2.0 OR MIT | https://github.com/linebender/fearless_simd | #1, #107
+ff 0.13.1 | MIT/Apache-2.0 | https://github.com/zkcrypto/ff | #2, #108
+flate2 1.1.10 | MIT OR Apache-2.0 | https://github.com/rust-lang/flate2-rs | #2, #109
+fnv 1.0.7 | Apache-2.0 / MIT | https://github.com/servo/rust-fnv | #2, #110
+foldhash 0.2.0 | Zlib | https://github.com/orlp/foldhash | #111
+font-types 0.12.6 | MIT OR Apache-2.0 | https://github.com/googlefonts/fontations | #112, #113
+foreign-types 0.5.0 | MIT/Apache-2.0 | https://github.com/sfackler/foreign-types | #15, #114
+foreign-types-shared 0.3.1 | MIT/Apache-2.0 | https://github.com/sfackler/foreign-types | #15, #114
+form_urlencoded 1.2.2 | MIT OR Apache-2.0 | https://github.com/servo/rust-url | #2, #115
+funty 2.0.0 | MIT | https://github.com/myrrlyn/funty | #116
+futures 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #117, #118
+futures-channel 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #117, #118
+futures-core 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #117, #118
+futures-executor 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #117, #118
+futures-io 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #117, #118
 futures-lite 2.6.1 | Apache-2.0 OR MIT | https://github.com/smol-rs/futures-lite | #2, #6, #28
-futures-sink 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #116, #117
-futures-task 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #116, #117
-futures-util 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #116, #117
-generic-array 0.14.9 | MIT | https://github.com/fizyk20/generic-array.git | #118
+futures-sink 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #117, #118
+futures-task 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #117, #118
+futures-util 0.3.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/futures-rs | #117, #118
+generic-array 0.14.9 | MIT | https://github.com/fizyk20/generic-array.git | #119
 gethostname 1.1.0 | Apache-2.0 | https://codeberg.org/swsnr/gethostname.rs.git | #2
-getrandom 0.2.17 | MIT OR Apache-2.0 | https://github.com/rust-random/getrandom | #119, #120
-getrandom 0.3.4 | MIT OR Apache-2.0 | https://github.com/rust-random/getrandom | #119, #121
-getrandom 0.4.3 | MIT OR Apache-2.0 | https://github.com/rust-random/getrandom | #119, #122
+getrandom 0.2.17 | MIT OR Apache-2.0 | https://github.com/rust-random/getrandom | #120, #121
+getrandom 0.3.4 | MIT OR Apache-2.0 | https://github.com/rust-random/getrandom | #120, #122
+getrandom 0.4.3 | MIT OR Apache-2.0 | https://github.com/rust-random/getrandom | #120, #123
 gimli 0.32.3 | MIT OR Apache-2.0 | https://github.com/gimli-rs/gimli | #2, #65
 gimli 0.33.0 | MIT OR Apache-2.0 | https://github.com/gimli-rs/gimli | #2, #65
 gimli 0.34.0 | MIT OR Apache-2.0 | https://github.com/gimli-rs/gimli | #2, #65
-glow 0.17.0 | MIT OR Apache-2.0 OR Zlib | https://github.com/grovesNL/glow | #2, #6, #123
-glutin_wgl_sys 0.6.1 | Apache-2.0 | https://github.com/rust-windowing/glutin | #124
-gpu-allocator 0.28.0 | MIT OR Apache-2.0 | https://github.com/Traverse-Research/gpu-allocator | #125, #126
+glow 0.17.0 | MIT OR Apache-2.0 OR Zlib | https://github.com/grovesNL/glow | #2, #6, #124
+glutin_wgl_sys 0.6.1 | Apache-2.0 | https://github.com/rust-windowing/glutin | #125
+gpu-allocator 0.28.0 | MIT OR Apache-2.0 | https://github.com/Traverse-Research/gpu-allocator | #126, #127
 group 0.13.0 | MIT/Apache-2.0 | https://github.com/zkcrypto/group | #2, #6
-guillotiere 0.7.0 | MIT/Apache-2.0 | https://github.com/nical/guillotiere | #127, #128
+guillotiere 0.7.0 | MIT/Apache-2.0 | https://github.com/nical/guillotiere | #128, #129
 half 2.7.1 | MIT OR Apache-2.0 | https://github.com/VoidStarKat/half-rs | #1, #11
-harfrust 0.12.0 | MIT | https://github.com/harfbuzz/harfrust | #129
-hashbrown 0.14.5 | MIT OR Apache-2.0 | https://github.com/rust-lang/hashbrown | #2, #130
-hashbrown 0.16.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/hashbrown | #2, #130
-hashbrown 0.17.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/hashbrown | #2, #130
+harfrust 0.12.0 | MIT | https://github.com/harfbuzz/harfrust | #130
+hashbrown 0.14.5 | MIT OR Apache-2.0 | https://github.com/rust-lang/hashbrown | #2, #131
+hashbrown 0.16.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/hashbrown | #2, #131
+hashbrown 0.17.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/hashbrown | #2, #131
 hermit-abi 0.5.3 | MIT OR Apache-2.0 | https://github.com/hermit-os/hermit-rs | #2, #6
-hex 0.4.3 | MIT OR Apache-2.0 | https://github.com/KokaKiwi/rust-hex | #15, #131
-hkdf 0.12.4 | MIT OR Apache-2.0 | https://github.com/RustCrypto/KDFs/ | #2, #132
+hex 0.4.3 | MIT OR Apache-2.0 | https://github.com/KokaKiwi/rust-hex | #15, #132
+hkdf 0.12.4 | MIT OR Apache-2.0 | https://github.com/RustCrypto/KDFs/ | #2, #133
 hmac 0.12.1 | MIT OR Apache-2.0 | https://github.com/RustCrypto/MACs | #2, #80
-hybrid-array 0.4.15 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hybrid-array | #2, #133
-iana-time-zone 0.1.65 | MIT OR Apache-2.0 | https://github.com/strawlab/iana-time-zone | #134, #135
-iana-time-zone-haiku 0.1.2 | MIT OR Apache-2.0 | https://github.com/strawlab/iana-time-zone | #134, #135
-iced-x86 1.21.0 | MIT | https://github.com/icedland/iced | #136
-icu_collections 2.3.0 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
-icu_locale_core 2.3.0 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
-icu_normalizer 2.3.0 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
-icu_normalizer_data 2.3.0 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
-icu_properties 2.3.0 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
-icu_properties_data 2.3.0 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
-icu_provider 2.3.1 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
+hybrid-array 0.4.15 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hybrid-array | #2, #134
+iana-time-zone 0.1.65 | MIT OR Apache-2.0 | https://github.com/strawlab/iana-time-zone | #135, #136
+iana-time-zone-haiku 0.1.2 | MIT OR Apache-2.0 | https://github.com/strawlab/iana-time-zone | #135, #136
+iced-x86 1.21.0 | MIT | https://github.com/icedland/iced | #137
+icu_collections 2.3.0 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
+icu_locale_core 2.3.0 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
+icu_normalizer 2.3.0 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
+icu_normalizer_data 2.3.0 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
+icu_properties 2.3.0 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
+icu_properties_data 2.3.0 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
+icu_provider 2.3.1 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
 id-arena 2.3.0 | MIT/Apache-2.0 | https://github.com/fitzgen/id-arena | #2, #55
-idna 1.1.0 | MIT OR Apache-2.0 | https://github.com/servo/rust-url/ | #2, #138
-idna_adapter 1.2.2 | Apache-2.0 OR MIT | https://github.com/hsivonen/idna_adapter | #2, #139
+idna 1.1.0 | MIT OR Apache-2.0 | https://github.com/servo/rust-url/ | #2, #139
+idna_adapter 1.2.2 | Apache-2.0 OR MIT | https://github.com/hsivonen/idna_adapter | #2, #140
 image 0.25.10 | MIT OR Apache-2.0 | https://github.com/image-rs/image | #1, #11
-indexmap 2.14.2 | Apache-2.0 OR MIT | https://github.com/indexmap-rs/indexmap | #2, #140
-intaglio 1.15.1 | Apache-2.0 OR MIT | https://github.com/artichoke/intaglio | #2, #141
+indexmap 2.14.2 | Apache-2.0 OR MIT | https://github.com/indexmap-rs/indexmap | #2, #141
+intaglio 1.15.1 | Apache-2.0 OR MIT | https://github.com/artichoke/intaglio | #2, #142
 inventory 0.3.25 | MIT OR Apache-2.0 | https://github.com/dtolnay/inventory | #1, #6
-ipnet 2.12.2 | MIT OR Apache-2.0 | https://github.com/krisprice/ipnet | #142, #143
+ipnet 2.12.2 | MIT OR Apache-2.0 | https://github.com/krisprice/ipnet | #143, #144
 is_terminal_polyfill 1.70.2 | MIT OR Apache-2.0 | https://github.com/polyfill-rs/is_terminal_polyfill | #15, #16
 itertools 0.14.0 | MIT OR Apache-2.0 | https://github.com/rust-itertools/itertools | #2, #90
 itertools 0.15.0 | MIT OR Apache-2.0 | https://github.com/rust-itertools/itertools | #2, #90
 itoa 1.0.18 | MIT OR Apache-2.0 | https://github.com/dtolnay/itoa | #1, #6
 jni 0.22.4 | MIT OR Apache-2.0 | https://github.com/jni-rs/jni-rs | #2, #3
-jni-sys 0.3.1 | MIT OR Apache-2.0 | https://github.com/jni-rs/jni-sys | #15, #144
-jni-sys 0.4.1 | MIT OR Apache-2.0 | https://github.com/jni-rs/jni-sys | #15, #144
+jni-sys 0.3.1 | MIT OR Apache-2.0 | https://github.com/jni-rs/jni-sys | #15, #145
+jni-sys 0.4.1 | MIT OR Apache-2.0 | https://github.com/jni-rs/jni-sys | #15, #145
 js-sys 0.3.106 | MIT OR Apache-2.0 | https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys | #2, #55
 khronos-egl 6.0.0 | MIT/Apache-2.0 | https://github.com/timothee-haudebourg/khronos-egl | #2, #6
-kurbo 0.13.1 | Apache-2.0 OR MIT | https://github.com/linebender/kurbo | #2, #106
+kurbo 0.13.1 | Apache-2.0 OR MIT | https://github.com/linebender/kurbo | #2, #107
 lazy_static 1.5.1 | MIT OR Apache-2.0 | https://github.com/rust-lang-nursery/lazy-static.rs | #2, #6
 leb128 0.2.7 | MIT OR Apache-2.0 | https://github.com/gimli-rs/leb128 | #2, #65
 leb128fmt 0.1.0 | MIT OR Apache-2.0 | https://github.com/bluk/leb128fmt | #2, #6
-libc 0.2.190 | MIT OR Apache-2.0 | https://github.com/rust-lang/libc | #1, #145
-libloading 0.8.9 | ISC | https://github.com/nagisa/rust_libloading/ | #146
-libm 0.2.16 | MIT | https://github.com/rust-lang/compiler-builtins | #147
-libredox 0.1.25 | MIT | https://gitlab.redox-os.org/redox-os/libredox.git | #148
+libc 0.2.190 | MIT OR Apache-2.0 | https://github.com/rust-lang/libc | #1, #146
+libloading 0.8.9 | ISC | https://github.com/nagisa/rust_libloading/ | #147
+libm 0.2.16 | MIT | https://github.com/rust-lang/compiler-builtins | #148
+libredox 0.1.25 | MIT | https://gitlab.redox-os.org/redox-os/libredox.git | #149
+libsqlite3-sys 0.40.0 | MIT | https://github.com/rusqlite/rusqlite | #150
 linebender_resource_handle 0.1.1 | Apache-2.0 OR MIT | https://github.com/linebender/raw_resource_handle | #1, #11
 linux-raw-sys 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | https://github.com/sunfishcode/linux-raw-sys | #2, #6, #67
 linux-raw-sys 0.4.15 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | https://github.com/sunfishcode/linux-raw-sys | #2, #6, #67
-litemap 0.8.3 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
-lock_api 0.4.14 | MIT OR Apache-2.0 | https://github.com/Amanieu/parking_lot | #2, #149
+litemap 0.8.3 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
+lock_api 0.4.14 | MIT OR Apache-2.0 | https://github.com/Amanieu/parking_lot | #2, #151
 log 0.4.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/log | #2, #37
-logos 0.16.1 | MIT OR Apache-2.0 | https://github.com/maciejhirsz/logos | #150, #151
-mach2 0.4.3 | BSD-2-Clause OR MIT OR Apache-2.0 | https://github.com/JohnTitor/mach2 | #1, #152, #153
-mach2 0.6.0 | BSD-2-Clause OR MIT OR Apache-2.0 | https://github.com/JohnTitor/mach2 | #1, #152, #153
-md-5 0.10.6 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #154
-md-5 0.11.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #155
-md2 0.10.2 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #156
+logos 0.16.1 | MIT OR Apache-2.0 | https://github.com/maciejhirsz/logos | #152, #153
+mach2 0.4.3 | BSD-2-Clause OR MIT OR Apache-2.0 | https://github.com/JohnTitor/mach2 | #1, #154, #155
+mach2 0.6.0 | BSD-2-Clause OR MIT OR Apache-2.0 | https://github.com/JohnTitor/mach2 | #1, #154, #155
+md-5 0.10.6 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #156
+md-5 0.11.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #157
+md2 0.10.2 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #158
 memchr 2.8.3 | Unlicense OR MIT | https://github.com/BurntSushi/memchr | #7, #8, #9
-memfd 0.6.6 | MIT OR Apache-2.0 | https://github.com/lucab/memfd-rs | #2, #157
-memmap2 0.9.11 | MIT OR Apache-2.0 | https://github.com/RazrFalcon/memmap2-rs | #158, #159
-memoffset 0.9.1 | MIT | https://github.com/Gilnaa/memoffset | #160
-mime 0.3.17 | MIT OR Apache-2.0 | https://github.com/hyperium/mime | #2, #161
-mime_guess2 2.3.1 | MIT | https://github.com/ttys3/mime_guess2 | #162
-minimal-lexical 0.2.1 | MIT/Apache-2.0 | https://github.com/Alexhuszagh/minimal-lexical | #2, #6, #163
-miniz_oxide 0.8.9 | MIT OR Zlib OR Apache-2.0 | https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide | #1, #164, #164, #165
-miniz_oxide 0.9.1 | MIT OR Zlib OR Apache-2.0 | https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide | #1, #164, #164, #165
-moxcms 0.8.1 | BSD-3-Clause OR Apache-2.0 | https://github.com/awxkee/moxcms.git | #166, #167
-msvc-demangler 0.11.0 | MIT/NCSA | https://github.com/mstange/msvc-demangler-rust | #168, #169
-naga 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #170
-naga-types 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #170
+memfd 0.6.6 | MIT OR Apache-2.0 | https://github.com/lucab/memfd-rs | #2, #159
+memmap2 0.9.11 | MIT OR Apache-2.0 | https://github.com/RazrFalcon/memmap2-rs | #160, #161
+memoffset 0.9.1 | MIT | https://github.com/Gilnaa/memoffset | #162
+mime 0.3.17 | MIT OR Apache-2.0 | https://github.com/hyperium/mime | #2, #163
+mime_guess2 2.3.1 | MIT | https://github.com/ttys3/mime_guess2 | #164
+minimal-lexical 0.2.1 | MIT/Apache-2.0 | https://github.com/Alexhuszagh/minimal-lexical | #2, #6, #165
+miniz_oxide 0.8.9 | MIT OR Zlib OR Apache-2.0 | https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide | #1, #166, #166, #167
+miniz_oxide 0.9.1 | MIT OR Zlib OR Apache-2.0 | https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide | #1, #166, #166, #167
+moxcms 0.8.1 | BSD-3-Clause OR Apache-2.0 | https://github.com/awxkee/moxcms.git | #168, #169
+msvc-demangler 0.11.0 | MIT/NCSA | https://github.com/mstange/msvc-demangler-rust | #170, #171
+naga 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #172
+naga-types 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #172
 ndk 0.9.0 | MIT OR Apache-2.0 | https://github.com/rust-mobile/ndk | #2, #3
 ndk-context 0.1.1 | MIT OR Apache-2.0 | https://github.com/rust-windowing/android-ndk-rs | #2, #3
 ndk-sys 0.6.0+11769913 | MIT OR Apache-2.0 | https://github.com/rust-mobile/ndk | #2, #3
-nohash-hasher 0.2.0 | Apache-2.0 OR MIT | https://github.com/paritytech/nohash-hasher | #2, #171
-nom 7.1.3 | MIT | https://github.com/Geal/nom | #172
-nom 8.0.0 | MIT | https://github.com/rust-bakery/nom | #172
+nohash-hasher 0.2.0 | Apache-2.0 OR MIT | https://github.com/paritytech/nohash-hasher | #2, #173
+nom 7.1.3 | MIT | https://github.com/Geal/nom | #174
+nom 8.0.0 | MIT | https://github.com/rust-bakery/nom | #174
 num-bigint 0.4.8 | MIT OR Apache-2.0 | https://github.com/rust-num/num-bigint | #2, #37
 num-bigint-dig 0.8.6 | MIT/Apache-2.0 | https://github.com/dignifiedquire/num-bigint | #2, #37
-num-conv 0.2.2 | MIT OR Apache-2.0 | https://github.com/jhpratt/num-conv | #1, #173
+num-conv 0.2.2 | MIT OR Apache-2.0 | https://github.com/jhpratt/num-conv | #1, #175
 num-integer 0.1.47 | MIT OR Apache-2.0 | https://github.com/rust-num/num-integer | #2, #37
 num-iter 0.1.46 | MIT OR Apache-2.0 | https://github.com/rust-num/num-iter | #2, #37
 num-traits 0.2.19 | MIT OR Apache-2.0 | https://github.com/rust-num/num-traits | #2, #37
-num_enum 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 | https://github.com/illicitonion/num_enum | #1, #6, #174
+num_enum 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 | https://github.com/illicitonion/num_enum | #1, #6, #176
 objc-sys 0.3.5 | MIT | https://github.com/madsmtm/objc2 | #42
 objc2 0.5.3 | MIT | https://github.com/madsmtm/objc2 | #41
 objc2 0.6.5 | MIT | https://github.com/madsmtm/objc2 | #42
-objc2-app-kit 0.2.2 | MIT | https://github.com/madsmtm/objc2 | #175
+objc2-app-kit 0.2.2 | MIT | https://github.com/madsmtm/objc2 | #177
 objc2-app-kit 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 | #2, #46, #47
 objc2-core-foundation 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 | #2, #46, #47
 objc2-core-graphics 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 | #2, #46, #47
 objc2-encode 4.1.0 | MIT | https://github.com/madsmtm/objc2 | #42
-objc2-foundation 0.2.2 | MIT | https://github.com/madsmtm/objc2 | #176
-objc2-foundation 0.3.2 | MIT | https://github.com/madsmtm/objc2 | #176
+objc2-foundation 0.2.2 | MIT | https://github.com/madsmtm/objc2 | #178
+objc2-foundation 0.3.2 | MIT | https://github.com/madsmtm/objc2 | #178
 objc2-metal 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 | #2, #46, #47
 objc2-quartz-core 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 | #2, #46, #47
-objc2-ui-kit 0.2.2 | MIT | https://github.com/madsmtm/objc2 | #177
+objc2-ui-kit 0.2.2 | MIT | https://github.com/madsmtm/objc2 | #179
 objc2-ui-kit 0.3.2 | Zlib OR Apache-2.0 OR MIT | https://github.com/madsmtm/objc2 | #2, #46, #47
-object 0.39.1 | Apache-2.0 OR MIT | https://github.com/gimli-rs/object | #2, #178
-object 0.40.0 | Apache-2.0 OR MIT | https://github.com/gimli-rs/object | #2, #178
+object 0.39.1 | Apache-2.0 OR MIT | https://github.com/gimli-rs/object | #2, #180
+object 0.40.0 | Apache-2.0 OR MIT | https://github.com/gimli-rs/object | #2, #180
 oid-registry 0.8.1 | MIT OR Apache-2.0 | https://github.com/rusticata/oid-registry.git | #2, #25
 once_cell 1.21.4 | MIT OR Apache-2.0 | https://github.com/matklad/once_cell | #2, #6
 once_cell_polyfill 1.70.2 | MIT OR Apache-2.0 | https://github.com/polyfill-rs/once_cell_polyfill | #15, #16
-orbclient 0.3.55 | MIT | https://gitlab.redox-os.org/redox-os/orbclient | #179
-ordered-float 5.5.0 | MIT | https://github.com/reem/rust-ordered-float | #180
+orbclient 0.3.55 | MIT | https://gitlab.redox-os.org/redox-os/orbclient | #181
+ordered-float 5.5.0 | MIT | https://github.com/reem/rust-ordered-float | #182
 ordered-stream 0.2.0 | MIT OR Apache-2.0 | https://github.com/danieldg/ordered-stream | #2, #6
 owned_ttf_parser 0.25.1 | Apache-2.0 | https://github.com/alexheretic/owned-ttf-parser | #1
-p256 0.13.2 | Apache-2.0 OR MIT | https://github.com/RustCrypto/elliptic-curves/tree/master/p256 | #2, #181
-p384 0.13.1 | Apache-2.0 OR MIT | https://github.com/RustCrypto/elliptic-curves/tree/master/p384 | #2, #182
-parking 2.2.1 | Apache-2.0 OR MIT | https://github.com/smol-rs/parking | #2, #6, #183
-parking_lot 0.12.5 | MIT OR Apache-2.0 | https://github.com/Amanieu/parking_lot | #2, #149
-parking_lot_core 0.9.12 | MIT OR Apache-2.0 | https://github.com/Amanieu/parking_lot | #2, #149
-pdb 0.8.0 | MIT OR Apache-2.0 | https://github.com/willglynn/pdb | #2, #184
+p256 0.13.2 | Apache-2.0 OR MIT | https://github.com/RustCrypto/elliptic-curves/tree/master/p256 | #2, #183
+p384 0.13.1 | Apache-2.0 OR MIT | https://github.com/RustCrypto/elliptic-curves/tree/master/p384 | #2, #184
+parking 2.2.1 | Apache-2.0 OR MIT | https://github.com/smol-rs/parking | #2, #6, #185
+parking_lot 0.12.5 | MIT OR Apache-2.0 | https://github.com/Amanieu/parking_lot | #2, #151
+parking_lot_core 0.9.12 | MIT OR Apache-2.0 | https://github.com/Amanieu/parking_lot | #2, #151
+pdb 0.8.0 | MIT OR Apache-2.0 | https://github.com/willglynn/pdb | #2, #186
 pem-rfc7468 0.7.0 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/pem-rfc7468 | #2, #71
-peniko 0.6.1 | Apache-2.0 OR MIT | https://github.com/linebender/peniko | #2, #106
-percent-encoding 2.3.2 | MIT OR Apache-2.0 | https://github.com/servo/rust-url/ | #2, #138
-phf 0.13.1 | MIT | https://github.com/rust-phf/rust-phf | #185
-phf_shared 0.13.1 | MIT | https://github.com/rust-phf/rust-phf | #185
+peniko 0.6.1 | Apache-2.0 OR MIT | https://github.com/linebender/peniko | #2, #107
+percent-encoding 2.3.2 | MIT OR Apache-2.0 | https://github.com/servo/rust-url/ | #2, #139
+phf 0.13.1 | MIT | https://github.com/rust-phf/rust-phf | #187
+phf_shared 0.13.1 | MIT | https://github.com/rust-phf/rust-phf | #187
 pin-project 1.1.13 | Apache-2.0 OR MIT | https://github.com/taiki-e/pin-project | #1, #6
 pin-project-lite 0.2.17 | Apache-2.0 OR MIT | https://github.com/taiki-e/pin-project-lite | #1, #6
 piper 0.2.5 | MIT OR Apache-2.0 | https://github.com/smol-rs/piper | #2, #6
-pkcs1 0.7.5 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/pkcs1 | #2, #186
+pkcs1 0.7.5 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/pkcs1 | #2, #188
 pkcs8 0.10.2 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/pkcs8 | #2, #77
-plain 0.2.3 | MIT/Apache-2.0 | https://github.com/randomites/plain | #2, #187
-plist 1.10.1 | MIT | https://github.com/ebarnard/rust-plist/ | #188
-png 0.18.1 | MIT OR Apache-2.0 | https://github.com/image-rs/image-png | #2, #189
+plain 0.2.3 | MIT/Apache-2.0 | https://github.com/randomites/plain | #2, #189
+plist 1.10.1 | MIT | https://github.com/ebarnard/rust-plist/ | #190
+png 0.18.1 | MIT OR Apache-2.0 | https://github.com/image-rs/image-png | #2, #191
 polling 3.11.0 | Apache-2.0 OR MIT | https://github.com/smol-rs/polling | #2, #6
-pollster 1.0.1 | Apache-2.0/MIT | https://github.com/zesterer/pollster | #2, #190
-polycool 0.4.0 | MIT OR Apache-2.0 | https://github.com/linebender/kurbo | #2, #106
+pollster 1.0.1 | Apache-2.0/MIT | https://github.com/zesterer/pollster | #2, #192
+polycool 0.4.0 | MIT OR Apache-2.0 | https://github.com/linebender/kurbo | #2, #107
 portable-atomic 1.15.0 | Apache-2.0 OR MIT | https://github.com/taiki-e/portable-atomic | #1, #6
 portable-atomic-util 0.2.8 | Apache-2.0 OR MIT | https://github.com/taiki-e/portable-atomic-util | #1, #6
-postcard 1.1.3 | MIT OR Apache-2.0 | https://github.com/jamesmunns/postcard | #2, #191
-potential_utf 0.1.6 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
-powerfmt 0.2.1 | MIT OR Apache-2.0 | https://github.com/jhpratt/powerfmt | #192, #193
-ppv-lite86 0.2.21 | MIT OR Apache-2.0 | https://github.com/cryptocorrosion/cryptocorrosion | #194, #195
-presser 0.3.1 | MIT OR Apache-2.0 | https://github.com/EmbarkStudios/presser | #2, #196
-primeorder 0.13.6 | Apache-2.0 OR MIT | https://github.com/RustCrypto/elliptic-curves/tree/master/primeorder | #2, #181
+postcard 1.1.3 | MIT OR Apache-2.0 | https://github.com/jamesmunns/postcard | #2, #193
+potential_utf 0.1.6 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
+powerfmt 0.2.1 | MIT OR Apache-2.0 | https://github.com/jhpratt/powerfmt | #194, #195
+ppv-lite86 0.2.21 | MIT OR Apache-2.0 | https://github.com/cryptocorrosion/cryptocorrosion | #196, #197
+presser 0.3.1 | MIT OR Apache-2.0 | https://github.com/EmbarkStudios/presser | #2, #198
+primeorder 0.13.6 | Apache-2.0 OR MIT | https://github.com/RustCrypto/elliptic-curves/tree/master/primeorder | #2, #183
 proc-macro2 1.0.107 | MIT OR Apache-2.0 | https://github.com/dtolnay/proc-macro2 | #1, #6
 profiling 1.0.18 | MIT OR Apache-2.0 | https://github.com/aclysma/profiling | #2, #3
-protobuf 3.7.2 | MIT | https://github.com/stepancheg/rust-protobuf/ | #197
-protobuf-support 3.7.2 | MIT | https://github.com/stepancheg/rust-protobuf/ | #197
-psl 2.1.241 | MIT/Apache-2.0 | https://github.com/addr-rs/psl | #198
-psl-types 2.0.11 | MIT/Apache-2.0 | https://github.com/addr-rs/psl-types | #2, #199
+protobuf 3.7.2 | MIT | https://github.com/stepancheg/rust-protobuf/ | #199
+protobuf-support 3.7.2 | MIT | https://github.com/stepancheg/rust-protobuf/ | #199
+psl 2.1.241 | MIT/Apache-2.0 | https://github.com/addr-rs/psl | #200
+psl-types 2.0.11 | MIT/Apache-2.0 | https://github.com/addr-rs/psl-types | #2, #201
 pulley-interpreter 45.0.3 | Apache-2.0 WITH LLVM-exception | https://github.com/bytecodealliance/wasmtime/tree/main/pulley | #67
 pulley-interpreter 49.0.3 | Apache-2.0 WITH LLVM-exception | https://github.com/bytecodealliance/wasmtime/tree/main/pulley | #67
-pxfm 0.1.30 | BSD-3-Clause OR Apache-2.0 | https://github.com/awxkee/pxfm | #166, #167
-quick-error 2.0.1 | MIT/Apache-2.0 | http://github.com/tailhook/quick-error | #15, #200
-quick-xml 0.42.0 | MIT | https://github.com/tafia/quick-xml | #201
+pxfm 0.1.30 | BSD-3-Clause OR Apache-2.0 | https://github.com/awxkee/pxfm | #168, #169
+quick-error 2.0.1 | MIT/Apache-2.0 | http://github.com/tailhook/quick-error | #15, #202
+quick-xml 0.42.0 | MIT | https://github.com/tafia/quick-xml | #203
 quote 1.0.47 | MIT OR Apache-2.0 | https://github.com/dtolnay/quote | #1, #6
 r-efi 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | https://github.com/r-efi/r-efi | #2
 r-efi 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later | https://github.com/r-efi/r-efi | #2
-radium 0.7.0 | MIT | https://github.com/bitvecto-rs/radium | #202
-rand 0.8.8 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | #203, #204
-rand_chacha 0.3.1 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | #119, #204
-rand_core 0.6.4 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | #204, #205
-range-alloc 0.1.5 | MIT OR Apache-2.0 | https://github.com/gfx-rs/range-alloc | #1, #206
-raw-window-handle 0.6.2 | MIT OR Apache-2.0 OR Zlib | https://github.com/rust-windowing/raw-window-handle | #1, #207, #208
+radium 0.7.0 | MIT | https://github.com/bitvecto-rs/radium | #204
+rand 0.8.8 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | #205, #206
+rand_chacha 0.3.1 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | #120, #206
+rand_core 0.6.4 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | #206, #207
+range-alloc 0.1.5 | MIT OR Apache-2.0 | https://github.com/gfx-rs/range-alloc | #1, #208
+raw-window-handle 0.6.2 | MIT OR Apache-2.0 OR Zlib | https://github.com/rust-windowing/raw-window-handle | #1, #209, #210
 raw-window-metal 1.1.0 | MIT OR Apache-2.0 | https://github.com/rust-windowing/raw-window-metal | #2, #6
-rayon 1.12.0 | MIT OR Apache-2.0 | https://github.com/rayon-rs/rayon | #2, #209
-rayon-core 1.13.0 | MIT OR Apache-2.0 | https://github.com/rayon-rs/rayon | #2, #209
-read-fonts 0.41.0 | MIT OR Apache-2.0 | https://github.com/googlefonts/fontations | #111, #112
-redox_syscall 0.4.1 | MIT | https://gitlab.redox-os.org/redox-os/syscall | #210
-redox_syscall 0.5.18 | MIT | https://gitlab.redox-os.org/redox-os/syscall | #210
-redox_syscall 0.9.4 | MIT | https://gitlab.redox-os.org/redox-os/kernel | #210
+rayon 1.12.0 | MIT OR Apache-2.0 | https://github.com/rayon-rs/rayon | #2, #211
+rayon-core 1.13.0 | MIT OR Apache-2.0 | https://github.com/rayon-rs/rayon | #2, #211
+read-fonts 0.41.0 | MIT OR Apache-2.0 | https://github.com/googlefonts/fontations | #112, #113
+redox_syscall 0.4.1 | MIT | https://gitlab.redox-os.org/redox-os/syscall | #212
+redox_syscall 0.5.18 | MIT | https://gitlab.redox-os.org/redox-os/syscall | #212
+redox_syscall 0.9.4 | MIT | https://gitlab.redox-os.org/redox-os/kernel | #212
 ref-cast 1.0.27 | MIT OR Apache-2.0 | https://github.com/dtolnay/ref-cast | #1, #6
 regalloc2 0.15.2 | Apache-2.0 WITH LLVM-exception | https://github.com/bytecodealliance/regalloc2 | #67
 regex 1.13.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/regex | #2, #37
 regex-automata 0.4.18 | MIT OR Apache-2.0 | https://github.com/rust-lang/regex | #2, #37
 regex-syntax 0.8.11 | MIT OR Apache-2.0 | https://github.com/rust-lang/regex | #2, #37
-renderdoc-sys 1.1.0 | MIT OR Apache-2.0 | https://github.com/ebkalderon/renderdoc-rs | #2, #211
+renderdoc-sys 1.1.0 | MIT OR Apache-2.0 | https://github.com/ebkalderon/renderdoc-rs | #2, #213
 rfc6979 0.4.0 | Apache-2.0 OR MIT | https://github.com/RustCrypto/signatures/tree/master/rfc6979 | #86, #88
-ring 0.17.14 | Apache-2.0 AND ISC | https://github.com/briansmith/ring | #212, #213, #214
+ring 0.17.14 | Apache-2.0 AND ISC | https://github.com/briansmith/ring | #214, #215, #216
 rmcp 3.5.1 | Apache-2.0 | https://github.com/modelcontextprotocol/rust-sdk/ | #1
 rowan 0.17.0 | MIT OR Apache-2.0 | https://github.com/rust-analyzer/rowan | #2, #6
-roxmltree 0.21.1 | MIT OR Apache-2.0 | https://github.com/RazrFalcon/roxmltree | #2, #215
+roxmltree 0.21.1 | MIT OR Apache-2.0 | https://github.com/RazrFalcon/roxmltree | #2, #217
 rsa 0.9.10 | MIT OR Apache-2.0 | https://github.com/RustCrypto/RSA | #2, #6
+rusqlite 0.42.0 | MIT | https://github.com/rusqlite/rusqlite | #150
 rustc-demangle 0.1.28 | MIT/Apache-2.0 | https://github.com/rust-lang/rustc-demangle | #2, #55
 rustc-hash 1.1.0 | Apache-2.0/MIT | https://github.com/rust-lang-nursery/rustc-hash | #2, #6
 rustc-hash 2.1.3 | Apache-2.0 OR MIT | https://github.com/rust-lang/rustc-hash | #1, #6
 rusticata-macros 4.1.0 | MIT/Apache-2.0 | https://github.com/rusticata/rusticata-macros.git | #2, #25
 rustix 0.38.44 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | https://github.com/bytecodealliance/rustix | #2, #6, #67
 rustix 1.1.5 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | https://github.com/bytecodealliance/rustix | #2, #6, #67
-rustls 0.23.45 | Apache-2.0 OR ISC OR MIT | https://github.com/rustls/rustls | #2, #216, #217
-rustls-pki-types 1.15.1 | MIT OR Apache-2.0 | https://github.com/rustls/pki-types | #218, #219
-rustls-webpki 0.103.15 | ISC | https://github.com/rustls/webpki | #220
+rustls 0.23.45 | Apache-2.0 OR ISC OR MIT | https://github.com/rustls/rustls | #2, #218, #219
+rustls-pki-types 1.15.1 | MIT OR Apache-2.0 | https://github.com/rustls/pki-types | #220, #221
+rustls-webpki 0.103.15 | ISC | https://github.com/rustls/webpki | #222
 ryu 1.0.23 | Apache-2.0 OR BSL-1.0 | https://github.com/dtolnay/ryu | #1, #58
-schemars 1.2.2 | MIT | https://github.com/GREsau/schemars | #221
+schemars 1.2.2 | MIT | https://github.com/GREsau/schemars | #223
 scoped-tls 1.0.1 | MIT/Apache-2.0 | https://github.com/alexcrichton/scoped-tls | #2, #55
-scopeguard 1.2.0 | MIT OR Apache-2.0 | https://github.com/bluss/scopeguard | #2, #222
-scroll 0.11.0 | MIT | https://github.com/m4b/scroll | #223
-sctk-adwaita 0.10.1 | MIT | https://github.com/PolyMeilex/sctk-adwaita | #224
-sec1 0.7.3 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/sec1 | #2, #225
-self_cell 1.3.0 | Apache-2.0 OR GPL-2.0-only | https://github.com/Voultapher/self_cell | #2, #226
+scopeguard 1.2.0 | MIT OR Apache-2.0 | https://github.com/bluss/scopeguard | #2, #224
+scroll 0.11.0 | MIT | https://github.com/m4b/scroll | #225
+sctk-adwaita 0.10.1 | MIT | https://github.com/PolyMeilex/sctk-adwaita | #226
+sec1 0.7.3 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/sec1 | #2, #227
+self_cell 1.3.0 | Apache-2.0 OR GPL-2.0-only | https://github.com/Voultapher/self_cell | #2, #228
 semver 1.0.28 | MIT OR Apache-2.0 | https://github.com/dtolnay/semver | #1, #6
 serde 1.0.229 | MIT OR Apache-2.0 | https://github.com/serde-rs/serde | #1, #6
 serde_core 1.0.229 | MIT OR Apache-2.0 | https://github.com/serde-rs/serde | #1, #6
 serde_json 1.0.151 | MIT OR Apache-2.0 | https://github.com/serde-rs/json | #1, #6
 serde_spanned 1.1.2 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | #16, #57
-serde_yaml_ng 0.10.0 | MIT | https://github.com/acatton/serde-yaml-ng | #227
-sha1 0.10.7 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #154
-sha1 0.11.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #155
-sha2 0.10.9 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #154
-sha2 0.11.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #155
-signal-hook-registry 1.4.8 | MIT OR Apache-2.0 | https://github.com/vorner/signal-hook | #2, #228
+serde_yaml_ng 0.10.0 | MIT | https://github.com/acatton/serde-yaml-ng | #229
+sha1 0.10.7 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #156
+sha1 0.11.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #157
+sha2 0.10.9 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #156
+sha2 0.11.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | #2, #157
+signal-hook-registry 1.4.8 | MIT OR Apache-2.0 | https://github.com/vorner/signal-hook | #2, #230
 signature 2.2.0 | Apache-2.0 OR MIT | https://github.com/RustCrypto/traits/tree/master/signature | #2, #87
-simd-adler32 0.3.10 | MIT | https://github.com/mcountryman/simd-adler32 | #229
+simd-adler32 0.3.10 | MIT | https://github.com/mcountryman/simd-adler32 | #231
 simd_cesu8 1.2.0 | Apache-2.0 OR MIT | https://github.com/seancroach/simd_cesu8 | #2, #6
 simdutf8 0.1.5 | MIT OR Apache-2.0 | https://github.com/rusticstuff/simdutf8 | #1, #11
-siphasher 1.0.4 | MIT OR Apache-2.0 | https://github.com/jedisct1/rust-siphash | #2, #6, #230
-skrifa 0.44.0 | MIT OR Apache-2.0 | https://github.com/googlefonts/fontations | #111, #112
-slab 0.4.12 | MIT | https://github.com/tokio-rs/slab | #231
-slotmap 1.1.1 | Zlib | https://github.com/orlp/slotmap | #232
-smallvec 1.16.3 | MIT OR Apache-2.0 | https://github.com/servo/rust-smallvec | #2, #233
+siphasher 1.0.4 | MIT OR Apache-2.0 | https://github.com/jedisct1/rust-siphash | #2, #6, #232
+skrifa 0.44.0 | MIT OR Apache-2.0 | https://github.com/googlefonts/fontations | #112, #113
+slab 0.4.12 | MIT | https://github.com/tokio-rs/slab | #233
+slotmap 1.1.1 | Zlib | https://github.com/orlp/slotmap | #234
+smallvec 1.16.3 | MIT OR Apache-2.0 | https://github.com/servo/rust-smallvec | #2, #235
 smithay-client-toolkit 0.19.2 | MIT | https://github.com/smithay/client-toolkit | #49
 smithay-client-toolkit 0.20.0 | MIT | https://github.com/smithay/client-toolkit | #49
-smithay-clipboard 0.7.3 | MIT | https://github.com/smithay/smithay-clipboard | #234
+smithay-clipboard 0.7.3 | MIT | https://github.com/smithay/smithay-clipboard | #236
 smol_str 0.2.2 | MIT OR Apache-2.0 | https://github.com/rust-analyzer/smol_str | #2, #6
-spin 0.9.9 | MIT | https://github.com/mvdnes/spin-rs.git | #235
+spin 0.9.9 | MIT | https://github.com/mvdnes/spin-rs.git | #237
 spirv 0.4.0+sdk-1.4.341.0 | Apache-2.0 | https://github.com/gfx-rs/rspirv | #1
-spki 0.7.3 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/spki | #2, #186
-stable_deref_trait 1.2.1 | MIT OR Apache-2.0 | https://github.com/storyyeller/stable_deref_trait | #2, #236
-static_assertions 1.1.0 | MIT OR Apache-2.0 | https://github.com/nvzqz/static-assertions-rs | #2, #237
-strict-num 0.1.1 | MIT | https://github.com/RazrFalcon/strict-num | #238
-strsim 0.11.1 | MIT | https://github.com/rapidfuzz/strsim-rs | #239
-subtle 2.6.1 | BSD-3-Clause | https://github.com/dalek-cryptography/subtle | #240
+spki 0.7.3 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/spki | #2, #188
+stable_deref_trait 1.2.1 | MIT OR Apache-2.0 | https://github.com/storyyeller/stable_deref_trait | #2, #238
+static_assertions 1.1.0 | MIT OR Apache-2.0 | https://github.com/nvzqz/static-assertions-rs | #2, #239
+strict-num 0.1.1 | MIT | https://github.com/RazrFalcon/strict-num | #240
+strsim 0.11.1 | MIT | https://github.com/rapidfuzz/strsim-rs | #241
+subtle 2.6.1 | BSD-3-Clause | https://github.com/dalek-cryptography/subtle | #242
 syn 3.0.7 | MIT OR Apache-2.0 | https://github.com/dtolnay/syn | #1, #6
-tap 1.0.1 | MIT | https://github.com/myrrlyn/tap | #241
+tap 1.0.1 | MIT | https://github.com/myrrlyn/tap | #243
 target-lexicon 0.13.5 | Apache-2.0 WITH LLVM-exception | https://github.com/bytecodealliance/target-lexicon | #67
-tempfile 3.27.0 | MIT OR Apache-2.0 | https://github.com/Stebalien/tempfile | #2, #242
+tempfile 3.27.0 | MIT OR Apache-2.0 | https://github.com/Stebalien/tempfile | #2, #244
 termcolor 1.4.1 | Unlicense OR MIT | https://github.com/BurntSushi/termcolor | #7, #8, #9
 text-size 1.1.1 | MIT OR Apache-2.0 | https://github.com/rust-analyzer/text-size | #2, #6
 thiserror 1.0.69 | MIT OR Apache-2.0 | https://github.com/dtolnay/thiserror | #1, #6
 thiserror 2.0.21 | MIT OR Apache-2.0 | https://github.com/dtolnay/thiserror | #1, #6
-tiff 0.11.3 | MIT | https://github.com/image-rs/image-tiff | #243
-time 0.3.55 | MIT OR Apache-2.0 | https://github.com/time-rs/time | #1, #244
-time-core 0.1.9 | MIT OR Apache-2.0 | https://github.com/time-rs/time | #1, #244
-tiny-skia 0.11.4 | BSD-3-Clause | https://github.com/RazrFalcon/tiny-skia | #245
-tiny-skia-path 0.11.4 | BSD-3-Clause | https://github.com/RazrFalcon/tiny-skia/tree/master/path | #245
-tinystr 0.8.4 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
-tinyzip 0.4.0 | MIT | https://github.com/lovasoa/tinyzip | #246
-tokio 1.53.2 | MIT | https://github.com/tokio-rs/tokio | #247
-tokio-util 0.7.20 | MIT | https://github.com/tokio-rs/tokio | #247
+tiff 0.11.3 | MIT | https://github.com/image-rs/image-tiff | #245
+time 0.3.55 | MIT OR Apache-2.0 | https://github.com/time-rs/time | #1, #246
+time-core 0.1.9 | MIT OR Apache-2.0 | https://github.com/time-rs/time | #1, #246
+tiny-skia 0.11.4 | BSD-3-Clause | https://github.com/RazrFalcon/tiny-skia | #247
+tiny-skia-path 0.11.4 | BSD-3-Clause | https://github.com/RazrFalcon/tiny-skia/tree/master/path | #247
+tinystr 0.8.4 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
+tinyzip 0.4.0 | MIT | https://github.com/lovasoa/tinyzip | #248
+tokio 1.53.2 | MIT | https://github.com/tokio-rs/tokio | #249
+tokio-util 0.7.20 | MIT | https://github.com/tokio-rs/tokio | #249
 toml 1.1.8+spec-1.1.0 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | #16, #57
 toml_datetime 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | #16, #57
 toml_parser 1.1.5+spec-1.1.0 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | #16, #57
-tracing 0.1.44 | MIT | https://github.com/tokio-rs/tracing | #248
-tracing-core 0.1.36 | MIT | https://github.com/tokio-rs/tracing | #248
-ttf-parser 0.25.1 | MIT OR Apache-2.0 | https://github.com/harfbuzz/ttf-parser | #2, #249
-type-map 0.5.1 | MIT/Apache-2.0 | https://github.com/kardeiz/type-map | #250, #251
+tracing 0.1.44 | MIT | https://github.com/tokio-rs/tracing | #250
+tracing-core 0.1.36 | MIT | https://github.com/tokio-rs/tracing | #250
+ttf-parser 0.25.1 | MIT OR Apache-2.0 | https://github.com/harfbuzz/ttf-parser | #2, #251
+type-map 0.5.1 | MIT/Apache-2.0 | https://github.com/kardeiz/type-map | #252, #253
 typed-path 0.12.3 | MIT OR Apache-2.0 | https://github.com/chipsenkbeil/typed-path | #1, #6
-typenum 1.20.1 | MIT OR Apache-2.0 | https://github.com/paholg/typenum | #252, #253, #254
-uds_windows 1.2.1 | MIT | https://github.com/haraldh/rust_uds_windows | #255
-unicase 2.10.0 | MIT OR Apache-2.0 | https://github.com/seanmonstar/unicase | #2, #256
+typenum 1.20.1 | MIT OR Apache-2.0 | https://github.com/paholg/typenum | #254, #255, #256
+uds_windows 1.2.1 | MIT | https://github.com/haraldh/rust_uds_windows | #257
+unicase 2.10.0 | MIT OR Apache-2.0 | https://github.com/seanmonstar/unicase | #2, #258
 unicode-general-category 1.1.0 | Apache-2.0 | https://github.com/yeslogic/unicode-general-category | #15
-unicode-ident 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/dtolnay/unicode-ident | #1, #6, #257
+unicode-ident 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/dtolnay/unicode-ident | #1, #6, #259
 unicode-segmentation 1.13.3 | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-segmentation | #2, #65
 unicode-width 0.2.2 | MIT OR Apache-2.0 | https://github.com/unicode-rs/unicode-width | #2, #65
 unsafe-libyaml 0.2.11 | MIT | https://github.com/dtolnay/unsafe-libyaml | #6
-untrusted 0.9.0 | ISC | https://github.com/briansmith/untrusted | #258
-unty 0.0.4 | MIT OR Apache-2.0 | https://github.com/bincode-org/unty | #259, #260
-ureq 2.12.1 | MIT OR Apache-2.0 | https://github.com/algesten/ureq | #2, #261
-url 2.5.8 | MIT OR Apache-2.0 | https://github.com/servo/rust-url | #2, #138
+untrusted 0.9.0 | ISC | https://github.com/briansmith/untrusted | #260
+unty 0.0.4 | MIT OR Apache-2.0 | https://github.com/bincode-org/unty | #261, #262
+ureq 2.12.1 | MIT OR Apache-2.0 | https://github.com/algesten/ureq | #2, #263
+url 2.5.8 | MIT OR Apache-2.0 | https://github.com/servo/rust-url | #2, #139
 utf8_iter 1.0.4 | Apache-2.0 OR MIT | https://github.com/hsivonen/utf8_iter | #2, #92
-utf8parse 0.2.2 | Apache-2.0 OR MIT | https://github.com/alacritty/vte | #1, #262
-uuid 1.28.0 | Apache-2.0 OR MIT | https://github.com/uuid-rs/uuid | #2, #263
-vello_common 0.1.0 | Apache-2.0 OR MIT | https://github.com/linebender/vello | #1, #264
-vello_cpu 0.1.0 | Apache-2.0 OR MIT | https://github.com/linebender/vello | #1, #264
-walrus 0.27.2 | MIT/Apache-2.0 | https://github.com/rustwasm/walrus | #2, #265
+utf8parse 0.2.2 | Apache-2.0 OR MIT | https://github.com/alacritty/vte | #1, #264
+uuid 1.28.0 | Apache-2.0 OR MIT | https://github.com/uuid-rs/uuid | #2, #265
+vello_common 0.1.0 | Apache-2.0 OR MIT | https://github.com/linebender/vello | #1, #266
+vello_cpu 0.1.0 | Apache-2.0 OR MIT | https://github.com/linebender/vello | #1, #266
+walrus 0.27.2 | MIT/Apache-2.0 | https://github.com/rustwasm/walrus | #2, #267
 wasi 0.11.1+wasi-snapshot-preview1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | https://github.com/bytecodealliance/wasi | #2, #6, #67
 wasip2 1.0.4+wasi-0.2.12 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | https://github.com/bytecodealliance/wasi-rs | #2, #6, #67
 wasm-bindgen 0.2.129 | MIT OR Apache-2.0 | https://github.com/wasm-bindgen/wasm-bindgen | #2, #55
@@ -1081,95 +1091,95 @@ wasmtime-internal-jit-icache-coherence 45.0.3 | Apache-2.0 WITH LLVM-exception |
 wasmtime-internal-jit-icache-coherence 49.0.3 | Apache-2.0 WITH LLVM-exception | https://github.com/bytecodealliance/wasmtime | #67
 wasmtime-internal-unwinder 45.0.3 | Apache-2.0 WITH LLVM-exception | https://github.com/bytecodealliance/wasmtime | #67
 wasmtime-internal-unwinder 49.0.3 | Apache-2.0 WITH LLVM-exception | https://github.com/bytecodealliance/wasmtime | #67
-wayland-backend 0.3.17 | MIT | https://github.com/smithay/wayland-rs | #266
-wayland-client 0.31.15 | MIT | https://github.com/smithay/wayland-rs | #266
+wayland-backend 0.3.17 | MIT | https://github.com/smithay/wayland-rs | #268
+wayland-client 0.31.15 | MIT | https://github.com/smithay/wayland-rs | #268
 wayland-csd-frame 0.3.0 | MIT | https://github.com/rust-windowing/wayland-csd-frame | #50
-wayland-cursor 0.31.14 | MIT | https://github.com/smithay/wayland-rs | #266
-wayland-protocols 0.32.13 | MIT | https://github.com/smithay/wayland-rs | #266
-wayland-protocols-experimental 20250721.0.1 | MIT | https://github.com/smithay/wayland-rs | #266
-wayland-protocols-misc 0.3.12 | MIT | https://github.com/smithay/wayland-rs | #266
-wayland-protocols-plasma 0.3.12 | MIT | https://github.com/smithay/wayland-rs | #266
-wayland-protocols-wlr 0.3.12 | MIT | https://github.com/smithay/wayland-rs | #266
-wayland-sys 0.31.11 | MIT | https://github.com/smithay/wayland-rs | #266
+wayland-cursor 0.31.14 | MIT | https://github.com/smithay/wayland-rs | #268
+wayland-protocols 0.32.13 | MIT | https://github.com/smithay/wayland-rs | #268
+wayland-protocols-experimental 20250721.0.1 | MIT | https://github.com/smithay/wayland-rs | #268
+wayland-protocols-misc 0.3.12 | MIT | https://github.com/smithay/wayland-rs | #268
+wayland-protocols-plasma 0.3.12 | MIT | https://github.com/smithay/wayland-rs | #268
+wayland-protocols-wlr 0.3.12 | MIT | https://github.com/smithay/wayland-rs | #268
+wayland-sys 0.31.11 | MIT | https://github.com/smithay/wayland-rs | #268
 web-sys 0.3.106 | MIT OR Apache-2.0 | https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys | #2, #55
-web-time 1.1.0 | MIT OR Apache-2.0 | https://github.com/daxpedda/web-time | #267, #268
-webbrowser 1.2.4 | MIT OR Apache-2.0 | https://github.com/amodm/webbrowser-rs | #269, #270
-webpki-roots 0.26.11 | CDLA-Permissive-2.0 | https://github.com/rustls/webpki-roots | #271
-webpki-roots 1.0.9 | CDLA-Permissive-2.0 | https://github.com/rustls/webpki-roots | #271
-weezl 0.1.12 | MIT OR Apache-2.0 | https://github.com/image-rs/weezl | #2, #272
-wgpu 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #170
-wgpu-core 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #170
-wgpu-core-deps-apple 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #170
-wgpu-core-deps-emscripten 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #170
-wgpu-core-deps-wasm 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #170
-wgpu-core-deps-windows-linux-android 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #170
-wgpu-hal 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #170
-wgpu-naga-bridge 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #170
-wgpu-types 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #170
-winapi-util 0.1.11 | Unlicense OR MIT | https://github.com/BurntSushi/winapi-util | #7, #9, #273
-windows 0.62.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-collections 0.3.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-core 0.62.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-future 0.3.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-link 0.2.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-numerics 0.3.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-result 0.4.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-strings 0.5.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-sys 0.52.0 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-sys 0.59.0 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-sys 0.60.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-sys 0.61.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-targets 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-targets 0.53.5 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows-threading 0.2.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_aarch64_gnullvm 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_aarch64_gnullvm 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_aarch64_msvc 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_aarch64_msvc 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_i686_gnu 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_i686_gnu 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_i686_gnullvm 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_i686_gnullvm 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_i686_msvc 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_i686_msvc 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_x86_64_gnu 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_x86_64_gnu 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_x86_64_gnullvm 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_x86_64_gnullvm 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_x86_64_msvc 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
-windows_x86_64_msvc 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #274, #275
+web-time 1.1.0 | MIT OR Apache-2.0 | https://github.com/daxpedda/web-time | #269, #270
+webbrowser 1.2.4 | MIT OR Apache-2.0 | https://github.com/amodm/webbrowser-rs | #271, #272
+webpki-roots 0.26.11 | CDLA-Permissive-2.0 | https://github.com/rustls/webpki-roots | #273
+webpki-roots 1.0.9 | CDLA-Permissive-2.0 | https://github.com/rustls/webpki-roots | #273
+weezl 0.1.12 | MIT OR Apache-2.0 | https://github.com/image-rs/weezl | #2, #274
+wgpu 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #172
+wgpu-core 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #172
+wgpu-core-deps-apple 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #172
+wgpu-core-deps-emscripten 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #172
+wgpu-core-deps-wasm 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #172
+wgpu-core-deps-windows-linux-android 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #172
+wgpu-hal 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #172
+wgpu-naga-bridge 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #172
+wgpu-types 30.0.1 | MIT OR Apache-2.0 | https://github.com/gfx-rs/wgpu | #1, #172
+winapi-util 0.1.11 | Unlicense OR MIT | https://github.com/BurntSushi/winapi-util | #7, #9, #275
+windows 0.62.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-collections 0.3.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-core 0.62.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-future 0.3.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-link 0.2.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-numerics 0.3.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-result 0.4.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-strings 0.5.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-sys 0.52.0 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-sys 0.59.0 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-sys 0.60.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-sys 0.61.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-targets 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-targets 0.53.5 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows-threading 0.2.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_aarch64_gnullvm 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_aarch64_gnullvm 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_aarch64_msvc 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_aarch64_msvc 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_i686_gnu 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_i686_gnu 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_i686_gnullvm 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_i686_gnullvm 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_i686_msvc 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_i686_msvc 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_x86_64_gnu 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_x86_64_gnu 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_x86_64_gnullvm 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_x86_64_gnullvm 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_x86_64_msvc 0.52.6 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
+windows_x86_64_msvc 0.53.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | #276, #277
 winit 0.30.13 | Apache-2.0 | https://github.com/rust-windowing/winit | #15
 winnow 1.0.4 | MIT | https://github.com/winnow-rs/winnow | #6
 wit-bindgen 0.57.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | https://github.com/bytecodealliance/wit-bindgen | #2, #6, #67
-writeable 0.6.4 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
+writeable 0.6.4 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
 wyz 0.5.1 | MIT | https://github.com/myrrlyn/wyz | #38
 x11-dl 2.21.0 | MIT | https://github.com/AltF02/x11-rs.git | #6
-x11rb 0.13.2 | MIT OR Apache-2.0 | https://github.com/psychon/x11rb | #2, #276
-x11rb-protocol 0.13.2 | MIT OR Apache-2.0 | https://github.com/psychon/x11rb | #2, #276
+x11rb 0.13.2 | MIT OR Apache-2.0 | https://github.com/psychon/x11rb | #2, #278
+x11rb-protocol 0.13.2 | MIT OR Apache-2.0 | https://github.com/psychon/x11rb | #2, #278
 x509-parser 0.18.1 | MIT OR Apache-2.0 | https://github.com/rusticata/x509-parser.git | #2, #25
-xcursor 0.3.11 | MIT | https://github.com/esposm03/xcursor-rs | #277
-xkbcommon-dl 0.4.2 | MIT | https://github.com/rust-windowing/xkbcommon-dl | #278
-xkeysym 0.2.1 | MIT OR Apache-2.0 OR Zlib | https://github.com/notgull/xkeysym | #279, #280, #281
-yara-x 1.21.0 | BSD-3-Clause | https://github.com/VirusTotal/yara-x | #282
-yara-x-parser 1.21.0 | BSD-3-Clause | https://github.com/VirusTotal/yara-x | #282
-yoke 0.8.3 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
-zbus 5.19.0 | MIT | https://github.com/z-galaxy/zbus/ | #283
+xcursor 0.3.11 | MIT | https://github.com/esposm03/xcursor-rs | #279
+xkbcommon-dl 0.4.2 | MIT | https://github.com/rust-windowing/xkbcommon-dl | #280
+xkeysym 0.2.1 | MIT OR Apache-2.0 OR Zlib | https://github.com/notgull/xkeysym | #281, #282, #283
+yara-x 1.21.0 | BSD-3-Clause | https://github.com/VirusTotal/yara-x | #284
+yara-x-parser 1.21.0 | BSD-3-Clause | https://github.com/VirusTotal/yara-x | #284
+yoke 0.8.3 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
+zbus 5.19.0 | MIT | https://github.com/z-galaxy/zbus/ | #285
 zbus-lockstep 0.5.2 | MIT | https://github.com/luukvanderduim/zbus-lockstep | #6
-zbus_names 4.3.4 | MIT | https://github.com/z-galaxy/zbus/ | #283
-zbus_xml 5.2.1 | MIT | https://github.com/z-galaxy/zbus/ | #283
-zcheapstr 1.1.0 | MIT | https://github.com/z-galaxy/zcheapstr/ | #284
-zerocopy 0.8.62 | BSD-2-Clause OR Apache-2.0 OR MIT | https://github.com/google/zerocopy | #285, #286, #287
-zerofrom 0.1.8 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
-zeroize 1.9.1 | Apache-2.0 OR MIT | https://github.com/RustCrypto/utils | #2, #288
-zerotrie 0.2.5 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
-zerovec 0.11.8 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #137
-zip 8.6.0 | MIT | https://github.com/zip-rs/zip2 | #235
-zlib-rs 0.6.8 | Zlib | https://github.com/trifectatechfoundation/zlib-rs | #289
+zbus_names 4.3.4 | MIT | https://github.com/z-galaxy/zbus/ | #285
+zbus_xml 5.2.1 | MIT | https://github.com/z-galaxy/zbus/ | #285
+zcheapstr 1.1.0 | MIT | https://github.com/z-galaxy/zcheapstr/ | #286
+zerocopy 0.8.62 | BSD-2-Clause OR Apache-2.0 OR MIT | https://github.com/google/zerocopy | #287, #288, #289
+zerofrom 0.1.8 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
+zeroize 1.9.1 | Apache-2.0 OR MIT | https://github.com/RustCrypto/utils | #2, #290
+zerotrie 0.2.5 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
+zerovec 0.11.8 | Unicode-3.0 | https://github.com/unicode-org/icu4x | #138
+zip 8.6.0 | MIT | https://github.com/zip-rs/zip2 | #237
+zlib-rs 0.6.8 | Zlib | https://github.com/trifectatechfoundation/zlib-rs | #291
 zmij 1.0.23 | MIT | https://github.com/dtolnay/zmij | #6
-zopfli 0.8.4 | Apache-2.0 | https://github.com/zopfli-rs/zopfli | #290
-zune-core 0.5.3 | MIT OR Apache-2.0 OR Zlib | https://github.com/etemesi254/zune-image | #2, #291, #292
-zune-jpeg 0.5.15 | MIT OR Apache-2.0 OR Zlib | https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg | #2, #291, #292
-zvariant 5.15.0 | MIT | https://github.com/z-galaxy/zbus/ | #283
+zopfli 0.8.4 | Apache-2.0 | https://github.com/zopfli-rs/zopfli | #292
+zune-core 0.5.3 | MIT OR Apache-2.0 OR Zlib | https://github.com/etemesi254/zune-image | #2, #293, #294
+zune-jpeg 0.5.15 | MIT OR Apache-2.0 OR Zlib | https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg | #2, #293, #294
+zvariant 5.15.0 | MIT | https://github.com/z-galaxy/zbus/ | #285
 zvariant_utils 4.2.0 | MIT | https://github.com/z-galaxy/zbus/ | #6
 
 The following crates ship no license file in their package. Their texts in part 3 come from
@@ -1241,7 +1251,7 @@ declared expression (Apache-2.0 when offered), with copyright holders from packa
   yara-x-parser 1.21.0 (BSD-3-Clause): upstream repository file
 
 ==============================================================================
-PART 3. LICENSE TEXTS (292)
+PART 3. LICENSE TEXTS (294)
 ==============================================================================
 
 ------------------------------------------------------------------------------
@@ -2524,6 +2534,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
   dpi 0.1.2 (LICENSE)
   fallible-iterator 0.2.0 (LICENSE-APACHE)
   fallible-iterator 0.3.0 (LICENSE-APACHE)
+  fallible-streaming-iterator 0.1.9 (LICENSE-APACHE)
   foreign-types 0.5.0 (LICENSE-APACHE)
   foreign-types-shared 0.3.1 (LICENSE-APACHE)
   hex 0.4.3 (LICENSE-APACHE)
@@ -7039,6 +7050,30 @@ SOFTWARE.
 
 ------------------------------------------------------------------------------
 #105 used by:
+  fallible-streaming-iterator 0.1.9 (LICENSE-MIT)
+------------------------------------------------------------------------------
+Copyright (c) 2016 The fallible-streaming-iterator Developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------------
+#106 used by:
   fax 0.2.7 (LICENSE)
 ------------------------------------------------------------------------------
 Copyright © 2021 The pdf-rs contributers.
@@ -7050,7 +7085,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#106 used by:
+#107 used by:
   fearless_simd 0.4.1 (LICENSE-MIT)
   kurbo 0.13.1 (LICENSE-MIT)
   peniko 0.6.1 (LICENSE-MIT)
@@ -7083,7 +7118,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#107 used by:
+#108 used by:
   ff 0.13.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -7109,7 +7144,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#108 used by:
+#109 used by:
   flate2 1.1.10 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2014-2026 Alex Crichton
@@ -7139,7 +7174,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#109 used by:
+#110 used by:
   fnv 1.0.7 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2017 Contributors
@@ -7169,7 +7204,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#110 used by:
+#111 used by:
   foldhash 0.2.0 (LICENSE)
 ------------------------------------------------------------------------------
 Copyright (c) 2024 Orson Peters
@@ -7193,7 +7228,7 @@ the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 
 ------------------------------------------------------------------------------
-#111 used by:
+#112 used by:
   font-types 0.12.6 (LICENSE-APACHE)
   read-fonts 0.41.0 (LICENSE-APACHE)
   skrifa 0.44.0 (LICENSE-APACHE)
@@ -7267,7 +7302,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ------------------------------------------------------------------------------
-#112 used by:
+#113 used by:
   font-types 0.12.6 (LICENSE-MIT)
   read-fonts 0.41.0 (LICENSE-MIT)
   skrifa 0.44.0 (LICENSE-MIT)
@@ -7299,7 +7334,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#113 used by:
+#114 used by:
   foreign-types 0.5.0 (LICENSE-MIT)
   foreign-types-shared 0.3.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
@@ -7324,7 +7359,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#114 used by:
+#115 used by:
   form_urlencoded 1.2.2 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2013-2016 The rust-url developers
@@ -7354,7 +7389,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#115 used by:
+#116 used by:
   funty 2.0.0 (LICENSE.txt)
 ------------------------------------------------------------------------------
 MIT License
@@ -7380,7 +7415,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#116 used by:
+#117 used by:
   futures 0.3.34 (LICENSE-APACHE)
   futures-channel 0.3.34 (LICENSE-APACHE)
   futures-core 0.3.34 (LICENSE-APACHE)
@@ -7594,7 +7629,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ------------------------------------------------------------------------------
-#117 used by:
+#118 used by:
   futures 0.3.34 (LICENSE-MIT)
   futures-channel 0.3.34 (LICENSE-MIT)
   futures-core 0.3.34 (LICENSE-MIT)
@@ -7632,7 +7667,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#118 used by:
+#119 used by:
   generic-array 0.14.9 (LICENSE)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -7658,7 +7693,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#119 used by:
+#120 used by:
   getrandom 0.2.17 (LICENSE-APACHE)
   getrandom 0.3.4 (LICENSE-APACHE)
   getrandom 0.4.3 (LICENSE-APACHE)
@@ -7867,7 +7902,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ------------------------------------------------------------------------------
-#120 used by:
+#121 used by:
   getrandom 0.2.17 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2018-2024 The rust-random Project Developers
@@ -7898,7 +7933,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#121 used by:
+#122 used by:
   getrandom 0.3.4 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2018-2025 The rust-random Project Developers
@@ -7929,7 +7964,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#122 used by:
+#123 used by:
   getrandom 0.4.3 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2018-2026 The rust-random Project Developers
@@ -7960,7 +7995,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#123 used by:
+#124 used by:
   glow 0.17.0 (LICENSE-ZLIB)
 ------------------------------------------------------------------------------
 This software is provided 'as-is', without any express or implied
@@ -7980,7 +8015,7 @@ freely, subject to the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 
 ------------------------------------------------------------------------------
-#124 used by:
+#125 used by:
   glutin_wgl_sys 0.6.1 (LICENSE)
 ------------------------------------------------------------------------------
 Apache License
@@ -8186,7 +8221,7 @@ Apache License
    limitations under the License.
 
 ------------------------------------------------------------------------------
-#125 used by:
+#126 used by:
   gpu-allocator 0.28.0 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                               Apache License
@@ -8392,7 +8427,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ------------------------------------------------------------------------------
-#126 used by:
+#127 used by:
   gpu-allocator 0.28.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2021 Traverse Research B.V.
@@ -8404,7 +8439,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#127 used by:
+#128 used by:
   guillotiere 0.7.0 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
 Copyright 2019 Nicolas Silva
@@ -8422,7 +8457,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ------------------------------------------------------------------------------
-#128 used by:
+#129 used by:
   guillotiere 0.7.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -8447,7 +8482,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#129 used by:
+#130 used by:
   harfrust 0.12.0 (LICENSE)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -8474,7 +8509,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#130 used by:
+#131 used by:
   hashbrown 0.14.5 (LICENSE-MIT)
   hashbrown 0.16.1 (LICENSE-MIT)
   hashbrown 0.17.1 (LICENSE-MIT)
@@ -8506,7 +8541,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#131 used by:
+#132 used by:
   hex 0.4.3 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2013-2014 The Rust Project Developers.
@@ -8531,7 +8566,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#132 used by:
+#133 used by:
   hkdf 0.12.4 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2015-2018 Vlad Filippov
@@ -8562,7 +8597,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#133 used by:
+#134 used by:
   hybrid-array 0.4.15 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2022-2026 The RustCrypto Project Developers
@@ -8592,7 +8627,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#134 used by:
+#135 used by:
   iana-time-zone 0.1.65 (LICENSE-APACHE)
   iana-time-zone-haiku 0.1.2 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
@@ -8799,7 +8834,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ------------------------------------------------------------------------------
-#135 used by:
+#136 used by:
   iana-time-zone 0.1.65 (LICENSE-MIT)
   iana-time-zone-haiku 0.1.2 (LICENSE-MIT)
 ------------------------------------------------------------------------------
@@ -8830,7 +8865,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#136 used by:
+#137 used by:
   iced-x86 1.21.0 (standard MIT text (package ships none; holders from package metadata))
 ------------------------------------------------------------------------------
 Copyright (c) the iced-x86 authors (https://github.com/icedland/iced)
@@ -8854,7 +8889,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#137 used by:
+#138 used by:
   icu_collections 2.3.0 (LICENSE)
   icu_locale_core 2.3.0 (LICENSE)
   icu_normalizer 2.3.0 (LICENSE)
@@ -8919,7 +8954,7 @@ Portions of ICU4X may have been adapted from ICU4C and/or ICU4J.
 ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation and others.
 
 ------------------------------------------------------------------------------
-#138 used by:
+#139 used by:
   idna 1.1.0 (LICENSE-MIT)
   percent-encoding 2.3.2 (LICENSE-MIT)
   url 2.5.8 (LICENSE-MIT)
@@ -8951,7 +8986,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#139 used by:
+#140 used by:
   idna_adapter 1.2.2 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) The rust-url developers
@@ -8981,7 +9016,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#140 used by:
+#141 used by:
   indexmap 2.14.2 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2016--2017
@@ -9011,7 +9046,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#141 used by:
+#142 used by:
   intaglio 1.15.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -9037,7 +9072,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#142 used by:
+#143 used by:
   ipnet 2.12.2 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                                  Apache License
@@ -9243,7 +9278,7 @@ SOFTWARE.
    limitations under the License.
 
 ------------------------------------------------------------------------------
-#143 used by:
+#144 used by:
   ipnet 2.12.2 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright 2017 Juniper Networks, Inc.
@@ -9255,7 +9290,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#144 used by:
+#145 used by:
   jni-sys 0.3.1 (LICENSE-MIT)
   jni-sys 0.4.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
@@ -9280,7 +9315,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#145 used by:
+#146 used by:
   libc 0.2.190 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) The Rust Project Developers
@@ -9310,7 +9345,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#146 used by:
+#147 used by:
   libloading 0.8.9 (LICENSE)
 ------------------------------------------------------------------------------
 Copyright © 2015, Simonas Kazlauskas
@@ -9327,7 +9362,7 @@ NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE US
 THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-#147 used by:
+#148 used by:
   libm 0.2.16 (LICENSE.txt)
 ------------------------------------------------------------------------------
 rust-lang/libm as a whole is available for use under the MIT license:
@@ -9590,7 +9625,7 @@ have been licensed under extremely permissive terms.
 Copyright notices are retained in src/* files where relevant.
 
 ------------------------------------------------------------------------------
-#148 used by:
+#149 used by:
   libredox 0.1.25 (LICENSE)
 ------------------------------------------------------------------------------
 MIT License
@@ -9616,7 +9651,32 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#149 used by:
+#150 used by:
+  libsqlite3-sys 0.40.0 (LICENSE)
+  rusqlite 0.42.0 (LICENSE)
+------------------------------------------------------------------------------
+Copyright (c) 2014 The rusqlite developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+------------------------------------------------------------------------------
+#151 used by:
   lock_api 0.4.14 (LICENSE-MIT)
   parking_lot 0.12.5 (LICENSE-MIT)
   parking_lot_core 0.9.12 (LICENSE-MIT)
@@ -9648,7 +9708,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#150 used by:
+#152 used by:
   logos 0.16.1 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                               Apache License
@@ -9854,7 +9914,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ------------------------------------------------------------------------------
-#151 used by:
+#153 used by:
   logos 0.16.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2018 Maciej Hirsz <maciej.hirsz@gmail.com>
@@ -9880,7 +9940,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#152 used by:
+#154 used by:
   mach2 0.4.3 (LICENSE-BSD)
   mach2 0.6.0 (LICENSE-BSD)
 ------------------------------------------------------------------------------
@@ -9909,7 +9969,7 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-#153 used by:
+#155 used by:
   mach2 0.4.3 (LICENSE-MIT)
   mach2 0.6.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
@@ -9940,7 +10000,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#154 used by:
+#156 used by:
   md-5 0.10.6 (LICENSE-MIT)
   sha1 0.10.7 (LICENSE-MIT)
   sha2 0.10.9 (LICENSE-MIT)
@@ -9974,7 +10034,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#155 used by:
+#157 used by:
   md-5 0.11.0 (LICENSE-MIT)
   sha1 0.11.0 (LICENSE-MIT)
   sha2 0.11.0 (LICENSE-MIT)
@@ -10009,7 +10069,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#156 used by:
+#158 used by:
   md2 0.10.2 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2016 felipeamp
@@ -10039,7 +10099,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#157 used by:
+#159 used by:
   memfd 0.6.6 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright <YEAR> <COPYRIGHT HOLDER>
@@ -10060,7 +10120,7 @@ DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#158 used by:
+#160 used by:
   memmap2 0.9.11 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                               Apache License
@@ -10266,7 +10326,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ------------------------------------------------------------------------------
-#159 used by:
+#161 used by:
   memmap2 0.9.11 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2020 Yevhenii Reizner
@@ -10297,7 +10357,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#160 used by:
+#162 used by:
   memoffset 0.9.1 (LICENSE)
 ------------------------------------------------------------------------------
 Copyright (c) 2017 Gilad Naaman
@@ -10321,7 +10381,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#161 used by:
+#163 used by:
   mime 0.3.17 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2014 Sean McArthur
@@ -10345,7 +10405,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#162 used by:
+#164 used by:
   mime_guess2 2.3.1 (LICENSE)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -10371,7 +10431,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#163 used by:
+#165 used by:
   minimal-lexical 0.2.1 (LICENSE.md)
 ------------------------------------------------------------------------------
 Minimal-lexical is dual licensed under the Apache 2.0 license as well as the MIT
@@ -10413,7 +10473,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-#164 used by:
+#166 used by:
   miniz_oxide 0.8.9 (LICENSE)
   miniz_oxide 0.8.9 (LICENSE-MIT.md)
   miniz_oxide 0.9.1 (LICENSE)
@@ -10446,7 +10506,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#165 used by:
+#167 used by:
   miniz_oxide 0.8.9 (LICENSE-ZLIB.md)
   miniz_oxide 0.9.1 (LICENSE-ZLIB.md)
 ------------------------------------------------------------------------------
@@ -10466,7 +10526,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 3. This notice may not be removed or altered from any source distribution.
 
 ------------------------------------------------------------------------------
-#166 used by:
+#168 used by:
   moxcms 0.8.1 (LICENSE-APACHE.md)
   pxfm 0.1.30 (LICENSE-APACHE.md)
 ------------------------------------------------------------------------------
@@ -10673,7 +10733,7 @@ Permission is granted to anyone to use this software for any purpose, including 
    limitations under the License.
 
 ------------------------------------------------------------------------------
-#167 used by:
+#169 used by:
   moxcms 0.8.1 (LICENSE.md)
   pxfm 0.1.30 (LICENSE.md)
 ------------------------------------------------------------------------------
@@ -10705,7 +10765,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-#168 used by:
+#170 used by:
   msvc-demangler 0.11.0 (LICENSE.LLVM)
 ------------------------------------------------------------------------------
 ==============================================================================
@@ -10778,7 +10838,7 @@ ARM contributions   llvm/lib/Target/ARM/LICENSE.TXT
 md5 contributions   llvm/lib/Support/MD5.cpp llvm/include/llvm/Support/MD5.h
 
 ------------------------------------------------------------------------------
-#169 used by:
+#171 used by:
   msvc-demangler 0.11.0 (LICENSE.MIT)
 ------------------------------------------------------------------------------
 Copyright 2017-2018 Google, Mozilla
@@ -10790,7 +10850,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#170 used by:
+#172 used by:
   naga 30.0.1 (LICENSE.MIT)
   naga-types 30.0.1 (LICENSE.MIT)
   wgpu 30.0.1 (LICENSE.MIT)
@@ -10826,7 +10886,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#171 used by:
+#173 used by:
   nohash-hasher 0.2.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright 2018 Parity Technologies (UK) Ltd.
@@ -10849,7 +10909,7 @@ WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#172 used by:
+#174 used by:
   nom 7.1.3 (LICENSE)
   nom 8.0.0 (LICENSE)
 ------------------------------------------------------------------------------
@@ -10875,7 +10935,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#173 used by:
+#175 used by:
   num-conv 0.2.2 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) Jacob Pratt
@@ -10899,7 +10959,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#174 used by:
+#176 used by:
   num_enum 0.7.6 (LICENSE-BSD)
 ------------------------------------------------------------------------------
 Copyright (c) 2018, Daniel Wagner-Hall
@@ -10931,7 +10991,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-#175 used by:
+#177 used by:
   objc2-app-kit 0.2.2 (standard MIT text (package ships none; holders from package metadata))
 ------------------------------------------------------------------------------
 Copyright (c) the objc2-app-kit authors (https://github.com/madsmtm/objc2)
@@ -10955,7 +11015,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#176 used by:
+#178 used by:
   objc2-foundation 0.2.2 (standard MIT text (package ships none; holders from package metadata))
   objc2-foundation 0.3.2 (standard MIT text (package ships none; holders from package metadata))
 ------------------------------------------------------------------------------
@@ -10980,7 +11040,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#177 used by:
+#179 used by:
   objc2-ui-kit 0.2.2 (standard MIT text (package ships none; holders from package metadata))
 ------------------------------------------------------------------------------
 Copyright (c) the objc2-ui-kit authors (https://github.com/madsmtm/objc2)
@@ -11004,7 +11064,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#178 used by:
+#180 used by:
   object 0.39.1 (LICENSE-MIT)
   object 0.40.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
@@ -11035,7 +11095,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#179 used by:
+#181 used by:
   orbclient 0.3.55 (LICENSE)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -11061,7 +11121,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#180 used by:
+#182 used by:
   ordered-float 5.5.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2015 Jonathan Reem
@@ -11091,7 +11151,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#181 used by:
+#183 used by:
   p256 0.13.2 (LICENSE-MIT)
   primeorder 0.13.6 (LICENSE-MIT)
 ------------------------------------------------------------------------------
@@ -11122,7 +11182,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#182 used by:
+#184 used by:
   p384 0.13.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2020-2021 RustCrypto Developers
@@ -11152,7 +11212,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#183 used by:
+#185 used by:
   parking 2.2.1 (LICENSE-THIRD-PARTY)
 ------------------------------------------------------------------------------
 ===============================================================================
@@ -11166,7 +11226,7 @@ option. All files in the project carrying such notice may not be
 copied, modified, or distributed except according to those terms.
 
 ------------------------------------------------------------------------------
-#184 used by:
+#186 used by:
   pdb 0.8.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2017 pdb Developers
@@ -11196,7 +11256,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#185 used by:
+#187 used by:
   phf 0.13.1 (LICENSE)
   phf_shared 0.13.1 (LICENSE)
 ------------------------------------------------------------------------------
@@ -11222,7 +11282,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#186 used by:
+#188 used by:
   pkcs1 0.7.5 (LICENSE-MIT)
   spki 0.7.3 (LICENSE-MIT)
 ------------------------------------------------------------------------------
@@ -11253,7 +11313,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#187 used by:
+#189 used by:
   plain 0.2.3 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2017 Plain contributors
@@ -11283,7 +11343,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#188 used by:
+#190 used by:
   plist 1.10.1 (LICENCE)
 ------------------------------------------------------------------------------
 Copyright (c) 2015 Edward Barnard
@@ -11307,7 +11367,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#189 used by:
+#191 used by:
   png 0.18.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2015 nwin
@@ -11337,7 +11397,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#190 used by:
+#192 used by:
   pollster 1.0.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2020-2021 Joshua Barretto
@@ -11367,7 +11427,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#191 used by:
+#193 used by:
   postcard 1.1.3 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2019 Anthony James Munns
@@ -11397,7 +11457,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#192 used by:
+#194 used by:
   powerfmt 0.2.1 (LICENSE-Apache)
 ------------------------------------------------------------------------------
                                  Apache License
@@ -11603,7 +11663,7 @@ DEALINGS IN THE SOFTWARE.
    limitations under the License.
 
 ------------------------------------------------------------------------------
-#193 used by:
+#195 used by:
   powerfmt 0.2.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2023 Jacob Pratt et al.
@@ -11627,7 +11687,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#194 used by:
+#196 used by:
   ppv-lite86 0.2.21 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                               Apache License
@@ -11833,7 +11893,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ------------------------------------------------------------------------------
-#195 used by:
+#197 used by:
   ppv-lite86 0.2.21 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2019 The CryptoCorrosion Contributors
@@ -11863,7 +11923,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#196 used by:
+#198 used by:
   presser 0.3.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2019 Embark Studios
@@ -11893,7 +11953,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#197 used by:
+#199 used by:
   protobuf 3.7.2 (LICENSE.txt)
   protobuf-support 3.7.2 (LICENSE.txt)
 ------------------------------------------------------------------------------
@@ -11918,7 +11978,7 @@ OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
 OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#198 used by:
+#200 used by:
   psl 2.1.241 (LICENSE)
 ------------------------------------------------------------------------------
 MIT License
@@ -11944,7 +12004,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#199 used by:
+#201 used by:
   psl-types 2.0.11 (LICENSE)
 ------------------------------------------------------------------------------
 MIT License
@@ -11970,7 +12030,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#200 used by:
+#202 used by:
   quick-error 2.0.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2015 The quick-error Developers
@@ -11994,7 +12054,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#201 used by:
+#203 used by:
   quick-xml 0.42.0 (LICENSE-MIT.md)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -12022,7 +12082,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#202 used by:
+#204 used by:
   radium 0.7.0 (LICENSE.txt)
 ------------------------------------------------------------------------------
 MIT License
@@ -12048,7 +12108,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#203 used by:
+#205 used by:
   rand 0.8.8 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                               Apache License
@@ -12229,7 +12289,7 @@ TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
 END OF TERMS AND CONDITIONS
 
 ------------------------------------------------------------------------------
-#204 used by:
+#206 used by:
   rand 0.8.8 (LICENSE-MIT)
   rand_chacha 0.3.1 (LICENSE-MIT)
   rand_core 0.6.4 (LICENSE-MIT)
@@ -12262,7 +12322,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#205 used by:
+#207 used by:
   rand_core 0.6.4 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                               Apache License
@@ -12454,7 +12514,7 @@ APPENDIX: How to apply the Apache License to your work.
    identification within third-party archives.
 
 ------------------------------------------------------------------------------
-#206 used by:
+#208 used by:
   range-alloc 0.1.5 (LICENSE.MIT)
 ------------------------------------------------------------------------------
 MIT License
@@ -12480,7 +12540,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#207 used by:
+#209 used by:
   raw-window-handle 0.6.2 (LICENSE-MIT.md)
 ------------------------------------------------------------------------------
 MIT License
@@ -12506,7 +12566,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#208 used by:
+#210 used by:
   raw-window-handle 0.6.2 (LICENSE-ZLIB.md)
 ------------------------------------------------------------------------------
 Copyright (c) 2020 Osspial
@@ -12522,7 +12582,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 3. This notice may not be removed or altered from any source distribution.
 
 ------------------------------------------------------------------------------
-#209 used by:
+#211 used by:
   rayon 1.12.0 (LICENSE-MIT)
   rayon-core 1.13.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
@@ -12553,7 +12613,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#210 used by:
+#212 used by:
   redox_syscall 0.4.1 (LICENSE)
   redox_syscall 0.5.18 (LICENSE)
   redox_syscall 0.9.4 (LICENSE)
@@ -12582,7 +12642,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#211 used by:
+#213 used by:
   renderdoc-sys 1.1.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2022 Eyal Kalderon
@@ -12612,7 +12672,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#212 used by:
+#214 used by:
   ring 0.17.14 (LICENSE)
 ------------------------------------------------------------------------------
 *ring* uses an "ISC" license, like BoringSSL used to use, for new code
@@ -12626,7 +12686,7 @@ See src/polyfill/once_cell/LICENSE-APACHE and src/polyfill/once_cell/LICENSE-MIT
 for the license to code that was sourced from the once_cell project.
 
 ------------------------------------------------------------------------------
-#213 used by:
+#215 used by:
   ring 0.17.14 (LICENSE-BoringSSL)
 ------------------------------------------------------------------------------
                                  Apache License
@@ -12902,7 +12962,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-#214 used by:
+#216 used by:
   ring 0.17.14 (LICENSE-other-bits)
 ------------------------------------------------------------------------------
 Copyright 2015-2025 Brian Smith.
@@ -12920,7 +12980,7 @@ OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-#215 used by:
+#217 used by:
   roxmltree 0.21.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -12946,7 +13006,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#216 used by:
+#218 used by:
   rustls 0.23.45 (LICENSE-ISC)
 ------------------------------------------------------------------------------
 ISC License (ISC)
@@ -12966,7 +13026,7 @@ ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-#217 used by:
+#219 used by:
   rustls 0.23.45 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
@@ -12996,7 +13056,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#218 used by:
+#220 used by:
   rustls-pki-types 1.15.1 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                               Apache License
@@ -13202,7 +13262,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ------------------------------------------------------------------------------
-#219 used by:
+#221 used by:
   rustls-pki-types 1.15.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2023 Dirkjan Ochtman <dirkjan@ochtman.nl>
@@ -13232,7 +13292,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#220 used by:
+#222 used by:
   rustls-webpki 0.103.15 (LICENSE)
 ------------------------------------------------------------------------------
 Except as otherwise noted, this project is licensed under the following
@@ -13256,7 +13316,7 @@ The files under third-party/chromium are licensed as described in
 third-party/chromium/LICENSE.
 
 ------------------------------------------------------------------------------
-#221 used by:
+#223 used by:
   schemars 1.2.2 (LICENSE)
 ------------------------------------------------------------------------------
 MIT License
@@ -13282,7 +13342,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#222 used by:
+#224 used by:
   scopeguard 1.2.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2016-2019 Ulrik Sverdrup "bluss" and scopeguard developers
@@ -13312,7 +13372,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#223 used by:
+#225 used by:
   scroll 0.11.0 (LICENSE)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -13338,7 +13398,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#224 used by:
+#226 used by:
   sctk-adwaita 0.10.1 (LICENSE)
 ------------------------------------------------------------------------------
 MIT License
@@ -13364,7 +13424,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#225 used by:
+#227 used by:
   sec1 0.7.3 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2021-2022 The RustCrypto Project Developers
@@ -13394,7 +13454,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#226 used by:
+#228 used by:
   self_cell 1.3.0 (LICENSE-GPLv2)
 ------------------------------------------------------------------------------
                     GNU GENERAL PUBLIC LICENSE
@@ -13738,7 +13798,7 @@ library.  If this is what you want to do, use the GNU Lesser General
 Public License instead of this License.
 
 ------------------------------------------------------------------------------
-#227 used by:
+#229 used by:
   serde_yaml_ng 0.10.0 (LICENSE)
 ------------------------------------------------------------------------------
                                   MIT License
@@ -13765,7 +13825,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#228 used by:
+#230 used by:
   signal-hook-registry 1.4.8 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2017 tokio-jsonrpc developers
@@ -13795,7 +13855,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#229 used by:
+#231 used by:
   simd-adler32 0.3.10 (LICENSE.md)
 ------------------------------------------------------------------------------
 MIT License
@@ -13821,7 +13881,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#230 used by:
+#232 used by:
   siphasher 1.0.4 (COPYING)
 ------------------------------------------------------------------------------
 Copyright 2012-2016 The Rust Project Developers.
@@ -13833,7 +13893,7 @@ http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
 option.
 
 ------------------------------------------------------------------------------
-#231 used by:
+#233 used by:
   slab 0.4.12 (LICENSE)
 ------------------------------------------------------------------------------
 Copyright (c) 2019 Carl Lerche
@@ -13863,7 +13923,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#232 used by:
+#234 used by:
   slotmap 1.1.1 (LICENSE)
 ------------------------------------------------------------------------------
 Copyright (c) 2021 Orson Peters <orsonpeters@gmail.com>
@@ -13887,7 +13947,7 @@ the following restrictions:
  3. This notice may not be removed or altered from any source distribution.
 
 ------------------------------------------------------------------------------
-#233 used by:
+#235 used by:
   smallvec 1.16.3 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2018 The Servo Project Developers
@@ -13917,7 +13977,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#234 used by:
+#236 used by:
   smithay-clipboard 0.7.3 (LICENSE)
 ------------------------------------------------------------------------------
 Copyright (c) 2018 Lucas Timmins & Victor Berger
@@ -13941,7 +14001,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#235 used by:
+#237 used by:
   spin 0.9.9 (LICENSE)
   zip 8.6.0 (LICENSE)
 ------------------------------------------------------------------------------
@@ -13968,7 +14028,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#236 used by:
+#238 used by:
   stable_deref_trait 1.2.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2017 Robert Grosse
@@ -13998,7 +14058,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#237 used by:
+#239 used by:
   static_assertions 1.1.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 MIT License
@@ -14024,7 +14084,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#238 used by:
+#240 used by:
   strict-num 0.1.1 (LICENSE)
 ------------------------------------------------------------------------------
 Copyright (c) 2022 Yevhenii Reizner
@@ -14048,7 +14108,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#239 used by:
+#241 used by:
   strsim 0.11.1 (LICENSE)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -14076,7 +14136,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#240 used by:
+#242 used by:
   subtle 2.6.1 (LICENSE)
 ------------------------------------------------------------------------------
 Copyright (c) 2016-2017 Isis Agora Lovecruft, Henry de Valence. All rights reserved.
@@ -14110,7 +14170,7 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
 
 ------------------------------------------------------------------------------
-#241 used by:
+#243 used by:
   tap 1.0.1 (LICENSE.txt)
 ------------------------------------------------------------------------------
 MIT License
@@ -14136,7 +14196,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#242 used by:
+#244 used by:
   tempfile 3.27.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2015 Steven Allen
@@ -14166,7 +14226,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#243 used by:
+#245 used by:
   tiff 0.11.3 (LICENSE)
 ------------------------------------------------------------------------------
 MIT License
@@ -14192,7 +14252,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#244 used by:
+#246 used by:
   time 0.3.55 (LICENSE-MIT)
   time-core 0.1.9 (LICENSE-MIT)
 ------------------------------------------------------------------------------
@@ -14217,7 +14277,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#245 used by:
+#247 used by:
   tiny-skia 0.11.4 (LICENSE)
   tiny-skia-path 0.11.4 (LICENSE)
 ------------------------------------------------------------------------------
@@ -14253,7 +14313,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-#246 used by:
+#248 used by:
   tinyzip 0.4.0 (standard MIT text (package ships none; holders from package metadata))
 ------------------------------------------------------------------------------
 Copyright (c) the tinyzip authors (https://github.com/lovasoa/tinyzip)
@@ -14277,7 +14337,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#247 used by:
+#249 used by:
   tokio 1.53.2 (LICENSE)
   tokio-util 0.7.20 (LICENSE)
 ------------------------------------------------------------------------------
@@ -14304,7 +14364,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#248 used by:
+#250 used by:
   tracing 0.1.44 (LICENSE)
   tracing-core 0.1.36 (LICENSE)
 ------------------------------------------------------------------------------
@@ -14335,7 +14395,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#249 used by:
+#251 used by:
   ttf-parser 0.25.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2018 Yevhenii Reizner
@@ -14359,7 +14419,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#250 used by:
+#252 used by:
   type-map 0.5.1 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                               Apache License
@@ -14769,7 +14829,7 @@ limitations under the License.
    limitations under the License.
 
 ------------------------------------------------------------------------------
-#251 used by:
+#253 used by:
   type-map 0.5.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2022 Jacob Brown
@@ -14853,13 +14913,13 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#252 used by:
+#254 used by:
   typenum 1.20.1 (LICENSE)
 ------------------------------------------------------------------------------
 MIT OR Apache-2.0
 
 ------------------------------------------------------------------------------
-#253 used by:
+#255 used by:
   typenum 1.20.1 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                               Apache License
@@ -15065,7 +15125,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ------------------------------------------------------------------------------
-#254 used by:
+#256 used by:
   typenum 1.20.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -15091,7 +15151,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#255 used by:
+#257 used by:
   uds_windows 1.2.1 (LICENSE)
 ------------------------------------------------------------------------------
     MIT License
@@ -15117,7 +15177,7 @@ SOFTWARE.
     SOFTWARE
 
 ------------------------------------------------------------------------------
-#256 used by:
+#258 used by:
   unicase 2.10.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2014-2026 Sean McArthur
@@ -15141,7 +15201,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#257 used by:
+#259 used by:
   unicode-ident 1.0.26 (LICENSE-UNICODE)
 ------------------------------------------------------------------------------
 UNICODE LICENSE V3
@@ -15185,7 +15245,7 @@ dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
 
 ------------------------------------------------------------------------------
-#258 used by:
+#260 used by:
   untrusted 0.9.0 (LICENSE.txt)
 ------------------------------------------------------------------------------
 // Copyright 2015-2016 Brian Smith.
@@ -15203,7 +15263,7 @@ authorization of the copyright holder.
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ------------------------------------------------------------------------------
-#259 used by:
+#261 used by:
   unty 0.0.4 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                                  Apache License
@@ -15409,7 +15469,7 @@ authorization of the copyright holder.
    limitations under the License.
 
 ------------------------------------------------------------------------------
-#260 used by:
+#262 used by:
   unty 0.0.4 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 MIT License
@@ -15435,7 +15495,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#261 used by:
+#263 used by:
   ureq 2.12.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 MIT License
@@ -15461,7 +15521,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#262 used by:
+#264 used by:
   utf8parse 0.2.2 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2016 Joe Wilm
@@ -15491,7 +15551,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#263 used by:
+#265 used by:
   uuid 1.28.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2014 The Rust Project Developers
@@ -15522,7 +15582,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#264 used by:
+#266 used by:
   vello_common 0.1.0 (LICENSE-MIT)
   vello_cpu 0.1.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
@@ -15553,7 +15613,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#265 used by:
+#267 used by:
   walrus 0.27.2 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2018 Nick Fitzgerald
@@ -15583,7 +15643,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#266 used by:
+#268 used by:
   wayland-backend 0.3.17 (LICENSE.txt)
   wayland-client 0.31.15 (LICENSE.txt)
   wayland-cursor 0.31.14 (LICENSE.txt)
@@ -15615,7 +15675,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#267 used by:
+#269 used by:
   web-time 1.1.0 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                                  Apache License
@@ -15821,7 +15881,7 @@ THE SOFTWARE.
    limitations under the License.
 
 ------------------------------------------------------------------------------
-#268 used by:
+#270 used by:
   web-time 1.1.0 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 MIT License
@@ -15847,7 +15907,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#269 used by:
+#271 used by:
   webbrowser 1.2.4 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                               Apache License
@@ -16042,7 +16102,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ------------------------------------------------------------------------------
-#270 used by:
+#272 used by:
   webbrowser 1.2.4 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -16074,7 +16134,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#271 used by:
+#273 used by:
   webpki-roots 0.26.11 (LICENSE)
   webpki-roots 1.0.9 (LICENSE)
 ------------------------------------------------------------------------------
@@ -16141,7 +16201,7 @@ of Data, including for example machine learning models and models'
 insights.
 
 ------------------------------------------------------------------------------
-#272 used by:
+#274 used by:
   weezl 0.1.12 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -16167,7 +16227,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#273 used by:
+#275 used by:
   winapi-util 0.1.11 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -16193,7 +16253,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#274 used by:
+#276 used by:
   windows 0.62.2 (license-apache-2.0)
   windows-collections 0.3.2 (license-apache-2.0)
   windows-core 0.62.2 (license-apache-2.0)
@@ -16429,7 +16489,7 @@ THE SOFTWARE.
    limitations under the License.
 
 ------------------------------------------------------------------------------
-#275 used by:
+#277 used by:
   windows 0.62.2 (license-mit)
   windows-collections 0.3.2 (license-mit)
   windows-core 0.62.2 (license-mit)
@@ -16485,7 +16545,7 @@ THE SOFTWARE.
     SOFTWARE
 
 ------------------------------------------------------------------------------
-#276 used by:
+#278 used by:
   x11rb 0.13.2 (LICENSE-MIT)
   x11rb-protocol 0.13.2 (LICENSE-MIT)
 ------------------------------------------------------------------------------
@@ -16516,7 +16576,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#277 used by:
+#279 used by:
   xcursor 0.3.11 (LICENSE)
 ------------------------------------------------------------------------------
 MIT License
@@ -16542,7 +16602,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#278 used by:
+#280 used by:
   xkbcommon-dl 0.4.2 (LICENSE)
 ------------------------------------------------------------------------------
 The MIT License (MIT)
@@ -16568,7 +16628,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#279 used by:
+#281 used by:
   xkeysym 0.2.1 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                                  Apache License
@@ -16774,7 +16834,7 @@ SOFTWARE.
    limitations under the License.
 
 ------------------------------------------------------------------------------
-#280 used by:
+#282 used by:
   xkeysym 0.2.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2022-2023 John Nunley
@@ -16798,7 +16858,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#281 used by:
+#283 used by:
   xkeysym 0.2.1 (LICENSE-ZLIB)
 ------------------------------------------------------------------------------
 Copyright (c) 2022-2023 John Nunley
@@ -16814,7 +16874,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 3. This notice may not be removed or altered from any source distribution.
 
 ------------------------------------------------------------------------------
-#282 used by:
+#284 used by:
   yara-x 1.21.0 (LICENSE (from github.com/VirusTotal/yara-x))
   yara-x-parser 1.21.0 (LICENSE (from github.com/VirusTotal/yara-x))
 ------------------------------------------------------------------------------
@@ -16846,7 +16906,7 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-#283 used by:
+#285 used by:
   zbus 5.19.0 (LICENSE)
   zbus_names 4.3.4 (LICENSE)
   zbus_xml 5.2.1 (LICENSE)
@@ -16879,7 +16939,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#284 used by:
+#286 used by:
   zcheapstr 1.1.0 (LICENSE)
 ------------------------------------------------------------------------------
 Copyright (c) 2026 Zeeshan Ali Khan & zcheapstr contributors
@@ -16909,7 +16969,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#285 used by:
+#287 used by:
   zerocopy 0.8.62 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
                                  Apache License
@@ -17115,7 +17175,7 @@ DEALINGS IN THE SOFTWARE.
    limitations under the License.
 
 ------------------------------------------------------------------------------
-#286 used by:
+#288 used by:
   zerocopy 0.8.62 (LICENSE-BSD)
 ------------------------------------------------------------------------------
 Copyright 2019 The Fuchsia Authors.
@@ -17144,7 +17204,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-#287 used by:
+#289 used by:
   zerocopy 0.8.62 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright 2023 The Fuchsia Authors
@@ -17174,7 +17234,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#288 used by:
+#290 used by:
   zeroize 1.9.1 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 Copyright (c) 2018-2026 The RustCrypto Project Developers
@@ -17204,7 +17264,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-#289 used by:
+#291 used by:
   zlib-rs 0.6.8 (LICENSE)
 ------------------------------------------------------------------------------
 (C) 2024 Trifecta Tech Foundation 
@@ -17228,7 +17288,7 @@ freely, subject to the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 
 ------------------------------------------------------------------------------
-#290 used by:
+#292 used by:
   zopfli 0.8.4 (COPYING)
 ------------------------------------------------------------------------------
                                  Apache License
@@ -17434,7 +17494,7 @@ freely, subject to the following restrictions:
    limitations under the License.
 
 ------------------------------------------------------------------------------
-#291 used by:
+#293 used by:
   zune-core 0.5.3 (LICENSE-MIT)
   zune-jpeg 0.5.15 (LICENSE-MIT)
 ------------------------------------------------------------------------------
@@ -17461,7 +17521,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-#292 used by:
+#294 used by:
   zune-core 0.5.3 (LICENSE-ZLIB)
   zune-jpeg 0.5.15 (LICENSE-ZLIB)
 ------------------------------------------------------------------------------

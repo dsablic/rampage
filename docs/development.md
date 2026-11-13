@@ -69,6 +69,15 @@ If debugging Rust code requires symbols, temporarily override `CARGO_PROFILE_DEV
 the debugging session and clean obsolete artifacts when no build is running. Merely stripping final executables
 does not remove intermediate objects and incremental caches.
 
+### Analysis store version
+
+Release builds keep each binary's discovery in the [persistent analysis store](mcp.md#persistent-analysis-store);
+debug builds and tests leave it off unless `RAMPAGE_ANALYSIS_CACHE` is set. When a change to discovery or a loader
+changes any fixture's analysis, `analysis_cache::analysis_cache_golden` fails: increment `ANALYSIS_VERSION` in
+`crates/rampage-api/src/analysis_cache.rs`, then re-record the digests with
+`RAMPAGE_UPDATE_ANALYSIS_GOLDEN=1 cargo nextest run -p rampage-api -E 'test(/analysis_cache_golden/)'`. Re-recording
+refuses changed digests until the version is bumped, so entries stored by older builds are never read as current.
+
 ## Scope release validation
 
 For routine increments, use the full debug workspace suite and focused release checks for affected paths. Release
