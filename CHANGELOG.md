@@ -70,6 +70,12 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Changed
 
+- Stripped Go binaries (Go 1.16–1.27) have type layouts: `get_type` and `list_types` read the Go runtime type
+  descriptors (`source: "go"`; `auto` falls back to them after the type library and DWARF). Structs come back with
+  field names, offsets, tags and embedded fields, interfaces with their method sets, and named types with their
+  methods; `member` follows promoted fields shallowest-first like Go. On a stripped 26 MB Go binary all 3,824 named
+  structs that its unstripped twin's DWARF also describes match exactly. When nothing is found, `get_type` now names
+  the sources it tried.
 - 32-bit x86 ELF PIC PLT stubs (`jmp [ebx+disp]`) are named `name@plt` through `.got.plt`, so decompiled
   dispatchers in i386 shared objects show the called import instead of `sub_…`.
 - MCP accepts unambiguous argument aliases (`address`/`addr`/`ea` for `at`, `length`/`len` for `size`,
