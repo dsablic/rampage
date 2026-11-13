@@ -1054,7 +1054,7 @@ impl ServerHandler for RampageServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let name = request.name.into_owned();
-        let arguments = request.arguments.unwrap_or_default();
+        let mut arguments = request.arguments.unwrap_or_default();
         if name == ENABLE_TOOLS {
             let result = match self.enable(&arguments) {
                 Ok((listing, changed)) => {
@@ -1080,7 +1080,13 @@ impl ServerHandler for RampageServer {
             };
             return Ok(CallToolResult::error(vec![ContentBlock::text(reason)]).into());
         }
-        if let Some(schema) = self.advertised_schema(&name)
+        let schema = self.advertised_schema(&name);
+        if let Some(schema) = &schema {
+            // Clients often call a deferred tool before loading its schema; take unambiguous aliases and numbers
+            // sent as strings rather than refusing the call.
+            tools::normalize_arguments(schema, &mut arguments);
+        }
+        if let Some(schema) = schema
             && let Err(message) = tools::check_arguments(&name, &schema, &arguments)
         {
             // The import tools answer every failure with their own JSON receipt.

@@ -107,6 +107,7 @@ where
 {
     let mut decoder = new_decoder()?;
     let slot_name = |address| binary.import_slot(address).map(|slot| slot.name.as_str());
+    let got_base = i386_got_base(binary);
     let mut names = Vec::new();
     for section in binary.sections.iter().filter(|section| STUB_SECTIONS.contains(&section.name.as_str())) {
         let end = section.address.saturating_add(section.size);
@@ -126,7 +127,14 @@ where
                 && is_padding(&bytes[..usize::from(insn.len).min(bytes.len())], &decoder.format(bytes, address))
             {
                 stub_start = next;
-            } else if let Some(name) = insn.data_ref.and_then(slot_name).filter(|_| !named) {
+            } else if let Some(name) = insn
+                .data_ref
+                .or_else(|| {
+                    got_base.and_then(|base| ebx_relative_jump(&bytes[..usize::from(insn.len).min(bytes.len())], base))
+                })
+                .and_then(slot_name)
+                .filter(|_| !named)
+            {
                 // ELF stubs take objdump's `@plt` suffix: in a shared library the import may be one of its own
                 // exported functions, whose name the stub must not take.
                 let name = if binary.format == Format::Elf { format!("{name}@plt") } else { name.to_owned() };
@@ -142,6 +150,27 @@ where
         }
     }
     Ok(names)
+}
+
+/// The GOT base a 32-bit x86 ELF's position-independent PLT reaches its slots through: `ebx` holds
+/// `_GLOBAL_OFFSET_TABLE_`, the start of `.got.plt` (or of `.got` when the linker made no `.got.plt`).
+fn i386_got_base(binary: &Binary) -> Option<u64> {
+    if binary.format != Format::Elf || binary.arch != Arch::X86 {
+        return None;
+    }
+    let section = |name: &str| binary.sections.iter().find(|section| section.name == name && section.size > 0);
+    section(".got.plt").or_else(|| section(".got")).map(|section| section.address)
+}
+
+/// The slot a PIC PLT stub's `jmp [ebx+disp]` (`FF A3 disp32` or `FF 63 disp8`) jumps through, given the GOT base
+/// in `ebx`.
+fn ebx_relative_jump(code: &[u8], got_base: u64) -> Option<u64> {
+    let displacement = match code {
+        [0xff, 0xa3, a, b, c, d] => i64::from(i32::from_le_bytes([*a, *b, *c, *d])),
+        [0xff, 0x63, displacement] => i64::from(*displacement as i8),
+        _ => return None,
+    };
+    Some(got_base.wrapping_add(displacement as u64) & 0xffff_ffff)
 }
 
 /// Names PE import thunks outside stub sections after their import: `jmp [slot]` instructions in code

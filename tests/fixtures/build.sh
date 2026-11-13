@@ -19,6 +19,9 @@ llvm-strip --strip-debug bin/hello-x64-dyn.elf bin/hello-arm64.elf \
   bin/hello-{arm,thumb,mips,mipsel,ppc,ppc64le,riscv64,s390x}.elf
 zig cc -target x86_64-linux-gnu -O1 -g0 -fPIC -shared -o bin/libhelper-x64.so src/helper.c
 llvm-strip --strip-debug bin/libhelper-x64.so
+# The same on 32-bit x86, whose PIC PLT stubs jump through `[ebx+disp]` rather than an absolute slot.
+zig cc -target x86-linux-gnu -march=i686 -O1 -g0 -fPIC -shared -o bin/libhelper-x86.so src/helper.c
+llvm-strip --strip-debug bin/libhelper-x86.so
 zig cc -target x86_64-windows-gnu -O1 -g0 -o bin/hello-x64.exe "$src"
 # A PE with a TLS callback: the callback is an entry point reached before main, recovered as a function start.
 zig cc -target x86_64-windows-gnu -O1 -g0 -o bin/tls-x64.exe src/tls.c

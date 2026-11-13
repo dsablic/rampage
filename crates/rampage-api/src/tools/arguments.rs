@@ -63,11 +63,67 @@ pub fn admitted_arguments(schema: &Value) -> Option<BTreeSet<String>> {
     Some(names)
 }
 
+/// Unknown argument names that can only mean one admitted argument, so they are taken as that argument instead of
+/// costing the caller a refused call (agents often call before the schema is loaded).
+const ALIASES: [(&str, &str); 9] = [
+    ("address", "at"),
+    ("addr", "at"),
+    ("ea", "at"),
+    ("length", "size"),
+    ("len", "size"),
+    ("file", "path"),
+    ("file_path", "path"),
+    ("filename", "path"),
+    ("binary", "path"),
+];
+
+/// Repairs the argument mistakes of a caller working without the schema, before [`check_arguments`]: an unknown
+/// name in [`ALIASES`] becomes its admitted argument when that one is not also given, and a string holding a
+/// decimal or `0x` hex number becomes that number where the schema admits only numbers. Booleans stay strict:
+/// they gate writes (`apply`, `force`).
+pub fn normalize_arguments(schema: &Value, arguments: &mut Map<String, Value>) {
+    if let Some(admitted) = admitted_arguments(schema) {
+        for (alias, meant) in ALIASES {
+            if !admitted.contains(alias)
+                && admitted.contains(meant)
+                && !arguments.contains_key(meant)
+                && let Some(value) = arguments.remove(alias)
+            {
+                arguments.insert(meant.to_owned(), value);
+            }
+        }
+    }
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else { return };
+    for (key, value) in arguments.iter_mut() {
+        let Some(text) = value.as_str() else { continue };
+        let types: Vec<&str> = match properties.get(key).and_then(|property| property.get("type")) {
+            Some(Value::String(kind)) => vec![kind.as_str()],
+            Some(Value::Array(kinds)) => kinds.iter().filter_map(Value::as_str).collect(),
+            _ => continue,
+        };
+        if types.contains(&"string") {
+            continue;
+        }
+        if !types.contains(&"integer") && !types.contains(&"number") {
+            continue;
+        }
+        let text = text.trim().trim_matches('"').trim();
+        let parsed = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            Some(hex) => u64::from_str_radix(hex, 16).ok().map(Value::from),
+            None => text.parse::<u64>().map(Value::from).or_else(|_| text.parse::<i64>().map(Value::from)).ok(),
+        };
+        if let Some(number) = parsed {
+            *value = number;
+        }
+    }
+}
+
 /// The admitted argument an unknown `name` most likely meant, from the names agents reach for out of habit.
 fn likely_argument(name: &str, admitted: &BTreeSet<String>) -> Option<&'static str> {
     let candidates: &[&'static str] = match name.to_ascii_lowercase().as_str() {
-        "address" | "addr" | "ea" | "va" | "location" | "function" | "func" | "start" | "name" | "target" => {
-            &["at", "address", "target"]
+        // xrefs takes `to` (references to an address) and `from`; `to` is what an address argument usually means.
+        "address" | "addr" | "ea" | "va" | "location" | "function" | "func" | "start" | "name" | "target" | "at" => {
+            &["at", "address", "target", "to"]
         }
         "length" | "len" | "count" | "size" | "bytes" | "n" | "num" | "number" | "max" => {
             &["size", "count", "length", "limit"]
