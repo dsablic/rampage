@@ -87,6 +87,9 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
   7.9 MB SQLite build, so struct layouts were unreachable. Done: `get_type` DWARF fallback with per-request bounds.
 - [ ] Whole-file DWARF import previews still return nothing at this size; make them return partial results.
 - [ ] DWARF lookup: C++ types nested in classes, DWARF 5 type units / `.debug_types`, zstd-compressed sections.
+- [x] Persistent analysis store (roadmap 6.2, first half): SQLite cache of discovery, keyed by every analysis
+  input and the rampage build, with an `ANALYSIS_VERSION` golden test. Open: caching signatures and strings if they
+  matter, incremental re-analysis after edits, deleting a rejected store automatically.
 - [ ] `go-nested-field` took 26 rampage calls against REA's 14; read the transcript and remove the detour.
 
 ## Head-to-head suite v3: tasks where Ghidra is strong (not run yet)

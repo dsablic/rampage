@@ -70,6 +70,12 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Changed
 
+- Release builds keep a persistent analysis store: function discovery (functions, blocks, cross-references and
+  related facts) is saved to an SQLite file under the user cache directory (`rampage/analysis/`, owner-only) and
+  reused when the same image is opened with the same analysis inputs by the same rampage build. Re-opening a 26 MB
+  Go binary takes 0.13 s instead of about 1.7 s. Entries are verified before use and anything that does not
+  verify is analysed fresh; `binary_info` reports `analysis_store` (hit, miss, rejected, disabled). Disable with
+  `RAMPAGE_ANALYSIS_CACHE=off`; `RAMPAGE_ANALYSIS_CACHE_MAX_MB` bounds its size (1024 by default). Experimental.
 - `get_type` falls back to the binary's own DWARF when the type library has no such name (`source`: `auto`,
   `library`, `dwarf`), and can select a member by path (`init.busy`, `aDb[1].pBt`) or by `byte_offset`. A name index
   is built once per project and each lookup reads only the requested type and what it references, so the work per
