@@ -128,6 +128,9 @@ pub struct Binary {
     /// The version of the Go pclntab that named functions, set by [`Binary::recover_go_symbols`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub go_table: Option<crate::gopclntab::GoTableVersion>,
+    /// The Go pclntab's virtual address, which `moduledata` points at; set by [`Binary::recover_go_symbols`].
+    #[serde(skip)]
+    pub go_table_address: Option<u64>,
     /// Register-ABI Go functions' argument layouts by entry address, set by [`Binary::recover_go_symbols`].
     #[serde(skip)]
     pub go_arguments: std::collections::BTreeMap<u64, crate::gopclntab::GoArguments>,
@@ -289,6 +292,7 @@ impl Binary {
             snapshot_target: None,
             embedded: None,
             go_table: None,
+            go_table_address: None,
             pe_layout: None,
             msvc: None,
             go_arguments: std::collections::BTreeMap::new(),
@@ -450,6 +454,7 @@ impl Binary {
             snapshot_target: None,
             embedded: None,
             go_table: None,
+            go_table_address: None,
             pe_layout: None,
             msvc: None,
             go_arguments: std::collections::BTreeMap::new(),
@@ -929,6 +934,7 @@ impl Binary {
             snapshot_target: None,
             embedded: None,
             go_table: None,
+            go_table_address: None,
             pe_layout: None,
             msvc: None,
             go_arguments: std::collections::BTreeMap::new(),
@@ -1156,6 +1162,7 @@ impl Binary {
             return report;
         }
         self.go_table = report.version;
+        self.go_table_address = report.table_address;
         self.go_arguments = match self.read_go_arguments(&report) {
             Ok(arguments) => arguments,
             Err(reason) => {

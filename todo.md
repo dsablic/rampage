@@ -92,7 +92,8 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
   matter, incremental re-analysis after edits, deleting a rejected store automatically.
 - [x] `switch-pic-x86-so` took 12–20 rampage calls: unnamed i386 PIC PLT stubs. Done (named through the GOT base).
 - [x] Recurring argument-name errors cost a retry per call. Done (unambiguous aliases, numeric strings).
-- [ ] `go-nested-field` took 26 rampage calls (Cause: no Go runtime type metadata; in progress.) against REA's 14; read the transcript and remove the detour.
+- [x] `go-nested-field` took 20–26 rampage calls against REA's 14: no Go runtime type metadata. Done (`get_type`
+  Go source). Open: Go before 1.16, position-independent Go ELF (pointers filled in at load time).
 
 ## Head-to-head suite v3: tasks where Ghidra is strong (not run yet)
 

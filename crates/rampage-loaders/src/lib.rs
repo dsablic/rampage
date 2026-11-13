@@ -40,6 +40,7 @@ pub mod debug;
 pub mod debug_types;
 pub mod dotnet;
 pub mod gopclntab;
+pub mod gotypes;
 pub mod objc;
 pub mod pdb;
 pub mod pe_load_config;
