@@ -306,3 +306,61 @@ async fn get_type_reads_dwarf_layouts_without_importing() {
     let listed = invoke(&client, &fixture, "list_types", json!({}), true).await;
     assert!(listed["types"].as_array().unwrap().iter().all(|ty| ty["name"] != "debug_pair"), "{listed}");
 }
+
+/// On a stripped Go binary `get_type` falls back to Go runtime type metadata, and `list_types` lists Go types while
+/// the project library is empty.
+#[tokio::test]
+async fn get_type_reads_go_runtime_types_on_a_stripped_go_binary() {
+    let fixture =
+        Fixture::with("gotypes-go1.20-x64.elf", include_bytes!("../../../tests/fixtures/bin/gotypes-go1.20-x64.elf"));
+    let client = connect().await;
+    enable(&client).await;
+
+    let record = invoke(&client, &fixture, "get_type", json!({"name": "main.Record"}), true).await;
+    assert_eq!(record["source"], "go_runtime");
+    assert!(record["caveats"].as_array().is_some_and(|caveats| !caveats.is_empty()));
+    let definition = &record["definitions"][0];
+    assert_eq!((definition["kind"].as_str(), definition["byte_size"].as_u64()), (Some("struct"), Some(144)));
+    assert_eq!(definition["members"][3]["name"], "Inner");
+    assert_eq!(definition["members"][3]["offset"], 56);
+
+    let selected =
+        invoke(&client, &fixture, "get_type", json!({"name": "main.Record", "member": "Inner.Ratio"}), true).await;
+    assert_eq!(selected["definitions"][0]["selection"]["offset"], 64);
+    assert!(selected["definitions"][0].get("members").is_none(), "selection alone pages no members");
+    let at =
+        invoke(&client, &fixture, "get_type", json!({"name": "main.Record", "byte_offset": "\"0x31\""}), true).await;
+    assert_eq!(at["definitions"][0]["selection"]["path"], "flags");
+
+    let shape = invoke(&client, &fixture, "get_type", json!({"name": "main.Shape", "source": "go"}), true).await;
+    assert_eq!(shape["definitions"][0]["methods"][1]["name"], "Name");
+
+    // An unknown name reports every source it tried and suggests Go names; source=dwarf does not fall back.
+    let (text, failed) = call_text(&client, &fixture, "get_type", json!({"name": "main.Recor"})).await;
+    assert!(failed && text.contains("no Go runtime type named") && text.contains("main.Record"), "{text}");
+    assert!(text.contains("project type library has no type") && text.contains("Next: list_types"), "{text}");
+    assert!(!text.contains("Unknown named type"), "{text}");
+    invoke(&client, &fixture, "get_type", json!({"name": "main.Record", "source": "dwarf"}), false).await;
+    invoke(&client, &fixture, "get_type", json!({"name": "main.Record", "source": "library"}), false).await;
+
+    let listed = invoke(&client, &fixture, "list_types", json!({"contains": "main.R"}), true).await;
+    assert_eq!(listed["source"], "go_runtime");
+    assert_eq!(listed["types"][0]["name"], "main.Record");
+    let library = invoke(&client, &fixture, "list_types", json!({"source": "library"}), true).await;
+    assert_eq!(library["total"], 0);
+    client.cancel().await.unwrap();
+}
+
+async fn call_text(
+    client: &RunningService<RoleClient, Client>,
+    fixture: &Fixture,
+    name: &str,
+    mut args: Value,
+) -> (String, bool) {
+    args["path"] = json!(fixture.path());
+    let result = client
+        .call_tool(CallToolRequestParams::new(name.to_owned()).with_arguments(args.as_object().unwrap().clone()))
+        .await
+        .unwrap();
+    (result.content[0].as_text().unwrap().text.clone(), result.is_error == Some(true))
+}
