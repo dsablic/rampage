@@ -70,6 +70,13 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Changed
 
+- `search` scales to large images: `functions_referencing` a string finds the string first and decodes only the
+  blocks holding a matching reference, and wildcard byte patterns prefilter on their longest fixed run. On a 26 MB
+  stripped Go binary both used to stop on their work budget; they now complete. In Go images a string target's text
+  ends where the next code-referenced literal begins, so packed literals no longer match each other's text.
+- `function_graph` pages oversized functions by whole blocks (`block_offset`, `blocks_next_offset`) instead of
+  refusing them; edges keep whole-function block indices.
+- Raw projects hash their image once per open instead of on every call; drift checks still run per call.
 - `class_evidence` pages `rtti_classes` (`rtti_class_offset`/`rtti_class_limit`, 50 by default) and lists classes
   seen only as bases (`source: "rtti_base"`); a client that read the whole list must follow
   `rtti_classes_next_offset`.

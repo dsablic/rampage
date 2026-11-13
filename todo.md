@@ -61,12 +61,13 @@ From [suite v2](docs/benchmarks/agent-h2h-v2-2026-11-05.md). Fixed: `function_su
 search with a resume cursor, Go string-run match addresses, raw-profile aliases and headerless guidance, hex ARM
 immediates in `inspect_raw_code`, one-line argument errors and unknown-argument refusal, chained-fixup RTTI.
 
-- [ ] `search` `functions_referencing` a string stops on `match_work_budget` with nothing scanned on the 50 MB
+- [x] `search` `functions_referencing` a string stops on `match_work_budget` with nothing scanned on the 50 MB
   Hugo image (all 4 scale-string runs): `prepare_search` charges a B-tree insert for every discovered block of
   the whole program before decoding, then decodes every instruction to compare its references. For string
   references, find the string's addresses first (the now-linear text search) and walk the retained xrefs to
   them, decoding only the referencing sites; until then agents fall back to text search + `xrefs`.
-- [ ] Byte patterns with wildcards still charge their length per candidate start; a 50 MB image needs a
+  Done 2026-11-13 (restic 26 MB: budget stop → 1 exact hit; Go literals bounded by the next referenced literal).
+- [x] Byte patterns with wildcards still charge their length per candidate start; a 50 MB image needs a
   literal-prefix prefilter or a larger default budget.
 - [ ] ARM immediates are printed in LLVM's decimal (`movt r1, #1934`) by the shared native renderer, used by
   `disassemble` and search operand globs too. Only `inspect_raw_code` appends hex now; adding it to the native
@@ -77,7 +78,7 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
   decompilation, 4 MiB cap ([Cortex-M profile](docs/sleigh-decoding.md#cortex-m-profile)).
 - [ ] Go string literals referenced only through static `{ptr, len}` headers in data (not by code) get no
   `go_literal` start, since data-to-data references are not retained; reading headers would bound them too.
-- [ ] `function_graph` refuses oversized views like `function_summary` did; page its blocks the same way (edges
+- [x] `function_graph` refuses oversized views like `function_summary` did; page its blocks the same way (edges
   index whole-function block positions, so paging keeps them valid).
 
 ## Head-to-head suite v3: tasks where Ghidra is strong (not run yet)
@@ -265,7 +266,7 @@ Verify first which of these the existing raw-window and decoder-provider slices 
   ran past 2 minutes on the same image. Profile both and fix the slow path (likely a scan per query rather than
   an index). Done: the slow path was a full-image hash per xref row (binding check); now once per query. The
   22 s listing did not reproduce on the Cortex-M profile; re-time the original Sleigh workflow. Open: one image
-  hash per call remains (cache the raw identity in `rampage-loaders`).
+  hash per call remains (cache the raw identity in `rampage-loaders`). Done 2026-11-13: hashed once per open.
 - [x] **Container recognition.** Triage and `carve` do not flag a proprietary compressed container, i.e. a
   header with load address, sizes and a byte-sum around an LZSS stream. Report "header-checked
   compressed-component candidate" with extents, so the compression probe has a starting range.
