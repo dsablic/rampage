@@ -131,7 +131,7 @@ impl Project {
             .map(|block| self.decode_lines(block.start, block.end, usize::MAX, operands.as_ref()))
             .collect::<Result<_, _>>()?;
         let program = &self.analysis()?.program;
-        let objc = self.objc_dispatch()?;
+        let objc = self.objc_dispatch_for_function(start)?;
         let flows = &program.resolved_flows;
         for line in blocks.iter_mut().flatten() {
             if line.decode_gate.is_some() {
@@ -154,7 +154,7 @@ impl Project {
             };
             let callees: Vec<u64> = target.into_iter().chain(line.data_ref).collect();
             line.noreturn = program.noreturn_evidence(line.address, &callees);
-            if let Some(send) = objc.send_at(line.address).filter(|send| send.function == start)
+            if let Some(send) = objc.and_then(|objc| objc.send_at(line.address)).filter(|send| send.function == start)
                 && let Some(text) = self.objc_send_comment(send)
             {
                 let parts: Vec<String> = line.comment.take().into_iter().chain([format!("objc: {text}")]).collect();

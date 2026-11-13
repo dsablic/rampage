@@ -37,6 +37,7 @@ const TRUTH: &[(&str, &str, &[&str])] = &[
     ("-[Circle area]", "radius", &["-[Circle radius]"]),
     ("-[Circle describe]", "describe", &["-[Shape describe]"]),
     ("-[Circle describe]", "stringByAppendingString:", &[]),
+    ("-[Ring area]", "area", &["-[Circle area]"]),
     ("+[Square squareWithSide:]", "init", &[]),
     ("+[Square squareWithSide:]", "setSide:", &["-[Square setSide:]"]),
     ("-[Square area]", "side", &["-[Square side]"]),
@@ -45,6 +46,9 @@ const TRUTH: &[(&str, &str, &[&str])] = &[
     ("-[Shape(Debug) dump]", "scaledArea", &["-[Shape scaledArea]"]),
     ("-[Label describe]", "text", &["-[Label text]"]),
     ("-[Label describe]", "text", &["-[Label text]"]),
+    ("-[Label initials]", "text", &["-[Label text]"]),
+    ("-[Label initials]", "substringToIndex:", &[]),
+    ("-[NSString(Shout) shout]", "uppercaseString", &[]),
     ("_main", "init", &["-[Circle init]"]),
     ("_main", "squareWithSide:", &["+[Square squareWithSide:]"]),
     ("_main", "unitShape", &["+[Shape unitShape]"]),
@@ -52,6 +56,12 @@ const TRUTH: &[(&str, &str, &[&str])] = &[
     ("_main", "dump", &["-[Shape(Debug) dump]"]),
     ("_main", "dump", &["-[Shape(Debug) dump]"]),
     ("_main", "describe", &["-[Shape describe]"]),
+    ("_main", "alloc", &[]),
+    ("_main", "initials", &["-[Label initials]"]),
+    ("_main", "shout", &["-[NSString(Shout) shout]"]),
+    ("_main", "initWithFormat:", &[]),
+    ("_main", "shout", &["-[NSString(Shout) shout]"]),
+    ("_main", "area", &["-[Circle area]"]),
     ("_main", "kind", &["+[Circle kind]"]),
     ("_main", "length", &[]),
     ("_describe_any", "describe", &["-[Circle describe]", "-[Label describe]"]),
@@ -65,6 +75,8 @@ struct Score {
     in_binary: usize,
     /// ... reported `resolved` to exactly that implementation.
     resolved: usize,
+    /// ... reported `ambiguous` with it among the targets.
+    ambiguous: usize,
     /// ... whose reported targets include every implementation reached (resolved, ambiguous or candidates).
     covered: usize,
     /// Sends reported `resolved` to the wrong implementation, or `framework` when the binary implements it.
@@ -98,6 +110,11 @@ fn score(name: &str, symbols: &str) -> Score {
             if send.confidence == Confidence::Resolved && targets == truth {
                 score.resolved += 1;
             }
+            if send.confidence == Confidence::Ambiguous
+                && truth.iter().all(|implementation| targets.iter().any(|target| target == implementation))
+            {
+                score.ambiguous += 1;
+            }
             if truth.iter().all(|implementation| targets.iter().any(|target| target == implementation)) {
                 score.covered += 1;
             }
@@ -118,15 +135,25 @@ fn score(name: &str, symbols: &str) -> Score {
 
 #[test]
 fn every_fixture_send_resolves_with_no_false_resolutions() {
-    let expected =
-        Score { sends: 32, with_selector: 32, in_binary: 24, resolved: 18, covered: 24, false_resolutions: 0 };
-    for (name, symbols) in [
-        ("objc-dispatch-arm64.macho", "objc-dispatch-arm64.macho"),
-        ("objc-dispatch-arm64-stripped.macho", "objc-dispatch-arm64.macho"),
-        ("objc-dispatch-x64.macho", "objc-dispatch-x64.macho"),
-        ("objc-dispatch-x64-stripped.macho", "objc-dispatch-x64.macho"),
+    let arm64 = Score {
+        sends: 42,
+        with_selector: 42,
+        in_binary: 30,
+        resolved: 21,
+        ambiguous: 5,
+        covered: 30,
+        false_resolutions: 0,
+    };
+    // x86-64 keeps `label` and `circle` in stack slots by the time main sends -initials and -area, so those two
+    // receivers are unknown there (candidates, truth included).
+    let x64 = Score { resolved: 20, ambiguous: 4, ..arm64 };
+    for (name, symbols, expected) in [
+        ("objc-dispatch-arm64.macho", "objc-dispatch-arm64.macho", &arm64),
+        ("objc-dispatch-arm64-stripped.macho", "objc-dispatch-arm64.macho", &arm64),
+        ("objc-dispatch-x64.macho", "objc-dispatch-x64.macho", &x64),
+        ("objc-dispatch-x64-stripped.macho", "objc-dispatch-x64.macho", &x64),
     ] {
-        assert_eq!(score(name, symbols), expected, "{name}");
+        assert_eq!(&score(name, symbols), expected, "{name}");
     }
 }
 
@@ -144,7 +171,7 @@ fn stripped_binaries_resolve_exactly_as_their_unstripped_twins() {
 fn arm64_selector_stubs_are_found_without_symbols() {
     let (binary, dispatch) = dispatch("objc-dispatch-arm64-stripped.macho");
     let names = Names::new(&Binary::open(fixture("objc-dispatch-arm64.macho")).unwrap());
-    assert_eq!(dispatch.stubs.len(), 16);
+    assert_eq!(dispatch.stubs.len(), 21);
     for (address, selector) in &dispatch.stubs {
         assert_eq!(names.function_name(*address), format!("_objc_msgSend${selector}"));
     }

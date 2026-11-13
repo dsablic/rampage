@@ -62,9 +62,10 @@ impl Confidence {
         }
     }
 
-    /// Whether the send's targets are edges worth drawing: known-class resolutions and bounded candidate sets.
+    /// Whether the send's targets are call edges: the receiver's class is known (`resolved`, `ambiguous`). The
+    /// candidates of an unknown receiver are listed by the send, not drawn as calls.
     pub fn has_edges(self) -> bool {
-        matches!(self, Confidence::Resolved | Confidence::Ambiguous | Confidence::Candidates)
+        matches!(self, Confidence::Resolved | Confidence::Ambiguous)
     }
 }
 
@@ -366,6 +367,50 @@ where
     dispatch
 }
 
+/// Cheap evidence of where sends can be, without resolving any: the runtime entry points' stub and import-slot
+/// addresses, the selector stub sections and the method implementations. A function none of whose references
+/// reaches an entry makes no send, and only an implementation can be a send's target.
+#[derive(Debug, Default)]
+pub struct SendHints {
+    entries: HashSet<u64>,
+    stubs: Vec<(u64, u64)>,
+    implementations: HashSet<u64>,
+}
+
+impl SendHints {
+    /// The hints for `binary`, or `None` when sends are never resolved in it (not an arm64 or x86-64 Mach-O).
+    pub fn new(binary: &Binary, report: &ObjcReport) -> Option<SendHints> {
+        if binary.format != Format::MachO || Abi::of(binary.arch).is_none() {
+            return None;
+        }
+        let mut hints = SendHints::default();
+        let stubs = crate::functions::stub_names(binary);
+        let named = stubs.iter().map(|(address, name)| (*address, name.as_str()));
+        let slots = binary.import_slots.iter().map(|slot| (slot.address, slot.name.as_str()));
+        hints.entries = named.chain(slots).filter(|(_, name)| Entry::named(name).is_some()).map(|(at, _)| at).collect();
+        hints.stubs = binary
+            .sections
+            .iter()
+            .filter(|section| section.name == "__objc_stubs")
+            .map(|section| (section.address, section.address.saturating_add(section.size)))
+            .collect();
+        let methods = report.classes.iter().flat_map(|class| &class.methods);
+        let methods = methods.chain(report.categories.iter().flat_map(|category| &category.methods));
+        hints.implementations = methods.filter_map(|method| method.implementation).collect();
+        Some(hints)
+    }
+
+    /// Whether a reference to `target` (a call, jump or slot load) may be part of a send.
+    pub fn reaches_send(&self, target: u64) -> bool {
+        self.entries.contains(&target) || self.stubs.iter().any(|&(start, end)| (start..end).contains(&target))
+    }
+
+    /// Whether `address` is a method implementation, the only thing a send can reach.
+    pub fn is_implementation(&self, address: u64) -> bool {
+        self.implementations.contains(&address)
+    }
+}
+
 /// Names for the arm64 selector stubs in `__objc_stubs`, `_objc_msgSend$<selector>` as the linker's own symbols
 /// name them, so a stripped image's stubs read as they do unstripped.
 pub fn selector_stub_names(binary: &Binary) -> Vec<(u64, String)> {
@@ -636,38 +681,19 @@ impl<'a> Model<'a> {
         let blocks = &function.blocks;
         let index: HashMap<u64, usize> = blocks.iter().enumerate().map(|(index, block)| (block.start, index)).collect();
         let Some(&entry) = index.get(&function.address) else { return Vec::new() };
-        let mut inputs: Vec<Option<State>> = vec![None; blocks.len()];
         let mut start = [Value::Unknown; REGISTERS];
         start[self.abi.receiver] = self.entry_self(function.address);
-        inputs[entry] = Some(start);
         let mut x86 = X86Registers::default();
         let mut any = false;
-        for _ in 0..MAX_PASSES {
-            let mut changed = false;
-            for (position, block) in blocks.iter().enumerate() {
-                let Some(mut state) = inputs[position] else { continue };
-                let run = Run { program, function, start: block.start, end: block.end };
-                let Some(successors) = self.block(&run, &mut state, decoder, &mut x86, None, &mut any) else {
-                    continue;
-                };
-                for successor in successors.into_iter().filter_map(|at| index.get(&at).copied()) {
-                    let merged = match inputs[successor] {
-                        None => state,
-                        Some(previous) => join(&previous, &state),
-                    };
-                    if inputs[successor] != Some(merged) {
-                        inputs[successor] = Some(merged);
-                        changed = true;
-                    }
-                }
-            }
-            if !any {
-                return Vec::new();
-            }
-            if !changed {
-                break;
-            }
-        }
+        let settled = settle(blocks.len(), entry, start, |position, mut state| {
+            let block = &blocks[position];
+            let run = Run { program, function, start: block.start, end: block.end };
+            let successors = self.block(&run, &mut state, decoder, &mut x86, None, &mut any)?;
+            Some((state, successors.into_iter().filter_map(|at| index.get(&at).copied()).collect()))
+        });
+        // Inputs that never settled may still be more specific than every path allows: resolve nothing rather
+        // than risk a send resolved from a value some path does not have.
+        let Some(inputs) = settled.filter(|_| any) else { return Vec::new() };
         // One more pass from the settled inputs records the sends.
         let mut sends = Vec::new();
         for (position, block) in blocks.iter().enumerate() {
@@ -794,7 +820,7 @@ impl<'a> Model<'a> {
                 // `[super init…]` returns self, which is still of the method's own (static) class.
                 let result =
                     match (selector.map(|s| self.symbols.names[s as usize].as_str()), self.entry_self(function)) {
-                        (Some(name), own @ Value::Object { .. }) if name.starts_with("init") => own,
+                        (Some(name), own @ Value::Object { .. }) if init_family(name) => own,
                         _ => Value::Unknown,
                     };
                 let mut send = self.resolved(function, site, entry, selector, receiver);
@@ -804,10 +830,10 @@ impl<'a> Model<'a> {
                 return (Some(send), result);
             }
             Entry::Alloc => (named("alloc"), receiver, as_object(receiver)),
-            Entry::New => (named("new"), receiver, as_object(receiver)),
+            Entry::New => (named("new"), receiver, initialised(as_object(receiver))),
             Entry::AllocInit => {
                 let object = as_object(receiver);
-                (named("init"), object, object)
+                (named("init"), object, initialised(object))
             }
         };
         let mut send = self.resolved(function, site, entry, selector, receiver);
@@ -836,8 +862,9 @@ impl<'a> Model<'a> {
             return Value::Unknown;
         };
         match (name, receiver) {
-            ("alloc" | "new" | "allocWithZone:", Value::Class { .. }) => as_object(receiver),
-            (_, Value::Object { .. }) if name.starts_with("init") => receiver,
+            ("alloc" | "allocWithZone:", Value::Class { .. }) => as_object(receiver),
+            ("new", Value::Class { .. }) => initialised(as_object(receiver)),
+            (_, Value::Object { .. }) if init_family(name) => initialised(receiver),
             ("class", Value::Object { class, exact, .. }) => Value::Class { class, exact, origin: Origin::ClassOf },
             ("self" | "retain" | "autorelease", Value::Object { .. } | Value::Class { .. }) => receiver,
             _ => Value::Unknown,
@@ -883,7 +910,7 @@ impl<'a> Model<'a> {
             }
             return send;
         };
-        let (found, _) = self.lookup(class, selector, meta);
+        let (found, outside) = self.lookup(class, selector, meta);
         let mut targets: Vec<u64> = found.to_vec();
         if !exact {
             for implementation in self.overrides(class, selector, meta) {
@@ -892,34 +919,33 @@ impl<'a> Model<'a> {
                 }
             }
         }
+        // A method a local category adds to a class outside the binary may be overridden by that class's
+        // subclasses in the framework, which the binary does not show: for an instance of it, not one certain target.
         send.confidence = match (found.len(), targets.len()) {
             (_, 0) => Confidence::Framework,
-            (1, 1) => Confidence::Resolved,
+            (1, 1) if !(outside && !meta) => Confidence::Resolved,
             _ => Confidence::Ambiguous,
         };
         send.targets = targets;
         send
     }
 
-    /// The implementations a class's lookup of `selector` finds in the binary, walking up its superclasses, and the
-    /// first class outside the binary the walk reached without finding one.
-    fn lookup(&self, class: u32, selector: u32, meta: bool) -> (&[u64], Option<u32>) {
+    /// The implementations a class's lookup of `selector` finds in the binary, walking up its superclasses, and
+    /// whether they were found on a class outside the binary (in a local category on it).
+    fn lookup(&self, class: u32, selector: u32, meta: bool) -> (&[u64], bool) {
         let mut current = class;
         let mut visited = HashSet::new();
         while visited.insert(current) && visited.len() <= MAX_SUPERCLASS_DEPTH {
-            let Some(info) = self.classes.get(&current) else { return (&[], Some(current)) };
+            let Some(info) = self.classes.get(&current) else { break };
             if let Some(found) = info.own(selector, meta) {
-                return (found, None);
+                return (found, !info.local);
             }
-            if !info.local {
-                return (&[], Some(current));
-            }
-            match info.superclass {
+            match info.superclass.filter(|_| info.local) {
                 Some(superclass) => current = superclass,
-                None => return (&[], None),
+                None => break,
             }
         }
-        (&[], None)
+        (&[], false)
     }
 
     /// Implementations of `selector` in local subclasses of `class`, at any depth.
@@ -952,12 +978,62 @@ struct Run<'p> {
     end: u64,
 }
 
+/// Whether `selector` is in the ARC `init` method family: `init` followed by the end or a non-lowercase character
+/// (`init`, `initWithFrame:`, `init:`), not `initialize` or `initials`.
+fn init_family(selector: &str) -> bool {
+    let selector = selector.trim_start_matches('_');
+    selector.strip_prefix("init").is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_lowercase()))
+}
+
+/// What an initialiser returns for `value`: an object of the class, but possibly another one (a class cluster's
+/// concrete subclass, a replaced `self`), so no longer exactly that class.
+fn initialised(value: Value) -> Value {
+    match value {
+        Value::Object { class, .. } => Value::Object { class, exact: false, origin: Origin::Alloc },
+        _ => Value::Unknown,
+    }
+}
+
 /// An instance of the class `value` is, as `+alloc` makes it.
 fn as_object(value: Value) -> Value {
     match value {
         Value::Class { class, exact, .. } => Value::Object { class, exact, origin: Origin::Alloc },
         _ => Value::Unknown,
     }
+}
+
+/// Runs a forward dataflow over `count` blocks from `start` at block `entry` to a fixed point: `transfer` maps a
+/// block's input to its output and successors (`None` for a block that cannot be run). The settled input of every
+/// reached block, or `None` when the inputs still changed after [`MAX_PASSES`] passes.
+fn settle(
+    count: usize,
+    entry: usize,
+    start: State,
+    mut transfer: impl FnMut(usize, State) -> Option<(State, Vec<usize>)>,
+) -> Option<Vec<Option<State>>> {
+    let mut inputs: Vec<Option<State>> = vec![None; count];
+    *inputs.get_mut(entry)? = Some(start);
+    for _ in 0..MAX_PASSES {
+        let mut changed = false;
+        for position in 0..count {
+            let Some(state) = inputs[position] else { continue };
+            let Some((output, successors)) = transfer(position, state) else { continue };
+            for successor in successors.into_iter().filter(|&successor| successor < count) {
+                let merged = match inputs[successor] {
+                    None => output,
+                    Some(previous) => join(&previous, &output),
+                };
+                if inputs[successor] != Some(merged) {
+                    inputs[successor] = Some(merged);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return Some(inputs);
+        }
+    }
+    None
 }
 
 /// Where control flow joins, a register keeps a value only if every path agrees on it.
@@ -1020,6 +1096,31 @@ fn branch_register(arch: Arch, bytes: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn init_family_follows_the_arc_naming_rule() {
+        for selector in ["init", "initWithFrame:", "init:", "_initWithCoder:", "initX"] {
+            assert!(init_family(selector), "{selector}");
+        }
+        for selector in ["initialize", "initials", "initialViewController", "inits", "reinit", "in"] {
+            assert!(!init_family(selector), "{selector}");
+        }
+    }
+
+    #[test]
+    fn dataflow_that_never_settles_yields_nothing() {
+        let start = [Value::Unknown; REGISTERS];
+        // A chain laid out backwards (each block's successor at a lower address) reaches one block further per
+        // pass, so 40 blocks do not settle within the passes allowed.
+        let unsettled =
+            settle(40, 39, start, |position, state| Some((state, position.checked_sub(1).into_iter().collect())));
+        assert!(unsettled.is_none());
+        // An ordinary loop settles, with the value both paths agree on kept.
+        let mut entry = start;
+        entry[0] = Value::Selector(7);
+        let settled = settle(2, 0, entry, |position, state| Some((state, vec![1 - position]))).unwrap();
+        assert_eq!(settled[1].unwrap()[0], Value::Selector(7));
+    }
 
     #[test]
     fn register_moves_and_branch_registers_decode() {

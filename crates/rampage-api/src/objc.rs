@@ -161,7 +161,7 @@ impl Project {
     /// Adds a `/* objc: … */` comment at the end of each decompiled line holding an Objective-C send, after the
     /// line's last token, with a `comment` token of the send's address. Lines and other tokens are unchanged.
     pub(crate) fn annotate_objc_sends(&self, decompilation: &mut Decompilation) {
-        let Ok(dispatch) = self.objc_dispatch() else { return };
+        let Ok(Some(dispatch)) = self.objc_dispatch_for_function(decompilation.address) else { return };
         let sends: Vec<&Send> = dispatch.sends.iter().filter(|send| send.function == decompilation.address).collect();
         if sends.is_empty() {
             return;

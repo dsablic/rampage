@@ -46,11 +46,11 @@ async fn objc_sends_resolve_to_methods_across_tools() {
 
     let all = call(&client, "objc_sends", json!({ "path": path, "limit": 500 })).await;
     let summary = &all["summary"];
-    assert_eq!(summary["sends"], 32, "{summary}");
-    assert_eq!(summary["with_selector"], 32, "{summary}");
+    assert_eq!(summary["sends"], 42, "{summary}");
+    assert_eq!(summary["with_selector"], 42, "{summary}");
     assert_eq!(summary["unknown_selector"], 0, "{summary}");
-    assert_eq!(summary["selector_stubs"], 16, "{summary}");
-    assert_eq!(all["sends"]["total"], 32);
+    assert_eq!(summary["selector_stubs"], 21, "{summary}");
+    assert_eq!(all["sends"]["total"], 42);
 
     // [self area] in -[Shape scaledArea]: Circle and Square override it, so all three are reachable.
     let area =
@@ -59,7 +59,7 @@ async fn objc_sends_resolve_to_methods_across_tools() {
     assert_eq!(send["confidence"], "ambiguous", "{send}");
     assert_eq!(send["receiver"]["class"], "Shape");
     assert_eq!(send["receiver"]["source"], "self");
-    assert_eq!(names(&send["targets"], "name"), ["-[Shape area]", "-[Circle area]", "-[Square area]"]);
+    assert_eq!(names(&send["targets"], "name"), ["-[Shape area]", "-[Circle area]", "-[Ring area]", "-[Square area]"]);
 
     // [super describe] in -[Circle describe] is an edge to -[Shape describe]; so is the category's [self describe].
     let callers = call(&client, "xrefs", json!({ "path": path, "to": "-[Shape describe]" })).await;
@@ -68,6 +68,9 @@ async fn objc_sends_resolve_to_methods_across_tools() {
     let from: Vec<&str> = edges.iter().map(|row| row["from_function"].as_str().unwrap()).collect();
     // The arm64 link merges the Debug category into Shape, so its method is named as Shape's own.
     assert!(from.contains(&"-[Circle describe]") && from.contains(&"-[Shape dump]"), "{callers}");
+    // describe_any's [thing describe] has an unknown receiver: objc_sends lists its candidates, xrefs draws no call.
+    assert!(edges.iter().all(|row| row["objc"]["confidence"] != "candidates"), "{callers}");
+    assert_eq!(edges.len(), 2, "{callers}");
     let super_edge = edges.iter().find(|row| row["from_function"] == "-[Circle describe]").unwrap();
     assert_eq!(super_edge["kind"], "call");
     assert_eq!(super_edge["objc"]["confidence"], "resolved");

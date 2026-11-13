@@ -1,7 +1,9 @@
 // Objective-C message-send fixture: every way a send's receiver class is statically evident (self in instance
 // and class methods, super, class references, +alloc / objc_alloc_init / objc_opt_new results), a category on a
 // local superclass, a protocol method implemented by unrelated classes, and overrides that make a self send
-// ambiguous. Each send's expected resolution is listed in objc_dispatch truth in the rampage-api tests.
+// ambiguous, a subclass (Ring) overriding a method of an initialised object's class, a category on an imported
+// class (NSString), and a method whose name only starts with `init`. Each send's expected resolution is listed in
+// crates/rampage-analysis/tests/objc_dispatch.rs.
 #import <Foundation/Foundation.h>
 
 @protocol Describable
@@ -59,6 +61,15 @@
 }
 @end
 
+@interface Ring : Circle
+@end
+
+@implementation Ring
+- (double)area {
+    return [super area] / 2;
+}
+@end
+
 @interface Square : Shape
 @property(nonatomic) double side;
 + (Square *)squareWithSide:(double)side;
@@ -87,11 +98,26 @@
 
 @interface Label : NSObject <Describable>
 @property(nonatomic, copy) NSString *text;
+- (NSString *)initials;
 @end
 
 @implementation Label
 - (NSString *)describe {
     return self.text ? self.text : @"label";
+}
+// Not an initialiser: `init` is followed by a lowercase letter, so the result is not the receiver.
+- (NSString *)initials {
+    return [self.text substringToIndex:1];
+}
+@end
+
+@interface NSString (Shout)
+- (NSString *)shout;
+@end
+
+@implementation NSString (Shout)
+- (NSString *)shout {
+    return [self uppercaseString];
 }
 @end
 
@@ -108,6 +134,8 @@ int main(void) {
         [circle dump];
         [square dump];
         NSLog(@"%@ %@ %@", describe_any(circle), describe_any(label), [unit describe]);
+        NSString *greeting = [[NSString alloc] initWithFormat:@"%@!", [[label initials] shout]];
+        NSLog(@"%@ %f", [greeting shout], [circle area]);
         return [Circle kind].length > 0 ? 0 : 1;
     }
 }

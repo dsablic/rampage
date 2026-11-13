@@ -261,7 +261,10 @@ impl<'a> Parser<'a> {
             if count > MAX_CLASSES {
                 self.warn(format!("{name} lists {count} entries; reading the first {MAX_CLASSES}"));
             }
-            let start = section.address.next_multiple_of(self.size);
+            let Some(start) = section.address.checked_next_multiple_of(self.size) else {
+                self.warn(format!("{name} at {:#x} ends past the address space", section.address));
+                continue;
+            };
             for index in 0..count.min(MAX_CLASSES) {
                 let Some(at) = index.checked_mul(self.size).and_then(|offset| start.checked_add(offset)) else { break };
                 match self.pointer(at) {
@@ -280,7 +283,10 @@ impl<'a> Parser<'a> {
         let mut slots = Vec::new();
         for section in sections {
             let count = (section.size / self.size).min(MAX_LIST_ENTRIES * 4);
-            let start = section.address.next_multiple_of(self.size);
+            let Some(start) = section.address.checked_next_multiple_of(self.size) else {
+                self.warn(format!("{name} at {:#x} ends past the address space", section.address));
+                continue;
+            };
             for index in 0..count {
                 let Some(at) = index.checked_mul(self.size).and_then(|offset| start.checked_add(offset)) else { break };
                 if let Some(target) = self.pointer(at) {
@@ -626,6 +632,27 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod pointer_width_tests {
+    /// A reference section placed at the top of the address space, where aligning its start would overflow, is
+    /// skipped with a warning rather than panicking.
+    #[test]
+    fn reference_sections_at_the_top_of_the_address_space_are_skipped() {
+        let mut binary = crate::Binary::open(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/fixtures/bin/objc-dispatch-arm64.macho"),
+        )
+        .unwrap();
+        for section in binary.sections.iter_mut().filter(|section| section.name == "__objc_selrefs") {
+            section.address = u64::MAX - 2;
+        }
+        for section in binary.sections.iter_mut().filter(|section| section.name == "__objc_classlist") {
+            section.address = u64::MAX - 2;
+        }
+        let refs = super::refs(&binary);
+        assert!(refs.selectors.is_empty());
+        assert!(refs.warnings.iter().any(|warning| warning.contains("__objc_selrefs")), "{:?}", refs.warnings);
+        assert!(refs.warnings.iter().any(|warning| warning.contains("__objc_classlist")), "{:?}", refs.warnings);
+    }
+
     #[test]
     fn unknown_objc_width_is_reported_not_a_complete_empty_parse() {
         let mut report = super::ObjcReport::default();

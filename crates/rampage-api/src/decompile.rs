@@ -467,8 +467,7 @@ impl Project {
     /// [`Self::decompile`], also inside code judged encrypted or packed, which it otherwise refuses. The result is
     /// then whatever those bytes decode to, which is noise unless the judgement was wrong.
     pub fn decompile_encrypted(&self, address: u64) -> Result<Decompilation, ApiError> {
-        let mut decompilation =
-            self.decompile_guarded(address, &std::sync::atomic::AtomicBool::new(false), true)?;
+        let mut decompilation = self.decompile_guarded(address, &std::sync::atomic::AtomicBool::new(false), true)?;
         self.annotate_objc_sends(&mut decompilation);
         Ok(decompilation)
     }

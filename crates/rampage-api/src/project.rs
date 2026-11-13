@@ -111,6 +111,8 @@ pub struct Project {
     go_strings: OnceLock<crate::go_strings::GoStrings>,
     /// Objective-C message sends resolved to method implementations, derived once from the analysis.
     objc_dispatch: OnceLock<rampage_analysis::objc_dispatch::Dispatch>,
+    /// Where sends can be, so queries that cannot involve one skip resolving them.
+    objc_hints: OnceLock<Option<rampage_analysis::objc_dispatch::SendHints>>,
     /// Embedded DWARF name → DIE index, skimmed once on the first DWARF type lookup.
     dwarf_types: OnceLock<Result<Arc<rampage_loaders::debug::DwarfTypeIndex>, String>>,
     go_types: OnceLock<Result<Arc<rampage_loaders::gotypes::GoTypeIndex>, String>>,
@@ -373,6 +375,7 @@ impl Project {
             go_prototypes: OnceLock::new(),
             go_strings: OnceLock::new(),
             objc_dispatch: OnceLock::new(),
+            objc_hints: OnceLock::new(),
             dwarf_types: OnceLock::new(),
             go_types: OnceLock::new(),
             analysis_store: RwLock::new(crate::AnalysisStore::from_env()),
@@ -1023,6 +1026,46 @@ impl Project {
                 crate::decoder::decoder_for_project(&self.binary).ok()
             })
         }))
+    }
+
+    /// The sends, resolved only when `involved` says the query at hand can involve one (or they already are). The
+    /// first query that does resolves every send in the binary, about a tenth of discovery's time.
+    pub(crate) fn objc_dispatch_if(
+        &self,
+        involved: impl FnOnce(&rampage_analysis::objc_dispatch::SendHints) -> bool,
+    ) -> Result<Option<&rampage_analysis::objc_dispatch::Dispatch>, ApiError> {
+        if let Some(dispatch) = self.objc_dispatch.get() {
+            return Ok(Some(dispatch));
+        }
+        let hints = self.objc_hints.get_or_init(|| {
+            if self.binary.format != rampage_loaders::Format::MachO {
+                return None;
+            }
+            let report = rampage_loaders::objc::parse(&self.binary);
+            rampage_analysis::objc_dispatch::SendHints::new(&self.binary, &report)
+        });
+        match hints {
+            Some(hints) if involved(hints) => self.objc_dispatch().map(Some),
+            _ => Ok(None),
+        }
+    }
+
+    /// The sends, when the function starting at `start` references a send entry point.
+    pub(crate) fn objc_dispatch_for_function(
+        &self,
+        start: u64,
+    ) -> Result<Option<&rampage_analysis::objc_dispatch::Dispatch>, ApiError> {
+        let analysis = self.analysis()?;
+        let Some(function) = analysis.program.function_at(start) else { return Ok(None) };
+        let xrefs = &analysis.program.xrefs;
+        let by_source = &analysis.xrefs_by_source;
+        self.objc_dispatch_if(|hints| {
+            function.blocks.iter().any(|block| {
+                let first = by_source.partition_point(|&index| xrefs[index].from < block.start);
+                let last = by_source.partition_point(|&index| xrefs[index].from < block.end);
+                by_source[first..last].iter().any(|&index| hints.reaches_send(xrefs[index].to))
+            })
+        })
     }
 
     /// The embedded DWARF type index, built on first use; the error says why there is none.

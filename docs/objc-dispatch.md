@@ -29,7 +29,8 @@ stub's. The receiver register (x0, rdi; rsi for `_stret`) has a known class when
 | `class_ref` | a class reference (`__objc_classrefs`, `__objc_superrefs`, a GOT entry or `_OBJC_CLASS_$_` import, or the class's address formed directly) | yes: the class object itself |
 | `self` | `self` on entry to a method of a known class (the class object in a class method) | no: it may be a subclass |
 | `super` | the method's class's superclass, for `objc_msgSendSuper2` | yes: super sends are static |
-| `alloc` | the result of `+alloc`, `+new`, `objc_alloc(_init)`, `objc_opt_new` on a known class, or of `-init…` on such an instance | as the class was |
+| `alloc` | the result of `+alloc` / `objc_alloc` on a known class | as the class was |
+| `alloc` | the result of an initialiser (`-init…` in the ARC `init` family, `objc_alloc_init`, `+new`, `objc_opt_new`) on such an instance | no: an initialiser may return another object (a class cluster's subclass) |
 | `class_of` | `-class` / `objc_opt_class` of a known instance | as the instance was |
 
 Registers are followed by a forward dataflow over each function's blocks: moves between registers, loads of the
@@ -44,52 +45,59 @@ before the class's own methods, then up the superclass chain within the binary. 
 | `confidence` | Meaning | Targets |
 | --- | --- | --- |
 | `resolved` | known class, exactly one implementation reachable | that implementation |
-| `ambiguous` | known class, but a local subclass overrides the selector (receiver not exact) or several categories define it | the looked-up one first, then the overrides |
+| `ambiguous` | known class, but a local subclass overrides the selector (receiver not exact), several categories define it, or the only implementation is a local category's method on a class outside the binary, which the class's framework subclasses may override (instance receivers) | the looked-up one first, then the overrides |
 | `framework` | known class, no implementation in the binary: inherited from a class outside it | none |
 | `candidates` | unknown class: every implementation of the selector in the binary, when there are at most 8 (`candidates` counts them all) | the implementations |
 | `unknown_receiver` | unknown class, no implementation of the selector in the binary | none |
 | `unknown_selector` | the selector register's value is not evident | none |
 
 Nothing is guessed: a send of unknown receiver never gets a single target, and `resolved` requires both a known
-class and a unique implementation.
+class and a unique implementation. A function whose register dataflow does not settle within 16 passes over its
+blocks has no sends resolved at all, rather than sends resolved from values some path may not have.
 
 ## Where it shows
 
 - `objc_sends {path, at?, selector?, offset?, limit?}`: a summary (counts by confidence, with selector, with
   receiver class, selector stubs) over the selected sends, and a page of sends with targets named.
-- `xrefs`: each target of a `resolved`, `ambiguous` or `candidates` send is a `call` row from the send site with an
-  `objc` object (`selector`, `receiver` — `+Class` for a class object —, `confidence`, `alternatives`). Other rows
-  are unchanged. `function_summary` references and callees include them.
+- `xrefs` gains rows: each target of a `resolved` or `ambiguous` send is a new `call` row from the send site to the
+  method implementation, carrying an `objc` object (`selector`, `receiver` — `+Class` for a class object —,
+  `confidence`, `alternatives`). Sends of unknown receiver (`candidates`) add no rows; `objc_sends` lists them.
+  Existing rows are unchanged. `function_summary` references and callees include the new rows.
 - Listings (`function_graph`, `function_summary`): the send's line comment gains
   `objc: [(Shape *) area] -> -[Shape area] | -[Circle area] (ambiguous)`.
 - `decompile`: the C line holding the send ends with `/* objc: … */` (a `comment` token with the send's address).
 - Method implementations are named `-[Class selector]` / `+[Class selector]` from the runtime metadata even when
   stripped (see `language_metadata`).
 
-Images that are not Mach-O, or carry no selector references, skip all of this; their output is unchanged.
+Images that are not Mach-O, or carry no selector references, skip all of this; their output is unchanged. In an
+Objective-C image, sends are resolved for the whole binary at once, the first time a query can involve one: an
+`xrefs` query to a method implementation, or an `xrefs`/listing/`decompile` of a function that references a send
+entry point (other queries skip it). That first query pays roughly a tenth of discovery's time (5 s of iTerm2's 49 s
+in a debug build); later ones reuse the result.
 
 ## Measurements
 
 Owned fixtures (`tests/fixtures/objc-dispatch/dispatch.m`, built by `build.sh` for arm64 and x86-64, stripped and
 unstripped): classes, a subclass calling `super`, class methods, `alloc`/`init` and `new`, a category on a local
-superclass, a protocol method implemented by unrelated classes and overrides that make `self` sends ambiguous. Each
-of the 32 sends is checked against the implementations it reaches at run time (from the source) in
-`crates/rampage-analysis/tests/objc_dispatch.rs`:
+superclass (merged into the class on arm64, kept separate on x86-64) and on an imported class (`NSString`), a
+protocol method implemented by unrelated classes, overrides that make `self` and initialised-object sends
+ambiguous, and a method (`initials`) whose name only starts with `init`. Each of the 42 sends is checked against the
+implementations it reaches at run time (from the source) in `crates/rampage-analysis/tests/objc_dispatch.rs`:
 
-| Fixture | Sends | Selector | Truth in binary | Resolved exactly | Truth among targets | False resolutions |
-| --- | --- | --- | --- | --- | --- | --- |
-| arm64, stripped and unstripped | 32 | 32 (100%) | 24 | 18 (75%) | 24 (100%) | 0 |
-| x86-64, stripped and unstripped | 32 | 32 (100%) | 24 | 18 (75%) | 24 (100%) | 0 |
+| Fixture | Sends | Selector | Truth in binary | Resolved exactly | Ambiguous, truth included | Candidates, truth included | False resolutions |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| arm64, stripped and unstripped | 42 | 42 (100%) | 30 | 21 (70%) | 5 | 4 | 0 |
+| x86-64, stripped and unstripped | 42 | 42 (100%) | 30 | 20 (67%) | 4 | 6 | 0 |
 
-The six not resolved exactly are three `self` sends a subclass overrides (`ambiguous`, truth included) and three
-sends to receivers returned by other methods or passed as parameters (`candidates`, truth included).
+Every send whose implementation is in the binary has it among its targets. x86-64 keeps two of main's objects in
+stack slots, so two of its sends have unknown receivers.
 
 Installed applications (measured locally, not committed; sampled `resolved` sends checked by hand against the
 disassembly, none wrong):
 
 | Binary | Sends | Selector | Receiver class | Resolved | Ambiguous | Framework | Candidates |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| TextEdit (macOS 27, arm64e) | 2551 | 99.9% | 41.0% | 360 | 0 | 686 | 234 |
+| TextEdit (macOS 27, arm64e) | 2551 | 99.9% | 41.0% | 359 | 1 | 686 | 234 |
 | Stickies (macOS 27, arm64e) | 2082 | 100.0% | 45.3% | 454 | 0 | 489 | 293 |
 | Chess (macOS 27, arm64e) | 4328 | 100.0% | 37.4% | 671 | 7 | 942 | 1177 |
 | Bluetooth MIDI Connect (arm64) | 221 | 100.0% | 39.4% | 30 | 0 | 57 | 17 |

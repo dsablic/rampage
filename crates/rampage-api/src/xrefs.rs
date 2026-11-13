@@ -34,8 +34,8 @@ pub struct ObjcEdge {
     /// The receiver's class, `+` prefixed when the receiver is the class object (a class method send).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receiver: Option<String>,
-    /// `resolved` (the one implementation), `ambiguous` (one of several a subclass override or category makes
-    /// reachable) or `candidates` (receiver class unknown: one of the selector's implementations in the binary).
+    /// `resolved` (the one implementation) or `ambiguous` (one of several a subclass override or category makes
+    /// reachable). Sends of unknown receiver class add no rows; `objc_sends` lists their candidates.
     pub confidence: &'static str,
     /// How many implementations the send may reach, this one included.
     pub alternatives: usize,
@@ -70,7 +70,6 @@ impl Project {
             let last = by_source.partition_point(|&index| xrefs[index].from < end);
             by_source[first..last].iter().map(|&index| xrefs[index])
         };
-        let dispatch = self.objc_dispatch()?;
         let ranges: Vec<(u64, u64)> = match query {
             XrefQuery::To(_) => Vec::new(),
             XrefQuery::From(address) => match analysis.program.function_at(address) {
@@ -84,10 +83,22 @@ impl Project {
                 ranges.iter().flat_map(|&(start, end)| from_range(start, end)).map(|xref| (xref, None)).collect()
             }
         };
-        // Objective-C sends add call edges to the implementations they may reach.
-        let sends: Vec<&rampage_analysis::objc_dispatch::Send> = match query {
-            XrefQuery::To(address) => dispatch.sends.iter().filter(|send| send.targets.contains(&address)).collect(),
-            XrefQuery::From(_) => ranges.iter().flat_map(|&(start, end)| dispatch.sends_in(start, end)).collect(),
+        // Objective-C sends add call edges to the implementations they may reach. They are resolved only when
+        // this query can involve one: it is to a method implementation, or its references reach a send entry.
+        let dispatch = match query {
+            XrefQuery::To(address) => self.objc_dispatch_if(|hints| hints.is_implementation(address))?,
+            XrefQuery::From(_) => {
+                self.objc_dispatch_if(|hints| selected.iter().any(|(xref, _)| hints.reaches_send(xref.to)))?
+            }
+        };
+        let sends: Vec<&rampage_analysis::objc_dispatch::Send> = match (dispatch, query) {
+            (None, _) => Vec::new(),
+            (Some(dispatch), XrefQuery::To(address)) => {
+                dispatch.sends.iter().filter(|send| send.targets.contains(&address)).collect()
+            }
+            (Some(dispatch), XrefQuery::From(_)) => {
+                ranges.iter().flat_map(|&(start, end)| dispatch.sends_in(start, end)).collect()
+            }
         };
         for send in sends.into_iter().filter(|send| send.confidence.has_edges()) {
             for &target in &send.targets {

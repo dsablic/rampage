@@ -321,8 +321,8 @@ resolution rate on Mach-O fixtures).
 *Status (2026-11-06):* not started as a phase. Mach-O chained-fixup RTTI was added after suite v2 showed
 `class_evidence` returning nothing on a default-linked arm64 Mach-O. Item 3 (2026-11-13): `objc_msgSend` call
 resolution landed ([objc-dispatch.md](../objc-dispatch.md)): on the owned arm64/x86-64 fixtures every send's
-selector resolves, 18 of 24 in-binary targets resolve exactly and all 24 are among the reported targets, with 0
-false resolutions; macOS system apps resolve the selector at 99.9-100% of sends.
+selector resolves, 21 of 30 in-binary targets resolve exactly on arm64 (20 on x86-64) and all 30 are among the
+reported targets, with 0 false resolutions; macOS system apps resolve the selector at 99.9-100% of sends.
 
 ---
 
