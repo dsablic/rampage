@@ -207,6 +207,22 @@ fn plt_stubs_do_not_take_the_name_of_a_function_the_library_defines() {
 }
 
 #[test]
+fn i386_pic_plt_stubs_are_named_through_the_got_base() {
+    // `jmp [ebx+0xc]`: ebx holds the GOT base, so the slot is `.got.plt + 0xc`, a JUMP_SLOT for `helper`.
+    let binary = open("libhelper-x86.so");
+    let names = functions::Names::new(&binary);
+    let helper = symbol_address(&binary, "helper");
+    let stub = names.address_of("helper@plt").expect("stub named helper@plt");
+    assert_ne!(stub, helper);
+    assert_eq!(binary.read(stub, 2), Some(&[0xff, 0xa3][..]));
+    // entry_point calls the stub, which is a function of its own.
+    let program = functions::analyze(&binary).unwrap();
+    let entry = program.function_at(symbol_address(&binary, "entry_point")).unwrap();
+    assert!(program.function_at(stub).is_some());
+    assert!(program.xrefs_to(stub).iter().any(|xref| xref.kind == XrefKind::Call && entry.contains(xref.from)));
+}
+
+#[test]
 fn pe_import_thunks_are_named_without_analysis() {
     let binary = open("hello-x64.exe");
     let names = functions::Names::new(&binary);

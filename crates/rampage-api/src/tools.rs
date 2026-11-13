@@ -3666,7 +3666,7 @@ fn fit_committed_result(value: Value) -> Value {
     })
 }
 
-pub use arguments::{admitted_arguments, check_arguments, check_tool_arguments};
+pub use arguments::{admitted_arguments, check_arguments, check_tool_arguments, normalize_arguments};
 
 fn dispatch(
     tools: &[Tool],

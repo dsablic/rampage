@@ -54,6 +54,7 @@
     "bin/hello-x64.macho": "7d17afd16eabfc21d0c98b6b731c3a903cbdd1b55f532b7a70f82e6d39b038d2",
     "bin/hello-x64.o": "e3dabdca8fd326e7194dadcab9a5785545ccf13b6324167f0a3066ca4a554efc",
     "bin/libhelper-x64.so": "279e38b528bcd71fb14dbcbdcffba6bcf8f6710135557290846de6dbff1b3d33",
+    "bin/libhelper-x86.so": "ea021f0ecb02d3a32fa806660e877e31ab809257cf896251cee867cb7843a99d",
     "bin/musl-static-aarch64.elf": "be692428d5ab446fdb42f70ae503acb8f0460bf78b2a2f48cc183ae0166c22d7",
     "bin/musl-static-x86_64.elf": "58f94b6e0d4bf1e4ce708ae4cc449ade632e6ace9041511bc87d67176d057b00",
     "bin/objc-arm64-stripped.macho": "9d5b80322a2c5164b223793f5c9394fde15f7af6d15211887856e844c1fc94d8",

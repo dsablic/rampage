@@ -866,13 +866,12 @@ async fn decompile_names_its_decompiler_and_a_required_missing_worker_refuses() 
 async fn unknown_or_missing_arguments_are_refused_naming_the_tool_arguments() {
     let client = connect().await;
     let path = fixture("hello-x64.elf");
+    // `address` is taken as `at`; `length` has no single meaning for disassemble (it counts instructions).
     let guessed = call(&client, "disassemble", json!({ "path": path, "address": "0x401000", "length": "64" })).await;
     assert_eq!(guessed.is_error, Some(true));
     let message = text(&guessed);
-    assert!(
-        message.contains("unknown fields `address` (did you mean `at`?), `length` (did you mean `count`?)"),
-        "{message}"
-    );
+    assert!(message.contains("unknown field `length` (did you mean `count`?)"), "{message}");
+    assert!(!message.contains("`address` (did"), "{message}");
     assert!(message.contains("Arguments of disassemble:") && message.contains("`path` (required)"), "{message}");
     assert!(!message.contains('\n'), "one line: {message}");
 
@@ -896,6 +895,28 @@ async fn unknown_or_missing_arguments_are_refused_naming_the_tool_arguments() {
     // The Raw selector keeps its own refusal on tools that cannot serve it.
     let raw = call(&client, "inspect_data", json!({ "path": path, "at": "0x0", "raw": {} })).await;
     assert!(text(&raw).contains("does not accept Raw projects"), "{}", text(&raw));
+    client.cancel().await.unwrap();
+}
+
+/// Benchmark v3: agents calling deferred tools before loading their schemas lost a call each to `decompile`
+/// with `address`, `inspect_data` with `length` (and numbers sent as strings), and `xrefs` with `at`.
+#[tokio::test]
+async fn unambiguous_argument_aliases_and_numeric_strings_are_accepted() {
+    let client = connect().await;
+    let path = fixture("hello-x64.elf");
+    let decompiled = call(&client, "decompile", json!({ "path": path, "address": "main", "view": "summary" })).await;
+    assert!(!text(&decompiled).contains("invalid arguments"), "{}", text(&decompiled));
+    let inspected = call(&client, "inspect_data", json!({ "path": path, "at": "main", "length": "16" })).await;
+    assert_ne!(inspected.is_error, Some(true), "{}", text(&inspected));
+    assert_eq!(json_of(&inspected)["size"], 16, "{}", text(&inspected));
+    let hex = call(&client, "inspect_data", json!({ "path": path, "at": "main", "size": "0x8" })).await;
+    assert_eq!(json_of(&hex)["size"], 8, "{}", text(&hex));
+    // An argument that is given wins over its alias, which is then refused as unknown.
+    let both = call(&client, "inspect_data", json!({ "path": path, "at": "main", "address": "main" })).await;
+    assert!(text(&both).contains("unknown field `address`"), "{}", text(&both));
+    // `at` on xrefs is ambiguous (to or from), so it is refused with the likelier `to` named.
+    let xrefs = call(&client, "xrefs", json!({ "path": path, "at": "main" })).await;
+    assert!(text(&xrefs).contains("`at` (did you mean `to`?)"), "{}", text(&xrefs));
     client.cancel().await.unwrap();
 }
 
