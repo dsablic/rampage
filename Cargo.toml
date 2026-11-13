@@ -44,6 +44,7 @@ memmap2 = "0.9.11"
 predicates = "3.1.4"
 rayon = "1.12.0"
 rmcp = { version = "3.5.1", features = ["server", "transport-io", "macros", "schemars"] }
+rusqlite = { version = "0.42.0", default-features = false, features = ["bundled"] }
 schemars = "1.2.2"
 object = { version = "0.40.0", default-features = false, features = ["read", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }

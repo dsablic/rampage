@@ -1,6 +1,7 @@
 //! The crate's integration tests build into this one test binary, one module per `tests/*.rs` file, so an edit
 //! relinks one executable instead of one per file. Select a file's tests with `--test integration <file>::`.
 
+mod analysis_cache;
 mod annotate_batch;
 mod annotation_log_format;
 mod api;

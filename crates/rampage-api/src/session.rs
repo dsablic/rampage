@@ -28,6 +28,9 @@ pub struct Session {
     packs: Arc<Packs>,
     /// The worker every project must decompile in, chosen with [`Session::requiring_decompiler_worker`].
     required_worker: Option<PathBuf>,
+    /// The persistent analysis store chosen with [`Session::with_analysis_store`]; `None` keeps each project's
+    /// [`crate::AnalysisStore::from_env`] default.
+    analysis_store: Option<Option<Arc<crate::AnalysisStore>>>,
 }
 
 #[derive(Default)]
@@ -92,6 +95,18 @@ impl Session {
         Self { required_worker: Some(executable), ..self }
     }
 
+    /// Analyses every project this session opens through `store` (`None` disables the persistent store),
+    /// instead of the [`crate::AnalysisStore::from_env`] default.
+    pub fn with_analysis_store(self, store: Option<Arc<crate::AnalysisStore>>) -> Self {
+        Self { analysis_store: Some(store), ..self }
+    }
+
+    fn configure(&self, project: &Project) {
+        if let Some(store) = &self.analysis_store {
+            project.set_analysis_store(store.clone());
+        }
+    }
+
     /// The worker chosen with [`Session::requiring_decompiler_worker`], if any.
     pub fn required_decompiler_worker(&self) -> Option<&Path> {
         self.required_worker.as_deref()
@@ -120,6 +135,7 @@ impl Session {
             capture_annotations: self.capture_annotations.clone(),
             packs: self.packs(),
             required_worker: self.required_worker.clone(),
+            analysis_store: self.analysis_store.clone(),
             ..Self::default()
         }
     }
@@ -182,6 +198,7 @@ impl Session {
             } else {
                 let project = Project::new(binary);
                 project.set_packs(Arc::clone(&self.packs));
+                self.configure(&project);
                 if let Some(executable) = self.decompiler_worker() {
                     project.set_decompiler_worker(Some(crate::DecompilerWorkerConfig {
                         executable: Some(executable),
@@ -368,6 +385,7 @@ impl Session {
             }
             let project = Project::with_annotations(binary, annotations);
             project.set_packs(Arc::clone(&self.packs));
+            self.configure(&project);
             if let Some(executable) = worker {
                 project.set_decompiler_worker(Some(crate::DecompilerWorkerConfig {
                     executable: Some(executable),

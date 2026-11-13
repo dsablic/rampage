@@ -107,6 +107,10 @@ pub struct Project {
     pub(crate) go_prototypes: OnceLock<crate::decompile::GoPrototypes>,
     /// Go static string headers, read once from data on first use.
     go_strings: OnceLock<crate::go_strings::GoStrings>,
+    /// The persistent analysis store consulted before discovery, if any.
+    analysis_store: RwLock<Option<Arc<crate::AnalysisStore>>>,
+    /// What the persistent store did when analysis ran.
+    analysis_store_status: OnceLock<crate::AnalysisStoreStatus>,
 }
 
 /// Rechecks the frozen view after acquiring the authority read lock. Selecting a lock before a first patch
@@ -351,7 +355,67 @@ impl Project {
             packs: RwLock::default(),
             go_prototypes: OnceLock::new(),
             go_strings: OnceLock::new(),
+            analysis_store: RwLock::new(crate::AnalysisStore::from_env()),
+            analysis_store_status: OnceLock::new(),
         }
+    }
+
+    /// Selects the persistent analysis store (`None` disables it) for analyses that have not run yet. Projects
+    /// start with [`crate::AnalysisStore::from_env`].
+    pub fn set_analysis_store(&self, store: Option<Arc<crate::AnalysisStore>>) {
+        *self.analysis_store.write().unwrap_or_else(|poison| poison.into_inner()) = store;
+    }
+
+    /// The persistent store's part in this project's analysis, without starting it.
+    pub fn analysis_store_status(&self) -> crate::AnalysisStoreStatus {
+        if let Some(status) = self.analysis_store_status.get() {
+            return status.clone();
+        }
+        let state = if self.analysis_store.read().unwrap_or_else(|poison| poison.into_inner()).is_none() {
+            "disabled"
+        } else if self.patch_origin.is_some() || self.binary.format == rampage_loaders::Format::Snapshot {
+            "unsupported"
+        } else {
+            "pending"
+        };
+        crate::AnalysisStoreStatus::new(state, None, None)
+    }
+
+    /// Discovery through the persistent store: a verified entry for this exact input, else a fresh analysis that
+    /// is then stored. Byte-patched views are never stored; their bytes are not the file's.
+    fn discover_through_store(&self, binding: Option<&str>) -> Result<Program, DecoderInitializationError> {
+        use crate::AnalysisStoreStatus as Status;
+        use crate::analysis_cache::Lookup;
+        let fresh =
+            || functions::analyze_with_factory(&self.binary, || crate::decoder::decoder_for_project(&self.binary));
+        let store = self.analysis_store.read().unwrap_or_else(|poison| poison.into_inner()).clone();
+        let Some(store) = store else {
+            let _ = self.analysis_store_status.set(Status::new("disabled", None, None));
+            return fresh();
+        };
+        let key = if self.patch_origin.is_some() { None } else { crate::analysis_cache::key(&self.binary, binding) };
+        let Some(key) = key else {
+            let _ = self.analysis_store_status.set(Status::new("unsupported", None, None));
+            return fresh();
+        };
+        let rejected = match store.load(&key) {
+            Lookup::Hit(program) => {
+                let _ = self.analysis_store_status.set(Status::new("hit", Some(key), None));
+                return Ok(program);
+            }
+            Lookup::Absent => None,
+            Lookup::Rejected(reason) => Some(reason),
+        };
+        let program = fresh()?;
+        let stored = store.store(&key, &program);
+        let (state, detail) = match (rejected, stored) {
+            (Some(reason), Ok(())) => ("rejected", format!("{reason}; analysed fresh and stored")),
+            (Some(reason), Err(error)) => ("rejected", format!("{reason}; analysed fresh, {error}")),
+            (None, Ok(())) => ("miss", "analysed fresh and stored".to_owned()),
+            (None, Err(error)) => ("miss", format!("analysed fresh, {error}")),
+        };
+        let _ = self.analysis_store_status.set(Status::new(state, Some(key), Some(detail)));
+        Ok(program)
     }
 
     /// Layers `packs` over the bundled databases for identification, tool detection, YARA and capa.
@@ -750,14 +814,14 @@ impl Project {
                 vector_table: raw.vector_table(),
                 pointer_tables: raw.pointer_tables(),
             }),
+            analysis_store: self.analysis_store_status(),
         }
     }
 
     pub(crate) fn analysis(&self) -> Result<&Analysis, ApiError> {
         let analysis = self.analysis.get_or_init(|| {
             let binding = crate::decoder::analysis_binding(&self.binary)?;
-            let program =
-                functions::analyze_with_factory(&self.binary, || crate::decoder::decoder_for_project(&self.binary))?;
+            let program = self.discover_through_store(binding.as_deref())?;
             if crate::decoder::analysis_binding(&self.binary)? != binding {
                 return Err(DecoderInitializationError::Sleigh(Arc::new(rampage_decompiler::Error::Ghidra(
                     "Project decoder interpretation changed during discovery".into(),

@@ -1713,6 +1713,7 @@ mod tests {
             snapshot_registers: &registers,
             snapshot_target: Some(&target),
             raw: None,
+            analysis_store: crate::AnalysisStoreStatus::new("unsupported", None, None),
         };
         serde_json::to_value(summary).unwrap()
     }

@@ -248,6 +248,8 @@ pub struct Summary<'a> {
     /// A Raw Project's asserted interpretation, with vector-table evidence when seeding was requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<RawSummary<'a>>,
+    /// The persistent analysis store's part in this project's analysis (hit, miss, pending, disabled, ...).
+    pub analysis_store: crate::AnalysisStoreStatus,
 }
 
 #[derive(Debug, Serialize)]
