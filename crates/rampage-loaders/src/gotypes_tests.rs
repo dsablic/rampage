@@ -190,3 +190,72 @@ fn corrupted_fixture_bytes_never_panic() {
         assert!(types.len() <= roots.len() * 4, "round {round}: {}", types.len());
     }
 }
+
+impl Section {
+    /// A struct at `at` whose fields array lies at `at + 0x80`: (name offset, type offset, field offset).
+    fn structure(&mut self, at: usize, name: usize, size: u64, fields: &[(usize, usize, u64)]) {
+        self.header(at, size, KIND_STRUCT, name, 0);
+        self.word(at + 56, TYPES + (at + 0x80) as u64);
+        self.word(at + 64, fields.len() as u64);
+        self.word(at + 72, fields.len() as u64);
+        for (index, &(field_name, ty, offset)) in fields.iter().enumerate() {
+            let entry = at + 0x80 + index * 24;
+            self.word(entry, TYPES + field_name as u64);
+            self.word(entry + 8, TYPES + ty as u64);
+            self.word(entry + 16, offset);
+        }
+    }
+}
+
+/// Promotions: `Outer { A; B }` with `A` (embedded) holding `Deep` (embedded) holding `X`, `B` (embedded)
+/// holding `X` directly, and `A` and `B` both holding `Twin`.
+fn promotions() -> Section {
+    let mut section = Section::new(0x2000);
+    for (at, text, flags) in [
+        (0x10, "main.Outer", 1),
+        (0x20, "main.A", 1),
+        (0x30, "main.B", 1),
+        (0x40, "main.Deep", 1),
+        (0x50, "A", 1 | 8),
+        (0x58, "B", 1 | 8),
+        (0x60, "Deep", 1 | 8),
+        (0x70, "X", 1),
+        (0x78, "Twin", 1),
+        (0x88, "int64", 1),
+    ] {
+        section.name(at, text, flags);
+    }
+    section.header(0x100, 8, 6, 0x88, 0);
+    section.structure(0x200, 0x10, 64, &[(0x50, 0x400, 0), (0x58, 0x600, 32)]);
+    section.structure(0x400, 0x20, 32, &[(0x60, 0x800, 0), (0x78, 0x100, 24)]);
+    section.structure(0x600, 0x30, 32, &[(0x70, 0x100, 16), (0x78, 0x100, 24)]);
+    section.structure(0x800, 0x40, 24, &[(0x70, 0x100, 8)]);
+    section
+}
+
+#[test]
+fn promoted_fields_resolve_shallowest_first_and_report_ambiguity() {
+    let section = promotions();
+    let mut reader = section.reader();
+    let outer = reader.header(TYPES + 0x200).unwrap();
+    // Depth-first search would find A.Deep.X (offset 8); Go picks B.X at the shallower depth (32 + 16).
+    let x = select_path(&mut reader, &outer, "X").unwrap();
+    assert_eq!((x.offset, x.type_name.as_str()), (48, "int64"));
+    let twin = select_path(&mut section.reader(), &outer, "Twin").unwrap_err();
+    assert!(twin.contains("ambiguous"), "{twin}");
+}
+
+#[test]
+fn overflowing_offsets_are_errors_not_wraps() {
+    let mut section = cyclic();
+    section.word(0x190, u64::MAX - 4);
+    let mut reader = section.reader();
+    let header = reader.header(TYPES + 0x100).unwrap();
+    assert!(select_path(&mut reader, &header, "self.self").unwrap_err().contains("overflows"));
+    let mut section = cyclic();
+    section.word(0x100, u64::MAX);
+    section.word(0x190, 8);
+    let mut reader = section.reader();
+    let header = reader.header(TYPES + 0x100).unwrap();
+    assert!(select_offset(&mut reader, &header, u64::MAX - 1).is_err());
+}

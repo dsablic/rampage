@@ -1288,6 +1288,8 @@ fn get_type(project: &crate::Project, args: TypeNameArgs) -> Result<Value, ApiEr
         match project.go_type_layout(&go_request) {
             Ok(lookup) => return type_library_view(&lookup),
             Err(ApiError::NotFound(go)) => missing.push(go),
+            // Entries matched but none decoded (or the selection failed): keep the chain of sources tried.
+            Err(ApiError::Invalid(go)) => missing.push(format!("Go runtime metadata: {go}")),
             Err(error) => return Err(error),
         }
     }
@@ -1435,6 +1437,11 @@ fn list_types(project: &crate::Project, args: ListTypesArgs) -> Result<Value, Ap
             return type_library_view(&page);
         }
         if contains.is_some() && project.list_types(None, 0, 1)?.total > 0 {
+            return type_library_view(&page);
+        }
+        // Auto falls back to Go only when the Go index builds; an unsupported or unreadable Go image keeps the
+        // (empty) library page rather than turning a listing into an error.
+        if project.go_types().is_err() {
             return type_library_view(&page);
         }
     }

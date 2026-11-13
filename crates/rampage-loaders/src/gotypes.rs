@@ -576,12 +576,17 @@ struct Field {
 
 /// `pkgpath.Name` for a named type whose runtime string is `pkg.Name`; generic arguments stay as they are.
 fn qualified(name: &str, package: &str) -> Option<String> {
+    Some(format!("{package}.{}", qualified_rest(name)?))
+}
+
+/// What follows the package name in a runtime type string `pkg.Name`.
+fn qualified_rest(name: &str) -> Option<&str> {
     let mut depth = 0usize;
     for (index, ch) in name.char_indices() {
         match ch {
             '[' => depth += 1,
             ']' => depth = depth.saturating_sub(1),
-            '.' if depth == 0 => return Some(format!("{package}.{}", &name[index + 1..])),
+            '.' if depth == 0 => return Some(&name[index + 1..]),
             _ => {}
         }
     }
@@ -612,6 +617,7 @@ pub fn go_type_index(binary: &Binary) -> Result<GoTypeIndex, String> {
     let mut reader = Reader { layout, section, binary: Some(binary), steps: 0, budget: MAX_BUILD_STEPS };
     let mut warnings = Vec::new();
     let roots = roots(&mut reader, binary, moduledata, &mut warnings);
+    let roots_capped = roots.len() >= MAX_INDEX_TYPES;
     reader.layout.names = detect_names(&mut reader, &roots, version);
     let mut stats = GoIndexStats {
         layout: Some(layout.module),
@@ -620,6 +626,7 @@ pub fn go_type_index(binary: &Binary) -> Result<GoTypeIndex, String> {
         roots: roots.len(),
         ..GoIndexStats::default()
     };
+    stats.truncated |= roots_capped;
     let (types, votes) = walk(&mut reader, roots, &mut stats);
     if matches!(version, GoTableVersion::Go116 | GoTableVersion::Go118) {
         reader.layout.offset_embed = votes.old > votes.new;
@@ -646,7 +653,7 @@ pub fn go_type_index(binary: &Binary) -> Result<GoTypeIndex, String> {
         }
     }
     let mut listing: Vec<u32> = (0..types.len() as u32).filter(|&index| types[index as usize].named).collect();
-    listing.sort_by_cached_key(|&index| display_name(&types[index as usize]));
+    listing.sort_by(|&left, &right| display_key(&types[left as usize]).cmp(display_key(&types[right as usize])));
     stats.types = types.len();
     stats.named_types = listing.len();
     Ok(GoTypeIndex {
@@ -659,6 +666,19 @@ pub fn go_type_index(binary: &Binary) -> Result<GoTypeIndex, String> {
         stats,
         warnings,
     })
+}
+
+/// [`display_name`]'s bytes without building the string: `pkgpath`, `.`, the name after its package.
+fn display_key(ty: &IndexedType) -> impl Iterator<Item = u8> + '_ {
+    let qualified = ty.package.as_deref().filter(|_| ty.named).and_then(|package| {
+        let name = qualified_rest(&ty.name)?;
+        Some((package, name))
+    });
+    let (package, dot, name) = match qualified {
+        Some((package, name)) => (package, ".", name),
+        None => ("", "", &*ty.name),
+    };
+    package.bytes().chain(dot.bytes()).chain(name.bytes())
 }
 
 fn display_name(ty: &IndexedType) -> String {
@@ -822,6 +842,7 @@ fn walk(reader: &mut Reader<'_>, roots: Vec<u64>, stats: &mut GoIndexStats) -> (
     let mut types = Vec::new();
     let mut votes = EmbedVotes::default();
     let mut edges = Vec::new();
+    let mut name_bytes = 0usize;
     while let Some(address) = queue.pop_front() {
         if !seen.insert(address) {
             continue;
@@ -832,6 +853,12 @@ fn walk(reader: &mut Reader<'_>, roots: Vec<u64>, stats: &mut GoIndexStats) -> (
         }
         let Some(header) = reader.header(address) else { continue };
         let package = reader.uncommon_at(&header).and_then(|at| reader.uncommon(at)).and_then(|u| u.package);
+        // The name is kept, keyed by itself and (named types) by its qualified spelling: charge every copy.
+        name_bytes = name_bytes.saturating_add(3 * (header.name.len() + package.as_ref().map_or(0, String::len)));
+        if name_bytes > MAX_KEY_BYTES {
+            stats.truncated = true;
+            break;
+        }
         if header.kind == KIND_STRUCT && votes.old + votes.new < 256 {
             vote(reader, &header, &mut votes);
         }
@@ -1315,9 +1342,9 @@ fn select_path(reader: &mut Reader<'_>, root: &Header, path: &str) -> Result<GoM
             let Some(Body::Struct { fields, count }) = reader.body(&current) else {
                 return Err(format!("{} is not a struct; cannot select {field_name:?}", current.name));
             };
-            let (field_offset, ty) = find_field(reader, fields, count, field_name, 0)?
+            let (field_offset, ty) = find_field(reader, fields, count, field_name)?
                 .ok_or_else(|| format!("{} has no field {field_name:?}", current.name))?;
-            offset += field_offset;
+            offset = offset.checked_add(field_offset).ok_or("member offset overflows")?;
             current = reader.header(ty).ok_or("undecodable field type")?;
         }
         let mut rest = indices;
@@ -1332,7 +1359,10 @@ fn select_path(reader: &mut Reader<'_>, root: &Header, path: &str) -> Result<GoM
                 return Err(format!("index {index} is past the end of {}", current.name));
             }
             let elem = reader.header(elem).ok_or("undecodable element type")?;
-            offset += index * elem.size;
+            offset = index
+                .checked_mul(elem.size)
+                .and_then(|delta| offset.checked_add(delta))
+                .ok_or("member offset overflows")?;
             current = elem;
         }
         if !rest.is_empty() {
@@ -1349,34 +1379,33 @@ fn select_path(reader: &mut Reader<'_>, root: &Header, path: &str) -> Result<GoM
     })
 }
 
-/// The offset and type of field `name`, directly or promoted through embedded structs (shallowest first, as Go
-/// resolves selectors).
-fn find_field(
-    reader: &mut Reader<'_>,
-    fields: u64,
-    count: u64,
-    name: &str,
-    depth: usize,
-) -> Result<Option<(u64, u64)>, String> {
-    let mut embedded = Vec::new();
-    for index in 0..count {
-        let field = reader.field(fields, index).ok_or("undecodable struct field")?;
-        if field.name.text == name {
-            return Ok(Some((field.offset, field.ty)));
+/// The offset and type of field `name`, directly or promoted through embedded structs. Like Go's selector
+/// resolution this is breadth-first: the shallowest depth with a match wins, and two matches at that depth are
+/// ambiguous.
+fn find_field(reader: &mut Reader<'_>, fields: u64, count: u64, name: &str) -> Result<Option<(u64, u64)>, String> {
+    let mut level = vec![(0u64, fields, count)];
+    for _ in 0..=MAX_LOOKUP_DEPTH {
+        let mut found = Vec::new();
+        let mut next = Vec::new();
+        for &(base, fields, count) in &level {
+            for index in 0..count {
+                let field = reader.field(fields, index).ok_or("undecodable struct field")?;
+                let offset = base.checked_add(field.offset).ok_or("field offset overflows")?;
+                if field.name.text == name {
+                    found.push((offset, field.ty));
+                } else if field.embedded
+                    && let Some(header) = reader.header(field.ty)
+                    && let Some(Body::Struct { fields, count }) = reader.body(&header)
+                {
+                    next.push((offset, fields, count));
+                }
+            }
         }
-        if field.embedded {
-            embedded.push((field.offset, field.ty));
-        }
-    }
-    if depth >= MAX_LOOKUP_DEPTH {
-        return Ok(None);
-    }
-    for (base, ty) in embedded {
-        let Some(header) = reader.header(ty) else { continue };
-        if let Some(Body::Struct { fields, count }) = reader.body(&header)
-            && let Some((offset, ty)) = find_field(reader, fields, count, name, depth + 1)?
-        {
-            return Ok(Some((base + offset, ty)));
+        match found.len() {
+            0 if next.is_empty() => return Ok(None),
+            0 => level = next,
+            1 => return Ok(found.pop()),
+            _ => return Err(format!("field {name:?} is ambiguous: promoted from {} embedded fields", found.len())),
         }
     }
     Ok(None)
@@ -1395,7 +1424,7 @@ fn select_offset(reader: &mut Reader<'_>, root: &Header, target: u64) -> Result<
                 let mut chosen = None;
                 for index in 0..count {
                     let field = reader.field(fields, index).ok_or("undecodable struct field")?;
-                    let start = base + field.offset;
+                    let start = base.checked_add(field.offset).ok_or("field offset overflows")?;
                     if start > target {
                         break;
                     }
@@ -1403,7 +1432,7 @@ fn select_offset(reader: &mut Reader<'_>, root: &Header, target: u64) -> Result<
                 }
                 let Some((field, start)) = chosen else { break };
                 let header = reader.header(field.ty).ok_or("undecodable field type")?;
-                if target >= start + header.size {
+                if target >= start.checked_add(header.size).ok_or("field size overflows")? {
                     if !path.is_empty() {
                         path.push('.');
                     }
@@ -1427,7 +1456,10 @@ fn select_offset(reader: &mut Reader<'_>, root: &Header, target: u64) -> Result<
                 }
                 let index = ((target - base) / elem.size).min(len - 1);
                 path.push_str(&format!("[{index}]"));
-                base += index * elem.size;
+                base = index
+                    .checked_mul(elem.size)
+                    .and_then(|delta| base.checked_add(delta))
+                    .ok_or("element offset overflows")?;
                 current = elem;
             }
             _ => break,
