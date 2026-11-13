@@ -90,7 +90,9 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
 - [x] Persistent analysis store (roadmap 6.2, first half): SQLite cache of discovery, keyed by every analysis
   input and the rampage build, with an `ANALYSIS_VERSION` golden test. Open: caching signatures and strings if they
   matter, incremental re-analysis after edits, deleting a rejected store automatically.
-- [ ] `go-nested-field` took 26 rampage calls against REA's 14; read the transcript and remove the detour.
+- [x] `switch-pic-x86-so` took 12–20 rampage calls: unnamed i386 PIC PLT stubs. Done (named through the GOT base).
+- [x] Recurring argument-name errors cost a retry per call. Done (unambiguous aliases, numeric strings).
+- [ ] `go-nested-field` took 26 rampage calls (Cause: no Go runtime type metadata; in progress.) against REA's 14; read the transcript and remove the detour.
 
 ## Head-to-head suite v3: tasks where Ghidra is strong (not run yet)
 

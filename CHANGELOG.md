@@ -70,6 +70,12 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Changed
 
+- 32-bit x86 ELF PIC PLT stubs (`jmp [ebx+disp]`) are named `name@plt` through `.got.plt`, so decompiled
+  dispatchers in i386 shared objects show the called import instead of `sub_…`.
+- MCP accepts unambiguous argument aliases (`address`/`addr`/`ea` for `at`, `length`/`len` for `size`,
+  `file`/`file_path`/`filename`/`binary` for `path`) and decimal or `0x` strings for integer arguments, so a client
+  that calls a tool before loading its schema no longer needs a retry. `xrefs` with `at` still asks for `to` or
+  `from`.
 - Release builds keep a persistent analysis store: function discovery (functions, blocks, cross-references and
   related facts) is saved to an SQLite file under the user cache directory (`rampage/analysis/`, owner-only) and
   reused when the same image is opened with the same analysis inputs by the same rampage build. Re-opening a 26 MB
