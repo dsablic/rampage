@@ -3357,6 +3357,11 @@
           "repeated": false,
           "required": false
         },
+        "--explore-encrypted": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
         "--image-length": {
           "type": "value",
           "repeated": false,
@@ -4023,6 +4028,11 @@
           "required": false
         },
         "--exact-entry": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--explore-encrypted": {
           "type": "flag",
           "repeated": false,
           "required": false

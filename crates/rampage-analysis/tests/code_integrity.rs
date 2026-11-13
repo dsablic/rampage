@@ -248,7 +248,12 @@ fn no_fixture_code_region_is_judged() {
     for path in files {
         let Ok(binary) = Binary::open(&path) else { continue };
         let judged = code_integrity::assess(&binary, || binary.decoder());
-        assert!(judged.is_empty(), "{}: {:?}", path.display(), judged.iter().map(CodeRegion::explain).collect::<Vec<_>>());
+        assert!(
+            judged.is_empty(),
+            "{}: {:?}",
+            path.display(),
+            judged.iter().map(CodeRegion::explain).collect::<Vec<_>>()
+        );
         for section in code_integrity::measure(&binary, || binary.decoder()) {
             measured += 1;
             let label = format!("{} {}", path.file_name().unwrap().to_string_lossy(), section.name);
