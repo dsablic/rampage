@@ -111,6 +111,15 @@ pub struct Project {
     analysis_store: RwLock<Option<Arc<crate::AnalysisStore>>>,
     /// What the persistent store did when analysis ran.
     analysis_store_status: OnceLock<crate::AnalysisStoreStatus>,
+    /// A fresh analysis still to be written to the store, after the analysis itself is published.
+    analysis_store_pending: std::sync::Mutex<Option<PendingStore>>,
+}
+
+/// A fresh analysis to store: the store, its key, and why an existing entry was rejected, if one was.
+struct PendingStore {
+    store: Arc<crate::AnalysisStore>,
+    key: String,
+    rejected: Option<String>,
 }
 
 /// Rechecks the frozen view after acquiring the authority read lock. Selecting a lock before a first patch
@@ -357,11 +366,13 @@ impl Project {
             go_strings: OnceLock::new(),
             analysis_store: RwLock::new(crate::AnalysisStore::from_env()),
             analysis_store_status: OnceLock::new(),
+            analysis_store_pending: std::sync::Mutex::new(None),
         }
     }
 
     /// Selects the persistent analysis store (`None` disables it) for analyses that have not run yet. Projects
-    /// start with [`crate::AnalysisStore::from_env`].
+    /// start with [`crate::AnalysisStore::from_env`]. The store's key covers the bytes `binary` was loaded from, so
+    /// a project built from a `Binary` whose metadata was edited after loading must disable it.
     pub fn set_analysis_store(&self, store: Option<Arc<crate::AnalysisStore>>) {
         *self.analysis_store.write().unwrap_or_else(|poison| poison.into_inner()) = store;
     }
@@ -407,15 +418,24 @@ impl Project {
             Lookup::Rejected(reason) => Some(reason),
         };
         let program = fresh()?;
-        let stored = store.store(&key, &program);
+        *self.analysis_store_pending.lock().unwrap_or_else(|poison| poison.into_inner()) =
+            Some(PendingStore { store, key, rejected });
+        Ok(program)
+    }
+
+    /// Writes a fresh analysis to the store once it is published, so concurrent callers never wait on the write;
+    /// the write itself waits only briefly for another writer and is skipped when the store stays busy.
+    fn finish_store(&self, analysis: &Analysis) {
+        let pending = self.analysis_store_pending.lock().unwrap_or_else(|poison| poison.into_inner()).take();
+        let Some(PendingStore { store, key, rejected }) = pending else { return };
+        let stored = store.store(&key, &analysis.program);
         let (state, detail) = match (rejected, stored) {
             (Some(reason), Ok(())) => ("rejected", format!("{reason}; analysed fresh and stored")),
             (Some(reason), Err(error)) => ("rejected", format!("{reason}; analysed fresh, {error}")),
             (None, Ok(())) => ("miss", "analysed fresh and stored".to_owned()),
             (None, Err(error)) => ("miss", format!("analysed fresh, {error}")),
         };
-        let _ = self.analysis_store_status.set(Status::new(state, Some(key), Some(detail)));
-        Ok(program)
+        let _ = self.analysis_store_status.set(crate::AnalysisStoreStatus::new(state, Some(key), Some(detail)));
     }
 
     /// Layers `packs` over the bundled databases for identification, tool detection, YARA and capa.
@@ -831,6 +851,7 @@ impl Project {
             Ok(Analysis::new(program))
         });
         let analysis = analysis.as_ref().map_err(DecoderInitializationError::to_api_error)?;
+        self.finish_store(analysis);
         self.validate_cached_analysis_binding()?;
         Ok(analysis)
     }

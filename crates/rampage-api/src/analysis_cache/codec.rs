@@ -13,6 +13,8 @@ use rampage_arch::{DecodeGate, DecodeGateReason, Flow};
 const MAGIC: &[u8; 8] = b"RPGANLZ\0";
 /// The longest decode-gate text accepted; real ones are one formatted instruction.
 const MAX_TEXT: usize = 4096;
+/// The most items reserved up front from an untrusted count; longer lists grow as their items actually decode.
+const MAX_RESERVE: usize = 4096;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Malformed(pub(crate) &'static str);
@@ -95,7 +97,7 @@ pub(crate) fn decode(key: &str, bytes: &[u8]) -> Result<Program, Malformed> {
     }
     let mut program = Program::default();
     let count = input.count()?;
-    program.functions.reserve(count);
+    program.functions.reserve(count.min(MAX_RESERVE));
     let mut previous = 0u64;
     for index in 0..count {
         let address = input.delta(previous)?;
@@ -105,11 +107,18 @@ pub(crate) fn decode(key: &str, bytes: &[u8]) -> Result<Program, Malformed> {
         previous = address;
         let instruction_count = usize::try_from(input.uint()?).map_err(|_| Malformed("instruction count"))?;
         let blocks = input.count()?;
-        let mut function =
-            DiscoveredFunction { address, blocks: Vec::with_capacity(blocks), instruction_count, switches: Vec::new() };
+        let mut function = DiscoveredFunction {
+            address,
+            blocks: Vec::with_capacity(blocks.min(MAX_RESERVE)),
+            instruction_count,
+            switches: Vec::new(),
+        };
         for _ in 0..blocks {
             let start = input.delta(address)?;
             let end = input.delta(start)?;
+            if end < start {
+                return Err(Malformed("block ends before it starts"));
+            }
             function.blocks.push(Block { start, end });
         }
         let switches = input.count()?;
@@ -126,15 +135,17 @@ pub(crate) fn decode(key: &str, bytes: &[u8]) -> Result<Program, Malformed> {
         program.functions.push(function);
     }
     let count = input.count()?;
-    program.xrefs.reserve(count);
+    program.xrefs.reserve(count.min(MAX_RESERVE));
     let mut previous = 0u64;
+    let mut previous_from = 0u64;
     for index in 0..count {
         let to = input.delta(previous)?;
-        if index > 0 && to < previous {
+        let from = input.delta(to)?;
+        if index > 0 && (to, from) < (previous, previous_from) {
             return Err(Malformed("xrefs out of order"));
         }
         previous = to;
-        let from = input.delta(to)?;
+        previous_from = from;
         let kind = match input.byte()? {
             0 => XrefKind::Call,
             1 => XrefKind::Jump,
@@ -366,7 +377,7 @@ impl<'a> Reader<'a> {
 
     fn addresses(&mut self, base: u64) -> Result<Vec<u64>, Malformed> {
         let count = self.count()?;
-        let mut addresses = Vec::with_capacity(count);
+        let mut addresses = Vec::with_capacity(count.min(MAX_RESERVE));
         let mut previous = base;
         for _ in 0..count {
             previous = self.delta(previous)?;
@@ -453,6 +464,16 @@ mod tests {
         let mut huge = MAGIC.to_vec();
         huge.extend([3, b'k', b'e', b'y', 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01]);
         assert_eq!(decode("key", &huge), Err(Malformed("count exceeds payload")));
+    }
+
+    #[test]
+    fn broken_invariants_are_refused() {
+        let mut program = sample();
+        program.functions[0].blocks[0] = Block { start: 0x1010, end: 0x1000 };
+        assert_eq!(decode("k", &encode("k", &program)), Err(Malformed("block ends before it starts")));
+        let mut program = sample();
+        program.xrefs.swap(1, 2);
+        assert_eq!(decode("k", &encode("k", &program)), Err(Malformed("xrefs out of order")));
     }
 
     #[test]

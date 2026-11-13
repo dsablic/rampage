@@ -12,7 +12,7 @@ use rampage_api::{ANALYSIS_VERSION, AnalysisStore, Project, RawProjectRequest, S
 use serde_json::{Value, json};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures");
-const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/analysis-cache-golden.json");
+const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/data/analysis-cache-golden.json");
 const GOLDEN_UPDATE: &str = "RAMPAGE_UPDATE_ANALYSIS_GOLDEN";
 
 struct Scratch(PathBuf);
@@ -467,6 +467,33 @@ fn a_disabled_store_reports_disabled_and_writes_nothing() {
     let info: Value = serde_json::from_str(&call(&pending, "binary_info", json!({}))).unwrap();
     assert_eq!(info["analysis_store"], json!({ "state": "pending" }));
     assert!(!scratch.0.join("store.sqlite").exists());
+}
+
+/// Another process holding the write lock delays neither a hit (whose use-time touch is skipped) nor a miss
+/// (whose write gives up after a short wait); the analysis itself is never affected.
+#[test]
+fn a_busy_store_never_holds_up_analysis() {
+    let scratch = Scratch::new();
+    let store = scratch.store(rampage_api::DEFAULT_MAX_BYTES);
+    populate(&store);
+    let mut writer = rusqlite::Connection::open(store.path()).unwrap();
+    let lock = writer.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).unwrap();
+    lock.execute("UPDATE analysis SET last_used = 0", []).unwrap();
+    let started = std::time::Instant::now();
+    let (status, digest) = reopen(&store);
+    assert_eq!(status.state, "hit", "{status:?}");
+    assert_eq!(digest, fresh_digest());
+    let other = open(
+        &Session::default().with_analysis_store(Some(Arc::clone(&store))),
+        &Path::new(FIXTURES).join("bin/hello-arm64.elf"),
+    )
+    .unwrap();
+    program_digest(&other).unwrap();
+    let status = other.analysis_store_status();
+    assert_eq!(status.state, "miss", "{status:?}");
+    assert!(status.detail.unwrap().contains("not written"));
+    assert!(started.elapsed() < std::time::Duration::from_secs(4), "{:?}", started.elapsed());
+    lock.rollback().unwrap();
 }
 
 /// Analysis output per fixture, recorded under `ANALYSIS_VERSION`. When discovery or a loader changes any

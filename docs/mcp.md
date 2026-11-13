@@ -555,11 +555,13 @@ log and apply over a stored analysis exactly as over a fresh one.
 | `RAMPAGE_ANALYSIS_CACHE=/path/file.sqlite` | That file. |
 | `RAMPAGE_ANALYSIS_CACHE_MAX_MB=N` | Size bound in MiB (default 1024). |
 
-The default file is `rampage/rampage-analysis-store-v1.sqlite` under `$XDG_CACHE_HOME` when set, else `~/.cache`
-(where the bundled Sleigh specifications are materialized too), else `%LOCALAPPDATA%`; its directory is created
-private to the user. Nothing is written next to the analysed binary, which often sits in a read-only or shared
-directory; the store is keyed by content, so a copy of a binary under another path hits too. Deleting the file is
-always safe.
+The default file is `rampage/analysis/rampage-analysis-store-v1.sqlite` under `$XDG_CACHE_HOME` when set, else
+`~/.cache`, else `%LOCALAPPDATA%`. On Unix the `analysis` directory is kept private to the user (0700, also when it
+already exists; the shared `rampage` directory beside the Sleigh specifications keeps its mode), and the store file
+is created 0600 without following symbolic links, so SQLite's `-wal` and `-shm` files are 0600 too. For a custom
+path, a missing directory is created 0700 and an existing one keeps its mode; the file is created 0600. Nothing is
+written next to the analysed binary, which often sits in a read-only or shared directory; the store is keyed by
+content, so a copy of a binary under another path hits too. Deleting the file is always safe.
 
 `binary_info` (and `binary inspect --json`) report the store's part as `analysis_store`: `state` is `pending` (a
 store is configured but analysis has not run in this process), `hit` (discovery loaded from the store), `miss`
@@ -583,8 +585,9 @@ written. A truncated, corrupt or foreign file or entry is reported as `rejected`
 it never fails an open or yields a partial analysis. The checksums establish consistency, not authorship.
 
 **Concurrency and size.** Several processes may open the same binary at once. The store uses SQLite's write-ahead
-log; a reader reads an entry in one statement, so it sees a committed entry whole or not at all, and writers
-serialize on SQLite's lock (waiting up to five seconds, then skipping the write). After each write the least
+log; a reader reads an entry in one statement, so it sees a committed entry whole or not at all. A fresh analysis
+is written after it is already in use, and the write waits at most 200 ms for another writer before it is skipped;
+refreshing an entry's use time never waits. After each write the least
 recently used entries beyond the size bound are evicted; an entry larger than half the bound is not stored.
 Entries are delta-encoded varints, a few bytes per block and cross-reference.
 

@@ -1,5 +1,5 @@
 //! Persistent analysis store: discovered functions, blocks, switches and cross-references kept in a per-user SQLite
-//! file, so re-opening an already-analysed binary skips discovery. See `docs/analysis-cache.md`.
+//! file, so re-opening an already-analysed binary skips discovery. See "Persistent analysis store" in `docs/mcp.md`.
 //!
 //! An entry is found by a key that hashes every input discovery reads (the whole source file, the image's place in
 //! it, the loaded format and architecture, a Raw Project's interpretation and decoder binding), the store schema,
@@ -7,6 +7,11 @@
 //! its payload's SHA-256 matches, its embedded key matches, and it decodes completely under the codec's bounds and
 //! ordering checks; anything else is a rejection that falls back to a fresh analysis. Annotations are never stored
 //! here: they stay in their own log and apply over cached and fresh analyses alike.
+//!
+//! The key covers the bytes a [`Binary`] was loaded from, not the parsed `Binary` itself: discovery through a store
+//! assumes the project's `Binary` is exactly what its loader produced from those bytes (as every `Session` open
+//! and Raw admission produces). A caller that edits a `Binary`'s metadata before building a `Project` from it must
+//! disable the store for that project with `Project::set_analysis_store(None)`.
 
 mod codec;
 
@@ -28,7 +33,10 @@ pub const ANALYSIS_VERSION: u32 = 1;
 const SCHEMA: &str = "rampage-analysis-store-v1";
 /// The default bound on stored payload bytes; the least recently used entries are evicted beyond it.
 pub const DEFAULT_MAX_BYTES: u64 = 1024 * 1024 * 1024;
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a read waits for a lock; WAL readers wait only during recovery or a checkpoint.
+const READ_TIMEOUT: Duration = Duration::from_secs(1);
+/// How long a write waits for another writer before skipping the write; analysis results never wait on it.
+const WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 
 /// The environment variable that configures the store: unset uses the default (on in release builds, off in debug
 /// builds), `off`/`0`/`false` disables it, `on`/`1` selects the default file, and anything else is the file path.
@@ -41,6 +49,8 @@ pub const ANALYSIS_CACHE_MAX_VARIABLE: &str = "RAMPAGE_ANALYSIS_CACHE_MAX_MB";
 pub struct AnalysisStore {
     path: PathBuf,
     max_bytes: u64,
+    /// The default location: its directory is rampage's own and is kept private (0700) even when it exists.
+    owns_directory: bool,
 }
 
 /// What the persistent store did for a project, as `binary_info` reports it under `analysis_store`.
@@ -77,7 +87,7 @@ pub(crate) enum Lookup {
 impl AnalysisStore {
     /// A store in the SQLite file at `path` (created on first write), holding at most `max_bytes` of payloads.
     pub fn at(path: impl Into<PathBuf>, max_bytes: u64) -> Self {
-        Self { path: path.into(), max_bytes }
+        Self { path: path.into(), max_bytes, owns_directory: false }
     }
 
     /// The store [`ANALYSIS_CACHE_VARIABLE`] selects, read once per process.
@@ -91,14 +101,14 @@ impl AnalysisStore {
                     .map_or(DEFAULT_MAX_BYTES, |megabytes| megabytes.saturating_mul(1024 * 1024));
                 let path = match std::env::var_os(ANALYSIS_CACHE_VARIABLE) {
                     None if cfg!(debug_assertions) => None,
-                    None => default_path(),
+                    None => default_path().map(|path| (path, true)),
                     Some(value) => match value.to_str().map(str::trim) {
                         Some("" | "0" | "off" | "false" | "no") => None,
-                        Some("1" | "on" | "true" | "yes") => default_path(),
-                        _ => Some(PathBuf::from(value)),
+                        Some("1" | "on" | "true" | "yes") => default_path().map(|path| (path, true)),
+                        _ => Some((PathBuf::from(value), false)),
                     },
                 };
-                path.map(|path| Arc::new(Self::at(path, max_bytes)))
+                path.map(|(path, owns_directory)| Arc::new(Self { path, max_bytes, owns_directory }))
             })
             .clone()
     }
@@ -111,15 +121,42 @@ impl AnalysisStore {
         self.max_bytes
     }
 
-    fn connect(&self, create: bool) -> rusqlite::Result<Connection> {
-        let mut flags =
+    /// Opens the existing store file. SQLite creates the `-wal` and `-shm` files with the database file's mode, so
+    /// a store file created private by [`Self::prepare`] keeps them private too.
+    fn connect(&self, timeout: Duration) -> rusqlite::Result<Connection> {
+        let flags =
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_NOFOLLOW;
-        if create {
-            flags |= OpenFlags::SQLITE_OPEN_CREATE;
-        }
         let connection = Connection::open_with_flags(&self.path, flags)?;
-        connection.busy_timeout(BUSY_TIMEOUT)?;
+        connection.busy_timeout(timeout)?;
         Ok(connection)
+    }
+
+    /// Creates the store's directory (private when new, and always when it is rampage's own default directory)
+    /// and the store file itself, mode 0600 and never through a symbolic link, before SQLite opens it.
+    fn prepare(&self) -> std::io::Result<()> {
+        if let Some(parent) = self.path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            create_private_dir(parent, self.owns_directory)?;
+        }
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600).custom_flags(libc_nofollow());
+        }
+        let file = options.open(&self.path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(std::io::Error::other("store is not a regular file"));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if metadata.permissions().mode() & 0o077 != 0 {
+                file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            }
+        }
+        Ok(())
     }
 
     /// The entry for `key`, verified. Never writes beyond refreshing the entry's use time.
@@ -131,7 +168,7 @@ impl AnalysisStore {
             Ok(_) => {}
         }
         let read = || -> rusqlite::Result<Result<Option<Row>, String>> {
-            let connection = self.connect(false)?;
+            let connection = self.connect(READ_TIMEOUT)?;
             match check_schema(&connection)? {
                 Ok(()) => {}
                 // A store another process is creating right now has no entries yet.
@@ -145,7 +182,8 @@ impl AnalysisStore {
                 })
                 .optional()?;
             if row.is_some() {
-                // Best effort: a busy store only leaves the use time stale.
+                // Best effort and never waiting: a busy store only leaves the use time stale.
+                connection.busy_timeout(Duration::ZERO)?;
                 let _ = connection.execute(
                     "UPDATE analysis SET last_used = ?2 WHERE key = ?1 AND last_used < ?3",
                     params![key, now(), now() - 60_000_000_000],
@@ -181,11 +219,9 @@ impl AnalysisStore {
             return Err(format!("entry of {} bytes exceeds half the store's size bound", payload.len()));
         }
         let digest = Sha256::digest(&payload).to_vec();
-        if let Some(parent) = self.path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-            create_private_dir(parent).map_err(|error| format!("store directory: {error}"))?;
-        }
+        self.prepare().map_err(|error| format!("store not written: {error}"))?;
         let write = || -> rusqlite::Result<Result<(), String>> {
-            let mut connection = self.connect(true)?;
+            let mut connection = self.connect(WRITE_TIMEOUT)?;
             // Set before the first table exists (later a no-op), so evicted pages can be returned to the file system.
             connection.execute_batch("PRAGMA auto_vacuum = INCREMENTAL")?;
             // WAL lets readers proceed during a write; each process sees whole transactions only.
@@ -266,19 +302,42 @@ fn now() -> i64 {
         .map_or(0, |elapsed| i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX))
 }
 
-/// `$XDG_CACHE_HOME/rampage`, else `$HOME/.cache/rampage` (where the bundled Sleigh specifications are also
-/// materialized), else `%LOCALAPPDATA%\rampage`.
+/// `rampage/analysis` under `$XDG_CACHE_HOME`, else `$HOME/.cache` (whose `rampage` directory also holds the
+/// bundled Sleigh specifications), else `%LOCALAPPDATA%`. The store has a directory of its own so that it can be
+/// kept private without changing the mode of a shared one.
 fn default_path() -> Option<PathBuf> {
     let xdg = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).filter(|path| path.is_absolute());
     let root = xdg
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
         .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))?;
-    Some(root.join("rampage").join(format!("{SCHEMA}.sqlite")))
+    Some(root.join("rampage").join("analysis").join(format!("{SCHEMA}.sqlite")))
 }
 
-fn create_private_dir(path: &Path) -> std::io::Result<()> {
-    if path.is_dir() {
-        return Ok(());
+#[cfg(unix)]
+fn libc_nofollow() -> i32 {
+    rustix::fs::OFlags::NOFOLLOW.bits() as i32
+}
+
+/// Creates `path` private (0700) when it is missing. An existing directory keeps its mode unless `owned`, the
+/// store's own default directory, which is made private and must not be a symbolic link.
+fn create_private_dir(path: &Path, owned: bool) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            #[cfg(unix)]
+            if owned {
+                use std::os::unix::fs::PermissionsExt;
+                if metadata.permissions().mode() & 0o077 != 0 {
+                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+                }
+            }
+            return Ok(());
+        }
+        Ok(metadata) if owned || !metadata.file_type().is_symlink() => {
+            return Err(std::io::Error::other("store directory is not a directory"));
+        }
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+        Err(_) => {}
     }
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
@@ -330,6 +389,56 @@ fn executable_stamp() -> &'static str {
             .map_or(0, |elapsed| elapsed.as_nanos());
         format!("{}\0{}\0{modified}", path.display(), metadata.len())
     })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    fn mode(path: &Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn the_default_directory_and_every_store_file_are_private() {
+        let root = std::env::temp_dir().join(format!("rampage-store-mode-{}", std::process::id()));
+        let shared = root.join("rampage");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let own = shared.join("analysis");
+        std::fs::create_dir(&own).unwrap();
+        std::fs::set_permissions(&own, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let store = AnalysisStore { path: own.join("store.sqlite"), max_bytes: 1 << 30, owns_directory: true };
+        store.store("k", &Program::default()).unwrap();
+        assert_eq!(mode(&shared), 0o755, "a shared directory keeps its mode");
+        assert_eq!(mode(&own), 0o700);
+        for suffix in ["", "-wal", "-shm"] {
+            let path = PathBuf::from(format!("{}{suffix}", store.path.display()));
+            if path.exists() {
+                assert_eq!(mode(&path), 0o600, "{}", path.display());
+            }
+        }
+        assert!(matches!(store.load("k"), Lookup::Hit(_)));
+        // A store file made readable by others is narrowed again on the next write.
+        std::fs::set_permissions(&store.path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        store.store("k", &Program::default()).unwrap();
+        assert_eq!(mode(&store.path), 0o600);
+        // A new custom directory is created private.
+        let custom = AnalysisStore::at(root.join("new/dir/store.sqlite"), 1 << 30);
+        custom.store("k", &Program::default()).unwrap();
+        assert_eq!(mode(&root.join("new/dir")), 0o700);
+        assert_eq!(mode(custom.path()), 0o600);
+        // A symbolic link in place of the store file is refused, never followed.
+        let target = root.join("elsewhere.sqlite");
+        std::fs::write(&target, b"").unwrap();
+        let linked = AnalysisStore::at(root.join("linked.sqlite"), 1 << 30);
+        std::os::unix::fs::symlink(&target, linked.path()).unwrap();
+        assert!(linked.store("k", &Program::default()).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
 
 /// The digest `analysis_cache_golden` records per fixture: SHA-256 of the store encoding with an empty key.
