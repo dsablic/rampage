@@ -84,13 +84,21 @@ of the 32 sends is checked against the implementations it reaches at run time (f
 The six not resolved exactly are three `self` sends a subclass overrides (`ambiguous`, truth included) and three
 sends to receivers returned by other methods or passed as parameters (`candidates`, truth included).
 
-macOS 27 system applications (arm64e slices, measured locally, not committed):
+Installed applications (measured locally, not committed; sampled `resolved` sends checked by hand against the
+disassembly, none wrong):
 
 | Binary | Sends | Selector | Receiver class | Resolved | Ambiguous | Framework | Candidates |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| TextEdit | 2551 | 99.9% | 41.0% | 360 | 0 | 686 | 234 |
-| Stickies | 2082 | 100.0% | 45.3% | 454 | 0 | 489 | 293 |
-| Chess | 4328 | 100.0% | 37.4% | 671 | 7 | 942 | 1177 |
+| TextEdit (macOS 27, arm64e) | 2551 | 99.9% | 41.0% | 360 | 0 | 686 | 234 |
+| Stickies (macOS 27, arm64e) | 2082 | 100.0% | 45.3% | 454 | 0 | 489 | 293 |
+| Chess (macOS 27, arm64e) | 4328 | 100.0% | 37.4% | 671 | 7 | 942 | 1177 |
+| Bluetooth MIDI Connect (arm64) | 221 | 100.0% | 39.4% | 30 | 0 | 57 | 17 |
+| Bluetooth MIDI Connect (x86-64) | 216 | 94.9% | 39.8% | 28 | 0 | 56 | 14 |
+| iTerm2 3.6 (x86-64, 114k functions) | 218295 | 94.6% | 38.0% | 36674 | 342 | 43458 | 97234 |
+
+x86-64 code keeps selectors in stack slots more often than arm64 (`mov rsi, [rbp-0x30]` before the call), which is
+where its unknown selectors come from. Resolution takes a fraction of discovery's time (5 s against 49 s for
+iTerm2 in a debug build).
 
 ## Limits
 

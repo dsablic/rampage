@@ -4,8 +4,8 @@
 use rampage_analysis::objc_dispatch::{Confidence, Send};
 use serde::Serialize;
 
-use crate::rows::Page;
 use crate::decompile::DecompiledToken;
+use crate::rows::Page;
 use crate::{ApiError, Decompilation, Project};
 
 #[derive(Debug, Serialize)]
@@ -162,8 +162,7 @@ impl Project {
     /// line's last token, with a `comment` token of the send's address. Lines and other tokens are unchanged.
     pub(crate) fn annotate_objc_sends(&self, decompilation: &mut Decompilation) {
         let Ok(dispatch) = self.objc_dispatch() else { return };
-        let sends: Vec<&Send> =
-            dispatch.sends.iter().filter(|send| send.function == decompilation.address).collect();
+        let sends: Vec<&Send> = dispatch.sends.iter().filter(|send| send.function == decompilation.address).collect();
         if sends.is_empty() {
             return;
         }

@@ -209,9 +209,17 @@ enum Value {
     Unknown,
     Selector(u32),
     /// A class object.
-    Class { class: u32, exact: bool, origin: Origin },
+    Class {
+        class: u32,
+        exact: bool,
+        origin: Origin,
+    },
     /// An instance.
-    Object { class: u32, exact: bool, origin: Origin },
+    Object {
+        class: u32,
+        exact: bool,
+        origin: Origin,
+    },
     Entry(Entry),
 }
 
@@ -377,13 +385,7 @@ pub fn selector_stub_names(binary: &Binary) -> Vec<(u64, String)> {
 }
 
 impl<'a> Model<'a> {
-    fn new<F>(
-        binary: &'a Binary,
-        abi: Abi,
-        report: &ObjcReport,
-        refs: &ObjcRefs,
-        new_decoder: &F,
-    ) -> Option<Model<'a>>
+    fn new<F>(binary: &'a Binary, abi: Abi, report: &ObjcReport, refs: &ObjcRefs, new_decoder: &F) -> Option<Model<'a>>
     where
         F: Fn() -> Option<Box<dyn Disassembler>>,
     {
@@ -563,18 +565,20 @@ impl<'a> Model<'a> {
             state[destination] = state[source];
             return;
         }
-        let written = match self.abi.arch {
-            Arch::Aarch64 => {
-                bytes.get(..4).and_then(|word| a64_access(u32::from_le_bytes(word.try_into().unwrap()))).map(|a| a.writes)
-            }
-            _ => x86.access(bytes, insn.address).map(|(_, access)| access.writes),
+        let access = match self.abi.arch {
+            Arch::Aarch64 => bytes.get(..4).and_then(|word| a64_access(u32::from_le_bytes(word.try_into().unwrap()))),
+            _ => x86.access(bytes, insn.address).map(|(_, access)| access),
         };
-        let Some(written) = written else {
+        let Some(access) = access else {
             *state = [Value::Unknown; REGISTERS];
             return;
         };
-        let written = written & self.abi.general;
+        let written = access.writes & self.abi.general;
+        // Only a plain load or address formation gives its destination the referenced value; an x86 instruction
+        // that also reads the destination (`add rax, [slot]`) computes something else. (An AArch64 load reads its
+        // destination only as the base, `ldr x1, [x1, #off]`, which the decoder already folded into the address.)
         let value = match insn.data_ref {
+            _ if self.abi.arch == Arch::X86_64 && access.reads & written != 0 => Value::Unknown,
             Some(at) if insn.accesses => self.loaded(at),
             Some(at) => self.class_addresses.get(&at).map_or(Value::Unknown, |&class| Value::Class {
                 class,
@@ -583,9 +587,10 @@ impl<'a> Model<'a> {
             }),
             None => Value::Unknown,
         };
-        for register in 0..REGISTERS {
+        let value = if written.count_ones() == 1 { value } else { Value::Unknown };
+        for (register, slot) in state.iter_mut().enumerate() {
             if written & (1 << register) != 0 {
-                state[register] = if written.count_ones() == 1 { value } else { Value::Unknown };
+                *slot = value;
             }
         }
     }
@@ -713,9 +718,9 @@ impl<'a> Model<'a> {
                         }
                         None => Value::Unknown,
                     };
-                    for register in 0..REGISTERS {
+                    for (register, slot) in state.iter_mut().enumerate() {
                         if self.abi.clobbered & (1 << register) != 0 {
-                            state[register] = Value::Unknown;
+                            *slot = Value::Unknown;
                         }
                     }
                     state[self.abi.result] = result;
@@ -753,10 +758,13 @@ impl<'a> Model<'a> {
         let (selector, receiver, result) = match entry {
             Entry::Keep => return (None, receiver),
             Entry::ClassOf => {
-                return (None, match receiver {
-                    Value::Object { class, exact, .. } => Value::Class { class, exact, origin: Origin::ClassOf },
-                    _ => Value::Unknown,
-                });
+                return (
+                    None,
+                    match receiver {
+                        Value::Object { class, exact, .. } => Value::Class { class, exact, origin: Origin::ClassOf },
+                        _ => Value::Unknown,
+                    },
+                );
             }
             Entry::Send | Entry::Stub(_) => {
                 let selector = match entry {
@@ -784,11 +792,11 @@ impl<'a> Model<'a> {
                     _ => Value::Unknown,
                 };
                 // `[super init…]` returns self, which is still of the method's own (static) class.
-                let result = match (selector.map(|s| self.symbols.names[s as usize].as_str()), self.entry_self(function))
-                {
-                    (Some(name), own @ Value::Object { .. }) if name.starts_with("init") => own,
-                    _ => Value::Unknown,
-                };
+                let result =
+                    match (selector.map(|s| self.symbols.names[s as usize].as_str()), self.entry_self(function)) {
+                        (Some(name), own @ Value::Object { .. }) if name.starts_with("init") => own,
+                        _ => Value::Unknown,
+                    };
                 let mut send = self.resolved(function, site, entry, selector, receiver);
                 if let Some(receiver) = send.receiver.as_mut() {
                     receiver.source = "super";
@@ -970,7 +978,7 @@ fn register_move(arch: Arch, bytes: &[u8]) -> Option<(usize, usize)> {
             let word = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?);
             // ORR Xd, XZR, Xm (the MOV alias); the zero register reads as zero, not tracked.
             (word & 0xffe0_ffe0 == 0xaa00_03e0 && (word >> 16) & 31 != 31 && word & 31 != 31)
-                .then(|| ((word & 31) as usize, ((word >> 16) & 31) as usize))
+                .then_some(((word & 31) as usize, ((word >> 16) & 31) as usize))
         }
         Arch::X86_64 => {
             let [rex, opcode, modrm] = bytes else { return None };

@@ -23,8 +23,8 @@ use crate::args::{
     AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
     DisasmArgs, DotnetArgs, ExportsArgs, FileArgs, FuncsArgs, IdentifyArgs, ImportPdbNamesArgs, ImportsArgs,
-    JumpTableArgs, McpArgs, ObserveIndirectBranchArgs, PseudocodeArgs, QueryDebuggerArgs, RenameArgs, ReportArgs,
-    ObjcSendsArgs, SignaturesArgs, StringsArgs, TypeLayoutArgs, XrefsArgs, YaraArgs,
+    JumpTableArgs, McpArgs, ObjcSendsArgs, ObserveIndirectBranchArgs, PseudocodeArgs, QueryDebuggerArgs, RenameArgs,
+    ReportArgs, SignaturesArgs, StringsArgs, TypeLayoutArgs, XrefsArgs, YaraArgs,
 };
 use crate::commands::Options;
 use crate::hierarchy::RootCommand;

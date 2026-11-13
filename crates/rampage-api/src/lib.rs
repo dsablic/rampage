@@ -189,6 +189,7 @@ pub use module_references::{
     ModuleReferenceRow, ModuleReferenceStatus, ModuleReferenceView, module_references, prepare_module_reference_view,
     validate_module_reference_inputs,
 };
+pub use objc::{ObjcSendRow, ObjcSendSummary, ObjcSends, ObjcTarget};
 pub use offset::{FileOffset, parse_file_offset};
 pub use operand_types::{ApplyOperandTypeRequest, OperandAnnotationDisplay, OperandTypeEdit};
 pub use packs::{ContentInfo, ContentStatus, PackInfo, PackManifest, Packs};
@@ -276,7 +277,6 @@ pub use wasm::{MAX_WASM_PAGE, WasmList, WasmModulePage, wasm_module};
 pub use workflows::{
     Confidence as FindingConfidence, Excerpt, Finding, NextStep, ReportLimits, ReportTarget, Section, WorkflowReport,
 };
-pub use objc::{ObjcSendRow, ObjcSendSummary, ObjcSends, ObjcTarget};
 pub use xrefs::{ObjcEdge, XrefQuery, XrefRow};
 
 /// How many instructions a disassembly shows unless asked for another count.

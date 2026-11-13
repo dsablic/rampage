@@ -86,9 +86,10 @@ fn score(name: &str, symbols: &str) -> Score {
     for &(function, selector, truth) in TRUTH {
         let key = (function.to_owned(), selector.to_owned());
         let index = seen.entry(key.clone()).or_default();
-        let send = by_key.get(&key).and_then(|sends| sends.get(*index)).unwrap_or_else(|| {
-            panic!("{name}: no send {index} of {selector} in {function}: {:#?}", dispatch.sends)
-        });
+        let send = by_key
+            .get(&key)
+            .and_then(|sends| sends.get(*index))
+            .unwrap_or_else(|| panic!("{name}: no send {index} of {selector} in {function}: {:#?}", dispatch.sends));
         *index += 1;
         let targets: Vec<String> = send.targets.iter().map(|&target| names.function_name(target)).collect();
         let context = format!("{name}: {function} {selector} at {:#x}: {send:?} {targets:?}", send.site);
@@ -117,7 +118,8 @@ fn score(name: &str, symbols: &str) -> Score {
 
 #[test]
 fn every_fixture_send_resolves_with_no_false_resolutions() {
-    let expected = Score { sends: 32, with_selector: 32, in_binary: 24, resolved: 18, covered: 24, false_resolutions: 0 };
+    let expected =
+        Score { sends: 32, with_selector: 32, in_binary: 24, resolved: 18, covered: 24, false_resolutions: 0 };
     for (name, symbols) in [
         ("objc-dispatch-arm64.macho", "objc-dispatch-arm64.macho"),
         ("objc-dispatch-arm64-stripped.macho", "objc-dispatch-arm64.macho"),

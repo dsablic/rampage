@@ -53,7 +53,8 @@ async fn objc_sends_resolve_to_methods_across_tools() {
     assert_eq!(all["sends"]["total"], 32);
 
     // [self area] in -[Shape scaledArea]: Circle and Square override it, so all three are reachable.
-    let area = call(&client, "objc_sends", json!({ "path": path, "at": "-[Shape scaledArea]", "selector": "area" })).await;
+    let area =
+        call(&client, "objc_sends", json!({ "path": path, "at": "-[Shape scaledArea]", "selector": "area" })).await;
     let send = &area["sends"]["items"][0];
     assert_eq!(send["confidence"], "ambiguous", "{send}");
     assert_eq!(send["receiver"]["class"], "Shape");
@@ -62,7 +63,8 @@ async fn objc_sends_resolve_to_methods_across_tools() {
 
     // [super describe] in -[Circle describe] is an edge to -[Shape describe]; so is the category's [self describe].
     let callers = call(&client, "xrefs", json!({ "path": path, "to": "-[Shape describe]" })).await;
-    let edges: Vec<&Value> = callers["items"].as_array().unwrap().iter().filter(|row| row["objc"].is_object()).collect();
+    let edges: Vec<&Value> =
+        callers["items"].as_array().unwrap().iter().filter(|row| row["objc"].is_object()).collect();
     let from: Vec<&str> = edges.iter().map(|row| row["from_function"].as_str().unwrap()).collect();
     // The arm64 link merges the Debug category into Shape, so its method is named as Shape's own.
     assert!(from.contains(&"-[Circle describe]") && from.contains(&"-[Shape dump]"), "{callers}");
@@ -73,7 +75,8 @@ async fn objc_sends_resolve_to_methods_across_tools() {
     assert_eq!(super_edge["objc"]["receiver"], "Shape");
 
     // The class method send in -[Shape describe] reaches both +kind implementations.
-    let summary = call(&client, "function_summary", json!({ "path": path, "at": "-[Shape describe]", "view": "summary" })).await;
+    let summary =
+        call(&client, "function_summary", json!({ "path": path, "at": "-[Shape describe]", "view": "summary" })).await;
     let callees = names(&summary["callees"], "name");
     assert!(callees.iter().any(|name| name == "+[Shape kind]"), "{callees:?}");
     assert!(callees.iter().any(|name| name == "+[Circle kind]"), "{callees:?}");
@@ -88,7 +91,10 @@ async fn objc_sends_resolve_to_methods_across_tools() {
         .flat_map(|block| block["lines"].as_array().unwrap())
         .filter_map(|line| line["comment"].as_str().map(str::to_owned))
         .collect();
-    assert!(comments.iter().any(|comment| comment.contains("objc: [(Shape *) describe] -> -[Shape describe]")), "{comments:?}");
+    assert!(
+        comments.iter().any(|comment| comment.contains("objc: [(Shape *) describe] -> -[Shape describe]")),
+        "{comments:?}"
+    );
 
     // Decompiled C names the selector and implementation at the send.
     let decompiled = call(&client, "decompile", json!({ "path": path, "at": "entry", "view": "code" })).await;
