@@ -70,6 +70,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Changed
 
+- `get_type` falls back to the binary's own DWARF when the type library has no such name (`source`: `auto`,
+  `library`, `dwarf`), and can select a member by path (`init.busy`, `aDb[1].pBt`) or by `byte_offset`. A name index
+  is built once per project and each lookup reads only the requested type and what it references, so the work per
+  request does not grow with the binary: on a 7.9 MB SQLite build both previews used to stop on their budgets, and a
+  lookup now answers in under 0.1 s. Nothing is imported. CLI: `rampage type layout`.
 - Go images: string headers (`{ptr, len}` pairs) in data give literals referenced only from data their own start
   and length. `list_strings` reports `header_length`, and string matching ends a literal at its header length when
   code references agree with it. On a 26 MB Go binary, literal starts went from 10,709 to 17,700.

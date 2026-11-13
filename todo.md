@@ -81,6 +81,14 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
 - [x] `function_graph` refuses oversized views like `function_summary` did; page its blocks the same way (edges
   index whole-function block positions, so paging keeps them valid).
 
+## Suite v3 Haiku pass follow-ups (2026-11-13)
+
+- [x] DWARF types at scale: `import_debug_types`/`import_debug_layouts` previews stopped on whole-file budgets on a
+  7.9 MB SQLite build, so struct layouts were unreachable. Done: `get_type` DWARF fallback with per-request bounds.
+- [ ] Whole-file DWARF import previews still return nothing at this size; make them return partial results.
+- [ ] DWARF lookup: C++ types nested in classes, DWARF 5 type units / `.debug_types`, zstd-compressed sections.
+- [ ] `go-nested-field` took 26 rampage calls against REA's 14; read the transcript and remove the detour.
+
 ## Head-to-head suite v3: tasks where Ghidra is strong (not run yet)
 
 The suite-v2 fairness review found that its categories lean towards what rampage was built around (RTTI evidence,
