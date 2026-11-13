@@ -250,6 +250,29 @@ pub struct Summary<'a> {
     pub raw: Option<RawSummary<'a>>,
     /// The persistent analysis store's part in this project's analysis (hit, miss, pending, disabled, ...).
     pub analysis_store: crate::AnalysisStoreStatus,
+    /// Code regions judged encrypted or packed (high entropy and a poor decode), which discovery does not explore.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub encrypted_or_packed_code: Vec<rampage_analysis::code_integrity::CodeRegion>,
+}
+
+/// A page of [`FunctionRow`]s, with the code regions discovery did not explore because they are judged encrypted
+/// or packed: no function in the page lies in one.
+#[derive(Debug, Serialize)]
+pub struct FunctionsPage {
+    #[serde(flatten)]
+    pub page: Page<FunctionRow>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unexplored_code: Vec<UnexploredCode>,
+}
+
+/// A code region judged encrypted or packed, and the metadata entry points (symbols, exports, the entry point,
+/// function starts) that lie in it, which are real starts whose bytes are not yet code.
+#[derive(Debug, Serialize)]
+pub struct UnexploredCode {
+    #[serde(flatten)]
+    pub region: rampage_analysis::code_integrity::CodeRegion,
+    pub known_entry_points: usize,
+    pub note: String,
 }
 
 #[derive(Debug, Serialize)]

@@ -133,4 +133,5 @@ every list is full of long entries, such as escape-heavy string previews and alt
   `min_string_length`.
 - No format, architecture or codec detection (a compressed-component candidate names no codec): [`carve`](cli-reference.md) finds embedded headers,
   [explicit decoding](decoding.md) decompresses a range with supplied or probed parameters, and `binary triage` reports
-  whole-file entropy of loadable formats.
+  whole-file entropy of loadable formats, plus code sections judged encrypted or packed from their entropy and
+  decode evidence.

@@ -12,6 +12,7 @@ mod branch_observation;
 mod build_info;
 mod bundled_signatures;
 mod capture_session;
+mod code_integrity;
 mod compiled_arm64;
 mod correlation;
 mod debug_control;

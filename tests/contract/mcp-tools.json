@@ -1253,6 +1253,10 @@
           "type": "boolean",
           "required": false
         },
+        "explore_encrypted": {
+          "type": "boolean",
+          "required": false
+        },
         "image_length": {
           "type": "integer|null|string",
           "required": false

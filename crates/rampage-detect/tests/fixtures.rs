@@ -170,6 +170,65 @@ fn ordinary_binaries_are_not_misreported_as_packed_or_protected() {
     }
 }
 
+/// A minimal arm64 Mach-O executable with one segment per `(segment, section)` pair, each holding 0x100 bytes.
+fn macho_with_sections(sections: &[(&str, &str)]) -> Vec<u8> {
+    let name = |text: &str| {
+        let mut field = [0u8; 16];
+        field[..text.len()].copy_from_slice(text.as_bytes());
+        field
+    };
+    let commands = sections.len() as u32;
+    let mut out = Vec::new();
+    for word in [0xfeed_facf_u32, 0x0100_000c, 0, 2, commands, commands * (72 + 80), 0, 0] {
+        out.extend_from_slice(&word.to_le_bytes());
+    }
+    for (index, (segment, section)) in sections.iter().enumerate() {
+        let offset = 0x1000 * (index as u64 + 1);
+        out.extend_from_slice(&0x19u32.to_le_bytes());
+        out.extend_from_slice(&(72u32 + 80).to_le_bytes());
+        out.extend_from_slice(&name(segment));
+        for word in [0x1_0000_0000 + offset, 0x1000, offset, 0x1000] {
+            out.extend_from_slice(&word.to_le_bytes());
+        }
+        for word in [5u32, 5, 1, 0] {
+            out.extend_from_slice(&word.to_le_bytes());
+        }
+        out.extend_from_slice(&name(section));
+        out.extend_from_slice(&name(segment));
+        for word in [0x1_0000_0000 + offset, 0x100] {
+            out.extend_from_slice(&word.to_le_bytes());
+        }
+        for word in [offset as u32, 2, 0, 0, 0, 0, 0, 0] {
+            out.extend_from_slice(&word.to_le_bytes());
+        }
+    }
+    out.resize(0x1000 * (sections.len() + 1), 0);
+    out
+}
+
+fn detect_bytes(name: &str, bytes: &[u8]) -> Vec<rampage_detect::Detection> {
+    let path = std::env::temp_dir().join(format!("rampage-detect-{name}-{}", std::process::id()));
+    std::fs::write(&path, bytes).unwrap();
+    let binary = Binary::open(&path).expect("synthetic image loads");
+    std::fs::remove_file(&path).unwrap();
+    identify(&binary, &SignatureDb::bundled())
+}
+
+#[test]
+fn pace_wrapper_is_named_by_its_mach_o_sections() {
+    let wrapped = macho_with_sections(&[
+        ("__TEXT", "__text"),
+        ("__DATA", "__pbootstrap"),
+        ("__POVERTEXT", "__povertext"),
+        ("__POVERDDATA", "__poverdata"),
+    ]);
+    let detections = detect_bytes("pace", &wrapped);
+    let pace = find(&detections, "PACE (Eden/Fusion)").expect("protector detected");
+    assert_eq!((pace.kind, pace.confidence), (Kind::Protector, Confidence::Strong), "{detections:?}");
+    let plain = detect_bytes("pace-plain", &macho_with_sections(&[("__TEXT", "__text"), ("__DATA", "__data")]));
+    assert!(plain.iter().all(|d| d.kind != Kind::Protector), "{plain:?}");
+}
+
 #[test]
 fn identify_is_panic_free_across_every_fixture() {
     let db = SignatureDb::bundled();

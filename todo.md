@@ -95,6 +95,13 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
 - [x] `go-nested-field` took 20–26 rampage calls against REA's 14: no Go runtime type metadata. Done (`get_type`
   Go source). Open: Go before 1.16, position-independent Go ELF (pointers filled in at load time).
 
+## Protected and packed code (2026-11-13)
+
+- [x] Encrypted/packed code regions detected per window; discovery skips them; PACE protector signature; real
+  UPX-packed fixtures in `tests/fixtures/packed/`.
+- [ ] List the named entry points inside a skipped stretch as stubs instead of only counting them.
+- [ ] The x86 decode-share margin is thin (random bytes decode ~95% against the 97% threshold); entropy carries x86.
+
 ## Build diffing and annotation transfer (roadmap Phase 7, 2026-11-13)
 
 - [x] One-to-one build matching with per-method confidence and `transfer_annotations` (preview/apply, provenance,
