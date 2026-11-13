@@ -70,6 +70,12 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Changed
 
+- Go images: string headers (`{ptr, len}` pairs) in data give literals referenced only from data their own start
+  and length. `list_strings` reports `header_length`, and string matching ends a literal at its header length when
+  code references agree with it. On a 26 MB Go binary, literal starts went from 10,709 to 17,700.
+- ARM and AArch64 `disassemble` and `function_graph` rows carry `immediates_hex` (for example `0x78e` beside
+  `#1934`); the CLI and desktop listings append it as `; 0x78e`. Instruction text, and so operand-glob search, is
+  unchanged.
 - `search` scales to large images: `functions_referencing` a string finds the string first and decodes only the
   blocks holding a matching reference, and wildcard byte patterns prefilter on their longest fixed run. On a 26 MB
   stripped Go binary both used to stop on their work budget; they now complete. In Go images a string target's text

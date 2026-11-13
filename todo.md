@@ -69,14 +69,14 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
   Done 2026-11-13 (restic 26 MB: budget stop → 1 exact hit; Go literals bounded by the next referenced literal).
 - [x] Byte patterns with wildcards still charge their length per candidate start; a 50 MB image needs a
   literal-prefix prefilter or a larger default budget.
-- [ ] ARM immediates are printed in LLVM's decimal (`movt r1, #1934`) by the shared native renderer, used by
+- [x] ARM immediates are printed in LLVM's decimal (`movt r1, #1934`) by the shared native renderer, used by
   `disassemble` and search operand globs too. Only `inspect_raw_code` appends hex now; adding it to the native
   listing needs its own field or comment so CLI/UI comment columns and operand-glob matching stay unchanged.
 - [x] No Raw Project profile for ARM/Thumb (Cortex-M): firmware runs needed `inspect_raw_code`, which has no
   functions, xrefs or decompilation. A reviewed ARM/Thumb Raw profile would let `raw` serve them. Done:
   experimental `ARM:LE:32:Cortex` (aliases `cortex-m*`, `thumb`, `armv7m`, ...), native Thumb decoder, ARM v8
   decompilation, 4 MiB cap ([Cortex-M profile](docs/sleigh-decoding.md#cortex-m-profile)).
-- [ ] Go string literals referenced only through static `{ptr, len}` headers in data (not by code) get no
+- [x] Go string literals referenced only through static `{ptr, len}` headers in data (not by code) get no
   `go_literal` start, since data-to-data references are not retained; reading headers would bound them too.
 - [x] `function_graph` refuses oversized views like `function_summary` did; page its blocks the same way (edges
   index whole-function block positions, so paging keeps them valid).
