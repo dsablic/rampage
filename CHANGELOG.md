@@ -8,6 +8,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ### Added
 
+- 544 packer, protector, cryptor, compiler, installer, linker and SFX signatures converted from Detect It Easy (MIT,
+  pinned commit, authors credited per signature) join the bundled detection database. Only conditions rampage can
+  test exactly are converted (entry patterns that follow jumps, bytes at file offsets or the overlay, exact
+  library/import/export names, bit width); patterns copied or truncated from PeID's database are dropped. Matches
+  name their source and the DIE script. `tools/die_signatures.py` regenerates the data and reports what it skips.
 - Encrypted or packed code detection. Code is measured in 4 KiB windows; a stretch of at least 8 KiB with entropy
   ≥ 7.6 bits/byte and no more than 97% valid instructions is reported as `encrypted_or_packed_code` in `triage`,
   `triage_report` and `binary_info`, and function discovery stops at it, so a protected binary no longer lists

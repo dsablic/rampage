@@ -345,7 +345,10 @@ Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.m
 
 Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#heuristic-database-layer-pluggable-detection-dbs).
 
-- [ ] A real packed fixture (UPX or similar) once a packer is available, to test the packer path end to end.
+- [x] A real packed fixture: UPX-packed ELF and PE in `tests/fixtures/packed/` (2026-11-13).
+- [x] Detect It Easy signatures imported (544, exact conversions only). Open: an alias table to merge DIE and rampage
+  names (e.g. "MSVC" vs "Microsoft Visual C/C++"); DIE's UPX scripts (helpers/loops) are not converted, and UPX-packed
+  ELF is not detected yet; a Linux userland false-positive sweep.
 - [ ] Later DB kinds: Ghidra FidDb import (Apache, library-function ID, format conversion); ClamAV `.ndb/.ldb`
   as a user-supplied runtime input (GPL data -- never bundled); richer capa features once disasm extraction lands.
 
