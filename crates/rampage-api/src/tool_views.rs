@@ -226,7 +226,7 @@ fn merge_block_receipts(value: &mut Value, blocks: &str) {
         omissions.retain(|receipt| !per_block(receipt));
         omissions.push(json!({
             "path": format!("{blocks}*/lines"), "blocks": blocks_count, "items": items, "json_bytes": bytes,
-            "reason": "instruction text/bytes omitted; bounds, counts and non-rendering evidence retained",
+            "reason": "instruction text/bytes/immediates_hex omitted; bounds, counts and non-rendering evidence retained",
         }));
     }
 }
@@ -1061,7 +1061,7 @@ fn instruction_summary(value: &Value, path: &str, projection: &mut Projection) -
     projection.record(
         path,
         value,
-        "instruction text/bytes omitted; bounds, counts and non-rendering evidence retained",
+        "instruction text/bytes/immediates_hex omitted; bounds, counts and non-rendering evidence retained",
     )?;
     Ok(json!({
         "instructions_count": lines.len(),

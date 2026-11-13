@@ -919,7 +919,7 @@ impl Project {
                 let start = after.checked_sub(1).map(|index| starts[index]);
                 let next = starts.get(after).copied().unwrap_or(end);
                 let header = start.and_then(|start| headers?.header(start));
-                let header_length = header.map(|header| header.length);
+                let header_length = header.and_then(|header| header.length);
                 let end = match (start, header_length) {
                     (Some(start), Some(length)) if start + length > matched => start + length,
                     _ => next,
@@ -936,7 +936,11 @@ impl Project {
             });
             let blob = referenced_starts > 1;
             StringRow {
-                note: blob.then_some(GO_BLOB_NOTE),
+                note: blob.then_some(if headers.is_some_and(|headers| headers.truncated) {
+                    GO_BLOB_TRUNCATED_NOTE
+                } else {
+                    GO_BLOB_NOTE
+                }),
                 match_address,
                 go_literal: literal.filter(|_| blob),
                 string,
@@ -951,6 +955,11 @@ const GO_BLOB_NOTE: &str = "Go string data is not NUL-terminated: code reference
                             when a header gives one; when start_is_match is false, start \
                             may begin an earlier literal), or the address and length a referencing instruction or \
                             string header gives.";
+
+const GO_BLOB_TRUNCATED_NOTE: &str = "Go string data is not NUL-terminated: code references several addresses \
+                                      inside this run, so it joins several literals. Do not count offsets by \
+                                      hand: use match_address, go_literal or a referencing instruction. The static \
+                                      string header scan stopped at its cap, so some literal starts are missing.";
 
 /// One list_strings row.
 #[derive(Debug, Clone, serde::Serialize)]

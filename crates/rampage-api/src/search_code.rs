@@ -1719,25 +1719,26 @@ mod tests {
         let code: BTreeSet<u64> =
             program.xrefs.iter().filter(|xref| xref.kind == XrefKind::Data).map(|xref| xref.to).collect();
         // A header-only literal right after a code-referenced one, its text distinctive and absent before it.
-        let (earlier, header) = headers
+        let (earlier, start, length) = headers
             .in_range(0, u64::MAX)
             .iter()
             .filter(|header| !code.contains(&header.start))
-            .find_map(|header| {
-                let earlier = *code.range(..header.start).next_back()?;
-                let text = std::str::from_utf8(project.binary.read(header.start, header.length)?).ok()?;
-                let before = std::str::from_utf8(project.binary.read(earlier, header.start - earlier)?).ok()?;
-                (header.start - earlier < 256
+            .filter_map(|header| Some((header.start, header.length?)))
+            .find_map(|(start, length)| {
+                let earlier = *code.range(..start).next_back()?;
+                let text = std::str::from_utf8(project.binary.read(start, length)?).ok()?;
+                let before = std::str::from_utf8(project.binary.read(earlier, start - earlier)?).ok()?;
+                (start - earlier < 256
                     && text.len() >= 6
                     && text.bytes().all(|byte| byte.is_ascii_alphanumeric())
                     && !before.contains(text)
                     && !before.contains('\0'))
-                .then_some((earlier, *header))
+                .then_some((earlier, start, length))
             })
             .expect("fixture has a header-only Go literal after a code-referenced one");
-        assert_eq!(crate::go_strings::literal_end(program, headers, earlier), Some(header.start));
-        assert_eq!(crate::go_strings::literal_end(program, headers, header.start), Some(header.start + header.length));
-        let needle = std::str::from_utf8(project.binary.read(header.start, header.length).unwrap()).unwrap();
+        assert_eq!(crate::go_strings::literal_end(program, headers, earlier), Some(start));
+        assert_eq!(crate::go_strings::literal_end(program, headers, start), Some(start + length));
+        let needle = std::str::from_utf8(project.binary.read(start, length).unwrap()).unwrap();
         let query = CodeSearchQuery::new(CodeSearchKind::FunctionsReferencing(CodeReference::String(
             SourceString::new(needle, SourceStringEncoding::Utf8).unwrap(),
         )))
@@ -1746,7 +1747,7 @@ mod tests {
         .unwrap();
         let report = project.search_code(&query).unwrap();
         let matched: BTreeSet<u64> = report.hits.iter().filter_map(|hit| hit.evidence.target).collect();
-        assert!(!matched.contains(&earlier), "{needle:?}: {earlier:#x} ends at {:#x}", header.start);
+        assert!(!matched.contains(&earlier), "{needle:?}: {earlier:#x} ends at {start:#x}");
     }
 
     #[test]

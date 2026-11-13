@@ -46,8 +46,12 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - An odd address formed into a Cortex-M image that does not start a printable NUL-terminated run is still taken
   as a Thumb code pointer; odd-aligned binary constants can become false function starts.
 - Go string literal bounds come from code references and pointer-aligned static `{ptr, len}` headers in data
-  that point into the printable string blob. A literal that starts with a non-printable byte, or is reached only
-  through a header the image builds at run time, still ends at the next referenced literal.
+  that point into a printable region of the string blob. Code references win: a header may not run across a
+  code-referenced start, and disagreeing header lengths give only a start. Not covered: literals that start with
+  `\n` or a non-ASCII byte (the pointer must land on printable ASCII); headers in externally linked ELF PIE
+  images, whose pointer words are stored as 0 and filled by RELA relocations; and headers the program builds at
+  run time. The scan stops after 256 MiB of data or 1,048,576 candidates, and `list_strings` notes then say some
+  starts are missing. Such literals still end at the next referenced literal.
 - `function_graph` refuses a view too large for one result; `function_summary` pages its blocks instead.
 - Not built yet: DEX/JVM, Intel HEX/SREC and multi-region firmware maps, object-file relocation, Swift metadata,
   C++ layout recovery beyond RTTI evidence, and incremental analysis or a persistent database for very large
