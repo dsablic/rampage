@@ -353,7 +353,8 @@ jobs:
           bash tools/ci/module-linkage-oracle.sh --check \
             cargo nextest run --locked --workspace --run-ignored all -E '(package(rampage-api) | package(rampage-ui)) & binary(integration) & test(/(module_references)::/)'
       - name: Owned component workflow and resource boundaries
-        timeout-minutes: 5
+        # It compiles the plugin and test targets; a cold cache (a toolchain bump) takes several minutes.
+        timeout-minutes: 15
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
