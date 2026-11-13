@@ -1,4 +1,6 @@
 [toolchain]
-# Pinned so a new stable release cannot change lints under CI; bump deliberately.
+# Pinned so a new stable release cannot change lints under CI; bump deliberately. Everything CI needs is listed here,
+# because CI's own `stable` install does not apply to a pinned toolchain.
 channel = "1.100.0"
-components = ["rustfmt", "clippy"]
+components = ["rustfmt", "clippy", "llvm-tools"]
+targets = ["wasm32-unknown-unknown"]
