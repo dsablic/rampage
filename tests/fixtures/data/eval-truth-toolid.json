@@ -466,6 +466,10 @@
     }
   },
   "excluded": {
+    "../bin/objc-dispatch-arm64.macho": "an Objective-C message-dispatch fixture built with Apple clang; that toolchain is scored through hello-*.macho",
+    "../bin/objc-dispatch-arm64-stripped.macho": "an Objective-C message-dispatch fixture built with Apple clang; that toolchain is scored through hello-*.macho",
+    "../bin/objc-dispatch-x64.macho": "an Objective-C message-dispatch fixture built with Apple clang; that toolchain is scored through hello-*.macho",
+    "../bin/objc-dispatch-x64-stripped.macho": "an Objective-C message-dispatch fixture built with Apple clang; that toolchain is scored through hello-*.macho",
     "../bin/libhelper-x86.so": "the 32-bit x86 build of libhelper-x64.so, for i386 PIC PLT stub naming; its toolchain is scored through libhelper-x64.so",
     "../bin/classes-chained-arm64.macho": "classes-arm64.macho rebuilt with the linker's default chained fixups, for RTTI recovery; built later than it with a different linker (ld 27106 against 27037), so it is not a second sample of the scored toolchain",
     "../bin/auditable-arm64.macho": "a stripped carrier for a synthesized cargo-auditable .dep-v0 section; its C toolchain is scored through hello-*",
