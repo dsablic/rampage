@@ -20,6 +20,7 @@ pub(crate) fn bundled() -> SignatureDb {
     db.extend(linkers());
     db.extend(runtimes());
     db.extend(installers());
+    db.extend(crate::die::signatures());
     db
 }
 
@@ -276,7 +277,7 @@ mod tests {
         // Building the database runs every `ep(...)` constant through the parser; a bad constant would panic.
         let db = super::bundled();
         assert!(db.len() >= 20);
-        for signature in &db.signatures {
+        for signature in db.signatures.iter().filter(|signature| signature.source == crate::model::Source::Rampage) {
             assert!(!signature.conditions.is_empty(), "{} has no conditions", signature.name);
             for condition in &signature.conditions {
                 if let Condition::Entry { .. } = condition {

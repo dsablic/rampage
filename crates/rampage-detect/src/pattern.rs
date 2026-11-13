@@ -138,9 +138,179 @@ impl BytePattern {
     }
 }
 
+/// One piece of a [`JumpPattern`]: bytes to match, or a relative jump to follow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JumpPiece {
+    Bytes(BytePattern),
+    /// A signed displacement of this many bytes (1, 2 or 4), read in the image's byte order. Matching continues
+    /// at the address just past the displacement plus its value, as a `jmp`/`call` to it would.
+    Jump(u8),
+}
+
+/// A byte pattern that follows relative jumps, as Detect It Easy's `$` signatures do: `E9 $4 60 BE` matches an
+/// `E9` byte, reads a 4-byte displacement, and goes on matching `60 BE` where that jump lands.
+///
+/// The text is a [`BytePattern`] with whitespace-separated `$1`, `$2` or `$4` tokens where a displacement sits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JumpPattern {
+    pieces: Vec<JumpPiece>,
+}
+
+impl JumpPattern {
+    /// Parses the text form. A pattern needs at least one fixed nibble in its byte pieces; `$` tokens other than
+    /// `$1`, `$2` and `$4` are rejected as [`PatternError::BadChar`].
+    pub fn parse(text: &str) -> Result<Self, PatternError> {
+        let mut pieces = Vec::new();
+        let mut bytes = String::new();
+        let mut total = 0usize;
+        let flush = |bytes: &mut String, pieces: &mut Vec<JumpPiece>, total: &mut usize| -> Result<(), PatternError> {
+            if bytes.trim().is_empty() {
+                bytes.clear();
+                return Ok(());
+            }
+            let pattern = match BytePattern::parse(bytes) {
+                Ok(pattern) => pattern,
+                // A run of only wildcards between jumps is still a valid stretch of the whole pattern.
+                Err(PatternError::AllWildcard) => BytePattern::wildcards(bytes)?,
+                Err(error) => return Err(error),
+            };
+            *total += pattern.len();
+            pieces.push(JumpPiece::Bytes(pattern));
+            bytes.clear();
+            Ok(())
+        };
+        for token in text.split_ascii_whitespace() {
+            if let Some(size) = token.strip_prefix('$') {
+                flush(&mut bytes, &mut pieces, &mut total)?;
+                let size = match size {
+                    "1" => 1,
+                    "2" => 2,
+                    "4" => 4,
+                    _ => return Err(PatternError::BadChar('$')),
+                };
+                total += usize::from(size);
+                pieces.push(JumpPiece::Jump(size));
+            } else {
+                bytes.push_str(token);
+                bytes.push(' ');
+            }
+            if total > MAX_PATTERN_BYTES {
+                return Err(PatternError::TooLong);
+            }
+        }
+        flush(&mut bytes, &mut pieces, &mut total)?;
+        if total > MAX_PATTERN_BYTES {
+            return Err(PatternError::TooLong);
+        }
+        let pattern = Self { pieces };
+        if pattern.fixed_nibbles() == 0 {
+            return Err(if pattern.pieces.is_empty() { PatternError::Empty } else { PatternError::AllWildcard });
+        }
+        Ok(pattern)
+    }
+
+    /// The pieces in order.
+    pub fn pieces(&self) -> &[JumpPiece] {
+        &self.pieces
+    }
+
+    /// Whether the pattern follows no jump, so it is a plain [`BytePattern`].
+    pub fn into_plain(self) -> Result<BytePattern, Self> {
+        match self.pieces.as_slice() {
+            [JumpPiece::Bytes(pattern)] => Ok(pattern.clone()),
+            _ => Err(self),
+        }
+    }
+
+    /// Fixed nibbles across every byte piece.
+    pub fn fixed_nibbles(&self) -> usize {
+        self.pieces
+            .iter()
+            .map(|piece| match piece {
+                JumpPiece::Bytes(pattern) => pattern.fixed_nibbles(),
+                JumpPiece::Jump(_) => 0,
+            })
+            .sum()
+    }
+
+    /// Matches starting at `address`, reading memory through `read(address, len)` (file-backed bytes only).
+    pub fn matches_from(&self, mut address: u64, big_endian: bool, read: impl Fn(u64, usize) -> Option<Vec<u8>>) -> bool {
+        for piece in &self.pieces {
+            match piece {
+                JumpPiece::Bytes(pattern) => {
+                    let Some(bytes) = read(address, pattern.len()) else { return false };
+                    if !pattern.matches_at(&bytes) {
+                        return false;
+                    }
+                    let Some(next) = address.checked_add(pattern.len() as u64) else { return false };
+                    address = next;
+                }
+                JumpPiece::Jump(size) => {
+                    let Some(bytes) = read(address, usize::from(*size)) else { return false };
+                    let displacement: i64 = match (size, big_endian) {
+                        (1, _) => i64::from(bytes[0] as i8),
+                        (2, false) => i64::from(i16::from_le_bytes([bytes[0], bytes[1]])),
+                        (2, true) => i64::from(i16::from_be_bytes([bytes[0], bytes[1]])),
+                        (_, false) => i64::from(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
+                        (_, true) => i64::from(i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
+                    };
+                    let Some(next) = address
+                        .checked_add(u64::from(*size))
+                        .and_then(|after| after.checked_add_signed(displacement))
+                    else {
+                        return false;
+                    };
+                    address = next;
+                }
+            }
+        }
+        true
+    }
+}
+
+impl BytePattern {
+    /// Bytes the pattern matches: its fixed bits, with every wildcard bit zero.
+    #[cfg(test)]
+    pub(crate) fn example(&self) -> Vec<u8> {
+        self.bytes.iter().map(|byte| byte.value).collect()
+    }
+
+    /// A pattern of only `??` bytes, as many as `text` holds; used inside a [`JumpPattern`], never on its own.
+    fn wildcards(text: &str) -> Result<Self, PatternError> {
+        let count = text.chars().filter(|c| !c.is_ascii_whitespace()).count();
+        if !count.is_multiple_of(2) {
+            return Err(PatternError::OddNibbles);
+        }
+        if let Some(bad) = text.chars().find(|c| !c.is_ascii_whitespace() && *c != '?') {
+            return Err(PatternError::BadChar(bad));
+        }
+        Ok(Self { bytes: vec![MaskedByte { value: 0, mask: 0 }; count / 2] })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jump_patterns_follow_displacements() {
+        // E9 +2 lands past two filler bytes on 60 BE.
+        let pattern = JumpPattern::parse("E9 $4 60 BE").unwrap();
+        let memory = [0xe9, 0x02, 0x00, 0x00, 0x00, 0xcc, 0xcc, 0x60, 0xbe];
+        let read = |address: u64, len: usize| memory.get(address as usize..address as usize + len).map(<[u8]>::to_vec);
+        assert!(pattern.matches_from(0, false, read));
+        assert!(!pattern.matches_from(1, false, read));
+        // A backward one-byte jump.
+        let back = JumpPattern::parse("EB $1").unwrap();
+        let spin = [0xeb, 0xfe];
+        assert!(back.matches_from(0, false, |address, len| {
+            spin.get(address as usize..address as usize + len).map(<[u8]>::to_vec)
+        }));
+        assert_eq!(JumpPattern::parse("$3 E8"), Err(PatternError::BadChar('$')));
+        assert_eq!(JumpPattern::parse("?? $4 ??"), Err(PatternError::AllWildcard));
+        assert!(JumpPattern::parse("60 E8").unwrap().into_plain().is_ok());
+        assert!(JumpPattern::parse("$4 ?? ?? 55").is_ok());
+    }
 
     #[test]
     fn exact_bytes_match_only_themselves() {

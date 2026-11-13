@@ -2,7 +2,7 @@
 //! confirm an ordinary unpacked binary is not misreported as packed. No UPX binary is installed, so the packer
 //! path is exercised only by the crafted-image unit tests in `src/matcher.rs`.
 
-use rampage_detect::{Confidence, Kind, SignatureDb, identify};
+use rampage_detect::{Confidence, Kind, SignatureDb, Source, identify};
 use rampage_loaders::Binary;
 
 fn fixture(name: &str) -> std::path::PathBuf {
@@ -181,6 +181,33 @@ fn identify_is_panic_free_across_every_fixture() {
             let _ = identify(&binary, &db);
         }
     }
+}
+
+#[test]
+fn detect_it_easy_signatures_fire_only_where_expected_across_every_fixture() {
+    // The converted DIE rules were swept over every fixture (and macOS system and Homebrew binaries); the only
+    // matches are true ones. A new match here is a false positive to fix or drop in tools/die_signatures.py.
+    let db = SignatureDb::bundled();
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let mut found = Vec::new();
+    let mut pending = vec![dir.clone()];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next).expect("fixtures dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if let Ok(binary) = Binary::open(&path) {
+                for detection in identify(&binary, &db) {
+                    if detection.sources.contains(&Source::DetectItEasy) {
+                        let name = path.strip_prefix(&dir).unwrap().display().to_string();
+                        found.push(format!("{name}: {}", detection.name));
+                    }
+                }
+            }
+        }
+    }
+    found.sort();
+    assert_eq!(found, ["bin/buildinfo-go-x64.elf: Go", "bin/hello-go-arm64.elf: Go", "bin/hello-go-x64.elf: Go"]);
 }
 
 /// `host` with each of `payloads` appended, written to a fresh temporary file and loaded.

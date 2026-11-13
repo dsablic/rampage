@@ -37,14 +37,15 @@
 //! signatures. We ship the parser, not a database.
 
 mod bundled;
+mod die;
 mod matcher;
 mod model;
 mod pattern;
 mod peid;
 
 pub use matcher::identify;
-pub use model::{Condition, Confidence, Detection, Kind, Signature, SignatureDb};
-pub use pattern::{BytePattern, MAX_PATTERN_BYTES, MIN_DISTINCTIVE_NIBBLES, PatternError};
+pub use model::{Condition, Confidence, Detection, Kind, Signature, SignatureDb, Source};
+pub use pattern::{BytePattern, JumpPattern, JumpPiece, MAX_PATTERN_BYTES, MIN_DISTINCTIVE_NIBBLES, PatternError};
 pub use peid::{PeidError, PeidWarning};
 
 impl SignatureDb {

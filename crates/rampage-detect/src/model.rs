@@ -3,7 +3,7 @@
 use rampage_loaders::Format;
 use serde::Serialize;
 
-use crate::pattern::{BytePattern, MIN_DISTINCTIVE_NIBBLES};
+use crate::pattern::{BytePattern, JumpPattern, MIN_DISTINCTIVE_NIBBLES};
 
 /// The category of tool a signature identifies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -14,6 +14,12 @@ pub enum Kind {
     Protector,
     Installer,
     Linker,
+    /// A crypter: encrypts the image and decrypts it at run time, as a packer compresses it.
+    Cryptor,
+    /// A joiner (binder): glues several programs into one.
+    Joiner,
+    /// A self-extracting archive stub.
+    Sfx,
     /// A C or language runtime linked into the image (musl, glibc, the MinGW-w64 CRT): it says which libc the
     /// program uses, not which compiler built it.
     Runtime,
@@ -46,6 +52,22 @@ pub enum Condition {
     /// The entry-point bytes match this pattern. When `ep_only` is false the pattern may appear anywhere in the
     /// image except its overlay, which mirrors PeID's `ep_only = false`.
     Entry { pattern: BytePattern, ep_only: bool },
+    /// Following relative jumps from the entry point matches this pattern (see [`JumpPattern`]).
+    EntryJumps(JumpPattern),
+    /// The file's bytes at this offset match this pattern; offset 0 is the start of the file.
+    FileBytes { offset: u64, pattern: BytePattern },
+    /// The overlay's first bytes match this pattern.
+    OverlayBytes(BytePattern),
+    /// A library with exactly this name is linked: a PE import library (ignoring case), an ELF `DT_NEEDED` entry,
+    /// or the file name of a Mach-O dylib load command.
+    Library(String),
+    /// An imported function with exactly this name (case-sensitive) is present, from the named library (ignoring
+    /// case) when one is given.
+    ImportedFunction { library: Option<String>, name: String },
+    /// An exported name exactly equal to this one is present.
+    Export(String),
+    /// The image's architecture has pointers this many bits wide (a PE32 image is 32, a PE32+ image 64).
+    PointerBits(u8),
     /// A section with exactly this name is present.
     SectionName(String),
     /// At least one section whose name is in this list is present.
@@ -94,12 +116,17 @@ impl Condition {
     /// only corroborate.
     pub(crate) fn is_distinctive(&self) -> bool {
         match self {
-            Self::Entry { pattern, .. } => pattern.fixed_nibbles() >= MIN_DISTINCTIVE_NIBBLES,
+            Self::Entry { pattern, .. } | Self::FileBytes { pattern, .. } | Self::OverlayBytes(pattern) => {
+                pattern.fixed_nibbles() >= MIN_DISTINCTIVE_NIBBLES
+            }
+            Self::EntryJumps(pattern) => pattern.fixed_nibbles() >= MIN_DISTINCTIVE_NIBBLES,
             Self::SectionContains { .. }
             | Self::DebugContains(_)
             | Self::OverlayContains(_)
             | Self::CodeViewGuid(_)
             | Self::ImportFunction(_)
+            | Self::ImportedFunction { .. }
+            | Self::Export(_)
             | Self::UniqueSectionName(_)
             | Self::Symbol(_)
             | Self::SymbolPrefix(_)
@@ -112,9 +139,22 @@ impl Condition {
     pub(crate) fn is_unscoped(&self) -> bool {
         matches!(
             self,
-            Self::Entry { ep_only: false, .. } | Self::SectionContains { section: None, .. } | Self::OverlayContains(_)
+            Self::Entry { ep_only: false, .. }
+                | Self::SectionContains { section: None, .. }
+                | Self::OverlayContains(_)
+                | Self::OverlayBytes(_)
         )
     }
+}
+
+/// Where a signature comes from, so a report can tell rampage's own rules from imported ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    /// Authored in this crate, or supplied by the user (a PeID database, a data pack).
+    Rampage,
+    /// Converted from the Detect It Easy signature database (MIT); see the crate docs.
+    DetectItEasy,
 }
 
 /// A named rule that identifies one tool from a conjunction of conditions.
@@ -123,6 +163,11 @@ pub struct Signature {
     pub name: String,
     pub kind: Kind,
     pub conditions: Vec<Condition>,
+    /// The version (and any variant notes) the rule identifies, as its source words it.
+    pub version: Option<String>,
+    pub source: Source,
+    /// For an imported rule, where it came from (such as the Detect It Easy script path) and who wrote it.
+    pub origin: Option<String>,
     /// A short human note on what the signature keys off, for documentation and output.
     pub note: Option<String>,
     /// Whether a match is only `Tentative` on its own, however distinctive its conditions: the evidence also
@@ -132,7 +177,16 @@ pub struct Signature {
 
 impl Signature {
     pub fn new(name: &str, kind: Kind, conditions: Vec<Condition>) -> Self {
-        Self { name: name.to_owned(), kind, conditions, note: None, corroborating: false }
+        Self {
+            name: name.to_owned(),
+            kind,
+            conditions,
+            version: None,
+            source: Source::Rampage,
+            origin: None,
+            note: None,
+            corroborating: false,
+        }
     }
 
     pub fn with_note(mut self, note: &str) -> Self {
@@ -155,6 +209,12 @@ pub struct Detection {
     pub confidence: Confidence,
     /// One human-readable line per condition that matched.
     pub evidence: Vec<String>,
+    /// Every signature source that fired, in order: `rampage` for this crate's own rules, `detect_it_easy` for
+    /// rules converted from Detect It Easy.
+    pub sources: Vec<Source>,
+    /// The versions the matching signatures name, when they name one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub versions: Vec<String>,
 }
 
 /// A collection of signatures, bundled or user-supplied, applied together.

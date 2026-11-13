@@ -41,6 +41,21 @@ pub(crate) trait Image {
     fn build_tools(&self) -> Vec<(&str, &str)>;
     /// The overlay's size in bytes, when the image has one.
     fn overlay_size(&self) -> Option<u64>;
+    /// The entry point's address.
+    fn entry(&self) -> Option<u64>;
+    /// `len` file-backed bytes at `address`.
+    fn read(&self, address: u64, len: usize) -> Option<&[u8]>;
+    /// Whether multi-byte values are stored big-endian.
+    fn big_endian(&self) -> bool;
+    /// The libraries the image links by name: PE import libraries, ELF `DT_NEEDED` entries, Mach-O dylib file
+    /// names (the last path component).
+    fn linked_libraries(&self) -> Vec<&str>;
+    /// The imported functions with the library each comes from, when the format records it.
+    fn imported_functions(&self) -> Vec<(Option<&str>, &str)>;
+    /// Whether an export has exactly this name.
+    fn exports(&self, name: &str) -> bool;
+    /// The architecture's pointer width in bits, when known.
+    fn pointer_bits(&self) -> Option<u8>;
 }
 
 /// Identifies the tools that produced `binary`, testing every signature in `db`. Detections that name the same
@@ -87,7 +102,19 @@ fn evaluate(image: &impl Image, unanchored: &Unanchored, signature: &Signature) 
     // searches of a signature that names no format are generic however distinctive their bytes.
     let strong = !signature.corroborating && (distinctive || signals.count() >= 2);
     let confidence = if strong { Confidence::Strong } else { Confidence::Tentative };
-    Some(Detection { name: signature.name.clone(), kind: signature.kind, confidence, evidence })
+    if let Some(origin) = &signature.origin {
+        for line in &mut evidence {
+            *line = format!("{origin}: {line}");
+        }
+    }
+    Some(Detection {
+        name: signature.name.clone(),
+        kind: signature.kind,
+        confidence,
+        evidence,
+        sources: vec![signature.source],
+        versions: signature.version.iter().cloned().collect(),
+    })
 }
 
 /// Where every un-anchored pattern in a database first matches the image, found in one pass for all of them.
@@ -179,6 +206,43 @@ fn check(image: &impl Image, unanchored: &Unanchored, condition: &Condition) -> 
                 let at = unanchored.first_match(pattern)?;
                 Some(format!("pattern found at image offset {at:#x}"))
             }
+        }
+        Condition::EntryJumps(pattern) => {
+            let entry = image.entry()?;
+            pattern
+                .matches_from(entry, image.big_endian(), |address, len| image.read(address, len).map(<[u8]>::to_vec))
+                .then(|| "entry-point code matches a pattern that follows its jumps".to_owned())
+        }
+        Condition::FileBytes { offset, pattern } => {
+            let start = usize::try_from(*offset).ok()?;
+            let bytes = image.image_bytes().get(start..)?;
+            pattern.matches_at(bytes).then(|| format!("file bytes at offset {offset:#x} match {}-byte pattern", pattern.len()))
+        }
+        Condition::OverlayBytes(pattern) => pattern
+            .matches_at(image.overlay_bytes()?)
+            .then(|| format!("overlay starts with {}-byte pattern", pattern.len())),
+        Condition::Library(name) => {
+            let pe = image.format() == Some(Format::Pe);
+            image
+                .linked_libraries()
+                .into_iter()
+                .find(|linked| if pe { linked.eq_ignore_ascii_case(name) } else { linked == name })
+                .map(|linked| format!("links library {linked}"))
+        }
+        Condition::ImportedFunction { library, name } => image
+            .imported_functions()
+            .into_iter()
+            .find(|(from, function)| {
+                function == name
+                    && library.as_ref().is_none_or(|wanted| from.is_some_and(|from| from.eq_ignore_ascii_case(wanted)))
+            })
+            .map(|(from, function)| match from {
+                Some(from) => format!("imports function {function} from {from}"),
+                None => format!("imports function {function}"),
+            }),
+        Condition::Export(name) => image.exports(name).then(|| format!("exports {name}")),
+        Condition::PointerBits(bits) => {
+            (image.pointer_bits() == Some(*bits)).then(|| format!("{bits}-bit image"))
         }
         Condition::SectionName(name) => find_section(image, name).is_some().then(|| format!("section {name} present")),
         Condition::AnySectionName(names) | Condition::UniqueSectionName(names) => {
@@ -307,6 +371,17 @@ fn merge(detections: &mut Vec<Detection>, detection: Detection) {
         if detection.confidence == Confidence::Strong || existing.evidence.len() > known {
             existing.confidence = Confidence::Strong;
         }
+        for source in detection.sources {
+            if !existing.sources.contains(&source) {
+                existing.sources.push(source);
+            }
+        }
+        existing.sources.sort();
+        for version in detection.versions {
+            if !existing.versions.contains(&version) {
+                existing.versions.push(version);
+            }
+        }
         return;
     }
     detections.push(detection);
@@ -373,6 +448,48 @@ impl Image for Binary {
     fn overlay_size(&self) -> Option<u64> {
         self.overlay.map(|overlay| overlay.size)
     }
+
+    fn entry(&self) -> Option<u64> {
+        self.entry
+    }
+
+    fn read(&self, address: u64, len: usize) -> Option<&[u8]> {
+        Binary::read(self, address, len as u64)
+    }
+
+    fn big_endian(&self) -> bool {
+        self.big_endian
+    }
+
+    fn linked_libraries(&self) -> Vec<&str> {
+        match &self.details {
+            Details::Elf(elf) => elf.needed.iter().map(String::as_str).collect(),
+            Details::MachO(macho) => {
+                macho.dylibs.iter().map(|path| path.rsplit('/').next().unwrap_or(path.as_str())).collect()
+            }
+            _ => {
+                let mut libraries: Vec<&str> = Vec::new();
+                for library in self.imports.iter().filter_map(|import| import.library.as_deref()) {
+                    if !libraries.contains(&library) {
+                        libraries.push(library);
+                    }
+                }
+                libraries
+            }
+        }
+    }
+
+    fn imported_functions(&self) -> Vec<(Option<&str>, &str)> {
+        self.imports.iter().map(|import| (import.library.as_deref(), import.name.as_str())).collect()
+    }
+
+    fn exports(&self, name: &str) -> bool {
+        self.exports.iter().any(|export| export.name == name)
+    }
+
+    fn pointer_bits(&self) -> Option<u8> {
+        self.arch.pointer_size().map(|bytes| bytes * 8)
+    }
 }
 
 #[cfg(test)]
@@ -396,6 +513,8 @@ mod tests {
         /// The overlay's contents; `overlay` alone gives only its size.
         appended: Vec<u8>,
         codeview: Option<[u8; 16]>,
+        exported: Vec<String>,
+        bits: Option<u8>,
     }
 
     impl Fake {
@@ -441,6 +560,28 @@ mod tests {
         }
         fn overlay_size(&self) -> Option<u64> {
             self.overlay
+        }
+        fn entry(&self) -> Option<u64> {
+            (!self.entry.is_empty()).then_some(0)
+        }
+        fn read(&self, address: u64, len: usize) -> Option<&[u8]> {
+            let start = usize::try_from(address).ok()?;
+            self.entry.get(start..start.checked_add(len)?)
+        }
+        fn big_endian(&self) -> bool {
+            false
+        }
+        fn linked_libraries(&self) -> Vec<&str> {
+            self.libraries.iter().map(String::as_str).collect()
+        }
+        fn imported_functions(&self) -> Vec<(Option<&str>, &str)> {
+            self.functions.iter().map(|name| (self.libraries.first().map(String::as_str), name.as_str())).collect()
+        }
+        fn exports(&self, name: &str) -> bool {
+            self.exported.iter().any(|export| export == name)
+        }
+        fn pointer_bits(&self) -> Option<u8> {
+            self.bits
         }
     }
 
@@ -846,5 +987,104 @@ mod tests {
         assert_eq!(detection.evidence, ["section .gopclntab present"]);
         // Absent names still do not match.
         assert!(evaluate(&Fake::default().with_section(".text", &[0u8; 8]), &sig).is_none());
+    }
+
+    #[test]
+    fn exact_name_and_offset_conditions_match_as_detect_it_easy_does() {
+        let pe = Fake {
+            format: Some(Format::Pe),
+            image: b"MZ\x90\x00rest".to_vec(),
+            libraries: vec!["KERNEL32.dll".to_owned()],
+            functions: vec!["LoadLibraryA".to_owned()],
+            exported: vec!["DllMain".to_owned()],
+            appended: b"Inno".to_vec(),
+            bits: Some(32),
+            ..Fake::default()
+        };
+        let holds = |condition: Condition| evaluate(&pe, &Signature::new("T", Kind::Packer, vec![condition])).is_some();
+        // A PE library name compares whole, ignoring case; elsewhere it is exact.
+        assert!(holds(Condition::Library("kernel32.DLL".to_owned())));
+        assert!(!holds(Condition::Library("kernel32".to_owned())));
+        // Function names are case-sensitive, and a named library must be the one the function comes from.
+        let import = |library: Option<&str>, name: &str| Condition::ImportedFunction {
+            library: library.map(str::to_owned),
+            name: name.to_owned(),
+        };
+        assert!(holds(import(None, "LoadLibraryA")));
+        assert!(!holds(import(None, "loadlibrarya")));
+        assert!(holds(import(Some("kernel32.dll"), "LoadLibraryA")));
+        assert!(!holds(import(Some("user32.dll"), "LoadLibraryA")));
+        assert!(holds(Condition::Export("DllMain".to_owned())));
+        assert!(!holds(Condition::Export("dllmain".to_owned())));
+        let pattern = |text: &str| BytePattern::parse(text).unwrap();
+        assert!(holds(Condition::FileBytes { offset: 0, pattern: pattern("4D 5A") }));
+        assert!(holds(Condition::FileBytes { offset: 2, pattern: pattern("90 00") }));
+        assert!(!holds(Condition::FileBytes { offset: 1, pattern: pattern("4D 5A") }));
+        // Overlay bytes are anchored at the overlay's start.
+        assert!(holds(Condition::OverlayBytes(pattern("49 6E"))));
+        assert!(!holds(Condition::OverlayBytes(pattern("6E 6F"))));
+        assert!(holds(Condition::PointerBits(32)));
+        assert!(!holds(Condition::PointerBits(64)));
+        let elf = Fake { format: Some(Format::Elf), libraries: vec!["libc.so.6".to_owned()], ..Fake::default() };
+        let library = |name: &str| Signature::new("T", Kind::Packer, vec![Condition::Library(name.to_owned())]);
+        assert!(evaluate(&elf, &library("libc.so.6")).is_some());
+        assert!(evaluate(&elf, &library("LIBC.so.6")).is_none());
+    }
+
+    #[test]
+    fn bundled_detect_it_easy_signatures_match_synthetic_entry_points() {
+        use crate::model::Source;
+        use crate::pattern::JumpPiece;
+
+        let db = SignatureDb::bundled();
+        let (mut plain, mut jumps) = (0, 0);
+        for signature in db.signatures.iter().filter(|signature| signature.source == Source::DetectItEasy) {
+            let (format, entry) = match signature.conditions.as_slice() {
+                [Condition::Format(format), Condition::Entry { pattern, .. }] => {
+                    plain += 1;
+                    (*format, pattern.example())
+                }
+                // Every jump displacement zero, so each jump lands just past itself.
+                [Condition::Format(format), Condition::EntryJumps(pattern)] => {
+                    jumps += 1;
+                    let bytes = pattern.pieces().iter().flat_map(|piece| match piece {
+                        JumpPiece::Bytes(bytes) => bytes.example(),
+                        JumpPiece::Jump(size) => vec![0; usize::from(*size)],
+                    });
+                    (*format, bytes.collect())
+                }
+                _ => continue,
+            };
+            let image = Fake { format: Some(format), entry, ..Fake::default() };
+            let found = evaluate(&image, signature).unwrap_or_else(|| panic!("{} misses its own bytes", signature.name));
+            assert_eq!(found.sources, [Source::DetectItEasy]);
+            assert_eq!(found.versions, signature.version.iter().cloned().collect::<Vec<_>>());
+            assert!(found.evidence[0].starts_with("Detect It Easy "), "{:?}", found.evidence);
+            // The same bytes in another container format are not the rule's business.
+            let other = if format == Format::Pe { Format::Elf } else { Format::Pe };
+            assert!(evaluate(&Fake { format: Some(other), ..image }, signature).is_none());
+        }
+        assert!(plain > 100 && jumps > 10, "{plain} plain, {jumps} jump patterns");
+    }
+
+    #[test]
+    fn merged_detections_pool_sources_and_versions() {
+        use crate::model::Source;
+
+        let mut die = Signature::new("UPX", Kind::Packer, vec![Condition::SectionName("UPX1".to_owned())]);
+        die.source = Source::DetectItEasy;
+        die.version = Some("3.96".to_owned());
+        die.origin = Some("Detect It Easy PE/x.sg".to_owned());
+        let own = Signature::new("UPX", Kind::Packer, vec![Condition::SectionName("UPX0".to_owned())]);
+        let db = SignatureDb::from_signatures(vec![own, die]);
+        let image = Fake::default().with_section("UPX0", &[0; 4]).with_section("UPX1", &[0; 4]);
+        let detections = identify_image(&image, &db);
+        assert_eq!(detections.len(), 1);
+        assert_eq!(detections[0].sources, [Source::Rampage, Source::DetectItEasy]);
+        assert_eq!(detections[0].versions, ["3.96"]);
+        assert_eq!(
+            detections[0].evidence,
+            ["section UPX0 present", "Detect It Easy PE/x.sg: section UPX1 present"]
+        );
     }
 }
