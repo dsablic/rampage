@@ -921,7 +921,14 @@ pub fn decompile(out: &mut impl Write, args: &crate::args::DecompileArgs, option
         }
         return Ok(());
     }
-    let decompilation = project.decompile(address)?;
+    let decompilation = if args.explore_encrypted {
+        if let Some(region) = project.encrypted_region_at(address) {
+            eprintln!("warning: decompiling inside code judged encrypted or packed: {}", region.explain());
+        }
+        project.decompile_encrypted(address)?
+    } else {
+        project.decompile(address)?
+    };
     if write_tool_view(out, &decompilation, rampage_api::ToolViewKind::Decompile, args.view, options)? {
         return Ok(());
     }

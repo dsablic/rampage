@@ -78,6 +78,9 @@ These are not breaking:
 - adding a value to an open-ended string set such as an error kind or a finding category;
 - changing tool descriptions, server instructions, error message text, limitations text or the order of fields;
 - changing analysis results: better discovery, decompilation or names are improvements, not API changes;
+- refusing to decompile an address that analysis judges to lie in encrypted or packed code (see
+  [known limits](known-limits.md#analysis)). That judgement is an analysis result, and `explore_encrypted=true`
+  (CLI `--explore-encrypted`) still decompiles there, with a warning;
 - changing size caps and default page sizes, as long as paging still reports totals and omissions;
 - refusing an unknown argument (the argument was never part of the surface).
 

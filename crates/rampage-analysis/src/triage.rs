@@ -214,7 +214,8 @@ fn hints(binary: &Binary, triage: &Triage) -> Vec<String> {
     }
     for section in &triage.sections {
         let executable = section.perms.contains('x') || section.kind == SectionKind::Code;
-        let judged = triage.encrypted_or_packed_code.iter().any(|region| region.address == section.address);
+        let end = section.address.saturating_add(section.size);
+        let judged = triage.encrypted_or_packed_code.iter().any(|region| (section.address..end).contains(&region.address));
         if executable && !judged && section.file_size >= 512 && section.entropy > HIGH_ENTROPY {
             hints.push(format!(
                 "code section {} has entropy {:.2}: packed or encrypted code is likely",

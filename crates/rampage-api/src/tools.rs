@@ -1034,6 +1034,9 @@ struct DecompileToolArgs {
     /// Assert this exact entry and use bounded local context, without whole-program discovery.
     #[serde(default)]
     exact_entry: bool,
+    /// Decompile even inside code judged encrypted or packed (refused by default); the result carries a warning.
+    #[serde(default)]
+    explore_encrypted: bool,
     /// full (default) preserves original JSON; code retains complete native C and essential evidence;
     /// summary omits C text too, with exact counts/omission receipts. Oversized views refuse, never truncate.
     #[serde(default)]
@@ -1427,11 +1430,19 @@ fn decompile_tool(project: &Project, args: DecompileToolArgs) -> Result<Value, A
             address,
             validation: crate::EntryValidation::AnalystAsserted,
         })?)
+    } else if args.explore_encrypted {
+        serde_json::to_value(project.decompile_encrypted(address)?)
     } else {
         serde_json::to_value(project.decompile(address)?)
     };
     let mut value = value.map_err(|error| ApiError::Invalid(format!("decompilation serialization: {error}")))?;
     value["decompiler"] = Value::from(decompiler_mode(project));
+    if let Some(region) = project.encrypted_region_at(address).filter(|_| args.explore_encrypted) {
+        value["warning"] = Value::from(format!(
+            "decompiled inside code judged encrypted or packed; the C is likely noise: {}",
+            region.explain()
+        ));
+    }
     decompilation_view(value, args.view)
 }
 

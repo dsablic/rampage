@@ -176,14 +176,18 @@ using pefile's algorithm without its ordinal-name tables. Format details include
 - ELF interpreter, needed libraries, NX/RELRO/PIE and build ID.
 - Mach-O dylibs, platform, UUID, signing and encryption.
 
-Hints identify likely packing and missing hardening. Each code section (or executable segment) is also judged
-for encrypted or packed code: one whose entropy is at least 7.6 bits per byte and of which at most 97% decodes as
-valid instructions, on a sweep of 64 windows of 1 KiB with the binary's own decoder, is reported as
-`likely_encrypted_or_packed` with those numbers in `triage`, `triage_report` and `binary_info`
-(`encrypted_or_packed_code`). Function discovery does not explore such a region, `list_functions` names it under
-`unexplored_code` with the count of metadata entry points inside it, and `decompile` refuses addresses in it. On
-every fixture in the repository the highest code-section entropy is 6.86 bits per byte and the lowest decoded
-share 99.8%; random bytes decode at about 95% on x86-64 and 40% on ARM64. Permissive default databases are bundled; additional
+Hints identify likely packing and missing hardening. Code is also judged for encrypted or packed stretches: every
+code section, every executable PE section, or the executable segments of an image without sections, in 4 KiB
+windows. Adjacent windows of at least 7.6 bits per byte form a run; its edges are trimmed in 512-byte blocks below
+7.0 bits, and the block holding the entry point is cut out, since the entry runs before anything could decrypt
+it. A run of at least 8 KiB of which at most 97% decodes as valid instructions (a sweep of up to 64 windows of
+1 KiB with the binary's own decoder) is reported as `likely_encrypted_or_packed` with those numbers in `triage`,
+`triage_report` and `binary_info` (`encrypted_or_packed_code`). A packer's clear stub or a firmware loader beside
+the payload stays code. Function discovery does not explore a judged run (it follows clear code up to it),
+`list_functions` names it under `unexplored_code` with the count of metadata entry points inside it, and `decompile`
+refuses addresses in it unless given `explore_encrypted=true`. On every fixture in the repository the highest
+window entropy is 6.88 bits per byte and the lowest decoded share 99.8%; random bytes decode at about 95% on
+x86-64, 93% on Thumb and 40% on ARM64. Permissive default databases are bundled; additional
 databases are supplied at runtime. Detection databases name likely packers, compilers,
 protectors, installers, linkers and runtimes; user PeID `userdb.txt` files are accepted, with warnings for
 malformed entries that are skipped. YARA runs through embedded yara-x, while Mandiant capa rules use imports,

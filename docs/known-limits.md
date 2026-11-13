@@ -52,11 +52,13 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   images, whose pointer words are stored as 0 and filled by RELA relocations; and headers the program builds at
   run time. The scan stops after 256 MiB of data or 1,048,576 candidates, and `list_strings` notes then say some
   starts are missing. Such literals still end at the next referenced literal.
-- Encrypted or packed code is detected, not unpacked: a code section judged `likely_encrypted_or_packed` (see
-  [triage](features.md#triage-and-detection)) is left out of function discovery, so a protected binary lists only
-  the functions in its clear code, and its real entry points inside the region are counted, not analysed. The
-  judgement needs both signals: high-entropy code on an architecture where nearly every byte sequence decodes
-  (8-bit microcontrollers) is never judged, and sections under 4 KiB are not measured.
+- Encrypted or packed code is detected, not unpacked: a stretch of code judged `likely_encrypted_or_packed` (see
+  [triage](features.md#triage-and-detection)) is left out of function discovery, so a protected or packed binary
+  lists only the functions in its clear code (a packer's stub included), and symbols, exports and function starts
+  inside the stretch are counted, not analysed. `decompile` refuses there unless given `explore_encrypted=true`
+  (CLI `--explore-encrypted`). The judgement needs both signals: high-entropy code on an architecture where nearly
+  every byte sequence decodes (8-bit microcontrollers) is never judged, and runs under 8 KiB are not judged. The
+  edges of a judged stretch are placed to within 512 bytes, so a little clear code next to it may be left out.
 - `function_graph` refuses a view too large for one result; `function_summary` pages its blocks instead.
 - Not built yet: DEX/JVM, Intel HEX/SREC and multi-region firmware maps, object-file relocation, Swift metadata,
   C++ layout recovery beyond RTTI evidence, and incremental analysis or a persistent database for very large

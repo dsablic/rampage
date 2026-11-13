@@ -36,21 +36,31 @@ fn encrypted_code_is_reported_skipped_and_refused() {
     let entry = project.binary.entry.unwrap();
 
     let triage = project.triage();
-    let [region] = triage.encrypted_or_packed_code.as_slice() else { panic!("{:?}", triage.encrypted_or_packed_code) };
-    assert_eq!(region.name, ".text");
-    assert!(region.contains(entry) && region.entropy >= 7.9 && region.valid_share < 0.97, "{region:?}");
+    let regions = &triage.encrypted_or_packed_code;
+    assert!(!regions.is_empty() && regions.iter().all(|region| region.name == ".text"), "{regions:?}");
+    // The entry point runs before anything could decrypt it, so its block stays code.
+    assert!(regions.iter().all(|region| !region.contains(entry)), "{regions:?}");
+    let region = &regions[0];
+    assert!(region.entropy >= 7.9 && region.valid_share < 0.97, "{region:?}");
     assert!(triage.hints.iter().any(|hint| hint.contains("likely_encrypted_or_packed")), "{:?}", triage.hints);
 
     let info = serde_json::to_value(project.summary()).unwrap();
     assert_eq!(info["encrypted_or_packed_code"][0]["verdict"], "likely_encrypted_or_packed");
 
     let page = project.functions_page(&FunctionsQuery::default()).unwrap();
-    assert!(page.page.items.iter().all(|row| !region.contains(row.address)), "{:?}", page.page.items);
-    let [unexplored] = page.unexplored_code.as_slice() else { panic!("{:?}", page.unexplored_code) };
-    assert!(unexplored.known_entry_points >= 1 && unexplored.note.contains("not explored"), "{unexplored:?}");
+    for row in &page.page.items {
+        assert!(regions.iter().all(|region| !region.contains(row.address)), "{row:?}");
+    }
+    assert_eq!(page.unexplored_code.len(), regions.len());
+    assert!(page.unexplored_code[0].note.contains("not explored"), "{:?}", page.unexplored_code);
 
-    let refused = project.decompile(entry).unwrap_err().to_string();
-    assert!(refused.contains("encrypted or packed"), "{refused}");
+    let inside = region.address;
+    let refused = project.decompile(inside).unwrap_err().to_string();
+    assert!(refused.contains("encrypted or packed") && refused.contains("explore_encrypted"), "{refused}");
+    // The override proceeds: whatever happens next is the decompiler's doing, not the refusal.
+    if let Err(error) = project.decompile_encrypted(inside) {
+        assert!(!error.to_string().contains("judged encrypted"), "{error}");
+    }
 }
 
 #[test]

@@ -1,39 +1,55 @@
-//! Whether each code region holds instructions at all, or bytes that only become code at run time: encrypted or
-//! packed code that a protection wrapper or packer decrypts or unpacks after loading.
+//! Which stretches of code hold instructions at all, and which hold bytes that only become code at run time:
+//! encrypted or packed code that a protection wrapper or packer decrypts or unpacks after loading.
 //!
-//! Every code section (the executable segments, when the image has no code sections) is measured two ways. Its
-//! Shannon entropy says how random its bytes are: compiled code stays well below 8 bits per byte, while
-//! encrypted or compressed bytes sit at the 8-bit ceiling. A decode sweep says how much of it the image's own
-//! decoder reads as valid instructions: windows spread evenly across the region are decoded linearly, which for
-//! variable-length instruction sets (x86) also re-synchronizes from sampled starts. A region is judged
-//! [`Verdict::LikelyEncryptedOrPacked`] only when both agree: its entropy is at least [`MIN_ENTROPY`] and at most
-//! [`MAX_VALID_SHARE`] of the swept bytes decode. Neither alone is enough: dense code can approach the entropy
-//! floor, and instruction sets where nearly every byte sequence is valid (8-bit microcontrollers) say little
-//! through decoding, so those images are never judged from entropy alone.
+//! Every code section is measured, together with (in PE images, where each section has its own permissions) every
+//! executable section without the code flag, or the executable segments when the image has no such sections. A
+//! section is judged in [`WINDOW_BYTES`] windows, so a packer's clear stub beside its compressed payload, or a
+//! firmware loader in front of a compressed image, stays code:
 //!
-//! The thresholds are calibrated against every fixture in the repository (see the fixture margin test), and the
-//! numbers behind each verdict are reported so a reader can weigh them.
+//! 1. A window whose Shannon entropy is at least [`MIN_ENTROPY`] is a candidate: compiled code stays well below 8
+//!    bits per byte, while encrypted or compressed bytes sit at the ceiling. Adjacent candidates join into runs.
+//! 2. Each run's edges are trimmed in [`EDGE_BYTES`] blocks while a block's entropy is below [`MIN_EDGE_ENTROPY`],
+//!    so a run ends close to where the random bytes do. The image's entry point runs before anything could decrypt
+//!    it, so the block holding it is cut out of a run as well.
+//! 3. A run of at least [`MIN_RUN_BYTES`] is judged [`Verdict::LikelyEncryptedOrPacked`] when at most
+//!    [`MAX_VALID_SHARE`] of its swept bytes decode as valid instructions with the image's own decoder, on a
+//!    linear sweep of windows spread across it (which for variable-length instruction sets re-synchronizes from
+//!    sampled starts).
+//!
+//! Neither signal alone is enough: dense code can approach the entropy floor, and on instruction sets where nearly
+//! every byte sequence decodes (8-bit microcontrollers) decoding says little, so those images are never judged
+//! from entropy alone. The thresholds are calibrated against every fixture in the repository (see the fixture
+//! margin test), and the numbers behind each verdict are reported so a reader can weigh them.
 
 use std::ops::Range;
 
 use rampage_arch::{Disassembler, Flow};
-use rampage_loaders::{Binary, SectionKind};
+use rampage_loaders::{Binary, Format, Section, SectionKind};
 use serde::Serialize;
 
 use crate::memory::Memory;
 
-/// Regions smaller than this are not judged: entropy measured over few bytes is biased low and noisy.
-pub const MIN_REGION_BYTES: u64 = 4096;
-/// Entropy, in bits per byte, at or above which a code region's bytes look encrypted or compressed.
+/// Bytes per judged window.
+pub const WINDOW_BYTES: u64 = 4096;
+/// A section's last window is judged only when it holds at least this many bytes: entropy measured over few
+/// bytes is biased low and noisy.
+const MIN_WINDOW_BYTES: usize = 1024;
+/// Entropy, in bits per byte, at or above which a window's bytes look encrypted or compressed.
 pub const MIN_ENTROPY: f64 = 7.6;
-/// The share of swept bytes decoding as valid instructions at or below which a region does not read as code.
+/// Bytes per block when trimming a run's edges.
+pub const EDGE_BYTES: usize = 512;
+/// Entropy at or above which an edge block stays in its run. Random 512-byte blocks measure about 7.6.
+pub const MIN_EDGE_ENTROPY: f64 = 7.0;
+/// Runs shorter than this after trimming are not judged.
+pub const MIN_RUN_BYTES: u64 = 8192;
+/// The share of swept bytes decoding as valid instructions at or below which a run does not read as code.
 pub const MAX_VALID_SHARE: f64 = 0.97;
-/// Windows decoded per region, spread evenly across it.
-const WINDOWS: u64 = 64;
-/// Bytes decoded per window.
-const WINDOW_BYTES: u64 = 1024;
+/// Windows decoded per run, spread evenly across it.
+const SAMPLES: u64 = 64;
+/// Bytes decoded per sample.
+const SAMPLE_BYTES: u64 = 1024;
 
-/// The judgement on one code region.
+/// The judgement on one stretch of code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Verdict {
@@ -50,15 +66,15 @@ impl Verdict {
     }
 }
 
-/// The measurements for one code region and the verdict they support, if any.
+/// A stretch of a section judged encrypted or packed, with the evidence for it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CodeRegion {
-    /// The code section's name, or the executable segment's when the image has no code sections.
+    /// The section's name, or the executable segment's when the image has no sections.
     pub name: String,
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub size: u64,
-    /// Shannon entropy of the region's file-backed bytes, in bits per byte, rounded to two decimals.
+    /// Shannon entropy of the stretch's bytes, in bits per byte, rounded to two decimals.
     pub entropy: f64,
     /// Bytes the decode sweep covered.
     pub swept_bytes: u64,
@@ -94,60 +110,63 @@ impl CodeRegion {
     }
 }
 
-/// Every code region of at least [`MIN_REGION_BYTES`] file-backed bytes, measured with a decoder from
-/// `new_decoder`. Images whose decoder cannot be built are measured by entropy only and never judged.
+/// The stretches of code judged encrypted or packed, measured with a decoder from `new_decoder`. Images whose
+/// decoder cannot be built are never judged.
 pub fn assess<E>(binary: &Binary, new_decoder: impl Fn() -> Result<Box<dyn Disassembler>, E>) -> Vec<CodeRegion> {
     let mut decoder = None;
     let mut regions = Vec::new();
     for (name, address, bytes) in units(binary) {
-        if (bytes.len() as u64) < MIN_REGION_BYTES {
-            continue;
+        let entry = binary.entry.and_then(|entry| entry.checked_sub(address)).filter(|&at| at < bytes.len() as u64);
+        for run in runs(bytes, entry.map(|at| at as usize)) {
+            if ((run.end - run.start) as u64) < MIN_RUN_BYTES {
+                continue;
+            }
+            let Some(decoder) = decoder.get_or_insert_with(|| new_decoder().ok()).as_mut() else {
+                return Vec::new();
+            };
+            let start = address + run.start as u64;
+            let (swept, valid) = sweep(decoder.as_mut(), &bytes[run.clone()], start);
+            let valid_share = (valid as f64 / swept.max(1) as f64 * 1000.0).round() / 1000.0;
+            if swept == 0 || valid_share > MAX_VALID_SHARE {
+                continue;
+            }
+            regions.push(CodeRegion {
+                name: name.to_owned(),
+                address: start,
+                size: (run.end - run.start) as u64,
+                entropy: crate::triage::entropy(&bytes[run]),
+                swept_bytes: swept,
+                valid_share,
+                verdict: Some(Verdict::LikelyEncryptedOrPacked),
+            });
         }
-        let entropy = crate::triage::entropy(bytes);
-        let (swept, valid) = if entropy >= MIN_ENTROPY {
-            if decoder.is_none() {
-                decoder = Some(new_decoder().ok());
-            }
-            match decoder.as_mut().and_then(Option::as_mut) {
-                Some(decoder) => sweep(decoder.as_mut(), bytes, address),
-                None => (0, 0),
-            }
-        } else {
-            (0, 0)
-        };
-        let valid_share = if swept == 0 { 1.0 } else { ((valid as f64 / swept as f64) * 1000.0).round() / 1000.0 };
-        let verdict = (swept > 0 && entropy >= MIN_ENTROPY && valid_share <= MAX_VALID_SHARE)
-            .then_some(Verdict::LikelyEncryptedOrPacked);
-        regions.push(CodeRegion {
-            name: name.to_owned(),
-            address,
-            size: bytes.len() as u64,
-            entropy,
-            swept_bytes: swept,
-            valid_share,
-            verdict,
-        });
     }
     regions
 }
 
-/// [`assess`], measuring every region's decode share even when its entropy alone rules out a verdict. For
-/// calibration: the decode sweep is otherwise skipped for low-entropy regions.
-pub fn measure<E>(binary: &Binary, new_decoder: impl Fn() -> Result<Box<dyn Disassembler>, E>) -> Vec<CodeRegion> {
+/// One measured section's evidence, for calibration: the highest entropy of any judged window, and the valid share
+/// of a decode sweep over the whole section.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Measurement {
+    pub name: String,
+    pub size: u64,
+    pub max_window_entropy: f64,
+    pub valid_share: f64,
+}
+
+/// Every measured section's [`Measurement`].
+pub fn measure<E>(binary: &Binary, new_decoder: impl Fn() -> Result<Box<dyn Disassembler>, E>) -> Vec<Measurement> {
     let mut decoder = new_decoder().ok();
     units(binary)
-        .filter(|(_, _, bytes)| bytes.len() as u64 >= MIN_REGION_BYTES)
+        .filter(|(_, _, bytes)| bytes.len() >= MIN_WINDOW_BYTES)
         .map(|(name, address, bytes)| {
             let (swept, valid) = decoder.as_mut().map_or((0, 0), |decoder| sweep(decoder.as_mut(), bytes, address));
-            let valid_share = if swept == 0 { 1.0 } else { valid as f64 / swept as f64 };
-            CodeRegion {
+            let entropies = windows(bytes).map(|window| crate::triage::entropy(&bytes[window]));
+            Measurement {
                 name: name.to_owned(),
-                address,
                 size: bytes.len() as u64,
-                entropy: crate::triage::entropy(bytes),
-                swept_bytes: swept,
-                valid_share,
-                verdict: None,
+                max_window_entropy: entropies.fold(0.0, f64::max),
+                valid_share: if swept == 0 { 1.0 } else { valid as f64 / swept as f64 },
             }
         })
         .collect()
@@ -158,16 +177,70 @@ pub fn flagged_ranges(regions: &[CodeRegion]) -> Vec<Range<u64>> {
     regions.iter().filter(|region| region.verdict.is_some()).map(CodeRegion::range).collect()
 }
 
-/// Code sections with their file-backed bytes, or the executable segments when there are no code sections.
+/// The judged windows of a section: whole windows, and a last one of at least [`MIN_WINDOW_BYTES`].
+fn windows(bytes: &[u8]) -> impl Iterator<Item = Range<usize>> + '_ {
+    let size = WINDOW_BYTES as usize;
+    (0..bytes.len())
+        .step_by(size)
+        .map(move |start| start..(start + size).min(bytes.len()))
+        .filter(|window| window.len() >= MIN_WINDOW_BYTES)
+}
+
+/// The high-entropy runs of a section, as byte offsets: adjacent candidate windows joined, edges trimmed, and the
+/// block holding the entry point (at offset `entry`) cut out.
+fn runs(bytes: &[u8], entry: Option<usize>) -> Vec<Range<usize>> {
+    let mut joined: Vec<Range<usize>> = Vec::new();
+    for window in windows(bytes) {
+        if crate::triage::entropy(&bytes[window.clone()]) < MIN_ENTROPY {
+            continue;
+        }
+        match joined.last_mut() {
+            Some(last) if last.end == window.start => last.end = window.end,
+            _ => joined.push(window),
+        }
+    }
+    let mut runs = Vec::new();
+    for run in joined {
+        match entry.filter(|at| run.contains(at)) {
+            Some(at) => {
+                let block = run.start + (at - run.start) / EDGE_BYTES * EDGE_BYTES;
+                runs.push(trim(bytes, run.start..block));
+                runs.push(trim(bytes, (block + EDGE_BYTES).min(run.end)..run.end));
+            }
+            None => runs.push(trim(bytes, run)),
+        }
+    }
+    runs.retain(|run| !run.is_empty());
+    runs
+}
+
+/// `run` without the low-entropy [`EDGE_BYTES`] blocks at either end.
+fn trim(bytes: &[u8], mut run: Range<usize>) -> Range<usize> {
+    let low = |block: &[u8]| crate::triage::entropy(block) < MIN_EDGE_ENTROPY;
+    while run.len() >= EDGE_BYTES && low(&bytes[run.start..run.start + EDGE_BYTES]) {
+        run.start += EDGE_BYTES;
+    }
+    while run.len() >= EDGE_BYTES && low(&bytes[run.end - EDGE_BYTES..run.end]) {
+        run.end -= EDGE_BYTES;
+    }
+    if run.len() < EDGE_BYTES { run.start..run.start } else { run }
+}
+
+/// Code sections, and in PE images also executable sections without the code flag, with their file-backed bytes;
+/// the executable segments when the image has no such sections.
 fn units(binary: &Binary) -> impl Iterator<Item = (&str, u64, &[u8])> {
-    let sections: Vec<_> = binary
-        .sections
-        .iter()
-        .filter(|section| section.kind == SectionKind::Code && section.size > 0)
-        .filter_map(|section| Some((section.name.as_str(), section.address, binary.section_file_bytes(section)?)))
-        .collect();
-    let units = if binary.sections.iter().any(|section| section.kind == SectionKind::Code) {
-        sections
+    let executable = |address| binary.segment_containing(address).is_some_and(|segment| segment.perms.execute);
+    let measured = |section: &&Section| {
+        section.size > 0
+            && (section.kind == SectionKind::Code || (binary.format == Format::Pe && executable(section.address)))
+    };
+    let units: Vec<_> = if binary.sections.iter().any(|section| measured(&section)) {
+        binary
+            .sections
+            .iter()
+            .filter(measured)
+            .filter_map(|section| Some((section.name.as_str(), section.address, binary.section_file_bytes(section)?)))
+            .collect()
     } else {
         binary
             .segments
@@ -182,16 +255,16 @@ fn units(binary: &Binary) -> impl Iterator<Item = (&str, u64, &[u8])> {
     units.into_iter()
 }
 
-/// Decodes [`WINDOWS`] windows spread evenly across `bytes` and returns the bytes swept and the bytes covered by
-/// valid instructions.
+/// Decodes [`SAMPLES`] windows of [`SAMPLE_BYTES`] spread evenly across `bytes` and returns the bytes swept and the
+/// bytes covered by valid instructions.
 fn sweep(decoder: &mut dyn Disassembler, bytes: &[u8], address: u64) -> (u64, u64) {
     let len = bytes.len() as u64;
-    let windows = WINDOWS.min(len.div_ceil(WINDOW_BYTES)).max(1);
+    let windows = SAMPLES.min(len.div_ceil(SAMPLE_BYTES)).max(1);
     let (mut swept, mut valid) = (0, 0);
     for window in 0..windows {
         // Window starts are kept 4-byte aligned so fixed-width instruction sets decode on instruction boundaries.
         let start = (window * len / windows) & !3;
-        let end = (start + WINDOW_BYTES).min(len);
+        let end = (start + SAMPLE_BYTES).min(len);
         decoder.reset();
         let mut at = start;
         while at < end {
@@ -207,8 +280,8 @@ fn sweep(decoder: &mut dyn Disassembler, bytes: &[u8], address: u64) -> (u64, u6
     (swept, valid)
 }
 
-/// A view of `inner` in which the `excluded` ranges are not code: discovery neither starts
-/// nor runs into them, so judged regions yield no functions.
+/// A view of `inner` in which the `excluded` ranges are not code: discovery neither starts in them nor runs into
+/// them, so judged stretches yield no functions while the clear code around them is still explored.
 pub struct ExcludingMemory<'a, M> {
     pub inner: &'a M,
     pub excluded: &'a [Range<u64>],
