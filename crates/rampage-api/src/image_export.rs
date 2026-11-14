@@ -111,9 +111,24 @@ fn regions(binary: &Binary) -> Vec<(String, u64, &[u8], Option<&RawRegionInfo>)>
 
 impl Project {
     /// Writes this effective image to a new file (never replacing one) and reports its hash and regions.
+    /// The reviewed revision is checked under the annotation writer against the authoritative patch log, which
+    /// this held view must also match, and the file is published before the lock is released.
     pub fn export_image(self: &Arc<Self>, request: &ExportImageRequest) -> Result<ImageExport, ApiError> {
+        let held = self.patch_receipt().ok().map(|held| held.revision_sha256);
+        self.under_patch_authority(|receipt| {
+            if held != receipt.as_ref().map(|receipt| receipt.revision_sha256.clone()) {
+                return Err(invalid("the held view is not the current patch revision; acquire a new receipt"));
+            }
+            self.export_image_under(request, receipt)
+        })
+    }
+
+    fn export_image_under(
+        self: &Arc<Self>,
+        request: &ExportImageRequest,
+        receipt: Option<PatchReceipt>,
+    ) -> Result<ImageExport, ApiError> {
         let source = self.patch_source();
-        let receipt = self.patch_receipt().ok();
         match (&receipt, &request.expected_revision) {
             (Some(receipt), Some(expected)) if &receipt.revision_sha256 != expected => {
                 return Err(invalid("patch revision changed since review; acquire a new receipt"));

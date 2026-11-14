@@ -94,6 +94,8 @@ fn search<'a>(blocks: &'a [Block<'a>], constants: &'a BTreeSet<u64>, budget: u64
             range_starts: 0,
             bytes_hashed: 0,
             budget_bytes: budget,
+            lookups: 0,
+            lookup_budget: SEARCH_LOOKUP_BUDGET,
             budget_exhausted: false,
             skipped_items: 0,
         },
@@ -131,6 +133,35 @@ fn brute_force_finds_a_crc_after_padding_and_stops_at_its_budget() {
     starved.run(&ALGORITHMS);
     assert!(starved.matches.is_empty() && starved.stats.budget_exhausted && starved.stats.skipped_items > 0);
     assert_eq!(starved.stats.bytes_hashed, 0);
+    // The lookup budget stops the comparisons independently of the byte budget, and says so.
+    let mut capped = search(&blocks, &constants, SEARCH_BUDGET_BYTES);
+    capped.stats.lookup_budget = 3;
+    capped.run(&ALGORITHMS);
+    assert_eq!(capped.stats.lookups, 3);
+    assert!(capped.stats.budget_exhausted && capped.stats.skipped_items > 0);
+}
+
+/// A value inside a higher-scored check's range is dropped as a chance match on its bytes, unless code references
+/// it.
+#[test]
+fn values_inside_a_stronger_checks_range_are_dropped_unless_code_references_them() {
+    let found = |algorithm, field, range, field_origin| Match {
+        algorithm,
+        field,
+        endian: Endian::Little,
+        range,
+        field_origin,
+        bounds_from_code: false,
+        adjacent: true,
+    };
+    let strong = found(Algorithm::Crc32, 0x7fc, (0x400, 0x7fc), Origin::Layout);
+    let weak = found(Algorithm::Sum8, 0x500, (0x440, 0x500), Origin::Layout);
+    let checks = select(vec![strong.clone(), weak.clone()], &CodeEvidence::default());
+    assert_eq!(checks.iter().map(|check| check.field).collect::<Vec<_>>(), [0x7fc]);
+    let referenced = Match { field_origin: Origin::Code, ..weak };
+    let checks = select(vec![strong, referenced], &CodeEvidence::default());
+    assert_eq!(checks.len(), 2);
+    assert!(checks[1].code_bound);
 }
 
 #[test]
@@ -142,6 +173,7 @@ fn a_crc_that_covers_another_checks_value_is_fixed_after_it() {
         range,
         score: 0.9,
         emulated: false,
+        code_bound: false,
         evidence: Vec::new(),
         alternatives: 0,
     };

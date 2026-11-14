@@ -233,7 +233,8 @@ only through constants a function forms itself. See [peripheral maps](peripheral
 `integrity_checks` (group `formats`) finds checksum, CRC and digest fields and the ranges they cover in the
 original image, by bounded brute force, CRC code evidence and, with `emulate` (default), the image's own routine
 run on the range; each check reports stored and computed values on the patched image, evidence and confidence.
-`fix: true` with the receipt's tokens writes corrected values as patch records in dependency order.
+`fix: true` with the receipt's tokens writes corrected values as patch records in dependency order, by default
+only for checks confirmed by emulation or referenced by code (others by `ids`).
 `export_image` writes the patched image to a new file in its original container (HEX/S-record records, the binary
 file, the native file with an optional PE CheckSum) or as a flat binary. Both take `raw`, as do the patch tools
 except `export_patched`. Limits: one contiguous range per check; 256 MiB of hashing per search. See

@@ -13,7 +13,7 @@ use std::sync::Arc;
 struct IntegrityArgs {
     /// Write corrected stored values as byte patches (default false: preview in fix.writes).
     fix: Option<bool>,
-    /// Check ids to fix (default: invalid checks of medium or high confidence).
+    /// Check ids to fix (default: invalid checks confirmed by emulation or referenced by code).
     ids: Option<Vec<usize>>,
     /// Confirm matches by running the image's CRC routine with evaluate_function (default true).
     emulate: Option<bool>,

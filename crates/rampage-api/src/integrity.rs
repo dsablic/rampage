@@ -41,6 +41,8 @@ const MIN_WEAK_RANGE: u64 = 64;
 /// Bytes fed to all algorithms together before the search stops.
 pub const SEARCH_BUDGET_BYTES: u64 = 256 << 20;
 const MAX_MATCHES: usize = 4096;
+/// Value lookups (one per range end and algorithm) before the search stops, independent of the byte budget.
+pub const SEARCH_LOOKUP_BUDGET: u64 = 1 << 22;
 const MAX_CHECKS: usize = 32;
 const MAX_EMULATIONS: usize = 4;
 const MAX_EMULATED_RANGE: u64 = 64 * 1024;
@@ -130,7 +132,10 @@ pub struct SearchStats {
     pub range_starts: usize,
     pub bytes_hashed: u64,
     pub budget_bytes: u64,
-    /// Work items skipped because the byte budget ran out; matches may be missing when true.
+    /// Computed values looked up among the candidate stored values.
+    pub lookups: u64,
+    pub lookup_budget: u64,
+    /// Work items skipped because the byte or lookup budget ran out; matches may be missing when true.
     pub budget_exhausted: bool,
     pub skipped_items: usize,
 }
@@ -296,6 +301,8 @@ struct Routine {
     families: BTreeSet<&'static str>,
     evidence: Vec<String>,
     callers: Vec<u64>,
+    /// Image addresses this routine and its callers reference or load as constants.
+    constants: BTreeSet<u64>,
 }
 
 impl Routine {
@@ -418,6 +425,7 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
             families: BTreeSet::new(),
             evidence: Vec::new(),
             callers: Vec::new(),
+            constants: BTreeSet::new(),
         });
         routine.families.insert(family);
         let line = format!("{what} at {site:#x}");
@@ -447,6 +455,9 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
                 for value in values.into_iter().filter(|&value| in_image(value)) {
                     if evidence.constants.len() < MAX_CODE_CONSTANTS {
                         evidence.constants.insert(value);
+                    }
+                    if routine.constants.len() < MAX_CODE_CONSTANTS {
+                        routine.constants.insert(value);
                     }
                 }
             }
@@ -556,6 +567,22 @@ impl Search<'_> {
                 .or_insert_with(|| fields(self.blocks, self.constants, algorithm.width()));
         }
         self.stats.candidate_fields = fields_by_width.values().map(BTreeMap::len).sum();
+        // Candidate stored values by their bytes as a little-endian computation would produce them, so each
+        // computed value is one lookup however many candidates there are.
+        let mut indexes: HashMap<usize, ValueIndex> = HashMap::new();
+        for (&width, fields) in &fields_by_width {
+            let mut index = ValueIndex::new();
+            for &field in fields.keys() {
+                let Some(stored) = read(self.blocks, field, field + width as u64) else { continue };
+                if width == 1 || width > 8 {
+                    index.entry(stored.to_vec()).or_default().push((field, Endian::Bytes));
+                } else {
+                    index.entry(stored.to_vec()).or_default().push((field, Endian::Little));
+                    index.entry(stored.iter().rev().copied().collect()).or_default().push((field, Endian::Big));
+                }
+            }
+            indexes.insert(width, index);
+        }
         let mut starts_total = 0;
         for (index, &algorithm) in algorithms.iter().enumerate() {
             let fields = &fields_by_width[&algorithm.width()];
@@ -597,69 +624,77 @@ impl Search<'_> {
             }
             self.stats.bytes_hashed += cost;
             let algorithm = algorithms[algorithm];
-            self.stream(algorithm, &self.blocks[block], start, &fields_by_width[&algorithm.width()]);
+            let width = algorithm.width();
+            self.stream(algorithm, &self.blocks[block], start, &fields_by_width[&width], &indexes[&width]);
         }
     }
 
     /// Feeds `block` from `start` to its end through `algorithm`, comparing the value at every candidate range end
     /// with the candidate stored values.
-    fn stream(&mut self, algorithm: Algorithm, block: &Block, start: u64, fields: &BTreeMap<u64, Origin>) {
+    fn stream(
+        &mut self,
+        algorithm: Algorithm,
+        block: &Block,
+        start: u64,
+        fields: &BTreeMap<u64, Origin>,
+        index: &ValueIndex,
+    ) {
         let width = algorithm.width() as u64;
         let mut ends: BTreeSet<u64> = BTreeSet::new();
         ends.extend([block.end(), block.content_end]);
         ends.extend(block.fills.iter().map(|&(fill, _)| fill));
         ends.extend(self.constants.range(block.start..=block.end()).copied());
         ends.extend(fields.range(block.start..block.end()).map(|(&field, _)| field));
+        let layout_start = start == block.start || block.fills.iter().any(|&(_, fill)| fill == start);
         let mut state = algorithm.start(self.big_endian);
         let mut at = start;
         for end in ends.into_iter().filter(|&end| end >= start + MIN_RANGE) {
             state.update(block.slice(at, end));
             at = end;
-            let Some(value) = state.value() else { continue };
-            let mut candidates: Vec<u64> = Vec::new();
-            if algorithm.strong() {
-                candidates.extend(fields.keys().copied().filter(|&field| field + width <= start || field >= end));
-            } else if end - start >= MIN_WEAK_RANGE {
-                // A weak value sits right after or right before its range, whose far end is a layout boundary.
-                let layout_start = start == block.start || block.fills.iter().any(|&(_, fill)| fill == start);
-                let layout_end =
-                    end == block.end() || end == block.content_end || block.fills.iter().any(|&(fill, _)| fill == end);
-                if layout_start {
-                    candidates.push(end);
-                }
-                if layout_end {
-                    candidates.push(start.wrapping_sub(width));
-                }
-                candidates.retain(|field| fields.contains_key(field));
+            // A weak value sits right after or right before a range of at least MIN_WEAK_RANGE bytes whose far end
+            // is a layout boundary; a strong one may sit anywhere outside its range.
+            let layout_end =
+                end == block.end() || end == block.content_end || block.fills.iter().any(|&(fill, _)| fill == end);
+            if !algorithm.strong() && (end - start < MIN_WEAK_RANGE || !(layout_start || layout_end)) {
+                continue;
             }
-            for field in candidates {
-                let Some(stored) = read(self.blocks, field, field + width) else { continue };
-                let endians: &[Endian] = match algorithm.width() {
-                    1 | 16 | 32 => &[Endian::Bytes],
-                    _ => &[Endian::Little, Endian::Big],
+            if self.stats.lookups >= self.stats.lookup_budget {
+                self.stats.budget_exhausted = true;
+                self.stats.skipped_items += 1;
+                return;
+            }
+            self.stats.lookups += 1;
+            let Some(value) = state.value() else { continue };
+            let Some(hits) = index.get(&value) else { continue };
+            for &(field, endian) in hits {
+                let admitted = if algorithm.strong() {
+                    field + width <= start || field >= end
+                } else {
+                    (field == end && layout_start) || (field + width == start && layout_end)
                 };
-                for &endian in endians {
-                    if endian.encode(&value) != stored || uniform(block.slice(start, end)) {
-                        continue;
-                    }
-                    let in_code = |address: u64| self.constants.contains(&address);
-                    self.matches.push(Match {
-                        algorithm,
-                        field,
-                        endian,
-                        range: (start, end),
-                        field_origin: fields[&field],
-                        bounds_from_code: in_code(start) || in_code(end),
-                        adjacent: field == end || field + width == start,
-                    });
-                    if self.matches.len() >= MAX_MATCHES {
-                        return;
-                    }
+                if !admitted || uniform(block.slice(start, end)) {
+                    continue;
+                }
+                let in_code = |address: u64| self.constants.contains(&address);
+                self.matches.push(Match {
+                    algorithm,
+                    field,
+                    endian,
+                    range: (start, end),
+                    field_origin: fields[&field],
+                    bounds_from_code: in_code(start) || in_code(end),
+                    adjacent: field == end || field + width == start,
+                });
+                if self.matches.len() >= MAX_MATCHES {
+                    return;
                 }
             }
         }
     }
 }
+
+/// Candidate stored values keyed by their bytes in little-endian computation order: (address, byte order).
+type ValueIndex = HashMap<Vec<u8>, Vec<(u64, Endian)>>;
 
 // ---------------------------------------------------------------------------------------------------------------
 // Checks
@@ -673,6 +708,8 @@ struct Found {
     range: (u64, u64),
     score: f64,
     emulated: bool,
+    /// Code references the stored value or a range bound.
+    code_bound: bool,
     evidence: Vec<String>,
     alternatives: usize,
 }
@@ -710,7 +747,10 @@ fn score_match(found: &Match, code: &CodeEvidence) -> (f64, Vec<String>) {
     if found.adjacent {
         score += 0.1;
     }
-    if let Some(routine) = code.routines.iter().find(|routine| routine.admits(found.algorithm)) {
+    // A routine counts only when it (or a caller) references this check's value or range.
+    let referenced =
+        |routine: &&Routine| [found.field, start, end].iter().any(|address| routine.constants.contains(address));
+    if let Some(routine) = code.routines.iter().filter(referenced).find(|routine| routine.admits(found.algorithm)) {
         score += 0.2;
         evidence.push(format!(
             "code: {} at {:#x} holds {} constants ({})",
@@ -757,13 +797,23 @@ fn select(matches: Vec<Match>, code: &CodeEvidence) -> Vec<Found> {
             range: best.range,
             score,
             emulated: false,
+            code_bound: best.field_origin == Origin::Code || best.bounds_from_code,
             evidence,
             alternatives,
         });
     }
-    // A stored value inside another check's range at a weaker score is usually a chance match on its bytes.
+    // A stored value inside a higher-scored check's range is usually a chance match on the bytes that check covers;
+    // it is dropped unless code references it.
     checks.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.field.cmp(&b.field)));
-    checks
+    let mut kept: Vec<Found> = Vec::new();
+    for check in checks {
+        let covered =
+            kept.iter().any(|other| other.score > check.score && (other.range.0..other.range.1).contains(&check.field));
+        if !covered || check.code_bound {
+            kept.push(check);
+        }
+    }
+    kept
 }
 
 /// Runs the image's CRC routine over each matched range it admits; a result equal to the computed value confirms.
@@ -850,6 +900,10 @@ fn hex(bytes: &[u8]) -> String {
     rampage_arch::hex::bytes(bytes)
 }
 
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len() / 2).filter_map(|at| u8::from_str_radix(&text[2 * at..2 * at + 2], 16).ok()).collect()
+}
+
 /// The check's value over the blocks of one image, in the stored byte order.
 fn compute(found: &Found, blocks: &[Block], big_endian: bool) -> Option<Vec<u8>> {
     let algorithm = found.algorithm?;
@@ -923,6 +977,8 @@ impl Project {
                 range_starts: 0,
                 bytes_hashed: 0,
                 budget_bytes: SEARCH_BUDGET_BYTES,
+                lookups: 0,
+                lookup_budget: SEARCH_LOOKUP_BUDGET,
                 budget_exhausted: false,
                 skipped_items: 0,
             },
@@ -951,17 +1007,24 @@ impl Project {
         let mut project = Arc::clone(self);
         let mut writes = Vec::new();
         let mut transition: Option<(Arc<()>, Arc<()>)> = None;
-        let chosen: Vec<bool> = found
-            .iter()
-            .enumerate()
-            .map(
-                |(index, found)| if request.ids.is_empty() { found.score >= 0.5 } else { request.ids.contains(&index) },
-            )
-            .collect();
-        let order = fix_order(&found, &chosen).map_err(ApiError::Invalid)?;
         if let Some(&unknown) = request.ids.iter().find(|&&id| id >= found.len() + usize::from(pe_field.is_some())) {
             return Err(ApiError::Invalid(format!("no check with id {unknown}")));
         }
+        // By default only checks with independent evidence are written: confirmed by emulation, or a stored value or
+        // range bound the code references. Anything else is fixed only when its id is given.
+        let chosen: Vec<bool> =
+            found
+                .iter()
+                .enumerate()
+                .map(|(index, found)| {
+                    if request.ids.is_empty() {
+                        found.emulated || found.code_bound
+                    } else {
+                        request.ids.contains(&index)
+                    }
+                })
+                .collect();
+        let order = fix_order(&found, &chosen).map_err(ApiError::Invalid)?;
         let tokens = match (request.fix, &request.source_sha256, &request.expected_revision) {
             (false, ..) => None,
             (true, Some(source_sha256), Some(revision)) => Some((source_sha256.clone(), revision.clone())),
@@ -972,8 +1035,48 @@ impl Project {
                 ));
             }
         };
+        // Plan: every write is validated (admission, preimage, overlapping records, record budget) before any is
+        // committed. Values of dependent checks are computed as the writes before them land.
+        let existing = if receipt.is_some() { self.list_patches()? } else { Vec::new() };
+        let mut planned = Vec::new();
+        for &index in &order {
+            let check = &found[index];
+            let field_end = check.field + width(check) as u64;
+            let original = read(&original_blocks, check.field, field_end)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| ApiError::Invalid(format!("check {index}: its stored value is not in the image")))?;
+            let previous = existing.iter().find(|patch| {
+                let length = patch.original_hex.len() as u64 / 2;
+                patch.address < field_end && check.field < patch.address + length
+            });
+            if let Some(patch) = previous
+                && (patch.address != check.field || patch.original_hex.len() / 2 != width(check))
+            {
+                let message = format!(
+                    "check {index}: the patch at {:#x} overlaps the stored value at {:#x} without matching it exactly; \
+                     revert or adjust that patch first",
+                    patch.address, check.field
+                );
+                if request.fix && receipt.is_some() {
+                    return Err(ApiError::Invalid(message));
+                }
+                notes.push(message);
+            }
+            if receipt.is_some() {
+                source.check_patch_admission(check.field, width(check), true).map_err(|error| {
+                    ApiError::Invalid(format!("check {index}: the stored value cannot be patched: {error}"))
+                })?;
+            }
+            planned.push((index, original, previous.cloned()));
+        }
+        let new_records = planned.iter().filter(|(_, _, previous)| previous.is_none()).count();
+        if request.fix && existing.len() + new_records > crate::MAX_ACTIVE_PATCHES {
+            return Err(ApiError::Invalid("the fix would exceed the active patch budget".into()));
+        }
         let mut revision = tokens.as_ref().map(|(_, revision)| revision.clone());
-        for index in order {
+        let mut applied: Vec<(u64, Option<crate::BytePatch>)> = Vec::new();
+        let mut failure = None;
+        for (index, original, previous) in planned {
             let check = &found[index];
             let (current_blocks, _) = blocks(&project.binary);
             let field_end = check.field + width(check) as u64;
@@ -986,13 +1089,15 @@ impl Project {
             if current == desired {
                 continue;
             }
-            let original = read(&original_blocks, check.field, field_end).map(<[u8]>::to_vec).unwrap_or_default();
+            // The original bytes are correct again: remove the record at the value, which covers exactly its bytes
+            // (anything else was refused above).
+            let revert = desired == original;
             let mut write = FixWrite {
                 check: index,
                 address: check.field,
                 current_hex: hex(&current),
                 replacement_hex: hex(&desired),
-                action: if desired == original { "revert" } else { "patch" },
+                action: if revert { "revert" } else { "patch" },
                 detail: None,
             };
             if receipt.is_none() {
@@ -1000,19 +1105,79 @@ impl Project {
                 write.detail = Some("this image does not take byte patches".into());
             }
             if let (Some((source_sha256, _)), Some(expected), true) = (&tokens, &revision, receipt.is_some()) {
-                let outcome = if desired == original {
-                    project.revert_patch_reviewed(check.field, source_sha256, expected)?
+                let outcome = if revert {
+                    project.revert_patch_reviewed(check.field, source_sha256, expected)
                 } else {
-                    project.patch_bytes_reviewed(check.field, &original, &desired, true, source_sha256, expected)?
+                    project.patch_bytes_reviewed(check.field, &original, &desired, true, source_sha256, expected)
                 };
-                transition = Some(match transition {
-                    None => (outcome.before_annotation_revision, outcome.after_annotation_revision),
-                    Some((before, _)) => (before, outcome.after_annotation_revision),
-                });
-                revision = Some(outcome.receipt.revision_sha256.clone());
-                project = outcome.project;
+                match outcome {
+                    Ok(outcome) => {
+                        transition = Some(match transition {
+                            None => (outcome.before_annotation_revision, outcome.after_annotation_revision),
+                            Some((before, _)) => (before, outcome.after_annotation_revision),
+                        });
+                        revision = Some(outcome.receipt.revision_sha256.clone());
+                        project = outcome.project;
+                        applied.push((check.field, previous));
+                    }
+                    Err(error) => {
+                        failure = Some(format!("check {index} at {:#x}: {error}", check.field));
+                        break;
+                    }
+                }
             }
             writes.push(write);
+        }
+        if let Some(failure) = failure {
+            // Undo the writes already committed, newest first, restoring each value's previous record.
+            let (source_sha256, _) = tokens.as_ref().expect("fix tokens");
+            let mut restored = true;
+            for (address, previous) in applied.into_iter().rev() {
+                let Some(expected) = revision.clone() else { break };
+                let outcome = match previous {
+                    None => project.revert_patch_reviewed(address, source_sha256, &expected),
+                    Some(patch) => project.patch_bytes_reviewed(
+                        address,
+                        &unhex(&patch.original_hex),
+                        &unhex(&patch.replacement_hex),
+                        patch.allow_data,
+                        source_sha256,
+                        &expected,
+                    ),
+                };
+                match outcome {
+                    Ok(outcome) => {
+                        revision = Some(outcome.receipt.revision_sha256.clone());
+                        project = outcome.project;
+                    }
+                    Err(_) => restored = false,
+                }
+            }
+            let state = if restored { "earlier writes were undone" } else { "earlier writes could not all be undone" };
+            return Err(ApiError::Invalid(format!("fix failed at {failure}; {state}")));
+        }
+        for (index, check) in found.iter().enumerate().filter(|(index, _)| !chosen[*index]) {
+            let (current_blocks, _) = blocks(&project.binary);
+            let field_end = check.field + width(check) as u64;
+            let (Some(current), Some(desired)) = (
+                read(&current_blocks, check.field, field_end).map(<[u8]>::to_vec),
+                compute(check, &current_blocks, project.binary.big_endian),
+            ) else {
+                continue;
+            };
+            if current != desired {
+                writes.push(FixWrite {
+                    check: index,
+                    address: check.field,
+                    current_hex: hex(&current),
+                    replacement_hex: hex(&desired),
+                    action: "preview_only",
+                    detail: Some(
+                        "not confirmed by emulation and no code references its value or range; pass its id to fix it"
+                            .into(),
+                    ),
+                });
+            }
         }
         if pe_field.is_some() && request.fix && request.ids.contains(&found.len()) {
             notes.push("the PE CheckSum is written by export_image with pe_checksum: true, not as a patch".into());

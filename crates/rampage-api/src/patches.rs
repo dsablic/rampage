@@ -832,6 +832,30 @@ impl Project {
         self.patch_origin.as_ref().map_or_else(|| Arc::clone(self), Arc::clone)
     }
 
+    /// Whether a patch of `length` bytes at `address` would be admitted, without writing anything.
+    pub(crate) fn check_patch_admission(&self, address: u64, length: usize, allow_data: bool) -> Result<(), String> {
+        self.validate_patch_source()?;
+        let target = self.patch_target()?;
+        self.patch_file_offset(&target, address, length, allow_data).map(|_| ())
+    }
+
+    /// Runs `run` under the authoritative annotation writer with the receipt of the current patch log, or with
+    /// `None` for an image that takes no patches.
+    pub(crate) fn under_patch_authority<T>(
+        self: &Arc<Self>,
+        run: impl FnOnce(Option<PatchReceipt>) -> Result<T, ApiError>,
+    ) -> Result<T, ApiError> {
+        let source = self.original_patch_project();
+        if source.validate_patch_source().is_err() {
+            return run(None);
+        }
+        source.install_patch_validator();
+        source.annotations.write().expect("annotations lock").locked_staged_checked(|annotations| {
+            let (_, receipt) = source.materialize_patches(annotations).map_err(invalid)?;
+            run(Some(receipt))
+        })
+    }
+
     /// The original (unpatched) project this effective view was materialized from, or itself.
     pub(crate) fn patch_source(self: &Arc<Self>) -> Arc<Self> {
         self.original_patch_project()

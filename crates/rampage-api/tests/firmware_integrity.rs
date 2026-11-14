@@ -190,3 +190,61 @@ fn the_flat_image_finds_the_check_after_the_padding() {
     assert_eq!(check["confirmed_by_emulation"], true, "{check:#}");
     assert!(report["search"]["bytes_hashed"].as_u64().unwrap() <= report["search"]["budget_bytes"].as_u64().unwrap());
 }
+
+/// A weak chance match (an 8-bit sum no code references and no routine confirms) is reported and previewed, but a
+/// default fix leaves it alone; naming its id fixes it.
+#[test]
+fn a_default_fix_never_writes_an_unconfirmed_weak_match() {
+    let mut bytes: Vec<u8> = (0..128u32).map(|index| (index * 29 + 7) as u8).collect();
+    let sum = bytes.iter().fold(0u8, |sum, &byte| sum.wrapping_add(byte));
+    assert!(sum != 0 && sum != 0xff);
+    bytes.push(sum);
+    let options = rampage_loaders::RawCodeOptions {
+        profile: rampage_loaders::RawProfile::Msp430,
+        base: 0x1000,
+        entry: None,
+        seeds: vec![],
+        vector_table: None,
+        pointer_tables: false,
+    };
+    let project = Arc::new(Project::new(rampage_loaders::Binary::from_raw_code(bytes, options).unwrap()));
+    let field = format!("{:#x}", 0x1000 + 128);
+    let mut current = project.patch_bytes(0x1010, &[(16 * 29 + 7) as u8], &[0x5a], false).unwrap().project;
+    let report = call(&mut current, "integrity_checks", json!({ "emulate": false }));
+    let check = report["checks"].as_array().unwrap().iter().find(|check| check["stored"]["address"] == field);
+    let check = check.unwrap_or_else(|| panic!("{report:#}"));
+    assert_eq!((check["valid"].as_bool(), check["confidence"].as_str()), (Some(false), Some("low")), "{check:#}");
+    let id = check["id"].clone();
+    let mut fix = tokens(&report);
+    fix["fix"] = json!(true);
+    fix["emulate"] = json!(false);
+    let fixed = call(&mut current, "integrity_checks", fix.clone());
+    assert_eq!(fixed["fix"]["applied"], false, "{fixed:#}");
+    let preview = fixed["fix"]["writes"].as_array().unwrap().iter().find(|write| write["address"] == field).unwrap();
+    assert_eq!(preview["action"], "preview_only", "{fixed:#}");
+    assert_eq!(current.list_patches().unwrap().len(), 1);
+    fix["ids"] = json!([id]);
+    let fixed = call(&mut current, "integrity_checks", fix);
+    assert_eq!(fixed["fix"]["applied"], true, "{fixed:#}");
+    assert_eq!(current.list_patches().unwrap().len(), 2);
+}
+
+/// A user patch that overlaps the stored value without matching it exactly refuses the whole fix before any write.
+#[test]
+fn a_fix_refuses_before_writing_when_a_patch_overlaps_the_stored_value() {
+    let owned = Owned::new();
+    let path = owned.copy("hex");
+    let mut project = Session::default().open_raw(&path, &raw("hex")).unwrap();
+    let table = truth("app_table");
+    project = project.patch_bytes(table, &[0x11], &[0x42], false).unwrap().project;
+    let stored = fixture("bin")[0x7fe..0x800].to_vec();
+    let replacement: Vec<u8> = stored.iter().map(|byte| !byte).collect();
+    project = project.patch_bytes(CRC_FIELD + 2, &stored, &replacement, true).unwrap().project;
+    let report = call(&mut project, "integrity_checks", json!({ "emulate": false }));
+    let mut fix = tokens(&report);
+    fix["fix"] = json!(true);
+    fix["emulate"] = json!(false);
+    let (text, failed) = call_shared(&tools(), &mut project, "integrity_checks", fix);
+    assert!(failed && text.contains("overlaps the stored value"), "{text}");
+    assert_eq!(project.effective_snapshot().unwrap().list_patches().unwrap().len(), 2);
+}

@@ -49,21 +49,26 @@ measured on the patched image (`valid`, `stored_hex`, `computed_hex`).
   then `(start, end)` of each matched range up to 64 KiB, at most four runs; a result equal to the computed value
   marks the check `confirmed_by_emulation`.
 - **Confidence.** One best match per stored value (others counted in `alternatives`), scored from the algorithm's
-  strength, adjacency, code evidence and emulation: `high` at 0.75, `medium` at 0.5. `evidence` lists each reason.
+  strength, adjacency, code evidence (a routine counts only when it or a caller references the value or range)
+  and emulation. A value inside a higher-scored check's range is dropped as a chance match unless code references it: `high` at 0.75, `medium` at 0.5. `evidence` lists each reason.
 - **PE.** A PE's optional-header CheckSum is reported as a `file`-space check (zero means unset). Fix it with
   `export_image` and `pe_checksum: true`, not with a patch.
 
 ## Fixing
 
-`fix.writes` previews the corrected values of invalid checks of medium or high confidence (or the given `ids`), in
-dependency order: a check whose range covers another's stored value is computed after it, and a cycle refuses. Each
-write is a patch over the original bytes at the stored value, or a `revert` when the original bytes are correct
-again. A fix refuses where a patch would: an image that takes no patches, or a value overlapping a user patch.
+By default a fix writes only checks with independent evidence: confirmed by emulation, or whose stored value or
+range bound the code references. Other invalid checks appear in `fix.writes` as `preview_only` with the reason;
+pass their `ids` to fix them. Writes go in dependency order: a check whose range covers another's stored value is
+computed after it, and a cycle refuses. Each write is a patch over the original bytes at the stored value, or a
+`revert` of the record that covers exactly those bytes when the original bytes are correct again. Every write is
+validated before the first is committed (admission, preimage, the patch budget, and any user patch overlapping the
+value without matching it exactly, which refuses the whole fix); if a write still fails, the earlier ones are undone.
 
 ## Exporting
 
 `export_image` never replaces a file (it stages privately and publishes with create-new semantics, like
-`export_patched`) and needs `expected_revision` when patches are active. It reports the path, SHA-256, size and
+`export_patched`) and needs `expected_revision` when patches are active, checked against the authoritative patch log
+under the annotation lock. It reports the path, SHA-256, size and
 regions.
 
 - `format: original` (default): Intel HEX and S-record files are rewritten record by record. Only data records whose
@@ -77,8 +82,9 @@ regions.
 
 An unpatched export is byte-identical to the input for HEX, S-record and binary files.
 
-Limits: the search is bounded to 16 regions and 256 MiB of hashing (`search.budget_exhausted` and `skipped_items`
-say when it stopped), 32 reported checks and 8 CRC routines. Checks whose value is stored inside its own range, that
+Limits: the search is bounded to 16 regions, 256 MiB of hashing and 4,194,304 value lookups (candidate values are
+indexed by their bytes, so each computed value is one lookup; `search.budget_exhausted` and `skipped_items` say when
+it stopped), 32 reported checks and 8 CRC routines. Checks whose value is stored inside its own range, that
 skip the value's bytes, cover several discontiguous ranges, or use a keyed MAC or signature are not found;
 hardware CRC units are found by their result, not their registers. Native patches cover only the
 [supported ELF64 profile](patching.md); other native files export unpatched. Decoded Raw regions cannot be patched.

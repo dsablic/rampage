@@ -181,6 +181,8 @@
     "search.budget_exhausted",
     "search.bytes_hashed",
     "search.candidate_fields",
+    "search.lookup_budget",
+    "search.lookups",
     "search.range_starts",
     "search.skipped_items"
   ],
