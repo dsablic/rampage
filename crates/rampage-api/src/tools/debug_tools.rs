@@ -161,6 +161,9 @@ struct SnapshotArgs {
     ranges: Vec<DebugRange>,
     /// The stop epoch the caller expects; refused with stale_epoch when the session has moved on.
     epoch: Option<u64>,
+    /// Write exactly one range's bytes as a flat binary instead (a firmware dump: open it as a Raw project with
+    /// base_address = the range's address).
+    raw: Option<bool>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -595,6 +598,9 @@ fn read_and_execution_tools() -> Vec<DebugTool> {
             effect: Effect::FileWrite,
             handler: |registry, _projects, input, cancel| {
                 let args: SnapshotArgs = arguments(input)?;
+                if args.raw == Some(true) {
+                    return output(registry.dump_at(&args.session, &args.output, &args.ranges, args.epoch, cancel));
+                }
                 output(registry.snapshot_at(&args.session, &args.output, &args.ranges, args.epoch, cancel))
             },
         },

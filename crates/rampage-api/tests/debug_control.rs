@@ -131,6 +131,46 @@ fn inspects_and_snapshots_a_cortex_m_target_through_the_registry() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// `debug_snapshot` with `raw: true` writes one range byte for byte: a firmware dump.
+#[test]
+fn dumps_one_range_as_a_flat_binary() {
+    let stub = FakeStub::tcp(transcripts::qemu_cortex_m3());
+    let registry = DebugRegistry::new(&[stub.endpoint().to_owned()]).unwrap();
+    registry.connect(None).unwrap();
+    let tools = debug_tools();
+    let snapshot = tools.iter().find(|tool| tool.name == "debug_snapshot").unwrap();
+    let directory = private_directory("dump");
+    let output = directory.join("flash.bin");
+    let ranges = json!([{"address": "0x0", "length": 8}]);
+    let dump =
+        snapshot.call(&registry, json!({"session": "s1", "output": output, "ranges": ranges, "raw": true})).unwrap();
+    assert_eq!(
+        (dump["address"].as_str(), dump["length"].as_u64(), dump["epoch"].as_u64()),
+        (Some("0x0"), Some(8), Some(1))
+    );
+    let bytes = std::fs::read(&output).unwrap();
+    assert_eq!(bytes, transcripts::CORTEX_M_FLASH);
+    assert_eq!(std::fs::metadata(&output).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(dump["sha256"], rampage_arch::hex::bytes(&<sha2::Sha256 as sha2::Digest>::digest(&bytes)));
+    // Never overwrites; one range only, bytes only, fully readable only.
+    let again = json!({"session": "s1", "output": output, "ranges": ranges, "raw": true});
+    assert!(snapshot.call(&registry, again).unwrap_err().contains("already exists"));
+    let other = directory.join("other.bin");
+    for ranges in [
+        json!([{"address": "0x0", "length": 8}, {"address": "0x20000000", "length": 8}]),
+        json!([{"address": "0x0", "length": 8, "permissions": "r-x"}]),
+        json!([{"address": "0x200001f0", "length": 32}]),
+    ] {
+        let input = json!({"session": "s1", "output": other, "ranges": ranges, "raw": true});
+        let error = snapshot.call(&registry, input).unwrap_err();
+        assert!(error.starts_with("invalid_argument") || error.starts_with("target_error"), "{error}");
+    }
+    assert!(!other.exists());
+    drop(registry);
+    stub.finish().assert_clean();
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn aarch64_values_and_snapshots_wait_for_byte_order_evidence() {
     let stub = FakeStub::tcp(transcripts::gdbserver_aarch64());

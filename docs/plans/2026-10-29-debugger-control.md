@@ -214,6 +214,10 @@ more to show the breakpoint survived, then disconnects with `kill: true` and wai
 on `lm3s6965evb`, `X` is unsupported (rampage falls back to `M`), `P` is supported, the flash write is applied
 (`verified: true`: QEMU's debug path writes ROM), and `vKill;1` is answered `OK` before QEMU exits with status 0.
 
+The firmware-dump test reads the whole 256 KiB flash with `debug_snapshot` `raw: true`, checks it equals the ELF's
+loaded bytes followed by zeros, opens it as a Cortex-M Raw project at base 0 with the vector table there (Reset is
+the entry) and decompiles `tick` to the `counter` increment.
+
 ```sh
 RAMPAGE_QEMU_LIVE=1 cargo nextest run -p rampage-api --run-ignored only -E 'test(debug_qemu::)'
 ```

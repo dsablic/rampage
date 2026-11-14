@@ -13,6 +13,8 @@
   done. 4.3, the rest of Phase 5, 6.1/6.3 and Phase 8 are open.
 - Debugger (Phase 9): 9.1–9.5 done (9.5's live macOS `debugserver` acceptance passed 2026-11-11); 9.6a (Windows through
   RSP stubs) implemented, live acceptance pending (experimental in 1.0). See `docs/plans/2026-10-29-debugger-control.md`.
+  Cortex-M flash dump (`debug_snapshot` `raw: true`) live-verified on QEMU 2026-11-14; OpenOCD/pyOCD/J-Link on
+  real probes not yet run (flash `Z0` behaviour, FPB comparator exhaustion, read-protected parts).
 - REA gap-closing wave 1 (2026-10-29): `formats` tools and the findings ledger done; log compaction open.
 - Head-to-head with REA: suite v1 and suite v2 published (`docs/benchmarks/`); follow-ups below. Suite v3
   (tasks where Ghidra is strong) is built in `tests/fixtures/bench-v3`, and a Haiku development pass drove the

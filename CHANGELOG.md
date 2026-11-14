@@ -13,6 +13,10 @@ Additions only; nothing in the stable surface changed.
   stopping with `external_call`, and lists them in `stubbed`; `stubs: false` restores the old behaviour.
 - `string_decoding` takes `evaluate: true` to run each candidate decoder on the blobs passed to it, replaying the
   call site, and reports printable output with the arguments and stop reason, labelled as emulation output.
+- `debug_snapshot` takes `raw: true` to write one range of a stopped target as a flat binary, such as a
+  microcontroller's flash read through OpenOCD, pyOCD, J-Link or QEMU, which then opens as a Cortex-M Raw project.
+  The debug docs gain a Cortex-M probes section and the flash-dump recipe; a live QEMU test checks the dump against
+  the loaded image.
 
 ## 1.1.0 (2026-11-14)
 

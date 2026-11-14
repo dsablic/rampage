@@ -724,24 +724,7 @@ impl DebugRegistry {
             }
         };
         let ranges = validate_ranges(ranges)?;
-        // Status re-reads the stop reply and threads, so comparing it before and after the capture detects a
-        // target that stopped anew or changed threads in between.
-        let status = session.status().map_err(debug_failure)?;
-        if status.state == rampage_debug::State::Running {
-            return Err(failure("target_running", "the target is running; wait for it to stop or interrupt it"));
-        }
-        if status.state != rampage_debug::State::Stopped {
-            return Err(failure("session_not_stopped", "the session is not stopped"));
-        }
-        if let Some(given) = epoch
-            && given != status.epoch
-        {
-            return Err(debug_failure(rampage_debug::DebugError::StaleEpoch {
-                given,
-                current: status.epoch,
-                state: "stopped".into(),
-            }));
-        }
+        let status = stopped_status(&session, epoch)?;
         if status.threads.len() > MAX_SNAPSHOT_THREADS {
             return Err(failure(
                 "unsupported",
@@ -839,36 +822,12 @@ impl DebugRegistry {
         }
         for (region, range) in snapshot.regions.iter_mut().zip(&ranges) {
             let mut hex = String::with_capacity(range.length as usize * 2);
-            let mut done = 0u64;
-            while done < range.length {
-                let at = range.address + done;
-                let size = (range.length - done).min(rampage_debug::MAX_MEMORY_READ as u64) as usize;
-                let read = session.read_memory_at(at, size, None, Some(status.epoch), cancel).map_err(debug_failure)?;
-                if let Some(chunk) = read.chunks.iter().find(|chunk| chunk.error.is_some()) {
-                    return Err(failure(
-                        "target_error",
-                        format!(
-                            "memory at {:#x} is not fully readable ({}); a snapshot never records partial regions",
-                            chunk.address,
-                            chunk.error.as_deref().unwrap_or("")
-                        ),
-                    ));
-                }
-                for chunk in &read.chunks {
-                    hex.push_str(&rampage_arch::hex::bytes(&chunk.bytes));
-                }
-                done += size as u64;
-            }
+            read_range(&session, range.address, range.length, status.epoch, cancel, |bytes| {
+                hex.push_str(&rampage_arch::hex::bytes(bytes));
+            })?;
             region.bytes = hex;
         }
-        let after = session.status().map_err(debug_failure)?;
-        let ids = |status: &rampage_debug::Status| status.threads.iter().map(|thread| thread.id).collect::<Vec<_>>();
-        if after.state != rampage_debug::State::Stopped || after.epoch != status.epoch || ids(&after) != ids(&status) {
-            return Err(failure(
-                "session_not_stopped",
-                "the target's stop reply or threads changed while capturing; nothing was written",
-            ));
-        }
+        unchanged_since(&session, &status)?;
         let captured: u64 = ranges.iter().map(|range| range.length).sum();
         let (registers_recorded, modules_recorded) = (snapshot.registers.len(), snapshot.modules.len());
         let document = serde_json::to_vec(&snapshot).map_err(|error| failure("invalid_argument", error))?;
@@ -910,6 +869,126 @@ impl DebugRegistry {
             ],
         })
     }
+
+    /// Writes one range of the stopped target's memory, byte for byte, to a new flat binary at `output` (a firmware
+    /// dump that opens as a Raw project with `base_address` = `address`). Same reads, checks and publication as
+    /// [`DebugRegistry::snapshot_at`], without registers, modules or a snapshot document.
+    pub fn dump_at(
+        &self,
+        id: &str,
+        output: &Path,
+        ranges: &[DebugRange],
+        epoch: Option<u64>,
+        cancel: &Cancel,
+    ) -> Result<DebugDump, ApiError> {
+        let session = self.session(id)?;
+        let [range] = ranges else {
+            return Err(failure("invalid_argument", "a raw dump takes exactly one range"));
+        };
+        if range.permissions.is_some() || range.thumb.is_some() {
+            return Err(failure("invalid_argument", "a raw dump records bytes only; drop permissions and thumb"));
+        }
+        let range = validate_ranges(std::slice::from_ref(range))?.remove(0);
+        let status = stopped_status(&session, epoch)?;
+        let mut bytes = Vec::with_capacity(range.length as usize);
+        read_range(&session, range.address, range.length, status.epoch, cancel, |chunk| {
+            bytes.extend_from_slice(chunk)
+        })?;
+        unchanged_since(&session, &status)?;
+        let outcome = crate::debugger_capture::publish_private_document_limited(
+            output,
+            &bytes,
+            crate::debugger_capture::MAX_PRIVATE_DOCUMENT_BYTES,
+            |_| Ok(()),
+        )?;
+        Ok(DebugDump {
+            session: id.to_owned(),
+            path: outcome.path.display().to_string(),
+            sha256: outcome.document_sha256,
+            status: outcome.status,
+            warnings: outcome.warnings,
+            retained_staging_paths: outcome
+                .retained_staging_paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
+            epoch: status.epoch,
+            address: format!("{:#x}", range.address),
+            length: range.length,
+            limitations: vec![
+                NOT_ATOMIC.to_owned(),
+                "bytes as the stub reads them: read-protected or unmapped memory is refused, not filled".into(),
+            ],
+        })
+    }
+}
+
+/// The session's status when it is stopped (at `epoch`, when given). Status re-reads the stop reply and threads,
+/// so comparing it before and after a capture ([`unchanged_since`]) detects a target that stopped anew or changed
+/// threads in between.
+fn stopped_status(session: &Session, epoch: Option<u64>) -> Result<rampage_debug::Status, ApiError> {
+    let status = session.status().map_err(debug_failure)?;
+    if status.state == rampage_debug::State::Running {
+        return Err(failure("target_running", "the target is running; wait for it to stop or interrupt it"));
+    }
+    if status.state != rampage_debug::State::Stopped {
+        return Err(failure("session_not_stopped", "the session is not stopped"));
+    }
+    if let Some(given) = epoch
+        && given != status.epoch
+    {
+        return Err(debug_failure(rampage_debug::DebugError::StaleEpoch {
+            given,
+            current: status.epoch,
+            state: "stopped".into(),
+        }));
+    }
+    Ok(status)
+}
+
+fn unchanged_since(session: &Session, status: &rampage_debug::Status) -> Result<(), ApiError> {
+    let after = session.status().map_err(debug_failure)?;
+    let ids = |status: &rampage_debug::Status| status.threads.iter().map(|thread| thread.id).collect::<Vec<_>>();
+    if after.state != rampage_debug::State::Stopped || after.epoch != status.epoch || ids(&after) != ids(status) {
+        return Err(failure(
+            "session_not_stopped",
+            "the target's stop reply or threads changed while capturing; nothing was written",
+        ));
+    }
+    Ok(())
+}
+
+/// Reads `length` bytes at `address` in stub-sized requests, handing each chunk to `sink`; any unreadable chunk
+/// refuses the whole range.
+fn read_range(
+    session: &Session,
+    address: u64,
+    length: u64,
+    epoch: u64,
+    cancel: &Cancel,
+    mut sink: impl FnMut(&[u8]),
+) -> Result<(), ApiError> {
+    let mut done = 0u64;
+    while done < length {
+        let at = address + done;
+        let size = (length - done).min(rampage_debug::MAX_MEMORY_READ as u64) as usize;
+        let read = session.read_memory_at(at, size, None, Some(epoch), cancel).map_err(debug_failure)?;
+        if let Some(chunk) = read.chunks.iter().find(|chunk| chunk.error.is_some()) {
+            return Err(failure(
+                "target_error",
+                format!(
+                    "memory at {:#x} is not fully readable ({}); a capture never records partial regions",
+                    chunk.address,
+                    chunk.error.as_deref().unwrap_or("")
+                ),
+            ));
+        }
+        for chunk in &read.chunks {
+            sink(&chunk.bytes);
+        }
+        done += size as u64;
+    }
+    Ok(())
 }
 
 impl Drop for DebugRegistry {
@@ -1353,5 +1432,22 @@ pub struct DebugSnapshot {
     pub registers_recorded: usize,
     pub registers_skipped: usize,
     pub modules: usize,
+    pub limitations: Vec<String>,
+}
+
+/// A raw memory dump written by [`DebugRegistry::dump_at`].
+#[derive(Debug, Serialize)]
+pub struct DebugDump {
+    pub session: String,
+    pub path: String,
+    /// SHA-256 of the dumped bytes.
+    pub sha256: String,
+    pub status: crate::DebuggerCapturePublicationStatus,
+    pub warnings: Vec<String>,
+    pub retained_staging_paths: Vec<String>,
+    pub epoch: u64,
+    /// The target address of the file's first byte: a Raw project's `base_address`.
+    pub address: String,
+    pub length: u64,
     pub limitations: Vec<String>,
 }

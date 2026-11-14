@@ -116,8 +116,8 @@ pub use data::{
 };
 pub use debug_control::{
     DEFAULT_RUN_WAIT_MS, DebugBreakKind, DebugBreakpoint, DebugBreakpoints, DebugBytes, DebugConnection,
-    DebugDisconnected, DebugKill, DebugMemory, DebugModules, DebugRange, DebugRegisters, DebugRegistry, DebugRun,
-    DebugSnapshot, DebugStatus, DebugSteps, MAX_DEBUG_SESSIONS, MAX_RUN_WAIT_MS, tool_read_limit,
+    DebugDisconnected, DebugDump, DebugKill, DebugMemory, DebugModules, DebugRange, DebugRegisters, DebugRegistry,
+    DebugRun, DebugSnapshot, DebugStatus, DebugSteps, MAX_DEBUG_SESSIONS, MAX_RUN_WAIT_MS, tool_read_limit,
 };
 pub use debug_correlation::{
     AnnotatedRegister, BindEvidence, BindingView, BreakTarget, BreakpointLocated, DebugBinding, DebugEvidence,

@@ -415,7 +415,8 @@ ends. Reads report the stop epoch they read at, and execution tools require the 
 `debug_connect` with `path`) binds a project to a runtime module, which adds breakpoints by function name or static
 address, located stops, annotated registers and `debug_evidence` items for `record_finding`. With the operator's
 flags, `debug_write_memory`, `debug_write_register` and `debug_disconnect` with `kill: true` change the target;
-nothing writes or kills on its own, and no signal is delivered. [Debug control](debug-control.md) has each tool's
+nothing writes or kills on its own, and no signal is delivered. `debug_snapshot` with `raw: true` writes one range
+as a flat binary, a firmware dump to open as a Raw project. [Debug control](debug-control.md) has each tool's
 arguments and results, the macOS and Windows specifics, and the limits.
 
 Debug tools carry MCP annotations: inspection tools and `debug_wait` are read-only; `debug_snapshot` only adds a

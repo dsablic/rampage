@@ -126,6 +126,58 @@ fn reads_and_snapshots_a_halted_cortex_m3() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+/// The firmware-dump path: the whole 256 KiB flash read through the stub into a flat binary, which matches the
+/// loaded image byte for byte and opens as a Cortex-M Raw project whose vector table finds the reset handler and
+/// whose `tick` decompiles to the counter increment.
+#[test]
+#[ignore = "needs qemu-system-arm; run with RAMPAGE_QEMU_LIVE=1"]
+fn dumps_cortex_m3_flash_and_opens_it_as_a_raw_project() {
+    let Some((qemu, endpoint)) = start(true) else { return };
+    let registry = DebugRegistry::new(&[endpoint]).unwrap();
+    connect(&registry);
+    let directory =
+        std::env::temp_dir().canonicalize().unwrap().join(format!("rampage-qemu-dump-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::DirBuilder::new().mode(0o700).create(&directory).unwrap();
+    let output = directory.join("flash.bin");
+    let tools = debug_tools();
+    let snapshot = tools.iter().find(|tool| tool.name == "debug_snapshot").unwrap();
+    let ranges = json!([{"address": "0x0", "length": "0x40000"}]);
+    let input = json!({"session": "s1", "epoch": 1, "output": output, "ranges": ranges, "raw": true});
+    let dump = snapshot.call(&registry, input).unwrap();
+    assert_eq!((dump["address"].as_str(), dump["length"].as_u64()), (Some("0x0"), Some(0x40000)), "{dump}");
+    assert_eq!(serde_json::to_value(registry.disconnect("s1").unwrap()).unwrap()["state"], "detached");
+    drop(qemu);
+
+    // The dump is the ELF's loaded flash bytes, then erased (zero, in QEMU) flash.
+    let bytes = std::fs::read(&output).unwrap();
+    assert_eq!(bytes.len(), 0x40000);
+    let elf = rampage_loaders::Binary::open(firmware()).unwrap();
+    let flash: Vec<_> = elf.segments.iter().filter(|segment| segment.address < 0x2000_0000).collect();
+    let end = flash.iter().map(|segment| segment.address + segment.file_size).max().unwrap();
+    assert!(end > 0x40 && flash.iter().all(|segment| segment.size == segment.file_size));
+    assert_eq!(&bytes[..end as usize], elf.read(0, end).unwrap(), "flash matches the loaded image");
+    assert!(bytes[end as usize..].iter().all(|byte| *byte == 0));
+
+    // Opened as a Cortex-M Raw project at base 0 with the vector table there: Reset is the entry.
+    let options = rampage_loaders::RawCodeOptions {
+        profile: rampage_loaders::RawProfile::CortexM,
+        base: 0,
+        entry: None,
+        seeds: vec![],
+        vector_table: Some(0),
+        pointer_tables: false,
+    };
+    let project = rampage_api::Project::new(rampage_loaders::Binary::from_raw_code(bytes, options).unwrap());
+    let (reset, _) = symbol("reset_handler");
+    let (tick, _) = symbol("tick");
+    let (counter, _) = symbol("counter");
+    assert_eq!(project.binary.entry, Some(reset));
+    let code = project.decompile(tick).unwrap().code;
+    assert!(code.contains(&format!("ram_{counter:08x} = ram_{counter:08x} + 1;")), "{code}");
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 #[ignore = "needs qemu-system-arm; run with RAMPAGE_QEMU_LIVE=1"]
 fn reads_ram_the_firmware_wrote_after_running_briefly() {

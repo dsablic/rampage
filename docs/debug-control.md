@@ -386,6 +386,71 @@ architecture and data byte order. The file uses the format in [runtime snapshots
   slide), not header addresses.
 - No entry point or seeds are recorded.
 
+With `raw: true`, `debug_snapshot` writes exactly one range's bytes as a flat binary instead of a snapshot
+document: a firmware dump. The same stop, epoch, readability and publication rules apply; `permissions` and `thumb`
+are refused, and no registers or modules are recorded. The result reports the range's `address`, `length` and the
+bytes' `sha256`. See [Dumping flash](#dumping-flash).
+
+## Cortex-M probes: OpenOCD, pyOCD, J-Link, probe-rs
+
+A hardware debug probe's GDB server is an ordinary GDB remote stub: start it yourself, then allow its endpoint.
+Typical default ports:
+
+| GDB server | Example | Port |
+| --- | --- | --- |
+| OpenOCD | `openocd -f interface/cmsis-dap.cfg -f target/stm32f1x.cfg` | 3333 |
+| pyOCD | `pyocd gdbserver -t <target>` | 3333 |
+| SEGGER J-Link | `JLinkGDBServer -device <device> -if SWD` | 2331 |
+| probe-rs | `probe-rs gdb --chip <chip>` | 1337 |
+
+```sh
+rampage server serve --debug-endpoint 127.0.0.1:3333
+```
+
+Halt the core in the server first (most halt on connect; OpenOCD's `reset halt` from its telnet port does it
+explicitly). rampage never sends monitor commands. What to expect on Cortex-M:
+
+- **Registers.** The M-profile target description gives `r0`–`r12`, `sp`, `lr`, `pc` and `xpsr` (plus `msp`,
+  `psp`, `primask`, `basepri`, `faultmask` and `control` where the server lists them). The core is always Thumb;
+  `xpsr` bit 24 (T) is set, and `pc` has its Thumb bit clear.
+- **Breakpoints in flash.** A software breakpoint (`Z0`) writes a `bkpt` into memory, which flash does not accept
+  through a plain write. Use `kind: "hardware"` (`Z1`, the Flash Patch and Breakpoint unit: typically 2 to 8
+  comparators); when they run out, the server refuses the next one. OpenOCD's `gdb_breakpoint_override hard` and
+  J-Link's flash breakpoints change what `Z0` does in the server; rampage does not depend on either. Watchpoints use
+  the DWT comparators.
+- **No processes or libraries.** There is one thread (one per core), no module list and usually a
+  `qXfer:memory-map` with the flash and RAM regions, which `debug_modules` reports.
+- **Reads.** Read-protected devices refuse flash reads, and the dump is refused rather than filled. Peripheral
+  reads can have side effects.
+
+The reproducible example uses QEMU's Cortex-M3 board and the owned firmware in `tests/fixtures/firmware`:
+
+```sh
+qemu-system-arm -M lm3s6965evb -kernel tests/fixtures/firmware/cortex-m3.elf -nographic -monitor none \
+  -serial null -gdb tcp:127.0.0.1:1234 -S
+rampage server serve --debug-endpoint 127.0.0.1:1234
+```
+
+QEMU treats every breakpoint kind alike, so code that passes there can still meet the flash limits above on a
+probe. Only QEMU is live-verified; the probe servers are not.
+
+### Dumping flash
+
+To get the firmware off a halted device and analyse it:
+
+1. `debug_connect`, then `debug_modules` to see the flash region (from the memory map, or the part's datasheet).
+2. `debug_snapshot` with `raw: true` and that one range, for example
+   `{"session": "s1", "output": "/abs/dir/flash.bin", "raw": true, "ranges": [{"address": "0x0", "length": "0x40000"}]}`.
+   The output directory must be a same-user `0700` directory.
+3. Open the dump as a Cortex-M Raw project ([Raw projects](mcp.md#raw-projects)) with `base_address` set to the
+   range's address and `vector_table: true`:
+   `{"path": "/abs/dir/flash.bin", "raw": {"profile": "cortex-m3", "offset": 0, "length": 262144, "base_address": "0x0", "vector_table": true}}`.
+
+To check a patched image, dump again after flashing it and compare the `sha256` with the file you flashed, or
+`diff` the two dumps. The live QEMU test `dumps_cortex_m3_flash_and_opens_it_as_a_raw_project` dumps the 256 KiB
+flash, checks it equals the ELF's loaded bytes followed by QEMU's zero fill, and decompiles `tick` from the Raw
+project.
+
 ## Static correlation
 
 ### Binding a project

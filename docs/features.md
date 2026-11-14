@@ -64,7 +64,8 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 - [Debug sessions](debug-control.md) (MCP `debug` group, only with an operator-allowed endpoint): inspection,
   snapshots, all-stop execution control and project correlation over GDB remote stubs, Apple's `debugserver` and
   Windows RSP stubs (both *experimental*; `debugserver` has passed a live run, Windows has not); writes and kill
-  only behind operator flags.
+  only behind operator flags. `debug_snapshot` with `raw: true` dumps one range (such as a microcontroller's flash)
+  to a flat binary that opens as a Raw project.
 
 Decoder accuracy against `llvm-mc` and real arm64 code is recorded in the
 [benchmarks](benchmarks.md#earlier-measurements).

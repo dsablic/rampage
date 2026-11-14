@@ -1029,6 +1029,10 @@
           "type": "array",
           "required": true
         },
+        "raw": {
+          "type": "boolean|null",
+          "required": false
+        },
         "session": {
           "type": "string",
           "required": true
