@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+// Modified for rampage: a volatile access with no symbol is named by the global scope (pushAnnotation).
 #include "printc.hh"
 #include "funcdata.hh"
 
@@ -1950,6 +1951,13 @@ void PrintC::pushAnnotation(const Varnode *vn,const PcodeOp *op)
   }
   else {
     string regname = glb->translate->getRegisterName(vn->getSpace(),vn->getOffset(),size);
+    if (regname.empty() && vn->getSpace() == glb->getDefaultDataSpace()) {
+      // rampage: a volatile access with no symbol takes the global scope's name for its address, as a global
+      // variable there would (a named region gives `periph_40011000`; otherwise the same `Ram40011000`).
+      int4 index = 0;
+      regname = glb->symboltab->getGlobalScope()->buildVariableName(vn->getAddr(),op->getAddr(),(Datatype *)0,
+								    index,Varnode::persist);
+    }
     if (regname.empty()) {
       AddrSpace *spc = vn->getSpace();
       string spacename = spc->getName();

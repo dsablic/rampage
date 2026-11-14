@@ -124,7 +124,10 @@ impl Project {
             {
                 names.push(format!("={name}"));
             }
-            if let Some(accessed) = self.register_accesses_at(line.address) {
+            // The decoder may already name the register it resolved the access to.
+            if let Some(accessed) = self.register_accesses_at(line.address)
+                && line.comment.as_deref() != Some(accessed.as_str())
+            {
                 names.push(accessed);
             }
             if names.is_empty() {

@@ -149,7 +149,10 @@ Two further observations change no truth but matter to how an agent reads rampag
 - In rampage's decompiled `enforce_pairing`, the `SCB.AIRCR` reset request before the wait loop is gone (only the
   `WaitForInterrupt` loop remains), and both lock functions show the flash reads at 0xC80 and 0xC04 folded to
   constants. `lock_mechanisms` reports the reset correctly and the disassembly shows both addresses, so the truth
-  is reachable, but an agent that trusts the decompiled C alone would answer "halt" and miss the addresses.
+  is reachable, but an agent that trusts the decompiled C alone would answer "halt" and miss the addresses. **Fixed
+  after the suite found it** (Unreleased): on Cortex-M Raw images flash words read through a formed address no
+  longer fold and the peripheral and system ranges are volatile, so `enforce_pairing` shows
+  `ppb_e000ed0c = 0x5fa0004` before the wait loop and both functions read `code_c80` / `code_c04`.
 
 **Owner decision:** run as built (a measurement of 1.2.0 + Unreleased as they are), or fix gaps 1 and 2 first. If
 they are fixed first, the report must disclose that the fixes were made after these fixtures existed (as v3

@@ -561,7 +561,8 @@ so a bootloader's second stage is analysed at the address it runs from:
 }
 ```
 
-Each region has a `kind`: `code` (r-x; seeds may lie here, and on Cortex-M its literal pools fold as constants),
+Each region has a `kind`: `code` (r-x; seeds may lie here, and on Cortex-M its literal pools fold as constants, but
+words the code reads through an address it forms do not),
 `data` (r--, constant bytes) or `ram` (rw-; its bytes, if any, are initial values the program may change, so the
 decompiler never folds loads from it). `offset`/`length` select its bytes in the same file; a `ram` region without
 `offset` has no bytes (zero-filled or uninitialised RAM, memory-mapped I/O) and `length` is its size. `decode`

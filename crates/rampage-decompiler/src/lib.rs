@@ -337,6 +337,7 @@ unsafe extern "C" {
     fn rampage_decomp_data_name(handle: *mut Opaque, addr: u64, name: *const c_char) -> *const c_char;
     fn rampage_decomp_data_region(handle: *mut Opaque, first: u64, last: u64, prefix: *const c_char) -> *const c_char;
     fn rampage_decomp_volatile_range(handle: *mut Opaque, first: u64, last: u64) -> *const c_char;
+    fn rampage_decomp_read_only_range(handle: *mut Opaque, first: u64, last: u64, read_only: u8) -> *const c_char;
     fn rampage_decomp_callee_inference(handle: *mut Opaque, effects: u8, prototypes: u8) -> *const c_char;
     fn rampage_decomp_fold_read_only(handle: *mut Opaque, enabled: u8) -> *const c_char;
     fn rampage_decomp_virtual_table(
@@ -635,6 +636,15 @@ impl Decompiler {
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: valid serialized handle; the returned error belongs to the handle.
         ffi_result(unsafe { rampage_decomp_volatile_range(self.handle, first, last) })
+    }
+
+    /// Sets (`read_only`) or clears the read-only property of `first..=last`: with read-only folding, loads from a
+    /// read-only address fold into the bytes they read, and loads from any other address stay reads. Globals
+    /// declared in the range afterwards take the property.
+    pub fn set_read_only_range(&mut self, first: u64, last: u64, read_only: bool) -> Result<(), Error> {
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid serialized handle; the returned error belongs to the handle.
+        ffi_result(unsafe { rampage_decomp_read_only_range(self.handle, first, last, u8::from(read_only)) })
     }
 
     /// Folds loads from read-only mappings into the values they read, as Ghidra's "respect read-only flags"

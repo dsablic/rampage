@@ -42,7 +42,11 @@ fn literal_pool_globals_are_named_by_cortex_m_region() {
     let project = project();
     let code = decompile(&project, "advance_cursor");
     assert!(code.contains("ram_20000048 = ram_20000048 + 4;"), "{code}");
-    assert!(code.contains("periph_40021004 = periph_40021000 | 0x100;"), "{code}");
+    // The peripheral range is volatile: the register is read once, then the result written.
+    let read =
+        code.lines().find(|line| line.trim().ends_with("= periph_40021000;")).unwrap_or_else(|| panic!("{code}"));
+    let variable = read.trim().split(' ').next().unwrap();
+    assert!(code.contains(&format!("periph_40021004 = {variable} | 0x100;")), "{code}");
     assert!(!code.contains("Ram"), "{code}");
     // The analyst's name for a data address wins over the region name.
     project.rename(0x2000_0048, Some("cursor")).unwrap();
@@ -78,8 +82,10 @@ fn a_register_the_callee_writes_still_reads_as_its_output() {
 fn call_results_feed_the_calls_that_use_them() {
     let project = project();
     let code = decompile(&project, "reset_handler");
-    // reset_handler keeps unpack_field's result for a later call too, so it lands in a variable first.
-    let call = format!(" = {}(periph_40021000);", sub("unpack_field"));
+    // reset_handler keeps unpack_field's result for a later call too, so it lands in a variable first. Its argument
+    // is the (volatile) peripheral register, read into a variable of its own.
+    let call = format!(" = {}(", sub("unpack_field"));
+    assert!(code.contains("= periph_40021000;"), "{code}");
     let line = code.lines().find(|line| line.contains(&call)).unwrap_or_else(|| panic!("{code}"));
     let variable = line.trim().split(' ').next().unwrap();
     assert!(code.contains(&format!("{}({variable})", sub("verify_image"))), "{code}");

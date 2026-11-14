@@ -17,6 +17,14 @@ see the [stability policy](docs/stability.md) for what the version promises.
 - `evaluate_function` (and `function evaluate`) accepts a Raw project's `raw` selector, so a firmware image's own
   routines (a checksum, a decoder) can be run; processors the interpreter does not support, such as MSP430, are
   refused with the reason. `mmio`, with imported SVD register names, works as on an ELF image.
+- Fix: decompiling a Cortex-M Raw image no longer folds flash words the code reads through an address it forms
+  itself (`mov r1, #0xc80; ldr r1, [r1]`: a pairing token, a version, option bytes) into constants; literal pools
+  still fold. The peripheral, external-device and system ranges (0x40000000-0x5fffffff, 0xa0000000-0xdfffffff,
+  0xe0000000 and up) are volatile without an SVD too, so a register store before an endless loop
+  (`ppb_e000ed0c = 0x5fa0004`, a reset request) is no longer dropped as dead, and every poll of a status register is
+  shown. A volatile access with no symbol is named by its region (`periph_40011000`). The ARM address tracker
+  follows `mov`/`movs` immediates and keeps r4-r11 across calls (AAPCS), so disassembly and xrefs resolve more
+  loads and stores (on every ARM image; the analysis cache version is bumped). Decompiled output of other formats and architectures is unchanged.
 
 ## 1.3.0 (2026-11-14)
 

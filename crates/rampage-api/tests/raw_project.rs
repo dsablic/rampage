@@ -696,3 +696,36 @@ fn the_raw_cache_is_bounded_by_total_input_bytes() {
     assert!(Arc::ptr_eq(&first, &open(&paths[0])));
     assert!(Arc::ptr_eq(&second, &open(&paths[1])));
 }
+
+/// On Cortex-M Raw images a flash word the code reads through an address it forms stays a read (it is written by
+/// whoever programs the image, not the compiler), while literal pools still fold; a store to a system register
+/// before an endless loop is kept.
+#[test]
+fn cortex_m_decompilation_keeps_flash_data_reads_and_system_register_stores() {
+    let firmware = |name: &str| {
+        let path = project_path(name);
+        let elf = rampage_loaders::Binary::open(path.with_extension("elf")).unwrap();
+        let length = std::fs::metadata(&path).unwrap().len();
+        let selector = json!({ "profile": "cortex-m3", "offset": 0, "length": length, "base_address": "0x8000000",
+                               "vector_table": true });
+        (Session::default().open_raw(&path, &request(selector)).unwrap(), elf)
+    };
+    let decompile = |project: &Arc<rampage_api::Project>, elf: &rampage_loaders::Binary, symbol: &str| {
+        project.decompile(elf.symbol_by_name(symbol).unwrap().address & !1).unwrap().code
+    };
+    // reset_handler compares the application's CRC-32 with the word stored at 0x080007fc.
+    let (project, elf) = firmware("raw-cortex-m-crc.bin");
+    let code = decompile(&project, &elf, "reset_handler");
+    let bytes = std::fs::read(project_path("raw-cortex-m-crc.bin")).unwrap();
+    let stored = u32::from_le_bytes(bytes[0x7fc..0x800].try_into().unwrap());
+    assert!(code.contains("code_80007fc"), "{code}");
+    assert!(!code.contains(&format!("{stored:#x}")), "{code}");
+    // system_reset requests a reset through SCB.AIRCR, then spins.
+    let (project, elf) = firmware("raw-cortex-m-locks.bin");
+    let code = decompile(&project, &elf, "system_reset");
+    assert!(code.contains("ppb_e000ed0c = 0x5fa0004"), "{code}");
+}
+
+fn project_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware").join(name)
+}

@@ -213,6 +213,12 @@ pub enum WorkerOperation {
         first: u64,
         last: u64,
     },
+    /// Set or clear the read-only property of `first..=last` (see `Decompiler::set_read_only_range`).
+    ReadOnlyRange {
+        first: u64,
+        last: u64,
+        read_only: bool,
+    },
     /// Infer callee effects and prototypes (see [`crate::CalleeInference`]).
     CalleeInference {
         inference: crate::CalleeInference,
@@ -1148,6 +1154,9 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
             WorkerOperation::DataName { address, name } => engine.set_data_name(address, &name),
             WorkerOperation::DataRegion { first, last, prefix } => engine.add_data_region(first, last, &prefix),
             WorkerOperation::VolatileRange { first, last } => engine.add_volatile_range(first, last),
+            WorkerOperation::ReadOnlyRange { first, last, read_only } => {
+                engine.set_read_only_range(first, last, read_only)
+            }
             WorkerOperation::CalleeInference { inference } => engine.set_callee_inference(inference),
             WorkerOperation::FoldReadOnly { enabled } => engine.set_read_only_folding(enabled),
             WorkerOperation::VirtualTables { tables, names } => engine.add_virtual_tables(&tables, &names),

@@ -134,7 +134,7 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
         }
     }
     operations.extend(data_names(project, annotations, &identities, &slots));
-    operations.extend(raw_image_operations(binary));
+    operations.extend(raw_image_operations(project));
     operations.extend(virtual_tables(project, annotations));
     Ok(operations)
 }
@@ -257,18 +257,102 @@ fn class_type_names(name: &str) -> Vec<String> {
     names
 }
 
-/// Cortex-M Raw images only: their mapping is flash, which nothing writes at run time, they carry no prototypes, and
-/// their code is often built with interprocedural register allocation. Headered formats keep Ghidra's defaults (a
-/// PE's `.rdata` can be rewritten at run time by its pseudo-relocator, and ELF and PE callees have libc/import
-/// prototypes), and so do the other Raw profiles, whose image is often RAM that the program writes (`lda counter`
-/// would fold to its load-time byte). The engine resets the callee inference before each top-level decompilation,
-/// so a cached engine gives the same C whatever was decompiled before.
-fn raw_image_operations(binary: &rampage_loaders::Binary) -> Vec<WorkerOperation> {
+/// Cortex-M Raw images only: their mapping is flash, they carry no prototypes, and their code is often built with
+/// interprocedural register allocation. Headered formats keep Ghidra's defaults (a PE's `.rdata` can be rewritten
+/// at run time by its pseudo-relocator, and ELF and PE callees have libc/import prototypes), and so do the other Raw
+/// profiles, whose image is often RAM that the program writes (`lda counter` would fold to its load-time byte). The
+/// engine resets the callee inference before each top-level decompilation, so a cached engine gives the same C
+/// whatever was decompiled before.
+///
+/// Loads from the flash mapping fold into the values they read, so a literal-pool word reads as the address or
+/// constant it holds. Flash the code reads or writes at an address it forms itself (`mov r1, #0xc80; ldr r1, [r1]`)
+/// is not known to be constant: a pairing token, a version word or option bytes are written by a programmer or a
+/// bootloader, not the compiler, so those words stay reads. The peripheral, device and system ranges are volatile, so
+/// a store to a memory-mapped register (`SCB.AIRCR = 0x5fa0004` before a wait loop) is never removed as dead.
+fn raw_image_operations(project: &Project) -> Vec<WorkerOperation> {
+    let binary = &project.binary;
     if !binary.m_profile() {
         return Vec::new();
     }
     let inference = rampage_decompiler::CalleeInference { register_effects: true, prototypes: true };
-    vec![WorkerOperation::FoldReadOnly { enabled: true }, WorkerOperation::CalleeInference { inference }]
+    let mut operations =
+        vec![WorkerOperation::FoldReadOnly { enabled: true }, WorkerOperation::CalleeInference { inference }];
+    operations
+        .extend(CORTEX_M_DEVICE_RANGES.iter().map(|&(first, last)| WorkerOperation::VolatileRange { first, last }));
+    operations.extend(flash_data_accesses(project).into_iter().map(|(first, last)| WorkerOperation::ReadOnlyRange {
+        first,
+        last,
+        read_only: false,
+    }));
+    operations
+}
+
+/// The ARMv6-M/ARMv7-M ranges with Device or Strongly-ordered memory: peripherals, external devices, the private
+/// peripheral bus (SCB, NVIC, SysTick) and the vendor system range.
+const CORTEX_M_DEVICE_RANGES: [(u64, u64); 3] =
+    [(0x4000_0000, 0x5fff_ffff), (0xa000_0000, 0xdfff_ffff), (0xe000_0000, 0xffff_ffff)];
+
+/// Most flash words [`flash_data_accesses`] reports.
+const MAX_FLASH_ACCESSES: usize = 4096;
+
+/// Byte ranges (inclusive) of read-only image mappings that the code loads from or stores to through an address it
+/// forms itself, not relative to the PC as a literal-pool load is. The native listing tracks constants in registers
+/// within straight-line runs (`movw`/`movt`, `mov`, literal-pool values) and resolves the accesses through them.
+fn flash_data_accesses(project: &Project) -> Vec<(u64, u64)> {
+    let binary = &project.binary;
+    let read_only =
+        |address: u64| binary.segments.iter().any(|segment| segment.contains(address) && !segment.perms.write);
+    // Decoded here rather than through a listing, which reads annotations the caller may hold.
+    let Ok(analysis) = project.analysis() else { return Vec::new() };
+    let (Ok(mut decoder), Ok(mut alone)) =
+        (crate::decoder::project_decoder(project), crate::decoder::project_decoder(project))
+    else {
+        return Vec::new();
+    };
+    decoder.set_code_modes(&analysis.program.code_modes);
+    alone.set_code_modes(&analysis.program.code_modes);
+    let mut ranges = std::collections::BTreeSet::new();
+    for block in analysis.program.functions.iter().flat_map(|function| &function.blocks) {
+        let Some(code) = binary.read_to_segment_end(block.start) else { continue };
+        let code =
+            &code[..usize::try_from(block.end.saturating_sub(block.start)).unwrap_or(usize::MAX).min(code.len())];
+        decoder.reset();
+        let mut offset = 0;
+        while offset < code.len() {
+            let address = block.start + offset as u64;
+            let insn = decoder.decode_with_memory(&code[offset..], address, &|at, size| binary.read_pointer(at, size));
+            let length = usize::from(insn.len.max(1));
+            let Some(accessed) = insn.data_ref.filter(|&accessed| insn.accesses && read_only(accessed)) else {
+                offset += length;
+                continue;
+            };
+            let text = decoder.format(&code[offset..(offset + length).min(code.len())], address);
+            // An access the instruction resolves without any register value is PC-relative: a literal pool.
+            alone.reset();
+            let lone = alone.decode_with_memory(&code[offset..], address, &|at, size| binary.read_pointer(at, size));
+            offset += length;
+            if lone.accesses && lone.data_ref == Some(accessed) {
+                continue;
+            }
+            let mnemonic = text.split_whitespace().next().unwrap_or_default();
+            let size = if mnemonic.starts_with("ldrd") || mnemonic.starts_with("strd") {
+                8
+            } else if mnemonic.starts_with("ldrb") || mnemonic.starts_with("ldrsb") || mnemonic.starts_with("strb") {
+                1
+            } else if mnemonic.starts_with("ldrh") || mnemonic.starts_with("ldrsh") || mnemonic.starts_with("strh") {
+                2
+            } else if mnemonic.starts_with("vldr") || mnemonic.starts_with("vstr") {
+                if text.contains(" d") { 8 } else { 4 }
+            } else {
+                4
+            };
+            ranges.insert((accessed, accessed + size - 1));
+            if ranges.len() == MAX_FLASH_ACCESSES {
+                return ranges.into_iter().collect();
+            }
+        }
+    }
+    ranges.into_iter().collect()
 }
 
 /// The architectural ARMv6-M/ARMv7-M system address map: every M-profile core decodes these ranges the same way,
@@ -445,6 +529,9 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
             WorkerOperation::VolatileRange { first, last } => {
                 engine.add_volatile_range(first, last).map_err(|error| failure(first, "mark volatile range", error))?
             }
+            WorkerOperation::ReadOnlyRange { first, last, read_only } => engine
+                .set_read_only_range(first, last, read_only)
+                .map_err(|error| failure(first, "set read-only range", error))?,
             WorkerOperation::CalleeInference { inference } => engine
                 .set_callee_inference(inference)
                 .map_err(|error| ApiError::Unavailable(format!("callee inference: {error}")))?,
@@ -564,7 +651,7 @@ mod tests {
                 vector_table: None,
                 pointer_tables: false,
             };
-            rampage_loaders::Binary::from_raw_code(vec![0; 4], options).unwrap()
+            Project::new(rampage_loaders::Binary::from_raw_code(vec![0; 4], options).unwrap())
         };
         for profile in [rampage_loaders::RawProfile::Msp430, rampage_loaders::RawProfile::Avr8] {
             assert!(raw_image_operations(&raw(profile)).is_empty(), "{profile:?}");
@@ -572,7 +659,13 @@ mod tests {
         let operations = raw_image_operations(&raw(rampage_loaders::RawProfile::CortexM));
         assert!(matches!(
             operations[..],
-            [WorkerOperation::FoldReadOnly { enabled: true }, WorkerOperation::CalleeInference { .. }]
+            [
+                WorkerOperation::FoldReadOnly { enabled: true },
+                WorkerOperation::CalleeInference { .. },
+                WorkerOperation::VolatileRange { first: 0x4000_0000, last: 0x5fff_ffff },
+                WorkerOperation::VolatileRange { first: 0xa000_0000, last: 0xdfff_ffff },
+                WorkerOperation::VolatileRange { first: 0xe000_0000, last: 0xffff_ffff },
+            ]
         ));
     }
 

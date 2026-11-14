@@ -6,7 +6,7 @@ use crate::{Disassembler, Flow, Got, Insn, Target};
 use std::collections::BTreeMap;
 
 use super::operands::{canonical_rotation, label_target};
-use super::spec_types::a32_expand_imm;
+use super::spec_types::{a32_expand_imm, t32_expand_imm};
 use super::{Decoded, ItState, LabelStyle, Set, decode_a32, decode_t32, decode_t32_m, format};
 
 const PC: u64 = 15;
@@ -348,6 +348,16 @@ impl Aarch32Disassembler {
         } else if matches!(mnemonic, "MOVW") || name.starts_with("MOV_i_A2") || name.starts_with("MOV_i_T3") {
             let value = wide_immediate(decoded);
             written = rd.map(|rd| (rd, Some(Value { value, address: false })));
+        } else if matches!(name, "MOV_i_T1" | "MOV_i_T2" | "MOVS_i_T2" | "MOV_i_A1" | "MOVS_i_A1") {
+            // `movs r1, #64`, `mov.w r1, #0xc80`: a constant a later load or store may use as its address.
+            let value = match decoded.set {
+                Set::A32 => f("imm12").map(a32_expand_imm),
+                Set::T16 => f("imm8"),
+                Set::T32 => Some(t32_expand_imm(
+                    f("i").unwrap_or(0) << 11 | f("imm3").unwrap_or(0) << 8 | f("imm8").unwrap_or(0),
+                )),
+            };
+            written = rd.map(|rd| (rd, value.map(|value| Value { value, address: false })));
         } else if mnemonic == "MOVT" {
             let high = wide_immediate(decoded);
             if let Some(rd) = rd {
@@ -492,8 +502,13 @@ impl Aarch32Disassembler {
         {
             self.registers.set(rt + 1, None);
         }
-        if matches!(mnemonic, "BL" | "BLX" | "SVC") {
+        if mnemonic == "SVC" {
             self.registers = Registers::default();
+        } else if matches!(mnemonic, "BL" | "BLX") {
+            // A call preserves r4-r11 (AAPCS); the argument, scratch and link registers are its to change.
+            for register in [0, 1, 2, 3, 12, 14] {
+                self.registers.set(register, None);
+            }
         }
         if matches!(mnemonic, "PUSH" | "POP") || decoded.syntax.operands.iter().any(|operand| operand.name == "SP") {
             self.registers.set(SP, None);

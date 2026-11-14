@@ -1948,6 +1948,23 @@ const char *rampage_decomp_volatile_range(void *h, uint64_t first, uint64_t last
     });
 }
 
+// Sets or clears the read-only property of [first, last] of the data space, which decides (with read-only folding)
+// whether a load from it folds into the bytes it reads. Symbols added in the range afterwards take the property.
+const char *rampage_decomp_read_only_range(void *h, uint64_t first, uint64_t last, uint8_t read_only) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &nativeMutation) {
+        AddrSpace *space = handle->arch->getDefaultDataSpace();
+        if (first > last || last > space->getHighest()) throw LowlevelError("Read-only range exceeds the data space");
+        nativeMutation = true;
+        Range range(space, first, last);
+        if (read_only != 0) {
+            handle->arch->symboltab->setPropertyRange(Varnode::readonly, range);
+        } else {
+            handle->arch->symboltab->clearPropertyRange(Varnode::readonly, range);
+        }
+    });
+}
+
 // Registers one MSVC vftable for virtual call resolution: its slots, its complete class (type descriptor
 // address) and vfptr offset, and the NUL-separated type names whose pointers it serves at offset 0.
 const char *rampage_decomp_virtual_table(void *h, uint64_t address, uint64_t complete, int64_t offset,

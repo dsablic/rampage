@@ -134,7 +134,12 @@ but ARMv8-M-only instructions are not reviewed, and `cortex-m33`/`cortex-m55` ar
   int and long 4 bytes, matching AAPCS) and TMode set explicitly at every function, as for ARM ELF Thumb code.
   Only the code mapping is served, read-only, and on Cortex-M Raw images (only: other Raw profiles' images are
   often RAM the program writes) the decompiler folds loads from it, so a literal-pool word reads as the address it
-  holds. A global with no other name is named by its architectural
+  holds. Flash the code loads from or stores to through an address it forms itself (`mov r1, #0xc80; ldr r1, [r1]`,
+  a `movw`/`movt` pair) does not fold: such words (a pairing token, a version, option bytes) are written by a
+  programmer or bootloader, so they read as globals (`code_00000c80`). The peripheral (0x40000000-0x5fffffff),
+  external device (0xa0000000-0xdfffffff) and system (0xe0000000 and up: SCB, NVIC, SysTick) ranges are volatile,
+  with or without an imported SVD, so a register store before a wait loop (`SCB.AIRCR = 0x5fa0004` requesting a
+  reset) is never dropped as dead. A global with no other name is named by its architectural
   ARMv6-M/ARMv7-M region and address (`code_`, `ram_`, `periph_`, `extram_`, `extdev_`, `ppb_`, `vendor_sys_`:
   `ram_20000004`, `periph_40021000`); an analyst's `rename` of the address wins. The data type stays inferred.
 - **Callees.** Raw images carry no prototypes, so for a Cortex-M Raw image (only; headered ARM binaries keep
