@@ -22,7 +22,7 @@ mod tests;
 pub use convention::Convention;
 use convention::{Abi, Link, Place};
 use machine::{Fault, Flow, Machine, Ram, SpaceIds, UserOp};
-use stubs::{BYTES_PER_STEP, HEAP_BYTES, Heap, Stop, Stub};
+use stubs::{BYTES_PER_STEP, HEAP_BYTES, Heap, Limits, Stop, Stub};
 
 pub const DEFAULT_MAX_STEPS: u64 = 1_000_000;
 pub const MAX_STEPS: u64 = 20_000_000;
@@ -658,13 +658,13 @@ impl Run<'_> {
 
     /// Runs the library model `stub` for the import `name` the run just reached (without one, the import returns
     /// 0), writes its result and returns to the caller. Returns the address returned to and the steps it costs.
-    fn call_import(&mut self, stub: Option<Stub>, abi: &Abi, name: &str, budget: u64) -> Result<(u64, u64), Stop> {
+    fn call_import(&mut self, stub: Option<Stub>, abi: &Abi, limits: &stubs::Limits<'_>) -> Result<(u64, u64), Stop> {
         let unreadable = |error: ApiError| (StopReason::UnsupportedOp, error.to_string());
         let outcome = match stub {
             Some(stub) => {
                 let args: Vec<u64> =
                     self.arguments(abi, stub.arity(), true)?.into_iter().map(|(_, value)| value).collect();
-                stubs::call(stub, &args, abi.width, &mut self.machine.ram, budget, name)?
+                stubs::call(stub, &args, abi.width, &mut self.machine.ram, limits)?
             }
             None => stubs::Outcome { value: 0, bytes: 0 },
         };
@@ -730,6 +730,8 @@ pub(crate) struct Probe {
     /// Start at `.0`, a caller's code, and end when the call instruction at `.1` returns, instead of running a
     /// function from its entry to its return.
     pub replay: Option<(u64, u64)>,
+    /// The encoded input (a blob address): output equal to or a prefix of its bytes is not decoded text.
+    pub input: Option<u64>,
 }
 
 /// What a probing run found.
@@ -1030,6 +1032,20 @@ impl Project {
         let mut skipped: Vec<(String, u64)> = Vec::new();
         let mut replay_return = None;
         let mut replay_arguments = None;
+        let stdcall_imports = binary.arch == Arch::X86 && binary.format == rampage_loaders::Format::Pe;
+        // What the probed addresses held before the run (direct) or at the replayed call: the blob's bytes and each
+        // argument's string, which decoded output must differ from.
+        let mut snapshots: Vec<(u64, Vec<u8>)> = Vec::new();
+        if let Some(probe) = probe {
+            let addresses = probe.input.into_iter().chain(if replay.is_none() {
+                probed_arguments.iter().map(|(_, value)| *value).collect()
+            } else {
+                Vec::new()
+            });
+            for address in addresses {
+                snapshots.push((address, snapshot(&mut run.machine.ram, address)));
+            }
+        }
         let (stop, detail) = loop {
             if pc == sentinel {
                 break (StopReason::Returned, "the function returned".to_owned());
@@ -1039,13 +1055,24 @@ impl Project {
             }
             let stand_in = run.machine.ram.stand_in(pc).cloned();
             let stub = stand_in.as_deref().filter(|_| stub_abi.is_some()).and_then(stubs::lookup);
-            // Replaying a caller, imports before the replayed call that have no model return 0.
+            // Replaying a caller, imports before the replayed call that have no model return 0. Not on 32-bit
+            // PE, where a stdcall import pops its own arguments and skipping it would leave the stack pointer off.
             let skip = stub.is_none() && replay.is_some() && replay_return.is_none();
             if let Some(name) = &stand_in
                 && stub.is_none()
-                && !skip
             {
-                break (StopReason::ExternalCall, format!("call to imported function {name}, outside the image"));
+                if !skip {
+                    break (StopReason::ExternalCall, format!("call to imported function {name}, outside the image"));
+                }
+                if stdcall_imports {
+                    break (
+                        StopReason::ExternalCall,
+                        format!(
+                            "call to imported function {name} before the replayed call; on 32-bit PE an import may \
+                             pop its own arguments, so it is not skipped"
+                        ),
+                    );
+                }
             }
             if steps >= max_steps {
                 break (StopReason::StepLimit, format!("stopped after {max_steps} instructions (max_steps)"));
@@ -1054,8 +1081,9 @@ impl Project {
                 break (StopReason::Timeout, format!("stopped after {timeout_ms} ms (timeout_ms)"));
             }
             if let Some(name) = &stand_in {
-                let budget = (max_steps - steps).saturating_mul(BYTES_PER_STEP);
-                match run.call_import(stub, stub_abi.as_ref().unwrap_or(&abi), name, budget) {
+                let limits =
+                    Limits { bytes: (max_steps - steps).saturating_mul(BYTES_PER_STEP), deadline, name: name.as_str() };
+                match run.call_import(stub, stub_abi.as_ref().unwrap_or(&abi), &limits) {
                     Ok((target, cost)) => {
                         let rows = if stub.is_some() { &mut stubbed } else { &mut skipped };
                         match rows.iter_mut().find(|(seen, _)| seen == name) {
@@ -1082,6 +1110,9 @@ impl Project {
             {
                 replay_return = Some(pc.wrapping_add(decoded.extent));
                 replay_arguments = run.arguments(&abi, REPLAY_ARGUMENTS, false).ok();
+                for &(_, address) in replay_arguments.iter().flatten() {
+                    snapshots.push((address, snapshot(&mut run.machine.ram, address)));
+                }
             }
             last_text = Some(decoded.text.clone());
             if let Some(storage) = run.mode_switch {
@@ -1169,7 +1200,9 @@ impl Project {
             .collect();
         skipped.truncate(MAX_CALL_ROWS);
         let mut probed = Probed { arguments: replay_arguments, texts: Vec::new(), skipped };
-        if probe.is_some() && stop == StopReason::Returned {
+        // A replay that returned without reaching its call ran past it some other way: nothing to probe.
+        let reached = replay.is_none() || replay_return.is_some();
+        if probe.is_some() && stop == StopReason::Returned && reached {
             let mut pointers = match &probed.arguments {
                 Some(arguments) => arguments.clone(),
                 None if replay.is_some() => Vec::new(),
@@ -1182,7 +1215,7 @@ impl Project {
                 if probed.texts.iter().any(|text| text.address == address) {
                     continue;
                 }
-                if let Some(text) = self.probed_text(&mut run.machine.ram, address) {
+                if let Some(text) = self.probed_text(&mut run.machine.ram, address, &snapshots) {
                     probed.texts.push(ProbedText { source, address, text });
                 }
             }
@@ -1220,16 +1253,12 @@ impl Project {
         Ok((report, probed))
     }
 
-    /// The printable NUL-terminated string at `address` after a run, unless the file holds the same bytes there.
-    fn probed_text(&self, ram: &mut ImageRam<'_>, address: u64) -> Option<String> {
-        let mut bytes = Vec::new();
-        while bytes.len() < PROBED_TEXT_BYTES {
-            let mut byte = [0u8];
-            ram.read(address.wrapping_add(bytes.len() as u64), &mut byte).ok()?;
-            if byte[0] == 0 {
-                break;
-            }
-            bytes.push(byte[0]);
+    /// The printable NUL-terminated string at `address` after a run, unless the file holds the same bytes there,
+    /// the address held it before (`snapshots`), or it is an input's bytes (equal to or a prefix of a snapshot).
+    fn probed_text(&self, ram: &mut ImageRam<'_>, address: u64, snapshots: &[(u64, Vec<u8>)]) -> Option<String> {
+        let bytes = snapshot(ram, address);
+        if snapshots.iter().any(|(_, before)| before.starts_with(&bytes)) {
+            return None;
         }
         let printable = |byte: &u8| byte.is_ascii_graphic() || matches!(byte, b' ' | b'\t' | b'\n' | b'\r');
         if bytes.len() < MIN_PROBED_TEXT || !bytes.iter().all(printable) {
@@ -1240,6 +1269,19 @@ impl Project {
         });
         (!unchanged).then(|| String::from_utf8_lossy(&bytes).into_owned())
     }
+}
+
+/// The bytes at `address` up to a NUL, an unreadable byte or `PROBED_TEXT_BYTES`.
+fn snapshot(ram: &mut ImageRam<'_>, address: u64) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    while bytes.len() < PROBED_TEXT_BYTES {
+        let mut byte = [0u8];
+        if ram.read(address.wrapping_add(bytes.len() as u64), &mut byte).is_err() || byte[0] == 0 {
+            break;
+        }
+        bytes.push(byte[0]);
+    }
+    bytes
 }
 
 fn width_mask(width: u32) -> u64 {

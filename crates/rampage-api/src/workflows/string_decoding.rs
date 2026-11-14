@@ -650,10 +650,11 @@ impl Project {
             }
             report.limitation(format!(
                 "Decoded text comes from emulation: the caller's block holding the call is replayed through the call \
-                 (imports before it that are not modelled C library functions return 0), else the routine is called \
-                 as (blob), (output, blob, length) and (blob, output, length); each run has {EVALUATE_STEPS} steps \
+                 (imports before it that are not modelled C library functions return 0, except on 32-bit PE, where \
+                 an import may pop its own arguments and the replay stops instead), else the routine is called as (blob), (output, blob, length) and (blob, output, length); each run has {EVALUATE_STEPS} steps \
                  and {EVALUATE_RUN_MS} ms. Registers set before the block start at zero, other imports stop a run, \
-                 and printable output can still be an intermediate value. A candidate is a loop shape that byte-wise \
+                 and printable output can still be an intermediate value; output equal to its input, or unchanged since the call, is \
+                 not reported. A candidate is a loop shape that byte-wise \
                  copying, case conversion, checksums and ciphers also have. Absence of evidence is not evidence of \
                  absence."
             ));
@@ -687,6 +688,7 @@ impl Project {
                     let setup = site.setup.expect("filtered above");
                     let attempt = self.attempt(
                         candidate.address,
+                        blob,
                         format!(
                             "replayed the caller from its block at {setup:#x} through the call at {:#x} (arguments \
                              as there)",
@@ -716,7 +718,7 @@ impl Project {
                         break;
                     }
                     let how = format!("called `{}` directly as {shape}", candidate.name);
-                    attempts.push(self.attempt(candidate.address, how, args, None, remaining));
+                    attempts.push(self.attempt(candidate.address, blob, how, args, None, remaining));
                 }
                 if let Some(found) = attempts.iter().position(|attempt| attempt.text().is_some()) {
                     attempts = attempts.split_off(found);
@@ -728,7 +730,15 @@ impl Project {
         (emulated, unevaluated)
     }
 
-    fn attempt(&self, at: u64, how: String, args: Value, replay: Option<(u64, u64)>, remaining: Duration) -> Attempt {
+    fn attempt(
+        &self,
+        at: u64,
+        input: u64,
+        how: String,
+        args: Value,
+        replay: Option<(u64, u64)>,
+        remaining: Duration,
+    ) -> Attempt {
         let timeout = (remaining.as_millis() as u64).clamp(1, EVALUATE_RUN_MS);
         let request = json!({
             "at": format!("{at:#x}"),
@@ -738,7 +748,8 @@ impl Project {
         });
         let outcome =
             serde_json::from_value::<EvaluateRequest>(request).map_err(|error| error.to_string()).and_then(|request| {
-                self.evaluate_probed(&request, Some(Probe { replay })).map_err(|error| error.to_string())
+                self.evaluate_probed(&request, Some(Probe { replay, input: Some(input) }))
+                    .map_err(|error| error.to_string())
             });
         let arguments = match &outcome {
             Ok((_, Probed { arguments: Some(arguments), .. })) => {

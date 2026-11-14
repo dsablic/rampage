@@ -710,8 +710,46 @@ fn get(ram: &mut ImageRam<'_>, address: u64, length: usize) -> Vec<u8> {
     out
 }
 
+fn limits(bytes: u64, name: &str) -> stubs::Limits<'_> {
+    stubs::Limits { bytes, deadline: Instant::now() + Duration::from_secs(60), name }
+}
+
+#[test]
+fn long_stand_ins_stream_and_stop_at_memory_and_time_limits() {
+    use stubs::Stub;
+    let project = fixture("bin/hello-x64.elf");
+    let mut ram = stub_ram(&project);
+    // A 300 MB memset is refused before it writes: memory cannot take it, whatever the step budget.
+    let error =
+        stubs::call(Stub::Memset, &[0x7000_0000, 0, 300 << 20], 8, &mut ram, &limits(u64::MAX, "memset")).unwrap_err();
+    assert_eq!(error.0, StopReason::MemoryLimit, "{}", error.1);
+    // A past deadline stops a long stand-in.
+    let mut ram = stub_ram(&project);
+    ram.map(0x7200_0000, vec![b'x'; 2 << 20]);
+    let late = stubs::Limits { bytes: u64::MAX, deadline: Instant::now(), name: "strlen" };
+    let error = stubs::call(Stub::Strlen, &[0x7200_0000], 8, &mut ram, &late).unwrap_err();
+    assert_eq!(error.0, StopReason::Timeout, "{}", error.1);
+    // Copies stream in chunks, across chunk boundaries and through an overlap in both directions.
+    let pattern: Vec<u8> = (0..10_000u32).map(|index| (index % 251) as u8 + 1).collect();
+    put(&mut ram, 0x7200_0000, &pattern);
+    stub(&mut ram, Stub::Memmove, &[0x7200_0000 + 3000, 0x7200_0000, 10_000]);
+    assert_eq!(get(&mut ram, 0x7200_0000 + 3000, 10_000), pattern);
+    put(&mut ram, 0x7200_0000 + 3000, &pattern);
+    stub(&mut ram, Stub::Memmove, &[0x7200_0000, 0x7200_0000 + 3000, 10_000]);
+    assert_eq!(get(&mut ram, 0x7200_0000, 10_000), pattern);
+    // A string ending just before unmapped memory: the 4 KiB region's last byte is its NUL.
+    let mut ram = stub_ram(&project);
+    put(&mut ram, 0x7000_0000 + 4090, b"tail\0");
+    assert_eq!(stub(&mut ram, Stub::Strlen, &[0x7000_0000 + 4090]), 4);
+    put(&mut ram, 0x7000_0000 + 4091, b"ail\0\0");
+    assert_eq!(stub(&mut ram, Stub::Strcmp, &[0x7000_0000 + 4091, 0x7000_0000 + 4091]), 0);
+    // calloc touches nothing.
+    let outcome = stubs::call(Stub::Calloc, &[1 << 20, 1], 8, &mut ram, &limits(64, "calloc")).unwrap();
+    assert_eq!(outcome.bytes, 0);
+}
+
 fn stub(ram: &mut ImageRam<'_>, which: stubs::Stub, args: &[u64]) -> u64 {
-    stubs::call(which, args, 8, ram, 1 << 20, "test").unwrap().value
+    stubs::call(which, args, 8, ram, &limits(1 << 20, "test")).unwrap().value
 }
 
 #[test]
@@ -731,11 +769,11 @@ fn memory_stand_ins_copy_fill_and_compare() {
     assert_eq!(stub(&mut ram, Stub::Memcmp, &[a, b, 3]) as i64, i64::from(b'*') - i64::from(b'a'));
     assert_eq!(stub(&mut ram, Stub::Memcmp, &[b, b, 7]), 0);
     // A copy from unmapped memory stops with the first unreadable byte.
-    let error = stubs::call(Stub::Memcpy, &[a, 0x10, 4], 8, &mut ram, 1 << 20, "memcpy").unwrap_err();
+    let error = stubs::call(Stub::Memcpy, &[a, 0x10, 4], 8, &mut ram, &limits(1 << 20, "memcpy")).unwrap_err();
     assert_eq!(error.0, StopReason::UnmappedRead, "{}", error.1);
     assert!(error.1.contains("0x10"), "{}", error.1);
     // A length past the step budget stops instead of running on.
-    let error = stubs::call(Stub::Memset, &[a, 0, 64], 8, &mut ram, 16, "memset").unwrap_err();
+    let error = stubs::call(Stub::Memset, &[a, 0, 64], 8, &mut ram, &limits(16, "memset")).unwrap_err();
     assert_eq!(error.0, StopReason::StepLimit);
 }
 
@@ -775,8 +813,11 @@ fn string_stand_ins_follow_the_c_library() {
     // An int argument is its low 32 bits.
     assert_eq!(stub(&mut ram, Stub::Abs, &[0x1_ffff_fff9]), 7);
     // 32-bit targets: arguments and results are masked to the register width.
-    assert_eq!(stubs::call(Stub::Abs, &[0xffff_fffe], 4, &mut ram, 64, "abs").unwrap().value, 2);
-    assert_eq!(stubs::call(Stub::Tolower, &[u64::MAX], 4, &mut ram, 64, "tolower").unwrap().value, 0xffff_ffff);
+    assert_eq!(stubs::call(Stub::Abs, &[0xffff_fffe], 4, &mut ram, &limits(64, "abs")).unwrap().value, 2);
+    assert_eq!(
+        stubs::call(Stub::Tolower, &[u64::MAX], 4, &mut ram, &limits(64, "tolower")).unwrap().value,
+        0xffff_ffff
+    );
 }
 
 #[test]
@@ -793,11 +834,11 @@ fn heap_stand_ins_allocate_zeroed_blocks_within_the_cap() {
     assert_eq!(get(&mut ram, moved, 10), b"0123456789");
     assert_eq!(stub(&mut ram, Stub::Free, &[moved]), 0);
     assert_eq!(stub(&mut ram, Stub::Calloc, &[u64::MAX, 2]), 0, "an overflowing calloc returns NULL");
-    let error = stubs::call(Stub::Realloc, &[0x7000_0000, 8], 8, &mut ram, 64, "realloc").unwrap_err();
+    let error = stubs::call(Stub::Realloc, &[0x7000_0000, 8], 8, &mut ram, &limits(64, "realloc")).unwrap_err();
     assert_eq!(error.0, StopReason::UnsupportedOp, "{}", error.1);
     // Heap pages count against the run's page cap, together with written image pages.
     ram.page_limit = ram.heap.as_ref().unwrap().pages() + 1;
-    let error = stubs::call(Stub::Malloc, &[2 * PAGE], 8, &mut ram, 64, "malloc").unwrap_err();
+    let error = stubs::call(Stub::Malloc, &[2 * PAGE], 8, &mut ram, &limits(64, "malloc")).unwrap_err();
     assert_eq!(error.0, StopReason::MemoryLimit, "{}", error.1);
     assert!(error.1.contains("malloc(8192)"), "{}", error.1);
     stub(&mut ram, Stub::Malloc, &[PAGE]);
@@ -805,7 +846,7 @@ fn heap_stand_ins_allocate_zeroed_blocks_within_the_cap() {
     assert_eq!(ram.write(data, &[1]), Err(Fault::MemoryLimit { pages: ram.page_limit }));
     // And the heap never grows past its reserve.
     let mut ram = stub_ram(&project);
-    let error = stubs::call(Stub::Malloc, &[stubs::HEAP_BYTES + 1], 8, &mut ram, 64, "malloc").unwrap_err();
+    let error = stubs::call(Stub::Malloc, &[stubs::HEAP_BYTES + 1], 8, &mut ram, &limits(64, "malloc")).unwrap_err();
     assert_eq!(error.0, StopReason::MemoryLimit, "{}", error.1);
 }
 
@@ -829,4 +870,73 @@ fn imported_library_calls_run_as_stand_ins() {
         assert_eq!(off.stop, StopReason::ExternalCall, "{name}");
         assert!(off.detail.contains("strlen") && off.stubbed.is_empty(), "{name}: {}", off.detail);
     }
+}
+
+fn probed(project: &Project, request: serde_json::Value, probe: Probe) -> (EvaluateReport, Probed) {
+    let request: EvaluateRequest = serde_json::from_value(request).unwrap();
+    project.evaluate_probed(&request, Some(probe)).unwrap()
+}
+
+#[test]
+fn probed_text_must_differ_from_the_input_and_from_before_the_run() {
+    let project = fixture("bin/hello-x64.elf");
+    let mut ram = stub_ram(&project);
+    let (blob, copy) = (0x7000_0000u64, 0x7000_0100u64);
+    put(&mut ram, blob, b"aGVsbG8sIHdvcmxkIQ==\0");
+    let snapshots = vec![(blob, super::snapshot(&mut ram, blob))];
+    // A printable blob copied unchanged, or cut short, into a fresh buffer is not decoded text.
+    put(&mut ram, copy, b"aGVsbG8sIHdvcmxkIQ==\0");
+    assert_eq!(project.probed_text(&mut ram, copy, &snapshots), None);
+    put(&mut ram, copy, b"aGVsbG8s\0");
+    assert_eq!(project.probed_text(&mut ram, copy, &snapshots), None);
+    put(&mut ram, copy, b"hello, world!\0");
+    assert_eq!(project.probed_text(&mut ram, copy, &snapshots).as_deref(), Some("hello, world!"));
+    // A direct run that leaves a printable buffer argument as it was decodes nothing: memset(buffer, 'A', 0).
+    let thumb = fixture("bin/hello-thumb.elf");
+    let buffer = json!({"buffer": {"text": "QUJDREVGRw=="}});
+    let request = json!({"at": "0x20e9e", "args": [buffer, 0x41, 0]});
+    let (report, found) = probed(&thumb, request, Probe::default());
+    assert_eq!(report.stop, StopReason::Returned, "{}", report.detail);
+    assert!(found.texts.is_empty(), "{:?}", found.texts);
+    let request = json!({"at": "0x20e9e", "args": [buffer, 0x41, 4]});
+    let (_, found) = probed(&thumb, request, Probe::default());
+    assert_eq!(found.texts[0].text, "AAAAREVGRw==");
+}
+
+#[test]
+fn a_replay_that_never_reaches_its_call_probes_nothing() {
+    // main, patched to return its last `reveal` result instead of freeing it: `call free` becomes `mov rax, rbx`
+    // and `xor eax, eax` two NOPs.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/decode-alloc-x64.elf");
+    let project = Project::new(Binary::open(path).unwrap());
+    let main = project.resolve("main").unwrap();
+    let main_code = project.binary.read_to_segment_end(main).unwrap();
+    assert_eq!(main_code[0x5e..0x65], [0xe8, 0x3d, 0x01, 0x00, 0x00, 0x31, 0xc0], "the fixture's main changed");
+    let patch = json!([
+        {"address": format!("{:#x}", main + 0x5e), "hex": "4889d89090"},
+        {"address": format!("{:#x}", main + 0x63), "hex": "9090"},
+    ]);
+    let request = json!({"at": "main", "memory": patch});
+    // Reached: the third `reveal` call returns the decoded text.
+    let (report, found) = probed(&project, request.clone(), Probe { replay: Some((main, main + 0x4b)), input: None });
+    assert_eq!(report.stop, StopReason::Returned, "{}", report.detail);
+    assert_eq!(found.texts[0].text, "connect: ok");
+    // Not reached: main returns the same pointer, but nothing is probed.
+    let (report, found) = probed(&project, request, Probe { replay: Some((main, main + 0x6c)), input: None });
+    assert_eq!((report.stop, report.detail.as_str()), (StopReason::Returned, "the function returned"));
+    assert!(found.arguments.is_none() && found.texts.is_empty(), "{found:?}");
+}
+
+#[test]
+fn replays_on_32_bit_pe_stop_at_imports_they_cannot_skip() {
+    // A replay of `call [slot]` to an import without a model: x86 PE imports may pop their own arguments.
+    let project = fixture("bin/pe-metadata-x86.exe");
+    let slot = project.binary.import_slots.iter().find(|slot| stubs::lookup(&slot.name).is_none()).unwrap();
+    let code = 0x0040_1000u64;
+    let call = format!("ff15{}", rampage_arch::hex::bytes(&(slot.address as u32).to_le_bytes()));
+    let request = json!({"at": format!("{code:#x}"), "memory": [{"address": format!("{code:#x}"), "hex": call}]});
+    let (report, found) = probed(&project, request, Probe { replay: Some((code, code + 0x40)), input: None });
+    assert_eq!(report.stop, StopReason::ExternalCall, "{}", report.detail);
+    assert!(report.detail.contains("32-bit PE"), "{}", report.detail);
+    assert!(found.skipped.is_empty());
 }

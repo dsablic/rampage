@@ -2,6 +2,7 @@
 //! through ordinary string and memory handling instead of stopping at the import.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use super::machine::Ram;
 use super::{ImageRam, PAGE, StopReason, fault_stop};
@@ -144,147 +145,289 @@ impl ImageRam<'_> {
     }
 }
 
-fn read(ram: &mut ImageRam<'_>, address: u64, length: u64) -> Result<Vec<u8>, Stop> {
-    let mut out = vec![0; length as usize];
-    let mut done = 0u64;
-    while done < length {
-        let size = (length - done).min(CHUNK);
-        let chunk = &mut out[done as usize..(done + size) as usize];
-        if ram.read(address.wrapping_add(done), chunk).is_err() {
-            // Byte by byte, so the fault names the first unreadable byte.
-            for (index, byte) in chunk.iter_mut().enumerate() {
-                let mut one = [0u8];
-                ram.read(address.wrapping_add(done + index as u64), &mut one).map_err(fault_stop)?;
-                *byte = one[0];
-            }
-        }
-        done += size;
+impl ImageRam<'_> {
+    /// Bytes a write can still reach: mapped regions, the heap's allocated bytes, image pages already written and
+    /// the pages left under the cap. A longer write stops before it starts.
+    fn writable_bytes(&self) -> u64 {
+        let regions: u64 = self.regions.iter().map(|region| region.bytes.len() as u64).sum();
+        let heap = self.heap.as_ref().map_or(0, |heap| heap.bytes.len() as u64);
+        let heap_pages = self.heap.as_ref().map_or(0, Heap::pages);
+        let free_pages = self.page_limit.saturating_sub(self.pages.len() + heap_pages) as u64;
+        regions + heap + (self.pages.len() as u64 + free_pages) * PAGE
     }
-    Ok(out)
 }
 
-fn write(ram: &mut ImageRam<'_>, address: u64, bytes: &[u8]) -> Result<(), Stop> {
-    for (index, chunk) in bytes.chunks(CHUNK as usize).enumerate() {
-        let at = address.wrapping_add(index as u64 * CHUNK);
-        if ram.write(at, chunk).is_err() {
-            for (offset, byte) in chunk.iter().enumerate() {
-                ram.write(at.wrapping_add(offset as u64), &[*byte]).map_err(fault_stop)?;
-            }
+/// What a stand-in may spend: bytes touched (the remaining steps) and the run's deadline.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Limits<'a> {
+    pub bytes: u64,
+    pub deadline: Instant,
+    /// The import called, for stop details.
+    pub name: &'a str,
+}
+
+/// Chunks between deadline checks inside one stand-in (1 MiB).
+const CHUNKS_PER_CHECK: u64 = 256;
+
+impl Limits<'_> {
+    fn bytes(&self, length: u64) -> Result<u64, Stop> {
+        if length > self.bytes {
+            return Err((
+                StopReason::StepLimit,
+                format!("library stand-in {} ran past the remaining step budget (max_steps)", self.name),
+            ));
         }
+        Ok(length)
+    }
+
+    /// Checks the deadline every `CHUNKS_PER_CHECK` chunks.
+    fn tick(&self, chunk: u64) -> Result<(), Stop> {
+        if chunk.is_multiple_of(CHUNKS_PER_CHECK) && Instant::now() >= self.deadline {
+            return Err((StopReason::Timeout, format!("library stand-in {} ran past timeout_ms", self.name)));
+        }
+        Ok(())
+    }
+
+    /// A write of `length` bytes, within the budget and what memory can take.
+    fn writable(&self, ram: &ImageRam<'_>, length: u64) -> Result<u64, Stop> {
+        let length = self.bytes(length)?;
+        let writable = ram.writable_bytes();
+        if length > writable {
+            return Err((
+                StopReason::MemoryLimit,
+                format!("{} would write {length} bytes; at most {writable} more bytes can be written", self.name),
+            ));
+        }
+        Ok(length)
+    }
+}
+
+/// Reads up to `out.len()` bytes; on a fault, byte by byte so the fault names the first unreadable byte.
+fn read_chunk(ram: &mut ImageRam<'_>, address: u64, out: &mut [u8]) -> Result<(), Stop> {
+    if ram.read(address, out).is_ok() {
+        return Ok(());
+    }
+    for (index, byte) in out.iter_mut().enumerate() {
+        let mut one = [0u8];
+        ram.read(address.wrapping_add(index as u64), &mut one).map_err(fault_stop)?;
+        *byte = one[0];
     }
     Ok(())
 }
 
-/// The bytes of the string at `address` without its NUL, reading at most `limit` bytes (then without a NUL).
-fn string(ram: &mut ImageRam<'_>, address: u64, limit: u64, budget: u64, name: &str) -> Result<Vec<u8>, Stop> {
-    let mut out = Vec::new();
-    while (out.len() as u64) < limit {
-        if out.len() as u64 >= budget {
-            return Err(over_budget(name));
-        }
-        let mut byte = [0u8];
-        ram.read(address.wrapping_add(out.len() as u64), &mut byte).map_err(fault_stop)?;
-        if byte[0] == 0 {
-            break;
-        }
-        out.push(byte[0]);
+/// Reads string bytes into `out`: all of them, or (when the whole range is not mapped) byte by byte through the
+/// first NUL, which ends the valid bytes. Returns how many bytes are valid.
+fn read_string_chunk(ram: &mut ImageRam<'_>, address: u64, out: &mut [u8]) -> Result<usize, Stop> {
+    if ram.read(address, out).is_ok() {
+        return Ok(out.len());
     }
-    Ok(out)
+    for (index, byte) in out.iter_mut().enumerate() {
+        let mut one = [0u8];
+        ram.read(address.wrapping_add(index as u64), &mut one).map_err(fault_stop)?;
+        *byte = one[0];
+        if one[0] == 0 {
+            return Ok(index + 1);
+        }
+    }
+    Ok(out.len())
 }
 
-fn over_budget(name: &str) -> Stop {
-    (StopReason::StepLimit, format!("library stand-in {name} ran past the remaining step budget (max_steps)"))
+fn write_chunk(ram: &mut ImageRam<'_>, address: u64, bytes: &[u8]) -> Result<(), Stop> {
+    if ram.write(address, bytes).is_ok() {
+        return Ok(());
+    }
+    for (index, byte) in bytes.iter().enumerate() {
+        ram.write(address.wrapping_add(index as u64), &[*byte]).map_err(fault_stop)?;
+    }
+    Ok(())
+}
+
+/// Copies `length` bytes in 4 KiB chunks, backwards when the destination overlaps the source from above.
+fn copy(ram: &mut ImageRam<'_>, destination: u64, source: u64, length: u64, limits: &Limits<'_>) -> Result<(), Stop> {
+    let chunks = length.div_ceil(CHUNK);
+    let backwards = destination > source && destination < source.wrapping_add(length);
+    let mut buffer = vec![0u8; CHUNK.min(length) as usize];
+    for index in 0..chunks {
+        limits.tick(index)?;
+        let chunk = if backwards { chunks - 1 - index } else { index };
+        let offset = chunk * CHUNK;
+        let size = (length - offset).min(CHUNK) as usize;
+        read_chunk(ram, source.wrapping_add(offset), &mut buffer[..size])?;
+        write_chunk(ram, destination.wrapping_add(offset), &buffer[..size])?;
+    }
+    Ok(())
+}
+
+fn fill(ram: &mut ImageRam<'_>, destination: u64, byte: u8, length: u64, limits: &Limits<'_>) -> Result<(), Stop> {
+    let buffer = vec![byte; CHUNK.min(length) as usize];
+    for index in 0..length.div_ceil(CHUNK) {
+        limits.tick(index)?;
+        let offset = index * CHUNK;
+        let size = (length - offset).min(CHUNK) as usize;
+        write_chunk(ram, destination.wrapping_add(offset), &buffer[..size])?;
+    }
+    Ok(())
+}
+
+/// Streams the string at `address` (at most `limit` bytes, without its NUL) to `visit` in chunks, and returns its
+/// length. Reading stops at a NUL, at `limit`, or at the budget (then with a step-limit stop).
+fn scan(
+    ram: &mut ImageRam<'_>,
+    address: u64,
+    limit: u64,
+    limits: &Limits<'_>,
+    mut visit: impl FnMut(u64, &[u8]),
+) -> Result<u64, Stop> {
+    let mut buffer = [0u8; CHUNK as usize];
+    let mut length = 0u64;
+    let mut index = 0;
+    while length < limit {
+        limits.tick(index)?;
+        index += 1;
+        // The chunk ends at a page boundary, so it never reaches into unmapped memory past a NUL.
+        let at = address.wrapping_add(length);
+        let size = (CHUNK - at % CHUNK).min(limit - length) as usize;
+        let valid = read_string_chunk(ram, at, &mut buffer[..size])?;
+        let chunk = &buffer[..valid];
+        let end = chunk.iter().position(|&byte| byte == 0).unwrap_or(valid);
+        limits.bytes(length + end as u64)?;
+        visit(length, &chunk[..end]);
+        length += end as u64;
+        if end < size {
+            break;
+        }
+    }
+    Ok(length)
 }
 
 fn sign(value: i64) -> u64 {
     value as u64
 }
 
-fn compare(a: &[u8], b: &[u8]) -> u64 {
-    match a.iter().zip(b).find(|(x, y)| x != y) {
-        Some((x, y)) => sign(i64::from(*x) - i64::from(*y)),
-        None => sign(a.len().cmp(&b.len()) as i64),
+/// Compares `length` bytes (or, for strings, up to the first NUL in either) in chunks.
+fn compare(
+    ram: &mut ImageRam<'_>,
+    a: u64,
+    b: u64,
+    length: u64,
+    strings: bool,
+    limits: &Limits<'_>,
+) -> Result<(u64, u64), Stop> {
+    let mut left = [0u8; CHUNK as usize];
+    let mut right = [0u8; CHUNK as usize];
+    let mut offset = 0u64;
+    let mut index = 0;
+    while offset < length {
+        limits.tick(index)?;
+        index += 1;
+        // Strings are read byte by byte up to a page boundary of either side, so no read passes a NUL into
+        // unmapped memory.
+        let size = if strings {
+            let to_page = |address: u64| CHUNK - address.wrapping_add(offset) % CHUNK;
+            to_page(a).min(to_page(b)).min(length - offset)
+        } else {
+            (length - offset).min(CHUNK)
+        } as usize;
+        limits.bytes(2 * (offset + size as u64))?;
+        let valid = if strings {
+            let left_valid = read_string_chunk(ram, a.wrapping_add(offset), &mut left[..size])?;
+            let right_valid = read_string_chunk(ram, b.wrapping_add(offset), &mut right[..size])?;
+            left_valid.min(right_valid)
+        } else {
+            read_chunk(ram, a.wrapping_add(offset), &mut left[..size])?;
+            read_chunk(ram, b.wrapping_add(offset), &mut right[..size])?;
+            size
+        };
+        // A string side with fewer valid bytes ended at a NUL inside them, so the loop returns.
+        for (x, y) in left[..valid].iter().zip(&right[..valid]) {
+            if x != y {
+                return Ok((sign(i64::from(*x) - i64::from(*y)), 2 * offset));
+            }
+            if strings && *x == 0 {
+                return Ok((0, 2 * offset));
+            }
+        }
+        offset += size as u64;
     }
+    Ok((0, 2 * offset))
 }
 
-/// Runs `stub` on `args` (each masked to the pointer width). `budget` bounds the bytes it may touch; `name` is the
-/// import called, for stop details.
+/// Runs `stub` on `args` (each masked to the pointer width), within `limits`.
 pub(super) fn call(
     stub: Stub,
     args: &[u64],
     width: u32,
     ram: &mut ImageRam<'_>,
-    budget: u64,
-    name: &str,
+    limits: &Limits<'_>,
 ) -> Result<Outcome, Stop> {
+    let name = limits.name;
     let mask = if width >= 8 { u64::MAX } else { (1u64 << (width * 8)) - 1 };
     let arg = |index: usize| args.get(index).copied().unwrap_or(0) & mask;
     let int = |index: usize| i64::from(arg(index) as u32 as i32);
-    let sized = |length: u64| if length > budget { Err(over_budget(name)) } else { Ok(length) };
     let outcome = |value: u64, bytes: u64| Ok(Outcome { value: value & mask, bytes });
     match stub {
         Stub::Memcpy | Stub::Memmove => {
-            let length = sized(arg(2))?;
-            let bytes = read(ram, arg(1), length)?;
-            write(ram, arg(0), &bytes)?;
+            let length = limits.writable(ram, arg(2))?;
+            copy(ram, arg(0), arg(1), length, limits)?;
             outcome(arg(0), length)
         }
         Stub::Memset => {
-            let length = sized(arg(2))?;
-            write(ram, arg(0), &vec![arg(1) as u8; length as usize])?;
+            let length = limits.writable(ram, arg(2))?;
+            fill(ram, arg(0), arg(1) as u8, length, limits)?;
             outcome(arg(0), length)
         }
         Stub::Memcmp => {
-            let length = sized(arg(2))?;
-            let (a, b) = (read(ram, arg(0), length)?, read(ram, arg(1), length)?);
-            outcome(compare(&a, &b), length)
+            let length = limits.bytes(arg(2))?;
+            let (value, touched) = compare(ram, arg(0), arg(1), length, false, limits)?;
+            outcome(value, touched)
         }
-        Stub::Strlen => {
-            let text = string(ram, arg(0), u64::MAX, budget, name)?;
-            outcome(text.len() as u64, text.len() as u64)
-        }
-        Stub::Strnlen => {
-            let text = string(ram, arg(0), arg(1), budget, name)?;
-            outcome(text.len() as u64, text.len() as u64)
+        Stub::Strlen | Stub::Strnlen => {
+            let limit = if stub == Stub::Strnlen { arg(1) } else { u64::MAX };
+            let length = scan(ram, arg(0), limit, limits, |_, _| {})?;
+            outcome(length, length)
         }
         Stub::Strcpy => {
-            let mut text = string(ram, arg(1), u64::MAX, budget, name)?;
-            text.push(0);
-            write(ram, arg(0), &text)?;
-            outcome(arg(0), text.len() as u64)
+            let length = scan(ram, arg(1), u64::MAX, limits, |_, _| {})? + 1;
+            let length = limits.writable(ram, length)?;
+            copy(ram, arg(0), arg(1), length, limits)?;
+            outcome(arg(0), length)
         }
         Stub::Strncpy => {
-            let limit = sized(arg(2))?;
-            let mut text = string(ram, arg(1), limit, budget, name)?;
-            text.resize(limit as usize, 0);
-            write(ram, arg(0), &text)?;
+            let limit = limits.writable(ram, arg(2))?;
+            let length = scan(ram, arg(1), limit, limits, |_, _| {})?;
+            copy(ram, arg(0), arg(1), length, limits)?;
+            fill(ram, arg(0).wrapping_add(length), 0, limit - length, limits)?;
             outcome(arg(0), limit)
         }
         Stub::Strcmp | Stub::Strncmp => {
             let limit = if stub == Stub::Strncmp { arg(2) } else { u64::MAX };
-            let a = string(ram, arg(0), limit, budget, name)?;
-            let b = string(ram, arg(1), limit, budget, name)?;
-            let touched = (a.len() + b.len()) as u64;
-            outcome(compare(&a, &b), touched)
+            let (value, touched) = compare(ram, arg(0), arg(1), limit, true, limits)?;
+            outcome(value, touched)
         }
         Stub::Strchr | Stub::Strrchr => {
-            let text = string(ram, arg(0), u64::MAX, budget, name)?;
             let wanted = arg(1) as u8;
-            let found = if wanted == 0 {
-                Some(text.len())
-            } else if stub == Stub::Strchr {
-                text.iter().position(|&byte| byte == wanted)
-            } else {
-                text.iter().rposition(|&byte| byte == wanted)
-            };
-            outcome(found.map_or(0, |offset| arg(0).wrapping_add(offset as u64)), text.len() as u64)
+            let mut found = None;
+            let length = scan(ram, arg(0), u64::MAX, limits, |offset, chunk| {
+                let hit = if stub == Stub::Strchr {
+                    chunk.iter().position(|&byte| byte == wanted)
+                } else {
+                    chunk.iter().rposition(|&byte| byte == wanted)
+                };
+                if let Some(hit) = hit
+                    && (stub == Stub::Strrchr || found.is_none())
+                {
+                    found = Some(offset + hit as u64);
+                }
+            })?;
+            let found = if wanted == 0 { Some(length) } else { found };
+            outcome(found.map_or(0, |offset| arg(0).wrapping_add(offset)), length)
         }
         Stub::Strcat => {
-            let head = string(ram, arg(0), u64::MAX, budget, name)?;
-            let mut tail = string(ram, arg(1), u64::MAX, budget, name)?;
-            tail.push(0);
-            write(ram, arg(0).wrapping_add(head.len() as u64), &tail)?;
-            outcome(arg(0), (head.len() + tail.len()) as u64)
+            let head = scan(ram, arg(0), u64::MAX, limits, |_, _| {})?;
+            let tail = scan(ram, arg(1), u64::MAX, limits, |_, _| {})? + 1;
+            let tail = limits.writable(ram, tail)?;
+            copy(ram, arg(0).wrapping_add(head), arg(1), tail, limits)?;
+            outcome(arg(0), head + tail)
         }
         Stub::Toupper | Stub::Tolower => {
             let value = int(0);
@@ -304,25 +447,27 @@ pub(super) fn call(
             let Some(total) = arg(0).checked_mul(arg(1)).filter(|&total| total <= mask) else {
                 return outcome(0, 0);
             };
-            // Heap memory starts zeroed and is never reused.
+            // Heap memory starts zeroed and is never reused, so nothing is touched.
             let address = ram.allocate(total, &format!("{name}({}, {})", arg(0), arg(1)))?;
-            outcome(address, total)
+            outcome(address, 0)
         }
         Stub::Realloc => {
             let (old, size) = (arg(0), arg(1));
+            let previous = match old {
+                0 => 0,
+                _ => ram.heap.as_ref().and_then(|heap| heap.sizes.get(&old).copied()).ok_or_else(|| {
+                    (StopReason::UnsupportedOp, format!("{name} of {old:#x}, which is not a live heap block"))
+                })?,
+            };
+            let kept = limits.bytes(previous.min(size))?;
             let address = ram.allocate(size, &format!("{name}({old:#x}, {size})"))?;
             if old != 0 {
-                let previous = ram.heap.as_ref().and_then(|heap| heap.sizes.get(&old).copied()).ok_or_else(|| {
-                    (StopReason::UnsupportedOp, format!("{name} of {old:#x}, which is not a live heap block"))
-                })?;
-                let bytes = read(ram, old, previous.min(size))?;
-                write(ram, address, &bytes)?;
+                copy(ram, address, old, kept, limits)?;
                 if let Some(heap) = ram.heap.as_mut() {
                     heap.sizes.remove(&old);
                 }
-                return outcome(address, previous.min(size));
             }
-            outcome(address, 0)
+            outcome(address, kept)
         }
         Stub::Free => {
             if let Some(heap) = ram.heap.as_mut() {

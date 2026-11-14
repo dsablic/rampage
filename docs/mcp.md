@@ -350,11 +350,13 @@ processor operations (many SSE ones) stop with `user_op`, and x87 extended float
 
 `string_decoding` with `evaluate: true` also runs each candidate decoder on the blobs passed to it (at most 16
 pairs, 200,000 steps and 500 ms per run, 5 s in all): it replays the caller's block holding the call through the
-call's return (imports before the call without a model return 0), and failing that calls the routine as (blob),
-(output, blob, length) and (blob, output, length). Printable output that differs from the file, read at the result
-or an argument pointer, is reported in a "Decoded by emulation" section with the arguments, stop reason and
-library stand-ins used; a pair that gives no text is reported with each attempt's stop. Decoded text is emulation
-output, not file content. Without `evaluate` the report is unchanged.
+call's return (imports before the call without a model return 0, except on 32-bit PE, where the replay
+stops because an import may pop its own arguments), and failing that calls the routine as (blob),
+(output, blob, length) and (blob, output, length). Printable output at the result or an argument pointer that
+differs from the file, from what that address held before, and from the blob (not equal to or a prefix of it)
+is reported in a "Decoded by emulation" section with the arguments, stop reason and library stand-ins used;
+a pair that gives no text is reported with each attempt's stop. Decoded text is emulation output, not file content.
+Without `evaluate` the report is unchanged.
 
 `dotnet_metadata` selects `types`, `pinvokes`, `attributes` or `resources`, filtering with `contains`/`parent_token` and
 paging entries. `dotnet_il` selects a method token or qualified name and pages instructions with `offset`/`limit`,
