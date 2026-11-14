@@ -1,7 +1,7 @@
 //! `evaluate_function`: run one function of the image on given integer and buffer arguments with a p-code
 //! interpreter over the bundled Sleigh decoder, and report what it returns. Nothing executes natively.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -38,6 +38,10 @@ const STACK_BYTES: u64 = 1 << 20;
 const THREAD_BYTES: u64 = 0x2000;
 const MAX_CACHED_INSTRUCTIONS: usize = 1 << 18;
 const PAGE: u64 = 4096;
+/// Copy-on-write image pages a run may create (64 MiB).
+const MAX_WRITTEN_PAGES: usize = 16 * 1024;
+/// Addresses below this are never mapped, so null-pointer accesses stop.
+const NULL_GUARD: u64 = 0x1000;
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -126,6 +130,8 @@ pub enum StopReason {
     UserOp,
     InvalidInstruction,
     DivisionByZero,
+    /// The run wrote more image pages than the copy-on-write cap (64 MiB).
+    MemoryLimit,
 }
 
 #[derive(Debug, Serialize)]
@@ -165,6 +171,17 @@ pub struct ResultValue {
     pub signed: serde_json::Value,
     /// The registers read, high half first for a pair.
     pub registers: Vec<String>,
+    /// Without return_bits on a target wider than 32 bits: the low 32 bits, the value of a C int or bool result,
+    /// whose upper register bits are undefined.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub low_32: Option<LowView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LowView {
+    pub hex: String,
+    pub unsigned: serde_json::Value,
+    pub signed: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -233,6 +250,9 @@ fn parse_integer(text: &str) -> Result<(u64, bool, usize), ApiError> {
         (body.parse::<u64>(), 0)
     };
     let value = value.map_err(|_| invalid(format!("argument {text:?} is not an integer")))?;
+    if negative && value > 1u64 << 63 {
+        return Err(invalid(format!("argument {text:?} is below the 64-bit signed minimum")));
+    }
     Ok((if negative { value.wrapping_neg() } else { value }, negative, digits))
 }
 
@@ -264,6 +284,9 @@ fn prepare(argument: &EvaluateArgument, width: u32) -> Result<Prepared, ApiError
             None if width == 4 && negative && (value as i64) < i64::from(i32::MIN) => 8,
             None => width,
         };
+        if negative && bytes == 8 && value != 0 && (value as i64) >= 0 {
+            return Err(invalid(format!("argument {value:#x} does not fit in 64 signed bits")));
+        }
         if bytes < 8 {
             let limit = 1u64 << (bytes * 8);
             let fits = if negative { (value as i64) >= -((limit / 2) as i64) } else { value < limit };
@@ -324,8 +347,11 @@ struct ImageRam<'a> {
     big_endian: bool,
     /// Import slot address to (stand-in address, import name).
     slots: HashMap<u64, u64>,
+    /// Import slots the run wrote, which then read back as written.
+    written_slots: HashSet<u64>,
     stand_ins: BTreeMap<u64, String>,
     code_written: bool,
+    page_limit: usize,
 }
 
 impl<'a> ImageRam<'a> {
@@ -334,7 +360,8 @@ impl<'a> ImageRam<'a> {
         let segments = binary
             .segments
             .iter()
-            .filter(|segment| segment.size > 0)
+            // A segment with no permissions (Mach-O __PAGEZERO) reserves addresses; it maps nothing.
+            .filter(|segment| segment.size > 0 && (segment.perms.read || segment.perms.write || segment.perms.execute))
             .map(|segment| {
                 let start = usize::try_from(segment.file_offset).unwrap_or(usize::MAX).min(image.len());
                 let length = usize::try_from(segment.file_size.min(segment.size)).unwrap_or(usize::MAX);
@@ -354,8 +381,10 @@ impl<'a> ImageRam<'a> {
             pointer_bytes,
             big_endian: binary.big_endian,
             slots: HashMap::new(),
+            written_slots: HashSet::new(),
             stand_ins: BTreeMap::new(),
             code_written: false,
+            page_limit: MAX_WRITTEN_PAGES,
         }
     }
 
@@ -376,6 +405,9 @@ impl<'a> ImageRam<'a> {
     }
 
     fn segment(&self, address: u64) -> Option<&Segment<'a>> {
+        if address < NULL_GUARD {
+            return None;
+        }
         self.segments.iter().find(|segment| address >= segment.start && address - segment.start < segment.size)
     }
 
@@ -392,10 +424,11 @@ impl<'a> ImageRam<'a> {
     }
 
     fn read_image_byte(&self, address: u64) -> Option<u8> {
+        // A written page may extend past its segment; only segment addresses are mapped.
+        let segment = self.segment(address)?;
         if let Some(page) = self.pages.get(&(address / PAGE)) {
             return Some(page[(address % PAGE) as usize]);
         }
-        let segment = self.segment(address)?;
         Some(segment.file.get((address - segment.start) as usize).copied().unwrap_or(0))
     }
 }
@@ -404,7 +437,7 @@ impl Ram for ImageRam<'_> {
     fn read(&mut self, address: u64, out: &mut [u8]) -> Result<(), Fault> {
         if out.len() == self.pointer_bytes as usize
             && let Some(&stand_in) = self.slots.get(&address)
-            && !self.pages.contains_key(&(address / PAGE))
+            && !self.written_slots.contains(&address)
         {
             let bytes = stand_in.to_le_bytes();
             out.copy_from_slice(&bytes[..out.len()]);
@@ -446,8 +479,16 @@ impl Ram for ImageRam<'_> {
         }
         for (index, &byte) in bytes.iter().enumerate() {
             let at = address.wrapping_add(index as u64);
+            for slot in at.saturating_sub(u64::from(self.pointer_bytes) - 1)..=at {
+                if self.slots.contains_key(&slot) {
+                    self.written_slots.insert(slot);
+                }
+            }
             let page_number = at / PAGE;
             if !self.pages.contains_key(&page_number) {
+                if self.pages.len() >= self.page_limit {
+                    return Err(Fault::MemoryLimit { pages: self.page_limit });
+                }
                 let page: Box<[u8]> =
                     (0..PAGE).map(|offset| self.read_image_byte(page_number * PAGE + offset).unwrap_or(0)).collect();
                 self.pages.insert(page_number, page);
@@ -575,6 +616,10 @@ impl Run<'_> {
                 format!("processor operation {name} (system call, trap or special register) is not interpreted"),
             ),
             Fault::DivisionByZero => (StopReason::DivisionByZero, "integer division by zero".to_owned()),
+            Fault::MemoryLimit { pages } => (
+                StopReason::MemoryLimit,
+                format!("the run wrote more than {pages} image pages ({} MiB)", (pages as u64 * PAGE) >> 20),
+            ),
             Fault::Malformed(what) => (StopReason::UnsupportedOp, format!("malformed p-code: {what}")),
         }
     }
@@ -712,6 +757,8 @@ impl Project {
             .iter()
             .map(|argument| match argument {
                 Prepared::Integer { bytes, .. } if *bytes > width => 2 * width,
+                // Apple arm64 packs stack arguments at their own size.
+                Prepared::Integer { bytes, .. } if abi.natural_stack_slots => *bytes,
                 _ => width,
             })
             .collect();
@@ -770,6 +817,15 @@ impl Project {
                     run.set_register(low, u128::from(value & low_mask))?;
                     run.set_register(high, u128::from(value >> half))?;
                     format!("{high}:{low}")
+                }
+                Place::Split(low, offset) => {
+                    let half = 8 * width;
+                    run.set_register(low, u128::from(value & ((1u64 << half) - 1)))?;
+                    let address = first_stack_argument + offset;
+                    run.machine
+                        .write_memory(address, width, u128::from(value >> half))
+                        .map_err(|fault| invalid(format!("stack write failed: {fault:?}")))?;
+                    format!("stack+{:#x}:{low}", address - sp)
                 }
                 Place::Stack(offset) => {
                     let address = first_stack_argument + offset;
@@ -876,7 +932,12 @@ impl Project {
             } else {
                 (run.get_register(abi.result.0)? & half_mask, vec![abi.result.0.to_owned()])
             };
-            Some(result_value(value, return_bits, registers))
+            let mut result = result_value(value, return_bits, registers);
+            if request.return_bits.is_none() && width * 8 > 32 {
+                let low = result_value(value, 32, Vec::new());
+                result.low_32 = Some(LowView { hex: low.hex, unsigned: low.unsigned, signed: low.signed });
+            }
+            Some(result)
         } else {
             None
         };
@@ -994,5 +1055,6 @@ fn result_value(value: u128, bits: u32, registers: Vec<String>) -> ResultValue {
         unsigned,
         signed,
         registers,
+        low_32: None,
     }
 }

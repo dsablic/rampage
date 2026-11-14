@@ -549,3 +549,111 @@ fn memory_writes_and_requests_are_validated() {
     let unsupported = fixture("bin/hello-s390x.elf");
     assert!(try_run(&unsupported, "add", json!([1, 2]), json!({})).is_err());
 }
+
+// ----------------------------------------------------------------------------------------------------------------
+// Review regressions.
+
+#[test]
+fn no_permission_segments_and_the_null_page_are_unmapped() {
+    // Mach-O __PAGEZERO covers 4 GiB at 0 with no permissions: a null dereference must stop, not read zero.
+    let macho = fixture("bin/hello-x64.macho");
+    assert!(macho.binary.segments.iter().any(|segment| segment.address == 0 && segment.size > 0));
+    let mut ram = ImageRam::new(&macho.binary, 8);
+    let mut word = [0u8; 8];
+    assert!(matches!(ram.read(0x10, &mut word), Err(Fault::UnmappedRead { address: 0x10, .. })));
+    assert!(matches!(ram.write(0x1_0000, &word), Err(Fault::UnmappedWrite { .. })));
+    let elf = fixture("bin/hello-x64.elf");
+    let mut ram = ImageRam::new(&elf.binary, 8);
+    assert!(matches!(ram.read(0x8, &mut word), Err(Fault::UnmappedRead { .. })));
+    // strlen(NULL) stops with unmapped_read.
+    let report = run(&fixture("bin/hello-thumb.elf"), "0x20e8c", json!([0]), json!({}));
+    assert_eq!(report.stop, StopReason::UnmappedRead, "{}", report.detail);
+}
+
+#[test]
+fn written_pages_are_capped() {
+    let project = fixture("bench-v3/bin/semantics-x86.elf");
+    let mut ram = ImageRam::new(&project.binary, 4);
+    ram.page_limit = 1;
+    let data = project.binary.segments.iter().find(|segment| segment.size > 2 * PAGE).unwrap();
+    ram.write(data.address, &[1]).unwrap();
+    ram.write(data.address + 1, &[2]).unwrap();
+    let next_page = (data.address / PAGE + 1) * PAGE;
+    assert_eq!(ram.write(next_page, &[3]), Err(Fault::MemoryLimit { pages: 1 }));
+    // A written page that extends past its segment does not map the bytes beyond it.
+    let end = data.address + data.size;
+    if end % PAGE != 0 && project.binary.segments.iter().all(|segment| !segment.contains(end)) {
+        let mut ram = ImageRam::new(&project.binary, 4);
+        ram.write(end - 1, &[9]).unwrap();
+        assert!(matches!(ram.read(end, &mut [0u8]), Err(Fault::UnmappedRead { .. })));
+    }
+}
+
+#[test]
+fn writes_near_an_import_slot_keep_its_stand_in() {
+    let project = fixture("bin/hello-x64-dyn.elf");
+    let mut ram = ImageRam::new(&project.binary, 8);
+    let slot = project.binary.import_slots[0].address;
+    ram.slots.insert(slot, 0x7000_0000);
+    ram.stand_ins.insert(0x7000_0000, "puts".into());
+    let neighbour = if slot % PAGE >= 8 { slot - 8 } else { slot + 8 };
+    ram.write(neighbour, &[0xaa; 8]).unwrap();
+    let mut word = [0u8; 8];
+    ram.read(slot, &mut word).unwrap();
+    assert_eq!(u64::from_le_bytes(word), 0x7000_0000, "a write on the slot's page leaves the stand-in");
+    ram.write(slot + 4, &[0x11; 4]).unwrap();
+    ram.read(slot, &mut word).unwrap();
+    assert_ne!(u64::from_le_bytes(word), 0x7000_0000, "a write to the slot itself is read back");
+}
+
+#[test]
+fn rv32_splits_a_pair_across_the_last_register_and_the_stack() {
+    let rv32 = abi(Arch::Riscv32, rampage_loaders::Format::Elf, false, Convention::Default);
+    let places = assign(&rv32, &[4, 4, 4, 4, 4, 4, 4, 8, 4], false);
+    assert_eq!(places[6], Place::Register("a6"));
+    assert_eq!(places[7], Place::Split("a7", 0));
+    assert_eq!(places[8], Place::Stack(4));
+}
+
+#[test]
+fn apple_arm64_packs_stack_arguments_at_their_size() {
+    let darwin = abi(Arch::Aarch64, rampage_loaders::Format::MachO, false, Convention::Default);
+    assert_eq!(darwin.name(), "aapcs64_darwin");
+    let places = assign(&darwin, &[8, 8, 8, 8, 8, 8, 8, 8, 4, 1, 8, 4], false);
+    assert_eq!(places[8..], [Place::Stack(0), Place::Stack(4), Place::Stack(8), Place::Stack(16)]);
+    let linux = abi(Arch::Aarch64, rampage_loaders::Format::Elf, false, Convention::Default);
+    assert_eq!(assign(&linux, &[8, 8, 8, 8, 8, 8, 8, 8, 4, 1], false)[8..], [Place::Stack(0), Place::Stack(8)]);
+}
+
+#[test]
+fn int_results_on_64_bit_targets_have_a_low_32_view() {
+    let project = fixture("bin/hello-x64.elf");
+    let report = run(&project, "add", json!([1, -3]), json!({}));
+    let result = report.result.as_ref().unwrap();
+    let low = result.low_32.as_ref().unwrap();
+    assert_eq!((low.signed.clone(), low.hex.as_str()), (json!(-2), "0xfffffffe"));
+    let report = run(&project, "add", json!([1, -3]), json!({"return_bits": 32}));
+    assert!(report.result.unwrap().low_32.is_none());
+    let report = run(&fixture("bin/hello-arm.elf"), "add", json!([1, 2]), json!({}));
+    assert!(report.result.unwrap().low_32.is_none());
+}
+
+#[test]
+fn negative_arguments_out_of_range_are_refused() {
+    let parse = |value: serde_json::Value, width| prepare(&serde_json::from_value(value).unwrap(), width);
+    assert!(parse(json!("-18446744073709551615"), 8).is_err());
+    assert!(parse(json!({"value": "-18446744073709551615", "bits": 64}), 4).is_err());
+    assert!(parse(json!({"value": "-9223372036854775809", "bits": 64}), 8).is_err());
+    assert!(parse(json!({"value": "-9223372036854775808", "bits": 64}), 8).is_ok());
+    assert!(parse(json!({"value": "-129", "bits": 8}), 4).is_err());
+    assert!(parse(json!({"value": "-128", "bits": 8}), 4).is_ok());
+}
+
+#[test]
+fn scratch_writes_straddling_the_dense_limit_read_back() {
+    let mut machine = machine(false);
+    let straddling = register(machine::DENSE_LIMIT - 2, 4);
+    machine.write_int(&straddling, 0x1122_3344).unwrap();
+    assert_eq!(machine.read_int(&straddling).unwrap(), 0x1122_3344);
+    assert_eq!(machine.read_int(&register(machine::DENSE_LIMIT, 2)).unwrap(), 0x1122);
+}

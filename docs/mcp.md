@@ -329,13 +329,16 @@ rather than simulating it from pseudocode. A p-code interpreter over the bundled
 string longer than 8 digits is 64-bit on a 32-bit target) or `{buffer: {hex | text, size}}` buffers passed by
 pointer and returned with their final bytes. Arguments go where the binary's calling convention puts them;
 `convention` selects cdecl, stdcall, fastcall or thiscall on x86 and sysv or win64 on x86-64. `return_bits` sets
-the result width (default the register width; 32 for a C `int` on a 64-bit target), and twice the register width
-reads a register pair (EDX:EAX, r1:r0). Memory starts as the file's image (zero-filled bss, copy-on-write) plus a
+the result width (default the register width), and twice the register width reads a register pair (EDX:EAX,
+r1:r0). Without `return_bits` on a 64-bit target the result also has `low_32`, the value of a C `int` or `bool`
+whose upper register bits are undefined. Addresses below 0x1000 and segments without permissions (Mach-O
+`__PAGEZERO`) are unmapped, and Apple arm64 binaries pack stack arguments at their own size. Memory starts as the file's image (zero-filled bss, copy-on-write) plus a
 zeroed stack and thread block; `memory` writes bytes into it first. Calls inside the image are followed; `stop`
 says why the run ended: `returned` (with `result` as hex, unsigned and signed), `step_limit`, `timeout`,
 `external_call` (an import, named), `external_read`, `unmapped_read`/`unmapped_write`/`unmapped_fetch`, `user_op`
 (system calls, traps and processor operations, named), `unsupported_op`, `invalid_instruction` or
-`division_by_zero`, with `stopped_at` naming the instruction and function. Each result also lists where every
+`division_by_zero` or `memory_limit` (more than 64 MiB of written image pages), with `stopped_at` naming the
+instruction and function. Each result also lists where every
 argument went and the functions called. Limits: `max_steps` (default 1,000,000, at most 20,000,000) and
 `timeout_ms` (default 10,000, at most 60,000); integer results only; SIMD instructions that Sleigh models as
 processor operations (many SSE ones) stop with `user_op`, and x87 extended floats with `unsupported_op`.

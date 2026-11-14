@@ -456,7 +456,9 @@ async fn scripted_repeated_catalog_refreshes_are_not_duplicated_and_cannot_starv
     replies.push(tool("disassemble", json!({ "path": path, "at": "0x1010518", "count": 2 })));
     replies.push(final_answer(json!({ "status": "unknown", "reason": "scripted repeated refresh check" })));
     let (script, _) = Script::new(replies);
-    let bounds = config();
+    // A budget below the default, so the all-group catalog overruns the catalogs' half of it.
+    let mut bounds = config();
+    bounds.max_retained_bytes = 640_000;
     let run = run_task(&client, Some(script), ModelSource::Scripted, &task(), &path, &bounds).await;
     assert!(matches!(run.disposition, AgentDisposition::Unknown { .. }), "{run:?}");
 

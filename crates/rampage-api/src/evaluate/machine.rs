@@ -160,6 +160,10 @@ pub(crate) enum Fault {
     Unsupported(String),
     UserOp(String),
     DivisionByZero,
+    /// The copy-on-write image pages reached their cap.
+    MemoryLimit {
+        pages: usize,
+    },
     Malformed(String),
 }
 
@@ -201,7 +205,7 @@ pub(crate) enum UserOp {
     Other(String),
 }
 
-const DENSE_LIMIT: u64 = 1 << 24;
+pub(crate) const DENSE_LIMIT: u64 = 1 << 24;
 
 /// One byte-addressed scratch space, dense near zero and sparse beyond.
 #[derive(Default)]
@@ -231,8 +235,17 @@ impl ByteSpace {
             self.dense[offset as usize..end as usize].copy_from_slice(bytes);
             return;
         }
+        // Each byte goes where `read` looks for it, even when an access straddles the dense limit.
         for (index, &byte) in bytes.iter().enumerate() {
-            self.sparse.insert(offset.wrapping_add(index as u64), byte);
+            let at = offset.wrapping_add(index as u64);
+            if at < DENSE_LIMIT {
+                if self.dense.len() <= at as usize {
+                    self.dense.resize(at as usize + 1, 0);
+                }
+                self.dense[at as usize] = byte;
+            } else {
+                self.sparse.insert(at, byte);
+            }
         }
     }
 }

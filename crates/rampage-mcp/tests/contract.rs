@@ -187,6 +187,7 @@ async fn contract_mcp_core_results() {
     exercise(c, o, "evaluate_function", json!({"path": thumb, "at": "0x20e9e", "args": buffer})).await;
     exercise(c, o, "evaluate_function", json!({"path": thumb, "at": "add", "args": [1, 2]})).await;
     exercise(c, o, "evaluate_function", json!({"path": elf, "at": "main"})).await;
+    exercise(c, o, "evaluate_function", json!({"path": elf, "at": "add", "args": [1, -3]})).await;
     exercise(c, o, "disassemble", json!({"path": elf, "at": "main", "count": 4})).await;
     exercise(c, o, "function_graph", json!({"path": elf, "at": "main"})).await;
     exercise(c, o, "function_summary", json!({"path": elf, "at": "main"})).await;

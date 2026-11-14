@@ -67,6 +67,8 @@ pub(crate) struct Abi {
     /// Register that receives the image's global pointer, when it has one.
     pub global_pointer: Option<&'static str>,
     pub stack_alignment: u64,
+    /// Apple arm64: stack arguments take their own size and alignment, not 8-byte slots.
+    pub natural_stack_slots: bool,
 }
 
 const X86_NONE: &[&str] = &[];
@@ -98,6 +100,7 @@ impl Abi {
             entry_registers: &[],
             global_pointer: None,
             stack_alignment: 16,
+            natural_stack_slots: false,
         };
         let x86 =
             |convention, registers, pair| base(convention, registers, 4, "ESP", Link::Stack, ("EAX", "EDX"), pair, 0);
@@ -114,9 +117,10 @@ impl Abi {
             (Arch::X86_64, Convention::Default | Convention::Sysv) => {
                 base(Convention::Sysv, SYSV, 8, "RSP", Link::Stack, ("RAX", "RDX"), PairRule::Next, 0)
             }
-            (Arch::Aarch64, Convention::Default | Convention::Aapcs64) => {
-                base(Convention::Aapcs64, AARCH64, 8, "sp", Link::Register("x30"), ("x0", "x1"), PairRule::Next, 0)
-            }
+            (Arch::Aarch64, Convention::Default | Convention::Aapcs64) => Abi {
+                natural_stack_slots: format == Format::MachO,
+                ..base(Convention::Aapcs64, AARCH64, 8, "sp", Link::Register("x30"), ("x0", "x1"), PairRule::Next, 0)
+            },
             (Arch::Arm, Convention::Default | Convention::Aapcs) => Abi {
                 stack_alignment: 8,
                 ..base(Convention::Aapcs, ARM, 4, "sp", Link::Register("lr"), ("r0", "r1"), PairRule::Even, 0)
@@ -178,6 +182,9 @@ impl Abi {
 
     /// The name this convention is reported by.
     pub fn name(&self) -> String {
+        if self.natural_stack_slots {
+            return "aapcs64_darwin".to_owned();
+        }
         serde_json::to_value(self.convention)
             .ok()
             .and_then(|value| value.as_str().map(str::to_owned))
@@ -193,6 +200,8 @@ pub(crate) enum Place {
     Pair(&'static str, &'static str),
     /// Bytes above the first stack argument's position.
     Stack(u64),
+    /// RISC-V: a double-width value split between the last argument register (low half) and the stack (high).
+    Split(&'static str, u64),
 }
 
 /// Assigns argument locations: `widths` are each argument's bytes (the register width, or twice it for a pair).
@@ -230,6 +239,13 @@ pub(crate) fn assign(abi: &Abi, widths: &[u32], big_endian: bool) -> Vec<Place> 
                 next_register = start + 2;
                 continue;
             }
+            if abi.pair == PairRule::Next && start + 1 == abi.registers.len() {
+                // RISC-V: one register left takes the low half, the stack the high half; later arguments follow it.
+                places.push(Place::Split(abi.registers[start], stack));
+                next_register = abi.registers.len();
+                stack += width;
+                continue;
+            }
             if abi.pair == PairRule::Even {
                 // AAPCS and PowerPC: a pair that no longer fits leaves the remaining registers unused.
                 next_register = abi.registers.len();
@@ -243,6 +259,11 @@ pub(crate) fn assign(abi: &Abi, widths: &[u32], big_endian: bool) -> Vec<Place> 
         } else if next_register < abi.registers.len() {
             places.push(Place::Register(abi.registers[next_register]));
             next_register += 1;
+        } else if abi.natural_stack_slots {
+            let size = u64::from(bytes);
+            stack = stack.next_multiple_of(size);
+            places.push(Place::Stack(stack));
+            stack += size;
         } else {
             places.push(Place::Stack(stack));
             stack += width;

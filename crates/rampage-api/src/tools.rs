@@ -2570,7 +2570,8 @@ pub fn tools() -> Vec<Tool> {
              MIPS, PowerPC, RISC-V); nothing runs natively. Arguments follow the binary's calling convention (64-bit \
              values on 32-bit targets as register pairs or stack slots); buffers are passed by pointer and returned. \
              Calls inside the image are followed. `stop` says why a run ended: returned (with result), \
-             step_limit, timeout, external_call, user_op (syscalls, SIMD helpers), unmapped_read, ..., each named.",
+             step_limit, timeout, external_call, user_op (syscalls, SIMD helpers), unmapped_read, memory_limit, ..., \
+             each named. For a C int or bool result on a 64-bit target read `low_32` or pass return_bits 32.",
             |project, request: crate::evaluate::EvaluateRequest| project.evaluate_function(&request),
         ),
         tool(
