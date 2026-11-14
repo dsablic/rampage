@@ -112,9 +112,10 @@ fn group_summary(group: Group) -> &'static str {
              find_crypto, yara_scan and capa_detect (your rules)."
         }
         Group::Types => {
-            "structs, signatures, debug info: declare_types (C), get_type, set_signature, set_types, \
-             edit_variable and function_frame (locals), apply_data_type, import_debug_types (DWARF/PDB), \
-             import_pdb_names."
+            "struct layouts by name, field path or offset: get_type and list_types read DWARF, PDB and Go runtime \
+             type data (stripped Go included; source \"go\"), so never decode type descriptors by hand; \
+             declare_types (C), set_signature, set_types, edit_variable and function_frame (locals), \
+             apply_data_type, import_debug_types (DWARF/PDB), import_pdb_names."
         }
         Group::Runtime => {
             "memory snapshots: observe_pointer, compare_runtime_bytes, observe_indirect_branch; query_debugger \
