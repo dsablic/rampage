@@ -205,8 +205,12 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
   bit-field comments, names in disassembly/xrefs/evaluation faults, constant-address access scan, `mmio` values
   for `evaluate_function`. Open: an `svd` field on the `raw` selector (Raw annotations are per session, so the
   map must be imported again after a restart; skipped to keep the catalog small), carrying maps in
-  `transfer_annotations`, accesses through pointers passed between functions, `evaluate_function` on Raw
-  projects (not raw-capable yet), and a run on a real vendor SVD and image.
+  `transfer_annotations`, accesses through pointers passed between functions, and a run on a real vendor SVD
+  and image. (`evaluate_function` on Raw projects landed with the suite v4 gap fixes.)
+- [ ] Extend the Cortex-M decompiler settings (device-range volatility, flash words read through a formed
+  address not folding) from Cortex-M Raw projects to Cortex-M ELF firmware: recognise it by the ARM attributes
+  section's CPU profile 'M' (Tag_CPU_arch_profile), not by load address. Today `Binary::m_profile()` is Raw-only,
+  so an SVD-less ELF build of the same firmware still loses a reset-register store before an endless loop.
 
 ## Objective-C dispatch (2026-11-13)
 
