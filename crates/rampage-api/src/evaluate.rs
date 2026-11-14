@@ -808,7 +808,6 @@ impl Project {
         if request.memory.len() > MAX_MEMORY_WRITES || request.mmio.len() > MAX_MEMORY_WRITES {
             return Err(invalid(format!("at most {MAX_MEMORY_WRITES} memory writes")));
         }
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         let target = binary.target();
         let big_endian = binary.big_endian;
         let abi = Abi::select(binary.arch, binary.format, big_endian, request.convention).map_err(invalid)?;
@@ -830,6 +829,9 @@ impl Project {
             }
             error => ApiError::Unavailable(format!("instruction decoder: {error}")),
         })?;
+        // The timeout covers emulation, not building the decoder: a cold language load can take longer than a
+        // short run's whole budget on a busy machine.
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
         let metadata = decoder.metadata().clone();
         let space = |name: &str| metadata.spaces.iter().find(|space| space.name == name).map(|space| space.id);
         let ram_id = metadata.code_space;
