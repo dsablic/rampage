@@ -595,6 +595,11 @@ impl Disassembler for Aarch32Disassembler {
         self.sequential_mode =
             matches!(flow, Flow::Next | Flow::Call(_) | Flow::IndirectCall | Flow::ConditionalJump(_))
                 .then_some((next, thumb));
+        if self.sequential_mode.is_none() {
+            // Nothing falls through to the next instruction, which is reached (if at all) from elsewhere with other
+            // register values: a `movs r4, #0; b ...` must not make the next block's `str r5, [r4]` store to 0.
+            self.registers = Registers::default();
+        }
         Insn {
             address,
             len: decoded.size(),

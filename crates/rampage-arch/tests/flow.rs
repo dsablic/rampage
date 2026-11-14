@@ -449,6 +449,18 @@ fn thumb_high_registers_track_the_complete_operand() {
 }
 
 #[test]
+fn thumb_register_constants_follow_moves_and_calls_but_not_branches() {
+    // movs r4, #0x40; str r5, [r4]: a constant base makes the store's address.
+    assert_eq!(accesses(thumb(), "40242560", &[2, 2])[1], (Some(0x40), true));
+    // movs r4, #0x40; bl; str r5, [r4]: a call preserves r4.
+    assert_eq!(accesses(thumb(), "402400f000f82560", &[2, 4, 2])[2], (Some(0x40), true));
+    // movs r4, #0x40; b .; str r5, [r4]: the store is reached from elsewhere, with another r4.
+    assert_eq!(accesses(thumb(), "4024fee72560", &[2, 2, 2])[2], (None, false));
+    // movs r0, #0x40; bl; str r5, [r0]: a call may change r0.
+    assert_eq!(accesses(thumb(), "402000f000f80560", &[2, 4, 2])[2], (None, false));
+}
+
+#[test]
 fn arm_unknown_writes_forget_all_destinations() {
     // movw r0, #0x100; movw r1, #0x200; <write>; add r2, pc, r0; add r2, pc, r1
     for (hex, cleared) in [
