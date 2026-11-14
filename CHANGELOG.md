@@ -24,7 +24,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
   (`ppb_e000ed0c = 0x5fa0004`, a reset request) is no longer dropped as dead, and every poll of a status register is
   shown. A volatile access with no symbol is named by its region (`periph_40011000`). The ARM address tracker
   follows `mov`/`movs` immediates and keeps r4-r11 across calls (AAPCS), so disassembly and xrefs resolve more
-  loads and stores (on every ARM image; the analysis cache version is bumped). Decompiled output of other formats and architectures is unchanged.
+  loads and stores (on every ARM image; the analysis cache version is bumped). Decompiled output of other formats
+  and architectures is unchanged.
+- `string_decoding` also finds table-driven decoders: a loop with two byte loads, one through a base plus an index
+  register (`ldrb w9, [x10, x9]`), and a byte store is a candidate ("table lookup") when a call site passes it
+  encoded-looking data, so `evaluate: true` runs it on its blobs.
 
 ## 1.3.0 (2026-11-14)
 

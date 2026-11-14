@@ -575,6 +575,21 @@ fn string_decoding_with_evaluate_runs_the_decoders() {
     }
 }
 
+/// A table-driven decoder (each output byte read from a 64-entry alphabet at an index computed from the input byte;
+/// the AArch64 binary of benchmark suite v4) has no arithmetic transform, but its call sites pass encoded data.
+#[test]
+fn string_decoding_finds_a_table_driven_decoder_passed_encoded_data() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bench-v4/bin/strdec-arm64.elf");
+    let report = open(path).string_decoding_with(ReportLimits::default(), true).unwrap();
+    assert_well_formed(&report);
+    let routines = section(&report, "Candidate decoding routines");
+    assert_eq!(routines.total, 1, "{routines:#?}");
+    assert!(routines.findings[0].observation.contains("applying table lookup"), "{routines:#?}");
+    let decoded = section(&report, "Decoded by emulation");
+    assert_eq!(decoded.total, 3, "{decoded:#?}");
+    assert!(decoded.findings.iter().any(|finding| finding.observation.contains("\"diagnostic session closed\"")));
+}
+
 #[test]
 fn string_decoding_without_encoded_arguments_stays_low() {
     // Go's runtime has XOR byte loops (random seeding, hex dumping) whose callers pass no encoded-looking data.

@@ -99,8 +99,8 @@ def strings_rolling(route: Route) -> dict[str, Any]:
 
 
 def strings_alphabet(route: Route) -> dict[str, Any]:
-    # string_decoding finds no candidate (a table-driven decoder; its limitations say so), so the route is the one a
-    # reader of the listing takes: the asked function calls 0x10102c4 with (stack buffer, blob, 33); run that call.
+    # The route a reader of the listing takes (string_decoding with evaluate also decodes this table-driven decoder
+    # since the suite found it missing): the asked function calls 0x10102c4 with (stack buffer, blob, 33); run that.
     listing = route.call("disassemble", at="0x1010304", count=12)
     blob = next(row["data_ref"] for row in listing if row["text"].startswith("adr x1"))
     length = next(int(row["text"].split("#")[1]) for row in listing if row["text"].startswith("mov w2"))

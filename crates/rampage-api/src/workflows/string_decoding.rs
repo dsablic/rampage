@@ -1,5 +1,6 @@
 //! `string_decoding`: candidate string-decoding routines found statically -- functions with a short loop that
-//! loads a byte, transforms it (XOR, rotate, or byte ADD/SUB) and stores a byte, ranked by how many call sites
+//! loads a byte, transforms it (XOR, rotate, byte ADD/SUB, or a table lookup when encoded-looking data is passed
+//! in) and stores a byte, ranked by how many call sites
 //! pass them pointers to non-printable or high-entropy data blobs. By default nothing is emulated or executed: a
 //! candidate is a loop shape plus its call sites, not a decoded string. With `evaluate`, each candidate is run on its
 //! blobs in `evaluate_function`'s p-code interpreter, and printable output is reported as emulation evidence.
@@ -88,6 +89,9 @@ struct ByteOps {
     xor: bool,
     rotate: bool,
     add_sub: bool,
+    /// A byte load through a base plus an index register (`ldrb w9, [x10, x9]`): a table lookup when the loop also
+    /// loads the bytes it translates.
+    indexed_load: bool,
 }
 
 impl ByteOps {
@@ -97,18 +101,24 @@ impl ByteOps {
         self.xor |= other.xor;
         self.rotate |= other.rotate;
         self.add_sub |= other.add_sub;
+        self.indexed_load |= other.indexed_load;
     }
 
     fn transforms(self) -> bool {
-        self.xor || self.rotate || self.add_sub
+        self.xor || self.rotate || self.add_sub || self.indexed_load
     }
 
     /// The transforms seen, as words for a report.
     fn transform_names(self) -> Vec<&'static str> {
-        [(self.xor, "XOR"), (self.rotate, "rotate"), (self.add_sub, "byte ADD/SUB")]
-            .into_iter()
-            .filter_map(|(seen, name)| seen.then_some(name))
-            .collect()
+        [
+            (self.xor, "XOR"),
+            (self.rotate, "rotate"),
+            (self.add_sub, "byte ADD/SUB"),
+            (self.indexed_load, "table lookup"),
+        ]
+        .into_iter()
+        .filter_map(|(seen, name)| seen.then_some(name))
+        .collect()
     }
 }
 
@@ -155,13 +165,29 @@ fn classify(arch: Arch, text: &str) -> ByteOps {
     if is(&BYTE_XORS_IN_MEMORY) && arch == Arch::S390x {
         return ByteOps { load: true, store: true, xor: true, ..ByteOps::default() };
     }
+    let load = is(&BYTE_LOADS);
     ByteOps {
-        load: is(&BYTE_LOADS),
+        load,
         store: is(&BYTE_STORES),
         xor: is(&XORS) && !same_operands(&operands),
         rotate: is(&ROTATES),
         add_sub: false,
+        indexed_load: load && operands.iter().any(|operand| register_indexed(operand)),
     }
+}
+
+/// Whether a memory operand adds an index register to its base: `[x10, x9]`, `[r2, r3]`, `[x1, w8, uxtw]` or x86's
+/// `[rcx + rax]`, not an immediate offset (`[x0, #4]`), a post-index or a PC-relative address.
+fn register_indexed(operand: &str) -> bool {
+    let Some(inner) = operand.split_once('[').and_then(|(_, rest)| rest.split_once(']')).map(|(inner, _)| inner) else {
+        return false;
+    };
+    let register = |term: &str| {
+        let term = term.trim();
+        term.starts_with(|c: char| c.is_ascii_alphabetic()) && !matches!(term, "rip" | "pc" | "sp")
+    };
+    let terms: Vec<&str> = if inner.contains('+') { inner.split('+').collect() } else { inner.split(',').collect() };
+    terms.len() >= 2 && register(terms[0]) && register(terms[1])
 }
 
 /// m68k gives the operand size as a mnemonic suffix (`move.b`), and its operands run source first.
@@ -202,7 +228,11 @@ fn classify_x86(mnemonic: &str, operands: &[String]) -> ByteOps {
             ops.store = sized && first_memory;
             ops.load = sized && later_memory;
         }
-        "movzx" | "movsx" => ops.load = operands.iter().skip(1).any(|operand| operand.starts_with("byte ptr")),
+        "movzx" | "movsx" => {
+            let source = operands.iter().skip(1).find(|operand| operand.starts_with("byte ptr"));
+            ops.load = source.is_some();
+            ops.indexed_load = source.is_some_and(|operand| register_indexed(operand));
+        }
         "xor" | "add" | "sub" | "adc" | "sbb" | "rol" | "ror" => {
             // A memory destination is read, transformed and written back.
             ops.load = sized && (first_memory || later_memory);
@@ -240,6 +270,11 @@ struct Candidate {
 }
 
 impl Candidate {
+    /// Whether the loop's only transform is a table lookup.
+    fn table_only(&self) -> bool {
+        self.ops.indexed_load && !(self.ops.xor || self.ops.rotate || self.ops.add_sub)
+    }
+
     /// XOR or rotate in the loop plus at least one encoded-looking argument is the shape worth a Medium; anything
     /// less (byte ADD/SUB alone, or no such argument) is common in ordinary string handling.
     fn confidence(&self) -> Confidence {
@@ -453,6 +488,11 @@ impl Project {
             }
             candidates.sort_by_key(|candidate| (!(candidate.ops.xor || candidate.ops.rotate), candidate.address));
             tracing = self.trace_call_sites(decoder.as_mut(), &mut candidates, &analysis.program.xrefs);
+            // A table lookup alone is common in ordinary code (hex formatting, case mapping, Go's runtime): such a
+            // loop is a candidate only when a call site passes it encoded-looking data.
+            let untraced = candidates.iter().filter(|candidate| candidate.table_only() && !candidate.traced).count();
+            tracing.untraced_candidates = tracing.untraced_candidates.saturating_sub(untraced);
+            candidates.retain(|candidate| !candidate.table_only() || !candidate.blobs.is_empty());
         }
         candidates.sort_by(|a, b| {
             b.confidence()
@@ -631,10 +671,11 @@ impl Project {
         }
         report.limitation(format!(
             "Loops are found from backward branches within one function, at most {MAX_LOOP_INSTRUCTIONS} \
-             instructions long, and read by mnemonic: vectorized, table-driven, multi-byte or unrolled-without-branch \
-             decoders, decoders split across functions, and inlined decoders without a call site are missed. Byte \
-             operations are recognized on {RECOGNIZED_ARCHITECTURES}; byte ADD/SUB only on x86 and m68k, where \
-             operand sizes are visible."
+             instructions long, and read by mnemonic: vectorized, multi-byte or unrolled-without-branch decoders, \
+             decoders split across functions, and inlined decoders without a call site are missed. A table-driven \
+             decoder (two byte loads, one through a base plus an index register) counts only when a call site passes \
+             it encoded-looking data. Byte operations are recognized on {RECOGNIZED_ARCHITECTURES}; byte ADD/SUB only \
+             on x86 and m68k, where operand sizes are visible."
         ));
         report.limitation(format!(
             "Arguments are data pointers in the {ARGUMENT_WINDOW} instructions before a direct call; pointers built \
@@ -779,6 +820,7 @@ impl Project {
         // than the decoding already counted against MAX_SCANNED_INSTRUCTIONS. The text is kept for quoting only
         // when the instruction does something to bytes.
         let mut classified: Vec<Option<(ByteOps, Option<String>)>> = vec![None; instructions.len()];
+        let mut table_loop = None;
         for (insn, _) in instructions {
             let (Flow::ConditionalJump(target) | Flow::Jump(target)) = insn.flow else { continue };
             if target > insn.address || !function.contains(target) {
@@ -791,6 +833,7 @@ impl Project {
             }
             let mut ops = ByteOps::default();
             let mut quoted = Vec::new();
+            let mut loads = 0;
             for index in first..last {
                 let (other, bytes) = &instructions[index];
                 let (found, text) = classified[index].get_or_insert_with(|| {
@@ -803,10 +846,14 @@ impl Project {
                 {
                     quoted.push(format!("{:#x}: {text}", other.address));
                 }
+                loads += usize::from(found.load);
                 ops.merge(*found);
             }
+            // A table lookup transforms only when the loop also loads the bytes it translates: a copy loop may
+            // index its one load too.
+            ops.indexed_load &= loads >= 2;
             if ops.load && ops.store && ops.transforms() {
-                return Some(Candidate {
+                let candidate = Candidate {
                     address: function.address,
                     name: self.function_name(function.address),
                     loop_start: target,
@@ -816,10 +863,15 @@ impl Project {
                     call_sites: Vec::new(),
                     call_sites_cut: false,
                     blobs: BTreeMap::new(),
-                });
+                };
+                // A loop with an arithmetic transform wins over a table-lookup-only one earlier in the function.
+                if !candidate.table_only() {
+                    return Some(candidate);
+                }
+                table_loop.get_or_insert(candidate);
             }
         }
-        None
+        table_loop
     }
 
     /// Fills the direct call sites of the first `MAX_TRACED_CANDIDATES` candidates and the encoded-looking data
@@ -1026,6 +1078,19 @@ mod tests {
         assert!(!ops("add w11, w12, #61").add_sub);
         assert!(classify(Arch::Mips, "lbu $v0, 0($a1)").load);
         assert!(classify(Arch::Riscv64, "sb a5, 0(a0)").store);
+    }
+
+    #[test]
+    fn indexed_byte_loads_are_table_lookups() {
+        assert!(classify(Arch::Aarch64, "ldrb w9, [x10, x9]").indexed_load);
+        assert!(classify(Arch::Aarch64, "ldrb w9, [x1, w8, uxtw]").indexed_load);
+        assert!(classify(Arch::Arm, "ldrb r3, [r2, r3]").indexed_load);
+        assert!(classify(Arch::X86_64, "movzx eax, byte ptr [rcx + rax]").indexed_load);
+        for text in ["ldrb w9, [x10, #4]", "ldrb w9, [x10], #1", "ldrb w9, [x10]", "strb w9, [x0, x8]"] {
+            assert!(!classify(Arch::Aarch64, text).indexed_load, "{text}");
+        }
+        assert!(!classify(Arch::X86_64, "movzx eax, byte ptr [rip + 0x1234]").indexed_load);
+        assert!(!classify(Arch::X86_64, "movzx eax, byte ptr [rcx + 8]").indexed_load);
     }
 
     #[test]

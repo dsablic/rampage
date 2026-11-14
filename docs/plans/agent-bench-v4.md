@@ -145,7 +145,9 @@ views report them apart (`known_rampage_gaps`).
 Two further observations change no truth but matter to how an agent reads rampage's output:
 
 - `string_decoding` finds no candidate for the alphabet decoder (table-driven; its limitations say so). The route
-  that works is reading the call (blob address and length) and running the decoder with `evaluate_function`.
+  that works is reading the call (blob address and length) and running the decoder with `evaluate_function`. **Fixed
+  after the suite found it** (Unreleased): table-lookup loops passed encoded-looking data are candidates, and
+  `string_decoding` with `evaluate: true` decodes all three alphabet blobs.
 - In rampage's decompiled `enforce_pairing`, the `SCB.AIRCR` reset request before the wait loop is gone (only the
   `WaitForInterrupt` loop remains), and both lock functions show the flash reads at 0xC80 and 0xC04 folded to
   constants. `lock_mechanisms` reports the reset correctly and the disassembly shows both addresses, so the truth
