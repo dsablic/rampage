@@ -43,6 +43,12 @@ fixture's `build.sh`), compiled with `zig cc` or `clang` by the committed build 
 or commercial binaries, bytes extracted from them, captured process memory or secrets. Only permissively licensed
 inputs (Apache-2.0, MIT, BSD, zlib, public domain) belong in the repository.
 
+Firmware fixtures that exercise library identification may also link the Arm GNU Toolchain's prebuilt runtime
+libraries: newlib and newlib-nano (under the permissive terms in newlib's `COPYING.NEWLIB`) and libgcc (GPLv3 with
+the GCC Runtime Library Exception, which permits distributing compiled programs). They are built with
+`arm-none-eabi-gcc` by the committed scripts under `tools/embedded-signatures`, and the notices are recorded in
+`crates/rampage-signatures/data/notices`.
+
 ## Pull requests
 
 Keep a pull request to one focused change with an imperative commit subject. Run the four commands above and note
