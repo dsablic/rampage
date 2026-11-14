@@ -34,6 +34,29 @@ explains mechanisms and lets owners inspect and change their own devices. It hol
 
 ### Privacy: what a smart device records and where it sends it (2026-11-14)
 
+Work from representative samples across device categories, not one device. Pick one or two samples per category
+where the vendor publishes updates for download. They are local workloads only, never committed and never named
+in the repo.
+
+| Category | Typical firmware | Processor | Main concern | What it tests |
+| --- | --- | --- | --- | --- |
+| Smart TV / streaming stick | Android TV or embedded Linux in a vendor container | ARM64/ARM32 | screen fingerprinting, microphones, telemetry | firmware unpacking, DEX, `privacy_surface` |
+| Smart speaker / voice assistant | embedded Linux | ARM | always-listening microphone, cloud upload | audio-capture paths, wake-word gating |
+| IP camera / baby monitor | embedded Linux (often uClibc) | MIPS / ARM32 | video upload, backdoor accounts, hard-coded credentials | MIPS, endpoint inventory, credential finding |
+| Robot vacuum | embedded Linux | ARM64 | camera and floor-plan maps sent to the cloud | sensor-to-network paths |
+| Smart plug / bulb / hub | RTOS on ESP32 or similar | Xtensa / RISC-V | phoning home, cloud dependency | non-ARM microcontrollers (Xtensa is new), RTOS signatures |
+| Printer | RTOS or embedded Linux | ARM | cartridge chip lockouts, telemetry | lock-mechanism detection (repair lock) |
+| E-bike / scooter controller | bare metal | Cortex-M | parts pairing, dealer-only diagnostics | SVD, checksums, patch round trip |
+
+- **Borrow before building.** Firmware extraction is a long tail of container and filesystem formats that binwalk
+  (v3 is a Rust rewrite) and unblob have covered for years. Check their licences and APIs, and prefer using one as a
+  crate or subprocess; rampage's own effort goes into what comes after extraction. Likewise, Exodus Privacy's
+  tracker list could seed the analytics-SDK signatures, licence permitting. Related tools to learn from and not
+  duplicate: OFRAK (unpack, modify, repack), EMBA and FACT (firmware triage), Firmadyne and FirmAE (whole-firmware
+  emulation).
+- **Cloud-dependency analysis.** Find which features need the vendor's servers and what fails without them: the
+  first step to keeping a device working after its service shuts down.
+
 Smart TVs and similar devices may run automatic content recognition (fingerprinting what is on screen or heard),
 keep microphones live, and send telemetry. These capabilities would help an owner find and stop that on their own
 device:
@@ -58,6 +81,11 @@ device:
   surfaced as "component X does content fingerprinting", without naming any TV vendor in the repo.
 - **Configuration and feature flags.** Find settings that switch collection on or off (a viewing-data opt-out, a
   voice-assistant wake word), including ones the menu ignores, and where the code reads them.
+- **Acceptance on real vendor updates (local only).** Many TV makers publish firmware updates for download, usually
+  in vendor containers, often encrypted or signed. Use one or two as local workloads, never committed: start from
+  the vendor's update file and list the components that open the microphone or fingerprint the screen, plus the
+  endpoints they contact. Container parsing and decryption with a key the user supplies are in scope. Bundled
+  vendor keys are not.
 - **Patch to disable.** This builds on the patching round trip (checksum recompute, export in the original format):
   stub a capture or upload path in an owner's own firmware image. Still general tooling, not a recipe for any
   particular device.
