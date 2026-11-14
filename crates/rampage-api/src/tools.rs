@@ -31,6 +31,7 @@ mod debug_tools;
 #[cfg(test)]
 mod patch_dispatch_tests;
 pub use debug_tools::{DebugTool, debug_tools, debug_tools_with};
+mod integrity_page;
 mod patch_page;
 pub(crate) mod search_page;
 mod signature_page;
@@ -151,7 +152,7 @@ impl Group {
                 "standalone ZIP32 metadata without extraction."
             ),
             Group::Formats => {
-                "Toolchain and container metadata: Go build info, Rust dependency audit data, PE resources and load config, PyInstaller archives and WebAssembly modules."
+                "Toolchain and container metadata: Go build info, Rust dependency audit data, PE resources and load config, PyInstaller archives and WebAssembly modules; firmware integrity checks (CRC/checksum fields, recomputed after patches) and patched-image export in the original container."
             }
             Group::Debug => {
                 "Sessions with the operator-allowed GDB remote stubs: connect, status, registers, memory, modules and \
@@ -827,7 +828,7 @@ fn sleigh_file_schema() -> Value {
 
 /// Project tools that serve a Raw Project opened with [`crate::Session::open_raw`]: each returns a result or an
 /// explicit typed refusal on Raw input. Clients offer the `raw` selector only on these.
-pub const RAW_CAPABLE_TOOLS: [&str; 18] = [
+pub const RAW_CAPABLE_TOOLS: [&str; 23] = [
     "binary_info",
     "list_functions",
     "disassemble",
@@ -846,6 +847,11 @@ pub const RAW_CAPABLE_TOOLS: [&str; 18] = [
     "decompile",
     "import_svd",
     "peripheral_access",
+    "list_patches",
+    "patch_bytes",
+    "revert_patch",
+    "integrity_checks",
+    "export_image",
 ];
 
 /// Whether the project tool `name` accepts a Raw Project selector.
@@ -3499,6 +3505,7 @@ pub fn tools() -> Vec<Tool> {
         .annotates(),
     ]);
     tools.extend(patch_page::tools());
+    tools.extend(integrity_page::tools());
     tools
 }
 

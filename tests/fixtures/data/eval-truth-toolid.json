@@ -510,6 +510,7 @@
     "../malformed/signed_overlay.exe": "craft.py patches ../bin/hello-x64.exe (scored) into a loader regression",
     "../malformed/sstrip.elf": "craft.py patches ../bin/hello-x64-dyn.elf (scored) into a loader regression",
     "../malformed/trunc.elf": "assembled byte by byte by tests/fixtures/craft.py, so no toolchain produced it",
-    "../malformed/wrap.elf": "assembled byte by byte by tests/fixtures/craft.py, so no toolchain produced it"
+    "../malformed/wrap.elf": "assembled byte by byte by tests/fixtures/craft.py, so no toolchain produced it",
+    "../firmware/raw-cortex-m-crc.elf": "a freestanding Cortex-M3 firmware for the integrity_checks round trip; its .bin, .hex and .srec are headerless Raw images, which tool identification does not score"
   }
 }

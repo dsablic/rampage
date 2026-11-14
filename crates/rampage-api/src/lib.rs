@@ -41,7 +41,9 @@ mod frame;
 mod fuzzy_signatures;
 mod go_strings;
 mod graph;
+mod image_export;
 mod import_types;
+pub mod integrity;
 mod jumptable;
 pub mod layout_containers;
 mod listing;
@@ -182,7 +184,9 @@ pub use fuzzy_signatures::{
     MAX_FUZZY_QUERY_FUNCTIONS, fuzzy_code_identity, fuzzy_code_projection,
 };
 pub use graph::{Edge, EdgeKind, FunctionGraph, GraphBlock};
+pub use image_export::{ExportFormat, ExportImageRequest, ImageExport};
 pub use import_types::{ImportPrototype, PosixContext, import_prototype};
+pub use integrity::{IntegrityOutcome, IntegrityReport, IntegrityRequest};
 pub use jumptable::{JumpTable, JumpTableEntry};
 pub use listing::{DisassemblyLine, FunctionListing};
 pub use module_references::{

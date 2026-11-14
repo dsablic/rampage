@@ -121,7 +121,7 @@ impl Drop for ExportStaging {
     }
 }
 
-fn publish_export(
+pub(crate) fn publish_export(
     output: &Path,
     bytes: &[u8],
     write: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
@@ -211,16 +211,32 @@ fn preimage_digest(patch: &BytePatch) -> String {
     hex(&hash.finalize())
 }
 
+/// Record version of a patch to a whole-file ELF64 image; `file_offset` is a file offset.
+const ELF_PATCH_VERSION: u32 = 1;
+/// Record version of a patch to a Raw project; `source_sha256` is its interpretation identity and `file_offset`
+/// the offset in its owned region bytes.
+const RAW_PATCH_VERSION: u32 = 2;
+
 fn validate_patch(patch: &BytePatch) -> Result<(), String> {
-    if patch.version != 1
+    let arch = match patch.version {
+        ELF_PATCH_VERSION => matches!(patch.arch.as_str(), "x86_64" | "aarch64"),
+        RAW_PATCH_VERSION => {
+            (1..=32).contains(&patch.arch.len())
+                && patch.arch.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        }
+        _ => false,
+    };
+    if !arch
         || !lowercase_hex(&patch.source_sha256, 32)
         || !lowercase_hex(&patch.preimage_sha256, 32)
-        || !matches!(patch.arch.as_str(), "x86_64" | "aarch64")
         || patch.image_offset != 0
         || patch.image_length == 0
         || patch.image_length > MAX_PATCH_SOURCE_BYTES as u64
     {
-        return Err("patch requires a version-1 whole-file ELF64 source identity and supported architecture".into());
+        return Err(
+            "patch requires a version-1 whole-file ELF64 or version-2 Raw source identity and supported architecture"
+                .into(),
+        );
     }
     let original = decode_hex(&patch.original_hex)?;
     let replacement = decode_hex(&patch.replacement_hex)?;
@@ -718,7 +734,72 @@ impl ElfPayload {
     }
 }
 
+/// What a patch's `file_offset` indexes: an admitted ELF64 file, or a Raw project's owned region bytes.
+enum PatchTarget {
+    Elf(ElfPayload),
+    Raw,
+}
+
+impl PatchTarget {
+    fn version(&self) -> u32 {
+        match self {
+            PatchTarget::Elf(_) => ELF_PATCH_VERSION,
+            PatchTarget::Raw => RAW_PATCH_VERSION,
+        }
+    }
+}
+
+/// The owned-bytes offset of a Raw patch: wholly inside one backed region whose bytes the export can write back
+/// (not decoder output); code regions by default, data and RAM initial values only with `allow_data`.
+fn raw_patch_offset(binary: &Binary, address: u64, length: usize, allow_data: bool) -> Result<u64, String> {
+    let raw = binary.raw_code_image().ok_or("Raw project has no retained admission facts")?;
+    let end = address.checked_add(length as u64).ok_or("patch address overflow")?;
+    let region = raw
+        .regions()
+        .iter()
+        .find(|region| region.range().contains(&address))
+        .ok_or("patch address lies outside every mapped Raw region")?;
+    if end > region.range().end || !region.backed() {
+        return Err(format!("patch must lie wholly inside the backed bytes of Raw region {}", region.name));
+    }
+    if matches!(region.source, Some(rampage_loaders::RawRegionSource::Decoded { .. })) {
+        return Err(format!("Raw region {} is decoder output, which cannot be written back to its file", region.name));
+    }
+    if region.kind != rampage_loaders::RawRegionKind::Code && !allow_data {
+        return Err(format!("Raw region {} is not code; patching it requires allow_data", region.name));
+    }
+    Ok(region.data_range().start as u64 + (address - region.base_address))
+}
+
 impl Project {
+    fn patch_target(&self) -> Result<PatchTarget, String> {
+        if self.binary.format == Format::Raw {
+            return Ok(PatchTarget::Raw);
+        }
+        ElfPayload::parse(self.binary.file_bytes(), self.binary.arch).map(PatchTarget::Elf)
+    }
+
+    fn patch_file_offset(
+        &self,
+        target: &PatchTarget,
+        address: u64,
+        length: usize,
+        allow_data: bool,
+    ) -> Result<u64, String> {
+        match target {
+            PatchTarget::Elf(elf) => elf.file_offset(self.binary.file_bytes(), address, length, allow_data),
+            PatchTarget::Raw => raw_patch_offset(&self.binary, address, length, allow_data),
+        }
+    }
+
+    /// Mapped-file freshness for native sources; a Raw project's bytes are owned and bound by their identity.
+    fn check_patch_backing(&self) -> Result<(), String> {
+        if self.binary.format == Format::Raw {
+            return Ok(());
+        }
+        self.binary.validate_backing_source().map_err(|error| error.to_string())
+    }
+
     pub(crate) fn validate_patch_context(&self, annotations: &Annotations) -> Result<(), ApiError> {
         if &self.byte_patches != annotations.patches() {
             return Err(invalid(
@@ -751,7 +832,37 @@ impl Project {
         self.patch_origin.as_ref().map_or_else(|| Arc::clone(self), Arc::clone)
     }
 
+    /// The original (unpatched) project this effective view was materialized from, or itself.
+    pub(crate) fn patch_source(self: &Arc<Self>) -> Arc<Self> {
+        self.original_patch_project()
+    }
+
+    /// Records the file a Raw project was read from, so an export can rewrite its original container. Only the
+    /// first call takes effect.
+    pub fn set_raw_source(&self, path: &Path) {
+        let _ = self.raw_source.set(path.to_owned());
+    }
+
     fn validate_patch_source(&self) -> Result<[u8; 32], String> {
+        if self.binary.format == Format::Raw {
+            let identity = self
+                .binary
+                .raw_interpretation_identity()
+                .map_err(|error| error.to_string())?
+                .ok_or("Raw project has no interpretation identity")?;
+            if self.binary.image_bytes().len() > MAX_PATCH_SOURCE_BYTES || identity.sha256.len() != 64 {
+                return Err("Raw patch source exceeds the patch admission budget".into());
+            }
+            let mut hash = [0u8; 32];
+            for (index, byte) in hash.iter_mut().enumerate() {
+                *byte = u8::from_str_radix(&identity.sha256[2 * index..2 * index + 2], 16)
+                    .map_err(|_| "Raw interpretation identity is not hexadecimal")?;
+            }
+            if *self.patch_source_sha256.get_or_init(|| hash) != hash {
+                return Err("original patch source digest changed since admission".into());
+            }
+            return Ok(hash);
+        }
         if self.binary.format != Format::Elf
             || !matches!(self.binary.arch, Arch::X86_64 | Arch::Aarch64)
             || self.binary.big_endian
@@ -814,10 +925,10 @@ impl Project {
         Self::validate_patch_metadata(annotations)?;
         let source_hash = self.validate_patch_source()?;
         let original = self.binary.file_bytes();
-        let elf = ElfPayload::parse(original, self.binary.arch)?;
+        let target = self.patch_target()?;
         let mut bytes = original.to_vec();
-        self.binary.validate_backing_source().map_err(|error| error.to_string())?;
-        if Sha256::digest(&bytes).as_slice() != source_hash {
+        self.check_patch_backing()?;
+        if target.version() == ELF_PATCH_VERSION && Sha256::digest(&bytes).as_slice() != source_hash {
             return Err("original source changed while copying patch materialization".into());
         }
         let mut total = 0usize;
@@ -828,8 +939,9 @@ impl Project {
             let patch = parse_patch(value)?;
             let original_bytes = decode_hex(&patch.original_hex)?;
             let replacement = decode_hex(&patch.replacement_hex)?;
-            let offset = elf.file_offset(original, address, original_bytes.len(), patch.allow_data)?;
-            if patch.source_sha256 != hex(&source_hash)
+            let offset = self.patch_file_offset(&target, address, original_bytes.len(), patch.allow_data)?;
+            if patch.version != target.version()
+                || patch.source_sha256 != hex(&source_hash)
                 || patch.arch != self.binary.arch.to_string()
                 || patch.image_length != original.len() as u64
                 || patch.file_offset != offset
@@ -843,12 +955,16 @@ impl Project {
             revision.update(address.to_le_bytes());
             revision.update(encode_patch(&patch)?.as_bytes());
         }
-        self.binary.validate_backing_source().map_err(|error| error.to_string())?;
+        self.check_patch_backing()?;
         if self.validate_patch_source()? != source_hash {
             return Err("original patch source changed during materialization".into());
         }
         let effective_sha256 = digest(&bytes);
-        let binary = Binary::from_owned_native_bytes(bytes, self.binary.arch).map_err(|error| error.to_string())?;
+        let binary = match target {
+            PatchTarget::Raw => self.binary.with_raw_bytes(bytes),
+            PatchTarget::Elf(_) => Binary::from_owned_native_bytes(bytes, self.binary.arch),
+        }
+        .map_err(|error| error.to_string())?;
         if binary.format != self.binary.format
             || binary.arch != self.binary.arch
             || binary.entry != self.binary.entry
@@ -982,15 +1098,14 @@ impl Project {
         let source = self.original_patch_project();
         source.install_patch_validator();
         let source_sha256 = source.validate_patch_source().map_err(invalid)?;
-        let elf = ElfPayload::parse(source.binary.file_bytes(), source.binary.arch).map_err(invalid)?;
-        let file_offset =
-            elf.file_offset(source.binary.file_bytes(), address, original.len(), allow_data).map_err(invalid)?;
+        let target = source.patch_target().map_err(invalid)?;
+        let file_offset = source.patch_file_offset(&target, address, original.len(), allow_data).map_err(invalid)?;
         if source.binary.file_bytes().get(file_offset as usize..file_offset as usize + original.len()) != Some(original)
         {
             return Err(invalid("expected original bytes do not match the original source (not the effective view)"));
         }
         let mut patch = BytePatch {
-            version: 1,
+            version: target.version(),
             source_sha256: hex(&source_sha256),
             arch: source.binary.arch.to_string(),
             image_offset: 0,

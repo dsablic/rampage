@@ -48,6 +48,7 @@ mod dotnet;
 mod embedded;
 mod ergonomics;
 mod findings;
+mod firmware_integrity;
 mod go_types;
 mod jumptable;
 mod module_references;

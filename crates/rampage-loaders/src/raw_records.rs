@@ -184,6 +184,87 @@ pub fn parse_raw_records(text: &[u8], format: RawRecordFormat, max_data_bytes: u
     Ok(RawRecords { format, runs, data_records, start_address })
 }
 
+/// Rewrites the data records of `text` (already admitted by [`parse_raw_records`]) with the bytes `current`
+/// returns for each record's address and length, keeping every other byte as written: record order and
+/// lengths, extended-address, header, count and start records, line endings, whitespace and hex-digit case.
+/// A record whose bytes are unchanged is copied verbatim; a changed one gets a recomputed checksum. Returns the
+/// new text and the number of records rewritten.
+pub fn rewrite_raw_records(
+    text: &[u8],
+    format: RawRecordFormat,
+    mut current: impl FnMut(u64, usize) -> Option<Vec<u8>>,
+) -> Result<(Vec<u8>, usize), LoadError> {
+    parse_raw_records(text, format, usize::MAX)?;
+    let mut output = Vec::with_capacity(text.len());
+    let mut rewritten = 0;
+    let mut upper = 0_u64;
+    for (index, line) in text.split_inclusive(|&byte| byte == b'\n').enumerate() {
+        let bad = |message: &str| malformed(format, index + 1, message);
+        let start = line.iter().position(|byte| !byte.is_ascii_whitespace()).unwrap_or(line.len());
+        let end = line.iter().rposition(|byte| !byte.is_ascii_whitespace()).map_or(start, |end| end + 1);
+        let record = &line[start..end];
+        // (offset of the payload's first hex digit in `record`, address, payload bytes, body) for a data record.
+        let data = match format {
+            _ if record.is_empty() => None,
+            RawRecordFormat::Ihex => {
+                let body = hex_bytes(&record[1..]).ok_or_else(|| bad("not hex digits"))?;
+                let payload = &body[4..body.len() - 1];
+                match body[3] {
+                    0 => Some((9, upper + big_endian(&body[1..3]), payload.to_vec(), body)),
+                    2 => {
+                        upper = big_endian(payload) << 4;
+                        None
+                    }
+                    4 => {
+                        upper = big_endian(payload) << 16;
+                        None
+                    }
+                    _ => None,
+                }
+            }
+            RawRecordFormat::Srec => {
+                let body = hex_bytes(&record[2..]).ok_or_else(|| bad("not hex digits"))?;
+                match record[1] {
+                    kind @ b'1'..=b'3' => {
+                        let width = usize::from(kind - b'0') + 1;
+                        let payload = body[1 + width..body.len() - 1].to_vec();
+                        Some((4 + 2 * width, big_endian(&body[1..1 + width]), payload, body))
+                    }
+                    _ => None,
+                }
+            }
+        };
+        let Some((at, address, payload, mut body)) = data.filter(|(_, _, payload, _)| !payload.is_empty()) else {
+            output.extend_from_slice(line);
+            continue;
+        };
+        let replacement = current(address, payload.len()).ok_or_else(|| bad("no bytes for this data record"))?;
+        if replacement.len() != payload.len() {
+            return Err(bad("replacement bytes differ in length from the record"));
+        }
+        if replacement == payload {
+            output.extend_from_slice(line);
+            continue;
+        }
+        let first = body.len() - 1 - payload.len();
+        body[first..first + payload.len()].copy_from_slice(&replacement);
+        let sum = body[..body.len() - 1].iter().fold(0_u8, |sum, &byte| sum.wrapping_add(byte));
+        *body.last_mut().expect("record checksum") = match format {
+            RawRecordFormat::Ihex => sum.wrapping_neg(),
+            RawRecordFormat::Srec => !sum,
+        };
+        let lower = record.iter().any(|byte| (b'a'..=b'f').contains(byte));
+        let digits = rampage_arch::hex::bytes(&body[first..]);
+        let digits = if lower { digits } else { digits.to_ascii_uppercase() };
+        output.extend_from_slice(&line[..start]);
+        output.extend_from_slice(&record[..at]);
+        output.extend_from_slice(digits.as_bytes());
+        output.extend_from_slice(&line[end..]);
+        rewritten += 1;
+    }
+    Ok((output, rewritten))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +298,36 @@ mod tests {
         assert!(parsed.unwrap_err().to_string().contains("no end record"));
         let parsed = ihex(":020000021000EC\n:01001000559A\n:0400000310000020C9\n:00000001FF\n").unwrap();
         assert_eq!((parsed.runs, parsed.start_address), (vec![(0x10010, vec![0x55])], Some(0x10020)));
+    }
+
+    #[test]
+    fn rewriting_keeps_unchanged_records_verbatim_and_recomputes_changed_checksums() {
+        let hex =
+            ":020000040800F2\r\n:0400000001020304F2\r\n:0400040005060708DE\r\n:0400000508000101ED\r\n:00000001FF\r\n";
+        let image = |patch: Option<(u64, u8)>| {
+            move |address: u64, length: usize| {
+                let mut bytes: Vec<u8> = (0..length as u64).map(|at| (address + at - 0x0800_0000 + 1) as u8).collect();
+                if let Some((at, value)) = patch
+                    && (address..address + length as u64).contains(&at)
+                {
+                    bytes[(at - address) as usize] = value;
+                }
+                Some(bytes)
+            }
+        };
+        let (same, count) = rewrite_raw_records(hex.as_bytes(), RawRecordFormat::Ihex, image(None)).unwrap();
+        assert_eq!((same.as_slice(), count), (hex.as_bytes(), 0));
+        let (patched, count) =
+            rewrite_raw_records(hex.as_bytes(), RawRecordFormat::Ihex, image(Some((0x0800_0005, 0x60)))).unwrap();
+        assert_eq!(count, 1);
+        let expected = hex.replace(":0400040005060708DE", ":040004000560070884");
+        assert_eq!(std::str::from_utf8(&patched).unwrap(), expected);
+        assert_eq!(ihex(&expected).unwrap().runs, [(0x0800_0000, vec![1, 2, 3, 4, 5, 0x60, 7, 8])]);
+        let srec = "S00600004844521B\nS107000001020304EE\nS9030000FC\n";
+        let (patched, count) =
+            rewrite_raw_records(srec.as_bytes(), RawRecordFormat::Srec, |_, _| Some(vec![1, 2, 3, 5])).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(std::str::from_utf8(&patched).unwrap(), "S00600004844521B\nS107000001020305ED\nS9030000FC\n");
     }
 
     #[test]

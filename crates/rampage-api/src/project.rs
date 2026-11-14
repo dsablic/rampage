@@ -93,6 +93,8 @@ pub struct Project {
     pub(crate) byte_patches: BTreeMap<u64, String>,
     pub(crate) patch_origin: Option<Arc<Project>>,
     pub(crate) patch_source_sha256: OnceLock<[u8; 32]>,
+    /// The file a Raw project was opened from, for writing a patched image back in its original container.
+    pub(crate) raw_source: OnceLock<std::path::PathBuf>,
     analysis: OnceLock<Result<Analysis, DecoderInitializationError>>,
     analysis_binding: OnceLock<Option<String>>,
     triage: OnceLock<Triage>,
@@ -367,6 +369,7 @@ impl Project {
             byte_patches: BTreeMap::new(),
             patch_origin: None,
             patch_source_sha256: OnceLock::new(),
+            raw_source: OnceLock::new(),
             analysis: OnceLock::new(),
             analysis_binding: OnceLock::new(),
             triage: OnceLock::new(),

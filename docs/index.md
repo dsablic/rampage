@@ -53,6 +53,8 @@ Typing:
 Patching:
 
 - [Checked byte patches and export](patching.md) and the [assembler](assembly.md).
+- [Firmware patching round trip](firmware-patching.md): integrity checks (CRCs, checksums) found, fixed after
+  patching, and the image exported as Intel HEX, S-records or binary.
 
 Formats and raw code:
 

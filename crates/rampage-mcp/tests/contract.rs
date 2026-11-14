@@ -448,6 +448,30 @@ async fn contract_mcp_formats_results() {
     exercise(c, o, "wasm_module", json!({"path": fixture("module.wasm")})).await;
     exercise(c, o, "wasm_module", json!({"path": fixture("module.wasm"), "list": "functions"})).await;
     exercise(c, o, "wasm_module", json!({"path": fixture("component.wasm")})).await;
+    // Firmware integrity: a CRC-protected Cortex-M image in Intel HEX, patched, previewed, fixed and exported.
+    let firmware = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware/raw-cortex-m-crc.hex");
+    let firmware = owned(&scratch, &firmware);
+    let raw = json!({"profile": "cortex-m3", "format": "ihex", "vector_table": true});
+    let report = exercise(c, o, "integrity_checks", json!({"path": firmware, "raw": raw})).await;
+    let source = report["receipt"]["source_sha256"].clone();
+    let patch = json!({"path": firmware, "raw": raw, "at": "0x8000434", "original_hex": "11", "replacement_hex": "42",
+        "allow_data": false, "source_sha256": source, "expected_revision": report["receipt"]["revision_sha256"]});
+    let patched = json_of("patch_bytes", &call(c, "patch_bytes", patch).await);
+    let revision = patched["receipt"]["revision_sha256"].clone();
+    exercise(c, o, "integrity_checks", json!({"path": firmware, "raw": raw, "emulate": false})).await;
+    let fix = json!({"path": firmware, "raw": raw, "emulate": false, "fix": true, "source_sha256": source,
+        "expected_revision": revision});
+    let fixed = exercise(c, o, "integrity_checks", fix).await;
+    let export = json!({"path": firmware, "raw": raw, "destination": scratch.0.join("patched.hex"),
+        "expected_revision": fixed["receipt"]["revision_sha256"]});
+    exercise(c, o, "export_image", export).await;
+    let flat = json!({"path": firmware, "raw": raw, "destination": scratch.0.join("flat.bin"), "format": "binary",
+        "expected_revision": fixed["receipt"]["revision_sha256"]});
+    exercise(c, o, "export_image", flat).await;
+    // A PE: its header CheckSum as a check, and recomputed on export.
+    exercise(c, o, "integrity_checks", json!({"path": resources, "emulate": false})).await;
+    let pe = json!({"path": resources, "destination": scratch.0.join("checksummed.exe"), "pe_checksum": true});
+    exercise(c, o, "export_image", pe).await;
     check_group(client, "formats", &observed, &[]).await;
 }
 

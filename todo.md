@@ -189,6 +189,14 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
   running candidate decoders on their blobs. Open: models for `sprintf`/`strdup`/`operator new`, and replays
   that start before the caller's block.
 
+## Firmware patching round trip (2026-11-14)
+
+- [x] `integrity_checks` (CRC/checksum/digest fields, brute force + code + emulation, fix as patches in dependency
+  order), `export_image` (HEX/S-record record rewrite, binary file, flat binary, PE CheckSum), Raw project patches.
+  Open: checks over several discontiguous ranges or with the value's bytes skipped/zeroed inside the range;
+  polynomials formed other than by literal or Thumb movw/movt (16-bit CRC immediates); ELF32/PE patch admission so
+  native firmware ELFs patch in place; persisting Raw patches across sessions; a run on a real owner's image.
+
 ## CMSIS-SVD peripheral maps (2026-11-14)
 
 - [x] `import_svd` and `peripheral_access` (types group): SVD registers as struct globals in decompiled C with

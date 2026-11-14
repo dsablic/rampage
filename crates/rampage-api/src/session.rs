@@ -197,6 +197,7 @@ impl Session {
                 project
             } else {
                 let project = Project::new(binary);
+                let _ = project.raw_source.set(key.0.clone());
                 project.set_packs(Arc::clone(&self.packs));
                 self.configure(&project);
                 if let Some(executable) = self.decompiler_worker() {

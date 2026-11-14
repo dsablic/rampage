@@ -96,7 +96,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 that answer common first questions, such as `language_metadata` and `class_evidence` for class names and
 hierarchies, are in `core` so that a client deferring schemas still sees their names.
 
-A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling every group lists 90. The
+A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling every group lists 92. The
 `debug` group adds 14 tools (16 with `--debug-writes`), `--observations` adds `report_observation`, and a
 `--corpus` server lists `enable_tools` and the 4 `improve` tools only.
 
@@ -121,7 +121,7 @@ A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
 - `carve`: `carve`, `archive_inventory`.
 - `formats`: `build_info`, `pe_resources`, `pe_load_config`, `exception_handlers`, `pyinstaller_archive`,
-  `wasm_module`.
+  `wasm_module`, `integrity_checks`, `export_image`.
 - `debug`, only on a server started with a debug endpoint: `debug_connect`, `debug_bind`, `debug_status`,
   `debug_registers`, `debug_read_memory`, `debug_modules`, `debug_snapshot`, `debug_continue`, `debug_wait`,
   `debug_interrupt`, `debug_step`, `debug_breakpoints`, `debug_evidence`, `debug_disconnect`; with the
@@ -229,6 +229,15 @@ bit-field comment (`/* CR: EN|MODE=Single_MATCH */`); disassembly, xref rows and
 and `evaluate_function` takes `mmio` values for polled registers. `peripheral_access` pages peripherals with
 access counts, or one peripheral's registers with bit fields and accessing functions. Limits: accesses are found
 only through constants a function forms itself. See [peripheral maps](peripheral-maps.md).
+
+`integrity_checks` (group `formats`) finds checksum, CRC and digest fields and the ranges they cover in the
+original image, by bounded brute force, CRC code evidence and, with `emulate` (default), the image's own routine
+run on the range; each check reports stored and computed values on the patched image, evidence and confidence.
+`fix: true` with the receipt's tokens writes corrected values as patch records in dependency order.
+`export_image` writes the patched image to a new file in its original container (HEX/S-record records, the binary
+file, the native file with an optional PE CheckSum) or as a flat binary. Both take `raw`, as do the patch tools
+except `export_patched`. Limits: one contiguous range per check; 256 MiB of hashing per search. See
+[firmware patching](firmware-patching.md).
 
 `propagate_types` previews direct-call type candidates; `apply=true` persists separate unlocked hints with
 source fingerprints. Analyst annotations take priority, conflicts remain explicit and unsupported mappings

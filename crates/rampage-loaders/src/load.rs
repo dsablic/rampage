@@ -302,6 +302,39 @@ impl Binary {
         })
     }
 
+    /// This Raw image's interpretation over replacement owned bytes of exactly the same length (a byte patch):
+    /// the mapping, entry and seeds are kept, and each region's SHA-256 is recomputed.
+    pub fn with_raw_bytes(&self, data: Vec<u8>) -> Result<Self, LoadError> {
+        let raw = match &self.raw {
+            Some(raw) if self.format == Format::Raw && matches!(self.data, Bytes::Owned(_)) => raw,
+            _ => return Err(LoadError::Unsupported("replacement bytes need an admitted Raw image".into())),
+        };
+        if data.len() != self.data.len() {
+            return Err(LoadError::Malformed("Raw replacement bytes must keep the owned length".into()));
+        }
+        let mut binary = Self::from_raw_code(
+            vec![0],
+            crate::RawCodeOptions {
+                profile: raw.profile(),
+                base: raw.base(),
+                entry: None,
+                seeds: Vec::new(),
+                vector_table: None,
+                pointer_tables: false,
+            },
+        )?;
+        binary.entry = self.entry;
+        binary.segments = self.segments.clone();
+        binary.sections = self.sections.clone();
+        binary.function_starts = self.function_starts.clone();
+        binary.thumb = self.thumb.clone();
+        binary.code_ranges = self.code_ranges.clone();
+        binary.image = 0..data.len();
+        binary.raw = Some(raw.with_bytes(&data));
+        binary.data = Bytes::Owned(data);
+        Ok(binary)
+    }
+
     /// Retained admission facts, not translator-verified facts or source authority.
     pub fn raw_code_image(&self) -> Option<&crate::RawCodeImage> {
         self.raw.as_ref()

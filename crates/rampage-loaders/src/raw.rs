@@ -718,6 +718,16 @@ impl RawCodeImage {
         self.regions.iter().map(RawRegionInfo::segment).collect()
     }
 
+    /// The same admission facts over replacement owned bytes of the same length: each backed region's SHA-256 is
+    /// recomputed; entry, seeds and vector/pointer-table evidence stay those of the admitted bytes.
+    pub(crate) fn with_bytes(&self, data: &[u8]) -> Self {
+        let mut image = self.clone();
+        for region in image.regions.iter_mut().filter(|region| region.backed()) {
+            region.sha256 = Some(sha256_hex(&data[region.data_range()]));
+        }
+        image
+    }
+
     pub(crate) fn sections(&self) -> Vec<Section> {
         self.regions.iter().map(RawRegionInfo::section).collect()
     }

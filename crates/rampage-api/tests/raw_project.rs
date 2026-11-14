@@ -65,6 +65,34 @@ fn msp430(seeds: &[&str]) -> RawProjectRequest {
     }))
 }
 
+/// The input of a patch-review tool that needs the current receipt; `None` for the other tools.
+fn reviewed_input(
+    project: &Arc<rampage_api::Project>,
+    name: &str,
+    at: u64,
+    original: &[u8],
+    export: &Path,
+) -> Option<Value> {
+    let receipt = project.patch_receipt().unwrap();
+    let tokens = json!({ "source_sha256": receipt.source_sha256, "expected_revision": receipt.revision_sha256 });
+    let mut input = match name {
+        "patch_bytes" => {
+            let replacement: Vec<u8> = original.iter().map(|byte| byte ^ 0xff).collect();
+            json!({
+                "at": format!("{at:#x}"),
+                "original_hex": original.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+                "replacement_hex": replacement.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+                "allow_data": false,
+            })
+        }
+        "revert_patch" => json!({ "at": format!("{at:#x}") }),
+        "export_image" => return Some(json!({ "destination": export, "expected_revision": receipt.revision_sha256 })),
+        _ => return None,
+    };
+    input.as_object_mut().unwrap().extend(tokens.as_object().unwrap().clone());
+    Some(input)
+}
+
 fn refusal(path: &Path, value: Value) -> String {
     let error = Session::default().open_raw(path, &request(value)).err().expect("Raw open must refuse");
     let mut text = error.to_string();
@@ -236,11 +264,18 @@ fn every_raw_capable_tool_answers_on_a_reviewed_msp430_project() {
         ("decompile", json!({ "at": "0x4400" })),
         ("import_svd", json!({ "svd": svd("edge-cases.svd"), "apply": true })),
         ("peripheral_access", json!({ "peripheral": "CTRL" })),
+        ("list_patches", json!({})),
+        ("patch_bytes", Value::Null),
+        ("revert_patch", Value::Null),
+        ("integrity_checks", json!({})),
+        ("export_image", Value::Null),
     ];
     assert_eq!(inputs.each_ref().map(|(name, _)| *name), RAW_CAPABLE_TOOLS);
+    let export = owned.0.join("export.bin");
     let mut outcomes = Vec::new();
     for (name, input) in inputs {
         assert!(raw_capable(name));
+        let input = reviewed_input(&project, name, 0x4404, &MSP430[4..6], &export).unwrap_or(input);
         let (text, failed) = call_shared(&registry, &mut project, name, input);
         assert!(!failed, "{name}: {text}");
         serde_json::from_str::<Value>(&text).unwrap_or_else(|error| panic!("{name}: {error}: {text}"));
@@ -253,9 +288,14 @@ fn every_raw_capable_tool_answers_on_a_reviewed_msp430_project() {
     assert!(outcome("decompile").contains("callee"), "{}", outcome("decompile"));
     assert!(!raw_capable("triage") && !raw_capable("inspect_sleigh"));
 
+    assert!(outcome("patch_bytes").contains("\"active_ranges\":1"), "{}", outcome("patch_bytes"));
+    // The patch was reverted, so the exported file is the input, byte for byte.
+    assert!(outcome("export_image").contains("\"format\":\"binary_file\""), "{}", outcome("export_image"));
+    assert_eq!(std::fs::read(&export).unwrap(), MSP430);
+
     let reopened = session.open_raw(&path, &msp430(&["0x4400", "0x4410"])).unwrap();
     assert_eq!(reopened.comment_at(0x4404).as_deref(), Some("nop"), "redo restored the batch");
-    assert_eq!(owned.names(), ["code.bin"]);
+    assert_eq!(owned.names(), ["code.bin", "export.bin"]);
 }
 
 #[test]
@@ -382,10 +422,19 @@ fn cortex_m_raw_projects_serve_every_raw_capable_tool_with_native_evidence() {
         ("decompile", json!({ "at": reset })),
         ("import_svd", json!({ "svd": svd("ARM_Example.svd"), "apply": true })),
         ("peripheral_access", json!({})),
+        ("list_patches", json!({})),
+        ("patch_bytes", Value::Null),
+        ("revert_patch", Value::Null),
+        ("integrity_checks", json!({})),
+        ("export_image", Value::Null),
     ];
     assert_eq!(inputs.each_ref().map(|(name, _)| *name), RAW_CAPABLE_TOOLS);
+    let export = owned.0.join("export.bin");
+    let at = truth("uart_puts");
+    let offset = (at - 0x0800_0000) as usize;
     let mut outcomes = Vec::new();
     for (name, input) in inputs {
+        let input = reviewed_input(&project, name, at, &CORTEX_M[offset..offset + 2], &export).unwrap_or(input);
         let (text, failed) = call_shared(&registry, &mut project, name, input);
         assert!(!failed, "{name}: {text}");
         serde_json::from_str::<Value>(&text).unwrap_or_else(|error| panic!("{name}: {error}: {text}"));
@@ -401,7 +450,8 @@ fn cortex_m_raw_projects_serve_every_raw_capable_tool_with_native_evidence() {
     // ARM v8 Thumb with its reviewed C model decompiles the reset handler and names the analyst's callee.
     let decompiled = outcome("decompile");
     assert!(decompiled.contains("uart_puts(") && decompiled.contains("while"), "{decompiled}");
-    assert_eq!(owned.names(), ["firmware.bin"]);
+    assert_eq!(std::fs::read(&export).unwrap(), CORTEX_M);
+    assert_eq!(owned.names(), ["export.bin", "firmware.bin"]);
 }
 
 /// `disassemble` pages over the whole image as text, 1000 instructions at a time, data included.

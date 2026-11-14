@@ -127,7 +127,8 @@ fn group_summary(group: Group) -> &'static str {
         Group::Carve => "files inside files: carve (embedded executables), archive_inventory (ZIP listing).",
         Group::Formats => {
             "build_info (Go modules, Rust dependencies), pe_resources, pe_load_config, exception_handlers (MSVC C++ \
-             try/catch tables), pyinstaller_archive, wasm_module."
+             try/catch tables), pyinstaller_archive, wasm_module; firmware: integrity_checks (CRC/checksum fields; fix \
+             after patch_bytes), export_image (patched HEX/S-record/binary)."
         }
         Group::Debug => {
             "a live target via GDB remote stub: debug_connect, debug_registers, debug_read_memory, \

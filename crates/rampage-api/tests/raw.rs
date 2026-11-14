@@ -54,14 +54,28 @@ fn raw_is_not_a_capture_or_original_source_proof() {
 }
 
 #[test]
-fn raw_patch_v1_is_refused_without_changing_bytes_or_annotations() {
+fn raw_patches_are_version_2_records_over_owned_region_bytes() {
     let project = project();
     let bytes = project.binary.image_bytes().to_vec();
-    let error = project.patch_bytes(0x1000, &[0x30, 0x41], &[0, 0], false).err().expect("Raw patch must refuse");
-    assert!(error.to_string().contains("ELF64"), "{error}");
-    assert_eq!(project.binary.image_bytes(), bytes);
+    // Outside the mapped bytes, and a preimage that is not the original, refuse without changing anything.
+    let error = project.patch_bytes(0x1001, &[0x41, 0], &[0, 0], false).err().expect("past the region");
+    assert!(error.to_string().contains("wholly inside"), "{error}");
+    assert!(project.patch_bytes(0x1000, &[0, 0], &[1, 1], false).is_err());
     assert!(project.list_patches().unwrap().is_empty());
-    assert!(project.annotation_list().names.is_empty());
+
+    let outcome = project.patch_bytes(0x1000, &[0x30, 0x41], &[0x03, 0x43], false).unwrap();
+    assert_eq!(outcome.project.binary.image_bytes(), [0x03, 0x43]);
+    assert_eq!(project.binary.image_bytes(), bytes, "the original project keeps its bytes");
+    let patches = outcome.project.list_patches().unwrap();
+    assert_eq!((patches.len(), patches[0].version, patches[0].file_offset), (1, 2, 0));
+    let identity = project.binary.raw_interpretation_identity().unwrap().unwrap();
+    assert_eq!(outcome.receipt.source_sha256, identity.sha256);
+    // The effective image keeps the interpretation; only its bytes (and their hashes) differ.
+    let effective = outcome.project.binary.raw_code_image().unwrap();
+    assert_eq!(effective.regions()[0].range(), project.binary.raw_code_image().unwrap().regions()[0].range());
+    assert_ne!(effective.regions()[0].sha256, project.binary.raw_code_image().unwrap().regions()[0].sha256);
+    let reverted = outcome.project.revert_patch(0x1000).unwrap();
+    assert_eq!(reverted.project.binary.image_bytes(), bytes);
 }
 
 #[test]

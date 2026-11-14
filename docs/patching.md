@@ -7,6 +7,12 @@ whole-file, little-endian, static `ET_EXEC` ELF64 images for x86-64 and AArch64.
 snapshots/captures, embedded/fat images, relocatable objects, ambiguous mappings, zero-fill, headers and
 loader-control metadata reject. Unsupported relocation/control encodings also reject explicitly.
 
+Raw projects take patches too (record version 2): each range lies wholly inside one backed region that is not
+decoder output, its offset indexes the project's region bytes, and the source identity is the Raw interpretation
+identity. Code regions are patched by default, data and RAM initial values with `allow_data`. Raw patches live in
+memory for the session; [`export_image`](firmware-patching.md) writes them back into the original HEX, S-record or
+binary file.
+
 Mapped code payload is the default. Non-code payload additionally requires explicit `allow_data: true`.
 Every admitted range must have unique virtual and file backing and preserve the loader layout after reparse.
 Data permission does not authorize changes to loader metadata hidden inside nominal payload sections.

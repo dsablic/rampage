@@ -27,6 +27,15 @@ Additions only; nothing in the stable surface changed.
   `evaluate_function` takes `mmio` register values, so routines that poll a status register run. See
   [peripheral maps](docs/peripheral-maps.md).
 
+- Firmware patching round trip (formats group): `integrity_checks` finds CRC-32 (IEEE, MPEG-2, STM32 word order,
+  JAMCRC, CRC-32C), CRC-16/8, sum, XOR, Adler-32, Fletcher and SHA-256/MD5 fields with the ranges they cover, by
+  bounded brute force over layout and code-referenced ranges, CRC tables and polynomials in code, and emulation of
+  the image's own routine; it reports which checks the active patches broke and, with `fix: true`, writes the
+  corrected values as patches in dependency order. `export_image` writes the patched image to a new file as Intel
+  HEX or S-records (only changed data records re-encoded), the original binary file, the native file (optional PE
+  CheckSum) or a flat binary. Raw projects now take `patch_bytes`, `revert_patch` and `list_patches` (patch record
+  version 2). See [firmware patching](docs/firmware-patching.md).
+
 ## 1.1.0 (2026-11-14)
 
 Additions only; nothing in the stable surface changed.

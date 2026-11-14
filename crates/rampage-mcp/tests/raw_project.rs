@@ -318,3 +318,50 @@ async fn an_svd_map_names_registers_across_tools() {
     assert!(!failed && text.contains("\"name\":\"RELOAD[2]\""), "{text}");
     client.cancel().await.unwrap();
 }
+
+/// The firmware patching round trip over MCP on Intel HEX: find the application CRC, patch, fix, export the HEX and
+/// reopen it with the check valid and the patch present.
+#[tokio::test]
+async fn a_patched_hex_image_is_fixed_and_exported_in_its_container() {
+    let client = connect().await;
+    let directory = FixtureCopy::new();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware");
+    let path = directory.0.join("firmware.hex");
+    std::fs::copy(root.join("raw-cortex-m-crc.hex"), &path).unwrap();
+    let selector = json!({ "profile": "cortex-m3", "format": "ihex", "vector_table": true });
+    let (text, failed) = call(&client, "enable_tools", json!({ "groups": ["formats"] })).await;
+    assert!(!failed, "{text}");
+    let (text, failed) = call(&client, "integrity_checks", json!({ "path": path, "raw": selector })).await;
+    assert!(!failed, "{text}");
+    let report: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(report["checks"][0]["algorithm"], "crc32", "{text}");
+    assert_eq!(report["checks"][0]["confirmed_by_emulation"], true, "{text}");
+    let receipt = &report["receipt"];
+    let patch = json!({
+        "path": path, "raw": selector, "at": "0x8000434", "original_hex": "11", "replacement_hex": "42",
+        "allow_data": false, "source_sha256": receipt["source_sha256"], "expected_revision": receipt["revision_sha256"],
+    });
+    let (text, failed) = call(&client, "patch_bytes", patch).await;
+    assert!(!failed, "{text}");
+    let patched: Value = serde_json::from_str(&text).unwrap();
+    let fix = json!({
+        "path": path, "raw": selector, "fix": true, "emulate": false,
+        "source_sha256": receipt["source_sha256"], "expected_revision": patched["receipt"]["revision_sha256"],
+    });
+    let (text, failed) = call(&client, "integrity_checks", fix).await;
+    assert!(!failed && text.contains("\"applied\":true"), "{text}");
+    let fixed: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(fixed["invalid"], 0, "{text}");
+    let exported = directory.0.join("patched.hex");
+    let export = json!({
+        "path": path, "raw": selector, "destination": exported,
+        "expected_revision": fixed["receipt"]["revision_sha256"],
+    });
+    let (text, failed) = call(&client, "export_image", export).await;
+    assert!(!failed && text.contains("\"records_rewritten\":2"), "{text}");
+    let (text, failed) = call(&client, "integrity_checks", json!({ "path": exported, "raw": selector })).await;
+    assert!(!failed, "{text}");
+    let reopened: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!((reopened["checks"][0]["valid"].as_bool(), reopened["invalid"].as_u64()), (Some(true), Some(0)));
+    client.cancel().await.unwrap();
+}

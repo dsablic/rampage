@@ -1857,6 +1857,97 @@
       },
       "experimental": true
     },
+    "export_image": {
+      "group": "formats",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "destination": {
+          "type": "string",
+          "required": true
+        },
+        "expected_revision": {
+          "type": "null|string",
+          "required": false
+        },
+        "fill": {
+          "type": "integer|null",
+          "required": false
+        },
+        "format": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "pe_checksum": {
+          "type": "boolean|null",
+          "required": false
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "offset": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
+        },
+        "region": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
     "export_patched": {
       "group": "core",
       "arguments": {
@@ -2647,6 +2738,93 @@
         }
       }
     },
+    "integrity_checks": {
+      "group": "formats",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "emulate": {
+          "type": "boolean|null",
+          "required": false
+        },
+        "expected_revision": {
+          "type": "null|string",
+          "required": false
+        },
+        "fix": {
+          "type": "boolean|null",
+          "required": false
+        },
+        "ids": {
+          "type": "array|null",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "offset": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
+        },
+        "source_sha256": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
     "language_metadata": {
       "group": "core",
       "arguments": {
@@ -2959,6 +3137,52 @@
         "path": {
           "type": "string",
           "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "offset": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         }
       }
     },
@@ -3186,6 +3410,52 @@
         "path": {
           "type": "string",
           "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "offset": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         },
         "replacement_hex": {
           "type": "string",
@@ -3741,6 +4011,52 @@
         "path": {
           "type": "string",
           "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "offset": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         },
         "source_sha256": {
           "type": "string",

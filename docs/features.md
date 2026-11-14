@@ -51,6 +51,11 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   disassembly, xrefs and evaluation faults say `TIMER0.CR`, and `peripheral_access` lists the functions that read
   or write each register. Limits: accesses are found only through constants a function forms itself; bit fields
   are comments, not C bit-fields.
+- [Firmware patching round trip](firmware-patching.md) (`integrity_checks`, `export_image`): finds the CRC,
+  checksum and digest fields protecting an image and the ranges they cover (bounded brute force, CRC code and
+  emulation of the image's own routine), reports which no longer hold after patches, writes corrected values as
+  patches in dependency order, and exports the patched image as Intel HEX, S-records, the original binary file or a
+  flat binary (PE CheckSum recomputed on request). Limits: one contiguous range per check, unkeyed digests only.
 - ELF, PE and Mach-O, including universal Mach-O binaries and explicitly selected embedded executable images.
 - x86 and x86-64 use [iced-x86](https://github.com/icedland/iced).
 - AArch64 and 32-bit ARM decode natively from Arm's
@@ -268,13 +273,14 @@ signatures, types and globals as an undoable batch with a provenance ledger entr
 
 ## Checked patches and assembly
 
-Static ELF64 x86-64/AArch64 patches use the annotation log, original identity/preimage checks,
+Static ELF64 x86-64/AArch64 and Raw project patches use the annotation log, original identity/preimage checks,
 reviewed revisions and immutable effective projects. Listing, analysis and decompilation consume the same
 effective bytes. Export publishes only a new file; source files and debugger/capture memory remain unchanged.
 Unsupported profiles and incompatible image-sealed metadata reject rather than weakening evidence gates.
 
 The pure assembler supports a documented x86/x64/AArch64 subset and returns verified bytes without applying
-them. See [patching/export contracts](patching.md) and [assembly grammar and limits](assembly.md).
+them. See [patching/export contracts](patching.md), [assembly grammar and limits](assembly.md) and the
+[firmware patching round trip](firmware-patching.md) for checksums and export in the original container.
 
 ## Search
 
