@@ -281,7 +281,10 @@ fn exact_evidence(
 ) -> Result<(BTreeMap<u64, FuzzyExactEvidence>, Vec<String>), ApiError> {
     let packs = project.packs();
     let packed = packs.signatures_for(project.binary.arch);
-    let builtin = rampage_signatures::bundled_sets(project.binary.arch).map(|db| (BUILTIN_PACK, db));
+    let corpus = rampage_signatures::bundled_ref(project.binary.arch).map(|db| (BUILTIN_PACK, db));
+    let embedded = rampage_signatures::bundled_embedded_for(&project.binary)
+        .map(|db| (crate::signatures::EMBEDDED_SIGNATURES, db));
+    let builtin = corpus.into_iter().chain(embedded);
     let databases: Vec<_> = user.map(|db| (USER_SIGNATURES, db)).into_iter().chain(packed).chain(builtin).collect();
     for (_, database) in &databases {
         database.ensure_byte_matching_supported().map_err(|error| ApiError::Invalid(error.to_string()))?;

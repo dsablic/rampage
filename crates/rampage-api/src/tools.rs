@@ -2167,7 +2167,7 @@ struct IdentifyArgs {
     /// and candidates_per_function (1..16). Required with fuzzy_database.
     #[serde(default)]
     fuzzy_request: Option<String>,
-    /// Leave out the bundled starter database, matching against `database` and the data packs' databases only
+    /// Leave out the bundled databases, matching against `database` and the data packs' databases only
     /// (needs at least one of them).
     #[serde(default)]
     no_bundled: bool,
@@ -2735,10 +2735,11 @@ pub fn tools() -> Vec<Tool> {
             "identify_functions",
             "Identify library functions using native databases or user-supplied PAT patterns. Statically linked \
              library code in a stripped binary gets recognized. Applies, first match winning: an optional \
-             database path, then loaded data packs' databases in pack order, then the bundled starter database for \
-             the architecture (left out with no_bundled=true, which works with a database path, a data pack's \
-             database for the architecture, or both, and is refused with neither). Each match's `source` names \
-             the database that named it: \"user database\", the data pack's name, or \"rampage-builtin\". \
+             database path, then loaded data packs' databases in pack order, then the bundled corpus for the \
+             architecture and, for firmware (Cortex-M Raw, static ELF executables), the embedded firmware set \
+             (both left out with no_bundled=true, which works with a database path, a data pack's database for the \
+             architecture, or both, and is refused with neither). Each match's `source` names the database that \
+             named it: \"user database\", the data pack's name, \"rampage-builtin\" or \"rampage-builtin embedded\". \
              A function whose masked body collides with another's is named by the names of the functions it \
              calls, once those are named; thunks too small for the confidence gate are never named. apply=true \
              saves names for unnamed functions. `warnings` names data packs or pack signature databases that did \

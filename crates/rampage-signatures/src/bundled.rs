@@ -9,6 +9,8 @@ pub use catalog::{BundledMetadata, BundledProfile, FLYWHEEL_PROFILE_PREFIX};
 use rampage_arch::Arch;
 use std::sync::OnceLock;
 
+use rampage_loaders::{Binary, Details};
+
 use crate::{SignatureDb, SignatureDbError};
 
 struct Entry {
@@ -117,10 +119,30 @@ pub fn bundled_embedded_ref(arch: Arch) -> Option<&'static SignatureDb> {
     embedded_entry(arch)?.database().ok()
 }
 
-/// Every bundled signature set for `arch`, in the order identification consults them: the public-source corpus,
-/// then the embedded firmware set. They use different hash schemes, so they are layered, never merged.
-pub fn bundled_sets(arch: Arch) -> impl Iterator<Item = &'static SignatureDb> {
-    bundled_ref(arch).into_iter().chain(bundled_embedded_ref(arch))
+/// The embedded firmware set for `binary`, when it looks like firmware ([`firmware_like`]); identification
+/// consults it after the corpus ([`bundled_ref`]). They use different hash schemes, so they are layered, never
+/// merged.
+pub fn bundled_embedded_for(binary: &Binary) -> Option<&'static SignatureDb> {
+    if firmware_like(binary) { bundled_embedded_ref(binary.arch) } else { None }
+}
+
+/// Whether `binary` looks like bare-metal firmware, the code the embedded set was built from: a Raw project with an
+/// M-profile (Cortex-M) profile, or a statically linked ELF executable (`ET_EXEC`, no interpreter, no dynamic
+/// section). A Linux PIE, shared object or dynamically linked armhf program is not, so its Thumb code never
+/// meets firmware library names.
+pub fn firmware_like(binary: &Binary) -> bool {
+    if binary.raw_code_image().is_some() {
+        return binary.m_profile();
+    }
+    match &binary.details {
+        Details::Elf(elf) => {
+            elf.kind == "executable"
+                && elf.interpreter.is_none()
+                && elf.needed.is_empty()
+                && !binary.sections.iter().any(|section| section.name == ".dynamic")
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -149,7 +171,6 @@ mod tests {
             assert_eq!(database.scheme(), crate::LITERAL_POOL_SCHEME);
             assert!(!database.is_empty());
             assert!(std::ptr::eq(bundled_embedded_ref(entry.arch).unwrap(), database));
-            assert_eq!(bundled_sets(entry.arch).count(), 2);
         }
     }
 
@@ -160,7 +181,53 @@ mod tests {
         assert!(bundled_counts(Arch::S390x).is_none());
         assert!(SignatureDb::bundled_metadata(Arch::S390x).unwrap().is_none());
         assert!(bundled_embedded_ref(Arch::X86_64).is_none());
-        assert_eq!(bundled_sets(Arch::S390x).count(), 0);
+    }
+
+    fn fixture(path: &str) -> Binary {
+        Binary::open(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(path)).unwrap()
+    }
+
+    /// The embedded firmware set is consulted for statically linked firmware only, never for a dynamically linked
+    /// armhf Linux program, whose Thumb code is no microcontroller's.
+    #[test]
+    fn the_embedded_set_applies_to_firmware_only() {
+        let firmware = fixture("firmware/embedded-libs-m4f.elf");
+        assert!(firmware_like(&firmware));
+        assert!(bundled_embedded_for(&firmware).is_some());
+        // A dynamically linked armhf program (interpreter, DT_NEEDED, .dynamic). Its fixture is A32; built for Thumb
+        // (the armhf default) only its code ranges differ, so mark them Thumb.
+        let mut linux = fixture("bin/hello-arm.elf");
+        assert_eq!(linux.arch, Arch::Arm);
+        linux.thumb = linux.segments.iter().map(|segment| segment.address..segment.address + segment.size).collect();
+        assert!(linux.target().is_thumb(linux.entry.unwrap()));
+        assert!(!firmware_like(&linux));
+        assert!(bundled_embedded_for(&linux).is_none());
+        assert!(bundled_ref(Arch::Arm).is_some(), "the corpus still applies");
+    }
+
+    /// Every notice the index names exists with its recorded digest, and every file beside it is named.
+    #[test]
+    fn the_notice_index_names_every_notice_file_with_its_digest() {
+        use sha2::Digest;
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/notices");
+        let index: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(directory.join("index.json")).unwrap()).unwrap();
+        let mut named = std::collections::BTreeSet::new();
+        for notice in index["notices"].as_array().unwrap() {
+            let file = notice["notice"].as_str().unwrap();
+            let bytes = std::fs::read(directory.join(file)).unwrap_or_else(|error| panic!("{file}: {error}"));
+            assert_eq!(crate::hex(&sha2::Sha256::digest(&bytes)), notice["notice_sha256"].as_str().unwrap(), "{file}");
+            named.insert(file.to_owned());
+            for related in notice["related_notices"].as_array().into_iter().flatten() {
+                let related = related.as_str().unwrap();
+                assert!(directory.join(related).is_file(), "{related}");
+                named.insert(related.to_owned());
+            }
+        }
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            assert!(name == "index.json" || named.contains(&name), "{name} is in data/notices but not in the index");
+        }
     }
 
     #[test]

@@ -8,7 +8,8 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 Additions only; nothing in the stable surface changed.
 
-- Embedded library signatures: Thumb identification also applies a bundled firmware set (1.3 MB) built from
+- Embedded library signatures: identification of firmware (Cortex-M Raw projects and static Thumb ELF
+  executables) also applies a bundled firmware set (1.3 MB, source `rampage-builtin embedded`) built from
   newlib and newlib-nano, libgcc, compiler-rt builtins, the FreeRTOS kernel and the STM32F4 HAL/LL across three
   Arm GNU Toolchain releases, five Cortex-M multilibs and five optimisation levels. Its hash scheme 3 treats Thumb
   literal pools as data (masking address-like words), records Thumb call targets for callee keys and leaves short

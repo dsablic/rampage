@@ -19,6 +19,10 @@ pub const USER_SIGNATURES: &str = "user database";
 /// function, as training builds of the same library do (`rampage_signatures::callgraph`).
 pub const CALL_GRAPH: &str = "rampage-builtin call graph";
 
+/// The [`SignatureMatch::source`] of a name the bundled embedded firmware set gave (newlib, libgcc, compiler-rt,
+/// FreeRTOS, STM32F4 HAL), consulted for firmware-like Thumb targets only (`rampage_signatures::firmware_like`).
+pub const EMBEDDED_SIGNATURES: &str = "rampage-builtin embedded";
+
 #[derive(Debug, Serialize)]
 pub struct SignatureMatch {
     #[serde(serialize_with = "rampage_arch::hex::address")]
@@ -28,13 +32,13 @@ pub struct SignatureMatch {
     /// Whether the function is currently unnamed (a `sub_<hex>` default), so naming it adds information.
     pub unnamed: bool,
     /// The database that named it: [`USER_SIGNATURES`], the name of the data pack that holds it,
-    /// [`BUILTIN_PACK`] for the starter database bundled with rampage, or [`CALL_GRAPH`] for a name the bundled
-    /// call graph gave from an already-named caller.
+    /// [`BUILTIN_PACK`] for the corpus bundled with rampage, [`EMBEDDED_SIGNATURES`] for the bundled embedded
+    /// firmware set, or [`CALL_GRAPH`] for a name the bundled call graph gave from an already-named caller.
     pub source: String,
 }
 
 impl SignatureMatch {
-    /// The database that named the function, for prose: "the bundled starter database", "data pack `x`".
+    /// The database that named the function, for prose: "the bundled signature corpus", "data pack `x`".
     pub fn origin(&self) -> String {
         signature_origin(&self.source)
     }
@@ -43,7 +47,8 @@ impl SignatureMatch {
 /// [`SignatureMatch::origin`] for a match `source`.
 pub(crate) fn signature_origin(source: &str) -> String {
     match source {
-        BUILTIN_PACK => "the bundled starter database".to_owned(),
+        BUILTIN_PACK => "the bundled signature corpus".to_owned(),
+        EMBEDDED_SIGNATURES => "the bundled embedded firmware signatures".to_owned(),
         CALL_GRAPH => "the bundled call graph (from an already-named caller)".to_owned(),
         USER_SIGNATURES => "the user-supplied database".to_owned(),
         pack => format!("data pack `{pack}`"),
@@ -177,7 +182,7 @@ impl Project {
     }
 
     /// Identifies functions against an optional `user` database first, then the data packs' databases for this
-    /// architecture in pack order, then the bundled starter database (so user names win). With no database,
+    /// architecture in pack order, then the bundled databases (so user names win). With no database,
     /// nothing matches.
     pub fn apply_signatures_default(
         &self,
@@ -188,7 +193,7 @@ impl Project {
     }
 
     /// Identifies functions against an optional `user` database first, then the data packs' databases for this
-    /// architecture in pack order, then, with `bundled`, the bundled starter database. Leaving out the bundled
+    /// architecture in pack order, then, with `bundled`, the bundled corpus and, for firmware, the embedded set. Leaving out the bundled
     /// database needs a `user` or pack one, so that the request is never silently empty.
     pub fn identify_functions(
         &self,
@@ -218,11 +223,14 @@ impl Project {
             ));
         }
         let call_graph = if bundled { rampage_signatures::bundled_call_graph() } else { None };
-        // The corpus, then (Thumb) the embedded firmware set: different hash schemes, so layered.
-        let bundled: Vec<&SignatureDb> =
-            if bundled { rampage_signatures::bundled_sets(self.binary.arch).collect() } else { Vec::new() };
+        // The corpus, then (firmware) the embedded set: different hash schemes, so layered.
+        let corpus = bundled.then(|| rampage_signatures::bundled_ref(self.binary.arch)).flatten();
+        let embedded = bundled.then(|| rampage_signatures::bundled_embedded_for(&self.binary)).flatten();
         let user = user.map(|database| (USER_SIGNATURES, database));
-        let bundled = bundled.into_iter().map(|database| (BUILTIN_PACK, database));
+        let bundled = corpus
+            .map(|database| (BUILTIN_PACK, database))
+            .into_iter()
+            .chain(embedded.map(|database| (EMBEDDED_SIGNATURES, database)));
         let databases: Vec<(&str, &SignatureDb)> = user.into_iter().chain(packed).chain(bundled).collect();
         self.apply_layered_signatures_with_preflight(
             &databases,

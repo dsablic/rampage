@@ -57,11 +57,13 @@ are harness labels only; native runtime optimization is not inferred. Zig runtim
 
 ## Embedded firmware set
 
-A second bundled ARM database, `data/embedded-thumb.json.gz` (1.31 MB gzip, 2.44 MB JSON; 22,538 masked entries
+A second bundled ARM database, `data/embedded-thumb.json.gz` (1.31 MB gzip, 2.44 MB JSON; 22,541 masked entries
 and 4,189 callee keys over 22 recorded profiles in `embedded-thumb.index.json`), names the library code
 microcontroller firmware links: newlib and newlib-nano (libc and libm), libgcc, LLVM compiler-rt builtins,
-the FreeRTOS kernel and the STM32F4 HAL/LL drivers. Identification consults it after the ARM corpus for every
-Thumb target, ELF or [Cortex-M Raw project](sleigh-decoding.md#cortex-m-profile), as `rampage-builtin`.
+the FreeRTOS kernel and the STM32F4 HAL/LL drivers. Identification consults it after the ARM corpus, with source
+`rampage-builtin embedded`, for firmware only: a [Cortex-M Raw project](sleigh-decoding.md#cortex-m-profile), or
+an ELF executable (`ET_EXEC`) with no interpreter and no dynamic section. Linux PIE, shared and dynamically linked
+armhf programs never meet its names (`rampage_signatures::firmware_like`).
 
 | Library | Versions | Built with | Cores and options |
 | --- | --- | --- | --- |
@@ -73,14 +75,19 @@ Thumb target, ELF or [Cortex-M Raw project](sleigh-decoding.md#cortex-m-profile)
 
 It uses hash scheme 3 (`LITERAL_POOL_SCHEME`), which is scheme 2 everywhere except Thumb code:
 
-- A word a PC-relative `LDR` loads from inside the body is hashed as literal-pool data, not decoded as
-  instructions. Words below `0x4000_0000` (the Cortex-M code and SRAM regions: pointers to globals, strings and
-  functions that move with layout) are masked; peripheral and system addresses, which are fixed per device, are
-  kept. The rule does not depend on the image's mapping, so an ELF and a Raw project hash alike.
+- A word a PC-relative load (`LDR`, `LDR.W`, `LDRD`, `VLDR`) reads from inside the body is hashed as
+  literal-pool data, not decoded as instructions, in the data byte order. Address-like words are masked: those
+  below `0x4000_0000` (the Cortex-M code and SRAM regions, where pointers to globals, strings and functions move
+  with layout) and those inside the image's executable ranges (flash mapped higher, as XIP, QSPI or SDRAM
+  images are). An ELF's text segment and a Raw project's code region cover the same flash, so both hash alike.
+  Peripheral and system addresses (fixed per device) and float constants of magnitude 2 or more or negative are
+  kept; integers and smaller positive floats below the limit are masked.
+- `TBB`/`TBH` tables are hashed as data and skipped, so decoding resumes at the first case.
 - BL, B.W and 16-bit B targets are recorded, so a body several functions share is told apart by its callees'
   names, as on x86 and AArch64.
-- Trailing `nop` padding is ignored, and the gate needs six instructions (pool words not counted): short
-  accessors such as `HAL_GetTick` mask to the same few instructions in every program, so they stay unnamed.
+- Trailing 16-bit `nop`s (whole decoded instructions, never half of a `B.W`) are ignored, and the gate needs six
+  instructions (pool words not counted): short accessors such as `HAL_GetTick` mask to the same few instructions
+  in every program, so they stay unnamed.
 - Each function is hashed over the extents discovery finds in the reference and in a stripped copy of it
   (discovery cannot tell a call to an unnamed `abort` never returns); symbol-size hashes, which span a trailing
   pool no discovered body includes, and exact fallbacks (layout-specific, never matching another link) do not ship.
@@ -96,7 +103,7 @@ python3 -I tools/embedded-signatures/build.py fetch            # WORK defaults t
 python3 -I tools/embedded-signatures/build.py refs             # 255 references from the training toolchains
 python3 -I tools/embedded-signatures/build.py compiler-rt      # 12 more with Homebrew llvm@22
 cargo build -p rampage-eval --example embedded_signatures --example signature_bundle_index
-target/debug/examples/embedded_signatures --output WORK/db.json --gzip WORK/db.json.gz --drop-prefix embsig_ WORK/refs/*.elf
+target/debug/examples/embedded_signatures --output WORK/db.json --gzip WORK/db.json.gz WORK/refs/*.elf
 python3 -I tools/embedded-signatures/build.py profiles > WORK/profiles.json
 target/debug/examples/signature_bundle_index --database WORK/db.json.gz --profiles WORK/profiles.json \
   --asset embedded-thumb.json.gz --output crates/rampage-signatures/data/embedded-thumb.index.json
@@ -117,9 +124,10 @@ fixture's own objects), so any name on the fixture's own code counts as spurious
 | `embedded-libs-m0` (ELF) | 227 | 70 | 0 | 100% | 30.8% |
 | `embedded-libs-m0` (Raw, vector table) | 227 | 71 | 0 | 100% | 31.3% |
 
-The `libid-embedded-m4f` and `libid-embedded-m0` slices of `tests/fixtures/data/eval-manifest.json` gate these
-numbers; the fixtures also join the toolid truth as `arm-none-eabi-gcc` builds. Misses are mostly code a
-different GCC generated differently (newlib's C, FreeRTOS), kernel functions whose layout depends on the
+The `libid-embedded-m4f` and `libid-embedded-m0` slices of `tests/fixtures/data/eval-manifest.json` gate the ELF
+rows; the MCP Raw-project tests (`crates/rampage-mcp/tests/raw_project.rs`) gate the Raw rows, requiring exactly
+those counts with every name matching the truth. The fixtures also join the toolid truth as `arm-none-eabi-gcc`
+builds. Misses are mostly code a different GCC generated differently (newlib's C, FreeRTOS), kernel functions whose layout depends on the
 FreeRTOS configuration, bodies below the gate, functions discovery does not reach (handlers only the vector table
 names, unused weak callbacks) and collisions without named callees (`_close_r` and friends call libnosys stubs
 that are all alike). With the newest toolchain held out instead (training 12.3, 13.3 and 14.3, firmware built

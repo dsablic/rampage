@@ -53,8 +53,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 pub use bundled::{
-    BundledMetadata, BundledProfile, FLYWHEEL_PROFILE_PREFIX, bundled, bundled_counts, bundled_embedded_ref,
-    bundled_ref, bundled_sets,
+    BundledMetadata, BundledProfile, FLYWHEEL_PROFILE_PREFIX, bundled, bundled_counts, bundled_embedded_for,
+    bundled_embedded_ref, bundled_ref, firmware_like,
 };
 pub use callgraph::{CallGraph, CallSequence, bundled_call_graph};
 pub use compressed::{CombineError, SignatureDbError};
@@ -109,8 +109,10 @@ pub const KNOWN_SCHEMES: [u32; 3] = [LEGACY_SCHEME, CURRENT_SCHEME, LITERAL_POOL
 
 /// Under [`LITERAL_POOL_SCHEME`], a literal-pool word below this value is masked as a possible address: the
 /// Cortex-M code and SRAM regions (and ordinary images on other Thumb targets) lie below it, so a pointer to a
-/// function, a string or a global moves with layout. Words at or above it (the peripheral and system regions, fixed
-/// per device, and most float constants) are kept, since they discriminate functions and never move.
+/// function, a string or a global moves with layout. So is a word inside the image's code
+/// ([`MaskContext::contains_code`]), for images based higher (XIP, QSPI or SDRAM flash). Other words (peripheral and
+/// system addresses, fixed per device, and single-precision constants of magnitude 2 or more or negative) are kept,
+/// since they discriminate functions and never move; smaller positive float constants and integers are masked.
 const POOL_ADDRESS_LIMIT: u32 = 0x4000_0000;
 
 /// Fewest instructions (pool words excluded) a [`LITERAL_POOL_SCHEME`] Thumb body needs: short firmware
@@ -129,37 +131,43 @@ const MIN_IMAGE_BASE: u64 = 0x1_0000;
 pub struct MaskContext {
     /// Sorted, non-overlapping, non-empty ranges.
     ranges: Vec<Range<u64>>,
+    /// The executable part of `ranges`, normalized the same way.
+    code: Vec<Range<u64>>,
 }
 
 impl MaskContext {
     /// A context over `ranges`, normalized (sorted, empty ranges dropped, overlaps merged).
     pub fn new(ranges: impl IntoIterator<Item = Range<u64>>) -> MaskContext {
-        let mut sorted: Vec<Range<u64>> = ranges.into_iter().filter(|range| range.start < range.end).collect();
-        sorted.sort_by_key(|range| range.start);
-        let mut merged: Vec<Range<u64>> = Vec::with_capacity(sorted.len());
-        for range in sorted {
-            match merged.last_mut() {
-                Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
-                _ => merged.push(range),
-            }
-        }
-        MaskContext { ranges: merged }
+        let ranges = normalize(ranges);
+        MaskContext { code: ranges.clone(), ranges }
     }
 
     /// The mapped, non-empty segments of `binary` (its sections when it has no segments, as for an object file).
     /// Inaccessible segments such as Mach-O's `__PAGEZERO` are guard regions, not image contents. An image based
-    /// below [`MIN_IMAGE_BASE`] is position-independent and gets an empty context.
+    /// below [`MIN_IMAGE_BASE`] is position-independent and gets an empty context. The executable segments (code
+    /// sections) are its code: a Raw project's code region, or an ELF's text segment, alike.
     pub fn from_binary(binary: &Binary) -> MaskContext {
-        let segments = binary
-            .segments
-            .iter()
-            .filter(|segment| segment.perms.read || segment.perms.write || segment.perms.execute)
-            .map(|segment| segment.address..segment.address.saturating_add(segment.size));
-        let sections =
-            binary.sections.iter().map(|section| section.address..section.address.saturating_add(section.size));
-        let context = if binary.segments.is_empty() { MaskContext::new(sections) } else { MaskContext::new(segments) };
-        match context.ranges.first() {
-            Some(lowest) if lowest.start >= MIN_IMAGE_BASE => context,
+        let range = |address: u64, size: u64| address..address.saturating_add(size);
+        let (ranges, code) = if binary.segments.is_empty() {
+            let sections = || binary.sections.iter();
+            let code = sections().filter(|section| section.kind == rampage_loaders::SectionKind::Code);
+            (
+                normalize(sections().map(|section| range(section.address, section.size))),
+                normalize(code.map(|section| range(section.address, section.size))),
+            )
+        } else {
+            let mapped = binary
+                .segments
+                .iter()
+                .filter(|segment| segment.perms.read || segment.perms.write || segment.perms.execute);
+            let code = binary.segments.iter().filter(|segment| segment.perms.execute);
+            (
+                normalize(mapped.map(|segment| range(segment.address, segment.size))),
+                normalize(code.map(|segment| range(segment.address, segment.size))),
+            )
+        };
+        match ranges.first() {
+            Some(lowest) if lowest.start >= MIN_IMAGE_BASE => MaskContext { ranges, code },
             _ => MaskContext::default(),
         }
     }
@@ -171,9 +179,33 @@ impl MaskContext {
 
     /// Whether `address` lies inside the image.
     pub fn contains(&self, address: u64) -> bool {
-        let next = self.ranges.partition_point(|range| range.start <= address);
-        next > 0 && address < self.ranges[next - 1].end
+        within(&self.ranges, address)
     }
+
+    /// Whether `address` lies inside the image's executable ranges (all of a context built with
+    /// [`MaskContext::new`]).
+    pub fn contains_code(&self, address: u64) -> bool {
+        within(&self.code, address)
+    }
+}
+
+fn within(ranges: &[Range<u64>], address: u64) -> bool {
+    let next = ranges.partition_point(|range| range.start <= address);
+    next > 0 && address < ranges[next - 1].end
+}
+
+/// `ranges` sorted, with empty ones dropped and overlaps merged.
+fn normalize(ranges: impl IntoIterator<Item = Range<u64>>) -> Vec<Range<u64>> {
+    let mut sorted: Vec<Range<u64>> = ranges.into_iter().filter(|range| range.start < range.end).collect();
+    sorted.sort_by_key(|range| range.start);
+    let mut merged: Vec<Range<u64>> = Vec::with_capacity(sorted.len());
+    for range in sorted {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    merged
 }
 
 /// Accumulates a function's masked instruction stream and measures whether it carries enough discriminating
@@ -547,12 +579,8 @@ fn mask_thumb32(hw1: u16, hw2: u16, current: bool) -> (u16, u16) {
 
 /// Hashes a Thumb (T32) function, decoding halfword-by-halfword from the start. A first halfword with
 /// bits [15:11] in {0b11101, 0b11110, 0b11111} begins a 32-bit instruction (two halfwords), else it is 16-bit.
-/// `current` selects scheme 2's masking; `pools` (scheme 3, [`thumb_pool_fingerprint`]) adds literal pools and
-/// call targets.
-fn thumb_fingerprint(bytes: &[u8], address: u64, big_endian: bool, current: bool, pools: bool) -> Fingerprint {
-    if pools {
-        return thumb_pool_fingerprint(bytes, address, big_endian);
-    }
+/// `current` selects scheme 2's masking; scheme 3 is [`thumb_pool_fingerprint`].
+fn thumb_fingerprint(bytes: &[u8], big_endian: bool, current: bool) -> Fingerprint {
     let read_hw = |pair: &[u8]| {
         let raw = [pair[0], pair[1]];
         if big_endian { u16::from_be_bytes(raw) } else { u16::from_le_bytes(raw) }
@@ -584,42 +612,109 @@ fn thumb_fingerprint(bytes: &[u8], address: u64, big_endian: bool, current: bool
 /// The marker hashed in place of a literal-pool word, so a pool never hashes like instructions.
 const POOL_MARKER: &[u8] = b"rampage pool\0";
 
+/// The marker hashed before a `TBB`/`TBH` branch table, whose entries are hashed as data.
+const TABLE_MARKER: &[u8] = b"rampage table\0";
+
+/// One decoded piece of a scheme-3 Thumb body.
+enum ThumbToken {
+    /// An instruction of `length` (2 or 4) bytes at `at`.
+    Instruction { at: usize, length: usize },
+    /// A literal-pool word at `at`.
+    Pool { at: usize },
+    /// A `TBB`/`TBH` table of `length` bytes at `at`.
+    Table { at: usize, length: usize },
+}
+
 /// Scheme 3's Thumb hash: scheme 2's masking, plus
-/// - literal pools: a word a PC-relative `LDR` (T1 or T2) loads from inside the body is hashed as data, not
-///   decoded as instructions, and masked when below [`POOL_ADDRESS_LIMIT`] (a possible address; see there). The
-///   load itself is PC-relative within the function, so it stays. A pool reached before any load names it (a
-///   backward `LDR.W`) decodes as instructions, deterministically for identical code;
+/// - literal pools: a word a PC-relative load (`LDR` T1/T2, `LDRD`, `VLDR`) reads from inside the body is hashed as
+///   data, not decoded as instructions; a possible address (below [`POOL_ADDRESS_LIMIT`], or inside the image's
+///   code, see [`MaskContext::contains_code`]) is masked. The load itself is PC-relative within the function, so it
+///   stays. A pool reached before any load names it (a backward load) decodes as instructions, deterministically
+///   for identical code;
+/// - `TBB`/`TBH` tables: their entries (offsets within the function) are hashed as data and skipped, so decoding
+///   resumes at the first case;
 /// - call targets: BL, B.W and 16-bit B targets are recorded, so a body that several functions share is told apart
 ///   by the names of what it calls (see [`identify_program`]);
-/// - a stricter gate ([`MIN_POOL_INSTRUCTIONS`]); pool words are not instructions and carry no content.
-fn thumb_pool_fingerprint(bytes: &[u8], address: u64, big_endian: bool) -> Fingerprint {
+/// - trailing 16-bit `nop`s (alignment padding discovery takes in after a call it cannot tell never returns) are
+///   left out; only whole decoded instructions are trimmed;
+/// - a stricter gate ([`MIN_POOL_INSTRUCTIONS`]); pool words and tables are not instructions and carry no content.
+///
+/// `code_big_endian` reads instructions, `data_big_endian` pool words and table entries (they differ on BE8).
+fn thumb_pool_fingerprint(
+    bytes: &[u8],
+    address: u64,
+    code_big_endian: bool,
+    data_big_endian: bool,
+    image: &MaskContext,
+) -> Fingerprint {
     let read_hw = |at: usize| {
         let raw = [bytes[at], bytes[at + 1]];
-        if big_endian { u16::from_be_bytes(raw) } else { u16::from_le_bytes(raw) }
+        if code_big_endian { u16::from_be_bytes(raw) } else { u16::from_le_bytes(raw) }
     };
     let read_word = |at: usize| {
         let raw = [bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]];
-        if big_endian { u32::from_be_bytes(raw) } else { u32::from_le_bytes(raw) }
+        if data_big_endian { u32::from_be_bytes(raw) } else { u32::from_le_bytes(raw) }
     };
+    let tokens = thumb_tokens(bytes, address, &read_hw, data_big_endian);
+    // Alignment padding (the assembler pads Thumb code with `nop`) is not part of the code.
+    let mut end = tokens.len();
+    while end > 1 {
+        match tokens[end - 1] {
+            ThumbToken::Instruction { at, length: 2 } if matches!(read_hw(at), 0x46c0 | 0xbf00) => end -= 1,
+            _ => break,
+        }
+    }
     let mut fingerprint = Fingerprint::new();
     fingerprint.measure.min_instructions = MIN_POOL_INSTRUCTIONS;
     fingerprint.core.min_instructions = MIN_POOL_INSTRUCTIONS;
-    // Alignment padding (the assembler pads Thumb code with `nop`) is not part of the code: discovery takes it
-    // in after a call it cannot tell never returns, and leaves it out where it can.
-    let mut length = bytes.len() & !1;
-    while length > 2 && matches!(read_hw(length - 2), 0x46c0 | 0xbf00) {
-        length -= 2;
+    for token in &tokens[..end] {
+        if fingerprint.full() {
+            break;
+        }
+        match *token {
+            ThumbToken::Pool { at } => {
+                let word = read_word(at);
+                let address_like = word < POOL_ADDRESS_LIMIT || image.contains_code(u64::from(word & !1));
+                let kept = if address_like { 0 } else { word };
+                fingerprint.hasher.update(POOL_MARKER);
+                fingerprint.hasher.update(kept.to_le_bytes());
+                fingerprint.stream.extend_from_slice(&[0; 4]);
+            }
+            ThumbToken::Table { at, length } => {
+                fingerprint.hasher.update(TABLE_MARKER);
+                fingerprint.hasher.update(&bytes[at..at + length]);
+                fingerprint.stream.extend_from_slice(&bytes[at..at + length]);
+            }
+            ThumbToken::Instruction { at, length: 4 } => {
+                let (hw1, hw2) = (read_hw(at), read_hw(at + 2));
+                let (m1, m2) = mask_thumb32(hw1, hw2, true);
+                let mut encoding = [0u8; 4];
+                encoding[..2].copy_from_slice(&m1.to_le_bytes());
+                encoding[2..].copy_from_slice(&m2.to_le_bytes());
+                fingerprint.push(&encoding, thumb32_branch_target(hw1, hw2, address.wrapping_add(at as u64)));
+            }
+            ThumbToken::Instruction { at, .. } => {
+                let hw1 = read_hw(at);
+                // B (T2): 11100 imm11, the 16-bit unconditional branch a short tail call uses.
+                let branch = (hw1 >> 11 == 0b11100).then(|| {
+                    let offset = i64::from(((u32::from(hw1) & 0x07ff) << 21) as i32 >> 20);
+                    address.wrapping_add(at as u64).wrapping_add(4).wrapping_add_signed(offset)
+                });
+                fingerprint.push(&mask_thumb16(hw1, true).to_le_bytes(), branch);
+            }
+        }
     }
-    let bytes = &bytes[..length];
+    fingerprint
+}
+
+/// Decodes a scheme-3 Thumb body into instructions, literal-pool words and branch tables, front to back.
+fn thumb_tokens(bytes: &[u8], address: u64, read_hw: &impl Fn(usize) -> u16, data_big_endian: bool) -> Vec<ThumbToken> {
+    let mut tokens = Vec::new();
     let mut pool: BTreeSet<usize> = BTreeSet::new();
     let mut index = 0;
-    while index + 2 <= bytes.len() && !fingerprint.full() {
+    while index + 2 <= bytes.len() && tokens.len() < MAX_INSTRUCTIONS as usize {
         if pool.contains(&index) && index + 4 <= bytes.len() {
-            let word = read_word(index);
-            fingerprint.hasher.update(POOL_MARKER);
-            let kept = if word < POOL_ADDRESS_LIMIT { 0 } else { word };
-            fingerprint.hasher.update(kept.to_le_bytes());
-            fingerprint.stream.extend_from_slice(&[0; 4]);
+            tokens.push(ThumbToken::Pool { at: index });
             index += 4;
             continue;
         }
@@ -627,50 +722,77 @@ fn thumb_pool_fingerprint(bytes: &[u8], address: u64, big_endian: bool) -> Finge
         // The PC a Thumb instruction reads: its address plus 4, word-aligned for literal loads.
         let literal_base = (at.wrapping_add(4) & !3).wrapping_sub(address);
         let hw1 = read_hw(index);
-        if matches!(hw1 >> 11, 0b11101..=0b11111) {
-            if index + 4 > bytes.len() {
-                break;
-            }
-            let hw2 = read_hw(index + 2);
-            // LDR.W Rt, [PC, #+/-imm12] (T2): 1111 1000 U101 1111.
-            if hw1 & 0xff7f == 0xf85f {
-                let offset = u64::from(hw2 & 0x0fff);
-                let target =
-                    if hw1 & 0x80 != 0 { literal_base.wrapping_add(offset) } else { literal_base.wrapping_sub(offset) };
-                note_pool_word(&mut pool, target, index, bytes.len());
-            }
-            let (m1, m2) = mask_thumb32(hw1, hw2, true);
-            let mut encoding = [0u8; 4];
-            encoding[..2].copy_from_slice(&m1.to_le_bytes());
-            encoding[2..].copy_from_slice(&m2.to_le_bytes());
-            fingerprint.push(&encoding, thumb32_branch_target(hw1, hw2, at));
-            index += 4;
-        } else {
+        if !matches!(hw1 >> 11, 0b11101..=0b11111) {
             // LDR Rt, [PC, #imm8 * 4] (T1): 01001 Rt imm8.
             if hw1 & 0xf800 == 0x4800 {
                 let target = literal_base.wrapping_add(u64::from(hw1 & 0xff) * 4);
-                note_pool_word(&mut pool, target, index, bytes.len());
+                note_pool_words(&mut pool, target, 1, index, bytes.len());
             }
-            // B (T2): 11100 imm11, the 16-bit unconditional branch a short tail call uses.
-            let branch = (hw1 >> 11 == 0b11100).then(|| {
-                let offset = i64::from(((u32::from(hw1) & 0x07ff) << 21) as i32 >> 20);
-                at.wrapping_add(4).wrapping_add_signed(offset)
-            });
-            fingerprint.push(&mask_thumb16(hw1, true).to_le_bytes(), branch);
+            tokens.push(ThumbToken::Instruction { at: index, length: 2 });
             index += 2;
+            continue;
+        }
+        if index + 4 > bytes.len() {
+            break;
+        }
+        let hw2 = read_hw(index + 2);
+        let up = hw1 & 0x80 != 0;
+        let literal =
+            |offset: u64| if up { literal_base.wrapping_add(offset) } else { literal_base.wrapping_sub(offset) };
+        // LDR.W Rt, [PC, #+/-imm12] (T2): 1111 1000 U101 1111.
+        if hw1 & 0xff7f == 0xf85f {
+            note_pool_words(&mut pool, literal(u64::from(hw2 & 0x0fff)), 1, index, bytes.len());
+        }
+        // LDRD Rt, Rt2, [PC, #+/-imm8 * 4] (T1, P=1 W=0): 1110 1001 U101 1111.
+        if hw1 & 0xff7f == 0xe95f {
+            note_pool_words(&mut pool, literal(u64::from(hw2 & 0xff) * 4), 2, index, bytes.len());
+        }
+        // VLDR Sd/Dd, [PC, #+/-imm8 * 4]: 1110 1101 UD01 1111, 101 sz in the second halfword's bits 11:8.
+        if hw1 & 0xff3f == 0xed1f && hw2 & 0x0e00 == 0x0a00 {
+            let words = if hw2 & 0x0100 != 0 { 2 } else { 1 };
+            note_pool_words(&mut pool, literal(u64::from(hw2 & 0xff) * 4), words, index, bytes.len());
+        }
+        tokens.push(ThumbToken::Instruction { at: index, length: 4 });
+        index += 4;
+        // TBB [Rn, Rm] / TBH [Rn, Rm, LSL #1] with Rn = PC: the table follows the instruction.
+        if hw1 == 0xe8df && hw2 & 0xffe0 == 0xf000 {
+            let halfwords = hw2 & 0x10 != 0;
+            if let Some(length) = branch_table_length(bytes, index, halfwords, data_big_endian) {
+                tokens.push(ThumbToken::Table { at: index, length });
+                index += length;
+            }
         }
     }
-    fingerprint
+    tokens
 }
 
-/// Records the pool word a literal load at body offset `load` reads from body offset `target`, when it lies
-/// after the load and wholly inside the body.
-fn note_pool_word(pool: &mut BTreeSet<usize>, target: u64, load: usize, length: usize) {
-    if let Ok(target) = usize::try_from(target)
-        && target > load
-        && target.checked_add(4).is_some_and(|end| end <= length)
-    {
-        pool.insert(target);
+/// The length of the `TBB` (`halfwords` false) or `TBH` table starting at body offset `start`: entries run until
+/// the nearest case they branch to (each case is `start + 2 * entry`), rounded up to a halfword. `None` when that
+/// case would lie outside the body.
+fn branch_table_length(bytes: &[u8], start: usize, halfwords: bool, data_big_endian: bool) -> Option<usize> {
+    let size = if halfwords { 2 } else { 1 };
+    let mut nearest = usize::MAX;
+    let mut cursor = start;
+    while cursor < nearest {
+        let entry = match bytes.get(cursor..cursor + size)? {
+            [byte] => usize::from(*byte),
+            [a, b] if data_big_endian => usize::from(u16::from_be_bytes([*a, *b])),
+            [a, b] => usize::from(u16::from_le_bytes([*a, *b])),
+            _ => return None,
+        };
+        nearest = nearest.min(start + 2 * entry);
+        cursor += size;
+    }
+    let end = cursor.next_multiple_of(2);
+    (nearest > start && nearest <= bytes.len() && end <= nearest).then_some(nearest - start)
+}
+
+/// Records the `words` pool words a literal load at body offset `load` reads from body offset `target`, when they
+/// lie after the load and wholly inside the body.
+fn note_pool_words(pool: &mut BTreeSet<usize>, target: u64, words: usize, load: usize, length: usize) {
+    let Ok(target) = usize::try_from(target) else { return };
+    if target > load && target.checked_add(4 * words).is_some_and(|end| end <= length) {
+        pool.extend((0..words).map(|word| target + 4 * word));
     }
 }
 
@@ -929,9 +1051,10 @@ fn fingerprint_with(
             fixed_word_fingerprint(bytes, address, false, |word| pages.mask(word), aarch64_branch_target)
         }
         Arch::Aarch64 => fixed_word_fingerprint(bytes, address, false, mask_aarch64, aarch64_branch_target),
-        Arch::Arm if target.is_thumb(address) => {
-            thumb_fingerprint(bytes, address, big_endian, image.is_some(), pools && image.is_some())
-        }
+        Arch::Arm if target.is_thumb(address) => match image {
+            Some(image) if pools => thumb_pool_fingerprint(bytes, address, big_endian, target.data_big_endian, image),
+            _ => thumb_fingerprint(bytes, big_endian, image.is_some()),
+        },
         Arch::Arm => fixed_word_fingerprint(bytes, address, big_endian, mask_arm_a32, no_branch),
         Arch::Mips | Arch::Mips64 => {
             fixed_word_fingerprint(bytes, address, big_endian, |word| mask_mips(word, image.is_some()), no_branch)
@@ -2143,6 +2266,81 @@ mod tests {
         assert!(pool_hash(&code, 0x100).is_some());
         assert_eq!(pool_hash(&code, 0x100), pool_hash(&padded, 0x100));
         assert_eq!(pool_hash(&code, 0x100), pool_hash(&padded_v7, 0x100));
+    }
+
+    fn token_kinds(bytes: &[u8], address: u64) -> Vec<(&'static str, usize, usize)> {
+        let read_hw = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+        thumb_tokens(bytes, address, &read_hw, false)
+            .into_iter()
+            .map(|token| match token {
+                ThumbToken::Instruction { at, length } => ("instruction", at, length),
+                ThumbToken::Pool { at } => ("pool", at, 4),
+                ThumbToken::Table { at, length } => ("table", at, length),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scheme_3_trims_only_whole_trailing_nops() {
+        // push {r4, lr}; movs r0, #1; adds r0, #1; adds r2, r0, #1; add r0, r2; movs r3, #0; then a tail call whose
+        // B.W second halfword (10x1 ...) is 0xbf00, the `nop` encoding: it is part of the branch, not padding.
+        let code = halfwords_to_bytes(&[0xb510, 0x2001, 0x3001, 0x1c42, 0x4410, 0x2300, 0xf000, 0xbf00], false);
+        let print = |bytes: &[u8]| {
+            fingerprint_scheme(LITERAL_POOL_SCHEME, &thumb_target(false), &MaskContext::default(), bytes, 0x100)
+                .unwrap()
+        };
+        assert_eq!(print(&code).branch_targets.len(), 1, "the B.W is decoded whole and records its target");
+        let padded = [code.clone(), halfwords_to_bytes(&[0xbf00, 0x46c0], false)].concat();
+        assert_eq!(pool_hash(&code, 0x100), pool_hash(&padded, 0x100));
+        let truncated = halfwords_to_bytes(&[0xb510, 0x2001, 0x3001, 0x1c42, 0x4410, 0x2300, 0xf000], false);
+        assert_ne!(pool_hash(&code, 0x100), pool_hash(&truncated, 0x100));
+    }
+
+    #[test]
+    fn scheme_3_reads_pool_words_in_data_byte_order() {
+        // BE8: instructions little-endian, data big-endian. The peripheral word must read the same either way.
+        let mut be8 = pooled(0x2000_0010, 0);
+        let length = be8.len();
+        be8[length - 4..].copy_from_slice(&0x4002_3800u32.to_be_bytes());
+        let be8_target = Target { data_big_endian: true, ..thumb_target(false) };
+        let image = MaskContext::default();
+        let be8_hash = function_hash_scheme(LITERAL_POOL_SCHEME, &be8_target, &image, &be8, 0);
+        assert!(be8_hash.is_some());
+        assert_eq!(be8_hash, pool_hash(&pooled(0x2000_0010, 0x4002_3800), 0));
+        assert_ne!(be8_hash, pool_hash(&be8, 0), "read little-endian it is another constant");
+    }
+
+    #[test]
+    fn scheme_3_masks_pool_words_inside_a_high_based_image() {
+        // A pointer into flash mapped at 0x9000_0000 (XIP): kept without an image, masked once its code is known.
+        let xip = MaskContext::new(std::iter::once(0x9000_0000..0x9010_0000));
+        let hash = |first, image: &MaskContext| {
+            function_hash_scheme(LITERAL_POOL_SCHEME, &thumb_target(false), image, &pooled(first, 0x4002_3800), 0)
+        };
+        assert_ne!(hash(0x9000_1235, &MaskContext::default()), hash(0x9000_4445, &MaskContext::default()));
+        assert_eq!(hash(0x9000_1235, &xip), hash(0x9000_4445, &xip));
+        assert_eq!(hash(0x9000_1235, &xip), hash(0x2000_0010, &xip));
+    }
+
+    #[test]
+    fn scheme_3_skips_vldr_ldrd_pools_and_branch_tables() {
+        // vldr s0, [pc, #8] (ed9f 0a02) at 0, then ldrd r0, r1, [pc, #8] (e9df 0102) at 4; the vldr reads offset 12,
+        // the ldrd offsets 16 and 20. Pool words 0xf000_f000 would decode as a 32-bit instruction swallowing the next.
+        let mut body = halfwords_to_bytes(&[0xed9f, 0x0a02, 0xe9df, 0x0102, 0x2001, 0x4770], false);
+        for word in [0xf000_f000u32, 0xf000_f000, 0x0000_0001] {
+            body.extend_from_slice(&word.to_le_bytes());
+        }
+        let kinds: Vec<&str> = token_kinds(&body, 0).into_iter().map(|(kind, _, _)| kind).collect();
+        assert_eq!(kinds, ["instruction", "instruction", "instruction", "instruction", "pool", "pool", "pool"]);
+
+        // tbb [pc, r0] (e8df f000) at 0; a four-entry byte table (each case at 2 * entry from the table start);
+        // the entries 0xf0 0x04 would otherwise start a 32-bit instruction. The first case follows at offset 8.
+        let mut tbb = halfwords_to_bytes(&[0xe8df, 0xf000], false);
+        tbb.extend_from_slice(&[0x02, 0x03, 0xf0, 0x04]);
+        tbb.extend_from_slice(&halfwords_to_bytes(&[0x2001, 0x4770, 0x2002, 0x4770], false));
+        let tokens = token_kinds(&tbb, 0);
+        assert_eq!(tokens[1], ("table", 4, 4), "{tokens:?}");
+        assert_eq!(tokens[2], ("instruction", 8, 2), "{tokens:?}");
     }
 
     #[test]

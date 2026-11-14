@@ -5,8 +5,8 @@
 //! in a stripped copy (discovery in a stripped target cannot tell that a call to an unnamed `abort` never returns,
 //! so it can run on past it), and over its symbol size only when discovery finds neither. A masked hash two names
 //! share stops answering for good (collision-safe union). Raw exact fallbacks are layout-specific and never match
-//! another firmware link, so none ship, nor their tombstones; names the build itself introduced (link stubs) are
-//! dropped while their collision evidence stays.
+//! another firmware link, so none ship, nor their tombstones. The one-instruction link stubs the references carry
+//! for symbols nothing defines never pass the confidence gate, so they are never signed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -23,9 +23,6 @@ struct Arguments {
     /// Also write the database as deterministic gzip (the bundled asset form).
     #[arg(long)]
     gzip: Option<PathBuf>,
-    /// Drop answers whose name starts with this prefix (repeatable); their hashes stay as collision evidence.
-    #[arg(long)]
-    drop_prefix: Vec<String>,
     /// Symbolized reference ELFs.
     references: Vec<PathBuf>,
 }
@@ -60,7 +57,6 @@ fn extent_hashes(
 
 fn run(arguments: Arguments) -> Result<(), String> {
     let mut database: Option<SignatureDb> = None;
-    let mut names = BTreeSet::new();
     let (mut symbol_hashes, mut discovered_hashes) = (BTreeSet::new(), BTreeSet::new());
     let scratch = arguments.output.with_extension("stripped.tmp");
     for path in &arguments.references {
@@ -71,7 +67,6 @@ fn run(arguments: Arguments) -> Result<(), String> {
         std::fs::write(&scratch, rampage_eval::strip(&image, false)?).map_err(|e| error(e.to_string()))?;
         let stripped = Binary::open(&scratch).map_err(|e| error(e.to_string()))?;
         let stripped = rampage_eval::discovered_extents(&stripped).map_err(|e| error(e.to_string()))?;
-        names.extend(canonical_functions(&binary).values().map(|symbol| symbol.name.clone()));
         extent_hashes(&binary, &[&symbolized, &stripped], &mut symbol_hashes, &mut discovered_hashes);
         match &mut database {
             Some(database) if database.arch() != binary.arch => {
@@ -90,11 +85,6 @@ fn run(arguments: Arguments) -> Result<(), String> {
     let _ = std::fs::remove_file(&scratch);
     let mut database = database.ok_or("give at least one reference")?;
     database.withhold_exact_fallbacks();
-    let allowed: BTreeSet<String> = names
-        .into_iter()
-        .filter(|name| !arguments.drop_prefix.iter().any(|prefix| name.starts_with(prefix.as_str())))
-        .collect();
-    database.retain_names(&allowed);
 
     // Identification hashes discovered extents only: a symbol-size answer (one that spans a trailing literal pool)
     // for a function discovery found never matches. Exact tombstones guard only later merges of exact answers,

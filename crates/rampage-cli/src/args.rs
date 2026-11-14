@@ -356,7 +356,7 @@ pub(crate) struct IdentifyArgs {
     /// JSON FuzzySuggestRequest: cohort, numeric addresses (1..64), candidates_per_function (1..16)
     #[arg(long, requires = "fuzzy_db")]
     pub(crate) fuzzy_request: Option<PathBuf>,
-    /// Do not apply the bundled starter database (needs --db or a data pack with a database for the architecture)
+    /// Do not apply the bundled signature databases (needs --db or a data pack with a database for the architecture)
     #[arg(long)]
     pub(crate) no_bundled: bool,
     /// Save matched names for still-unnamed functions as user names

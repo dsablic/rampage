@@ -19,7 +19,7 @@ The whole regeneration (see docs/signature-corpus.md#embedded-firmware-set):
   python3 -I tools/embedded-signatures/build.py refs
   python3 -I tools/embedded-signatures/build.py compiler-rt
   target/debug/examples/embedded_signatures --output WORK/db.json --gzip WORK/db.json.gz \\
-      --drop-prefix embsig_ WORK/refs/*.elf
+      WORK/refs/*.elf
 
 Downloaded sources, toolchains and build outputs stay under WORK, never in the repository. Nothing that is built
 is executed. Run with `python3 -I`.
@@ -133,25 +133,49 @@ def fetch(work):
         archive = downloads / file
         if not archive.exists():
             print(f"downloading {url}", file=sys.stderr)
-            urllib.request.urlretrieve(url, archive)
+            partial = archive.with_name(archive.name + ".part")
+            urllib.request.urlretrieve(url, partial)
+            partial.rename(archive)
         actual = sha256(archive)
         if actual != digest:
-            raise RuntimeError(f"{archive}: SHA-256 {actual}, pinned {digest}")
+            archive.unlink()
+            raise RuntimeError(f"{archive}: SHA-256 {actual}, pinned {digest}; the download was deleted")
         if destination.exists():
             continue
-        destination.mkdir(parents=True)
-        with tarfile.open(archive) as tar:
-            members = []
-            for member in tar.getmembers():
-                parts = Path(member.name).parts
-                if strip == 2 and (len(parts) < 2 or parts[1] != "compiler-rt"):
+        unpack(archive, destination, strip)
+
+
+def unpack(archive, destination, strip):
+    """Extracts `archive` without its first `strip` path components (2: only the LLVM monorepo's compiler-rt) into a
+    temporary sibling directory, then renames it into place, so an interrupted run leaves no partial tree."""
+    staging = destination.with_name(destination.name + ".partial")
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+
+    def stripped(name):
+        parts = Path(name).parts
+        if strip == 2 and (len(parts) < 2 or parts[1] != "compiler-rt"):
+            return None
+        parts = parts[strip:]
+        return str(Path(*parts)) if parts else None
+
+    with tarfile.open(archive) as tar:
+        members = []
+        for member in tar.getmembers():
+            name = stripped(member.name)
+            if name is None or member.issym() and Path(member.linkname).is_absolute():
+                continue
+            if member.islnk():
+                # A hard link names another member by its archive path, which loses the same components.
+                target = stripped(member.linkname)
+                if target is None:
                     continue
-                parts = parts[strip:]
-                if not parts or member.islnk() or member.issym() and Path(member.linkname).is_absolute():
-                    continue
-                member.name = str(Path(*parts))
-                members.append(member)
-            tar.extractall(destination, members=members, filter="tar")
+                member.linkname = target
+            member.name = name
+            members.append(member)
+        tar.extractall(staging, members=members, filter="data")
+    staging.rename(destination)
 
 
 class Toolchain:

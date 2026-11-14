@@ -214,8 +214,9 @@ are metadata assertions, not verified boundaries; `CantUnwind` and coalesced int
 rows (`limit` 1–256); `offset` continues matches first, then warnings. `matched`/`applied` are whole-result totals:
 pages never select writes. Complete JSON stays within 60000 bytes; an oversized row refuses before any rename.
 Builtin signatures are cached per architecture; `list_packs` reads count indexes without decoding every bundle.
-Thumb targets also get the [embedded firmware set](signature-corpus.md#embedded-firmware-set) (newlib, libgcc,
-compiler-rt, FreeRTOS, STM32F4 HAL), and a Cortex-M Raw project's `raw` selector is accepted, with applied names
+Firmware (a Cortex-M Raw project, or a static Thumb ELF executable) also gets the
+[embedded firmware set](signature-corpus.md#embedded-firmware-set) (newlib, libgcc, compiler-rt, FreeRTOS, STM32F4
+HAL), source `rampage-builtin embedded`. A Cortex-M Raw project's `raw` selector is accepted, with applied names
 memory-only like its other annotations.
 The [offline corpus pipeline](signature-corpus.md) measures generated databases separately; its failed or unrun
 profiles are not default recognition coverage.
@@ -457,8 +458,9 @@ Errors start with a code: `unknown_session`, `endpoint_not_allowed`, `session_li
 
 Raw-capable tools (`binary_info`, `list_functions`, `disassemble`, `function_graph`, `xrefs`, `search`,
 `analysis_diagnostics`, `entry_diagnostics`, `capabilities`, `rename`, `set_comment`, `annotate_batch`,
-`list_annotations`, `undo`, `redo`, `decompile`, `import_svd`, `peripheral_access`, `identify_functions`) take an
-optional `raw` object in place of a native image:
+`list_annotations`, `undo`, `redo`, `decompile`, `import_svd`, `peripheral_access`, `list_patches`, `patch_bytes`,
+`revert_patch`, `integrity_checks`, `export_image`, `identify_functions`) take an optional `raw` object in place
+of a native image:
 
 ```json
 {

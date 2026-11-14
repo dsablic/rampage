@@ -346,14 +346,22 @@
       "license_declaration": "GPL-3.0-or-later WITH GCC-exception-3.1",
       "source_class": "toolchain-runtime",
       "runtime_archive_sha256": "3b2eee0bdf71c1bbeb3c3b7424fbf7bd9d5c3f0f5a3a4a78159c9e3ad219e7bd",
-      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING.RUNTIME and COPYING3",
-      "source_notice_sha256": {
-        "COPYING.RUNTIME": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-        "COPYING3": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
-      },
+      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING.RUNTIME",
+      "source_notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
       "notice": "gcc-15.2.0-COPYING.RUNTIME.txt",
       "notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-      "scope": "complete GCC Runtime Library Exception 3.1 and (gcc-15.2.0-COPYING3.txt) GPLv3 texts, byte-identical; the toolchain archive ships no license files"
+      "scope": "complete GCC Runtime Library Exception 3.1 text, byte-identical; the toolchain archive ships no license files"
+    },
+    {
+      "profile": "embedded-libgcc-arm-gnu-toolchain-12.3.rel1",
+      "license_declaration": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "3b2eee0bdf71c1bbeb3c3b7424fbf7bd9d5c3f0f5a3a4a78159c9e3ad219e7bd",
+      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING3",
+      "source_notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "notice": "gcc-15.2.0-COPYING3.txt",
+      "notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "scope": "complete GNU GPL version 3 text, byte-identical, which the runtime exception modifies"
     },
     {
       "profile": "embedded-newlib-4.4.0-arm-gnu-toolchain-13.3.rel1",
@@ -371,14 +379,22 @@
       "license_declaration": "GPL-3.0-or-later WITH GCC-exception-3.1",
       "source_class": "toolchain-runtime",
       "runtime_archive_sha256": "fb6921db95d345dc7e5e487dd43b745e3a5b4d5c0c7ca4f707347148760317b4",
-      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING.RUNTIME and COPYING3",
-      "source_notice_sha256": {
-        "COPYING.RUNTIME": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-        "COPYING3": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
-      },
+      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING.RUNTIME",
+      "source_notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
       "notice": "gcc-15.2.0-COPYING.RUNTIME.txt",
       "notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-      "scope": "complete GCC Runtime Library Exception 3.1 and (gcc-15.2.0-COPYING3.txt) GPLv3 texts, byte-identical; the toolchain archive ships no license files"
+      "scope": "complete GCC Runtime Library Exception 3.1 text, byte-identical; the toolchain archive ships no license files"
+    },
+    {
+      "profile": "embedded-libgcc-arm-gnu-toolchain-13.3.rel1",
+      "license_declaration": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "fb6921db95d345dc7e5e487dd43b745e3a5b4d5c0c7ca4f707347148760317b4",
+      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING3",
+      "source_notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "notice": "gcc-15.2.0-COPYING3.txt",
+      "notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "scope": "complete GNU GPL version 3 text, byte-identical, which the runtime exception modifies"
     },
     {
       "profile": "embedded-newlib-4.5.0-arm-gnu-toolchain-15.2.rel1",
@@ -396,14 +412,22 @@
       "license_declaration": "GPL-3.0-or-later WITH GCC-exception-3.1",
       "source_class": "toolchain-runtime",
       "runtime_archive_sha256": "1938a84b7105c192e3fb4fa5e893ba25f425f7ddab40515ae608cd40f68669a8",
-      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING.RUNTIME and COPYING3",
-      "source_notice_sha256": {
-        "COPYING.RUNTIME": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-        "COPYING3": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
-      },
+      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING.RUNTIME",
+      "source_notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
       "notice": "gcc-15.2.0-COPYING.RUNTIME.txt",
       "notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-      "scope": "complete GCC Runtime Library Exception 3.1 and (gcc-15.2.0-COPYING3.txt) GPLv3 texts, byte-identical; the toolchain archive ships no license files"
+      "scope": "complete GCC Runtime Library Exception 3.1 text, byte-identical; the toolchain archive ships no license files"
+    },
+    {
+      "profile": "embedded-libgcc-arm-gnu-toolchain-15.2.rel1",
+      "license_declaration": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "1938a84b7105c192e3fb4fa5e893ba25f425f7ddab40515ae608cd40f68669a8",
+      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING3",
+      "source_notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "notice": "gcc-15.2.0-COPYING3.txt",
+      "notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "scope": "complete GNU GPL version 3 text, byte-identical, which the runtime exception modifies"
     },
     {
       "profile": "embedded-freertos-kernel-11.1.0",

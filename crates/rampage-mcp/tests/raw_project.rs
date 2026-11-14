@@ -290,20 +290,18 @@ async fn a_cortex_m_image_opens_with_its_vector_table_in_one_call() {
     client.cancel().await.unwrap();
 }
 
-/// The bundled embedded firmware set names library functions of a headerless Cortex-M image (owned FreeRTOS,
-/// STM32F4 HAL and newlib-nano firmware built with a toolchain the set was not built from), and applying them
-/// renames the Raw project's functions for later calls with the same selector.
-#[tokio::test]
-async fn identify_functions_names_library_code_in_a_cortex_m_raw_image() {
+/// Identifies a committed embedded-libs flash image (owned FreeRTOS firmware built with a toolchain the embedded set
+/// was not built from) as a Cortex-M Raw project, applying the names, and checks every name against the libid truth
+/// of its symbolized build. Returns how many it named; the doc's Raw rows are these counts.
+async fn identify_embedded_raw_image(fixture: &str, profile: &str, names: &[&str]) -> usize {
     let client = connect().await;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
-    let path = root.join("firmware/embedded-libs-m4f.bin");
-    let truth: Value =
-        serde_json::from_str(&std::fs::read_to_string(root.join("data/eval-truth-embedded-m4f.json")).unwrap())
-            .unwrap();
+    let path = root.join(format!("firmware/embedded-libs-{fixture}.bin"));
+    let truth = std::fs::read_to_string(root.join(format!("data/eval-truth-embedded-{fixture}.json"))).unwrap();
+    let truth: Value = serde_json::from_str(&truth).unwrap();
     let length = std::fs::metadata(&path).unwrap().len();
     let selector = json!({
-        "profile": "cortex-m4", "offset": 0, "length": length, "base_address": "0x8000000", "vector_table": true,
+        "profile": profile, "offset": 0, "length": length, "base_address": "0x8000000", "vector_table": true,
     });
     let (text, failed) = call(&client, "enable_tools", json!({ "groups": ["detection"] })).await;
     assert!(!failed, "{text}");
@@ -312,19 +310,40 @@ async fn identify_functions_names_library_code_in_a_cortex_m_raw_image() {
     assert!(!failed, "{text}");
     let result: Value = serde_json::from_str(&text).unwrap();
     let matches = result["matches"].as_array().unwrap();
-    assert!(matches.len() >= 60, "{text}");
+    assert_eq!(result["matched"].as_u64(), Some(matches.len() as u64), "one page holds every match");
     for found in matches {
         let address = found["address"].as_str().unwrap();
         assert_eq!(found["name"], truth[address], "{address}: every name is the library function there");
-        assert_eq!(found["source"], "rampage-builtin");
+        assert_eq!(found["source"], "rampage-builtin embedded");
     }
-    for name in ["xQueueCreateMutex", "HAL_RCC_OscConfig", "memcpy", "__aeabi_i2d", "_malloc_r"] {
-        assert!(matches.iter().any(|found| found["name"] == name), "{name}: {text}");
+    for name in names {
+        assert!(matches.iter().any(|found| found["name"] == *name), "{name}: {text}");
     }
     let (text, failed) = call(&client, "list_functions", json!({ "path": path, "raw": selector })).await;
-    assert!(!failed && text.contains("HAL_RCC_OscConfig"), "{text}");
+    assert!(!failed && text.contains(names[0]), "{text}");
     client.cancel().await.unwrap();
+    matches.len()
 }
+
+/// The bundled embedded firmware set names library functions of a headerless Cortex-M4F image (FreeRTOS, the
+/// STM32F4 HAL, newlib-nano, libm and libgcc), and applying them renames the Raw project's functions for later calls
+/// with the same selector.
+#[tokio::test]
+async fn identify_functions_names_library_code_in_a_cortex_m4f_raw_image() {
+    let names = ["HAL_RCC_OscConfig", "xQueueCreateMutex", "memcpy", "__aeabi_i2d", "_malloc_r"];
+    assert_eq!(identify_embedded_raw_image("m4f", "cortex-m4", &names).await, EMBEDDED_M4F_RAW);
+}
+
+/// The same for the Cortex-M0 image (FreeRTOS's ARMv6-M port at -O1, full newlib, soft float).
+#[tokio::test]
+async fn identify_functions_names_library_code_in_a_cortex_m0_raw_image() {
+    let names = ["vListInsertEnd", "strlen", "__aeabi_i2d", "PendSV_Handler"];
+    assert_eq!(identify_embedded_raw_image("m0", "cortex-m0", &names).await, EMBEDDED_M0_RAW);
+}
+
+/// Correct names the Raw rows of docs/signature-corpus.md report (no wrong or spurious name is allowed above).
+const EMBEDDED_M4F_RAW: usize = 81;
+const EMBEDDED_M0_RAW: usize = 71;
 
 /// A CMSIS-SVD map imported once over MCP names a Cortex-M Raw project's registers in later calls with the same
 /// `raw` selector: decompiled C, xrefs by peripheral name and the per-register access listing.

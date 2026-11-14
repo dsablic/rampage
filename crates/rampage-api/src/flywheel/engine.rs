@@ -305,6 +305,9 @@ impl Engine {
                 rampage_signatures::bundled_call_graph()
             }
         };
+        // Layered as production identification layers it: the embedded firmware set after the corpus, for
+        // firmware-like targets only (a candidate bundle replaces the corpus, not the embedded set).
+        databases.extend(rampage_signatures::bundled_embedded_for(&loaded.binary));
         let bodies = loaded.bodies();
         let names = identify_program_sources(&databases, &loaded.binary.target(), &loaded.image, &bodies);
         let mut names: BTreeMap<u64, String> =

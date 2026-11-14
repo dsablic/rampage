@@ -303,9 +303,10 @@ branch/call targets, x86 RIP-relative displacements and PC-relative encodings of
 Supported signature architectures are x86, x86-64, AArch64, A32/Thumb, MIPS/MIPS64 and PowerPC/PowerPC64.
 
 Identification applies the reviewed default corpus for x86-64, AArch64, i386 and A32/Thumb without setup.
-Thumb code also gets the [embedded firmware set](signature-corpus.md#embedded-firmware-set): newlib and
-newlib-nano, libgcc, compiler-rt builtins, the FreeRTOS kernel and the STM32F4 HAL/LL, from several GCC releases,
-cores and optimisation levels. It hashes literal pools as data, masking address-like words, and leaves short
+Firmware (a Cortex-M Raw project, or a statically linked Thumb ELF executable with no interpreter or dynamic
+section) also gets the [embedded firmware set](signature-corpus.md#embedded-firmware-set), source
+`rampage-builtin embedded`: newlib and newlib-nano, libgcc, compiler-rt builtins, the FreeRTOS kernel and the
+STM32F4 HAL/LL, from several GCC releases, cores and optimisation levels. It hashes literal pools as data, masking address-like words, and leaves short
 accessors unnamed. `identify_functions` takes a Cortex-M Raw project's `raw` selector, so a headerless flash image
 gets the same names as its ELF. Limits: on owned firmware built with a held-out GCC it names 31–51% of library
 functions with no wrong name; FreeRTOS matches only configurations laid out like a trained one. Build an
