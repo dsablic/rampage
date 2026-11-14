@@ -126,7 +126,8 @@ views report them apart (`known_rampage_gaps`).
 
 1. **`evaluate_function` cannot run code mapped at address 0** (`emulate-control-thumb-elf`): it stops with
    `unmapped_fetch` at 0x144. The same function linked at 0x8000 runs and returns the truth. Firmware linked at
-   0x0 is common, so this is a real gap, not a fixture artifact.
+   0x0 is common, so this is a real gap, not a fixture artifact. **Fixed after the suite found it** (Unreleased): page 0 of a
+   fixed-address image linked there (Raw, or an ELF executable) is mapped; the route now reaches the truth.
 2. **`integrity_checks` misses the CRC-16/CCITT-FALSE at 0x840** (all three patching tasks). It finds the CRC-32
    at 0x13FC (polynomial formed by `movw`/`movt`), but not the 16-bit field right after the 64-byte configuration
    block, whose routine the compiler turned into a table lookup. `fix: true` then writes a CRC-32 computed over the

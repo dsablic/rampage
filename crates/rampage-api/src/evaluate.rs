@@ -42,7 +42,7 @@ const MAX_CACHED_INSTRUCTIONS: usize = 1 << 18;
 const PAGE: u64 = 4096;
 /// Copy-on-write image pages a run may create (64 MiB).
 const MAX_WRITTEN_PAGES: usize = 16 * 1024;
-/// Addresses below this are never mapped, so null-pointer accesses stop.
+/// Addresses below this are unmapped, so null-pointer accesses stop, unless the image is linked to run there.
 const NULL_GUARD: u64 = 0x1000;
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -387,6 +387,20 @@ struct ImageRam<'a> {
     last_fault: Option<u64>,
     /// The library stand-ins' bump heap, reserving `HEAP_BYTES` of addresses from its base.
     heap: Option<Heap>,
+    /// Addresses below this read as unmapped: `NULL_GUARD`, or 0 for an image linked to run at page 0.
+    null_guard: u64,
+}
+
+/// Whether the image is linked to run with mapped contents in page 0, as Cortex-M and other firmware images commonly
+/// are (vector table and code from address 0): a fixed-address image (Raw, or an ELF executable) with a mapped
+/// segment there. Page 0 of a shared object, PIE, PE or Mach-O dylib holds headers the loader relocates away, and
+/// Mach-O's `__PAGEZERO` maps nothing, so those keep the null-page guard.
+fn runs_at_page_zero(binary: &Binary, segments: &[Segment<'_>]) -> bool {
+    let fixed_address = match &binary.details {
+        rampage_loaders::Details::Elf(elf) => elf.kind == "executable",
+        _ => binary.format == rampage_loaders::Format::Raw,
+    };
+    fixed_address && segments.iter().any(|segment| segment.start < NULL_GUARD)
 }
 
 impl<'a> ImageRam<'a> {
@@ -408,9 +422,11 @@ impl<'a> ImageRam<'a> {
                     execute: segment.perms.execute,
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let null_guard = if runs_at_page_zero(binary, &segments) { 0 } else { NULL_GUARD };
         Self {
             segments,
+            null_guard,
             pages: HashMap::new(),
             regions: Vec::new(),
             pointer_bytes,
@@ -443,7 +459,7 @@ impl<'a> ImageRam<'a> {
     }
 
     fn segment(&self, address: u64) -> Option<&Segment<'a>> {
-        if address < NULL_GUARD {
+        if address < self.null_guard {
             return None;
         }
         self.segments.iter().find(|segment| address >= segment.start && address - segment.start < segment.size)

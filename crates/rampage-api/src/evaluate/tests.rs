@@ -571,6 +571,26 @@ fn no_permission_segments_and_the_null_page_are_unmapped() {
 }
 
 #[test]
+fn images_linked_at_page_zero_map_it() {
+    // Cortex-M firmware linked at 0: the vector table and code live in page 0, so they read and run.
+    let firmware = fixture("firmware/cortex-m3.elf");
+    let tick = firmware.binary.symbols.iter().find(|symbol| symbol.name == "tick").unwrap().address;
+    assert!(tick < NULL_GUARD, "{tick:#x}");
+    let mut ram = ImageRam::new(&firmware.binary, 4);
+    let mut word = [0u8; 4];
+    ram.read(0, &mut word).unwrap();
+    assert_eq!(u32::from_le_bytes(word) & 0xfff0_0000, 0x2000_0000, "initial stack pointer");
+    let report = run(&firmware, "tick", json!([]), json!({}));
+    assert_eq!(report.stop, StopReason::Returned, "{}", report.detail);
+    // A shared object's page 0 holds its headers, relocated away at run time: still a null page.
+    let shared = fixture("bin/libhelper-x64.so");
+    assert!(shared.binary.segments.iter().any(|segment| segment.address == 0 && segment.perms.read));
+    let mut ram = ImageRam::new(&shared.binary, 8);
+    let mut word = [0u8; 8];
+    assert!(matches!(ram.read(0x10, &mut word), Err(Fault::UnmappedRead { .. })));
+}
+
+#[test]
 fn written_pages_are_capped() {
     let project = fixture("bench-v3/bin/semantics-x86.elf");
     let mut ram = ImageRam::new(&project.binary, 4);

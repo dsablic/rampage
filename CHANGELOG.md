@@ -6,6 +6,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- Fix: `evaluate_function` runs code and reads data in page 0 of a fixed-address image linked there (a Raw project,
+  or an ELF executable with a segment at 0, as Cortex-M firmware often is) instead of stopping with
+  `unmapped_fetch`; shared objects, PIEs, PE and Mach-O images keep the null-page guard.
+
 ## 1.3.0 (2026-11-14)
 
 Additions only; nothing in the stable surface changed.

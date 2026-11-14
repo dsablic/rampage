@@ -276,8 +276,6 @@ def libid_raw(route: Route) -> dict[str, Any]:
 # Truths the scripted tool route does not reach today, and why. An agent can still reach them by reading code (and,
 # for the patching tasks, by computing the missing CRC-16 by hand), so the tasks stay; the runs will show it.
 GAPS = {
-    "emulate-control-thumb-elf": "evaluate_function stops with unmapped_fetch for code mapped at address 0 (the same "
-                                 "function linked at 0x8000 runs and returns the truth)",
     "patch-values-cm4-hex": "integrity_checks finds the CRC-32 at 0x13fc but not the CRC-16/CCITT-FALSE at 0x840 "
                             "(table-driven routine, 16-bit value after a 64-byte range), so fix writes a CRC-32 over "
                             "the stale CRC-16; evaluate_function does not accept Raw projects",
