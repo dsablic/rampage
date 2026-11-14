@@ -44,7 +44,10 @@ On these tasks with one model, rampage is modestly ahead on accuracy and clearly
 and tokens. The tasks were written by the rampage project and lean towards what it was built for; REA ran without
 Rizin, so part of its catalog could not run; 15 tasks × 3 runs is small. REA's denominator is 43 because two of
 its runs fell back to another model and are excluded. Read the [suite v2 report](docs/benchmarks/agent-h2h-v2-2026-11-05.md)
-for its fairness corrections to scoring, the failure analysis and rampage's own ranked gaps, and the
+for its fairness corrections to scoring, the failure analysis and rampage's own ranked gaps. The 1.0 run of
+[suite v3](docs/benchmarks/agent-h2h-v3-2026-11-14.md) (21 tasks × 3) scored rampage 57/63 and REA 61/63: both
+servers were perfect outside the semantics tasks, where every miss on either side was the model's hand arithmetic,
+and rampage used a median of 2 tool calls against 6, 10.7 s against 31.6 s. See the
 [first head-to-head run](docs/benchmarks/agent-h2h-2026-11-05.md) for 20 simpler tasks, where both servers were
 near 100%.
 

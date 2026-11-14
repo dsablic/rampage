@@ -1,0 +1,585 @@
+{
+ "rules": "Derived views of a suite-v3 head-to-head report, from its published JSON only (no transcripts, no model calls).\nDeclared before any suite-v3 run (fairness review); a view added after a run must say so.\n\nWhich run counts, per (task, server, repetition) slot:\n\n- headline: the first run of each slot. A run stopped from outside before any answer (an outside kill, the client's\n  usage limit, a safeguard model fallback) is an infrastructure failure: it counts for neither server, and its\n  once-only rerun counts instead when there is one (suite v2's rule). Should a task's definition change after a\n  run, its first run under the new definition counts, the change is listed in REDEFINED below with the date, and\n  the report says so; there is none.\n- every score is given strict (the manifest contract) and lenient (an extra \"status\":\"ok\" field and the task's\n  declared lenient_spellings in neutral-v3.toml forgiven), side by side; strict is the headline.\n\nViews:\n\n- headline: strict and lenient correct over all tasks.\n- headline_by_category: the same per category.\n- category_averaged: the mean over categories of each category's strict (and lenient) accuracy, so that a\n  category's task count does not weight it.\n- ghidra_advantage_core: every task except the call-graph lookups (sqlite-callers, go-callers).\n- combined_v2_v3: with a suite-v2 report given, v2's headline rows (its own published rule,\n  tools/agent-bench/v2/report-views.py) and v3's headline rows together, overall and per suite.\n- timing: per server and category, agent wall time (median and range), reported apart from accuracy.\n- rea_import: with RUNS_DIR, per fixture the longest single tool call of each REA run (its fresh Ghidra import and\n  analysis), and wall time without it; measurements made outside the agent (the report's `attachments`) are copied\n  as they are.",
+ "redefined_tasks": {},
+ "headline": {
+  "rampage": {
+   "correct": 57,
+   "correct_lenient": 59,
+   "runs": 63,
+   "infrastructure_failures_excluded": 0
+  },
+  "rea": {
+   "correct": 61,
+   "correct_lenient": 62,
+   "runs": 63,
+   "infrastructure_failures_excluded": 0
+  }
+ },
+ "headline_by_category": {
+  "callconv": {
+   "rampage": {
+    "correct": 9,
+    "correct_lenient": 9,
+    "runs": 9,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 9,
+    "correct_lenient": 9,
+    "runs": 9,
+    "infrastructure_failures_excluded": 0
+   }
+  },
+  "go": {
+   "rampage": {
+    "correct": 9,
+    "correct_lenient": 9,
+    "runs": 9,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 9,
+    "correct_lenient": 9,
+    "runs": 9,
+    "infrastructure_failures_excluded": 0
+   }
+  },
+  "msvc": {
+   "rampage": {
+    "correct": 9,
+    "correct_lenient": 9,
+    "runs": 9,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 9,
+    "correct_lenient": 9,
+    "runs": 9,
+    "infrastructure_failures_excluded": 0
+   }
+  },
+  "semantics": {
+   "rampage": {
+    "correct": 6,
+    "correct_lenient": 8,
+    "runs": 12,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 10,
+    "correct_lenient": 11,
+    "runs": 12,
+    "infrastructure_failures_excluded": 0
+   }
+  },
+  "switch": {
+   "rampage": {
+    "correct": 9,
+    "correct_lenient": 9,
+    "runs": 9,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 9,
+    "correct_lenient": 9,
+    "runs": 9,
+    "infrastructure_failures_excluded": 0
+   }
+  },
+  "symbols": {
+   "rampage": {
+    "correct": 9,
+    "correct_lenient": 9,
+    "runs": 9,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 9,
+    "correct_lenient": 9,
+    "runs": 9,
+    "infrastructure_failures_excluded": 0
+   }
+  },
+  "typing": {
+   "rampage": {
+    "correct": 6,
+    "correct_lenient": 6,
+    "runs": 6,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 6,
+    "correct_lenient": 6,
+    "runs": 6,
+    "infrastructure_failures_excluded": 0
+   }
+  }
+ },
+ "category_averaged": {
+  "rampage": {
+   "strict": 0.9286,
+   "lenient": 0.9524,
+   "categories": 7
+  },
+  "rea": {
+   "strict": 0.9762,
+   "lenient": 0.9881,
+   "categories": 7
+  }
+ },
+ "ghidra_advantage_core": {
+  "rampage": {
+   "correct": 51,
+   "correct_lenient": 53,
+   "runs": 57,
+   "infrastructure_failures_excluded": 0
+  },
+  "rea": {
+   "correct": 55,
+   "correct_lenient": 56,
+   "runs": 57,
+   "infrastructure_failures_excluded": 0
+  }
+ },
+ "outside_core": {
+  "rampage": {
+   "correct": 6,
+   "correct_lenient": 6,
+   "runs": 6,
+   "infrastructure_failures_excluded": 0
+  },
+  "rea": {
+   "correct": 6,
+   "correct_lenient": 6,
+   "runs": 6,
+   "infrastructure_failures_excluded": 0
+  }
+ },
+ "headline_runs": [
+  "callconv-arguments-x86-pe:rampage:1:answer_matches",
+  "callconv-arguments-x86-pe:rampage:2:answer_matches",
+  "callconv-arguments-x86-pe:rampage:3:answer_matches",
+  "callconv-arguments-x86-pe:rea:1:answer_matches",
+  "callconv-arguments-x86-pe:rea:2:answer_matches",
+  "callconv-arguments-x86-pe:rea:3:answer_matches",
+  "callconv-classify-x86-pe:rampage:1:answer_matches",
+  "callconv-classify-x86-pe:rampage:2:answer_matches",
+  "callconv-classify-x86-pe:rampage:3:answer_matches",
+  "callconv-classify-x86-pe:rea:1:answer_matches",
+  "callconv-classify-x86-pe:rea:2:answer_matches",
+  "callconv-classify-x86-pe:rea:3:answer_matches",
+  "callconv-member-x86-pe:rampage:1:answer_matches",
+  "callconv-member-x86-pe:rampage:2:answer_matches",
+  "callconv-member-x86-pe:rampage:3:answer_matches",
+  "callconv-member-x86-pe:rea:1:answer_matches",
+  "callconv-member-x86-pe:rea:2:answer_matches",
+  "callconv-member-x86-pe:rea:3:answer_matches",
+  "go-callers-x64-elf:rampage:1:answer_matches",
+  "go-callers-x64-elf:rampage:2:answer_matches",
+  "go-callers-x64-elf:rampage:3:answer_matches",
+  "go-callers-x64-elf:rea:1:answer_matches",
+  "go-callers-x64-elf:rea:2:answer_matches",
+  "go-callers-x64-elf:rea:3:answer_matches",
+  "go-nested-field-x64-elf:rampage:1:answer_matches",
+  "go-nested-field-x64-elf:rampage:2:answer_matches",
+  "go-nested-field-x64-elf:rampage:3:answer_matches",
+  "go-nested-field-x64-elf:rea:1:answer_matches",
+  "go-nested-field-x64-elf:rea:2:answer_matches",
+  "go-nested-field-x64-elf:rea:3:answer_matches",
+  "go-struct-layout-x64-elf:rampage:1:answer_matches",
+  "go-struct-layout-x64-elf:rampage:2:answer_matches",
+  "go-struct-layout-x64-elf:rampage:3:answer_matches",
+  "go-struct-layout-x64-elf:rea:1:answer_matches",
+  "go-struct-layout-x64-elf:rea:2:answer_matches",
+  "go-struct-layout-x64-elf:rea:3:answer_matches",
+  "msvc-catch-types-x64-pe:rampage:1:answer_matches",
+  "msvc-catch-types-x64-pe:rampage:2:answer_matches",
+  "msvc-catch-types-x64-pe:rampage:3:answer_matches",
+  "msvc-catch-types-x64-pe:rea:1:answer_matches",
+  "msvc-catch-types-x64-pe:rea:2:answer_matches",
+  "msvc-catch-types-x64-pe:rea:3:answer_matches",
+  "msvc-rtti-hierarchy-x64-pe:rampage:1:answer_matches",
+  "msvc-rtti-hierarchy-x64-pe:rampage:2:answer_matches",
+  "msvc-rtti-hierarchy-x64-pe:rampage:3:answer_matches",
+  "msvc-rtti-hierarchy-x64-pe:rea:1:answer_matches",
+  "msvc-rtti-hierarchy-x64-pe:rea:2:answer_matches",
+  "msvc-rtti-hierarchy-x64-pe:rea:3:answer_matches",
+  "msvc-vtable-slots-x64-pe:rampage:1:answer_matches",
+  "msvc-vtable-slots-x64-pe:rampage:2:answer_matches",
+  "msvc-vtable-slots-x64-pe:rampage:3:answer_matches",
+  "msvc-vtable-slots-x64-pe:rea:1:answer_matches",
+  "msvc-vtable-slots-x64-pe:rea:2:answer_matches",
+  "msvc-vtable-slots-x64-pe:rea:3:answer_matches",
+  "semantics-bits-x86-elf:rampage:1:answer_mismatch",
+  "semantics-bits-x86-elf:rampage:2:answer_matches",
+  "semantics-bits-x86-elf:rampage:3:answer_mismatch",
+  "semantics-bits-x86-elf:rea:1:answer_matches",
+  "semantics-bits-x86-elf:rea:2:answer_matches",
+  "semantics-bits-x86-elf:rea:3:answer_matches",
+  "semantics-loop-arm32-elf:rampage:1:answer_mismatch",
+  "semantics-loop-arm32-elf:rampage:2:answer_matches",
+  "semantics-loop-arm32-elf:rampage:3:answer_mismatch",
+  "semantics-loop-arm32-elf:rea:1:answer_matches",
+  "semantics-loop-arm32-elf:rea:2:answer_matches",
+  "semantics-loop-arm32-elf:rea:3:answer_mismatch",
+  "semantics-wide-arm32-elf:rampage:1:answer_matches",
+  "semantics-wide-arm32-elf:rampage:2:answer_matches",
+  "semantics-wide-arm32-elf:rampage:3:answer_matches",
+  "semantics-wide-arm32-elf:rea:1:answer_matches",
+  "semantics-wide-arm32-elf:rea:2:answer_mismatch",
+  "semantics-wide-arm32-elf:rea:3:answer_matches",
+  "semantics-wide-x86-elf:rampage:1:answer_matches",
+  "semantics-wide-x86-elf:rampage:2:answer_mismatch",
+  "semantics-wide-x86-elf:rampage:3:answer_mismatch",
+  "semantics-wide-x86-elf:rea:1:answer_matches",
+  "semantics-wide-x86-elf:rea:2:answer_matches",
+  "semantics-wide-x86-elf:rea:3:answer_matches",
+  "sqlite-callers-x64-elf:rampage:1:answer_matches",
+  "sqlite-callers-x64-elf:rampage:2:answer_matches",
+  "sqlite-callers-x64-elf:rampage:3:answer_matches",
+  "sqlite-callers-x64-elf:rea:1:answer_matches",
+  "sqlite-callers-x64-elf:rea:2:answer_matches",
+  "sqlite-callers-x64-elf:rea:3:answer_matches",
+  "sqlite-field-use-x64-elf:rampage:1:answer_matches",
+  "sqlite-field-use-x64-elf:rampage:2:answer_matches",
+  "sqlite-field-use-x64-elf:rampage:3:answer_matches",
+  "sqlite-field-use-x64-elf:rea:1:answer_matches",
+  "sqlite-field-use-x64-elf:rea:2:answer_matches",
+  "sqlite-field-use-x64-elf:rea:3:answer_matches",
+  "sqlite-nested-member-x64-elf:rampage:1:answer_matches",
+  "sqlite-nested-member-x64-elf:rampage:2:answer_matches",
+  "sqlite-nested-member-x64-elf:rampage:3:answer_matches",
+  "sqlite-nested-member-x64-elf:rea:1:answer_matches",
+  "sqlite-nested-member-x64-elf:rea:2:answer_matches",
+  "sqlite-nested-member-x64-elf:rea:3:answer_matches",
+  "switch-nonpic-x64-elf:rampage:1:answer_matches",
+  "switch-nonpic-x64-elf:rampage:2:answer_matches",
+  "switch-nonpic-x64-elf:rampage:3:answer_matches",
+  "switch-nonpic-x64-elf:rea:1:answer_matches",
+  "switch-nonpic-x64-elf:rea:2:answer_matches",
+  "switch-nonpic-x64-elf:rea:3:answer_matches",
+  "switch-pic-x64-so:rampage:1:answer_matches",
+  "switch-pic-x64-so:rampage:2:answer_matches",
+  "switch-pic-x64-so:rampage:3:answer_matches",
+  "switch-pic-x64-so:rea:1:answer_matches",
+  "switch-pic-x64-so:rea:2:answer_matches",
+  "switch-pic-x64-so:rea:3:answer_matches",
+  "switch-pic-x86-so:rampage:1:answer_matches",
+  "switch-pic-x86-so:rampage:2:answer_matches",
+  "switch-pic-x86-so:rampage:3:answer_matches",
+  "switch-pic-x86-so:rea:1:answer_matches",
+  "switch-pic-x86-so:rea:2:answer_matches",
+  "switch-pic-x86-so:rea:3:answer_matches",
+  "type-fields-written-x64-elf:rampage:1:answer_matches",
+  "type-fields-written-x64-elf:rampage:2:answer_matches",
+  "type-fields-written-x64-elf:rampage:3:answer_matches",
+  "type-fields-written-x64-elf:rea:1:answer_matches",
+  "type-fields-written-x64-elf:rea:2:answer_matches",
+  "type-fields-written-x64-elf:rea:3:answer_matches",
+  "type-indirect-offsets-arm64-elf:rampage:1:answer_matches",
+  "type-indirect-offsets-arm64-elf:rampage:2:answer_matches",
+  "type-indirect-offsets-arm64-elf:rampage:3:answer_matches",
+  "type-indirect-offsets-arm64-elf:rea:1:answer_matches",
+  "type-indirect-offsets-arm64-elf:rea:2:answer_matches",
+  "type-indirect-offsets-arm64-elf:rea:3:answer_matches"
+ ],
+ "timing": {
+  "rampage": {
+   "callconv": {
+    "runs": 9,
+    "wall_s": {
+     "median": 9.5,
+     "min": 6.7,
+     "max": 11.7
+    }
+   },
+   "go": {
+    "runs": 9,
+    "wall_s": {
+     "median": 12.1,
+     "min": 8.2,
+     "max": 70.2
+    }
+   },
+   "msvc": {
+    "runs": 9,
+    "wall_s": {
+     "median": 8.9,
+     "min": 6.5,
+     "max": 13.6
+    }
+   },
+   "semantics": {
+    "runs": 12,
+    "wall_s": {
+     "median": 16.5,
+     "min": 9.2,
+     "max": 20.6
+    }
+   },
+   "switch": {
+    "runs": 9,
+    "wall_s": {
+     "median": 10.1,
+     "min": 7.9,
+     "max": 16.3
+    }
+   },
+   "symbols": {
+    "runs": 9,
+    "wall_s": {
+     "median": 11.3,
+     "min": 6.7,
+     "max": 14.2
+    }
+   },
+   "typing": {
+    "runs": 6,
+    "wall_s": {
+     "median": 13.1,
+     "min": 12.1,
+     "max": 20.2
+    }
+   }
+  },
+  "rea": {
+   "callconv": {
+    "runs": 9,
+    "wall_s": {
+     "median": 28.8,
+     "min": 22.7,
+     "max": 33.0
+    }
+   },
+   "go": {
+    "runs": 9,
+    "wall_s": {
+     "median": 316.0,
+     "min": 283.8,
+     "max": 343.0
+    }
+   },
+   "msvc": {
+    "runs": 9,
+    "wall_s": {
+     "median": 58.6,
+     "min": 43.9,
+     "max": 133.6
+    }
+   },
+   "semantics": {
+    "runs": 12,
+    "wall_s": {
+     "median": 28.4,
+     "min": 20.8,
+     "max": 34.5
+    }
+   },
+   "switch": {
+    "runs": 9,
+    "wall_s": {
+     "median": 26.4,
+     "min": 23.7,
+     "max": 28.8
+    }
+   },
+   "symbols": {
+    "runs": 9,
+    "wall_s": {
+     "median": 116.1,
+     "min": 112.1,
+     "max": 266.5
+    }
+   },
+   "typing": {
+    "runs": 6,
+    "wall_s": {
+     "median": 25.8,
+     "min": 24.2,
+     "max": 30.5
+    }
+   }
+  }
+ },
+ "rea_import": {
+  "outside_agent": {},
+  "in_agent_runs": {
+   "conv-x86-pe": {
+    "longest_tool_call_s": {
+     "median": 11.8,
+     "min": 11.4,
+     "max": 13.2
+    },
+    "wall_s_without_longest_call": {
+     "median": 16.7,
+     "min": 9.5,
+     "max": 20.8
+    }
+   },
+   "engine-x64-pe": {
+    "longest_tool_call_s": {
+     "median": 17.4,
+     "min": 16.5,
+     "max": 17.7
+    },
+    "wall_s_without_longest_call": {
+     "median": 41.3,
+     "min": 26.2,
+     "max": 117.1
+    }
+   },
+   "jobs-x64-elf": {
+    "longest_tool_call_s": {
+     "median": 8.2,
+     "min": 7.5,
+     "max": 8.6
+    },
+    "wall_s_without_longest_call": {
+     "median": 17.5,
+     "min": 17.3,
+     "max": 23.1
+    }
+   },
+   "libopcodes-x64-so": {
+    "longest_tool_call_s": {
+     "median": 6.2,
+     "min": 6.2,
+     "max": 6.2
+    },
+    "wall_s_without_longest_call": {
+     "median": 20.7,
+     "min": 20.5,
+     "max": 21.0
+    }
+   },
+   "libopcodes-x86-so": {
+    "longest_tool_call_s": {
+     "median": 7.0,
+     "min": 6.0,
+     "max": 7.1
+    },
+    "wall_s_without_longest_call": {
+     "median": 16.9,
+     "min": 16.6,
+     "max": 22.8
+    }
+   },
+   "opcodes-x64-elf": {
+    "longest_tool_call_s": {
+     "median": 7.5,
+     "min": 7.5,
+     "max": 8.5
+    },
+    "wall_s_without_longest_call": {
+     "median": 18.0,
+     "min": 16.8,
+     "max": 18.4
+    }
+   },
+   "restic-v0173-x64-elf": {
+    "longest_tool_call_s": {
+     "median": 264.8,
+     "min": 262.1,
+     "max": 267.9
+    },
+    "wall_s_without_longest_call": {
+     "median": 51.7,
+     "min": 17.3,
+     "max": 80.9
+    }
+   },
+   "semantics-arm32-elf": {
+    "longest_tool_call_s": {
+     "median": 7.4,
+     "min": 7.2,
+     "max": 8.1
+    },
+    "wall_s_without_longest_call": {
+     "median": 15.4,
+     "min": 13.4,
+     "max": 25.3
+    }
+   },
+   "semantics-x86-elf": {
+    "longest_tool_call_s": {
+     "median": 6.9,
+     "min": 6.8,
+     "max": 8.3
+    },
+    "wall_s_without_longest_call": {
+     "median": 22.0,
+     "min": 20.1,
+     "max": 27.6
+    }
+   },
+   "sqlite3-x64-elf": {
+    "longest_tool_call_s": {
+     "median": 98.5,
+     "min": 95.7,
+     "max": 99.6
+    },
+    "wall_s_without_longest_call": {
+     "median": 18.9,
+     "min": 13.5,
+     "max": 166.9
+    }
+   },
+   "stream-arm64-elf": {
+    "longest_tool_call_s": {
+     "median": 8.5,
+     "min": 7.7,
+     "max": 8.6
+    },
+    "wall_s_without_longest_call": {
+     "median": 16.3,
+     "min": 15.7,
+     "max": 20.3
+    }
+   }
+  }
+ },
+ "combined_v2_v3": {
+  "v2": {
+   "rampage": {
+    "correct": 44,
+    "correct_lenient": 45,
+    "runs": 45,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 38,
+    "correct_lenient": 39,
+    "runs": 43,
+    "infrastructure_failures_excluded": 2
+   }
+  },
+  "v3": {
+   "rampage": {
+    "correct": 57,
+    "correct_lenient": 59,
+    "runs": 63,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 61,
+    "correct_lenient": 62,
+    "runs": 63,
+    "infrastructure_failures_excluded": 0
+   }
+  },
+  "both": {
+   "rampage": {
+    "correct": 101,
+    "correct_lenient": 104,
+    "runs": 108,
+    "infrastructure_failures_excluded": 0
+   },
+   "rea": {
+    "correct": 99,
+    "correct_lenient": 101,
+    "runs": 106,
+    "infrastructure_failures_excluded": 2
+   }
+  }
+ }
+}

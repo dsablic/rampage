@@ -13,6 +13,7 @@ internal milestone numbers they were recorded under.
 
 | Report | Contents |
 | --- | --- |
+| [Head-to-head suite v3: rampage vs REA](benchmarks/agent-h2h-v3-2026-11-14.md) | 21 tasks (calling conventions, Go, MSVC C++, semantics, switch tables, SQLite symbols, typing) × 3 through `claude-sonnet-5-5`, on the 1.0.0 feature set. |
 | [Head-to-head agent runs: rampage vs REA](benchmarks/agent-h2h-2026-11-05.md) | 20 canonical tasks × 3 through `claude-sonnet-5-5`. |
 | [Head-to-head suite v2: rampage vs REA](benchmarks/agent-h2h-v2-2026-11-05.md) | 15 harder tasks (C++, typing, investigation, 50 MB scale, raw firmware, diffing) × 3 through `claude-sonnet-5-5`. |
 | [Debugger acceptance](benchmarks/phase9-debugger.md) | GDB stub, debugserver and Windows acceptance. |

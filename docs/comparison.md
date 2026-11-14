@@ -48,7 +48,11 @@ Read these with their caveats, which the reports state in full:
 - REA's import time varied almost 3× with host load; the 2,355 s figure is one measurement.
 - 15 tasks × 3 runs is small: 2/3 against 3/3 on one task is within run-to-run variance.
 
-Sources: [suite v2 report](benchmarks/agent-h2h-v2-2026-11-05.md) and
+- On [suite v3](benchmarks/agent-h2h-v3-2026-11-14.md) (21 tasks × 3, the 1.0.0 feature set) rampage scored 57/63
+  and REA 61/63. Both were 51/51 outside the semantics tasks; there, every miss was the model evaluating a loop by
+  hand from equivalent pseudocode, since neither server can run the function.
+
+Sources: [suite v3 report](benchmarks/agent-h2h-v3-2026-11-14.md), [suite v2 report](benchmarks/agent-h2h-v2-2026-11-05.md) and
 [suite v1 report](benchmarks/agent-h2h-2026-11-05.md). rampage's static analysis is also compared with Ghidra's
 on fixtures built by the rampage project (function starts, CFG edges, call edges, decompilation health) in
 [accuracy benchmarks](benchmarks.md); there Ghidra is a reference, not ground truth.

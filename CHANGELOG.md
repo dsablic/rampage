@@ -4,7 +4,7 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
-## 1.0.0
+## 1.0.0 (2026-11-14)
 
 The first stable release. From here a breaking change to the stable surface in the
 [stability policy](docs/stability.md) needs a new major version. The surface is the one rc.1 froze, extended since
