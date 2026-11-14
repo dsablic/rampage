@@ -142,6 +142,13 @@ arm64 selector stubs, `objc_alloc_init`) are resolved to their selector and, whe
 confidence; `objc_sends` lists them and they become call edges in `xrefs`, `function_summary` and decompiled-C
 comments (see [Objective-C message sends](objc-dispatch.md)).
 
+`evaluate_function` (core, experimental) runs a function on integer and buffer arguments and returns its
+result: a p-code interpreter over the bundled Sleigh specifications follows calls inside the image, places
+arguments and reads results by the binary's calling convention (64-bit values on 32-bit targets as register pairs)
+and says why a run stopped, naming the import, unmapped address or processor operation. Nothing runs natively.
+Limits: integer results; system calls, imports and SIMD processor operations stop the run; see
+[the MCP reference](mcp.md#inputs-paging-and-decompiler-tokens).
+
 Types-group [`edit_variable`](local-variables.md) persists local/parameter names and types by native storage
 identity and returns refreshed C in one call, with undo/replay. Limits: single whole register/stack mappings
 and same-size retypes; unsupported storage is explicit, with no automatic cross-call propagation.

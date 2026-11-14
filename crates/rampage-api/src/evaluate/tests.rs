@@ -1,0 +1,551 @@
+use serde_json::json;
+
+use super::convention::{PairRule, assign, result_pair};
+use super::machine::op;
+use super::*;
+
+// ----------------------------------------------------------------------------------------------------------------
+// Interpreter operations, on hand-built p-code.
+
+const CONSTANT: u32 = 0;
+const REGISTER: u32 = 1;
+const UNIQUE: u32 = 2;
+const RAM: u32 = 3;
+
+struct TestRam {
+    base: u64,
+    bytes: Vec<u8>,
+}
+
+impl Ram for TestRam {
+    fn read(&mut self, address: u64, out: &mut [u8]) -> Result<(), Fault> {
+        let offset = address.checked_sub(self.base).filter(|offset| offset + out.len() as u64 <= 256);
+        let offset = offset.ok_or(Fault::UnmappedRead { address, size: out.len() as u32 })? as usize;
+        out.copy_from_slice(&self.bytes[offset..offset + out.len()]);
+        Ok(())
+    }
+
+    fn write(&mut self, address: u64, bytes: &[u8]) -> Result<(), Fault> {
+        let offset = address.checked_sub(self.base).filter(|offset| offset + bytes.len() as u64 <= 256);
+        let offset = offset.ok_or(Fault::UnmappedWrite { address, size: bytes.len() as u32 })? as usize;
+        self.bytes[offset..offset + bytes.len()].copy_from_slice(bytes);
+        Ok(())
+    }
+}
+
+fn machine(big_endian: bool) -> Machine<TestRam> {
+    let ids = SpaceIds { constant: CONSTANT, unique: UNIQUE, register: REGISTER, ram: RAM, address_bytes: 4 };
+    Machine::new(ids, big_endian, TestRam { base: 0x1000, bytes: vec![0; 256] })
+}
+
+fn node(space: u32, offset: u64, size: u32) -> Varnode {
+    Varnode { space, size, address_size: 4, word_size: 1, offset: Some(offset), selected_space: None }
+}
+
+fn constant(value: u64, size: u32) -> Varnode {
+    node(CONSTANT, value, size)
+}
+
+fn register(offset: u64, size: u32) -> Varnode {
+    node(REGISTER, offset, size)
+}
+
+fn selector(space: u32) -> Varnode {
+    Varnode { space: CONSTANT, size: 8, address_size: 8, word_size: 1, offset: None, selected_space: Some(space) }
+}
+
+fn pcode(opcode: u32, output: Option<Varnode>, inputs: Vec<Varnode>) -> PcodeOp {
+    let name = machine::opcode_name(opcode).unwrap_or("UNKNOWN").to_owned();
+    PcodeOp { opcode, name, address: 0, output, inputs }
+}
+
+/// Runs `opcode` on constant inputs of `size` bytes and returns its `out_size`-byte output.
+fn evaluate(opcode: u32, inputs: &[(u64, u32)], out_size: u32) -> Result<u128, Fault> {
+    let mut machine = machine(false);
+    let output = register(0x100, out_size);
+    let inputs = inputs.iter().map(|&(value, size)| constant(value, size)).collect();
+    machine.execute(&[pcode(opcode, Some(output.clone()), inputs)])?;
+    machine.read_int(&output)
+}
+
+fn value(opcode: u32, inputs: &[(u64, u32)], out_size: u32) -> u128 {
+    evaluate(opcode, inputs, out_size).unwrap()
+}
+
+#[test]
+fn integer_arithmetic_wraps_at_the_operand_width() {
+    assert_eq!(value(op::INT_ADD, &[(0xffff_ffff, 4), (2, 4)], 4), 1);
+    assert_eq!(value(op::INT_SUB, &[(1, 4), (2, 4)], 4), 0xffff_ffff);
+    assert_eq!(value(op::INT_MULT, &[(0x1_0000, 4), (0x1_0001, 4)], 4), 0x1_0000);
+    assert_eq!(value(op::INT_MULT, &[(0xffff_ffff, 8), (0xffff_ffff, 8)], 8), 0xffff_fffe_0000_0001);
+    assert_eq!(value(op::INT_2COMP, &[(5, 1)], 1), 0xfb);
+    assert_eq!(value(op::INT_NEGATE, &[(0x0f, 2)], 2), 0xfff0);
+    assert_eq!(value(op::INT_XOR, &[(0xff00, 2), (0x0ff0, 2)], 2), 0xf0f0);
+    assert_eq!(value(op::INT_AND, &[(0xff00, 2), (0x0ff0, 2)], 2), 0x0f00);
+    assert_eq!(value(op::INT_OR, &[(0xff00, 2), (0x0ff0, 2)], 2), 0xfff0);
+}
+
+#[test]
+fn carry_and_signed_overflow_flags() {
+    assert_eq!(value(op::INT_CARRY, &[(0xffff_ffff, 4), (1, 4)], 1), 1);
+    assert_eq!(value(op::INT_CARRY, &[(0xffff_fffe, 4), (1, 4)], 1), 0);
+    assert_eq!(value(op::INT_SCARRY, &[(0x7fff_ffff, 4), (1, 4)], 1), 1);
+    assert_eq!(value(op::INT_SCARRY, &[(0xffff_ffff, 4), (1, 4)], 1), 0);
+    assert_eq!(value(op::INT_SBORROW, &[(0x8000_0000, 4), (1, 4)], 1), 1);
+    assert_eq!(value(op::INT_SBORROW, &[(0, 4), (1, 4)], 1), 0);
+    assert_eq!(value(op::INT_CARRY, &[(u64::MAX, 8), (1, 8)], 1), 1);
+}
+
+#[test]
+fn shifts_saturate_past_the_width() {
+    assert_eq!(value(op::INT_LEFT, &[(1, 4), (31, 4)], 4), 0x8000_0000);
+    assert_eq!(value(op::INT_LEFT, &[(1, 4), (32, 4)], 4), 0);
+    assert_eq!(value(op::INT_RIGHT, &[(0x8000_0000, 4), (31, 1)], 4), 1);
+    assert_eq!(value(op::INT_RIGHT, &[(0x8000_0000, 4), (40, 1)], 4), 0);
+    assert_eq!(value(op::INT_SRIGHT, &[(0x8000_0000, 4), (4, 1)], 4), 0xf800_0000);
+    assert_eq!(value(op::INT_SRIGHT, &[(0x8000_0000, 4), (99, 1)], 4), 0xffff_ffff);
+    assert_eq!(value(op::INT_SRIGHT, &[(0x4000_0000, 4), (99, 1)], 4), 0);
+}
+
+#[test]
+fn division_signed_and_unsigned() {
+    assert_eq!(value(op::INT_DIV, &[(100, 4), (7, 4)], 4), 14);
+    assert_eq!(value(op::INT_REM, &[(100, 4), (7, 4)], 4), 2);
+    let minus_100 = (-100i32) as u32 as u64;
+    assert_eq!(value(op::INT_SDIV, &[(minus_100, 4), (7, 4)], 4), (-14i32) as u32 as u128);
+    assert_eq!(value(op::INT_SREM, &[(minus_100, 4), (7, 4)], 4), (-2i32) as u32 as u128);
+    assert_eq!(value(op::INT_SDIV, &[(0x8000_0000, 4), (0xffff_ffff, 4)], 4), 0x8000_0000);
+    assert_eq!(evaluate(op::INT_DIV, &[(1, 4), (0, 4)], 4), Err(Fault::DivisionByZero));
+    assert_eq!(evaluate(op::INT_SREM, &[(1, 4), (0, 4)], 4), Err(Fault::DivisionByZero));
+}
+
+#[test]
+fn comparisons_and_booleans() {
+    assert_eq!(value(op::INT_LESS, &[(1, 4), (0xffff_ffff, 4)], 1), 1);
+    assert_eq!(value(op::INT_SLESS, &[(1, 4), (0xffff_ffff, 4)], 1), 0);
+    assert_eq!(value(op::INT_SLESSEQUAL, &[(0xffff_ffff, 4), (0xffff_ffff, 4)], 1), 1);
+    assert_eq!(value(op::INT_LESSEQUAL, &[(2, 4), (1, 4)], 1), 0);
+    assert_eq!(value(op::INT_EQUAL, &[(2, 2), (2, 2)], 1), 1);
+    assert_eq!(value(op::INT_NOTEQUAL, &[(2, 2), (2, 2)], 1), 0);
+    assert_eq!(value(op::BOOL_NEGATE, &[(1, 1)], 1), 0);
+    assert_eq!(value(op::BOOL_XOR, &[(1, 1), (1, 1)], 1), 0);
+    assert_eq!(value(op::BOOL_AND, &[(1, 1), (0, 1)], 1), 0);
+    assert_eq!(value(op::BOOL_OR, &[(1, 1), (0, 1)], 1), 1);
+}
+
+#[test]
+fn extension_pieces_and_bit_counts() {
+    assert_eq!(value(op::INT_ZEXT, &[(0x80, 1)], 4), 0x80);
+    assert_eq!(value(op::INT_SEXT, &[(0x80, 1)], 4), 0xffff_ff80);
+    assert_eq!(value(op::INT_SEXT, &[(0x7f, 1)], 8), 0x7f);
+    assert_eq!(value(op::PIECE, &[(0x1234, 2), (0x5678_9abc, 4)], 6), 0x1234_5678_9abc);
+    assert_eq!(value(op::SUBPIECE, &[(0x1122_3344_5566_7788, 8), (4, 4)], 4), 0x1122_3344);
+    assert_eq!(value(op::SUBPIECE, &[(0x1122_3344_5566_7788, 8), (0, 4)], 2), 0x7788);
+    assert_eq!(value(op::POPCOUNT, &[(0xf0f0, 2)], 1), 8);
+    assert_eq!(value(op::LZCOUNT, &[(0x0001, 2)], 1), 15);
+    assert_eq!(value(op::LZCOUNT, &[(0, 4)], 1), 32);
+}
+
+#[test]
+fn sixteen_byte_values_multiply_exactly() {
+    let mut machine = machine(false);
+    let wide = register(0x40, 16);
+    let a = register(0x10, 16);
+    let b = register(0x20, 16);
+    machine.write_int(&a, u128::from(u64::MAX)).unwrap();
+    machine.write_int(&b, u128::from(u64::MAX)).unwrap();
+    machine.execute(&[pcode(op::INT_MULT, Some(wide.clone()), vec![a, b])]).unwrap();
+    assert_eq!(machine.read_int(&wide).unwrap(), u128::from(u64::MAX) * u128::from(u64::MAX));
+}
+
+#[test]
+fn floats_follow_ieee_semantics() {
+    let one_half = 0.5f64.to_bits();
+    let two = 2.0f64.to_bits();
+    let single = |value: f32| u64::from(value.to_bits());
+    assert_eq!(value(op::FLOAT_ADD, &[(one_half, 8), (two, 8)], 8), u128::from(2.5f64.to_bits()));
+    assert_eq!(value(op::FLOAT_MULT, &[(single(1.5), 4), (single(2.0), 4)], 4), u128::from(single(3.0)));
+    assert_eq!(value(op::FLOAT_LESS, &[(one_half, 8), (two, 8)], 1), 1);
+    assert_eq!(value(op::FLOAT_INT2FLOAT, &[((-3i32) as u32 as u64, 4)], 8), u128::from((-3.0f64).to_bits()));
+    assert_eq!(value(op::FLOAT_TRUNC, &[((-2.75f64).to_bits(), 8)], 4), (-2i32) as u32 as u128);
+    assert_eq!(value(op::FLOAT_FLOAT2FLOAT, &[(single(1.25), 4)], 8), u128::from(1.25f64.to_bits()));
+    assert_eq!(value(op::FLOAT_NAN, &[(f64::NAN.to_bits(), 8)], 1), 1);
+    assert!(matches!(evaluate(op::FLOAT_ADD, &[(0, 10), (0, 10)], 10), Err(Fault::Unsupported(_))));
+}
+
+#[test]
+fn loads_and_stores_honour_byte_order() {
+    for big_endian in [false, true] {
+        let mut machine = machine(big_endian);
+        let value = register(0, 4);
+        let address = register(8, 4);
+        machine.write_int(&value, 0x1122_3344).unwrap();
+        machine.write_int(&address, 0x1010).unwrap();
+        machine.execute(&[pcode(op::STORE, None, vec![selector(RAM), address.clone(), value])]).unwrap();
+        let expected = if big_endian { [0x11, 0x22, 0x33, 0x44] } else { [0x44, 0x33, 0x22, 0x11] };
+        assert_eq!(machine.ram.bytes[0x10..0x14], expected);
+        let half = register(16, 2);
+        machine.write_int(&address, 0x1012).unwrap();
+        machine.execute(&[pcode(op::LOAD, Some(half.clone()), vec![selector(RAM), address])]).unwrap();
+        assert_eq!(machine.read_int(&half).unwrap(), if big_endian { 0x3344 } else { 0x1122 });
+        assert_eq!(machine.read_memory(0x1010, 4).unwrap(), 0x1122_3344);
+    }
+}
+
+#[test]
+fn register_aliases_overlap_in_target_byte_order() {
+    // A little-endian 32-bit register's low byte is at its offset; a big-endian one's is at offset + 3.
+    let mut little = machine(false);
+    little.write_int(&register(0, 4), 0xaabb_ccdd).unwrap();
+    assert_eq!(little.read_int(&register(0, 1)).unwrap(), 0xdd);
+    let mut big = machine(true);
+    big.write_int(&register(0, 4), 0xaabb_ccdd).unwrap();
+    assert_eq!(big.read_int(&register(3, 1)).unwrap(), 0xdd);
+}
+
+#[test]
+fn unmapped_memory_faults_name_the_address() {
+    let mut machine = machine(false);
+    let address = register(8, 4);
+    machine.write_int(&address, 0x9000).unwrap();
+    let load = pcode(op::LOAD, Some(register(0, 4)), vec![selector(RAM), address.clone()]);
+    assert_eq!(machine.execute(&[load]), Err(Fault::UnmappedRead { address: 0x9000, size: 4 }));
+    let store = pcode(op::STORE, None, vec![selector(RAM), address, constant(1, 2)]);
+    assert_eq!(machine.execute(&[store]), Err(Fault::UnmappedWrite { address: 0x9000, size: 2 }));
+}
+
+#[test]
+fn branches_relative_absolute_and_indirect() {
+    let mut machine = machine(false);
+    let flag = node(UNIQUE, 0, 1);
+    let out = register(0, 4);
+    // A taken relative CBRANCH skips the next op; falling off the end continues with the next instruction.
+    let ops = [
+        pcode(op::COPY, Some(flag.clone()), vec![constant(1, 1)]),
+        pcode(op::CBRANCH, None, vec![constant(2, 4), flag.clone()]),
+        pcode(op::COPY, Some(out.clone()), vec![constant(7, 4)]),
+        pcode(op::COPY, Some(register(4, 4)), vec![constant(9, 4)]),
+    ];
+    assert_eq!(machine.execute(&ops).unwrap(), Flow::Next);
+    assert_eq!(machine.read_int(&out).unwrap(), 0);
+    assert_eq!(machine.read_int(&register(4, 4)).unwrap(), 9);
+    let call = pcode(op::CALL, None, vec![node(RAM, 0x4000, 4)]);
+    assert_eq!(machine.execute(&[call]).unwrap(), Flow::Jump { target: 0x4000, call: true });
+    machine.write_int(&out, 0x5000).unwrap();
+    let ret = pcode(op::RETURN, None, vec![out]);
+    assert_eq!(machine.execute(&[ret]).unwrap(), Flow::Jump { target: 0x5000, call: false });
+    let not_taken = [
+        pcode(op::CBRANCH, None, vec![node(RAM, 0x6000, 4), constant(0, 1)]),
+        pcode(op::BRANCH, None, vec![node(RAM, 0x7000, 4)]),
+    ];
+    assert_eq!(machine.execute(&not_taken).unwrap(), Flow::Jump { target: 0x7000, call: false });
+    let backwards_forever = [pcode(op::BRANCH, None, vec![constant(0, 4)])];
+    assert!(matches!(machine.execute(&backwards_forever), Err(Fault::Malformed(_))));
+}
+
+#[test]
+fn user_operations_stop_unless_implemented() {
+    let mut machine = machine(false);
+    machine.set_user_op(0, UserOp::Other("syscall".into()));
+    machine.set_user_op(1, UserOp::Nop("LOCK".into()));
+    machine.set_user_op(2, UserOp::Segment { thread_selectors: vec![(REGISTER, 0x80)], thread_base: 0x1000 });
+    let call = |index| pcode(op::CALLOTHER, None, vec![constant(index, 4)]);
+    assert_eq!(machine.execute(&[call(0)]), Err(Fault::UserOp("syscall".into())));
+    assert_eq!(machine.execute(&[call(1)]), Ok(Flow::Next));
+    assert_eq!(machine.execute(&[call(3)]), Err(Fault::UserOp("user operation 3".into())));
+    let out = register(0, 4);
+    let segment = |selector| {
+        pcode(op::CALLOTHER, Some(out.clone()), vec![constant(2, 4), register(selector, 2), constant(0x10, 4)])
+    };
+    machine.execute(&[segment(0x80)]).unwrap();
+    assert_eq!(machine.read_int(&out).unwrap(), 0x1010);
+    machine.execute(&[segment(0x82)]).unwrap();
+    assert_eq!(machine.read_int(&out).unwrap(), 0x10);
+}
+
+#[test]
+fn unknown_opcodes_are_named() {
+    let mut machine = machine(false);
+    let mut unknown = pcode(op::INT_ADD, Some(register(0, 4)), vec![constant(1, 4), constant(1, 4)]);
+    unknown.opcode = 60;
+    unknown.name = "MULTIEQUAL".into();
+    let Err(Fault::Unsupported(message)) = machine.execute(&[unknown]) else { panic!("expected unsupported") };
+    assert!(message.contains("MULTIEQUAL"), "{message}");
+}
+
+// ----------------------------------------------------------------------------------------------------------------
+// Calling conventions.
+
+fn abi(arch: Arch, format: rampage_loaders::Format, big_endian: bool, convention: Convention) -> Abi {
+    Abi::select(arch, format, big_endian, convention).unwrap()
+}
+
+#[test]
+fn x86_conventions_place_arguments_on_the_stack_or_in_ecx_edx() {
+    use rampage_loaders::Format::{Elf, Pe};
+    let cdecl = abi(Arch::X86, Elf, false, Convention::Default);
+    assert_eq!(cdecl.convention, Convention::Cdecl);
+    assert_eq!(assign(&cdecl, &[4, 8, 4], false), [Place::Stack(0), Place::Stack(4), Place::Stack(12)]);
+    let fastcall = abi(Arch::X86, Pe, false, Convention::Fastcall);
+    assert_eq!(
+        assign(&fastcall, &[8, 4, 4, 4], false),
+        [Place::Stack(0), Place::Register("ECX"), Place::Register("EDX"), Place::Stack(8)]
+    );
+    let thiscall = abi(Arch::X86, Pe, false, Convention::Thiscall);
+    assert_eq!(assign(&thiscall, &[4, 4], false), [Place::Register("ECX"), Place::Stack(0)]);
+    assert_eq!(result_pair(&cdecl, false), ("EAX", "EDX"));
+    assert!(Abi::select(Arch::X86, Elf, false, Convention::Sysv).is_err());
+}
+
+#[test]
+fn x86_64_picks_sysv_or_win64_from_the_format() {
+    use rampage_loaders::Format::{Elf, Pe};
+    let sysv = abi(Arch::X86_64, Elf, false, Convention::Default);
+    assert_eq!(sysv.convention, Convention::Sysv);
+    let places = assign(&sysv, &[8; 7], false);
+    assert_eq!(places[5], Place::Register("R9"));
+    assert_eq!(places[6], Place::Stack(0));
+    let win64 = abi(Arch::X86_64, Pe, false, Convention::Default);
+    assert_eq!(win64.convention, Convention::Win64);
+    assert_eq!(win64.stack_arguments, 0x20);
+    assert_eq!(assign(&win64, &[8; 5], false)[4], Place::Stack(0));
+    assert_eq!(abi(Arch::X86_64, Elf, false, Convention::Win64).convention, Convention::Win64);
+}
+
+#[test]
+fn aapcs_aligns_register_pairs_and_spills_whole_pairs() {
+    let arm = abi(Arch::Arm, rampage_loaders::Format::Elf, false, Convention::Default);
+    assert_eq!(arm.pair, PairRule::Even);
+    assert_eq!(assign(&arm, &[8, 4], false), [Place::Pair("r0", "r1"), Place::Register("r2")]);
+    assert_eq!(assign(&arm, &[4, 8], false), [Place::Register("r0"), Place::Pair("r2", "r3")]);
+    assert_eq!(
+        assign(&arm, &[4, 4, 4, 8, 4], false),
+        [Place::Register("r0"), Place::Register("r1"), Place::Register("r2"), Place::Stack(0), Place::Stack(8)]
+    );
+    // Big-endian AAPCS keeps the high word in the lower-numbered register, for arguments and results.
+    assert_eq!(assign(&arm, &[8], true), [Place::Pair("r1", "r0")]);
+    assert_eq!(result_pair(&arm, true), ("r1", "r0"));
+    assert_eq!(result_pair(&arm, false), ("r0", "r1"));
+}
+
+#[test]
+fn mips_o32_uses_positional_slots() {
+    let o32 = abi(Arch::Mips, rampage_loaders::Format::Elf, true, Convention::Default);
+    assert_eq!(assign(&o32, &[4, 8, 4], true), [Place::Register("a0"), Place::Pair("a3", "a2"), Place::Stack(16)]);
+    assert_eq!(assign(&o32, &[4, 4, 4, 4, 4], false)[4], Place::Stack(16));
+    assert_eq!(o32.entry_registers, ["t9"]);
+}
+
+#[test]
+fn other_conventions_use_their_register_lists() {
+    use rampage_loaders::Format::Elf;
+    let n64 = abi(Arch::Mips64, Elf, true, Convention::Default);
+    assert_eq!(assign(&n64, &[8; 5], true)[4], Place::Register("t0"));
+    let rv32 = abi(Arch::Riscv32, Elf, false, Convention::Default);
+    assert_eq!(assign(&rv32, &[4, 8], false), [Place::Register("a0"), Place::Pair("a1", "a2")]);
+    let ppc = abi(Arch::PowerPc, Elf, true, Convention::Default);
+    assert_eq!(assign(&ppc, &[4, 8], true), [Place::Register("r3"), Place::Pair("r6", "r5")]);
+    assert_eq!(result_pair(&ppc, true), ("r4", "r3"));
+    let aarch64 = abi(Arch::Aarch64, Elf, false, Convention::Default);
+    assert_eq!(assign(&aarch64, &[8; 9], false)[8], Place::Stack(0));
+    assert!(Abi::select(Arch::Msp430, Elf, false, Convention::Default).is_err());
+}
+
+#[test]
+fn arguments_parse_widths_and_buffers() {
+    let parse = |value: serde_json::Value, width| prepare(&serde_json::from_value(value).unwrap(), width);
+    let integer = |value: serde_json::Value, width| match parse(value, width).unwrap() {
+        Prepared::Integer { value, bytes, .. } => (value, bytes),
+        Prepared::Buffer(_) => panic!("buffer"),
+    };
+    assert_eq!(integer(json!(3), 4), (3, 4));
+    assert_eq!(integer(json!("0x00F0A500"), 4), (0x00f0_a500, 4));
+    assert_eq!(integer(json!("0x0000000100000003"), 4), (0x1_0000_0003, 8));
+    assert_eq!(integer(json!("-1"), 4), (u64::MAX, 4));
+    assert_eq!(integer(json!({"value": 5, "bits": 64}), 4), (5, 8));
+    assert_eq!(integer(json!(5_000_000_000u64), 4), (5_000_000_000, 8));
+    assert!(parse(json!({"value": 300, "bits": 8}), 4).is_err());
+    assert!(parse(json!("12abc"), 4).is_err());
+    let Prepared::Buffer(bytes) = parse(json!({"buffer": {"text": "ab", "size": 4}}), 4).unwrap() else {
+        panic!("buffer")
+    };
+    assert_eq!(bytes, b"ab\0\0");
+    let Prepared::Buffer(bytes) = parse(json!({"buffer": {"hex": "0102"}}), 4).unwrap() else { panic!("buffer") };
+    assert_eq!(bytes, [1, 2]);
+    assert!(parse(json!({"buffer": {"hex": "010203", "size": 2}}), 4).is_err());
+    assert!(parse(json!({"value": 1, "buffer": {}}), 4).is_err());
+}
+
+#[test]
+fn results_report_hex_and_both_signs() {
+    let result = result_value(0xffff_fffe, 32, vec!["EAX".into()]);
+    assert_eq!(result.hex, "0xfffffffe");
+    assert_eq!(result.unsigned, json!(4294967294u64));
+    assert_eq!(result.signed, json!(-2));
+    let wide = result_value(u128::MAX, 128, vec![]);
+    assert_eq!(wide.signed, json!(-1));
+    assert_eq!(wide.unsigned, json!(u128::MAX.to_string()));
+}
+
+// ----------------------------------------------------------------------------------------------------------------
+// Whole functions of committed fixtures, against reference implementations of their C source.
+
+fn fixture(path: &str) -> Project {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(path);
+    Project::new(Binary::open(path).unwrap())
+}
+
+fn try_run(
+    project: &Project,
+    at: &str,
+    args: serde_json::Value,
+    extra: serde_json::Value,
+) -> Result<EvaluateReport, ApiError> {
+    let mut request = json!({ "at": at, "args": args });
+    request.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    project.evaluate_function(&serde_json::from_value(request).unwrap())
+}
+
+fn run(project: &Project, at: &str, args: serde_json::Value, extra: serde_json::Value) -> EvaluateReport {
+    try_run(project, at, args, extra).unwrap_or_else(|error| panic!("{at}: {error}"))
+}
+
+fn returned(report: &EvaluateReport) -> u64 {
+    assert_eq!(report.stop, StopReason::Returned, "{}", report.detail);
+    report.result.as_ref().unwrap().unsigned.as_u64().unwrap()
+}
+
+/// `fold_bytes` of tests/fixtures/bench-v3/src/semantics.c.
+fn fold_bytes(mut value: u32, mut rounds: u32) -> u32 {
+    let mut acc = 0x85eb_ca6bu32;
+    while rounds != 0 && value != 0 {
+        acc = acc.rotate_left(7).wrapping_add(value & 0xff);
+        value >>= 8;
+        rounds -= 1;
+    }
+    acc ^ (acc >> 13)
+}
+
+/// `scale64` of semantics.c.
+fn scale64(a: u32, b: u32) -> u64 {
+    let mut wide = u64::from(a) * u64::from(b);
+    wide = wide.wrapping_add(u64::from(a) << 21);
+    wide ^= wide >> 29;
+    wide.wrapping_sub(0x1_0000_0001u64.wrapping_mul(u64::from(b & 7)))
+}
+
+/// `mix64` of semantics.c.
+fn mix64(x: u64, k: u32) -> u64 {
+    let k = (k & 31) + 1;
+    let y = x.rotate_left(k).wrapping_add(u64::from(k) * 0xffff_ffff);
+    y / 7 + ((y % 7) << 40)
+}
+
+#[test]
+fn x86_cdecl_functions_return_in_eax_and_edx_eax() {
+    let project = fixture("bench-v3/twins/semantics-x86.elf");
+    for (value, rounds) in [(0x1234_5678u32, 4u32), (0xdead_beef, 2), (0, 9)] {
+        let report = run(&project, "fold_bytes", json!([format!("{value:#x}"), rounds]), json!({}));
+        assert_eq!(returned(&report), u64::from(fold_bytes(value, rounds)));
+        assert_eq!(report.arguments[1].location, "stack+0x8");
+    }
+    let report = run(&project, "scale64", json!(["0xfffffff1", 13]), json!({"return_bits": 64}));
+    assert_eq!(returned(&report), scale64(0xffff_fff1, 13));
+    assert_eq!(report.result.as_ref().unwrap().registers, ["EDX", "EAX"]);
+}
+
+#[test]
+fn arm32_follows_helper_calls_and_returns_register_pairs() {
+    let project = fixture("bench-v3/twins/semantics-arm32.elf");
+    let report = run(&project, "fold_bytes", json!([0x00c0_ffee, 3]), json!({}));
+    assert_eq!(returned(&report), u64::from(fold_bytes(0x00c0_ffee, 3)));
+    // The 64-bit division calls the compiler runtime's __aeabi_uldivmod, which the run follows.
+    let report = run(&project, "mix64", json!(["0x8000000000000005", 9]), json!({"return_bits": 64}));
+    assert_eq!(returned(&report), mix64(0x8000_0000_0000_0005, 9));
+    assert_eq!(report.arguments[0].location, "r1:r0");
+    assert_eq!(report.result.as_ref().unwrap().registers, ["r1", "r0"]);
+    assert!(report.calls.iter().any(|call| call.name.as_deref() == Some("__aeabi_uldivmod")), "{:?}", report.calls);
+}
+
+#[test]
+fn add_runs_on_every_supported_architecture() {
+    for name in [
+        "hello-x64.elf",
+        "hello-x64.exe",
+        "hello-arm64.elf",
+        "hello-arm.elf",
+        "hello-thumb.elf",
+        "hello-mips.elf",
+        "hello-mipsel.elf",
+        "hello-ppc.elf",
+        "hello-ppc64le.elf",
+        "hello-riscv64.elf",
+    ] {
+        let project = fixture(&format!("bin/{name}"));
+        let report = run(&project, "add", json!([40, -2]), json!({}));
+        assert_eq!(returned(&report), 38, "{name}");
+        assert_eq!(report.result.as_ref().unwrap().signed, json!(38), "{name}");
+        // `int` is 32 bits on every target: return_bits keeps a 64-bit register's undefined upper half out.
+        let report = run(&project, "add", json!([1, -3]), json!({"return_bits": 32}));
+        assert_eq!(report.result.as_ref().unwrap().signed, json!(-2), "{name}");
+    }
+}
+
+#[test]
+fn buffers_are_passed_by_pointer_and_returned() {
+    // strlen and memset of the statically linked runtime, in Thumb-2 (with IT blocks) and big-endian PowerPC.
+    for (name, strlen, memset) in [("hello-thumb.elf", "0x20e8c", "0x20e9e"), ("hello-ppc.elf", "0x21da0", "0x21dd4")] {
+        let project = fixture(&format!("bin/{name}"));
+        let report = run(&project, strlen, json!([{"buffer": {"text": "evaluate me"}}]), json!({}));
+        assert_eq!(returned(&report), 11, "{name}");
+        let report = run(&project, memset, json!([{"buffer": {"size": 40}}, 0x41, 33]), json!({}));
+        assert_eq!(report.stop, StopReason::Returned, "{name}: {}", report.detail);
+        let buffer = &report.buffers[0];
+        assert_eq!(buffer.hex, format!("{}{}", "41".repeat(33), "00".repeat(7)), "{name}");
+        assert_eq!(buffer.text.as_deref(), Some("A".repeat(33).as_str()));
+        assert_eq!(report.arguments[0].buffer, Some(0));
+    }
+}
+
+#[test]
+fn runs_stop_with_named_reasons() {
+    let dynamic = fixture("bin/hello-x64-dyn.elf");
+    let report = run(&dynamic, "main", json!([]), json!({}));
+    assert_eq!(report.stop, StopReason::ExternalCall);
+    assert!(report.detail.contains("puts"), "{}", report.detail);
+    let report = run(&dynamic, "main", json!([]), json!({"max_steps": 2}));
+    assert_eq!((report.stop, report.steps), (StopReason::StepLimit, 2));
+
+    let static_x64 = fixture("bin/hello-x64.elf");
+    let report = run(&static_x64, "main", json!([]), json!({}));
+    assert_eq!(report.stop, StopReason::UserOp);
+    assert!(report.detail.contains("syscall"), "{}", report.detail);
+    let stopped = report.stopped_at.as_ref().unwrap();
+    assert_eq!(stopped.instruction.as_deref(), Some("SYSCALL"));
+    assert!(report.calls.iter().any(|call| call.name.as_deref() == Some("puts")), "{:?}", report.calls);
+
+    let thumb = fixture("bin/hello-thumb.elf");
+    let report = run(&thumb, "0x20e8c", json!(["0x10"]), json!({}));
+    assert_eq!(report.stop, StopReason::UnmappedRead);
+    assert!(report.detail.contains("0x10"), "{}", report.detail);
+}
+
+#[test]
+fn memory_writes_and_requests_are_validated() {
+    let project = fixture("bin/hello-thumb.elf");
+    // Copy-on-write: a string written into the image is seen by the function, never by the file.
+    let address = project.binary.segments.iter().find(|segment| segment.perms.write).unwrap().address;
+    let report = run(
+        &project,
+        "0x20e8c",
+        json!([format!("{address:#x}")]),
+        json!({"memory": [{"address": format!("{address:#x}"), "hex": "6162636400"}]}),
+    );
+    assert_eq!(returned(&report), 4);
+    assert!(try_run(&project, "add", json!([]), json!({"convention": "sysv"})).is_err());
+    assert!(try_run(&project, "add", json!([]), json!({"max_steps": 0})).is_err());
+    assert!(try_run(&project, "add", json!([]), json!({"return_bits": 96})).is_err());
+    assert!(try_run(&project, "add", json!([]), json!({"memory": [{"address": "0x10", "hex": "00"}]})).is_err());
+    let unsupported = fixture("bin/hello-s390x.elf");
+    assert!(try_run(&unsupported, "add", json!([1, 2]), json!({})).is_err());
+}

@@ -258,6 +258,16 @@ unsafe extern "C" {
     fn rampage_sleigh_error(handle: *mut c_void) -> *const c_char;
     fn rampage_sleigh_decode(handle: *mut c_void, base: u64, bytes: *const u8, size: usize, result: *mut NativeResult);
     fn rampage_sleigh_close(handle: *mut c_void);
+    fn rampage_sleigh_register(
+        handle: *mut c_void,
+        name: *const c_char,
+        space: *mut u32,
+        offset: *mut u64,
+        size: *mut u32,
+    ) -> u8;
+    fn rampage_sleigh_userop_name(handle: *mut c_void, index: u32, output: *mut c_char, capacity: usize) -> u8;
+    fn rampage_sleigh_keep_context_commits(handle: *mut c_void, keep: u8);
+    fn rampage_sleigh_set_context(handle: *mut c_void, name: *const c_char, value: u32) -> u8;
     #[cfg(test)]
     fn rampage_sleigh_test_loader_isolation(handle: *mut c_void) -> u8;
     #[cfg(test)]
@@ -306,6 +316,32 @@ fn registered_profile(profile: &str) -> Option<&'static RegisteredProfile> {
     REGISTERED_PROFILES.iter().find(|descriptor| descriptor.id == profile)
 }
 
+/// Bundled languages opened only to interpret native code (`evaluate_function`), never offered as `inspect_sleigh`
+/// window profiles.
+static EMULATION_PROFILES: &[RegisteredProfile] = &[
+    RegisteredProfile { id: "ARM:LE:32:v8", family: "ARM", sla: "ARM8_le", pspec: "ARMt" },
+    RegisteredProfile { id: "ARM:BE:32:v8", family: "ARM", sla: "ARM8_be", pspec: "ARMt" },
+    RegisteredProfile { id: "MIPS:LE:32:default", family: "MIPS", sla: "mips32le", pspec: "mips32" },
+    RegisteredProfile { id: "MIPS:BE:32:default", family: "MIPS", sla: "mips32be", pspec: "mips32" },
+    RegisteredProfile { id: "MIPS:LE:64:default", family: "MIPS", sla: "mips64le", pspec: "mips64" },
+    RegisteredProfile { id: "MIPS:BE:64:default", family: "MIPS", sla: "mips64be", pspec: "mips64" },
+    RegisteredProfile { id: "PowerPC:LE:32:default", family: "PowerPC", sla: "ppc_32_le", pspec: "ppc_32" },
+    RegisteredProfile { id: "PowerPC:BE:32:default", family: "PowerPC", sla: "ppc_32_be", pspec: "ppc_32" },
+    RegisteredProfile { id: "PowerPC:LE:64:default", family: "PowerPC", sla: "ppc_64_le", pspec: "ppc_64" },
+    RegisteredProfile { id: "PowerPC:BE:64:default", family: "PowerPC", sla: "ppc_64_be", pspec: "ppc_64" },
+    RegisteredProfile { id: "RISCV:LE:32:default", family: "RISCV", sla: "riscv.ilp32d", pspec: "RV32" },
+    RegisteredProfile { id: "RISCV:LE:64:default", family: "RISCV", sla: "riscv.lp64d", pspec: "RV64" },
+];
+
+/// Where a register lives in a decoder's translator: a space index from [`DecodedInstruction::spaces`], a byte
+/// offset and a byte size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegisterStorage {
+    pub space: u32,
+    pub offset: u64,
+    pub size: u32,
+}
+
 /// One profile, reused across bounded windows. Every decode rebinds bytes/base and clears translation caches.
 /// This does not admit decompilation, ABI/type layouts, executable discovery, or external specification paths.
 pub struct SleighDecoder {
@@ -335,6 +371,75 @@ impl SleighDecoder {
     pub fn open(profile: &str) -> Result<Self, Error> {
         let descriptor = registered_profile(profile)
             .ok_or_else(|| Error::Ghidra("unregistered bundled decoder profile".to_owned()))?;
+        Self::open_descriptor(descriptor)
+    }
+
+    /// A decoder for interpreting `target`'s native code: the window profiles plus the [`EMULATION_PROFILES`]
+    /// (32-bit ARM, MIPS, PowerPC and RISC-V). This asserts no C ABI either; callers place arguments themselves.
+    pub fn for_emulation(target: &Target) -> Result<Self, Error> {
+        let id = match (target.arch, target.big_endian, target.data_big_endian) {
+            (Arch::X86 | Arch::X86_64 | Arch::Aarch64, ..) => return Self::for_target(target),
+            (Arch::Arm, false, false) => "ARM:LE:32:v8",
+            (Arch::Arm, true, true) => "ARM:BE:32:v8",
+            (Arch::Mips, false, _) => "MIPS:LE:32:default",
+            (Arch::Mips, true, _) => "MIPS:BE:32:default",
+            (Arch::Mips64, false, _) => "MIPS:LE:64:default",
+            (Arch::Mips64, true, _) => "MIPS:BE:64:default",
+            (Arch::PowerPc, false, _) => "PowerPC:LE:32:default",
+            (Arch::PowerPc, true, _) => "PowerPC:BE:32:default",
+            (Arch::PowerPc64, false, _) => "PowerPC:LE:64:default",
+            (Arch::PowerPc64, true, _) => "PowerPC:BE:64:default",
+            (Arch::Riscv32, false, _) => "RISCV:LE:32:default",
+            (Arch::Riscv64, false, _) => "RISCV:LE:64:default",
+            _ => return Err(Error::UnsupportedArch(target.arch)),
+        };
+        let descriptor = EMULATION_PROFILES
+            .iter()
+            .find(|descriptor| descriptor.id == id)
+            .ok_or_else(|| Error::Ghidra("unregistered bundled emulation profile".to_owned()))?;
+        Self::open_descriptor(descriptor)
+    }
+
+    /// The storage of the register `name` (Sleigh's spelling, such as `EAX`, `x0`, `r0` or `a0`).
+    pub fn register(&self, name: &str) -> Option<RegisterStorage> {
+        let name = CString::new(name).ok()?;
+        let (mut space, mut offset, mut size) = (0u32, 0u64, 0u32);
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: the handle is live; the shim writes only the three outputs and keeps no pointers.
+        let found = unsafe { rampage_sleigh_register(self.handle, name.as_ptr(), &mut space, &mut offset, &mut size) };
+        (found != 0).then_some(RegisterStorage { space, offset, size })
+    }
+
+    /// The name of user-defined p-code operation `index`, the constant first input of a CALLOTHER.
+    pub fn user_op_name(&self, index: u32) -> Option<String> {
+        let mut output = [0 as c_char; 128];
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: the handle is live; the shim writes at most `output.len()` bytes, NUL-terminated.
+        let found = unsafe { rampage_sleigh_userop_name(self.handle, index, output.as_mut_ptr(), output.len()) };
+        (found != 0).then(|| text(&output))
+    }
+
+    /// Keeps the context each later decode commits (Sleigh `globalset`, such as ARM IT-block state) for the
+    /// addresses it names, as an interpreter that decodes one execution path in order needs. Window decoding never
+    /// sets this.
+    pub fn keep_context_commits(&mut self, keep: bool) {
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: the handle is live; this only sets a flag the shim reads on later decodes.
+        unsafe { rampage_sleigh_keep_context_commits(self.handle, u8::from(keep)) };
+    }
+
+    /// Sets the default of the context variable `name` (such as ARM `TMode`) for later decodes. Returns false when
+    /// the language has no such variable.
+    pub fn set_context_variable(&mut self, name: &str, value: u32) -> bool {
+        let Ok(name) = CString::new(name) else {
+            return false;
+        };
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: the handle is live and the name outlives the call.
+        unsafe { rampage_sleigh_set_context(self.handle, name.as_ptr(), value) != 0 }
+    }
+
+    fn open_descriptor(descriptor: &'static RegisteredProfile) -> Result<Self, Error> {
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: this reads only the shim's compile-time record size under the native serialization lock.
         if unsafe { rampage_sleigh_result_size() } != std::mem::size_of::<NativeResult>() {

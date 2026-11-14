@@ -74,6 +74,7 @@ rampage binary analyze module.dylib --all-architectures --workflow triage-report
 | `function build-signatures FILE [--output DB]` | `signatures` | Named-function JSON; separate fuzzy mode with `--fuzzy-request` |
 | `function compare FILE --reference JSON` | `compare` | Versioned, image-matched function-start comparison |
 | `function inspect-table FILE --at ADDRESS --count N` | `jump-table` | Explicit immutable ARM64 table validation |
+| `function evaluate FILE --at ADDRESS [--arg VALUE]... [--return-bits N]` | | Run a function on arguments with a p-code interpreter (experimental; [details](mcp.md#inputs-paging-and-decompiler-tokens)) |
 | `function graph FILE --at ADDRESS` | `graph` | Native control-flow graph, complete or as a summary projection ([tool views](tool-views.md)) |
 | `function batch FILE [OPTIONS]` | `batch` | Atomic checked rename/comment/signature/type/global operations from JSON |
 | `string list FILE [--min-len N] [--contains TEXT]` | `strings` | ASCII and UTF-16LE strings; minimum defaults to 4 |

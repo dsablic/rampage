@@ -683,6 +683,8 @@ struct DecodeHandle {
     std::unique_ptr<DecodeSleigh> sleigh;
     char error[256]{};
     std::string processorHelper;
+    // Interpreting decoders keep context commits (ARM IT blocks); window decoders never do.
+    bool contextCommits = false;
 };
 
 void decodeError(char *output, const char *message) noexcept {
@@ -1525,7 +1527,7 @@ void rampage_sleigh_decode(void *pointer, uint64_t base, const uint8_t *bytes,
     }
     try {
         handle->sleigh->clearCache();
-        handle->sleigh->allowContextSet(false);
+        handle->sleigh->allowContextSet(handle->contextCommits);
         handle->image.bytes.clear();
         handle->image.padded = false;
         if (size > decodeMaxWindow) throw DecodeLimit();
@@ -1591,6 +1593,64 @@ void rampage_sleigh_decode(void *pointer, uint64_t base, const uint8_t *bytes,
 
 void rampage_sleigh_close(void *pointer) noexcept {
     try { delete static_cast<DecodeHandle *>(pointer); } catch (...) {}
+}
+
+// A named register's storage: translator space index, byte offset and size. Returns 0 for an unknown name.
+uint8_t rampage_sleigh_register(void *pointer, const char *name, uint32_t *space, uint64_t *offset,
+                                uint32_t *size) noexcept {
+    DecodeHandle *handle = static_cast<DecodeHandle *>(pointer);
+    if (handle == nullptr || handle->error[0] != 0 || !handle->sleigh || name == nullptr || space == nullptr
+        || offset == nullptr || size == nullptr)
+        return 0;
+    try {
+        const VarnodeData &value = handle->sleigh->getRegister(name);
+        for (int4 i = 0; i < handle->sleigh->numSpaces(); ++i) {
+            if (handle->sleigh->getSpace(i) == value.space) {
+                *space = uint32_t(i);
+                *offset = value.offset;
+                *size = value.size;
+                return 1;
+            }
+        }
+    } catch (...) {}
+    return 0;
+}
+
+// The name of user-defined p-code operation `index` (a CALLOTHER's first input), truncated to `capacity`.
+uint8_t rampage_sleigh_userop_name(void *pointer, uint32_t index, char *output, size_t capacity) noexcept {
+    DecodeHandle *handle = static_cast<DecodeHandle *>(pointer);
+    if (handle == nullptr || handle->error[0] != 0 || !handle->sleigh || output == nullptr || capacity == 0)
+        return 0;
+    try {
+        std::vector<std::string> names;
+        handle->sleigh->getUserOpNames(names);
+        if (index >= names.size()) return 0;
+        size_t length = std::min(names[index].size(), capacity - 1);
+        memcpy(output, names[index].data(), length);
+        output[length] = 0;
+        return 1;
+    } catch (...) {}
+    return 0;
+}
+
+// Lets later decodes store their context commits (globalset), as an interpreter following one path needs.
+void rampage_sleigh_keep_context_commits(void *pointer, uint8_t keep) noexcept {
+    DecodeHandle *handle = static_cast<DecodeHandle *>(pointer);
+    if (handle != nullptr) handle->contextCommits = keep != 0;
+}
+
+// Sets a context variable's default (such as ARM TMode) for later decodes. Returns 0 for an unknown variable.
+uint8_t rampage_sleigh_set_context(void *pointer, const char *name, uint32_t value) noexcept {
+    DecodeHandle *handle = static_cast<DecodeHandle *>(pointer);
+    if (handle == nullptr || handle->error[0] != 0 || !handle->sleigh || name == nullptr) return 0;
+    try {
+        handle->context.setVariableDefault(name, value);
+        // Paint every code address too: a processor specification's context_set overrides the default.
+        handle->context.setVariableRegion(name, Address(handle->image.code, 0), Address(), value);
+        handle->sleigh->clearCache();
+        return 1;
+    } catch (...) {}
+    return 0;
 }
 
 // Private test probe against actual translator space identities, including Harvard code/mem/codebyte.

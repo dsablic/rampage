@@ -44,7 +44,7 @@ fn json_of(tool: &str, result: &CallToolResult) -> Value {
 }
 
 /// Tools outside the experimental groups whose results are experimental (docs/stability.md).
-const EXPERIMENTAL_TOOLS: [&str; 1] = ["exception_handlers"];
+const EXPERIMENTAL_TOOLS: [&str; 2] = ["evaluate_function", "exception_handlers"];
 
 /// Every tool `client` lists once all its groups are enabled, with its group and argument summary.
 async fn listed_tools(client: Client, tools: &mut BTreeMap<String, Value>) {
@@ -181,6 +181,12 @@ async fn contract_mcp_core_results() {
     exercise(c, o, "list_exports", json!({"path": fixture("hello-x64.dylib"), "limit": 3})).await;
     exercise(c, o, "list_strings", json!({"path": elf, "limit": 3})).await;
     exercise(c, o, "decompile", json!({"path": elf, "at": "main"})).await;
+    // evaluate_function: a result with a buffer, and a stop with the instruction, function and calls behind it.
+    let thumb = fixture("hello-thumb.elf");
+    let buffer = json!([{"buffer": {"size": 8}}, 65, 4]);
+    exercise(c, o, "evaluate_function", json!({"path": thumb, "at": "0x20e9e", "args": buffer})).await;
+    exercise(c, o, "evaluate_function", json!({"path": thumb, "at": "add", "args": [1, 2]})).await;
+    exercise(c, o, "evaluate_function", json!({"path": elf, "at": "main"})).await;
     exercise(c, o, "disassemble", json!({"path": elf, "at": "main", "count": 4})).await;
     exercise(c, o, "function_graph", json!({"path": elf, "at": "main"})).await;
     exercise(c, o, "function_summary", json!({"path": elf, "at": "main"})).await;

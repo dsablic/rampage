@@ -4,6 +4,14 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
+## Unreleased
+
+- `evaluate_function` (core, experimental) runs a function of the image on integer and buffer arguments and
+  returns its result, so agents stop simulating loops by hand. A p-code interpreter over the bundled Sleigh
+  specifications executes x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC and RISC-V code with the
+  binary's calling convention (cdecl/stdcall/fastcall/thiscall, System V, Win64, AAPCS, o32/n64, RISC-V and
+  PowerPC), follows calls inside the image and names why a run stopped. CLI: `rampage function evaluate`.
+
 ## 1.0.0 (2026-11-14)
 
 The first stable release. From here a breaking change to the stable surface in the

@@ -1753,6 +1753,56 @@
       },
       "experimental": true
     },
+    "evaluate_function": {
+      "group": "core",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "args": {
+          "type": "array",
+          "required": false
+        },
+        "at": {
+          "type": "string",
+          "required": true
+        },
+        "convention": {
+          "type": "string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "max_steps": {
+          "type": "integer|null",
+          "required": false
+        },
+        "memory": {
+          "type": "array",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "return_bits": {
+          "type": "integer|null",
+          "required": false
+        },
+        "timeout_ms": {
+          "type": "integer|null",
+          "required": false
+        }
+      },
+      "experimental": true
+    },
     "exception_handlers": {
       "group": "formats",
       "arguments": {

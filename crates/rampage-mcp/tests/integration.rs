@@ -16,6 +16,7 @@ mod debugger;
 mod decode;
 mod entry_scope;
 mod ergonomics;
+mod evaluate;
 mod file_layout;
 mod findings;
 mod flywheel;

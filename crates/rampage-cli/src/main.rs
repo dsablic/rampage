@@ -283,6 +283,8 @@ enum Command {
     #[command(skip)]
     ObjcSends(ObjcSendsArgs),
     #[command(skip)]
+    Evaluate(args::EvaluateArgs),
+    #[command(skip)]
     ImportDebugLayouts(ImportDebugLayoutsArgs),
     /// Run a guided investigation workflow and print its bounded, evidence-backed report
     #[command(hide = true)]
@@ -616,6 +618,7 @@ fn main() -> ExitCode {
         Command::ImportPdbNames(args) => commands::import_pdb_names(&mut out, &args, &options),
         Command::TypeLayout(args) => commands::type_layout(&mut out, &args, &options),
         Command::ObjcSends(args) => commands::objc_sends(&mut out, &args, &options),
+        Command::Evaluate(args) => commands::evaluate(&mut out, &args, &options),
         Command::ImportDebugLayouts(args) => commands::import_debug_layouts(&mut out, &args, &options),
         Command::Report(ReportArgs {
             workflow,

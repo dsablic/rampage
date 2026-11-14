@@ -96,11 +96,12 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 that answer common first questions, such as `language_metadata` and `class_evidence` for class names and
 hierarchies, are in `core` so that a client deferring schemas still sees their names.
 
-A default session lists 44 tools: the 43 in `core` plus `enable_tools`. Enabling every group lists 87. The
+A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling every group lists 88. The
 `debug` group adds 14 tools (16 with `--debug-writes`), `--observations` adds `report_observation`, and a
 `--corpus` server lists `enable_tools` and the 4 `improve` tools only.
 
-- `core`: `triage`, `binary_info`, `list_functions`, `disassemble`, `decompile`, `function_graph`,
+- `core`: `triage`, `binary_info`, `list_functions`, `disassemble`, `decompile`, `evaluate_function`,
+  `function_graph`,
   `assemble`, `patch_bytes`, `revert_patch`, `list_patches`, `export_patched`,
   `function_summary`, `xrefs`, `search`, `list_strings`, `list_imports`, `list_exports`, `rename`, `set_comment`,
   `annotate_batch`, `batch`, `check_names`, `undo`, `redo`, `discard_undo`, `list_annotations`, `record_finding`,
@@ -319,6 +320,25 @@ spans index the rendered C; flow-only records can be spanless. Storage offsets a
 not automatically program virtual addresses. C production and `no_reported_issues` do not establish correct
 recovery. See the [decompiler reference](../crates/rampage-decompiler/README.md) for token/output bounds,
 diagnostics and worker requirements; `function_summary` remains a structural alternative, not decompiled C.
+
+`evaluate_function` (core, experimental) runs one function of the image on given arguments and returns its
+integer result, so a question like "what does this return for (0x00F0A500, 3)?" is answered by running the code
+rather than simulating it from pseudocode. A p-code interpreter over the bundled Sleigh specifications executes it
+(x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC, RISC-V); nothing runs natively. `at` names the entry;
+`args` are integers (numbers, or `0x` hex or decimal strings; `{value, bits}` for an explicit width, and a hex
+string longer than 8 digits is 64-bit on a 32-bit target) or `{buffer: {hex | text, size}}` buffers passed by
+pointer and returned with their final bytes. Arguments go where the binary's calling convention puts them;
+`convention` selects cdecl, stdcall, fastcall or thiscall on x86 and sysv or win64 on x86-64. `return_bits` sets
+the result width (default the register width; 32 for a C `int` on a 64-bit target), and twice the register width
+reads a register pair (EDX:EAX, r1:r0). Memory starts as the file's image (zero-filled bss, copy-on-write) plus a
+zeroed stack and thread block; `memory` writes bytes into it first. Calls inside the image are followed; `stop`
+says why the run ended: `returned` (with `result` as hex, unsigned and signed), `step_limit`, `timeout`,
+`external_call` (an import, named), `external_read`, `unmapped_read`/`unmapped_write`/`unmapped_fetch`, `user_op`
+(system calls, traps and processor operations, named), `unsupported_op`, `invalid_instruction` or
+`division_by_zero`, with `stopped_at` naming the instruction and function. Each result also lists where every
+argument went and the functions called. Limits: `max_steps` (default 1,000,000, at most 20,000,000) and
+`timeout_ms` (default 10,000, at most 60,000); integer results only; SIMD instructions that Sleigh models as
+processor operations (many SSE ones) stop with `user_op`, and x87 extended floats with `unsupported_op`.
 
 `dotnet_metadata` selects `types`, `pinvokes`, `attributes` or `resources`, filtering with `contains`/`parent_token` and
 paging entries. `dotnet_il` selects a method token or qualified name and pages instructions with `offset`/`limit`,

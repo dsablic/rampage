@@ -52,6 +52,8 @@ These may change or disappear in any minor release. Each is marked as experiment
 - **`exception_handlers`:** the MSVC C++ exception-handling tool. Its name and arguments are pinned in the
   contract snapshot, but its row shape may change, and `__CxxFrameHandler4` tables (cl.exe x64's default) are not
   decoded yet.
+- **`evaluate_function`:** the function interpreter. Its name and arguments are pinned in the contract snapshot,
+  but its result fields, stop reasons and the conventions it chooses may change as it is verified on more code.
 - **`rampage-eval`:** the evaluation and benchmark harness, its commands and its report formats.
 - **Component plugins:** the WebAssembly triage-component host (`--component`) and its WIT interface, which are
   versioned separately (`0.0.1`); see [plugins](plugins.md).

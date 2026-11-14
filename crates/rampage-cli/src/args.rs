@@ -590,6 +590,34 @@ pub(crate) struct ImportDebugLayoutsArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct EvaluateArgs {
+    #[arg(value_name = "IMAGE")]
+    pub(crate) file: PathBuf,
+    /// The function's entry: an address or a symbol name
+    #[arg(long)]
+    pub(crate) at: String,
+    /// An argument, repeated in order: an integer (0x hex or decimal, negative allowed) or a JSON argument object
+    /// such as '{"value":"0x10","bits":64}' or '{"buffer":{"text":"abc"}}'
+    #[arg(long = "arg", value_name = "VALUE", allow_hyphen_values = true)]
+    pub(crate) args: Vec<String>,
+    /// Calling convention: default, cdecl, stdcall, fastcall, thiscall (x86), sysv, win64 (x86-64)
+    #[arg(long)]
+    pub(crate) convention: Option<String>,
+    /// Width of the integer result in bits (twice the register width reads a register pair)
+    #[arg(long)]
+    pub(crate) return_bits: Option<u32>,
+    /// Bytes written into the image first, as ADDRESS=HEX, repeated
+    #[arg(long = "memory", value_name = "ADDRESS=HEX")]
+    pub(crate) memory: Vec<String>,
+    /// Instructions to execute before stopping (default 1000000)
+    #[arg(long)]
+    pub(crate) max_steps: Option<u64>,
+    /// Wall-clock budget in milliseconds (default 10000)
+    #[arg(long)]
+    pub(crate) timeout_ms: Option<u64>,
+}
+
+#[derive(Args)]
 pub(crate) struct ObjcSendsArgs {
     #[arg(value_name = "IMAGE")]
     pub(crate) file: PathBuf,

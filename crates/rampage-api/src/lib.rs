@@ -31,6 +31,7 @@ pub mod derived_cache;
 mod detect;
 mod diagnostics;
 mod dotnet;
+pub mod evaluate;
 mod fid_signatures;
 pub mod file_layout;
 mod files;

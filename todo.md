@@ -101,6 +101,13 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
 - [x] `go-nested-field` took 20–26 rampage calls against REA's 14: no Go runtime type metadata. Done (`get_type`
   Go source). Open: Go before 1.16, position-independent Go ELF (pointers filled in at load time).
 
+## Function evaluation (2026-11-14)
+
+- [x] `evaluate_function` (core, experimental): run a function on arguments with a p-code interpreter instead of
+  simulating it; every suite v3 semantics miss was a hand-evaluated loop. Open: interpret the SIMD processor
+  operations Sleigh leaves as CALLOTHER (SSE `memset`/`memcpy` stop with `user_op`), optional stubs for common
+  imports, float results, and a benchmark run with the tool.
+
 ## Objective-C dispatch (2026-11-13)
 
 - [x] `objc_msgSend` resolution (selectors, receiver classes, method lookup, `objc_sends`, xref rows, comments).

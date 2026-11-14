@@ -118,6 +118,7 @@ impl RootCommand {
             Self::Function(FunctionCommand::BuildSignatures(args)) => Command::Signatures(args),
             Self::Function(FunctionCommand::Compare(args)) => Command::Compare(args),
             Self::Function(FunctionCommand::InspectTable(args)) => Command::JumpTable(args),
+            Self::Function(FunctionCommand::Evaluate(args)) => Command::Evaluate(args),
             Self::String(StringCommand::List(args)) => Command::Strings(args),
             Self::Language(LanguageCommand::Inspect(args)) => Command::Metadata(args),
             Self::Language(LanguageCommand::ObjcSends(args)) => Command::ObjcSends(args),
@@ -254,6 +255,8 @@ pub(crate) enum FunctionCommand {
     Compare(CompareArgs),
     /// Inspect an explicit ARM64 absolute64 or signed-relative32 jump table
     InspectTable(JumpTableArgs),
+    /// Run a function on integer or buffer arguments with a p-code interpreter and print its result (experimental)
+    Evaluate(crate::args::EvaluateArgs),
 }
 
 #[derive(Subcommand)]

@@ -2103,6 +2103,79 @@ mod debug_layout_output_tests {
     }
 }
 
+pub fn evaluate(out: &mut impl Write, args: &crate::args::EvaluateArgs, options: &Options) -> Result<()> {
+    let project = open(&args.file, options)?;
+    let arguments: Vec<serde_json::Value> = args
+        .args
+        .iter()
+        .map(|text| match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(value @ serde_json::Value::Object(_)) => value,
+            _ => serde_json::Value::String(text.clone()),
+        })
+        .collect();
+    let memory = args
+        .memory
+        .iter()
+        .map(|write| {
+            let (address, hex) =
+                write.split_once('=').ok_or_else(|| anyhow::anyhow!("--memory takes ADDRESS=HEX, not {write:?}"))?;
+            Ok(serde_json::json!({ "address": address, "hex": hex }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut input = serde_json::json!({ "at": args.at, "args": arguments, "memory": memory });
+    for (key, value) in [
+        ("convention", args.convention.clone().map(serde_json::Value::from)),
+        ("return_bits", args.return_bits.map(serde_json::Value::from)),
+        ("max_steps", args.max_steps.map(serde_json::Value::from)),
+        ("timeout_ms", args.timeout_ms.map(serde_json::Value::from)),
+    ] {
+        if let Some(value) = value {
+            input[key] = value;
+        }
+    }
+    let (text, failed) = rampage_api::tools::call(&rampage_api::tools::tools(), &project, "evaluate_function", input);
+    let result: serde_json::Value = serde_json::from_str(&text)?;
+    if failed {
+        anyhow::bail!("{}", result["error"].as_str().unwrap_or(&text));
+    }
+    if options.json {
+        out.write_all(text.as_bytes())?;
+        writeln!(out)?;
+        return Ok(());
+    }
+    writeln!(
+        out,
+        "stop: {} ({}) after {} instructions",
+        result["stop"].as_str().unwrap_or(""),
+        result["detail"].as_str().unwrap_or(""),
+        result["steps"]
+    )?;
+    if let Some(value) = result.get("result") {
+        let registers: Vec<&str> =
+            value["registers"].as_array().into_iter().flatten().filter_map(|name| name.as_str()).collect();
+        writeln!(
+            out,
+            "result: {} (unsigned {}, signed {}) in {}",
+            value["hex"].as_str().unwrap_or(""),
+            value["unsigned"],
+            value["signed"],
+            registers.join(":")
+        )?;
+    }
+    if let Some(at) = result.get("stopped_at") {
+        writeln!(
+            out,
+            "stopped at {} {}",
+            at["address"].as_str().unwrap_or(""),
+            at["instruction"].as_str().unwrap_or("")
+        )?;
+    }
+    for buffer in result["buffers"].as_array().into_iter().flatten() {
+        writeln!(out, "buffer (argument {}): {}", buffer["argument"], buffer["hex"].as_str().unwrap_or(""))?;
+    }
+    Ok(())
+}
+
 pub fn objc_sends(out: &mut impl Write, args: &crate::args::ObjcSendsArgs, options: &Options) -> Result<()> {
     let project = open(&args.file, options)?;
     let mut input = serde_json::json!({ "offset": args.offset, "limit": args.limit });

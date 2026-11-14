@@ -4220,6 +4220,86 @@
       },
       "subcommand_required": false
     },
+    "rampage function evaluate": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--arg": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--at": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        },
+        "--convention": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--max-steps": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--memory": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--return-bits": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--timeout-ms": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "<1>": {
+          "type": "value",
+          "repeated": false,
+          "required": true
+        }
+      },
+      "subcommand_required": false
+    },
     "rampage function graph": {
       "arguments": {
         "--arch": {

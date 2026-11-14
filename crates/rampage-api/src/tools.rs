@@ -2564,6 +2564,17 @@ pub fn tools() -> Vec<Tool> {
         ),
         tool(
             Group::Core,
+            "evaluate_function",
+            "Experimental. Run a function on arguments and return its integer result instead of simulating code by \
+             hand: a p-code interpreter over the bundled Sleigh specifications (x86, x86-64, AArch64, ARM/Thumb, \
+             MIPS, PowerPC, RISC-V); nothing runs natively. Arguments follow the binary's calling convention (64-bit \
+             values on 32-bit targets as register pairs or stack slots); buffers are passed by pointer and returned. \
+             Calls inside the image are followed. `stop` says why a run ended: returned (with result), \
+             step_limit, timeout, external_call, user_op (syscalls, SIMD helpers), unmapped_read, ..., each named.",
+            |project, request: crate::evaluate::EvaluateRequest| project.evaluate_function(&request),
+        ),
+        tool(
+            Group::Core,
             "language_metadata",
             "Demangled symbols, named Itanium vtables/RTTI, Objective-C selector strings and Objective-C classes and \
              categories (superclasses, methods with implementations, ivars, properties, protocols), with limits.",
