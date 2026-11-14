@@ -9,6 +9,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
 - Fix: `evaluate_function` runs code and reads data in page 0 of a fixed-address image linked there (a Raw project,
   or an ELF executable with a segment at 0, as Cortex-M firmware often is) instead of stopping with
   `unmapped_fetch`; shared objects, PIEs, PE and Mach-O images keep the null-page guard.
+- Fix: `integrity_checks` finds checks nested inside another check's range (a CRC-16 over a configuration block
+  inside an image CRC-32): code evidence includes CRC tables whose address `movw`/`movt` forms and the addresses
+  routines and their callers form as immediates, and a dropped nested value is kept when the image's own routine
+  computes it. `fix` writes inner values first and never writes an outer value over a stale inner one it knows of:
+  that write is reported as `blocked`, naming the value; a CRC routine with no matching check is named in `notes`.
 
 ## 1.3.0 (2026-11-14)
 

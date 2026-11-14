@@ -276,11 +276,6 @@ def libid_raw(route: Route) -> dict[str, Any]:
 # Truths the scripted tool route does not reach today, and why. An agent can still reach them by reading code (and,
 # for the patching tasks, by computing the missing CRC-16 by hand), so the tasks stay; the runs will show it.
 GAPS = {
-    "patch-values-cm4-hex": "integrity_checks finds the CRC-32 at 0x13fc but not the CRC-16/CCITT-FALSE at 0x840 "
-                            "(table-driven routine, 16-bit value after a 64-byte range), so fix writes a CRC-32 over "
-                            "the stale CRC-16; evaluate_function does not accept Raw projects",
-    "patch-export-srec-cm4-srec": "as patch-values-cm4-hex: the exported image keeps a stale CRC-16 and a wrong CRC-32",
-    "patch-export-bin-cm4-raw": "as patch-values-cm4-hex: the exported image keeps a stale CRC-16 and a wrong CRC-32",
     "libid-names-m0-elf": "the embedded signature set names strlen, strcmp and strchr but not strncpy or qsort",
     "libid-names-m0-raw": "the embedded signature set names __udivsi3 but not memset, memmove, malloc or strtol",
 }

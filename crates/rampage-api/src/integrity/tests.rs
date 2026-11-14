@@ -120,7 +120,7 @@ fn brute_force_finds_a_crc_after_padding_and_stops_at_its_budget() {
     let constants = BTreeSet::new();
     let mut found = search(&blocks, &constants, SEARCH_BUDGET_BYTES);
     found.run(&ALGORITHMS);
-    let checks = select(found.matches, &CodeEvidence::default());
+    let (checks, _) = select(found.matches, &CodeEvidence::default());
     let best = &checks[0];
     assert_eq!(
         (best.algorithm, best.field, best.range, best.endian),
@@ -156,10 +156,11 @@ fn values_inside_a_stronger_checks_range_are_dropped_unless_code_references_them
     };
     let strong = found(Algorithm::Crc32, 0x7fc, (0x400, 0x7fc), Origin::Layout);
     let weak = found(Algorithm::Sum8, 0x500, (0x440, 0x500), Origin::Layout);
-    let checks = select(vec![strong.clone(), weak.clone()], &CodeEvidence::default());
+    let (checks, dropped) = select(vec![strong.clone(), weak.clone()], &CodeEvidence::default());
     assert_eq!(checks.iter().map(|check| check.field).collect::<Vec<_>>(), [0x7fc]);
+    assert_eq!(dropped.iter().map(|check| check.field).collect::<Vec<_>>(), [0x500]);
     let referenced = Match { field_origin: Origin::Code, ..weak };
-    let checks = select(vec![strong, referenced], &CodeEvidence::default());
+    let (checks, _) = select(vec![strong, referenced], &CodeEvidence::default());
     assert_eq!(checks.len(), 2);
     assert!(checks[1].code_bound);
 }

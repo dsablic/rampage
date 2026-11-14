@@ -134,7 +134,9 @@ views report them apart (`known_rampage_gaps`).
    stale CRC-16 (`0x7cf33297` instead of `0xc2980fa1`), so the exported image fails the boot code. And
    `evaluate_function` refuses Raw projects, so an agent cannot run the image's own CRC-16 routine either. With the
    correct CRC-16 patched in by hand, the rest of the route (`integrity_checks fix`, `export_image` to S-records)
-   produces exactly the expected image; that export is the checker's test file.
+   produces exactly the expected image; that export is the checker's test file. **Fixed after the suite found it** (Unreleased):
+   `integrity_checks` now finds the nested CRC-16 (table address formed by `movw`/`movt`, range and stored value
+   passed as immediates) and fixes it before the CRC-32; all three patching routes reach the truth.
 3. **Embedded signatures name 4 of the 10 asked library functions** (`libid-names-m0-elf`: strlen, strcmp,
    strchr, not strncpy or qsort; `libid-names-m0-raw`: `__udivsi3`, not memset, memmove, malloc or strtol). That
    matches the published 31% recall on this held-out fixture; the rest must be recognised from their code.

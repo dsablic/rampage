@@ -43,14 +43,19 @@ measured on the patched image (`valid`, `stored_hex`, `computed_hex`).
   right after or right before a range of at least 64 bytes whose other end is a layout boundary, since chance
   matches are otherwise common. Uniform ranges and erased (all 0x00 or 0xff) values are skipped.
 - **Code.** Functions that reference a CRC table (from `find_crypto`'s constants), load a 32-bit polynomial literal,
-  or form one with a Thumb `movw`/`movt` pair are reported in `routines` with their callers; the addresses they and
-  their callers reference become candidates, and a match whose algorithm the code implements gains confidence.
+  or form one (or a table's address) with a Thumb `movw`/`movt` pair are reported in `routines` with their callers;
+  the addresses they and their callers reference or form as immediates (`mov r0, #0x800` passing a range,
+  `mov r1, #0x840` before reading a stored value) become candidates, and a match whose algorithm the code
+  implements gains confidence. A routine with no matching check is named in `notes`.
 - **Emulation.** With `emulate` (the default), the routine is run with `evaluate_function` on `(start, length)` and
   then `(start, end)` of each matched range up to 64 KiB, at most four runs; a result equal to the computed value
   marks the check `confirmed_by_emulation`.
 - **Confidence.** One best match per stored value (others counted in `alternatives`), scored from the algorithm's
   strength, adjacency, code evidence (a routine counts only when it or a caller references the value or range)
-  and emulation. A value inside a higher-scored check's range is dropped as a chance match unless code references it: `high` at 0.75, `medium` at 0.5. `evidence` lists each reason.
+  and emulation: `high` at 0.75, `medium` at 0.5. A value inside a higher-scored check's range is dropped as a
+  chance match unless code references it or the image's routine computes it (emulation is tried on those too), so
+  nested checks, such as a CRC-16 over a configuration block inside an image CRC-32, are both kept. `evidence` lists
+  each reason.
 - **PE.** A PE's optional-header CheckSum is reported as a `file`-space check (zero means unset). Fix it with
   `export_image` and `pe_checksum: true`, not with a patch.
 
@@ -59,7 +64,9 @@ measured on the patched image (`valid`, `stored_hex`, `computed_hex`).
 By default a fix writes only checks with independent evidence: confirmed by emulation, or whose stored value or
 range bound the code references. Other invalid checks appear in `fix.writes` as `preview_only` with the reason;
 pass their `ids` to fix them. Writes go in dependency order: a check whose range covers another's stored value is
-computed after it, and a cycle refuses. Each write is a patch over the original bytes at the stored value, or a
+computed after it (inner values first), and a cycle refuses. A check whose range covers another check's value
+that is stale and not being fixed (not chosen, or a dropped match whose algorithm the image's code implements) is
+not written: it appears as `blocked`, naming that value, since its new value would cover a stale one. Each write is a patch over the original bytes at the stored value, or a
 `revert` of the record that covers exactly those bytes when the original bytes are correct again. Every write is
 validated before the first is committed (admission, preimage, the patch budget, and any user patch overlapping the
 value without matching it exactly, which refuses the whole fix); if a write still fails, the earlier ones are undone.

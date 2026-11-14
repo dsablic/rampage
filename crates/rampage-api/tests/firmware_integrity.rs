@@ -248,3 +248,53 @@ fn a_fix_refuses_before_writing_when_a_patch_overlaps_the_stored_value() {
     assert!(failed && text.contains("overlaps the stored value"), "{text}");
     assert_eq!(project.effective_snapshot().unwrap().list_patches().unwrap().len(), 2);
 }
+
+/// Nested checks (the boot image of benchmark suite v4: a CRC-16 over a configuration block, inside the range of a
+/// CRC-32 its boot code also verifies). The CRC-16 routine reads a table whose address movw/movt forms, and its
+/// caller passes the range and reads the stored value through immediates, so both checks are found; a fix writes
+/// the inner value first, and never the outer one over a stale inner value.
+#[test]
+fn nested_checks_are_found_and_fixed_inner_first() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bench-v4/bin/boot-cm4.bin");
+    let length = std::fs::metadata(&path).unwrap().len();
+    let request = json!({ "profile": "cortex-m4", "offset": 0, "length": length, "base_address": 0,
+                          "vector_table": true });
+    let mut project = Session::default().open_raw(&path, &serde_json::from_value(request).unwrap()).unwrap();
+    let report = call(&mut project, "integrity_checks", json!({}));
+    let check = |report: &Value, address: &str| {
+        let checks = report["checks"].as_array().unwrap();
+        checks.iter().find(|check| check["stored"]["address"] == address).cloned().unwrap_or_else(|| {
+            panic!("no check at {address}: {report:#}");
+        })
+    };
+    let (inner, outer) = (check(&report, "0x840"), check(&report, "0x13fc"));
+    assert_eq!((inner["algorithm"].as_str(), outer["algorithm"].as_str()), (Some("crc16_ccitt_false"), Some("crc32")));
+    assert_eq!(outer["depends_on"], json!([inner["id"]]), "{report:#}");
+
+    // A configuration change invalidates both values.
+    let (baud, slower) = (115_200u32.to_le_bytes(), 57_600u32.to_le_bytes());
+    project = project.patch_bytes(0x808, &baud, &slower, true).unwrap().project;
+    let report = call(&mut project, "integrity_checks", json!({}));
+    assert_eq!(report["invalid"], 2, "{report:#}");
+
+    // Fixing only the outer check while the inner one is stale writes nothing and names the inner value.
+    let mut fix = tokens(&report);
+    fix["fix"] = json!(true);
+    fix["ids"] = json!([outer["id"]]);
+    let blocked = call(&mut project, "integrity_checks", fix);
+    let write = &blocked["fix"]["writes"][0];
+    assert_eq!(write["action"], "blocked", "{blocked:#}");
+    assert_eq!(blocked["fix"]["applied"], false, "{blocked:#}");
+    assert!(write["detail"].as_str().unwrap().contains("0x840"), "{blocked:#}");
+    assert_eq!(project.list_patches().unwrap().len(), 1);
+
+    // The default fix writes the inner value, then the outer one over it: both hold afterwards.
+    let mut fix = tokens(&report);
+    fix["fix"] = json!(true);
+    let fixed = call(&mut project, "integrity_checks", fix);
+    let writes = fixed["fix"]["writes"].as_array().unwrap();
+    let order: Vec<&str> = writes.iter().map(|write| write["address"].as_str().unwrap()).collect();
+    assert_eq!(order, ["0x840", "0x13fc"], "{fixed:#}");
+    assert_eq!(fixed["fix"]["applied"], true, "{fixed:#}");
+    assert_eq!(fixed["invalid"], 0, "{fixed:#}");
+}
