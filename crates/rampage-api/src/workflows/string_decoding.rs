@@ -184,7 +184,8 @@ fn register_indexed(operand: &str) -> bool {
     };
     let register = |term: &str| {
         let term = term.trim();
-        term.starts_with(|c: char| c.is_ascii_alphabetic()) && !matches!(term, "rip" | "pc" | "sp")
+        term.starts_with(|c: char| c.is_ascii_alphabetic())
+            && !matches!(term, "rip" | "eip" | "pc" | "sp" | "rsp" | "esp")
     };
     let terms: Vec<&str> = if inner.contains('+') { inner.split('+').collect() } else { inner.split(',').collect() };
     terms.len() >= 2 && register(terms[0]) && register(terms[1])
@@ -486,7 +487,17 @@ impl Project {
                     candidates.push(candidate);
                 }
             }
-            candidates.sort_by_key(|candidate| (!(candidate.ops.xor || candidate.ops.rotate), candidate.address));
+            // XOR and rotate loops are traced first, table lookups alone last.
+            candidates.sort_by_key(|candidate| {
+                let tier = if candidate.ops.xor || candidate.ops.rotate {
+                    0
+                } else if candidate.table_only() {
+                    2
+                } else {
+                    1
+                };
+                (tier, candidate.address)
+            });
             tracing = self.trace_call_sites(decoder.as_mut(), &mut candidates, &analysis.program.xrefs);
             // A table lookup alone is common in ordinary code (hex formatting, case mapping, Go's runtime): such a
             // loop is a candidate only when a call site passes it encoded-looking data.
@@ -658,7 +669,7 @@ impl Project {
         if tracing.untraced_candidates > 0 {
             report.limitation(format!(
                 "Call sites were traced for the first {MAX_TRACED_CANDIDATES} candidates only (XOR and rotate loops \
-                 first); {} candidates were not traced and stay at low confidence.",
+                 first, table lookups alone last and not reported untraced); {} candidates were not traced and stay at low confidence.",
                 tracing.untraced_candidates
             ));
         }
@@ -1091,6 +1102,7 @@ mod tests {
         }
         assert!(!classify(Arch::X86_64, "movzx eax, byte ptr [rip + 0x1234]").indexed_load);
         assert!(!classify(Arch::X86_64, "movzx eax, byte ptr [rcx + 8]").indexed_load);
+        assert!(!classify(Arch::X86_64, "movzx eax, byte ptr [rsp + rax]").indexed_load);
     }
 
     #[test]
