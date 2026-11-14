@@ -45,6 +45,7 @@ pub fn signatures() -> Vec<ConstantSignature> {
     all.extend(other_primitives());
     all.extend(checksums_and_formats());
     all.extend(curves());
+    all.extend(digest_infos());
     all
 }
 
@@ -313,5 +314,20 @@ fn curves() -> Vec<ConstantSignature> {
             ED25519,
             "2b8324804fc1df0b2b4d00993dfbd7a72f431806ad2fe478c4ee1b274a0ea0b0",
         ),
+    ]
+}
+
+/// The DER DigestInfo prefixes an RSA PKCS#1 v1.5 signature check compares the decrypted block with (RFC 8017
+/// section 9.2, note 1). SHA-1's 15-byte prefix is below the length guard.
+fn digest_infos() -> Vec<ConstantSignature> {
+    const RFC8017: &str = "RFC 8017 section 9.2";
+    let prefix = |what, value: &str| {
+        signature("RSA PKCS#1 v1.5", Kind::PublicKey, what, RFC8017, Pattern::Bytes(hex(value)), None)
+    };
+    vec![
+        prefix("PKCS#1 v1.5 DigestInfo prefix for SHA-224", "302d300d06096086480165030402040500041c"),
+        prefix("PKCS#1 v1.5 DigestInfo prefix for SHA-256", "3031300d060960864801650304020105000420"),
+        prefix("PKCS#1 v1.5 DigestInfo prefix for SHA-384", "3041300d060960864801650304020205000430"),
+        prefix("PKCS#1 v1.5 DigestInfo prefix for SHA-512", "3051300d060960864801650304020305000440"),
     ]
 }

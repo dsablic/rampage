@@ -38,7 +38,7 @@ pub const MAX_HITS: usize = 4096;
 
 const ANCHOR_LEN: usize = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     BlockCipher,

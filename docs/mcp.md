@@ -96,7 +96,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 that answer common first questions, such as `language_metadata` and `class_evidence` for class names and
 hierarchies, are in `core` so that a client deferring schemas still sees their names.
 
-A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling every group lists 92. The
+A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling every group lists 93. The
 `debug` group adds 14 tools (16 with `--debug-writes`), `--observations` adds `report_observation`, and a
 `--corpus` server lists `enable_tools` and the 4 `improve` tools only.
 
@@ -110,7 +110,7 @@ A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling
   `decode_file_range`, `probe_compression`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`, `language_metadata`,
   `objc_sends`, `class_evidence`; with --observations (or RAMPAGE_OBSERVATIONS), also `report_observation`.
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
-  `capa_detect`, `find_crypto`, `list_packs`.
+  `capa_detect`, `find_crypto`, `list_packs`, `lock_mechanisms`.
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_debug_layouts`,
   `import_pdb_names`, `edit_variable`, `declare_types`, `list_types`, `get_type`, `delete_type`, `apply_data_type`,
   `read_data`, `apply_enum`, `apply_offset`, `function_frame`, `propagate_types`, `import_debug_types`,
@@ -243,6 +243,15 @@ only for checks confirmed by emulation or referenced by code (others by `ids`).
 file, the native file with an optional PE CheckSum) or as a flat binary. Both take `raw`, as do the patch tools
 except `export_patched`. Limits: one contiguous range per check; 256 MiB of hashing per search. See
 [firmware patching](firmware-patching.md).
+
+`lock_mechanisms` (group `detection`, experimental) explains mechanisms that can make a device refuse a repair:
+signature and MAC verification, challenge-response unlocks, binding to a unique chip ID, anti-rollback counters,
+debug and readout protection, and fuse feature locks. Each mechanism names what is checked, the data and registers
+consulted, the decision's function and branch, what each path does (`reset`, `exit`, `halt`, `transfer`, `writes`,
+`returns`) and which is the refusal when the code shows it, with evidence and a confidence; `not_locks` lists plain
+integrity checks, identity reads and crypto that decide nothing. It never suggests changes or reads out keys.
+Pages with `offset`/`limit` (default 10, at most 50) and filters by `category`. Limits: register roles need
+`import_svd`; decisions are traced on ARM/Thumb, AArch64 and x86-64 only. See [lock mechanisms](lock-mechanisms.md).
 
 `propagate_types` previews direct-call type candidates; `apply=true` persists separate unlocked hints with
 source fingerprints. Analyst annotations take priority, conflicts remain explicit and unsupported mappings
@@ -459,7 +468,8 @@ Errors start with a code: `unknown_session`, `endpoint_not_allowed`, `session_li
 Raw-capable tools (`binary_info`, `list_functions`, `disassemble`, `function_graph`, `xrefs`, `search`,
 `analysis_diagnostics`, `entry_diagnostics`, `capabilities`, `rename`, `set_comment`, `annotate_batch`,
 `list_annotations`, `undo`, `redo`, `decompile`, `import_svd`, `peripheral_access`, `list_patches`, `patch_bytes`,
-`revert_patch`, `integrity_checks`, `export_image`, `identify_functions`) take an optional `raw` object in place
+`revert_patch`, `integrity_checks`, `export_image`, `identify_functions`, `lock_mechanisms`) take an optional `raw`
+object in place
 of a native image:
 
 ```json

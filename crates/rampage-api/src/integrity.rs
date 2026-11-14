@@ -954,6 +954,13 @@ fn fix_order(checks: &[Found], chosen: &[bool]) -> Result<Vec<usize>, String> {
     Ok(order)
 }
 
+/// The functions holding CRC code evidence (CRC tables, polynomial literals), as `integrity_checks` finds them.
+pub(crate) fn crc_routine_addresses(project: &Project) -> BTreeSet<u64> {
+    let (blocks, _) = blocks(&project.binary);
+    let mut notes = Vec::new();
+    code_evidence(project, &blocks, &mut notes).routines.iter().map(|routine| routine.address).collect()
+}
+
 impl Project {
     /// Finds integrity checks in the original image, measures them on this (effective) image, and with
     /// `request.fix` writes corrected stored values as reviewed byte patches in dependency order.

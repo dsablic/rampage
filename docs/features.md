@@ -56,6 +56,12 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   emulation of the image's own routine), reports which no longer hold after patches, writes corrected values as
   patches in dependency order, and exports the patched image as Intel HEX, S-records, the original binary file or a
   flat binary (PE CheckSum recomputed on request). Limits: one contiguous range per check, unkeyed digests only.
+- [Lock mechanisms](lock-mechanisms.md) (`lock_mechanisms`, *experimental*) explains what can make a device refuse
+  a repair: signature and MAC checks, challenge-response unlocks, binding to a unique chip ID, anti-rollback
+  counters, debug and readout protection, and fuse feature locks, each with what is checked, the data consulted,
+  the decision site and what each path does (reset, halt, error return, a flag written). It explains and never
+  suggests changes. Limits: register roles need an imported SVD map; decisions through heap data or indirect calls
+  are missed.
 - ELF, PE and Mach-O, including universal Mach-O binaries and explicitly selected embedded executable images.
 - x86 and x86-64 use [iced-x86](https://github.com/icedland/iced).
 - AArch64 and 32-bit ARM decode natively from Arm's

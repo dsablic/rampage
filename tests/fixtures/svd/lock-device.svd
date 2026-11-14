@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- A made-up microcontroller for the lock-mechanism fixture (tests/fixtures/firmware/locks/firmware.c): a flash
+     controller with option bytes, a unique-ID block, one-time-programmable fuses, a random number generator and an
+     SPI port. Names follow common CMSIS-SVD conventions; addresses and values are invented. -->
+<device schemaVersion="1.3" xmlns:xs="http://www.w3.org/2001/XMLSchema-instance">
+  <name>LOCKDEMO</name>
+  <size>32</size>
+  <resetValue>0x00000000</resetValue>
+  <peripherals>
+    <peripheral>
+      <name>FLASHC</name>
+      <description>Flash controller and option bytes</description>
+      <baseAddress>0x40022000</baseAddress>
+      <addressBlock><offset>0</offset><size>0x400</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register><name>ACR</name><addressOffset>0x00</addressOffset></register>
+        <register><name>KEYR</name><description>Flash unlock key</description><addressOffset>0x04</addressOffset><access>write-only</access></register>
+        <register><name>OPTKEYR</name><description>Option bytes unlock key</description><addressOffset>0x08</addressOffset><access>write-only</access></register>
+        <register>
+          <name>SR</name><addressOffset>0x0C</addressOffset>
+          <fields><field><name>BSY</name><bitOffset>0</bitOffset><bitWidth>1</bitWidth></field></fields>
+        </register>
+        <register>
+          <name>CR</name><addressOffset>0x10</addressOffset>
+          <fields>
+            <field><name>PG</name><bitOffset>0</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>OPTSTRT</name><bitOffset>17</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>LOCK</name><bitOffset>31</bitOffset><bitWidth>1</bitWidth></field>
+          </fields>
+        </register>
+        <register>
+          <name>OPTR</name><description>Option bytes</description><addressOffset>0x20</addressOffset>
+          <fields>
+            <field><name>RDP</name><description>Readout protection level</description><bitOffset>0</bitOffset><bitWidth>8</bitWidth></field>
+            <field><name>WRP_EN</name><description>Write protection enable</description><bitOffset>8</bitOffset><bitWidth>1</bitWidth></field>
+          </fields>
+        </register>
+      </registers>
+    </peripheral>
+    <peripheral>
+      <name>UID</name>
+      <description>Unique device identifier</description>
+      <baseAddress>0x1FFF7A10</baseAddress>
+      <addressBlock><offset>0</offset><size>0xC</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register><dim>3</dim><dimIncrement>4</dimIncrement><name>UID%s</name><addressOffset>0</addressOffset><access>read-only</access></register>
+      </registers>
+    </peripheral>
+    <peripheral>
+      <name>OTP</name>
+      <description>One-time-programmable fuses</description>
+      <baseAddress>0x1FFF7800</baseAddress>
+      <addressBlock><offset>0</offset><size>0x20</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register><dim>4</dim><dimIncrement>4</dimIncrement><name>VERCNT[%s]</name><description>Version counter</description><addressOffset>0</addressOffset><access>read-only</access></register>
+        <register>
+          <name>FEATURES</name><addressOffset>0x10</addressOffset><access>read-only</access>
+          <fields>
+            <field><name>BOOST</name><bitOffset>3</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>REGION</name><bitOffset>8</bitOffset><bitWidth>8</bitWidth></field>
+          </fields>
+        </register>
+      </registers>
+    </peripheral>
+    <peripheral>
+      <name>RNG</name>
+      <description>Random number generator</description>
+      <baseAddress>0x50060800</baseAddress>
+      <addressBlock><offset>0</offset><size>0x400</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register><name>CR</name><addressOffset>0</addressOffset></register>
+        <register><name>SR</name><addressOffset>4</addressOffset></register>
+        <register><name>DR</name><addressOffset>8</addressOffset><access>read-only</access></register>
+      </registers>
+    </peripheral>
+    <peripheral>
+      <name>SPI1</name>
+      <description>Serial peripheral interface</description>
+      <baseAddress>0x40013000</baseAddress>
+      <addressBlock><offset>0</offset><size>0x400</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register><name>CR1</name><addressOffset>0</addressOffset></register>
+        <register><name>SR</name><addressOffset>8</addressOffset></register>
+        <register><name>DR</name><addressOffset>0xC</addressOffset></register>
+      </registers>
+    </peripheral>
+  </peripherals>
+</device>

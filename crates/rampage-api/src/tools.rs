@@ -828,7 +828,7 @@ fn sleigh_file_schema() -> Value {
 
 /// Project tools that serve a Raw Project opened with [`crate::Session::open_raw`]: each returns a result or an
 /// explicit typed refusal on Raw input. Clients offer the `raw` selector only on these.
-pub const RAW_CAPABLE_TOOLS: [&str; 24] = [
+pub const RAW_CAPABLE_TOOLS: [&str; 25] = [
     "binary_info",
     "list_functions",
     "disassemble",
@@ -853,6 +853,7 @@ pub const RAW_CAPABLE_TOOLS: [&str; 24] = [
     "integrity_checks",
     "export_image",
     "identify_functions",
+    "lock_mechanisms",
 ];
 
 /// Whether the project tool `name` accepts a Raw Project selector.
@@ -1418,6 +1419,17 @@ struct ImportSvdArgs {
     /// Store the map; omit to preview.
     #[serde(default)]
     apply: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct LockMechanismsArgs {
+    /// Only this category: signature_verification, mac_verification, challenge_response, device_binding,
+    /// anti_rollback, debug_lock or feature_lock.
+    category: Option<String>,
+    offset: Option<usize>,
+    /// Mechanisms per page (default 10, at most 50).
+    limit: Option<usize>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -2795,6 +2807,21 @@ pub fn tools() -> Vec<Tool> {
              filesystem/registry, input capture) inferred from imports and strings. Triage evidence, not proof \
              the behavior executes.",
             |project, _: Nothing| Ok(project.capabilities()),
+        ),
+        tool(
+            Group::Detection,
+            "lock_mechanisms",
+            "Explain mechanisms that can make a device refuse a repair (experimental): signature/MAC checks, \
+             challenge-response unlocks, chip-ID binding, anti-rollback counters, debug/readout protection, fuse \
+             feature locks. Each: what is checked, data consulted, decision site, what each path does, evidence, \
+             confidence; plus checks that are not locks. Register roles need import_svd. Paginated.",
+            |project, args: LockMechanismsArgs| {
+                project.lock_mechanisms(&crate::LockQuery {
+                    category: args.category,
+                    offset: args.offset.unwrap_or(0),
+                    limit: args.limit.unwrap_or(0),
+                })
+            },
         ),
         tool(
             Group::DotNet,

@@ -1,0 +1,39 @@
+{
+  "description": "Lock mechanisms the fixtures in this directory contain, by the function whose code makes the decision (a reported decision or inner decision inside that function's symbol range matches), and negative controls in which no decision may be reported. Symbols come from the -sym/.elf builds; the analyzed images are the stripped or raw ones.",
+  "fixtures": [
+    {
+      "image": "raw-cortex-m-locks.bin",
+      "symbols": "raw-cortex-m-locks.elf",
+      "svd": "lock-device.svd",
+      "mechanisms": [
+        { "category": "signature_verification", "function": "boot_main", "failure": "reset" },
+        { "category": "anti_rollback", "function": "boot_main", "failure": "reset" },
+        { "category": "debug_lock", "function": "boot_main", "failure": "halt" },
+        { "category": "debug_lock", "function": "apply_readout_protection" },
+        { "category": "device_binding", "function": "check_pairing" },
+        { "category": "feature_lock", "function": "power_limit_watts" },
+        { "category": "feature_lock", "function": "motor_handler" },
+        { "category": "challenge_response", "function": "service_unlock" }
+      ],
+      "not_locks": [
+        { "kind": "integrity_check", "function": "load_config" },
+        { "kind": "identity_read", "function": "format_serial" },
+        { "kind": "crypto_without_decision", "function": "log_event" }
+      ],
+      "negatives": ["load_config", "probe_sensor", "log_event", "format_serial", "core_is_m4", "systick_handler"]
+    },
+    {
+      "image": "locks-x64.elf",
+      "symbols": "locks-x64-sym.elf",
+      "mechanisms": [
+        { "category": "signature_verification", "function": "install_update", "failure": "exit" },
+        { "category": "challenge_response", "function": "enter_service_mode" }
+      ],
+      "not_locks": [
+        { "kind": "integrity_check", "function": "load_settings" },
+        { "kind": "crypto_without_decision", "function": "log_digest" }
+      ],
+      "negatives": ["load_settings", "log_digest", "read_file"]
+    }
+  ]
+}

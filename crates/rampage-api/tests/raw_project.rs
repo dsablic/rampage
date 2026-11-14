@@ -270,6 +270,7 @@ fn every_raw_capable_tool_answers_on_a_reviewed_msp430_project() {
         ("integrity_checks", json!({})),
         ("export_image", Value::Null),
         ("identify_functions", json!({})),
+        ("lock_mechanisms", json!({})),
     ];
     assert_eq!(inputs.each_ref().map(|(name, _)| *name), RAW_CAPABLE_TOOLS);
     let export = owned.0.join("export.bin");
@@ -429,6 +430,7 @@ fn cortex_m_raw_projects_serve_every_raw_capable_tool_with_native_evidence() {
         ("integrity_checks", json!({})),
         ("export_image", Value::Null),
         ("identify_functions", json!({})),
+        ("lock_mechanisms", json!({})),
     ];
     assert_eq!(inputs.each_ref().map(|(name, _)| *name), RAW_CAPABLE_TOOLS);
     let export = owned.0.join("export.bin");

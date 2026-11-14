@@ -44,7 +44,7 @@ fn json_of(tool: &str, result: &CallToolResult) -> Value {
 }
 
 /// Tools outside the experimental groups whose results are experimental (docs/stability.md).
-const EXPERIMENTAL_TOOLS: [&str; 2] = ["evaluate_function", "exception_handlers"];
+const EXPERIMENTAL_TOOLS: [&str; 3] = ["evaluate_function", "exception_handlers", "lock_mechanisms"];
 
 /// Every tool `client` lists once all its groups are enabled, with its group and argument summary.
 async fn listed_tools(client: Client, tools: &mut BTreeMap<String, Value>) {
@@ -536,6 +536,17 @@ async fn contract_mcp_detection_results() {
     let output = scratch.0.join("signatures.json");
     let build = json!({"path": owned(&scratch, &fixture("eval-ref-x86_64.elf")), "output": output});
     exercise(c, o, "build_signatures", build).await;
+    // Lock mechanisms: an owned Linux program, and an owned Cortex-M firmware with its SVD map imported.
+    let firmware = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware");
+    exercise(c, o, "lock_mechanisms", json!({"path": owned(&scratch, &firmware.join("locks-x64.elf"))})).await;
+    let image = owned(&scratch, &firmware.join("raw-cortex-m-locks.bin"));
+    let length = std::fs::metadata(&image).unwrap().len();
+    let raw = json!({"profile": "cortex-m3", "offset": 0, "length": length, "base_address": "0x8000000",
+        "vector_table": true});
+    let svd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/svd/lock-device.svd");
+    json_of("import_svd", &call(c, "import_svd", json!({"path": image, "raw": raw, "svd": svd, "apply": true})).await);
+    exercise(c, o, "lock_mechanisms", json!({"path": image, "raw": raw, "limit": 50})).await;
+    exercise(c, o, "lock_mechanisms", json!({"path": image, "raw": raw, "category": "feature_lock", "limit": 1})).await;
     check_group(client, "detection", &observed, &[]).await;
 }
 

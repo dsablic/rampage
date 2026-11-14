@@ -109,7 +109,7 @@ fn group_summary(group: Group) -> &'static str {
         }
         Group::Detection => {
             "packer/compiler and library code: detect_tools, identify_functions (signatures), capabilities, \
-             find_crypto, yara_scan and capa_detect (your rules)."
+             find_crypto, yara_scan and capa_detect (your rules); lock_mechanisms (repair locks)."
         }
         Group::Types => {
             "struct layouts by name, field path or offset: get_type and list_types read DWARF, PDB and Go runtime \

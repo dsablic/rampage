@@ -16,6 +16,15 @@ Additions only; nothing in the stable surface changed.
   accessors unnamed. On owned firmware built with a held-out GCC it names 31–51% of the library functions with no
   wrong name. `identify_functions` (and `function identify`, without `--apply`) accepts a Cortex-M Raw project's
   `raw` selector. See [embedded firmware set](docs/signature-corpus.md#embedded-firmware-set).
+- `lock_mechanisms` (group `detection`, *experimental*) explains what can make a device refuse a repair:
+  signature and MAC verification, challenge-response unlocks, unique-chip-ID binding, anti-rollback counters, debug
+  and readout protection and fuse feature locks. A p-code dataflow over the functions near crypto constants,
+  library names and SVD-named registers finds the branch each decision is made at, what it consults and what each
+  path does (reset, halt, error return, a flag written), with evidence and a confidence; CRC and unkeyed digest
+  checks, unused identity reads and crypto that decides nothing are listed as not locks. It explains only: no
+  patch suggestions, no key extraction. Accepts a Cortex-M Raw project's `raw` selector. `find_crypto` also
+  recognizes the PKCS#1 v1.5 DigestInfo prefixes for SHA-224/256/384/512. See
+  [lock mechanisms](docs/lock-mechanisms.md).
 
 ## 1.2.0 (2026-11-14)
 

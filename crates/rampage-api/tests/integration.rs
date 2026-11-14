@@ -51,6 +51,7 @@ mod findings;
 mod firmware_integrity;
 mod go_types;
 mod jumptable;
+mod lock_mechanisms;
 mod module_references;
 mod packs;
 mod patch_frontends;

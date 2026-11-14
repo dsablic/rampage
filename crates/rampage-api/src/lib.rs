@@ -47,6 +47,7 @@ pub mod integrity;
 mod jumptable;
 pub mod layout_containers;
 mod listing;
+mod locks;
 mod module_references;
 mod objc;
 mod offset;
@@ -189,6 +190,7 @@ pub use import_types::{ImportPrototype, PosixContext, import_prototype};
 pub use integrity::{IntegrityOutcome, IntegrityReport, IntegrityRequest};
 pub use jumptable::{JumpTable, JumpTableEntry};
 pub use listing::{DisassemblyLine, FunctionListing};
+pub use locks::{LockQuery, LockReport, Mechanism as LockMechanism};
 pub use module_references::{
     MAX_MODULE_REFERENCE_MODULES, MAX_MODULE_REFERENCE_PAGE, MAX_MODULE_REFERENCE_RESULT_BYTES,
     ModuleReferenceCandidate, ModuleReferenceCoverage, ModuleReferenceInput, ModuleReferenceMetadataOrigin,

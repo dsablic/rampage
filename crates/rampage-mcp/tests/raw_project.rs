@@ -420,3 +420,37 @@ async fn a_patched_hex_image_is_fixed_and_exported_in_its_container() {
     assert_eq!((reopened["checks"][0]["valid"].as_bool(), reopened["invalid"].as_u64()), (Some(true), Some(0)));
     client.cancel().await.unwrap();
 }
+
+/// lock_mechanisms over MCP on the owned lock-mechanism firmware: after import_svd names its registers, the
+/// signature check, the unique-ID binding, the rollback counter and the challenge-response unlock are explained,
+/// each at its decision site.
+#[tokio::test]
+async fn lock_mechanisms_explain_a_cortex_m_raw_image_with_its_svd() {
+    let client = connect().await;
+    let directory = FixtureCopy::new();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let path = directory.0.join("firmware.bin");
+    std::fs::copy(root.join("firmware/raw-cortex-m-locks.bin"), &path).unwrap();
+    let length = std::fs::metadata(&path).unwrap().len();
+    let selector = json!({
+        "profile": "cortex-m3", "offset": 0, "length": length, "base_address": "0x8000000", "vector_table": true,
+    });
+    let (text, failed) = call(&client, "enable_tools", json!({ "groups": ["detection", "types"] })).await;
+    assert!(!failed, "{text}");
+    let svd = root.join("svd/lock-device.svd");
+    let import = json!({ "path": path, "raw": selector, "svd": svd, "apply": true });
+    let (text, failed) = call(&client, "import_svd", import).await;
+    assert!(!failed, "{text}");
+    let (text, failed) = call(&client, "lock_mechanisms", json!({ "path": path, "raw": selector })).await;
+    assert!(!failed, "{text}");
+    let report: Value = serde_json::from_str(&text).unwrap();
+    let mechanisms = report["mechanisms"].as_array().unwrap();
+    for category in ["signature_verification", "device_binding", "anti_rollback", "challenge_response"] {
+        let found = mechanisms.iter().find(|row| row["category"] == category);
+        assert!(found.is_some_and(|row| row["decision"]["at"].is_string()), "{category}: {text}");
+    }
+    let unknown = json!({ "path": path, "raw": selector, "category": "anything" });
+    let (text, failed) = call(&client, "lock_mechanisms", unknown).await;
+    assert!(failed && text.contains("signature_verification"), "{text}");
+    client.cancel().await.unwrap();
+}

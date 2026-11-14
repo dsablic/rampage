@@ -133,6 +133,7 @@ async fn lists_all_tools_with_instructions() {
         "list_patches",
         "list_strings",
         "list_types",
+        "lock_mechanisms",
         "network_surface",
         "objc_sends",
         "observe_indirect_branch",
