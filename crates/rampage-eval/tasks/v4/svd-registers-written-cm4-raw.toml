@@ -1,0 +1,35 @@
+version = 1
+id = "svd-registers-written-cm4-raw"
+kind = "analysis"
+question = """
+The first file is a raw flash image for an ARM Cortex-M4 microcontroller (Thumb-2, little-endian), mapped at address
+0x0 with no file header; it begins with the interrupt vector table. The second file is the microcontroller's
+CMSIS-SVD device description. The function at 0x16c configures a peripheral. List every memory-mapped register the
+function's own code writes, in program order, a register written twice appearing twice. Name each as
+PERIPHERAL.REGISTER with the peripheral and register names the device description gives it, and return them in an
+array named registers.
+"""
+truth_reference = """
+Host harness run of src/periph.c timer_setup with recorded register accesses, named by derive-truth.py's own SVD
+reader (TIMER1 is derivedFrom TIMER0); timer_setup = 0x16c from the twin's symbols.
+"""
+required_capabilities = ["raw_loading", "decompile", "peripheral_map"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "periph-cm4-bin"
+path = "tests/fixtures/bench-v4/bin/periph-cm4.bin"
+sha256 = "64f08bafa9b7cb939e8f0f08de06141e0b4d1fef746f61b65833bc4844cd47e0"
+source = "tests/fixtures/bench-v4/src/periph.c"
+build = "tests/fixtures/bench-v4/build.sh"
+
+[[fixture.companions]]
+name = "device.svd"
+path = "tests/fixtures/bench-v4/companions/benchm4.svd"
+sha256 = "12fbeec332ab815d8b900d3f905a12a553fbf352f988a4d92ebedcb3feb9e72d"
+
+[answer]
+kind = "exact"
+[answer.fields]
+registers = ["TIMER1.CTRL", "TIMER1.LOAD", "TIMER1.INTCLR", "TIMER1.CTRL"]

@@ -1,0 +1,34 @@
+version = 1
+id = "svd-fields-set-cm4-raw"
+kind = "analysis"
+question = """
+The first file is a raw flash image for an ARM Cortex-M4 microcontroller (Thumb-2, little-endian), mapped at address
+0x0 with no file header; it begins with the interrupt vector table. The second file is the microcontroller's
+CMSIS-SVD device description. The function at 0x9c writes the serial port's control register more than once. Using
+the bit-field names of the device description, name every bit field of that register that is non-zero in the last
+value the function writes to it. Return the field names in an array named fields.
+"""
+truth_reference = """
+Host harness run of src/periph.c uart_init(115200): the last UART0.CTRL value decoded with derive-truth.py's SVD
+reader; uart_init = 0x9c from the twin's symbols.
+"""
+required_capabilities = ["raw_loading", "decompile", "peripheral_map"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "periph-cm4-bin"
+path = "tests/fixtures/bench-v4/bin/periph-cm4.bin"
+sha256 = "64f08bafa9b7cb939e8f0f08de06141e0b4d1fef746f61b65833bc4844cd47e0"
+source = "tests/fixtures/bench-v4/src/periph.c"
+build = "tests/fixtures/bench-v4/build.sh"
+
+[[fixture.companions]]
+name = "device.svd"
+path = "tests/fixtures/bench-v4/companions/benchm4.svd"
+sha256 = "12fbeec332ab815d8b900d3f905a12a553fbf352f988a4d92ebedcb3feb9e72d"
+
+[answer]
+kind = "string_set"
+field = "fields"
+values = ["EN", "IRQEN", "PARITY", "RXEN", "TXEN"]

@@ -1,0 +1,29 @@
+version = 1
+id = "emulate-libc-arm64-elf"
+kind = "analysis"
+question = """
+This stripped, dynamically linked AArch64 Linux executable was compiled from C. The function at 0x10106cc takes a
+pointer to a NUL-terminated string in x0 and returns a 32-bit unsigned integer in w0; it calls functions of the C
+library. What does it return when x0 points to the 14-character ASCII string "bench-v4-token"? Return the value as
+result.
+"""
+truth_reference = """
+Host run of src/emulate.c (token_digest "bench-v4-token") at -O1 and -O0; token_digest = 0x10106cc from the twin's
+symbols; strlen, memset and memcpy are imports; derive-truth.py.
+"""
+required_capabilities = ["decompile", "evaluate"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "emulate-arm64-dyn-elf"
+path = "tests/fixtures/bench-v4/bin/emulate-arm64-dyn.elf"
+sha256 = "e454d08f54047bde456a2dda3b0448453b4d9cacda5a48d5079f3d093950c524"
+source = "tests/fixtures/bench-v4/src/emulate.c"
+build = "tests/fixtures/bench-v4/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+result = 2241813461

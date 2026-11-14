@@ -1,0 +1,28 @@
+version = 1
+id = "emulate-control-thumb-elf"
+kind = "analysis"
+question = """
+This stripped 32-bit ARM ELF executable for a Cortex-M4 microcontroller (Thumb-2, little-endian, AAPCS) was compiled
+from C. The function at 0x144 takes two 32-bit unsigned integers in r0 and r1 and returns a 32-bit unsigned integer
+in r0. What does it return for the arguments 40000 and 500? Return the value as result.
+"""
+truth_reference = """
+Host run of src/emulate.c (settle 40000 500) at -O1 and -O0; settle = 0x145 (Thumb bit set) from the twin's symbols;
+derive-truth.py.
+"""
+required_capabilities = ["decompile", "evaluate"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "emulate-thumb-elf"
+path = "tests/fixtures/bench-v4/bin/emulate-thumb.elf"
+sha256 = "80fcffda81e7195275dfeaee64d85d8905884932c626d94a766b91b05779549f"
+source = "tests/fixtures/bench-v4/src/emulate.c"
+build = "tests/fixtures/bench-v4/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+result = 2568817383

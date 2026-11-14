@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- A made-up Cortex-M4 microcontroller for the suite-v4 head-to-head benchmark fixtures
+     (tests/fixtures/bench-v4/src/periph.c, guard.c). Names follow common CMSIS-SVD conventions; every address and
+     value is invented. -->
+<device schemaVersion="1.3" xmlns:xs="http://www.w3.org/2001/XMLSchema-instance">
+  <name>BENCHM4</name>
+  <version>1.0</version>
+  <description>Benchmark microcontroller</description>
+  <addressUnitBits>8</addressUnitBits>
+  <width>32</width>
+  <size>32</size>
+  <access>read-write</access>
+  <resetValue>0x00000000</resetValue>
+  <resetMask>0xFFFFFFFF</resetMask>
+  <peripherals>
+    <peripheral>
+      <name>CLKCTRL</name>
+      <description>Clock control</description>
+      <baseAddress>0x40000000</baseAddress>
+      <addressBlock><offset>0</offset><size>0x400</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register>
+          <name>ENR</name><description>Peripheral clock enable</description><addressOffset>0x00</addressOffset>
+          <fields>
+            <field><name>GPIOAEN</name><bitOffset>0</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>GPIOBEN</name><bitOffset>1</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>UART0EN</name><bitOffset>4</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>TIMER0EN</name><bitOffset>8</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>TIMER1EN</name><bitOffset>9</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>WDOGEN</name><bitOffset>12</bitOffset><bitWidth>1</bitWidth></field>
+          </fields>
+        </register>
+        <register>
+          <name>DIV</name><description>Bus clock dividers</description><addressOffset>0x04</addressOffset>
+          <fields>
+            <field><name>AHBDIV</name><bitOffset>0</bitOffset><bitWidth>4</bitWidth></field>
+            <field><name>APBDIV</name><bitOffset>4</bitOffset><bitWidth>4</bitWidth></field>
+          </fields>
+        </register>
+        <register>
+          <name>STAT</name><description>Clock status</description><addressOffset>0x08</addressOffset>
+          <access>read-only</access>
+          <fields><field><name>READY</name><bitOffset>0</bitOffset><bitWidth>1</bitWidth></field></fields>
+        </register>
+      </registers>
+    </peripheral>
+    <peripheral>
+      <name>GPIOA</name>
+      <description>General-purpose I/O port</description>
+      <baseAddress>0x40001000</baseAddress>
+      <addressBlock><offset>0</offset><size>0x400</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register><name>MODE</name><description>Pin direction, one bit per pin</description><addressOffset>0x00</addressOffset></register>
+        <register><name>OUT</name><description>Output levels</description><addressOffset>0x04</addressOffset></register>
+        <register><name>IN</name><description>Input levels</description><addressOffset>0x08</addressOffset><access>read-only</access></register>
+        <register><name>SET</name><description>Set output bits</description><addressOffset>0x0C</addressOffset><access>write-only</access></register>
+        <register><name>CLR</name><description>Clear output bits</description><addressOffset>0x10</addressOffset><access>write-only</access></register>
+      </registers>
+    </peripheral>
+    <peripheral derivedFrom="GPIOA">
+      <name>GPIOB</name>
+      <baseAddress>0x40001400</baseAddress>
+    </peripheral>
+    <peripheral>
+      <name>UART0</name>
+      <description>Serial port</description>
+      <baseAddress>0x40002000</baseAddress>
+      <addressBlock><offset>0</offset><size>0x400</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register>
+          <name>CTRL</name><description>Control</description><addressOffset>0x00</addressOffset>
+          <fields>
+            <field><name>EN</name><bitOffset>0</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>TXEN</name><bitOffset>1</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>RXEN</name><bitOffset>2</bitOffset><bitWidth>1</bitWidth></field>
+            <field>
+              <name>PARITY</name><bitOffset>3</bitOffset><bitWidth>2</bitWidth>
+              <enumeratedValues>
+                <enumeratedValue><name>None</name><value>0</value></enumeratedValue>
+                <enumeratedValue><name>Odd</name><value>1</value></enumeratedValue>
+                <enumeratedValue><name>Even</name><value>2</value></enumeratedValue>
+              </enumeratedValues>
+            </field>
+            <field><name>STOP2</name><bitOffset>5</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>LOOPBACK</name><bitOffset>6</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>IRQEN</name><bitOffset>8</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>DMAEN</name><bitOffset>9</bitOffset><bitWidth>1</bitWidth></field>
+          </fields>
+        </register>
+        <register>
+          <name>BAUD</name><description>Baud rate divisor</description><addressOffset>0x04</addressOffset>
+          <fields><field><name>DIV</name><bitOffset>0</bitOffset><bitWidth>16</bitWidth></field></fields>
+        </register>
+        <register>
+          <name>STATUS</name><description>Status</description><addressOffset>0x08</addressOffset>
+          <fields>
+            <field><name>TXE</name><bitOffset>0</bitOffset><bitWidth>1</bitWidth><access>read-only</access></field>
+            <field><name>RXNE</name><bitOffset>1</bitOffset><bitWidth>1</bitWidth><access>read-only</access></field>
+            <field><name>BUSY</name><bitOffset>2</bitOffset><bitWidth>1</bitWidth><access>read-only</access></field>
+            <field><name>OVR</name><bitOffset>3</bitOffset><bitWidth>1</bitWidth></field>
+          </fields>
+        </register>
+        <register>
+          <name>DATA</name><description>Transmit and receive data</description><addressOffset>0x0C</addressOffset>
+          <fields><field><name>DATA</name><bitOffset>0</bitOffset><bitWidth>8</bitWidth></field></fields>
+        </register>
+      </registers>
+    </peripheral>
+    <peripheral>
+      <name>TIMER0</name>
+      <description>General-purpose timer</description>
+      <baseAddress>0x40003000</baseAddress>
+      <addressBlock><offset>0</offset><size>0x400</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register>
+          <name>CTRL</name><description>Control</description><addressOffset>0x00</addressOffset>
+          <fields>
+            <field><name>EN</name><bitOffset>0</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>ONESHOT</name><bitOffset>1</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>IRQEN</name><bitOffset>2</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>PRESC</name><bitOffset>8</bitOffset><bitWidth>4</bitWidth></field>
+          </fields>
+        </register>
+        <register><name>LOAD</name><description>Reload value</description><addressOffset>0x04</addressOffset></register>
+        <register><name>COUNT</name><description>Current count</description><addressOffset>0x08</addressOffset><access>read-only</access></register>
+        <register><name>INTCLR</name><description>Interrupt clear</description><addressOffset>0x0C</addressOffset><access>write-only</access></register>
+      </registers>
+    </peripheral>
+    <peripheral derivedFrom="TIMER0">
+      <name>TIMER1</name>
+      <baseAddress>0x40003400</baseAddress>
+    </peripheral>
+    <peripheral>
+      <name>WDOG</name>
+      <description>Watchdog</description>
+      <baseAddress>0x40004000</baseAddress>
+      <addressBlock><offset>0</offset><size>0x400</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register><name>KEY</name><description>Refresh key</description><addressOffset>0x00</addressOffset><access>write-only</access></register>
+        <register><name>RELOAD</name><description>Timeout</description><addressOffset>0x04</addressOffset></register>
+        <register>
+          <name>CTRL</name><description>Control</description><addressOffset>0x08</addressOffset>
+          <fields>
+            <field><name>EN</name><bitOffset>0</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>LOCK</name><bitOffset>1</bitOffset><bitWidth>1</bitWidth></field>
+          </fields>
+        </register>
+      </registers>
+    </peripheral>
+    <peripheral>
+      <name>OTP</name>
+      <description>One-time-programmable fuse block</description>
+      <baseAddress>0x40009000</baseAddress>
+      <addressBlock><offset>0</offset><size>0x100</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register><name>STATUS</name><description>Fuse controller status</description><addressOffset>0x00</addressOffset><access>read-only</access></register>
+        <register><name>MINVER</name><description>Monotonic minimum firmware version counter</description><addressOffset>0x10</addressOffset><access>read-only</access></register>
+        <register><name>SERIAL</name><description>Board serial number</description><addressOffset>0x14</addressOffset><access>read-only</access></register>
+      </registers>
+    </peripheral>
+    <peripheral>
+      <name>UID</name>
+      <description>Unique device identifier</description>
+      <baseAddress>0x1FFF7000</baseAddress>
+      <addressBlock><offset>0</offset><size>0x10</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register><name>UID0</name><description>Unique ID bits 31:0</description><addressOffset>0x0</addressOffset><access>read-only</access></register>
+        <register><name>UID1</name><description>Unique ID bits 63:32</description><addressOffset>0x4</addressOffset><access>read-only</access></register>
+        <register><name>UID2</name><description>Unique ID bits 95:64</description><addressOffset>0x8</addressOffset><access>read-only</access></register>
+      </registers>
+    </peripheral>
+  </peripherals>
+</device>

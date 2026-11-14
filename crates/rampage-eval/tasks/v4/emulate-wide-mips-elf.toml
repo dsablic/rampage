@@ -1,0 +1,28 @@
+version = 1
+id = "emulate-wide-mips-elf"
+kind = "analysis"
+question = """
+This stripped 32-bit big-endian MIPS Linux executable (o32 ABI) was compiled from C. The function at 0x211b0 takes
+one 64-bit unsigned integer, passed in a0 (high word) and a1 (low word), and returns a 64-bit unsigned integer in v0
+(high word) and v1 (low word). What does it return for the argument 63728127? Return the 64-bit value as result.
+"""
+truth_reference = """
+Host run of src/emulate.c (collatz_weight 63728127) at -O1 and -O0; collatz_weight = 0x211b0 from the twin's
+symbols; derive-truth.py.
+"""
+required_capabilities = ["decompile", "evaluate"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "emulate-mips-elf"
+path = "tests/fixtures/bench-v4/bin/emulate-mips.elf"
+sha256 = "08da9a909dbaf8b23d6467281b6a2faf1f6c81f216dbc6e1bd98b09799883b55"
+source = "tests/fixtures/bench-v4/src/emulate.c"
+build = "tests/fixtures/bench-v4/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+result = 1044403150794884

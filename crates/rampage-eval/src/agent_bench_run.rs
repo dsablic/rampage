@@ -8,7 +8,7 @@ use std::process::{Command, ExitCode};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rampage_eval::agent_bench::{
-    NeutralSuite, RunRow, RunnerResult, markdown_tables, rescored_report, score, summarize,
+    NeutralSuite, RunRow, RunnerResult, markdown_tables, rescored_report, score_with_artifact, summarize,
 };
 use rampage_eval::parity_tasks::{ParityTask, load_tasks};
 use serde_json::{Value, json};
@@ -22,13 +22,14 @@ pub const V3_REA_GHIDRA_MAXMEM: &str = "16G";
 
 pub const DEFAULT_RUNNER: &str = "python3 -I tools/agent-bench/claude-runner.py";
 
-/// Which task set to run: the frozen canonical manifests with `tasks/h2h/neutral.toml`, or suite v2's (v3's)
-/// manifests under `tasks/v2/` (`tasks/v3/`) with `tasks/h2h/neutral-v2.toml` (`neutral-v3.toml`).
+/// Which task set to run: the frozen canonical manifests with `tasks/h2h/neutral.toml`, or suite vN's manifests
+/// under `tasks/vN/` with `tasks/h2h/neutral-vN.toml` (N = 2, 3, 4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Suite {
     Canonical,
     V2,
     V3,
+    V4,
 }
 
 impl Suite {
@@ -38,6 +39,7 @@ impl Suite {
             Self::Canonical => (tasks.clone(), tasks.join("h2h/neutral.toml")),
             Self::V2 => (tasks.join("v2"), tasks.join("h2h/neutral-v2.toml")),
             Self::V3 => (tasks.join("v3"), tasks.join("h2h/neutral-v3.toml")),
+            Self::V4 => (tasks.join("v4"), tasks.join("h2h/neutral-v4.toml")),
         }
     }
 }
@@ -161,6 +163,11 @@ pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
     let suite_text = read(&suite_path)?;
     let suite = NeutralSuite::from_toml(&suite_text).map_err(|error| format!("{}: {error}", suite_path.display()))?;
     suite.check_against(&tasks, &args.servers)?;
+    for (id, neutral) in &suite.tasks {
+        if let Some(output) = &neutral.output {
+            output.expected_memory(&root).map_err(|error| format!("{id}: {error}"))?;
+        }
+    }
     if args.tasks != ["all"] {
         if let Some(missing) = args.tasks.iter().find(|id| !tasks.iter().any(|task| &task.id == *id)) {
             return Err(format!("unknown task {missing}"));
@@ -556,7 +563,49 @@ fn run_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
     let text = read(&result_path).map_err(|error| format!("runner exited {status} without a result: {error}"))?;
     let result: RunnerResult =
         serde_json::from_str(&text).map_err(|error| format!("{}: {error}", result_path.display()))?;
-    score(setup.task, setup.suite, setup.server, setup.repetition, setup.position, &result)
+    let artifact = check_output(setup, &target, &run_dir)?;
+    score_with_artifact(
+        setup.task,
+        setup.suite,
+        setup.server,
+        setup.repetition,
+        setup.position,
+        &result,
+        artifact.as_ref(),
+    )
+}
+
+/// For a task that asks for a file: check what the run wrote beside the fixture, keep a private copy of it in the
+/// run directory, and record the verdict there (`artifact.json`) so a rescore can reuse it after the working
+/// directory is gone.
+fn check_output(setup: &RunSetup<'_>, target: &Path, run_dir: &Path) -> Result<Option<Result<(), String>>, String> {
+    let Some(output) = &setup.suite.tasks[&setup.task.id].output else { return Ok(None) };
+    let produced = target.with_file_name(&output.name);
+    let verdict = output.check(setup.root, &produced);
+    if let Ok(metadata) = std::fs::metadata(&produced)
+        && metadata.is_file()
+        && metadata.len() <= rampage_eval::agent_bench_artifact::MAX_OUTPUT_BYTES
+    {
+        let bytes = std::fs::read(&produced).map_err(|error| format!("{}: {error}", produced.display()))?;
+        write_private(&run_dir.join(format!("output-{}", output.name)), &bytes)?;
+    }
+    let record = json!({"ok": verdict.is_ok(), "reason": verdict.as_ref().err()});
+    write_private(&run_dir.join("artifact.json"), record.to_string().as_bytes())?;
+    Ok(Some(verdict))
+}
+
+/// The verdict `check_output` recorded for a run, for a rescore.
+fn recorded_output(setup: &RunSetup<'_>, run_dir: &Path) -> Result<Option<Result<(), String>>, String> {
+    if setup.suite.tasks[&setup.task.id].output.is_none() {
+        return Ok(None);
+    }
+    let path = run_dir.join("artifact.json");
+    let record: Value = serde_json::from_str(&read(&path)?).map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(Some(if record["ok"] == true {
+        Ok(())
+    } else {
+        Err(record["reason"].as_str().unwrap_or("recorded as failed").to_owned())
+    }))
 }
 
 fn rescore_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
@@ -586,7 +635,16 @@ fn rescore_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
     let text = read(&result_path).map_err(|error| format!("runner exited {status} without a result: {error}"))?;
     let result: RunnerResult =
         serde_json::from_str(&text).map_err(|error| format!("{}: {error}", result_path.display()))?;
-    score(setup.task, setup.suite, setup.server, setup.repetition, setup.position, &result)
+    let artifact = recorded_output(setup, &run_dir)?;
+    score_with_artifact(
+        setup.task,
+        setup.suite,
+        setup.server,
+        setup.repetition,
+        setup.position,
+        &result,
+        artifact.as_ref(),
+    )
 }
 
 /// A fresh private directory outside the repository, so no project file or other run's output is visible.

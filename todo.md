@@ -19,6 +19,8 @@
 - Head-to-head with REA: suite v1 and suite v2 published (`docs/benchmarks/`); follow-ups below. Suite v3
   (tasks where Ghidra is strong) is built in `tests/fixtures/bench-v3`, and a Haiku development pass drove the
   follow-ups below; its published run and report will follow. A second model or client is not run yet.
+  Suite v4 (the post-1.0 features plus four v3 tasks) is built, not run: `docs/plans/agent-bench-v4.md`, with
+  fairness calls to confirm and six rampage gaps its validation found (address-0 emulation, a missed CRC-16).
 - Flywheel fast loop (`docs/plans/2026-11-05-flywheel-fast-loop.md`): the deterministic arm (exact rows, operand
   wildcarding) and call-graph propagation ship in the bundled databases; fuzzy matching failed the final split on
   both corpora and stays suggestion-only. The AI proposer has made no promotion a deterministic generator could

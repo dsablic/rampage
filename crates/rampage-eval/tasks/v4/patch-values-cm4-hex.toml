@@ -1,0 +1,31 @@
+version = 1
+id = "patch-values-cm4-hex"
+kind = "analysis"
+question = """
+The file is an Intel HEX image of the flash of an ARM Cortex-M4 microcontroller (Thumb-2, little-endian), starting
+at address 0x0 with the interrupt vector table. The 32-bit little-endian word at 0x808 holds 115200 and is to become
+57600. The boot code refuses an image that fails its own integrity checks. Which stored integrity values must change
+so that the changed image still passes every check the boot code makes? Return each as an [address, value] pair, the
+value read at the field's own width (little-endian), in an array named fields.
+"""
+truth_reference = """
+src/boot.c: CRC-16/CCITT-FALSE of 0x800..0x83F at 0x840 and CRC-32 of 0x800..0x13FB at 0x13FC; recomputed by
+image.py on the patched image and cross-checked against a host run of boot.c's own routines; the HEX file decodes to
+the flat image's bytes; derive-truth.py.
+"""
+required_capabilities = ["raw_loading", "integrity_checks"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "boot-cm4-hex"
+path = "tests/fixtures/bench-v4/bin/boot-cm4.hex"
+sha256 = "8118fe8dca3411ff20d2a52e70de921f753683a98e9e3b9ec3cbb9c51b6a6e64"
+source = "tests/fixtures/bench-v4/src/boot.c"
+build = "tests/fixtures/bench-v4/build.sh"
+
+[answer]
+kind = "tuple_set"
+hex_integers = true
+field = "fields"
+values = [[2112, 37662], [5116, 3264745377]]

@@ -1,0 +1,31 @@
+version = 1
+id = "patch-export-srec-cm4-srec"
+kind = "analysis"
+question = """
+The file is a Motorola S-record image of the flash of an ARM Cortex-M4 microcontroller (Thumb-2, little-endian),
+starting at address 0x0 with the interrupt vector table. Change the byte at 0x80c from 0x01 to 0x03. The boot code
+refuses an image that fails its own integrity checks, so update whatever stored values those checks need for the
+changed image to pass them, and change nothing else. Write the result in the same format, as Motorola S-records, to
+{output}, covering exactly the addresses the input file covers. When the file is written, reply with
+{"written":true}.
+"""
+truth_reference = """
+src/boot.c checksums recomputed by image.py on the flat image with 0x80c = 0x03 and cross-checked against a host run
+of boot.c's routines; the S-records decode to the flat image's bytes; the expected image is
+tests/fixtures/bench-v4/truth/patch-export-srec-cm4-srec.bin; derive-truth.py.
+"""
+required_capabilities = ["raw_loading", "patching", "integrity_checks", "export"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "boot-cm4-srec"
+path = "tests/fixtures/bench-v4/bin/boot-cm4.srec"
+sha256 = "d43fa4b9c6453d12873e3ae61a35a97271832a130a9f951d995b7e43f2099928"
+source = "tests/fixtures/bench-v4/src/boot.c"
+build = "tests/fixtures/bench-v4/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+written = true

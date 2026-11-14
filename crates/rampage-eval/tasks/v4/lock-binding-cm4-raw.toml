@@ -1,0 +1,43 @@
+version = 1
+id = "lock-binding-cm4-raw"
+kind = "analysis"
+question = """
+The first file is a raw flash image for an ARM Cortex-M4 microcontroller (Thumb-2, little-endian), mapped at address
+0x0 with no file header; it begins with the interrupt vector table. The second file is the microcontroller's
+CMSIS-SVD device description. This firmware runs only on units it was paired with. Explain that check; nothing needs
+to be changed. Give the entry address of the function in which the run-or-refuse decision is made, without the Thumb
+bit, as decision_function; the addresses of the hardware registers it reads to identify the chip, in ascending
+order, as id_registers; the address of the stored value the computed result is compared with as reference; and what
+the firmware does when the check fails as refusal, one of "reset" (it requests a system reset, whatever it does
+while waiting for it), "halt" (it stops in an endless loop without requesting a reset), "error_return" (it returns
+an error indication to its caller) or "flag" (it records a flag and carries on).
+"""
+truth_reference = """
+src/guard.c enforce_pairing: host harness run records the UID.UID0..UID2 reads (named by derive-truth.py's SVD
+reader) and the SCB.AIRCR SYSRESETREQ write on a mismatched token; function and PAIR_TOKEN addresses from the twin's
+symbols.
+"""
+required_capabilities = ["raw_loading", "decompile", "lock_explanation"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "guard-cm4-bin"
+path = "tests/fixtures/bench-v4/bin/guard-cm4.bin"
+sha256 = "35d0495d16424552a5c7ffff01607534f8f77432bb82d80a7584688c734f28c0"
+source = "tests/fixtures/bench-v4/src/guard.c"
+build = "tests/fixtures/bench-v4/build.sh"
+
+[[fixture.companions]]
+name = "device.svd"
+path = "tests/fixtures/bench-v4/companions/benchm4.svd"
+sha256 = "12fbeec332ab815d8b900d3f905a12a553fbf352f988a4d92ebedcb3feb9e72d"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+decision_function = 64
+id_registers = [536834048, 536834052, 536834056]
+reference = 3200
+refusal = "reset"

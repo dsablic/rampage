@@ -1,0 +1,83 @@
+{
+  "_comment": "Hand-written final replies for every suite-v4 task, scored by crates/rampage-eval/tests/agent_bench.rs (suite_v4_checkers_accept_correct_and_reject_incorrect_replies). `correct` replies must score answer_matches; `incorrect` ones must not. Each incorrect reply is a plausible near-miss: one hex digit, one field, an order, an extra or missing item, a spelling, a wrong refusal kind, an extra status field. Written by hand from the truths in the manifests, not generated from them.",
+  "emulate-mix-x64-elf": {
+    "correct": ["{\"result\": 3340219542}", "{\"result\": \"0xc717b496\"}", "{\"result\": \"0xC717B496\"}", "Ran it.\n{\"result\": \"0xc717b496\"}"],
+    "incorrect": ["{\"result\": \"0xc717b497\"}", "{\"result\": -954747754}", "{\"result\": \"c717b496\"}", "{\"result\": \"0xc717b496\", \"status\": \"ok\"}", "{\"value\": \"0xc717b496\"}"]
+  },
+  "emulate-libc-arm64-elf": {
+    "correct": ["{\"result\": 2241813461}", "{\"result\": \"0x859f5bd5\"}"],
+    "incorrect": ["{\"result\": \"0x859f5bd4\"}", "{\"result\": \"0x00000000859f5bd5ff\"}", "{\"result\": 2241813461.0}", "{\"result\": \"2241813461\"}"]
+  },
+  "emulate-control-thumb-elf": {
+    "correct": ["{\"result\": 2568817383}", "{\"result\": \"0x991d0ae7\"}"],
+    "incorrect": ["{\"result\": \"0x991d0ae6\"}", "{\"result\": -1726149913}", "{\"status\": \"unknown\", \"reason\": \"the emulator stopped\"}"]
+  },
+  "emulate-wide-mips-elf": {
+    "correct": ["{\"result\": 1044403150794884}", "{\"result\": \"0x3b5e10ece3084\"}", "{\"result\": \"0x0003b5e10ece3084\"}"],
+    "incorrect": ["{\"result\": \"0x03cfbcff00000000\"}", "{\"result\": \"0x10ece3084\"}", "{\"result\": \"0x3b5e10ece3085\"}", "{\"result\": [949, \"0x10ece3084\"]}"]
+  },
+  "strings-rolling-x64-elf": {
+    "correct": ["{\"text\": \"sensor calibration table checksum mismatch\"}"],
+    "incorrect": ["{\"text\": \"sensor calibration table checksum mismatch\\n\"}", "{\"text\": \"Sensor calibration table checksum mismatch\"}", "{\"text\": \"calibration restored from defaults\"}", "{\"text\": \"sensor calibration table checksum mismatc\"}"]
+  },
+  "strings-alphabet-arm64-elf": {
+    "correct": ["{\"text\": \"service port opened at 19200 baud\"}"],
+    "incorrect": ["{\"text\": \"service port opened at 19200 baud.\"}", "{\"text\": \"diagnostic session closed\"}", "{\"text\": \"service port opened at 19201 baud\"}", "{\"string\": \"service port opened at 19200 baud\"}"]
+  },
+  "svd-registers-written-cm4-raw": {
+    "correct": ["{\"registers\": [\"TIMER1.CTRL\", \"TIMER1.LOAD\", \"TIMER1.INTCLR\", \"TIMER1.CTRL\"]}"],
+    "incorrect": ["{\"registers\": [\"TIMER1.CTRL\", \"TIMER1.LOAD\", \"TIMER1.INTCLR\"]}", "{\"registers\": [\"TIMER0.CTRL\", \"TIMER0.LOAD\", \"TIMER0.INTCLR\", \"TIMER0.CTRL\"]}", "{\"registers\": [\"TIMER1.LOAD\", \"TIMER1.CTRL\", \"TIMER1.INTCLR\", \"TIMER1.CTRL\"]}", "{\"registers\": [\"timer1.ctrl\", \"timer1.load\", \"timer1.intclr\", \"timer1.ctrl\"]}", "{\"registers\": [\"0x40003400\", \"0x40003404\", \"0x4000340c\", \"0x40003400\"]}"]
+  },
+  "svd-fields-set-cm4-raw": {
+    "correct": ["{\"fields\": [\"EN\", \"TXEN\", \"RXEN\", \"PARITY\", \"IRQEN\"]}", "{\"fields\": [\"IRQEN\", \"PARITY\", \"RXEN\", \"TXEN\", \"EN\"]}"],
+    "incorrect": ["{\"fields\": [\"EN\", \"TXEN\", \"RXEN\", \"IRQEN\"]}", "{\"fields\": [\"EN\", \"TXEN\", \"RXEN\", \"PARITY\", \"IRQEN\", \"STOP2\"]}", "{\"fields\": [\"EN\", \"TXEN\", \"RXEN\", \"PARITY=Even\", \"IRQEN\"]}", "{\"fields\": [\"EN\", \"EN\", \"TXEN\", \"RXEN\", \"PARITY\", \"IRQEN\"]}"]
+  },
+  "svd-status-readers-cm4-raw": {
+    "correct": ["{\"values\": [200, 244, 288, 336]}", "{\"values\": [\"0xc8\", \"0xf4\", \"0x120\", \"0x150\"]}"],
+    "incorrect": ["{\"values\": [\"0x9c\", \"0xc8\", \"0xf4\", \"0x120\", \"0x150\"]}", "{\"values\": [\"0xc9\", \"0xf5\", \"0x121\", \"0x151\"]}", "{\"values\": [\"0xf4\", \"0xc8\", \"0x120\", \"0x150\"]}", "{\"values\": [\"0xc8\", \"0xf4\", \"0x120\"]}"]
+  },
+  "patch-values-cm4-hex": {
+    "correct": ["{\"fields\": [[2112, 37662], [5116, 3264745377]]}", "{\"fields\": [[\"0x13fc\", \"0xc2980fa1\"], [\"0x840\", \"0x931e\"]]}"],
+    "incorrect": ["{\"fields\": [[\"0x13fc\", \"0x7cf33297\"]]}", "{\"fields\": [[\"0x840\", \"0x931e\"], [\"0x13fc\", \"0x7cf33297\"]]}", "{\"fields\": [[\"0x840\", \"0x1e93\"], [\"0x13fc\", \"0xc2980fa1\"]]}", "{\"fields\": [[\"0x840\", \"0x931e\"], [\"0x13fc\", \"0xc2980fa1\"], [\"0x808\", \"0xe100\"]]}", "{\"fields\": [[\"0x840\", \"0x931e\"], [\"0x840\", \"0x931e\"], [\"0x13fc\", \"0xc2980fa1\"]]}"]
+  },
+  "patch-export-srec-cm4-srec": {
+    "correct": ["{\"written\": true}"],
+    "incorrect": ["{\"written\": false}", "{\"written\": \"true\"}", "{\"written\": true, \"path\": \"patched.srec\"}"]
+  },
+  "patch-export-bin-cm4-raw": {
+    "correct": ["{\"written\": true}"],
+    "incorrect": ["{\"written\": 1}", "{\"status\": \"unsupported\", \"reason\": \"cannot write files\"}"]
+  },
+  "lock-binding-cm4-raw": {
+    "correct": ["{\"decision_function\": 64, \"id_registers\": [536834048, 536834052, 536834056], \"reference\": 3200, \"refusal\": \"reset\"}", "{\"decision_function\": \"0x40\", \"id_registers\": [\"0x1fff7000\", \"0x1fff7004\", \"0x1fff7008\"], \"reference\": \"0xc80\", \"refusal\": \"reset\"}"],
+    "incorrect": ["{\"decision_function\": \"0x41\", \"id_registers\": [\"0x1fff7000\", \"0x1fff7004\", \"0x1fff7008\"], \"reference\": \"0xc80\", \"refusal\": \"reset\"}", "{\"decision_function\": \"0x40\", \"id_registers\": [\"0x1fff7000\", \"0x1fff7004\", \"0x1fff7008\"], \"reference\": \"0xc80\", \"refusal\": \"halt\"}", "{\"decision_function\": \"0x40\", \"id_registers\": [\"0x1fff7008\", \"0x1fff7004\", \"0x1fff7000\"], \"reference\": \"0xc80\", \"refusal\": \"reset\"}", "{\"decision_function\": \"0x40\", \"id_registers\": [\"0x1fff7000\", \"0x1fff7004\", \"0x1fff7008\"], \"reference\": \"0x5eed1e55\", \"refusal\": \"reset\"}", "{\"decision_function\": \"0x1ac\", \"id_registers\": [\"0x1fff7000\", \"0x1fff7004\", \"0x1fff7008\"], \"reference\": \"0xc80\", \"refusal\": \"reset\"}"]
+  },
+  "lock-rollback-cm4-raw": {
+    "correct": ["{\"decision_function\": 172, \"counter_register\": 1073778704, \"image_version\": 3076, \"refusal\": \"halt\"}", "{\"decision_function\": \"0xac\", \"counter_register\": \"0x40009010\", \"image_version\": \"0xc04\", \"refusal\": \"halt\"}"],
+    "incorrect": ["{\"decision_function\": \"0xac\", \"counter_register\": \"0x40009010\", \"image_version\": \"0xc00\", \"refusal\": \"halt\"}", "{\"decision_function\": \"0xac\", \"counter_register\": \"0x40009010\", \"image_version\": \"0xc04\", \"refusal\": \"reset\"}", "{\"decision_function\": \"0xac\", \"counter_register\": \"0x40009000\", \"image_version\": \"0xc04\", \"refusal\": \"halt\"}", "{\"decision_function\": \"0xac\", \"counter_register\": \"OTP.MINVER\", \"image_version\": \"0xc04\", \"refusal\": \"halt\"}", "{\"decision_function\": \"0xac\", \"counter_register\": \"0x40009010\", \"image_version\": \"0xc04\", \"refusal\": \"endless_loop\"}"]
+  },
+  "libid-names-m0-elf": {
+    "correct": ["{\"strlen\": \"0x8007ea0\", \"strcmp\": \"0x8007d60\", \"strchr\": \"0x8007bf4\", \"strncpy\": \"0x8007cb8\", \"qsort\": \"0x8006be8\"}", "{\"qsort\": 134245352, \"strncpy\": 134249656, \"strchr\": 134249460, \"strcmp\": 134249824, \"strlen\": 134250144}"],
+    "incorrect": ["{\"strlen\": \"0x8007ea1\", \"strcmp\": \"0x8007d61\", \"strchr\": \"0x8007bf5\", \"strncpy\": \"0x8007cb9\", \"qsort\": \"0x8006be9\"}", "{\"strlen\": \"0x8007ea0\", \"strcmp\": \"0x8007d60\", \"strchr\": \"0x8007bf4\", \"strncpy\": \"0x8007cb8\"}", "{\"strlen\": \"0x8007ea0\", \"strcmp\": \"0x8007d60\", \"strchr\": \"0x8007bf4\", \"strncpy\": \"0x8007cb8\", \"qsort\": null}", "{\"strlen\": \"0x8007ea0\", \"strcmp\": \"0x8007d60\", \"strchr\": \"0x8007bf4\", \"strncpy\": \"0x8007cb8\", \"qsort\": \"0x8006be8\", \"memcpy\": \"0x8007df8\"}"]
+  },
+  "libid-names-m0-raw": {
+    "correct": ["{\"memset\": \"0x8007b60\", \"memmove\": \"0x8007a60\", \"malloc\": \"0x800718c\", \"strtol\": \"0x80078f8\", \"unsigned_divide\": \"0x80036d0\"}"],
+    "incorrect": ["{\"memset\": \"0x8007b60\", \"memmove\": \"0x8007a60\", \"malloc\": \"0x800718c\", \"strtol\": \"0x80078f8\", \"unsigned_divide\": \"0x800e7e4\"}", "{\"memset\": \"0x7b60\", \"memmove\": \"0x7a60\", \"malloc\": \"0x718c\", \"strtol\": \"0x78f8\", \"unsigned_divide\": \"0x36d0\"}", "{\"memset\": \"0x8007b60\", \"memmove\": \"0x8007a60\", \"malloc\": \"0x800718c\", \"strtol\": \"0x80078f8\", \"__aeabi_uidiv\": \"0x80036d0\"}", "{\"memset\": \"0x8007a60\", \"memmove\": \"0x8007b60\", \"malloc\": \"0x800718c\", \"strtol\": \"0x80078f8\", \"unsigned_divide\": \"0x80036d0\"}"]
+  },
+  "semantics-wide-x86-elf": {
+    "correct": ["{\"result\": 149560347578}", "{\"result\": \"0x00000022D27DCBBA\"}"],
+    "incorrect": ["{\"result\": \"0x00000022D27DBBBA\"}", "{\"result\": \"0xD27DCBBA\"}"]
+  },
+  "switch-pic-x86-so": {
+    "correct": ["{\"values\": [108, 109, 116]}", "{\"values\": [\"0x6c\", \"0x6d\", \"0x74\"]}"],
+    "incorrect": ["{\"values\": [108, 116]}", "{\"values\": [109, 108, 116]}", "{\"values\": [108, 109, 116, 117]}"]
+  },
+  "callconv-arguments-x86-pe": {
+    "correct": ["{\"arguments\": [81, 31, 768, 7, 3054]}"],
+    "incorrect": ["{\"arguments\": [3054, 7, 768, 31, 81]}", "{\"arguments\": [81, 31, 768, 7]}"]
+  },
+  "type-indirect-offsets-arm64-elf": {
+    "correct": ["{\"table_offset\": 8, \"slot_offset\": 16, \"argument_offsets\": [24, 40]}", "{\"table_offset\": \"0x8\", \"slot_offset\": \"0x10\", \"argument_offsets\": [\"0x18\", \"0x28\"]}"],
+    "incorrect": ["{\"table_offset\": 8, \"slot_offset\": 16, \"argument_offsets\": [40, 24]}", "{\"table_offset\": 8, \"slot_offset\": 2, \"argument_offsets\": [24, 40]}"]
+  }
+}

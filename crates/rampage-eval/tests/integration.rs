@@ -2,6 +2,7 @@
 //! relinks one executable instead of one per file. Select a file's tests with `--test integration <file>::`.
 
 mod agent_bench;
+mod agent_bench_v4;
 mod cli;
 mod dwarf_truth;
 mod evaluate;

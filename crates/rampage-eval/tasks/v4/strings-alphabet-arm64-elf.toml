@@ -1,0 +1,27 @@
+version = 1
+id = "strings-alphabet-arm64-elf"
+kind = "analysis"
+question = """
+This stripped, statically linked AArch64 Linux executable was compiled from C. The function at 0x1010304 prints one
+line of text through the C library's puts. The text is not stored in readable form in the file; the program decodes
+it at run time. What text does the function print? Return it, without the newline puts adds, as text.
+"""
+truth_reference = """
+Host run of src/strdec.c (VARIANT=2, first call site); announce_service = 0x1010304 from the twin's symbols;
+derive-truth.py.
+"""
+required_capabilities = ["decompile", "string_decoding"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "strdec-arm64-elf"
+path = "tests/fixtures/bench-v4/bin/strdec-arm64.elf"
+sha256 = "0fe1b712d7b3d59881ac1c65bde31a21375e95eb1620dec52320d7bdd0b19979"
+source = "tests/fixtures/bench-v4/src/strdec.c"
+build = "tests/fixtures/bench-v4/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+text = "service port opened at 19200 baud"

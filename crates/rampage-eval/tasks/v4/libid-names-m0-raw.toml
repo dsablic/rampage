@@ -1,0 +1,35 @@
+version = 1
+id = "libid-names-m0-raw"
+kind = "analysis"
+question = """
+The file is a raw flash image for an ARM Cortex-M0 microcontroller (Thumb, little-endian), mapped at address
+0x08000000 with no file header; it begins with the interrupt vector table. The firmware was linked with a standard C
+library and the compiler's runtime library. Give the entry address, without the Thumb bit, of the function that
+implements each of: the C library functions memset, memmove, malloc and strtol, as fields named after them, and the
+compiler's 32-bit unsigned division helper (__aeabi_uidiv, also named __udivsi3), as unsigned_divide.
+"""
+truth_reference = """
+tests/fixtures/data/eval-truth-embedded-m0.json: the library functions of the symbolized held-out build (Arm GNU
+Toolchain 14.3.rel1, not used to build rampage's signatures); the flat image is the ELF's loaded bytes from
+0x08000000; derive-truth.py.
+"""
+required_capabilities = ["raw_loading", "function_identification"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "embedded-libs-m0-bin"
+path = "tests/fixtures/firmware/embedded-libs-m0.bin"
+sha256 = "f6c5db17f9e42ec23d4adf2316133349767a01aa828839f7548c1b9c66daf58c"
+source = "tests/fixtures/firmware/embedded-libs/main.c"
+build = "tools/embedded-signatures/build.py"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+memset = 134249312
+memmove = 134249056
+malloc = 134246796
+strtol = 134248696
+unsigned_divide = 134231760

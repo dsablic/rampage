@@ -1,0 +1,27 @@
+version = 1
+id = "strings-rolling-x64-elf"
+kind = "analysis"
+question = """
+This stripped, dynamically linked x86-64 Linux executable was compiled from C. The function at 0x1001560 prints one
+line of text with puts. The text is not stored in readable form in the file; the program decodes it at run time.
+What text does the function print? Return it, without the newline puts adds, as text.
+"""
+truth_reference = """
+Host run of src/strdec.c (VARIANT=1, first call site); report_calibration_error = 0x1001560 from the twin's symbols;
+derive-truth.py.
+"""
+required_capabilities = ["decompile", "string_decoding"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "strdec-x64-elf"
+path = "tests/fixtures/bench-v4/bin/strdec-x64.elf"
+sha256 = "826d015463ce6d690c7c94eb2d4a0705524198788874f7690bdbd3d306156144"
+source = "tests/fixtures/bench-v4/src/strdec.c"
+build = "tests/fixtures/bench-v4/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+text = "sensor calibration table checksum mismatch"

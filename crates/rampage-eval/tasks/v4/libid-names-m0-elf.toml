@@ -1,0 +1,33 @@
+version = 1
+id = "libid-names-m0-elf"
+kind = "analysis"
+question = """
+This stripped 32-bit ARM ELF executable for a Cortex-M0 microcontroller (Thumb, little-endian) was linked with a
+standard C library and the compiler's runtime library. Give the entry address, without the Thumb bit, of the
+function that implements each of these C library functions: strlen, strcmp, strchr, strncpy and qsort. Return them
+as fields named after the functions.
+"""
+truth_reference = """
+tests/fixtures/data/eval-truth-embedded-m0.json: the library functions of the symbolized held-out build (Arm GNU
+Toolchain 14.3.rel1, not used to build rampage's signatures); derive-truth.py.
+"""
+required_capabilities = ["function_identification"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "embedded-libs-m0-elf"
+path = "tests/fixtures/firmware/embedded-libs-m0.elf"
+sha256 = "ff3b3fc5cbf49bbe1b428e10cf3e65f402b41062af10c0b7d2d286135c8cf4df"
+source = "tests/fixtures/firmware/embedded-libs/main.c"
+build = "tools/embedded-signatures/build.py"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+strlen = 134250144
+strcmp = 134249824
+strchr = 134249460
+strncpy = 134249656
+qsort = 134245352

@@ -1,0 +1,28 @@
+version = 1
+id = "callconv-arguments-x86-pe"
+kind = "analysis"
+question = """
+This stripped 32-bit x86 Windows executable was compiled from C and C++. The function at 0x401140 calls the
+function at 0x4010d0 exactly once, with five 32-bit integer arguments. Give the value of each argument in the
+callee's parameter order, first parameter first. Return them as an array of integers named arguments.
+"""
+truth_reference = """
+src/conv.cpp's call record_five(...) in submit, cross-checked by a host run that prints the received parameters;
+submit and @record_five@20 from the twin's PDB; derive-truth.py.
+"""
+required_capabilities = ["calling_conventions", "decompile"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v3; the agent runs measure it."
+
+[fixture]
+id = "conv-x86-pe"
+path = "tests/fixtures/bench-v3/bin/conv-x86.exe"
+sha256 = "2b9ca5cc77910c2d8d15d2c5d136eef9c0a4ab1a1d0f8094a7ce7e9dfc64d422"
+source = "tests/fixtures/bench-v3/src/conv.cpp"
+build = "tests/fixtures/bench-v3/build.sh"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+arguments = [81, 31, 768, 7, 3054]

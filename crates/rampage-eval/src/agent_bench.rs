@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::agent_bench_artifact::OutputSpec;
 use crate::parity_tasks::{AnswerContract, ParityTask, TaskAttempt, TaskKind, TaskOutcome};
 
 /// Tool-neutral prompts for the canonical tasks, keyed by task id.
@@ -52,7 +53,14 @@ pub struct NeutralTask {
     /// equals a key, ignoring ASCII case, is read as its value. The strict score never uses them.
     #[serde(default)]
     pub lenient_spellings: BTreeMap<String, String>,
+    /// A file the question asks the agent to write (its path replaces `{output}` in the question), checked after the
+    /// run against the expected image; the answer contract is checked as well.
+    #[serde(default)]
+    pub output: Option<OutputSpec>,
 }
+
+/// The placeholder in a question that the prompt replaces with the output file's quoted path.
+pub const OUTPUT_PLACEHOLDER: &str = "{output}";
 
 /// An answer with every string that is a declared spelling variant (ignoring ASCII case) replaced by its
 /// canonical spelling.
@@ -121,6 +129,17 @@ impl NeutralSuite {
             if task.truth.keys().collect::<BTreeSet<_>>() != task.truth_evidence.keys().collect::<BTreeSet<_>>() {
                 return Err(format!("{id}: every per-server truth needs evidence, and only those"));
             }
+            let placeholders = task.question.matches(OUTPUT_PLACEHOLDER).count();
+            match &task.output {
+                Some(output) => {
+                    output.validate().map_err(|error| format!("{id}: {error}"))?;
+                    if placeholders != 1 {
+                        return Err(format!("{id}: a task with an output names {OUTPUT_PLACEHOLDER} exactly once"));
+                    }
+                }
+                None if placeholders > 0 => return Err(format!("{id}: {OUTPUT_PLACEHOLDER} without an output")),
+                None => {}
+            }
         }
         Ok(suite)
     }
@@ -174,6 +193,11 @@ impl NeutralSuite {
             format!(" The task also uses {}; refer to them as the question does.", list.join(" and "))
         };
         let read = if companions.is_empty() { "the file" } else { "the files" };
+        let neutral = &self.tasks[&task.id];
+        let mut question = neutral.question.trim().to_owned();
+        if let Some(output) = &neutral.output {
+            question = question.replace(OUTPUT_PLACEHOLDER, &quote(&Self::output_path(opened_path, output)));
+        }
         format!(
             "Analyze the binary at {path}.{also} Use only the tools of the connected MCP server; there is no \
              other way to read {read}.\n\n{}\n\n\
@@ -181,8 +205,13 @@ impl NeutralSuite {
              fields. If the evidence is insufficient, finish with {{\"status\":\"unknown\",\"reason\":\"...\"}}; \
              if the server cannot do what the question needs, finish with \
              {{\"status\":\"unsupported\",\"reason\":\"...\"}}.",
-            self.tasks[&task.id].question.trim()
+            question
         )
+    }
+
+    /// Where a task's output file goes: beside the opened fixture, under the output's name.
+    pub fn output_path(opened_path: &str, output: &OutputSpec) -> String {
+        std::path::Path::new(opened_path).with_file_name(&output.name).to_string_lossy().into_owned()
     }
 
     /// What a server's answer is scored against.
@@ -279,6 +308,8 @@ pub enum FailureKind {
     Unknown,
     Unsupported,
     WrongAnswer,
+    /// The answer matched, but the file the task asked for was missing or did not encode the expected image.
+    WrongArtifact,
 }
 
 /// How the final answer's JSON object was found. Only `Exact` follows the prompt to the letter; every kind is
@@ -392,6 +423,9 @@ pub struct RunRow {
     /// Bounded runner error for runner failures; never the model's answer.
     pub runner_error: Option<String>,
     pub runner: RunnerIdentity,
+    /// Tasks with an output file only: `ok`, or why the written file failed the check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<String>,
 }
 
 pub fn score(
@@ -402,6 +436,24 @@ pub fn score(
     position: u32,
     result: &RunnerResult,
 ) -> Result<RunRow, String> {
+    score_with_artifact(task, suite, server, repetition, position, result, None)
+}
+
+/// [`score`] for a task whose question asks for a file: `artifact` is the check of what the run wrote (required
+/// exactly when the task has an output). A run counts as correct only when both the answer and the file pass.
+pub fn score_with_artifact(
+    task: &ParityTask,
+    suite: &NeutralSuite,
+    server: &str,
+    repetition: u32,
+    position: u32,
+    result: &RunnerResult,
+    artifact: Option<&Result<(), String>>,
+) -> Result<RunRow, String> {
+    if suite.tasks[&task.id].output.is_some() != artifact.is_some() {
+        return Err(format!("{}: an artifact verdict is required exactly for tasks with an output", task.id));
+    }
+    let artifact_ok = artifact.is_none_or(Result::is_ok);
     let expected = suite.expected(task, server)?;
     let (attempt, mut failure, extraction) = attempt(result);
     let server_calls: Vec<_> =
@@ -414,6 +466,10 @@ pub fn score(
         _ => None,
     };
     let outcome = match &attempt {
+        TaskAttempt::Answer(answer) if expected.matches(answer) && !artifact_ok => {
+            failure = Some(FailureKind::WrongArtifact);
+            TaskOutcome::AnswerMismatch
+        }
         TaskAttempt::Answer(answer) if expected.matches(answer) => TaskOutcome::AnswerMatches,
         TaskAttempt::Answer(_) => {
             failure = Some(FailureKind::WrongAnswer);
@@ -423,14 +479,15 @@ pub fn score(
     };
     let spellings = &suite.tasks[&task.id].lenient_spellings;
     let lenient = outcome == TaskOutcome::AnswerMatches
-        || matches!(&attempt, TaskAttempt::Answer(Value::Object(object)) if {
-            let mut trimmed = object.clone();
-            if trimmed.get("status").and_then(Value::as_str) == Some("ok") {
-                trimmed.remove("status");
-            }
-            (trimmed.len() < object.len() || !spellings.is_empty())
-                && expected.matches(&respell(&Value::Object(trimmed), spellings))
-        });
+        || artifact_ok
+            && matches!(&attempt, TaskAttempt::Answer(Value::Object(object)) if {
+                let mut trimmed = object.clone();
+                if trimmed.get("status").and_then(Value::as_str) == Some("ok") {
+                    trimmed.remove("status");
+                }
+                (trimmed.len() < object.len() || !spellings.is_empty())
+                    && expected.matches(&respell(&Value::Object(trimmed), spellings))
+            });
     Ok(RunRow {
         task_id: task.id.clone(),
         kind: task.kind,
@@ -456,6 +513,10 @@ pub fn score(
         runner_error: (result.exit == RunnerExit::Error)
             .then(|| bounded(result.error.as_deref().unwrap_or("runner error"), 300)),
         runner: result.runner.clone(),
+        artifact: artifact.map(|verdict| match verdict {
+            Ok(()) => "ok".to_owned(),
+            Err(reason) => bounded(reason, 300),
+        }),
     })
 }
 

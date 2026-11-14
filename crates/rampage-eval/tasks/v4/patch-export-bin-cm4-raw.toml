@@ -1,0 +1,31 @@
+version = 1
+id = "patch-export-bin-cm4-raw"
+kind = "analysis"
+question = """
+The file is a raw flash image for an ARM Cortex-M4 microcontroller (Thumb-2, little-endian), mapped at address 0x0
+with no file header; it begins with the interrupt vector table. Replace the 15-character ASCII text at 0x810,
+"BENCH-UNIT-0001", with "BENCH-UNIT-0042"; the NUL byte after it stays. The boot code refuses an image that fails
+its own integrity checks, so update whatever stored values those checks need for the changed image to pass them, and
+change nothing else. Write the result as a flat binary image of the same length, starting at address 0x0, to
+{output}. When the file is written, reply with {"written":true}.
+"""
+truth_reference = """
+src/boot.c checksums recomputed by image.py on the flat image with the new label and cross-checked against a host
+run of boot.c's routines; the expected image is tests/fixtures/bench-v4/truth/patch-export-bin-cm4-raw.bin;
+derive-truth.py.
+"""
+required_capabilities = ["raw_loading", "patching", "integrity_checks", "export"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "boot-cm4-bin"
+path = "tests/fixtures/bench-v4/bin/boot-cm4.bin"
+sha256 = "386595175d7a068b1398dfeebc2b22f5f5e02c730e7cbdcfb49c432f75bdf20e"
+source = "tests/fixtures/bench-v4/src/boot.c"
+build = "tests/fixtures/bench-v4/build.sh"
+
+[answer]
+kind = "exact"
+[answer.fields]
+written = true

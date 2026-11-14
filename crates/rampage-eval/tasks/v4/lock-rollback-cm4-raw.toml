@@ -1,0 +1,42 @@
+version = 1
+id = "lock-rollback-cm4-raw"
+kind = "analysis"
+question = """
+The first file is a raw flash image for an ARM Cortex-M4 microcontroller (Thumb-2, little-endian), mapped at address
+0x0 with no file header; it begins with the interrupt vector table. The second file is the microcontroller's
+CMSIS-SVD device description. This firmware refuses to run when its own version is older than a minimum the chip
+records. Explain that check; nothing needs to be changed. Give the entry address of the function in which the
+run-or-refuse decision is made, without the Thumb bit, as decision_function; the address of the hardware register
+holding the minimum as counter_register; the flash address the image's own version is read from as image_version;
+and what the firmware does when the check fails as refusal, one of "reset" (it requests a system reset, whatever it
+does while waiting for it), "halt" (it stops in an endless loop without requesting a reset), "error_return" (it
+returns an error indication to its caller) or "flag" (it records a flag and carries on).
+"""
+truth_reference = """
+src/guard.c enforce_version: host harness run records the OTP.MINVER read and no reset request (the source halts in
+a wfi loop); function and IMAGE_HEADER addresses from the twin's symbols (version at +4).
+"""
+required_capabilities = ["raw_loading", "decompile", "lock_explanation"]
+capability_status = "unknown"
+capability_evidence = "Not inventoried for suite v4; the agent runs measure it."
+
+[fixture]
+id = "guard-cm4-bin"
+path = "tests/fixtures/bench-v4/bin/guard-cm4.bin"
+sha256 = "35d0495d16424552a5c7ffff01607534f8f77432bb82d80a7584688c734f28c0"
+source = "tests/fixtures/bench-v4/src/guard.c"
+build = "tests/fixtures/bench-v4/build.sh"
+
+[[fixture.companions]]
+name = "device.svd"
+path = "tests/fixtures/bench-v4/companions/benchm4.svd"
+sha256 = "12fbeec332ab815d8b900d3f905a12a553fbf352f988a4d92ebedcb3feb9e72d"
+
+[answer]
+kind = "exact"
+hex_integers = true
+[answer.fields]
+decision_function = 172
+counter_register = 1073778704
+image_version = 3076
+refusal = "halt"
