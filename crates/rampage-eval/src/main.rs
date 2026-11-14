@@ -218,7 +218,8 @@ struct RunArgs {
     /// Maximum live tasks attempted, default 1, at most 20. No model runs without --agent-model.
     #[arg(long, requires = "agent_model", default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..=20))]
     agent_max_tasks: u64,
-    /// A signature database (JSON) to identify with; repeatable, later ones win on a shared hash.
+    /// A signature database (JSON, or a bundled `.json.gz` asset) to identify with; repeatable, later ones win on a
+    /// shared hash.
     #[arg(long = "db")]
     databases: Vec<PathBuf>,
     /// A symbolized reference binary to build signatures from; repeatable.
@@ -528,7 +529,13 @@ impl Slice {
             }
         }
         for path in &self.dbs {
-            let db = SignatureDb::from_json(&read(path)?).map_err(|error| format!("{}: {error}", path.display()))?;
+            // A bundled asset (`.json.gz`) is scored as shipped.
+            let db = if path.extension().is_some_and(|extension| extension == "gz") {
+                let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+                SignatureDb::from_gzip(&bytes).map_err(|error| format!("{}: {error}", path.display()))?
+            } else {
+                SignatureDb::from_json(&read(path)?).map_err(|error| format!("{}: {error}", path.display()))?
+            };
             match &mut combined {
                 // merge() ignores an incompatible database; an eval must not drop an input silently.
                 Some(existing) if !existing.can_merge(&db) => {

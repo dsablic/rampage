@@ -290,6 +290,42 @@ async fn a_cortex_m_image_opens_with_its_vector_table_in_one_call() {
     client.cancel().await.unwrap();
 }
 
+/// The bundled embedded firmware set names library functions of a headerless Cortex-M image (owned FreeRTOS,
+/// STM32F4 HAL and newlib-nano firmware built with a toolchain the set was not built from), and applying them
+/// renames the Raw project's functions for later calls with the same selector.
+#[tokio::test]
+async fn identify_functions_names_library_code_in_a_cortex_m_raw_image() {
+    let client = connect().await;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let path = root.join("firmware/embedded-libs-m4f.bin");
+    let truth: Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("data/eval-truth-embedded-m4f.json")).unwrap())
+            .unwrap();
+    let length = std::fs::metadata(&path).unwrap().len();
+    let selector = json!({
+        "profile": "cortex-m4", "offset": 0, "length": length, "base_address": "0x8000000", "vector_table": true,
+    });
+    let (text, failed) = call(&client, "enable_tools", json!({ "groups": ["detection"] })).await;
+    assert!(!failed, "{text}");
+    let arguments = json!({ "path": path, "raw": selector, "apply": true, "limit": 256 });
+    let (text, failed) = call(&client, "identify_functions", arguments).await;
+    assert!(!failed, "{text}");
+    let result: Value = serde_json::from_str(&text).unwrap();
+    let matches = result["matches"].as_array().unwrap();
+    assert!(matches.len() >= 60, "{text}");
+    for found in matches {
+        let address = found["address"].as_str().unwrap();
+        assert_eq!(found["name"], truth[address], "{address}: every name is the library function there");
+        assert_eq!(found["source"], "rampage-builtin");
+    }
+    for name in ["xQueueCreateMutex", "HAL_RCC_OscConfig", "memcpy", "__aeabi_i2d", "_malloc_r"] {
+        assert!(matches.iter().any(|found| found["name"] == name), "{name}: {text}");
+    }
+    let (text, failed) = call(&client, "list_functions", json!({ "path": path, "raw": selector })).await;
+    assert!(!failed && text.contains("HAL_RCC_OscConfig"), "{text}");
+    client.cancel().await.unwrap();
+}
+
 /// A CMSIS-SVD map imported once over MCP names a Cortex-M Raw project's registers in later calls with the same
 /// `raw` selector: decompiled C, xrefs by peripheral name and the per-register access listing.
 #[tokio::test]

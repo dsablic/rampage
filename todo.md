@@ -355,6 +355,24 @@ Shared API/CLI/MCP edits and builds remain coordinated; each parallel worker own
 - Static only: no updater/installer execution, flashing, emulator execution or security changes. Do not turn
   this into an automatic unpacker or a generic firmware framework before the first traced loader path.
 
+### Embedded library signatures (2026-11-14)
+
+Done: the bundled embedded firmware set (scheme 3; newlib/newlib-nano, libgcc, compiler-rt, FreeRTOS, STM32F4
+HAL/LL; [signature corpus](docs/signature-corpus.md#embedded-firmware-set)) and Raw-project `identify_functions`.
+Held-out GCC 14.3 firmware: 100% precision, 51% (M4F) and 31% (M0) recall. Open:
+
+- [ ] Recall across compiler releases: newlib and FreeRTOS C code changes with every GCC major. Add older releases
+  (10.3, 11.3; x86-64 macOS builds) and, if a fuzzy or operand-wildcard tier ever passes its gate on firmware, use
+  it here.
+- [ ] FreeRTOS signatures match only configurations laid out like a trained one; add CubeMX's default
+  configuration and more ports (ARM_CM7, ARM_CM33_NTZ).
+- [ ] More families: picolibc, NXP MCUXpresso drivers, Raspberry Pi pico-sdk, Nordic nrfx, and IAR/Keil runtime
+  libraries (licences permitting).
+- [ ] `build_signatures` still writes scheme 2, so a user's own Thumb firmware database keeps literal-pool
+  addresses in its hashes; build scheme 3 for Thumb there (an additive output change).
+- [ ] ELF discovery does not seed Cortex-M vector-table handlers (Raw projects do), so `xPortPendSVHandler` and
+  friends stay unnamed in ELF firmware.
+
 ### Firmware gaps seen in an agent run on a Cortex-M image (2026-11-09, done 2026-11-12 except follow-ups)
 
 An agent analysing a headerless ARM Thumb (Cortex-M) firmware image fell back to

@@ -302,7 +302,13 @@ Native signatures hash function bytes with position-dependent encodings masked o
 branch/call targets, x86 RIP-relative displacements and PC-relative encodings of fixed-width instruction sets.
 Supported signature architectures are x86, x86-64, AArch64, A32/Thumb, MIPS/MIPS64 and PowerPC/PowerPC64.
 
-Identification applies the reviewed default corpus for x86-64, AArch64, i386 and A32/Thumb without setup. Build an
+Identification applies the reviewed default corpus for x86-64, AArch64, i386 and A32/Thumb without setup.
+Thumb code also gets the [embedded firmware set](signature-corpus.md#embedded-firmware-set): newlib and
+newlib-nano, libgcc, compiler-rt builtins, the FreeRTOS kernel and the STM32F4 HAL/LL, from several GCC releases,
+cores and optimisation levels. It hashes literal pools as data, masking address-like words, and leaves short
+accessors unnamed. `identify_functions` takes a Cortex-M Raw project's `raw` selector, so a headerless flash image
+gets the same names as its ELF. Limits: on owned firmware built with a held-out GCC it names 31–51% of library
+functions with no wrong name; FreeRTOS matches only configurations laid out like a trained one. Build an
 overlay database from a binary with named functions using `function build-signatures` (legacy `signatures`).
 A database hashes each function over both its symbol size and discovered extent. A function cut short at an
 unresolved jump table can match when discovery stops at the same place in the target.

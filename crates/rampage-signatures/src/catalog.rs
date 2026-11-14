@@ -107,7 +107,7 @@ impl BundledMetadata {
         }
         let metadata: Self = serde_json::from_str(index).map_err(|_| invalid("bundled index JSON"))?;
         if metadata.schema_version != 1
-            || ![crate::LEGACY_SCHEME, crate::CURRENT_SCHEME].contains(&metadata.scheme)
+            || !crate::KNOWN_SCHEMES.contains(&metadata.scheme)
             || metadata.recognition != RECOGNITION
             || !valid_digest(&metadata.gzip_sha256)
             || metadata.compressed_bytes < 18

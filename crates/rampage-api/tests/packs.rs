@@ -79,12 +79,21 @@ fn builtin_listing_uses_unique_catalog_assets_and_index_counts() {
             continue;
         }
         let arch: Arch = content.arch.as_ref().unwrap().parse().unwrap();
-        let metadata = rampage_signatures::SignatureDb::bundled_metadata(arch).unwrap().unwrap();
         assert_eq!(content.status, ContentStatus::Loaded);
-        assert_eq!(content.path, format!("bundled:{}", metadata.asset));
-        assert_eq!(rampage_signatures::bundled_counts(arch), Some((metadata.signatures, metadata.callee_keys)));
+        let corpus = rampage_signatures::SignatureDb::bundled_metadata(arch).unwrap().unwrap();
+        let embedded = rampage_signatures::SignatureDb::bundled_embedded_metadata(arch).unwrap();
+        let (metadata, label) = match embedded {
+            Some(embedded) if content.path == format!("bundled:{}", embedded.asset) => {
+                (embedded, "embedded firmware library")
+            }
+            _ => {
+                assert_eq!(content.path, format!("bundled:{}", corpus.asset));
+                assert_eq!(rampage_signatures::bundled_counts(arch), Some((corpus.signatures, corpus.callee_keys)));
+                (corpus, "public-source corpus")
+            }
+        };
         assert!(content.detail.starts_with(&format!(
-            "{} public-source corpus signatures and {} callee keys;",
+            "{} {label} signatures and {} callee keys;",
             metadata.signatures, metadata.callee_keys,
         )));
         assert!(content.detail.contains("same-build recognition, not version identification"));

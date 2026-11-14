@@ -6,6 +6,16 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+Additions only; nothing in the stable surface changed.
+
+- Embedded library signatures: Thumb identification also applies a bundled firmware set (1.3 MB) built from
+  newlib and newlib-nano, libgcc, compiler-rt builtins, the FreeRTOS kernel and the STM32F4 HAL/LL across three
+  Arm GNU Toolchain releases, five Cortex-M multilibs and five optimisation levels. Its hash scheme 3 treats Thumb
+  literal pools as data (masking address-like words), records Thumb call targets for callee keys and leaves short
+  accessors unnamed. On owned firmware built with a held-out GCC it names 31–51% of the library functions with no
+  wrong name. `identify_functions` (and `function identify`, without `--apply`) accepts a Cortex-M Raw project's
+  `raw` selector. See [embedded firmware set](docs/signature-corpus.md#embedded-firmware-set).
+
 ## 1.2.0 (2026-11-14)
 
 Additions only; nothing in the stable surface changed.

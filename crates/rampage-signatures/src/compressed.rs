@@ -7,7 +7,7 @@ use flate2::{Compression, GzBuilder, bufread::GzDecoder};
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
-use crate::{CURRENT_SCHEME, LEGACY_SCHEME, SignatureDb, add_unambiguous};
+use crate::{CURRENT_SCHEME, SignatureDb, add_unambiguous};
 
 /// Gzip input/output limits; direct JSON has its own early whole-input limit.
 const MAX_COMPRESSED_BYTES: usize = 64 * 1024 * 1024;
@@ -296,7 +296,7 @@ impl SignatureDb {
 
     fn validate_compressed(&self) -> Result<(), SignatureDbError> {
         self.validate_fid_namespace().map_err(|_| SignatureDbError::InvalidDatabase("invalid FID namespace"))?;
-        if ![LEGACY_SCHEME, CURRENT_SCHEME].contains(&self.scheme) {
+        if !crate::KNOWN_SCHEMES.contains(&self.scheme) {
             return Err(SignatureDbError::InvalidDatabase("unknown hash scheme"));
         }
         if let Some(patterns) = &self.pat
@@ -607,6 +607,7 @@ impl Write for BoundedWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LEGACY_SCHEME;
     use rampage_arch::Arch;
 
     fn gzip(bytes: &[u8]) -> Vec<u8> {

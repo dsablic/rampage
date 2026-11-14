@@ -692,7 +692,8 @@ const MAX_RAW_REQUEST_BYTES: u64 = 1024 * 1024;
 
 /// The commands [`raw_tool`] admits, as `--help` names them.
 const RAW_COMMANDS: &str = "binary inspect, binary audit, binary capabilities, binary search, function list, \
-                            function disassemble, function graph, function xrefs and function decompile";
+                            function disassemble, function graph, function xrefs, function decompile and function \
+                            identify";
 
 fn raw_request(json: Option<&str>, path: Option<&std::path::Path>) -> anyhow::Result<Option<RawProjectRequest>> {
     let text = match (json, path) {
@@ -724,6 +725,7 @@ fn raw_tool(command: &Command) -> Option<&'static str> {
         Command::Audit(..) => "analysis_diagnostics",
         Command::Capabilities(..) => "capabilities",
         Command::Decompile(..) => "decompile",
+        Command::Identify(..) => "identify_functions",
         _ => return None,
     };
     debug_assert!(rampage_api::tools::raw_capable(tool), "{tool} is not raw-capable");

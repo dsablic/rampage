@@ -63,8 +63,21 @@ static CATALOG: [Entry; 4] = [
     Entry::new(Arch::Arm, include_bytes!("../data/corpus-arm.json.gz"), include_str!("../data/corpus-arm.index.json")),
 ];
 
+/// Supplementary sets identification consults after an architecture's corpus: the embedded firmware library
+/// signatures (scheme 3; newlib, libgcc, FreeRTOS and an STM32 HAL for Cortex-M), built by
+/// `tools/embedded-signatures`.
+static EMBEDDED: [Entry; 1] = [Entry::new(
+    Arch::Arm,
+    include_bytes!("../data/embedded-thumb.json.gz"),
+    include_str!("../data/embedded-thumb.index.json"),
+)];
+
 fn entry(arch: Arch) -> Option<&'static Entry> {
     CATALOG.iter().find(|entry| entry.arch == arch)
+}
+
+fn embedded_entry(arch: Arch) -> Option<&'static Entry> {
+    EMBEDDED.iter().find(|entry| entry.arch == arch)
 }
 
 /// Cached signature/callee counts from a small generated index; never decompresses a database.
@@ -79,6 +92,13 @@ impl SignatureDb {
     pub fn bundled_metadata(arch: Arch) -> Result<Option<&'static BundledMetadata>, &'static SignatureDbError> {
         entry(arch).map(Entry::metadata).transpose()
     }
+
+    /// Metadata for the embedded firmware set shipped for `arch`, without loading it.
+    pub fn bundled_embedded_metadata(
+        arch: Arch,
+    ) -> Result<Option<&'static BundledMetadata>, &'static SignatureDbError> {
+        embedded_entry(arch).map(Entry::metadata).transpose()
+    }
 }
 
 /// An owned copy of the bundled corpus for `arch`; prefer [`bundled_ref`] for lookup.
@@ -90,6 +110,17 @@ pub fn bundled(arch: Arch) -> Option<SignatureDb> {
 /// Builtin corruption is checked by catalog validation tests; no partial or baseline fallback is returned.
 pub fn bundled_ref(arch: Arch) -> Option<&'static SignatureDb> {
     entry(arch)?.database().ok()
+}
+
+/// The embedded firmware library set for `arch` (Thumb only), cached like [`bundled_ref`].
+pub fn bundled_embedded_ref(arch: Arch) -> Option<&'static SignatureDb> {
+    embedded_entry(arch)?.database().ok()
+}
+
+/// Every bundled signature set for `arch`, in the order identification consults them: the public-source corpus,
+/// then the embedded firmware set. They use different hash schemes, so they are layered, never merged.
+pub fn bundled_sets(arch: Arch) -> impl Iterator<Item = &'static SignatureDb> {
+    bundled_ref(arch).into_iter().chain(bundled_embedded_ref(arch))
 }
 
 #[cfg(test)]
@@ -110,6 +141,16 @@ mod tests {
             assert_eq!(bundled_counts(entry.arch), Some((database.len(), database.callee_keys())));
             assert_eq!(crate::compressed::decode_gzip(entry.gzip).unwrap().len(), metadata.json_bytes);
         }
+        for entry in &EMBEDDED {
+            let metadata = entry.metadata().expect("valid embedded metadata");
+            assert!(assets.insert(&metadata.asset));
+            let database = entry.database().expect("embedded asset must decode and match its index");
+            assert_eq!(database.arch(), entry.arch);
+            assert_eq!(database.scheme(), crate::LITERAL_POOL_SCHEME);
+            assert!(!database.is_empty());
+            assert!(std::ptr::eq(bundled_embedded_ref(entry.arch).unwrap(), database));
+            assert_eq!(bundled_sets(entry.arch).count(), 2);
+        }
     }
 
     #[test]
@@ -118,6 +159,8 @@ mod tests {
         assert!(bundled_ref(Arch::S390x).is_none());
         assert!(bundled_counts(Arch::S390x).is_none());
         assert!(SignatureDb::bundled_metadata(Arch::S390x).unwrap().is_none());
+        assert!(bundled_embedded_ref(Arch::X86_64).is_none());
+        assert_eq!(bundled_sets(Arch::S390x).count(), 0);
     }
 
     #[test]
@@ -138,7 +181,7 @@ mod tests {
 
     #[test]
     fn default_corpora_withhold_raw_exact_and_reference_only_answers() {
-        for entry in &CATALOG {
+        for entry in CATALOG.iter().chain(&EMBEDDED) {
             let database = entry.database().unwrap();
             assert!(database.exact.is_empty(), "{}: raw exact fallbacks must not ship", entry.arch);
             assert!(

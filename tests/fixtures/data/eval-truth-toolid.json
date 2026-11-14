@@ -209,6 +209,21 @@
         "protector",
         "installer"
       ]
+    },
+    "arm-none-eabi-gcc": {
+      "how": "Arm GNU Toolchain arm-none-eabi-gcc 14.3.rel1 with its newlib, linked by GNU ld for Cortex-M (tools/embedded-signatures/build.py fixture)",
+      "expected": [
+        {
+          "kind": "compiler",
+          "name": "GCC",
+          "why": "arm-none-eabi-gcc compiles the C; .comment carries its producer string. GNU ld leaves no mark to key on, and newlib is named by library signatures, not by a producer mark"
+        }
+      ],
+      "absent": [
+        "packer",
+        "protector",
+        "installer"
+      ]
     }
   },
   "binaries": {
@@ -471,6 +486,14 @@
     "../bin/objc-x64-stripped.macho": {
       "toolchain": "apple-clang-macho",
       "built": "tests/fixtures/build.sh (clang -fobjc-arc, macOS 10.14, strip)"
+    },
+    "../firmware/embedded-libs-m4f.elf": {
+      "toolchain": "arm-none-eabi-gcc",
+      "built": "tools/embedded-signatures/build.py fixture, Cortex-M4F -Os, newlib-nano, FreeRTOS and STM32F4 HAL; stripped twin"
+    },
+    "../firmware/embedded-libs-m0.elf": {
+      "toolchain": "arm-none-eabi-gcc",
+      "built": "tools/embedded-signatures/build.py fixture, Cortex-M0 -O1, newlib, FreeRTOS; stripped twin"
     }
   },
   "excluded": {

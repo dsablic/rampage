@@ -24,6 +24,18 @@
       "truth": "eval-truth-cross-aarch64.json",
       "min_recall": 0.886
     },
+    "libid-embedded-m4f": {
+      "dbs": ["../../../crates/rampage-signatures/data/embedded-thumb.json.gz"],
+      "target": "../firmware/embedded-libs-m4f.elf",
+      "truth": "eval-truth-embedded-m4f.json",
+      "min_recall": 0.5063
+    },
+    "libid-embedded-m0": {
+      "dbs": ["../../../crates/rampage-signatures/data/embedded-thumb.json.gz"],
+      "target": "../firmware/embedded-libs-m0.elf",
+      "truth": "eval-truth-embedded-m0.json",
+      "min_recall": 0.3083
+    },
     "discovery-x86_64": {
       "family": "discovery",
       "target": "../bin/eval-twin-x86_64.elf",
@@ -41,7 +53,7 @@
     "toolid": {
       "family": "toolid",
       "truth": "eval-truth-toolid.json",
-      "min_recall": 0.8089,
+      "min_recall": 0.8111,
       "min_precision": 1.0
     },
     "types-params-x86_64": {

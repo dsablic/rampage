@@ -19,7 +19,8 @@
 //! address. It also masks relative fields scheme 1 missed or over-masked on Thumb and MIPS (see
 //! [`function_hash_in`]); scheme 1's hashes stay frozen. A [`SignatureDb`] records its scheme and
 //! [`SignatureDb::identify_in`] hashes with it, so databases saved under scheme 1 keep matching exactly as before.
-//! New databases, the bundled ones included, are scheme 2.
+//! New databases, the bundled corpora included, are scheme 2. Scheme 3 ([`LITERAL_POOL_SCHEME`]) adds Thumb
+//! literal pools, Thumb call targets and a stricter Thumb gate for firmware; the bundled embedded set uses it.
 //!
 //! A confidence gate rejects non-discriminating bodies so they are neither stored nor matched: a body whose
 //! masked form carries too little content (a single-branch thunk masks to almost nothing, all-nop padding is one
@@ -51,7 +52,10 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-pub use bundled::{BundledMetadata, BundledProfile, FLYWHEEL_PROFILE_PREFIX, bundled, bundled_counts, bundled_ref};
+pub use bundled::{
+    BundledMetadata, BundledProfile, FLYWHEEL_PROFILE_PREFIX, bundled, bundled_counts, bundled_embedded_ref,
+    bundled_ref, bundled_sets,
+};
 pub use callgraph::{CallGraph, CallSequence, bundled_call_graph};
 pub use compressed::{CombineError, SignatureDbError};
 pub use diagnostics::{
@@ -94,6 +98,25 @@ pub const LEGACY_SCHEME: u32 = 1;
 
 /// Hash scheme 2: [`function_hash_in`], which also masks absolute addresses into the image. New databases use it.
 pub const CURRENT_SCHEME: u32 = 2;
+
+/// Hash scheme 3: scheme 2 plus Thumb literal pools and Thumb call targets, for firmware (see
+/// [`function_hash_scheme`]). Every other architecture hashes exactly as under scheme 2. The embedded Thumb
+/// signature set uses it; scheme 2 databases are unchanged.
+pub const LITERAL_POOL_SCHEME: u32 = 3;
+
+/// The hash schemes this version reads.
+pub const KNOWN_SCHEMES: [u32; 3] = [LEGACY_SCHEME, CURRENT_SCHEME, LITERAL_POOL_SCHEME];
+
+/// Under [`LITERAL_POOL_SCHEME`], a literal-pool word below this value is masked as a possible address: the
+/// Cortex-M code and SRAM regions (and ordinary images on other Thumb targets) lie below it, so a pointer to a
+/// function, a string or a global moves with layout. Words at or above it (the peripheral and system regions, fixed
+/// per device, and most float constants) are kept, since they discriminate functions and never move.
+const POOL_ADDRESS_LIMIT: u32 = 0x4000_0000;
+
+/// Fewest instructions (pool words excluded) a [`LITERAL_POOL_SCHEME`] Thumb body needs: short firmware
+/// accessors (`ldr r3, =global; ldr r0, [r3]; bx lr`) mask to the same few instructions in every program, so
+/// they are left unnamed rather than guessed.
+const MIN_POOL_INSTRUCTIONS: u32 = 6;
 
 /// Images mapped below this address are position-independent (ELF PIE/shared objects and relocatable objects
 /// start at 0), so their code cannot embed absolute addresses, and treating their small offsets as addresses
@@ -166,19 +189,28 @@ struct Fingerprint {
     /// The last non-landing-pad instruction's fold and content, and whether it is a direct branch: not yet in
     /// `core`.
     last: Option<(u64, usize, bool)>,
-    /// Targets of the direct branches and calls, in instruction order (x86 and AArch64 only).
+    /// Targets of the direct branches and calls, in instruction order (x86, AArch64 and scheme-3 Thumb).
     branch_targets: Vec<u64>,
     /// The masked encodings fed so far, concatenated: [`masked_body_in`] compares them with the raw bytes.
     stream: Vec<u8>,
 }
 
 /// What the confidence gate measures of a masked instruction stream.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct Measure {
     instructions: u32,
     content_bytes: usize,
     /// Folds of distinct masked encodings, stopped once [`MIN_DISTINCT`] is reached so it stays small.
     distinct: BTreeSet<u64>,
+    /// The fewest instructions the gate requires: [`MIN_INSTRUCTIONS`], or [`MIN_POOL_INSTRUCTIONS`] for a
+    /// scheme-3 Thumb body.
+    min_instructions: u32,
+}
+
+impl Default for Measure {
+    fn default() -> Self {
+        Measure { instructions: 0, content_bytes: 0, distinct: BTreeSet::new(), min_instructions: MIN_INSTRUCTIONS }
+    }
 }
 
 impl Measure {
@@ -191,7 +223,7 @@ impl Measure {
     }
 
     fn discriminating(&self) -> bool {
-        self.instructions >= MIN_INSTRUCTIONS && self.has_content()
+        self.instructions >= self.min_instructions && self.has_content()
     }
 
     /// The content and distinct-encoding parts of the gate.
@@ -515,8 +547,12 @@ fn mask_thumb32(hw1: u16, hw2: u16, current: bool) -> (u16, u16) {
 
 /// Hashes a Thumb (T32) function, decoding halfword-by-halfword from the start. A first halfword with
 /// bits [15:11] in {0b11101, 0b11110, 0b11111} begins a 32-bit instruction (two halfwords), else it is 16-bit.
-/// `current` selects scheme 2's masking.
-fn thumb_fingerprint(bytes: &[u8], big_endian: bool, current: bool) -> Fingerprint {
+/// `current` selects scheme 2's masking; `pools` (scheme 3, [`thumb_pool_fingerprint`]) adds literal pools and
+/// call targets.
+fn thumb_fingerprint(bytes: &[u8], address: u64, big_endian: bool, current: bool, pools: bool) -> Fingerprint {
+    if pools {
+        return thumb_pool_fingerprint(bytes, address, big_endian);
+    }
     let read_hw = |pair: &[u8]| {
         let raw = [pair[0], pair[1]];
         if big_endian { u16::from_be_bytes(raw) } else { u16::from_le_bytes(raw) }
@@ -543,6 +579,117 @@ fn thumb_fingerprint(bytes: &[u8], big_endian: bool, current: bool) -> Fingerpri
         }
     }
     fingerprint
+}
+
+/// The marker hashed in place of a literal-pool word, so a pool never hashes like instructions.
+const POOL_MARKER: &[u8] = b"rampage pool\0";
+
+/// Scheme 3's Thumb hash: scheme 2's masking, plus
+/// - literal pools: a word a PC-relative `LDR` (T1 or T2) loads from inside the body is hashed as data, not
+///   decoded as instructions, and masked when below [`POOL_ADDRESS_LIMIT`] (a possible address; see there). The
+///   load itself is PC-relative within the function, so it stays. A pool reached before any load names it (a
+///   backward `LDR.W`) decodes as instructions, deterministically for identical code;
+/// - call targets: BL, B.W and 16-bit B targets are recorded, so a body that several functions share is told apart
+///   by the names of what it calls (see [`identify_program`]);
+/// - a stricter gate ([`MIN_POOL_INSTRUCTIONS`]); pool words are not instructions and carry no content.
+fn thumb_pool_fingerprint(bytes: &[u8], address: u64, big_endian: bool) -> Fingerprint {
+    let read_hw = |at: usize| {
+        let raw = [bytes[at], bytes[at + 1]];
+        if big_endian { u16::from_be_bytes(raw) } else { u16::from_le_bytes(raw) }
+    };
+    let read_word = |at: usize| {
+        let raw = [bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]];
+        if big_endian { u32::from_be_bytes(raw) } else { u32::from_le_bytes(raw) }
+    };
+    let mut fingerprint = Fingerprint::new();
+    fingerprint.measure.min_instructions = MIN_POOL_INSTRUCTIONS;
+    fingerprint.core.min_instructions = MIN_POOL_INSTRUCTIONS;
+    // Alignment padding (the assembler pads Thumb code with `nop`) is not part of the code: discovery takes it
+    // in after a call it cannot tell never returns, and leaves it out where it can.
+    let mut length = bytes.len() & !1;
+    while length > 2 && matches!(read_hw(length - 2), 0x46c0 | 0xbf00) {
+        length -= 2;
+    }
+    let bytes = &bytes[..length];
+    let mut pool: BTreeSet<usize> = BTreeSet::new();
+    let mut index = 0;
+    while index + 2 <= bytes.len() && !fingerprint.full() {
+        if pool.contains(&index) && index + 4 <= bytes.len() {
+            let word = read_word(index);
+            fingerprint.hasher.update(POOL_MARKER);
+            let kept = if word < POOL_ADDRESS_LIMIT { 0 } else { word };
+            fingerprint.hasher.update(kept.to_le_bytes());
+            fingerprint.stream.extend_from_slice(&[0; 4]);
+            index += 4;
+            continue;
+        }
+        let at = address.wrapping_add(index as u64);
+        // The PC a Thumb instruction reads: its address plus 4, word-aligned for literal loads.
+        let literal_base = (at.wrapping_add(4) & !3).wrapping_sub(address);
+        let hw1 = read_hw(index);
+        if matches!(hw1 >> 11, 0b11101..=0b11111) {
+            if index + 4 > bytes.len() {
+                break;
+            }
+            let hw2 = read_hw(index + 2);
+            // LDR.W Rt, [PC, #+/-imm12] (T2): 1111 1000 U101 1111.
+            if hw1 & 0xff7f == 0xf85f {
+                let offset = u64::from(hw2 & 0x0fff);
+                let target =
+                    if hw1 & 0x80 != 0 { literal_base.wrapping_add(offset) } else { literal_base.wrapping_sub(offset) };
+                note_pool_word(&mut pool, target, index, bytes.len());
+            }
+            let (m1, m2) = mask_thumb32(hw1, hw2, true);
+            let mut encoding = [0u8; 4];
+            encoding[..2].copy_from_slice(&m1.to_le_bytes());
+            encoding[2..].copy_from_slice(&m2.to_le_bytes());
+            fingerprint.push(&encoding, thumb32_branch_target(hw1, hw2, at));
+            index += 4;
+        } else {
+            // LDR Rt, [PC, #imm8 * 4] (T1): 01001 Rt imm8.
+            if hw1 & 0xf800 == 0x4800 {
+                let target = literal_base.wrapping_add(u64::from(hw1 & 0xff) * 4);
+                note_pool_word(&mut pool, target, index, bytes.len());
+            }
+            // B (T2): 11100 imm11, the 16-bit unconditional branch a short tail call uses.
+            let branch = (hw1 >> 11 == 0b11100).then(|| {
+                let offset = i64::from(((u32::from(hw1) & 0x07ff) << 21) as i32 >> 20);
+                at.wrapping_add(4).wrapping_add_signed(offset)
+            });
+            fingerprint.push(&mask_thumb16(hw1, true).to_le_bytes(), branch);
+            index += 2;
+        }
+    }
+    fingerprint
+}
+
+/// Records the pool word a literal load at body offset `load` reads from body offset `target`, when it lies
+/// after the load and wholly inside the body.
+fn note_pool_word(pool: &mut BTreeSet<usize>, target: u64, load: usize, length: usize) {
+    if let Ok(target) = usize::try_from(target)
+        && target > load
+        && target.checked_add(4).is_some_and(|end| end <= length)
+    {
+        pool.insert(target);
+    }
+}
+
+/// The target of a Thumb BL or B.W (T4) at `address`, the 32-bit branches that leave a function (calls and tail
+/// calls). BLX switches to ARM state, which M-profile code never does, and is not recorded.
+fn thumb32_branch_target(hw1: u16, hw2: u16, address: u64) -> Option<u64> {
+    let bl = hw2 & 0xd000 == 0xd000;
+    let b_w = hw2 & 0xd000 == 0x9000;
+    if hw1 >> 11 != 0b11110 || !(bl || b_w) {
+        return None;
+    }
+    let s = u32::from(hw1 >> 10) & 1;
+    let j1 = u32::from(hw2 >> 13) & 1;
+    let j2 = u32::from(hw2 >> 11) & 1;
+    let i1 = !(j1 ^ s) & 1;
+    let i2 = !(j2 ^ s) & 1;
+    let imm = (s << 24) | (i1 << 23) | (i2 << 22) | (u32::from(hw1 & 0x03ff) << 12) | (u32::from(hw2 & 0x07ff) << 1);
+    let offset = i64::from(((imm << 7) as i32) >> 7);
+    Some(address.wrapping_add(4).wrapping_add_signed(offset))
 }
 
 /// Masks the position-dependent target of a MIPS branch. J/JAL (opcode 0b000010/0b000011) carry a 26-bit
@@ -715,7 +862,7 @@ pub fn function_hash(target: &Target, bytes: &[u8], address: u64) -> Option<Func
 /// address are masked (this needs no context). Thumb also masks B.W, B<c>.W and CBZ/CBNZ offsets, and MIPS the
 /// branch-likely offsets while keeping REGIMM trap immediates, relative fields scheme 1 handled wrongly but cannot
 /// change. Absolute addresses on 32-bit ARM, MIPS and PowerPC (ARM literal pools, MIPS `lui`/`addiu` pairs) are
-/// not masked yet.
+/// not masked here; scheme 3 ([`LITERAL_POOL_SCHEME`]) masks Thumb literal pools.
 pub fn function_hash_in(target: &Target, image: &MaskContext, bytes: &[u8], address: u64) -> Option<FunctionHash> {
     hash(target, bytes, address, Some(image))
 }
@@ -741,8 +888,10 @@ pub fn masked_body_in(target: &Target, image: &MaskContext, bytes: &[u8], addres
     Some(body)
 }
 
-/// The hash of a function under `scheme` (see [`LEGACY_SCHEME`] and [`CURRENT_SCHEME`]), or `None` for an unknown
-/// scheme or a body [`function_hash`] would reject. `image` is ignored by scheme 1.
+/// The hash of a function under `scheme` (see [`LEGACY_SCHEME`], [`CURRENT_SCHEME`] and [`LITERAL_POOL_SCHEME`]),
+/// or `None` for an unknown scheme or a body the scheme's confidence gate rejects. `image` is ignored by scheme 1.
+/// Scheme 3 hashes Thumb code with its literal pools as data (address-like words masked) and gates it more
+/// strictly; it is scheme 2 everywhere else.
 pub fn function_hash_scheme(
     scheme: u32,
     target: &Target,
@@ -760,6 +909,17 @@ fn hash(target: &Target, bytes: &[u8], address: u64, image: Option<&MaskContext>
 
 /// The ungated fingerprint [`hash`] gates, or `None` for an unsupported architecture.
 fn fingerprint(target: &Target, bytes: &[u8], address: u64, image: Option<&MaskContext>) -> Option<Fingerprint> {
+    fingerprint_with(target, bytes, address, image, false)
+}
+
+/// [`fingerprint`], with `pools` selecting scheme 3's Thumb handling (with `image`, it is scheme 3).
+fn fingerprint_with(
+    target: &Target,
+    bytes: &[u8],
+    address: u64,
+    image: Option<&MaskContext>,
+    pools: bool,
+) -> Option<Fingerprint> {
     let big_endian = target.big_endian;
     Some(match target.arch {
         Arch::X86 => x86_fingerprint(32, bytes, address, image),
@@ -769,7 +929,9 @@ fn fingerprint(target: &Target, bytes: &[u8], address: u64, image: Option<&MaskC
             fixed_word_fingerprint(bytes, address, false, |word| pages.mask(word), aarch64_branch_target)
         }
         Arch::Aarch64 => fixed_word_fingerprint(bytes, address, false, mask_aarch64, aarch64_branch_target),
-        Arch::Arm if target.is_thumb(address) => thumb_fingerprint(bytes, big_endian, image.is_some()),
+        Arch::Arm if target.is_thumb(address) => {
+            thumb_fingerprint(bytes, address, big_endian, image.is_some(), pools && image.is_some())
+        }
         Arch::Arm => fixed_word_fingerprint(bytes, address, big_endian, mask_arm_a32, no_branch),
         Arch::Mips | Arch::Mips64 => {
             fixed_word_fingerprint(bytes, address, big_endian, |word| mask_mips(word, image.is_some()), no_branch)
@@ -790,6 +952,7 @@ fn fingerprint_scheme(
     match scheme {
         LEGACY_SCHEME => fingerprint(target, bytes, address, None),
         CURRENT_SCHEME => fingerprint(target, bytes, address, Some(image)),
+        LITERAL_POOL_SCHEME => fingerprint_with(target, bytes, address, Some(image), true),
         _ => None,
     }
 }
@@ -1036,7 +1199,17 @@ impl SignatureDb {
     /// match that function. The reference's extent matches a stripped target's only when discovery stops at the
     /// same place in both, which it does for the same code but need not where symbols or layout steer it.
     pub fn from_binary_with_extents(binary: &Binary, extents: &BTreeMap<u64, u64>) -> SignatureDb {
-        let mut db = SignatureDb::empty(binary.arch, CURRENT_SCHEME);
+        SignatureDb::from_binary_with_extents_in_scheme(binary, extents, CURRENT_SCHEME)
+    }
+
+    /// [`SignatureDb::from_binary_with_extents`] under a specific hash `scheme`, e.g. [`LITERAL_POOL_SCHEME`] for
+    /// Thumb firmware. An unknown scheme yields an empty database.
+    pub fn from_binary_with_extents_in_scheme(
+        binary: &Binary,
+        extents: &BTreeMap<u64, u64>,
+        scheme: u32,
+    ) -> SignatureDb {
+        let mut db = SignatureDb::empty(binary.arch, scheme);
         db.add_binary(binary, extents);
         db
     }
@@ -1413,8 +1586,8 @@ impl SignatureDb {
         db.pat = wire.pat;
         db.fid = wire.fid;
         db.validate_fid_namespace().map_err(serde::de::Error::custom)?;
-        if ![LEGACY_SCHEME, CURRENT_SCHEME].contains(&db.scheme) {
-            let message = format!("unknown signature hash scheme {} (this version knows 1 and 2)", db.scheme);
+        if !KNOWN_SCHEMES.contains(&db.scheme) {
+            let message = format!("unknown signature hash scheme {} (this version knows 1, 2 and 3)", db.scheme);
             return Err(serde::de::Error::custom(message));
         }
         if let Some(patterns) = &db.pat
@@ -1931,6 +2104,107 @@ mod tests {
         let le = function_hash(&thumb_target(false), &halfwords_to_bytes(&halfwords, false), 0);
         let be = function_hash(&thumb_target(true), &halfwords_to_bytes(&halfwords, true), 0);
         assert_eq!(le, be);
+    }
+
+    /// A firmware accessor shape at a word-aligned address: push {r4, lr}; ldr r3, [pc, #16]; ldr r0, [r3];
+    /// adds r0, #1; str r0, [r3]; ldr.w r2, [pc, #12]; add r0, r2; pop {r4, pc}; nop; then its literal pool
+    /// (`first`, `second`) at offsets 20 and 24.
+    fn pooled(first: u32, second: u32) -> Vec<u8> {
+        let mut bytes = halfwords_to_bytes(&[0xb510, 0x4b04, 0x6818, 0x3001, 0x6018, 0xf8df, 0x200c, 0x4410], false);
+        bytes.extend_from_slice(&halfwords_to_bytes(&[0xbd10, 0x46c0], false));
+        bytes.extend_from_slice(&first.to_le_bytes());
+        bytes.extend_from_slice(&second.to_le_bytes());
+        bytes
+    }
+
+    fn pool_hash(bytes: &[u8], address: u64) -> Option<FunctionHash> {
+        function_hash_scheme(LITERAL_POOL_SCHEME, &thumb_target(false), &MaskContext::default(), bytes, address)
+    }
+
+    #[test]
+    fn scheme_3_masks_address_like_literal_pool_words_and_keeps_device_constants() {
+        let base = pool_hash(&pooled(0x2000_0010, 0x4002_3800), 0x0800_0100);
+        assert!(base.is_some());
+        // Another link: the global moved (SRAM and flash words are addresses), at another function address.
+        assert_eq!(base, pool_hash(&pooled(0x2000_4444, 0x4002_3800), 0x0800_2200));
+        assert_eq!(base, pool_hash(&pooled(0x0800_1235, 0x4002_3800), 0x0800_0100));
+        // A peripheral register address is fixed per device and tells functions apart.
+        assert_ne!(base, pool_hash(&pooled(0x2000_0010, 0x4002_3c00), 0x0800_0100));
+        // Scheme 2 still hashes the pool as instructions, keeping the address.
+        let scheme_2 = |first| function_hash_in(&thumb_target(false), &MaskContext::default(), &pooled(first, 0), 0);
+        assert_ne!(scheme_2(0x2000_0010), scheme_2(0x2000_4444));
+    }
+
+    #[test]
+    fn scheme_3_ignores_trailing_alignment_padding() {
+        let code = halfwords_to_bytes(&[0xb510, 0x2001, 0x3001, 0x1c42, 0x4410, 0x2300, 0xbd10], false);
+        let padded = [code.clone(), halfwords_to_bytes(&[0x46c0], false)].concat();
+        let padded_v7 = [code.clone(), halfwords_to_bytes(&[0xbf00], false)].concat();
+        assert!(pool_hash(&code, 0x100).is_some());
+        assert_eq!(pool_hash(&code, 0x100), pool_hash(&padded, 0x100));
+        assert_eq!(pool_hash(&code, 0x100), pool_hash(&padded_v7, 0x100));
+    }
+
+    #[test]
+    fn scheme_3_leaves_short_thumb_accessors_unnamed() {
+        // ldr r3, [pc, #4]; ldr r0, [r3]; adds r0, #1; bx lr; .word global: what many firmware getters look like.
+        let mut getter = halfwords_to_bytes(&[0x4b01, 0x6818, 0x3001, 0x4770], false);
+        getter.extend_from_slice(&0x2000_0000u32.to_le_bytes());
+        assert!(pool_hash(&getter, 0x100).is_none());
+        // Scheme 2's gate admits the same body.
+        assert!(function_hash_in(&thumb_target(false), &MaskContext::default(), &getter, 0x100).is_some());
+    }
+
+    #[test]
+    fn scheme_3_records_thumb_call_targets_for_callee_keys() {
+        // push {r4, lr}; movs r0, #1; adds r0, #2; movs r1, r0; bl <callee>; adds r0, #3; pop {r4, pc}.
+        let call = |hw1, hw2| halfwords_to_bytes(&[0xb510, 0x2001, 0x3002, 0x0001, hw1, hw2, 0x3003, 0xbd10], false);
+        let print = fingerprint_scheme(
+            LITERAL_POOL_SCHEME,
+            &thumb_target(false),
+            &MaskContext::default(),
+            &call(0xf000, 0xf810),
+            0x1000,
+        )
+        .unwrap();
+        // bl at 0x1008: PC 0x100c plus 0x20.
+        assert_eq!(print.branch_targets, [0x102c]);
+        let backwards = fingerprint_scheme(
+            LITERAL_POOL_SCHEME,
+            &thumb_target(false),
+            &MaskContext::default(),
+            &call(0xf7ff, 0xfffe),
+            0x1000,
+        )
+        .unwrap();
+        assert_eq!(backwards.branch_targets, [0x1008]);
+        let named = |target: u64| (target == 0x102c).then_some("callee");
+        assert!(print.callee_key(0x1000..0x1010, named).is_some());
+        // Scheme 2 records no Thumb targets.
+        let scheme_2 =
+            fingerprint_scheme(CURRENT_SCHEME, &thumb_target(false), &MaskContext::default(), &call(0xf000, 0xf810), 0)
+                .unwrap();
+        assert!(scheme_2.branch_targets.is_empty());
+    }
+
+    #[test]
+    fn scheme_3_databases_round_trip_and_hash_other_architectures_as_scheme_2() {
+        let bytes = sample();
+        let x64 = target(Arch::X86_64, false);
+        let image = MaskContext::default();
+        assert_eq!(
+            function_hash_scheme(LITERAL_POOL_SCHEME, &x64, &image, &bytes, 0x1000),
+            function_hash_scheme(CURRENT_SCHEME, &x64, &image, &bytes, 0x1000)
+        );
+        let mut db = SignatureDb::empty(Arch::Arm, LITERAL_POOL_SCHEME);
+        db.add(pool_hash(&pooled(0x2000_0010, 0), 0).unwrap(), None, None, "counter_bump");
+        let loaded = SignatureDb::from_json(&db.to_json()).unwrap();
+        assert_eq!(loaded.scheme(), LITERAL_POOL_SCHEME);
+        let found = loaded.identify_in(&thumb_target(false), &image, &pooled(0x2000_9990, 0), 0x0800_0000);
+        assert_eq!(found, Some("counter_bump"));
+        assert_eq!(SignatureDb::from_gzip(&loaded.to_gzip().unwrap()).unwrap().scheme(), LITERAL_POOL_SCHEME);
+        let unknown = db.to_json().replace("\"scheme\":3", "\"scheme\":4");
+        assert!(SignatureDb::from_json(&unknown).is_err());
     }
 
     #[test]

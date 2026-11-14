@@ -16,7 +16,8 @@ database is not rerun.
 | i386 | 2,123 | 0 | 90 | 15 |
 | ARM/Thumb | 2,117 | 0 | 0 | 14 |
 
-Counts describe index keys, not unique recognized functions. An index's `signatures` count is the masked entries
+Thumb also gets the separately built [embedded firmware set](#embedded-firmware-set) for microcontroller
+libraries. Counts describe index keys, not unique recognized functions. An index's `signatures` count is the masked entries
 plus the PAT rows. The PAT rows are the flywheel's deterministic arms, bundled by `rampage-eval bundle --arm` under
 one `flywheel-libid-<arch>` profile each (zlib 1.2.13, LZ4 1.9.4, cJSON 1.7.15, zstd 1.5.4 and Lua 5.4.4 built
 with zig cc, clang and Alpine gcc; [flywheel.md](flywheel.md#bundle-a-promotion)). The ARM profiles are Thumb builds. The x64/AArch64
@@ -53,6 +54,82 @@ reports 1.2.5, but source revisions remain unknown. Rust fields identify verifie
 archives, not rust-src; the owned native rlib identities remain in each recipe. Compiler release strings record
 1.87.0 and 1.99.0, not authenticated language-version identification from matched signatures. SDK O2 and Rust O1
 are harness labels only; native runtime optimization is not inferred. Zig runtime is not the portable LLVM profile.
+
+## Embedded firmware set
+
+A second bundled ARM database, `data/embedded-thumb.json.gz` (1.31 MB gzip, 2.44 MB JSON; 22,538 masked entries
+and 4,189 callee keys over 22 recorded profiles in `embedded-thumb.index.json`), names the library code
+microcontroller firmware links: newlib and newlib-nano (libc and libm), libgcc, LLVM compiler-rt builtins,
+the FreeRTOS kernel and the STM32F4 HAL/LL drivers. Identification consults it after the ARM corpus for every
+Thumb target, ELF or [Cortex-M Raw project](sleigh-decoding.md#cortex-m-profile), as `rampage-builtin`.
+
+| Library | Versions | Built with | Cores and options |
+| --- | --- | --- | --- |
+| newlib, newlib-nano, libm | 4.3.0, 4.4.0, 4.5.0 | prebuilt in Arm GNU Toolchain 12.3.rel1, 13.3.rel1, 15.2.rel1 | Thumb multilibs v6-m, v7-m, v7e-m, v7e-m+fp hard, v7e-m+dp hard |
+| libgcc | GCC 12.3.1, 13.3.1, 15.2.1 | the same toolchains | the same multilibs |
+| compiler-rt builtins | LLVM 22.1.8 | clang 22.1.8 | thumbv6m, thumbv7m, thumbv7em, thumbv7em hard float; -O2, -Os, -O3 |
+| FreeRTOS kernel (with `heap_4`) | 10.6.2, 11.1.0 | GCC 12.3.1, 13.3.1, 15.2.1 | ARM_CM0, ARM_CM3, ARM_CM4F ports; two configurations; -Os, -O2, -O3, -Og, -O0 |
+| STM32F4 HAL/LL, CMSIS core | HAL 1.8.3, cmsis-device-f4 2.6.10, CMSIS 5.9.0 | GCC 12.3.1, 13.3.1, 15.2.1 | Cortex-M4F, STM32F407xx, every module; -Os, -O2, -O3, -Og, -O0 |
+
+It uses hash scheme 3 (`LITERAL_POOL_SCHEME`), which is scheme 2 everywhere except Thumb code:
+
+- A word a PC-relative `LDR` loads from inside the body is hashed as literal-pool data, not decoded as
+  instructions. Words below `0x4000_0000` (the Cortex-M code and SRAM regions: pointers to globals, strings and
+  functions that move with layout) are masked; peripheral and system addresses, which are fixed per device, are
+  kept. The rule does not depend on the image's mapping, so an ELF and a Raw project hash alike.
+- BL, B.W and 16-bit B targets are recorded, so a body several functions share is told apart by its callees'
+  names, as on x86 and AArch64.
+- Trailing `nop` padding is ignored, and the gate needs six instructions (pool words not counted): short
+  accessors such as `HAL_GetTick` mask to the same few instructions in every program, so they stay unnamed.
+- Each function is hashed over the extents discovery finds in the reference and in a stripped copy of it
+  (discovery cannot tell a call to an unnamed `abort` never returns); symbol-size hashes, which span a trailing
+  pool no discovered body includes, and exact fallbacks (layout-specific, never matching another link) do not ship.
+  Masked hashes two names share stay tombstones.
+
+`tools/embedded-signatures/build.py` fetches the pinned archives (toolchain and source SHA-256s are in the script
+and the index), links whole-archive reference ELFs per multilib (with one-instruction stubs for symbols nothing
+defines, which the gate never signs) and compiles the sources; `crates/rampage-eval/examples/embedded_signatures.rs`
+hashes them. Downloads and build trees stay outside the repository:
+
+```sh
+python3 -I tools/embedded-signatures/build.py fetch            # WORK defaults to /private/var/tmp/rampage-embsig-work
+python3 -I tools/embedded-signatures/build.py refs             # 255 references from the training toolchains
+python3 -I tools/embedded-signatures/build.py compiler-rt      # 12 more with Homebrew llvm@22
+cargo build -p rampage-eval --example embedded_signatures --example signature_bundle_index
+target/debug/examples/embedded_signatures --output WORK/db.json --gzip WORK/db.json.gz --drop-prefix embsig_ WORK/refs/*.elf
+python3 -I tools/embedded-signatures/build.py profiles > WORK/profiles.json
+target/debug/examples/signature_bundle_index --database WORK/db.json.gz --profiles WORK/profiles.json \
+  --asset embedded-thumb.json.gz --output crates/rampage-signatures/data/embedded-thumb.index.json
+```
+
+**Held-out measurement.** Arm GNU Toolchain 14.3.rel1 (GCC 14.3.1, newlib 4.5.0 as that release built it) is not
+used for training. `build.py fixture` builds two owned FreeRTOS applications with it
+(`tests/fixtures/firmware/embedded-libs/`): Cortex-M4F at -Os with newlib-nano, libm, libgcc soft double and the
+STM32F4 HAL, and Cortex-M0 at -O1 (an optimisation level not trained either) with full newlib and soft float. Both
+use a FreeRTOS configuration unlike the two training ones. The committed stripped ELFs and their flash images are
+scored against the library functions of the symbolized builds (`--library` the 14.3 references, `--program` the
+fixture's own objects), so any name on the fixture's own code counts as spurious:
+
+| Fixture | Library functions | Correct | Wrong or spurious | Precision | Recall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `embedded-libs-m4f` (ELF) | 158 | 80 | 0 | 100% | 50.6% |
+| `embedded-libs-m4f` (Raw, vector table) | 158 | 81 | 0 | 100% | 51.3% |
+| `embedded-libs-m0` (ELF) | 227 | 70 | 0 | 100% | 30.8% |
+| `embedded-libs-m0` (Raw, vector table) | 227 | 71 | 0 | 100% | 31.3% |
+
+The `libid-embedded-m4f` and `libid-embedded-m0` slices of `tests/fixtures/data/eval-manifest.json` gate these
+numbers; the fixtures also join the toolid truth as `arm-none-eabi-gcc` builds. Misses are mostly code a
+different GCC generated differently (newlib's C, FreeRTOS), kernel functions whose layout depends on the
+FreeRTOS configuration, bodies below the gate, functions discovery does not reach (handlers only the vector table
+names, unused weak callbacks) and collisions without named callees (`_close_r` and friends call libnosys stubs
+that are all alike). With the newest toolchain held out instead (training 12.3, 13.3 and 14.3, firmware built
+with 15.2) recall is 36.7% (M4F) and 15.0% (M0), still with no wrong or spurious name. compiler-rt built by clang
+23.1.5 (held out) is recognised at 100% precision and 65–68% recall per core. The same toolchain's own build is
+recognised far better: newlib and libgcc archive code is byte-identical within a toolchain release.
+
+Limits: one HAL family (STM32F4), GCC-built newlib and FreeRTOS only (no IAR, Keil/armcc, picolibc or vendor
+SDKs), little-endian Thumb only, and FreeRTOS signatures match only configurations whose struct layouts agree
+with a trained one. A firmware's own copy of a library function with identical code is named after the library.
 
 ## Recognition policy
 

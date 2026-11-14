@@ -329,6 +329,141 @@
       "notice": "cjson-1.7.15.txt",
       "notice_sha256": "a36dda207c36db5818729c54e7ad4e8b0c6fba847491ba64f372c1a2037b6d5c",
       "scope": "complete upstream notice file"
+    },
+    {
+      "profile": "embedded-newlib-4.3.0-arm-gnu-toolchain-12.3.rel1",
+      "license_declaration": "newlib collection of BSD-style and similar permissive notices (COPYING.NEWLIB)",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "3b2eee0bdf71c1bbeb3c3b7424fbf7bd9d5c3f0f5a3a4a78159c9e3ad219e7bd",
+      "source_notice_path": "newlib-cygwin.git tag newlib-4.3.0: COPYING.NEWLIB",
+      "source_notice_sha256": "422aa40293093fb54fc66e692a0d68fd0b24ed5602e5d1d33ad05ba3909057e9",
+      "notice": "newlib-4.5.0-COPYING.NEWLIB.txt",
+      "notice_sha256": "fcfb5ec69b6ab52676dcc4dab7cf4338c8000ef97812dadd35b8592a640a8419",
+      "scope": "complete newlib 4.5.0 notice file, byte-identical; the 4.3.0 and 4.4.0 notices (digests recorded) differ only by additions for other targets; the toolchain archive ships no license files"
+    },
+    {
+      "profile": "embedded-libgcc-arm-gnu-toolchain-12.3.rel1",
+      "license_declaration": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "3b2eee0bdf71c1bbeb3c3b7424fbf7bd9d5c3f0f5a3a4a78159c9e3ad219e7bd",
+      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING.RUNTIME and COPYING3",
+      "source_notice_sha256": {
+        "COPYING.RUNTIME": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+        "COPYING3": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      "notice": "gcc-15.2.0-COPYING.RUNTIME.txt",
+      "notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+      "scope": "complete GCC Runtime Library Exception 3.1 and (gcc-15.2.0-COPYING3.txt) GPLv3 texts, byte-identical; the toolchain archive ships no license files"
+    },
+    {
+      "profile": "embedded-newlib-4.4.0-arm-gnu-toolchain-13.3.rel1",
+      "license_declaration": "newlib collection of BSD-style and similar permissive notices (COPYING.NEWLIB)",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "fb6921db95d345dc7e5e487dd43b745e3a5b4d5c0c7ca4f707347148760317b4",
+      "source_notice_path": "newlib-cygwin.git tag newlib-4.4.0: COPYING.NEWLIB",
+      "source_notice_sha256": "9a59b4ee3af067045fe0ea78786201c42d54756fe48cbccf44f3dfc398474717",
+      "notice": "newlib-4.5.0-COPYING.NEWLIB.txt",
+      "notice_sha256": "fcfb5ec69b6ab52676dcc4dab7cf4338c8000ef97812dadd35b8592a640a8419",
+      "scope": "complete newlib 4.5.0 notice file, byte-identical; the 4.3.0 and 4.4.0 notices (digests recorded) differ only by additions for other targets; the toolchain archive ships no license files"
+    },
+    {
+      "profile": "embedded-libgcc-arm-gnu-toolchain-13.3.rel1",
+      "license_declaration": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "fb6921db95d345dc7e5e487dd43b745e3a5b4d5c0c7ca4f707347148760317b4",
+      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING.RUNTIME and COPYING3",
+      "source_notice_sha256": {
+        "COPYING.RUNTIME": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+        "COPYING3": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      "notice": "gcc-15.2.0-COPYING.RUNTIME.txt",
+      "notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+      "scope": "complete GCC Runtime Library Exception 3.1 and (gcc-15.2.0-COPYING3.txt) GPLv3 texts, byte-identical; the toolchain archive ships no license files"
+    },
+    {
+      "profile": "embedded-newlib-4.5.0-arm-gnu-toolchain-15.2.rel1",
+      "license_declaration": "newlib collection of BSD-style and similar permissive notices (COPYING.NEWLIB)",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "1938a84b7105c192e3fb4fa5e893ba25f425f7ddab40515ae608cd40f68669a8",
+      "source_notice_path": "newlib-cygwin.git tag newlib-4.5.0: COPYING.NEWLIB",
+      "source_notice_sha256": "fcfb5ec69b6ab52676dcc4dab7cf4338c8000ef97812dadd35b8592a640a8419",
+      "notice": "newlib-4.5.0-COPYING.NEWLIB.txt",
+      "notice_sha256": "fcfb5ec69b6ab52676dcc4dab7cf4338c8000ef97812dadd35b8592a640a8419",
+      "scope": "complete newlib 4.5.0 notice file, byte-identical; the 4.3.0 and 4.4.0 notices (digests recorded) differ only by additions for other targets; the toolchain archive ships no license files"
+    },
+    {
+      "profile": "embedded-libgcc-arm-gnu-toolchain-15.2.rel1",
+      "license_declaration": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "1938a84b7105c192e3fb4fa5e893ba25f425f7ddab40515ae608cd40f68669a8",
+      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING.RUNTIME and COPYING3",
+      "source_notice_sha256": {
+        "COPYING.RUNTIME": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+        "COPYING3": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+      },
+      "notice": "gcc-15.2.0-COPYING.RUNTIME.txt",
+      "notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+      "scope": "complete GCC Runtime Library Exception 3.1 and (gcc-15.2.0-COPYING3.txt) GPLv3 texts, byte-identical; the toolchain archive ships no license files"
+    },
+    {
+      "profile": "embedded-freertos-kernel-11.1.0",
+      "license_declaration": "MIT",
+      "source_archive_sha256": "0e21928b3bcc4f9bcaf7333fb1c8c0299d97e2ec9e13e3faa2c5a7ac8a3bc573",
+      "source_notice_path": "LICENSE.md",
+      "source_notice_sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1",
+      "notice": "freertos-kernel-LICENSE.txt",
+      "notice_sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1",
+      "scope": "complete upstream notice file, identical in both kernel releases"
+    },
+    {
+      "profile": "embedded-freertos-kernel-10.6.2",
+      "license_declaration": "MIT",
+      "source_archive_sha256": "219dfc5d6f51d1e7664cdb162c33725ea7e89703bb5a2becfa6a755a0f765c45",
+      "source_notice_path": "LICENSE.md",
+      "source_notice_sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1",
+      "notice": "freertos-kernel-LICENSE.txt",
+      "notice_sha256": "508a77d2e7b51d98adeed32648ad124b7b30241a8e70b2e72c99f92d8e5874d1",
+      "scope": "complete upstream notice file, identical in both kernel releases"
+    },
+    {
+      "profile": "embedded-stm32f4xx-hal-driver-1.8.3",
+      "license_declaration": "BSD-3-Clause",
+      "source_archive_sha256": "8e8a1a4872ab9617684806a6e7bd5aa82b71b5bfe0f88b6679760ca2933a8c02",
+      "source_notice_path": "LICENSE.md",
+      "source_notice_sha256": "376c82bcef0be563bf59b93d05cfdd4b6295e4660b55b31dd8a883bf1d6637f7",
+      "notice": "stm32f4xx-hal-driver-1.8.3-LICENSE.txt",
+      "notice_sha256": "376c82bcef0be563bf59b93d05cfdd4b6295e4660b55b31dd8a883bf1d6637f7",
+      "scope": "complete upstream notice file"
+    },
+    {
+      "profile": "embedded-cmsis-device-f4-2.6.10",
+      "license_declaration": "Apache-2.0",
+      "source_archive_sha256": "b0566d2e07f6f38d69f3ba78ffa8bbac6f393c5b0fa31dd9e84f2ab42994fe7b",
+      "source_notice_path": "LICENSE.md",
+      "source_notice_sha256": "dadb755f51d36614173b28c5790cb4a991e8f4cc822e5b634fd66a4f4145824d",
+      "notice": "cmsis-device-f4-2.6.10-LICENSE.txt",
+      "notice_sha256": "dadb755f51d36614173b28c5790cb4a991e8f4cc822e5b634fd66a4f4145824d",
+      "scope": "complete upstream notice file"
+    },
+    {
+      "profile": "embedded-cmsis-core-5.9.0",
+      "license_declaration": "Apache-2.0",
+      "source_archive_sha256": "9ce693dd15c41f02506adda79323c077912b3211303ca0d9b28b8ebe735a7031",
+      "source_notice_path": "LICENSE.txt",
+      "source_notice_sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "notice": "cmsis-5.9.0-LICENSE.txt",
+      "notice_sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1",
+      "scope": "complete upstream notice file; CMSIS core headers are inlined into the HAL builds"
+    },
+    {
+      "profile": "embedded-compiler-rt-builtins-22.1.8",
+      "license_declaration": "Apache-2.0 WITH LLVM-exception",
+      "source_archive_sha256": "922f1817a0df7b1489272d18134ee0087a8b068828f87ac63b9861b1a9965888",
+      "source_notice_path": "llvm-project-22.1.8.src/compiler-rt/LICENSE.TXT",
+      "source_notice_sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+      "notice": "portable-compiler-rt-22.1.8-LICENSE.txt",
+      "notice_sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+      "scope": "complete upstream license file, byte-identical (shared with the portable compiler-rt profile)"
     }
   ]
 }

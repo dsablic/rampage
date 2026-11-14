@@ -1,6 +1,6 @@
 use super::{
-    Arch, CURRENT_SCHEME, Fingerprint, LEGACY_SCHEME, Lookup, MAX_INSTRUCTIONS, MIN_CONTENT_BYTES, MIN_DISTINCT,
-    MIN_INSTRUCTIONS, MaskContext, Measure, SignatureDb, Target, fingerprint, fingerprint_scheme, function_hash, hex,
+    Arch, Fingerprint, KNOWN_SCHEMES, Lookup, MAX_INSTRUCTIONS, MIN_CONTENT_BYTES, MIN_DISTINCT, MaskContext, Measure,
+    SignatureDb, Target, fingerprint, fingerprint_scheme, function_hash, hex,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -130,8 +130,8 @@ impl From<&Measure> for GateDiagnostics {
     fn from(measure: &Measure) -> Self {
         Self {
             instruction_count: measure.instructions,
-            minimum_instructions: MIN_INSTRUCTIONS,
-            instructions_pass: measure.instructions >= MIN_INSTRUCTIONS,
+            minimum_instructions: measure.min_instructions,
+            instructions_pass: measure.instructions >= measure.min_instructions,
             content_bytes: measure.content_bytes,
             minimum_content_bytes: MIN_CONTENT_BYTES,
             content_bytes_pass: measure.content_bytes >= MIN_CONTENT_BYTES,
@@ -165,7 +165,7 @@ impl SignatureDb {
     ) -> MatchDiagnostics {
         let name = |at: u64| callees.get(&at).map(String::as_str);
         let print = fingerprint_scheme(self.scheme, target, image, bytes, address);
-        let scheme_supported = matches!(self.scheme, LEGACY_SCHEME | CURRENT_SCHEME);
+        let scheme_supported = KNOWN_SCHEMES.contains(&self.scheme);
         let target_supported = fingerprint(target, &[], address, None).is_some();
         let gates = print.as_ref().map(|print| GateDiagnostics::from(&print.measure));
         let core_callee_gate = print.as_ref().map(|print| GateDiagnostics::from(&print.callee_core()));

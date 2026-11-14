@@ -218,9 +218,11 @@ impl Project {
             ));
         }
         let call_graph = if bundled { rampage_signatures::bundled_call_graph() } else { None };
-        let bundled = if bundled { rampage_signatures::bundled_ref(self.binary.arch) } else { None };
+        // The corpus, then (Thumb) the embedded firmware set: different hash schemes, so layered.
+        let bundled: Vec<&SignatureDb> =
+            if bundled { rampage_signatures::bundled_sets(self.binary.arch).collect() } else { Vec::new() };
         let user = user.map(|database| (USER_SIGNATURES, database));
-        let bundled = bundled.map(|database| (BUILTIN_PACK, database));
+        let bundled = bundled.into_iter().map(|database| (BUILTIN_PACK, database));
         let databases: Vec<(&str, &SignatureDb)> = user.into_iter().chain(packed).chain(bundled).collect();
         self.apply_layered_signatures_with_preflight(
             &databases,

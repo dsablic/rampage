@@ -74,6 +74,8 @@
     "bin/switch-scheduled-arm64.so": "db84c893d5796c14e32b0c85c76e836bf5fd1cabf4dbe7d738943fc0f7104a1d",
     "bin/tls-x64.exe": "78fbca40fd2a82fe688ee1e64d7fcde6c5a30ca128db421028ddef2f15be5fdc",
     "firmware/cortex-m3.elf": "8127806ebad2c8f97d3a9ae69ea057688b57593ff37fa2e95531837660e19dff",
+    "firmware/embedded-libs-m0.elf": "91433d86072816adef98b708b9dbb1fa12b888d31a0816776d01960a2328034e",
+    "firmware/embedded-libs-m4f.elf": "7f7be04620b4c226d68c87d34f2d976a65da21c87c76ced6f826652843305f8f",
     "firmware/raw-cortex-m-crc.elf": "9eeb542ff55842efbd78b1f10e2c16bbf5a5e763063ba7403d892719fcce57ce",
     "firmware/raw-cortex-m-decompile.elf": "018087f6587e0eae4186c87a13f2f33094e00a4d7b3ca0718e17c599e6069971",
     "firmware/raw-cortex-m-stages-lzss.elf": "a9b6248f2ae8fef7c1237da501b2b53880f0cd1fa32ee0f7a775b4ea481692fe",

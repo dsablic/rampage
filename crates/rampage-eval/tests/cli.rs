@@ -76,7 +76,9 @@ fn run_prints_the_report_and_a_summary_and_passes_the_gate() {
 /// libid-twin identifies the corpus reference's own stripped twin: identical bytes, the best case. libid-cross
 /// identifies a different program linking the same static musl, scored only on functions the reference defines;
 /// it is what identifying a real binary looks like, and functions whose masked hash still encodes a
-/// layout-dependent value are its misses. discovery finds the twin's function starts; its spurious starts are
+/// layout-dependent value are its misses. libid-embedded identifies owned Cortex-M firmware built with a toolchain
+/// (Arm GNU 14.3) the shipped embedded set was not built from, scored on the library functions it links.
+/// discovery finds the twin's function starts; its spurious starts are
 /// unsized assembly the truth leaves out (`_start`, `__set_thread_area`). toolid names the producing tools of
 /// every committed fixture with a recorded build; like discovery it tolerates spurious answers and gates precision.
 /// types scores the signatures the decompiler infers for a stripped `-g` build against its DWARF; a recovered type
@@ -103,6 +105,8 @@ fn run_manifest_reports_every_slice_at_its_baseline() {
         "discovery-x86_64",
         "libid-cross-aarch64",
         "libid-cross-x86_64",
+        "libid-embedded-m0",
+        "libid-embedded-m4f",
         "libid-twin-aarch64",
         "libid-twin-x86_64",
         "toolid",
@@ -253,7 +257,7 @@ fn run_refuses_an_unknown_hash_scheme() {
     let scratch = std::env::temp_dir().join(format!("rampage-eval-scheme-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).unwrap();
     let future = scratch.join("future.json");
-    std::fs::write(&future, r#"{"arch":"x86_64","scheme":3,"entries":{}}"#).unwrap();
+    std::fs::write(&future, r#"{"arch":"x86_64","scheme":4,"entries":{}}"#).unwrap();
     let output = eval()
         .args(["run", "--db"])
         .arg(&future)
@@ -266,7 +270,7 @@ fn run_refuses_an_unknown_hash_scheme() {
     std::fs::remove_dir_all(&scratch).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains("unknown signature hash scheme 3"), "{stderr}");
+    assert!(stderr.contains("unknown signature hash scheme 4"), "{stderr}");
 }
 
 #[test]

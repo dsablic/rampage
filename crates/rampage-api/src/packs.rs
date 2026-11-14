@@ -841,12 +841,21 @@ fn builtin() -> PackInfo {
         status: ContentStatus::Loaded,
         detail,
     };
+    type Metadata =
+        Result<Option<&'static rampage_signatures::BundledMetadata>, &'static rampage_signatures::SignatureDbError>;
+    type Set = (fn(Arch) -> Metadata, &'static str, &'static str);
+    // Each architecture's public-source corpus, then its embedded firmware set (Thumb).
+    let sets: [Set; 2] = [
+        (rampage_signatures::SignatureDb::bundled_metadata, "public-source corpus", "index"),
+        (rampage_signatures::SignatureDb::bundled_embedded_metadata, "embedded firmware library", "embedded-index"),
+    ];
     let mut contents: Vec<ContentInfo> = Arch::ALL
         .into_iter()
-        .filter_map(|arch| match rampage_signatures::SignatureDb::bundled_metadata(arch) {
+        .flat_map(|arch| sets.iter().map(move |set| (arch, set)))
+        .filter_map(|(arch, &(metadata, label, index))| match metadata(arch) {
             Ok(Some(metadata)) => {
                 let detail = format!(
-                    "{} public-source corpus signatures and {} callee keys; {} shipped build profiles; \
+                    "{} {label} signatures and {} callee keys; {} shipped build profiles; \
                          same-build recognition, not version identification; gzip SHA-256 {}; \
                          {} compressed bytes, {} JSON bytes; provenance/license declarations are not authentication",
                     metadata.signatures,
@@ -861,10 +870,10 @@ fn builtin() -> PackInfo {
             Ok(None) => None,
             Err(error) => Some(ContentInfo {
                 kind: "signatures".to_owned(),
-                path: format!("bundled:index-{arch}"),
+                path: format!("bundled:{index}-{arch}"),
                 arch: Some(arch.to_string()),
                 status: ContentStatus::Error,
-                detail: format!("invalid builtin corpus index: {error}"),
+                detail: format!("invalid builtin {label} index: {error}"),
             }),
         })
         .collect();

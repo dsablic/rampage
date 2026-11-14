@@ -2548,6 +2548,12 @@ pub fn identify(
     apply: bool,
     options: &Options,
 ) -> Result<()> {
+    if apply && options.raw.is_some() {
+        anyhow::bail!(
+            "--apply needs saved annotations, which a Raw Project does not keep across CLI runs; leave it out to \
+             list the matches, or apply them over MCP (identify_functions with raw)"
+        );
+    }
     let project = open(path, options)?;
     let user = match db {
         Some(db) => Some(rampage_api::load_signature_database(db, project.binary.arch)?),
