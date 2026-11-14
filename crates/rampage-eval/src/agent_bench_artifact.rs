@@ -69,7 +69,9 @@ impl OutputSpec {
     /// Ok when the file at `produced` encodes exactly the expected memory; otherwise why not.
     pub fn check(&self, root: &Path, produced: &Path) -> Result<(), String> {
         let expected = self.expected_memory(root)?;
-        let metadata = std::fs::metadata(produced).map_err(|_| format!("no file was written at {}", self.name))?;
+        // A symbolic link could point the check at a file the agent did not write (the truth image itself).
+        let metadata =
+            std::fs::symlink_metadata(produced).map_err(|_| format!("no file was written at {}", self.name))?;
         if !metadata.is_file() {
             return Err(format!("{} is not a regular file", self.name));
         }
@@ -114,9 +116,17 @@ pub fn compare(produced: &BTreeMap<u64, u8>, expected: &BTreeMap<u64, u8>) -> Re
 pub fn decode(format: OutputFormat, bytes: &[u8], base: u64) -> Result<BTreeMap<u64, u8>, String> {
     match format {
         OutputFormat::Binary => Ok(flat(bytes, base)),
-        OutputFormat::Ihex => decode_ihex(std::str::from_utf8(bytes).map_err(|_| "not ASCII text".to_owned())?),
-        OutputFormat::Srec => decode_srec(std::str::from_utf8(bytes).map_err(|_| "not ASCII text".to_owned())?),
+        OutputFormat::Ihex => decode_ihex(ascii(bytes)?),
+        OutputFormat::Srec => decode_srec(ascii(bytes)?),
     }
+}
+
+/// Record files are ASCII; anything else is refused before a record is sliced.
+fn ascii(bytes: &[u8]) -> Result<&str, String> {
+    if !bytes.is_ascii() {
+        return Err("not ASCII text".into());
+    }
+    std::str::from_utf8(bytes).map_err(|_| "not ASCII text".to_owned())
 }
 
 fn record_bytes(digits: &str, number: usize) -> Result<Vec<u8>, String> {
@@ -178,9 +188,12 @@ pub fn decode_srec(text: &str) -> Result<BTreeMap<u64, u8>, String> {
         if terminated {
             return Err(format!("line {number}: record after the termination record"));
         }
+        if !line.is_ascii() {
+            return Err(format!("line {number}: not ASCII text"));
+        }
         let rest = line.strip_prefix('S').ok_or_else(|| format!("line {number}: not a record"))?;
         let kind = rest.chars().next().ok_or_else(|| format!("line {number}: not a record"))?;
-        let body = record_bytes(&rest[1..], number)?;
+        let body = record_bytes(&rest[kind.len_utf8()..], number)?;
         if body.is_empty() || usize::from(body[0]) + 1 != body.len() {
             return Err(format!("line {number}: bad length"));
         }
@@ -238,6 +251,9 @@ mod tests {
         assert_eq!(memory[&0x10000], 0x5A);
         assert!(decode_srec("S10500000102F7\n").unwrap_err().contains("termination"));
         assert!(decode_srec("S1050000010250\nS9030000FC\n").unwrap_err().contains("checksum"));
+        // A multi-byte character where the record type goes is refused, not sliced mid-character.
+        assert!(decode_srec("S\u{e9}0500000102F7\nS9030000FC\n").unwrap_err().contains("ASCII"));
+        assert!(decode(OutputFormat::Srec, "S\u{e9}05\n".as_bytes(), 0).unwrap_err().contains("ASCII"));
     }
 
     #[test]
