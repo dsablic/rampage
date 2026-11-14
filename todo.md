@@ -27,6 +27,54 @@
 This file holds open items. Done sections, including every completed parity phase, are archived verbatim in
 [docs/plans/todo-archive.md](docs/plans/todo-archive.md); each section below that lost done items links to them.
 
+## Ideas to review (unprioritised, not approved)
+
+Ideas collected while working, to go through together before any becomes a track. The repo stays general: it
+explains mechanisms and lets owners inspect and change their own devices. It holds no product-specific bypasses.
+
+### Privacy: what a smart device records and where it sends it (2026-11-14)
+
+Smart TVs and similar devices may run automatic content recognition (fingerprinting what is on screen or heard),
+keep microphones live, and send telemetry. These capabilities would help an owner find and stop that on their own
+device:
+
+- **Unpack device firmware.** TV and set-top firmware usually ships as SquashFS, UBI/UBIFS, ext4, Android sparse or
+  OTA payload images inside vendor containers. Today `carve` and `archive_inventory` find embedded executables and
+  ZIPs. Next: list and extract these filesystems, so the binaries and configuration inside can be analysed. Without
+  this, nothing else on this list applies to a TV.
+- **Android/DEX support.** Many TVs run Android TV, so the interesting logic is in APKs: DEX bytecode, the manifest's
+  permissions and receivers, and native JNI libraries. A `dex_metadata`/`dex_code` pair, like the .NET tools, plus
+  linking JNI exports to their Java callers.
+- **A `privacy_surface` workflow,** a sibling of `network_surface` and `persistence_surface`:
+  - Sources: microphone and camera capture (ALSA/tinyalsa, V4L2 ioctls, Android `AudioRecord`/`MediaRecorder`/
+    camera APIs), screen or framebuffer capture, HDMI-CEC and input events.
+  - Sinks: network sends and files that are later uploaded.
+  - Paths between them, ranked by evidence, with the call chains.
+  - Flag when capture runs without a user-facing trigger: started from boot, a timer or a network command.
+- **Telemetry endpoint inventory.** Hard-coded domains, URLs, IPs and certificate pins across every binary in a
+  firmware image, grouped by component. Export it as a DNS/firewall blocklist. Blocking at the router is the
+  least invasive fix, needs no device modification and survives updates.
+- **Generic ACR/analytics SDK recognition.** Signatures for common analytics and content-recognition libraries,
+  surfaced as "component X does content fingerprinting", without naming any TV vendor in the repo.
+- **Configuration and feature flags.** Find settings that switch collection on or off (a viewing-data opt-out, a
+  voice-assistant wake word), including ones the menu ignores, and where the code reads them.
+- **Patch to disable.** This builds on the patching round trip (checksum recompute, export in the original format):
+  stub a capture or upload path in an owner's own firmware image. Still general tooling, not a recipe for any
+  particular device.
+
+### Other ideas (2026-11-14)
+
+- **2.0 candidates** (breaking changes, only if a 2.0 is justified):
+  - move `get_type`/`list_types` into `core` (agents missed them, see the suite v3 Go task);
+  - promote proven experimental tools (`evaluate_function`, the analysis store);
+  - drop argument aliases.
+- **Shorter tool descriptions.** The full catalog is close to the agent-bench harness budget, and every agent
+  session pays for it in tokens.
+- **`evaluate_function` follow-ups:** SSE/SIMD user-ops, x87 floats, float return values, and a step trace on request
+  for explaining a result.
+- **Run checksum routines with `evaluate_function`.** For the patching round trip, run the device's own check
+  routine to confirm a recomputed value instead of trusting a recognised algorithm.
+
 ## Proposed tracks (2026-11-08, not started)
 
 Queued behind the flywheel work, one at a time; each needs its own design and go-ahead.
