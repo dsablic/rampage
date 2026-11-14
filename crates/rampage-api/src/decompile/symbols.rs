@@ -279,7 +279,8 @@ fn raw_image_operations(project: &Project) -> Vec<WorkerOperation> {
         vec![WorkerOperation::FoldReadOnly { enabled: true }, WorkerOperation::CalleeInference { inference }];
     operations
         .extend(CORTEX_M_DEVICE_RANGES.iter().map(|&(first, last)| WorkerOperation::VolatileRange { first, last }));
-    operations.extend(flash_data_accesses(project).into_iter().map(|(first, last)| WorkerOperation::ReadOnlyRange {
+    let accesses = project.flash_data_accesses.get_or_init(|| flash_data_accesses(project));
+    operations.extend(accesses.iter().map(|&(first, last)| WorkerOperation::ReadOnlyRange {
         first,
         last,
         read_only: false,

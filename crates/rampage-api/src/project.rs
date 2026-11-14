@@ -126,6 +126,9 @@ pub struct Project {
     analysis_store_pending: std::sync::Mutex<Option<PendingStore>>,
     /// Loads and stores at constant addresses, scanned once on the first peripheral query.
     pub(crate) mmio_accesses: OnceLock<Result<Arc<crate::peripherals::AccessIndex>, String>>,
+    /// Cortex-M Raw only: flash words code reads or writes through a formed address, scanned once per project for
+    /// the decompiler (`decompile::symbols`).
+    pub(crate) flash_data_accesses: OnceLock<Vec<(u64, u64)>>,
 }
 
 /// A fresh analysis to store: the store, its key, and why an existing entry was rejected, if one was.
@@ -387,6 +390,7 @@ impl Project {
             analysis_store_status: OnceLock::new(),
             analysis_store_pending: std::sync::Mutex::new(None),
             mmio_accesses: OnceLock::new(),
+            flash_data_accesses: OnceLock::new(),
         }
     }
 
