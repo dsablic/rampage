@@ -114,7 +114,9 @@ suite before any run starts.
 - **Truths.** `derive-truth.py`: 16 derived, 0 problems (the 4 regression truths are v3's).
 - **Reachability through rampage.** `validate-rampage.py` calls rampage's MCP server directly (release build of
   this branch, analysis cache off, the files copied under the harness's names) with one scripted route per task
-  and compares what it reads with the truth: **10 of 16 reached**; the six gaps are listed next. The routes read a
+  and compares what it reads with the truth: **10 of 16 reached** as built; the six gaps are listed next. After the
+  fixes below (made after the suite found the gaps, on Unreleased): **14 of 16**, the two signature-recall gaps
+  remaining. The routes read a
   few values the way a reader of the tool output would (a register name in decompiled code, a literal address in
   a disassembly); those reads are scripted by pattern and named in each route.
 
@@ -156,7 +158,12 @@ Two further observations change no truth but matter to how an agent reads rampag
   longer fold and the peripheral and system ranges are volatile, so `enforce_pairing` shows
   `ppb_e000ed0c = 0x5fa0004` before the wait loop and both functions read `code_c80` / `code_c04`.
 
-**Owner decision:** run as built (a measurement of 1.2.0 + Unreleased as they are), or fix gaps 1 and 2 first. If
+**Decision taken:** gaps 1 and 2, `evaluate_function` on Raw projects and both observations were fixed before any
+run (one commit each, each with tests on images other than these fixtures where one exists), so the report must
+disclose that these fixes were made after the fixtures existed. Gap 3 (signature recall) is unchanged.
+
+**Owner decision (as first written):** run as built (a measurement of 1.2.0 + Unreleased as they are), or fix gaps 1
+and 2 first. If
 they are fixed first, the report must disclose that the fixes were made after these fixtures existed (as v3
 disclosed its suite timing), and the fixes should be validated on other images too, not tuned to these.
 
