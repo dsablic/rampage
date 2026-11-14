@@ -374,7 +374,6 @@ impl<R: Ram> Machine<R> {
     }
 
     /// Reads `size` bytes of ram at `address` as an unsigned integer in the target's byte order.
-    #[cfg(test)]
     pub fn read_memory(&mut self, address: u64, size: u32) -> Result<u128, Fault> {
         let mut bytes = vec![0; size as usize];
         self.ram.read(address, &mut bytes)?;

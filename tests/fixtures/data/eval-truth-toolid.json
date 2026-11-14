@@ -348,6 +348,14 @@
       "toolchain": "zig-cc-linux-gnu",
       "built": "crates/rampage-api/tests/fixtures/build.sh"
     },
+    "../../../crates/rampage-api/tests/fixtures/decode-alloc-x64.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "crates/rampage-api/tests/fixtures/build.sh"
+    },
+    "../../../crates/rampage-api/tests/fixtures/decode-alloc-arm64.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "crates/rampage-api/tests/fixtures/build.sh"
+    },
     "../bin/hello-x64.exe": {
       "toolchain": "zig-cc-windows-gnu",
       "built": "tests/fixtures/build.sh"

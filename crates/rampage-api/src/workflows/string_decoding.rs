@@ -1,17 +1,20 @@
 //! `string_decoding`: candidate string-decoding routines found statically -- functions with a short loop that
 //! loads a byte, transforms it (XOR, rotate, or byte ADD/SUB) and stores a byte, ranked by how many call sites
-//! pass them pointers to non-printable or high-entropy data blobs. Nothing is emulated or executed: a candidate is
-//! a loop shape plus its call sites, not a decoded string.
+//! pass them pointers to non-printable or high-entropy data blobs. By default nothing is emulated or executed: a
+//! candidate is a loop shape plus its call sites, not a decoded string. With `evaluate`, each candidate is run on its
+//! blobs in `evaluate_function`'s p-code interpreter, and printable output is reported as emulation evidence.
 
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 use rampage_analysis::discover::{DiscoveredFunction, XrefKind};
 use rampage_arch::{Arch, Disassembler, Flow, Insn};
 use rampage_loaders::shannon_entropy;
 use serde_json::{Value, json};
 
-use super::registry::{Workflow, WorkflowOptions, report_options, report_schema};
+use super::registry::{Workflow, WorkflowOptions};
 use super::{Confidence, Finding, ReportLimits, Section, Tracer, WorkflowReport};
+use crate::evaluate::{EvaluateReport, EvaluateRequest, Probe, Probed};
 use crate::tools::Group;
 use crate::{ApiError, Project, XrefQuery};
 
@@ -45,6 +48,13 @@ const HIGH_ENTROPY_MIN_BYTES: usize = 48;
 const QUOTED_INSTRUCTIONS: usize = 4;
 /// Functions suggested for decompilation in next steps.
 const SUGGESTED_FUNCTIONS: usize = 3;
+/// With `evaluate`: candidate and blob pairs run, instructions and milliseconds per run, and milliseconds in all.
+const MAX_EVALUATED_PAIRS: usize = 16;
+const EVALUATE_STEPS: u64 = 200_000;
+const EVALUATE_RUN_MS: u64 = 500;
+const EVALUATE_TOTAL_MS: u64 = 5_000;
+/// Attempts quoted in a finding for a pair that gave no text.
+const QUOTED_ATTEMPTS: usize = 4;
 
 const X86_BYTE_REGISTERS: [&str; 20] = [
     "al", "bl", "cl", "dl", "ah", "bh", "ch", "dh", "sil", "dil", "bpl", "spl", "r8b", "r9b", "r10b", "r11b", "r12b",
@@ -241,6 +251,8 @@ struct CallSite {
     at: u64,
     caller: Option<(u64, String)>,
     blobs: Vec<u64>,
+    /// The start of the caller block holding the call, from which its argument setup is replayed.
+    setup: Option<u64>,
     /// Why the arguments were not read, when they were not.
     unread: Option<&'static str>,
 }
@@ -325,8 +337,8 @@ impl Workflow for StringDecoding {
     fn description(&self) -> &'static str {
         "Find candidate string-decoding routines statically: functions with a short loop that loads, transforms \
          (XOR, rotate, byte ADD/SUB) and stores bytes, their direct call sites, and the non-printable or \
-         high-entropy data blobs passed to them (address, length estimate, entropy). Nothing is emulated or \
-         executed; candidates are loop shapes with medium or low confidence."
+         high-entropy data blobs passed to them (address, length estimate, entropy). Candidates are loop shapes \
+         with medium or low confidence; evaluate=true also runs them on their blobs (emulated, bounded)."
     }
 
     fn group(&self) -> Group {
@@ -334,15 +346,62 @@ impl Workflow for StringDecoding {
     }
 
     fn input_schema(&self) -> Value {
-        report_schema()
+        crate::tools::schema::<StringDecodingArgs>()
     }
 
     fn options(&self, input: Value) -> Result<WorkflowOptions, String> {
-        report_options(input)
+        let args: StringDecodingArgs = crate::tools::arguments(input)?;
+        Ok(WorkflowOptions {
+            limits: ReportLimits::new(args.max_per_section),
+            evaluate: args.evaluate.unwrap_or(false),
+            ..WorkflowOptions::default()
+        })
     }
 
     fn run(&self, project: &Project, options: &WorkflowOptions) -> Result<WorkflowReport, ApiError> {
-        project.string_decoding(options.limits)
+        project.string_decoding_with(options.limits, options.evaluate)
+    }
+}
+
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct StringDecodingArgs {
+    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
+    /// reports are cut further to fit one tool result.
+    max_per_section: Option<usize>,
+    /// Run each candidate on its blobs with evaluate_function and report printable output (default false).
+    evaluate: Option<bool>,
+}
+
+/// One candidate and blob pair run with `evaluate`.
+struct Emulated {
+    candidate: usize,
+    blob: u64,
+    /// The run that gave text, or every run tried.
+    attempts: Vec<Attempt>,
+}
+
+struct Attempt {
+    /// How the decoder was called.
+    how: String,
+    /// `location=value` of each argument.
+    arguments: Vec<String>,
+    outcome: Result<(EvaluateReport, Probed), String>,
+}
+
+impl Attempt {
+    fn text(&self) -> Option<&crate::evaluate::ProbedText> {
+        self.outcome.as_ref().ok().and_then(|(_, probed)| probed.texts.first())
+    }
+
+    fn stop(&self) -> String {
+        match &self.outcome {
+            Ok((report, _)) => {
+                let stop = serde_json::to_value(report.stop).ok();
+                let stop = stop.as_ref().and_then(Value::as_str).unwrap_or("unknown");
+                format!("stop {stop} after {} steps: {}", report.steps, report.detail)
+            }
+            Err(error) => format!("not run: {error}"),
+        }
     }
 }
 
@@ -350,6 +409,12 @@ impl Project {
     /// Candidate string-decoding routines: byte loops that load, transform and store bytes, with the call sites
     /// and encoded-looking data blobs that reach them. Static and bounded: nothing is emulated or executed.
     pub fn string_decoding(&self, limits: ReportLimits) -> Result<WorkflowReport, ApiError> {
+        self.string_decoding_with(limits, false)
+    }
+
+    /// [`Project::string_decoding`]; with `evaluate`, each candidate is also run on its blobs (bounded) and
+    /// printable output is reported as emulation evidence.
+    pub fn string_decoding_with(&self, limits: ReportLimits, evaluate: bool) -> Result<WorkflowReport, ApiError> {
         if self.binary.is_sleigh_raw() {
             let _decoder = crate::decoder::project_decoder(self)?;
             return Err(ApiError::Unavailable(
@@ -396,6 +461,8 @@ impl Project {
                 .then(b.call_sites.len().cmp(&a.call_sites.len()))
                 .then(a.address.cmp(&b.address))
         });
+
+        let (emulated, unevaluated) = if evaluate { self.emulate(&candidates) } else { (Vec::new(), 0) };
 
         let mut routines = Section::new("Candidate decoding routines", limits);
         let mut sites = Section::new("Call sites", limits);
@@ -486,6 +553,14 @@ impl Project {
             limits,
         );
 
+        let decoded_section = evaluate.then(|| {
+            let mut section = Section::new("Decoded by emulation", limits);
+            for pair in &emulated {
+                section.push(emulated_finding(&candidates[pair.candidate], pair));
+            }
+            section
+        });
+
         report.summary.push(if candidates.is_empty() {
             "No byte loop that loads, transforms and stores bytes was found.".to_owned()
         } else {
@@ -496,6 +571,15 @@ impl Project {
                 routines.total, sites.total, blobs.total
             )
         });
+        if evaluate {
+            let decoded = emulated.iter().filter(|pair| pair.attempts.iter().any(|attempt| attempt.text().is_some()));
+            report.summary.push(format!(
+                "{} of {} candidate and blob pairs run decoded to printable text in emulation (evaluate_function); \
+                 decoded text is emulation output, not file content.",
+                decoded.count(),
+                emulated.len()
+            ));
+        }
         for candidate in candidates.iter().take(SUGGESTED_FUNCTIONS) {
             report.step(
                 "decompile",
@@ -518,6 +602,7 @@ impl Project {
             );
         }
         report.sections.extend([routines, sites, blobs, functions]);
+        report.sections.extend(decoded_section);
 
         if scan_stopped {
             report.limitation(format!(
@@ -556,12 +641,120 @@ impl Project {
              at run time, passed through the stack or through other functions, and indirect calls are not followed. \
              Blob lengths are estimates."
         ));
-        report.limitation(
-            "Nothing is emulated or executed: a candidate is a loop shape that byte-wise copying, case conversion, \
-             checksums and ciphers also have, and no string is decoded. Absence of evidence is not evidence of \
-             absence.",
-        );
+        if evaluate {
+            if unevaluated > 0 {
+                report.limitation(format!(
+                    "{unevaluated} candidate and blob pairs were not run: at most {MAX_EVALUATED_PAIRS} pairs and \
+                     {EVALUATE_TOTAL_MS} ms of emulation in all."
+                ));
+            }
+            report.limitation(format!(
+                "Decoded text comes from emulation: the caller's block holding the call is replayed through the call \
+                 (imports before it that are not modelled C library functions return 0), else the routine is called \
+                 as (blob), (output, blob, length) and (blob, output, length); each run has {EVALUATE_STEPS} steps \
+                 and {EVALUATE_RUN_MS} ms. Registers set before the block start at zero, other imports stop a run, \
+                 and printable output can still be an intermediate value. A candidate is a loop shape that byte-wise \
+                 copying, case conversion, checksums and ciphers also have. Absence of evidence is not evidence of \
+                 absence."
+            ));
+        } else {
+            report.limitation(
+                "Nothing is emulated or executed: a candidate is a loop shape that byte-wise copying, case conversion, \
+                 checksums and ciphers also have, and no string is decoded. Absence of evidence is not evidence of \
+                 absence.",
+            );
+        }
         Ok(report)
+    }
+
+    /// Runs candidates on their blobs, in report order, within the emulation budget. Returns the pairs run and how
+    /// many were left unrun.
+    fn emulate(&self, candidates: &[Candidate]) -> (Vec<Emulated>, usize) {
+        let started = Instant::now();
+        let total = Duration::from_millis(EVALUATE_TOTAL_MS);
+        let mut emulated = Vec::new();
+        let mut unevaluated = 0;
+        for (index, candidate) in candidates.iter().enumerate() {
+            for (&blob, details) in &candidate.blobs {
+                let remaining = total.saturating_sub(started.elapsed());
+                if emulated.len() >= MAX_EVALUATED_PAIRS || remaining.as_millis() < 10 {
+                    unevaluated += 1;
+                    continue;
+                }
+                let mut attempts = Vec::new();
+                let site = candidate.call_sites.iter().find(|site| site.blobs.contains(&blob) && site.setup.is_some());
+                if let Some(site) = site {
+                    let setup = site.setup.expect("filtered above");
+                    let attempt = self.attempt(
+                        candidate.address,
+                        format!(
+                            "replayed the caller from its block at {setup:#x} through the call at {:#x} (arguments \
+                             as there)",
+                            site.at
+                        ),
+                        json!([]),
+                        Some((setup, site.at)),
+                        total.saturating_sub(started.elapsed()),
+                    );
+                    attempts.push(attempt);
+                }
+                let length = details.length;
+                let shapes = [
+                    ("(blob)", json!([format!("{blob:#x}")])),
+                    (
+                        "(output, blob, length)",
+                        json!([{"buffer": {"size": length + 64}}, format!("{blob:#x}"), length]),
+                    ),
+                    (
+                        "(blob, output, length)",
+                        json!([format!("{blob:#x}"), {"buffer": {"size": length + 64}}, length]),
+                    ),
+                ];
+                for (shape, args) in shapes {
+                    let remaining = total.saturating_sub(started.elapsed());
+                    if attempts.iter().any(|attempt| attempt.text().is_some()) || remaining.as_millis() < 10 {
+                        break;
+                    }
+                    let how = format!("called `{}` directly as {shape}", candidate.name);
+                    attempts.push(self.attempt(candidate.address, how, args, None, remaining));
+                }
+                if let Some(found) = attempts.iter().position(|attempt| attempt.text().is_some()) {
+                    attempts = attempts.split_off(found);
+                    attempts.truncate(1);
+                }
+                emulated.push(Emulated { candidate: index, blob, attempts });
+            }
+        }
+        (emulated, unevaluated)
+    }
+
+    fn attempt(&self, at: u64, how: String, args: Value, replay: Option<(u64, u64)>, remaining: Duration) -> Attempt {
+        let timeout = (remaining.as_millis() as u64).clamp(1, EVALUATE_RUN_MS);
+        let request = json!({
+            "at": format!("{at:#x}"),
+            "args": args,
+            "max_steps": EVALUATE_STEPS,
+            "timeout_ms": timeout,
+        });
+        let outcome =
+            serde_json::from_value::<EvaluateRequest>(request).map_err(|error| error.to_string()).and_then(|request| {
+                self.evaluate_probed(&request, Some(Probe { replay })).map_err(|error| error.to_string())
+            });
+        let arguments = match &outcome {
+            Ok((_, Probed { arguments: Some(arguments), .. })) => {
+                arguments.iter().map(|(location, value)| format!("{location}={value:#x}")).collect()
+            }
+            Ok((report, _)) => report
+                .arguments
+                .iter()
+                .map(|argument| match argument.buffer {
+                    Some(_) => format!("{}={} (output buffer)", argument.location, argument.hex),
+                    None => format!("{}={}", argument.location, argument.hex),
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        Attempt { how, arguments, outcome }
     }
 
     /// The first loop in `function` that loads, transforms and stores bytes.
@@ -683,8 +876,9 @@ impl Project {
                 (Some(_), None) => Some("its arguments were not read: call-site tracing ran out of its decode budget"),
                 (Some(_), Some(_)) => None,
             };
+            let setup = pointers.as_ref().and(block);
             let mut site =
-                CallSite { at, caller: caller.map(|at| (at, self.function_name(at))), blobs: vec![], unread };
+                CallSite { at, caller: caller.map(|at| (at, self.function_name(at))), blobs: vec![], setup, unread };
             for address in pointers.unwrap_or_default() {
                 if let Some(blob) = candidate.blobs.get_mut(&address) {
                     site.blobs.push(address);
@@ -732,6 +926,56 @@ impl Project {
             passed_from: Vec::new(),
         })
     }
+}
+
+/// The finding for one candidate and blob pair run with `evaluate`.
+fn emulated_finding(candidate: &Candidate, pair: &Emulated) -> Finding {
+    let produced = "produced by emulation (evaluate_function's p-code interpreter), not read from the file";
+    let describe = |attempt: &Attempt| {
+        let mut lines = vec![attempt.how.clone()];
+        if !attempt.arguments.is_empty() {
+            lines.push(format!("arguments {}", attempt.arguments.join(", ")));
+        }
+        lines.push(attempt.stop());
+        if let Ok((report, _)) = &attempt.outcome
+            && !report.stubbed.is_empty()
+        {
+            let stubbed: Vec<String> =
+                report.stubbed.iter().map(|row| format!("{} x{}", row.name, row.count)).collect();
+            lines.push(format!("library stand-ins {}", stubbed.join(", ")));
+        }
+        if let Ok((_, probed)) = &attempt.outcome
+            && !probed.skipped.is_empty()
+        {
+            let skipped: Vec<String> = probed.skipped.iter().map(|(name, count)| format!("{name} x{count}")).collect();
+            lines.push(format!("imports before the call returned 0 unrun: {}", skipped.join(", ")));
+        }
+        lines
+    };
+    if let Some(attempt) = pair.attempts.iter().find(|attempt| attempt.text().is_some()) {
+        let text = attempt.text().expect("found above");
+        let mut evidence = vec![produced.to_owned()];
+        evidence.extend(describe(attempt));
+        evidence.push(format!("text read at {:#x} ({})", text.address, text.source));
+        return Finding::new(
+            "evaluate_function",
+            Confidence::Medium,
+            format!("`{}` decodes the blob at {:#x} to {:?} in emulation", candidate.name, pair.blob, text.text),
+        )
+        .at(pair.blob)
+        .evidence(evidence);
+    }
+    let mut evidence = vec![produced.to_owned()];
+    for attempt in pair.attempts.iter().take(QUOTED_ATTEMPTS) {
+        evidence.push(describe(attempt).join("; "));
+    }
+    Finding::new(
+        "evaluate_function",
+        Confidence::Low,
+        format!("`{}` on the blob at {:#x} gave no printable text in emulation", candidate.name, pair.blob),
+    )
+    .at(pair.blob)
+    .evidence(evidence)
 }
 
 /// The start of the block of `function` that holds `address`.

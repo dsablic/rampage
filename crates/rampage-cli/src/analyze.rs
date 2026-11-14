@@ -264,6 +264,7 @@ pub fn analyze(out: &mut impl Write, args: &AnalyzeArgs, options: &Options) -> R
                     .compares()
                     .then(|| args.other_image_offset.map(|offset| ImageAt::new(offset, args.other_image_length)))
                     .flatten(),
+                evaluate: false,
             };
             analysis.tasks.push(retain(
                 arch,

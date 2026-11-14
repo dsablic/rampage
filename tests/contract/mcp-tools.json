@@ -1796,6 +1796,10 @@
           "type": "integer|null",
           "required": false
         },
+        "stubs": {
+          "type": "boolean|null",
+          "required": false
+        },
         "timeout_ms": {
           "type": "integer|null",
           "required": false
@@ -3874,6 +3878,10 @@
       "arguments": {
         "arch": {
           "type": "null|string",
+          "required": false
+        },
+        "evaluate": {
+          "type": "boolean|null",
           "required": false
         },
         "image_length": {

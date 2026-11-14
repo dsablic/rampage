@@ -2569,9 +2569,10 @@ pub fn tools() -> Vec<Tool> {
              hand: a p-code interpreter over the bundled Sleigh specifications (x86, x86-64, AArch64, ARM/Thumb, \
              MIPS, PowerPC, RISC-V); nothing runs natively. Arguments follow the binary's calling convention (64-bit \
              values on 32-bit targets as register pairs or stack slots); buffers are passed by pointer and returned. \
-             Calls inside the image are followed. `stop` says why a run ended: returned (with result), \
-             step_limit, timeout, external_call, user_op (syscalls, SIMD helpers), unmapped_read, memory_limit, ..., \
-             each named. For a C int or bool result on a 64-bit target read `low_32` or pass return_bits 32.",
+             Calls inside the image are followed; common C library imports run as built-in models. `stop` says \
+             why a run ended: returned (with result), step_limit, timeout, external_call, user_op (syscalls, SIMD \
+             helpers), unmapped_read, memory_limit, ..., each named. For a C int or bool result on a 64-bit target \
+             read `low_32` or pass return_bits 32.",
             |project, request: crate::evaluate::EvaluateRequest| project.evaluate_function(&request),
         ),
         tool(

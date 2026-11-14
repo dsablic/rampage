@@ -15,4 +15,6 @@ zig cc -target x86_64-linux-gnu -O1 -g0 -o persist-x64.elf persist.c
 zig cc -target x86_64-windows-gnu -O1 -g0 -s -o persist-x64.exe persist.c -ladvapi32
 zig cc -target x86_64-linux-gnu -O1 -g0 -o decode-x64.elf decode.c
 zig cc -target aarch64-linux-gnu -O1 -g0 -o decode-arm64.elf decode.c
+zig cc -target x86_64-linux-gnu -O1 -g0 -o decode-alloc-x64.elf decode-alloc.c
+zig cc -target aarch64-linux-gnu -O1 -g0 -o decode-alloc-arm64.elf decode-alloc.c
 rm -f *.pdb

@@ -146,7 +146,10 @@ comments (see [Objective-C message sends](objc-dispatch.md)).
 result: a p-code interpreter over the bundled Sleigh specifications follows calls inside the image, places
 arguments and reads results by the binary's calling convention (64-bit values on 32-bit targets as register pairs)
 and says why a run stopped, naming the import, unmapped address or processor operation. Nothing runs natively.
-Limits: integer results; system calls, imports and SIMD processor operations stop the run; see
+Common C library imports (memory, string and allocation functions, with their underscore, fortified and MSVC CRT
+names) run as built-in models. `string_decoding` with `evaluate: true` runs candidate decoders on their blobs and
+reports printable output as emulation evidence. Limits: integer results; system calls, other imports and SIMD
+processor operations stop the run; see
 [the MCP reference](mcp.md#inputs-paging-and-decompiler-tokens).
 
 Types-group [`edit_variable`](local-variables.md) persists local/parameter names and types by native storage

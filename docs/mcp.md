@@ -338,10 +338,23 @@ says why the run ended: `returned` (with `result` as hex, unsigned and signed), 
 `external_call` (an import, named), `external_read`, `unmapped_read`/`unmapped_write`/`unmapped_fetch`, `user_op`
 (system calls, traps and processor operations, named), `unsupported_op`, `invalid_instruction` or
 `division_by_zero` or `memory_limit` (more than 64 MiB of written image pages), with `stopped_at` naming the
-instruction and function. Each result also lists where every
+instruction and function. Imports of common C library functions (`memcpy`, `memmove`, `memset`, `memcmp`,
+`strlen`, `strnlen`, `strcpy`, `strncpy`, `strcmp`, `strncmp`, `strchr`, `strrchr`, `strcat`, `toupper`,
+`tolower`, `abs`, `malloc`, `calloc`, `realloc`, `free`, also under their Mach-O underscore, `__name_chk`
+fortified and MSVC CRT names) run as built-in models with the binary's calling convention instead of stopping;
+`stubbed` counts them, and `stubs: false` stops at them as before. The allocators use a bump heap of at most
+16 MiB whose pages count against the 64 MiB cap. Each result also lists where every
 argument went and the functions called. Limits: `max_steps` (default 1,000,000, at most 20,000,000) and
 `timeout_ms` (default 10,000, at most 60,000); integer results only; SIMD instructions that Sleigh models as
 processor operations (many SSE ones) stop with `user_op`, and x87 extended floats with `unsupported_op`.
+
+`string_decoding` with `evaluate: true` also runs each candidate decoder on the blobs passed to it (at most 16
+pairs, 200,000 steps and 500 ms per run, 5 s in all): it replays the caller's block holding the call through the
+call's return (imports before the call without a model return 0), and failing that calls the routine as (blob),
+(output, blob, length) and (blob, output, length). Printable output that differs from the file, read at the result
+or an argument pointer, is reported in a "Decoded by emulation" section with the arguments, stop reason and
+library stand-ins used; a pair that gives no text is reported with each attempt's stop. Decoded text is emulation
+output, not file content. Without `evaluate` the report is unchanged.
 
 `dotnet_metadata` selects `types`, `pinvokes`, `attributes` or `resources`, filtering with `contains`/`parent_token` and
 paging entries. `dotnet_il` selects a method token or qualified name and pages instructions with `offset`/`limit`,

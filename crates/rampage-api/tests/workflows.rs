@@ -540,6 +540,42 @@ fn string_decoding_finds_a_byte_xor_loop_and_the_blobs_passed_to_it() {
 }
 
 #[test]
+fn string_decoding_with_evaluate_runs_the_decoders() {
+    let cases: [(&str, &[&str]); 4] = [
+        ("decode-alloc-x64.elf", &["open sesame", "token: 7f3a", "connect: ok"]),
+        ("decode-alloc-arm64.elf", &["open sesame", "token: 7f3a", "connect: ok"]),
+        ("decode-x64.elf", &["hello, world", "see you later", "status: ready"]),
+        ("decode-arm64.elf", &["hello, world", "see you later", "status: ready"]),
+    ];
+    for (name, expected) in cases {
+        let project = open(local_fixture(name));
+        let report = project.string_decoding_with(ReportLimits::default(), true).unwrap();
+        assert_well_formed(&report);
+        let decoded = section(&report, "Decoded by emulation");
+        assert_eq!(decoded.total, 3, "{name}: {decoded:#?}");
+        for (finding, text) in decoded.findings.iter().zip(expected) {
+            assert!(finding.observation.contains(&format!("to {text:?} in emulation")), "{name}: {finding:#?}");
+            assert_eq!(finding.source, "evaluate_function", "{name}");
+            assert!(finding.evidence[0].starts_with("produced by emulation"), "{name}: {finding:#?}");
+            assert!(finding.evidence[1].starts_with("replayed the caller"), "{name}: {finding:#?}");
+            assert!(finding.evidence.iter().any(|line| line.starts_with("stop returned")), "{name}: {finding:#?}");
+        }
+        if name.starts_with("decode-alloc") {
+            let stand_ins = &decoded.findings[0].evidence;
+            assert!(
+                stand_ins.iter().any(|line| line == "library stand-ins strlen x1, malloc x1, memcpy x1"),
+                "{name}: {stand_ins:#?}"
+            );
+        }
+        assert!(report.summary.iter().any(|line| line.starts_with("3 of 3 candidate and blob pairs")), "{name}");
+        assert!(!report.limitations.iter().any(|text| text.contains("Nothing is emulated")), "{name}");
+        // Without evaluate the report is unchanged: no emulation section.
+        let report = project.string_decoding(ReportLimits::default()).unwrap();
+        assert!(report.sections.iter().all(|section| section.title != "Decoded by emulation"), "{name}");
+    }
+}
+
+#[test]
 fn string_decoding_without_encoded_arguments_stays_low() {
     // Go's runtime has XOR byte loops (random seeding, hex dumping) whose callers pass no encoded-looking data.
     let report = open(fixture("hello-go-x64.elf")).string_decoding(ReportLimits::default()).unwrap();

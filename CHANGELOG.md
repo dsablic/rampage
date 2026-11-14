@@ -4,6 +4,16 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
+## Unreleased
+
+Additions only; nothing in the stable surface changed.
+
+- `evaluate_function` runs common C library imports (`memcpy`, `memset`, `strlen`, `strcmp`, `strchr`, `malloc`,
+  `free` and related functions, under their Mach-O, fortified and MSVC CRT names) as built-in models instead of
+  stopping with `external_call`, and lists them in `stubbed`; `stubs: false` restores the old behaviour.
+- `string_decoding` takes `evaluate: true` to run each candidate decoder on the blobs passed to it, replaying the
+  call site, and reports printable output with the arguments and stop reason, labelled as emulation output.
+
 ## 1.1.0 (2026-11-14)
 
 Additions only; nothing in the stable surface changed.

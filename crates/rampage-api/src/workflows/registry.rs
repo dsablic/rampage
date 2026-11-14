@@ -21,6 +21,8 @@ pub struct WorkflowOptions {
     pub other: Option<PathBuf>,
     /// Where in `other` an embedded image to compare with starts.
     pub other_image: Option<ImageAt>,
+    /// Run candidates on their data with the p-code interpreter (string_decoding).
+    pub evaluate: bool,
 }
 
 /// A guided workflow: a bounded composition of the analysis primitives into one [`WorkflowReport`].

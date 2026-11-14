@@ -116,6 +116,7 @@ pub fn report(
         decompile: !report_options.no_decompile,
         other: report_options.other.clone(),
         other_image: report_options.other_image,
+        evaluate: false,
     };
     let report = workflow.workflow.run(&project, &run_options)?;
     if options.json {

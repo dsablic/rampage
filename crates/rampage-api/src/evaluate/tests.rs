@@ -657,3 +657,176 @@ fn scratch_writes_straddling_the_dense_limit_read_back() {
     assert_eq!(machine.read_int(&straddling).unwrap(), 0x1122_3344);
     assert_eq!(machine.read_int(&register(machine::DENSE_LIMIT, 2)).unwrap(), 0x1122);
 }
+
+// ----------------------------------------------------------------------------------------------------------------
+// Library stand-ins.
+
+#[test]
+fn library_names_map_to_stand_ins_across_platforms() {
+    use stubs::{Stub, lookup};
+    for (name, stub) in [
+        ("memcpy", Stub::Memcpy),
+        ("_memcpy", Stub::Memcpy),
+        ("__memcpy_chk", Stub::Memcpy),
+        ("___memcpy_chk", Stub::Memcpy),
+        ("memcpy@GLIBC_2.14", Stub::Memcpy),
+        ("__memmove_chk", Stub::Memmove),
+        ("__memset_chk", Stub::Memset),
+        ("__strcpy_chk", Stub::Strcpy),
+        ("__strncpy_chk", Stub::Strncpy),
+        ("__strcat_chk", Stub::Strcat),
+        ("_strlen", Stub::Strlen),
+        ("strnlen", Stub::Strnlen),
+        ("_toupper", Stub::Toupper),
+        ("___tolower", Stub::Tolower),
+        ("abs", Stub::Abs),
+        ("_malloc", Stub::Malloc),
+        ("calloc", Stub::Calloc),
+        ("realloc", Stub::Realloc),
+        ("_free", Stub::Free),
+    ] {
+        assert_eq!(lookup(name), Some(stub), "{name}");
+    }
+    for name in ["puts", "__stack_chk_fail", "strlen_chk", "_strdup", "memcpy_s", "#12", ""] {
+        assert_eq!(lookup(name), None, "{name}");
+    }
+}
+
+/// An image's memory with a 4 KiB scratch region at 0x7000_0000 and a heap at 0x7100_0000.
+fn stub_ram(project: &Project) -> ImageRam<'_> {
+    let mut ram = ImageRam::new(&project.binary, 8);
+    ram.map(0x7000_0000, vec![0; 4096]);
+    ram.heap = Some(stubs::Heap::new(0x7100_0000));
+    ram
+}
+
+fn put(ram: &mut ImageRam<'_>, address: u64, bytes: &[u8]) {
+    ram.write(address, bytes).unwrap();
+}
+
+fn get(ram: &mut ImageRam<'_>, address: u64, length: usize) -> Vec<u8> {
+    let mut out = vec![0; length];
+    ram.read(address, &mut out).unwrap();
+    out
+}
+
+fn stub(ram: &mut ImageRam<'_>, which: stubs::Stub, args: &[u64]) -> u64 {
+    stubs::call(which, args, 8, ram, 1 << 20, "test").unwrap().value
+}
+
+#[test]
+fn memory_stand_ins_copy_fill_and_compare() {
+    use stubs::Stub;
+    let project = fixture("bin/hello-x64.elf");
+    let mut ram = stub_ram(&project);
+    let (a, b) = (0x7000_0000u64, 0x7000_0100u64);
+    put(&mut ram, a, b"abcdef\0");
+    assert_eq!(stub(&mut ram, Stub::Memcpy, &[b, a, 7]), b);
+    assert_eq!(get(&mut ram, b, 7), b"abcdef\0");
+    // memmove through an overlap.
+    assert_eq!(stub(&mut ram, Stub::Memmove, &[a + 1, a, 3]), a + 1);
+    assert_eq!(get(&mut ram, a, 6), b"aabcef");
+    assert_eq!(stub(&mut ram, Stub::Memset, &[a, 0x1_2a, 3]), a);
+    assert_eq!(get(&mut ram, a, 4), b"***c");
+    assert_eq!(stub(&mut ram, Stub::Memcmp, &[a, b, 3]) as i64, i64::from(b'*') - i64::from(b'a'));
+    assert_eq!(stub(&mut ram, Stub::Memcmp, &[b, b, 7]), 0);
+    // A copy from unmapped memory stops with the first unreadable byte.
+    let error = stubs::call(Stub::Memcpy, &[a, 0x10, 4], 8, &mut ram, 1 << 20, "memcpy").unwrap_err();
+    assert_eq!(error.0, StopReason::UnmappedRead, "{}", error.1);
+    assert!(error.1.contains("0x10"), "{}", error.1);
+    // A length past the step budget stops instead of running on.
+    let error = stubs::call(Stub::Memset, &[a, 0, 64], 8, &mut ram, 16, "memset").unwrap_err();
+    assert_eq!(error.0, StopReason::StepLimit);
+}
+
+#[test]
+fn string_stand_ins_follow_the_c_library() {
+    use stubs::Stub;
+    let project = fixture("bin/hello-x64.elf");
+    let mut ram = stub_ram(&project);
+    let (a, b, c) = (0x7000_0000u64, 0x7000_0100u64, 0x7000_0200u64);
+    put(&mut ram, a, b"hello, world\0");
+    put(&mut ram, c, b"hellp\0");
+    assert_eq!(stub(&mut ram, Stub::Strlen, &[a]), 12);
+    assert_eq!(stub(&mut ram, Stub::Strnlen, &[a, 5]), 5);
+    assert_eq!(stub(&mut ram, Stub::Strnlen, &[a, 50]), 12);
+    assert_eq!(stub(&mut ram, Stub::Strcpy, &[b, a]), b);
+    assert_eq!(get(&mut ram, b, 13), b"hello, world\0");
+    put(&mut ram, b, &[0xff; 8]);
+    assert_eq!(stub(&mut ram, Stub::Strncpy, &[b, c, 8]), b);
+    assert_eq!(get(&mut ram, b, 8), b"hellp\0\0\0");
+    assert_eq!(stub(&mut ram, Stub::Strncpy, &[b, a, 3]), b);
+    assert_eq!(get(&mut ram, b, 4), b"hell", "strncpy adds no NUL when the source is longer");
+    assert!((stub(&mut ram, Stub::Strcmp, &[a, c]) as i64) < 0);
+    assert!((stub(&mut ram, Stub::Strcmp, &[c, a]) as i64) > 0);
+    assert_eq!(stub(&mut ram, Stub::Strncmp, &[a, c, 4]), 0);
+    assert_eq!(stub(&mut ram, Stub::Strcmp, &[a, a]), 0);
+    assert_eq!(stub(&mut ram, Stub::Strchr, &[a, u64::from(b'o')]), a + 4);
+    assert_eq!(stub(&mut ram, Stub::Strrchr, &[a, u64::from(b'o')]), a + 8);
+    assert_eq!(stub(&mut ram, Stub::Strchr, &[a, u64::from(b'z')]), 0);
+    assert_eq!(stub(&mut ram, Stub::Strchr, &[a, 0]), a + 12);
+    put(&mut ram, b, b"ab\0");
+    assert_eq!(stub(&mut ram, Stub::Strcat, &[b, c]), b);
+    assert_eq!(get(&mut ram, b, 8), b"abhellp\0");
+    assert_eq!(stub(&mut ram, Stub::Toupper, &[u64::from(b'q')]), u64::from(b'Q'));
+    assert_eq!(stub(&mut ram, Stub::Tolower, &[u64::from(b'Q')]), u64::from(b'q'));
+    assert_eq!(stub(&mut ram, Stub::Toupper, &[u64::MAX]), u64::MAX, "EOF passes through");
+    assert_eq!(stub(&mut ram, Stub::Abs, &[(-7i64) as u64]), 7);
+    // An int argument is its low 32 bits.
+    assert_eq!(stub(&mut ram, Stub::Abs, &[0x1_ffff_fff9]), 7);
+    // 32-bit targets: arguments and results are masked to the register width.
+    assert_eq!(stubs::call(Stub::Abs, &[0xffff_fffe], 4, &mut ram, 64, "abs").unwrap().value, 2);
+    assert_eq!(stubs::call(Stub::Tolower, &[u64::MAX], 4, &mut ram, 64, "tolower").unwrap().value, 0xffff_ffff);
+}
+
+#[test]
+fn heap_stand_ins_allocate_zeroed_blocks_within_the_cap() {
+    use stubs::Stub;
+    let project = fixture("bin/hello-x64.elf");
+    let mut ram = stub_ram(&project);
+    let first = stub(&mut ram, Stub::Malloc, &[10]);
+    let second = stub(&mut ram, Stub::Calloc, &[4, 4]);
+    assert_eq!((first, second), (0x7100_0000, 0x7100_0010));
+    assert_eq!(get(&mut ram, second, 16), [0; 16]);
+    put(&mut ram, first, b"0123456789");
+    let moved = stub(&mut ram, Stub::Realloc, &[first, 32]);
+    assert_eq!(get(&mut ram, moved, 10), b"0123456789");
+    assert_eq!(stub(&mut ram, Stub::Free, &[moved]), 0);
+    assert_eq!(stub(&mut ram, Stub::Calloc, &[u64::MAX, 2]), 0, "an overflowing calloc returns NULL");
+    let error = stubs::call(Stub::Realloc, &[0x7000_0000, 8], 8, &mut ram, 64, "realloc").unwrap_err();
+    assert_eq!(error.0, StopReason::UnsupportedOp, "{}", error.1);
+    // Heap pages count against the run's page cap, together with written image pages.
+    ram.page_limit = ram.heap.as_ref().unwrap().pages() + 1;
+    let error = stubs::call(Stub::Malloc, &[2 * PAGE], 8, &mut ram, 64, "malloc").unwrap_err();
+    assert_eq!(error.0, StopReason::MemoryLimit, "{}", error.1);
+    assert!(error.1.contains("malloc(8192)"), "{}", error.1);
+    stub(&mut ram, Stub::Malloc, &[PAGE]);
+    let data = project.binary.segments.iter().find(|segment| segment.perms.write).unwrap().address;
+    assert_eq!(ram.write(data, &[1]), Err(Fault::MemoryLimit { pages: ram.page_limit }));
+    // And the heap never grows past its reserve.
+    let mut ram = stub_ram(&project);
+    let error = stubs::call(Stub::Malloc, &[stubs::HEAP_BYTES + 1], 8, &mut ram, 64, "malloc").unwrap_err();
+    assert_eq!(error.0, StopReason::MemoryLimit, "{}", error.1);
+}
+
+#[test]
+fn imported_library_calls_run_as_stand_ins() {
+    // `reveal` copies its input to the heap with strlen, malloc and memcpy, then decodes the copy.
+    for name in ["decode-alloc-x64.elf", "decode-alloc-arm64.elf"] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
+        let project = Project::new(Binary::open(path).unwrap());
+        let blob = project.resolve("door").unwrap();
+        let request = json!({"at": "reveal", "args": [format!("{blob:#x}")]});
+        let request: EvaluateRequest = serde_json::from_value(request).unwrap();
+        let (report, probed) = project.evaluate_probed(&request, Some(Probe::default())).unwrap();
+        assert_eq!(report.stop, StopReason::Returned, "{name}: {}", report.detail);
+        let names: Vec<(&str, u64)> = report.stubbed.iter().map(|row| (row.name.as_str(), row.count)).collect();
+        assert_eq!(names, [("strlen", 1), ("malloc", 1), ("memcpy", 1)], "{name}");
+        assert_eq!(probed.texts[0].text, "open sesame", "{name}");
+        assert_eq!(probed.texts[0].source, "result", "{name}");
+        // With stand-ins off, the first import stops the run as before.
+        let off = run(&project, "reveal", json!([format!("{blob:#x}")]), json!({"stubs": false}));
+        assert_eq!(off.stop, StopReason::ExternalCall, "{name}");
+        assert!(off.detail.contains("strlen") && off.stubbed.is_empty(), "{name}: {}", off.detail);
+    }
+}

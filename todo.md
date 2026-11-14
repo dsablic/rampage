@@ -181,8 +181,11 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
 
 - [x] `evaluate_function` (core, experimental): run a function on arguments with a p-code interpreter instead of
   simulating it; every suite v3 semantics miss was a hand-evaluated loop. Open: interpret the SIMD processor
-  operations Sleigh leaves as CALLOTHER (SSE `memset`/`memcpy` stop with `user_op`), optional stubs for common
-  imports, float results, and a benchmark run with the tool.
+  operations Sleigh leaves as CALLOTHER (SSE `memset`/`memcpy` stop with `user_op`), float results, and a
+  benchmark run with the tool.
+- [x] Library stand-ins for common C imports in `evaluate_function`, and `string_decoding` `evaluate: true`
+  running candidate decoders on their blobs. Open: models for `sprintf`/`strdup`/`operator new`, and replays
+  that start before the caller's block.
 
 ## Objective-C dispatch (2026-11-13)
 

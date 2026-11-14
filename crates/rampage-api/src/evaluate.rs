@@ -15,12 +15,14 @@ use crate::{ApiError, Project};
 
 mod convention;
 mod machine;
+mod stubs;
 #[cfg(test)]
 mod tests;
 
 pub use convention::Convention;
 use convention::{Abi, Link, Place};
 use machine::{Fault, Flow, Machine, Ram, SpaceIds, UserOp};
+use stubs::{BYTES_PER_STEP, HEAP_BYTES, Heap, Stop, Stub};
 
 pub const DEFAULT_MAX_STEPS: u64 = 1_000_000;
 pub const MAX_STEPS: u64 = 20_000_000;
@@ -65,6 +67,9 @@ pub struct EvaluateRequest {
     pub max_steps: Option<u64>,
     /// Wall-clock milliseconds (default 10000, at most 60000).
     pub timeout_ms: Option<u64>,
+    /// Model common C library imports (memcpy, strlen, strcmp, malloc, free, ...) instead of stopping at them
+    /// (default true).
+    pub stubs: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -158,6 +163,11 @@ pub struct EvaluateReport {
     /// Functions called during the run, by first call, with call counts.
     pub calls: Vec<CallRow>,
     pub calls_omitted: usize,
+    /// Imports run by a built-in library model instead of stopping the run, with call counts.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stubbed: Vec<StubRow>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub stubbed_omitted: usize,
     pub max_steps: u64,
     pub timeout_ms: u64,
 }
@@ -217,6 +227,16 @@ pub struct BufferResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     pub omitted_bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StubRow {
+    pub name: String,
+    pub count: u64,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Serialize)]
@@ -352,6 +372,8 @@ struct ImageRam<'a> {
     stand_ins: BTreeMap<u64, String>,
     code_written: bool,
     page_limit: usize,
+    /// The library stand-ins' bump heap, reserving `HEAP_BYTES` of addresses from its base.
+    heap: Option<Heap>,
 }
 
 impl<'a> ImageRam<'a> {
@@ -385,6 +407,7 @@ impl<'a> ImageRam<'a> {
             stand_ins: BTreeMap::new(),
             code_written: false,
             page_limit: MAX_WRITTEN_PAGES,
+            heap: None,
         }
     }
 
@@ -393,6 +416,7 @@ impl<'a> ImageRam<'a> {
         self.segments.iter().any(|segment| start < segment.start.saturating_add(segment.size) && segment.start < end)
             || self.regions.iter().any(|region| start < region.start + region.bytes.len() as u64 && region.start < end)
             || self.stand_ins.range(start..end).next().is_some()
+            || self.heap.as_ref().is_some_and(|heap| start < heap.base + HEAP_BYTES && heap.base < end)
     }
 
     /// A free, `PAGE`-aligned range of `length` bytes from the first candidate base that does not overlap.
@@ -450,6 +474,10 @@ impl Ram for ImageRam<'_> {
             out.copy_from_slice(&region.bytes[offset..offset + out.len()]);
             return Ok(());
         }
+        if let Some(bytes) = self.heap.as_mut().and_then(|heap| heap.slice(address, out.len())) {
+            out.copy_from_slice(bytes);
+            return Ok(());
+        }
         for (index, byte) in out.iter_mut().enumerate() {
             let at = address.wrapping_add(index as u64);
             match self.read_image_byte(at) {
@@ -470,6 +498,10 @@ impl Ram for ImageRam<'_> {
             region.bytes[offset..offset + bytes.len()].copy_from_slice(bytes);
             return Ok(());
         }
+        if let Some(slice) = self.heap.as_mut().and_then(|heap| heap.slice(address, bytes.len())) {
+            slice.copy_from_slice(bytes);
+            return Ok(());
+        }
         for index in 0..bytes.len() {
             let at = address.wrapping_add(index as u64);
             let Some(segment) = self.segment(at) else {
@@ -486,7 +518,7 @@ impl Ram for ImageRam<'_> {
             }
             let page_number = at / PAGE;
             if !self.pages.contains_key(&page_number) {
-                if self.pages.len() >= self.page_limit {
+                if self.pages.len() + self.heap.as_ref().map_or(0, Heap::pages) >= self.page_limit {
                     return Err(Fault::MemoryLimit { pages: self.page_limit });
                 }
                 let page: Box<[u8]> =
@@ -599,29 +631,87 @@ impl Run<'_> {
         Ok(decoded)
     }
 
-    fn fault(&self, fault: Fault) -> (StopReason, String) {
-        match fault {
-            Fault::UnmappedRead { address, size } => {
-                (StopReason::UnmappedRead, format!("{size}-byte read of unmapped address {address:#x}"))
-            }
-            Fault::UnmappedWrite { address, size } => {
-                (StopReason::UnmappedWrite, format!("{size}-byte write to unmapped address {address:#x}"))
-            }
-            Fault::ExternalRead { name, .. } => {
-                (StopReason::ExternalRead, format!("read of imported data {name}, which lies outside the image"))
-            }
-            Fault::Unsupported(what) => (StopReason::UnsupportedOp, format!("unsupported: {what}")),
-            Fault::UserOp(name) => (
-                StopReason::UserOp,
-                format!("processor operation {name} (system call, trap or special register) is not interpreted"),
-            ),
-            Fault::DivisionByZero => (StopReason::DivisionByZero, "integer division by zero".to_owned()),
-            Fault::MemoryLimit { pages } => (
-                StopReason::MemoryLimit,
-                format!("the run wrote more than {pages} image pages ({} MiB)", (pages as u64 * PAGE) >> 20),
-            ),
-            Fault::Malformed(what) => (StopReason::UnsupportedOp, format!("malformed p-code: {what}")),
+    /// The first `count` register-width arguments under `abi`, with their locations. `pushed` says whether an x86
+    /// `call` has already pushed the return address.
+    fn arguments(&mut self, abi: &Abi, count: usize, pushed: bool) -> Result<Vec<(String, u64)>, Stop> {
+        let unreadable = |error: ApiError| (StopReason::UnsupportedOp, error.to_string());
+        let width = abi.width;
+        let sp = self.get_register(abi.stack_pointer).map_err(unreadable)? as u64;
+        let return_address = if pushed && abi.link == Link::Stack { u64::from(width) } else { 0 };
+        let first_stack = sp.wrapping_add(return_address + abi.stack_arguments);
+        let mut values = Vec::with_capacity(count);
+        for place in convention::assign(abi, &vec![width; count], self.machine.ram.big_endian) {
+            let value = match place {
+                Place::Register(name) => (name.to_owned(), self.get_register(name).map_err(unreadable)? as u64),
+                Place::Stack(offset) => {
+                    let address = first_stack.wrapping_add(offset);
+                    let value = self.machine.read_memory(address, width).map_err(fault_stop)? as u64;
+                    (format!("stack+{:#x}", address.wrapping_sub(sp)), value)
+                }
+                // Register-width arguments never take a pair.
+                Place::Pair(..) | Place::Split(..) => break,
+            };
+            values.push(value);
         }
+        Ok(values)
+    }
+
+    /// Runs the library model `stub` for the import `name` the run just reached (without one, the import returns
+    /// 0), writes its result and returns to the caller. Returns the address returned to and the steps it costs.
+    fn call_import(&mut self, stub: Option<Stub>, abi: &Abi, name: &str, budget: u64) -> Result<(u64, u64), Stop> {
+        let unreadable = |error: ApiError| (StopReason::UnsupportedOp, error.to_string());
+        let outcome = match stub {
+            Some(stub) => {
+                let args: Vec<u64> =
+                    self.arguments(abi, stub.arity(), true)?.into_iter().map(|(_, value)| value).collect();
+                stubs::call(stub, &args, abi.width, &mut self.machine.ram, budget, name)?
+            }
+            None => stubs::Outcome { value: 0, bytes: 0 },
+        };
+        self.set_register(abi.result.0, u128::from(outcome.value)).map_err(unreadable)?;
+        let target = match abi.link {
+            Link::Stack => {
+                let sp = self.get_register(abi.stack_pointer).map_err(unreadable)? as u64;
+                let target = self.machine.read_memory(sp, abi.width).map_err(fault_stop)? as u64;
+                self.set_register(abi.stack_pointer, u128::from(sp.wrapping_add(u64::from(abi.width))))
+                    .map_err(unreadable)?;
+                target
+            }
+            Link::Register(link) => self.get_register(link).map_err(unreadable)? as u64,
+        };
+        let target = if self.mode_switch.is_some() {
+            self.thumb = target & 1 == 1;
+            target & !1
+        } else {
+            target
+        };
+        Ok((target, 1 + outcome.bytes / BYTES_PER_STEP))
+    }
+}
+
+/// The stop a fault ends a run with.
+fn fault_stop(fault: Fault) -> Stop {
+    match fault {
+        Fault::UnmappedRead { address, size } => {
+            (StopReason::UnmappedRead, format!("{size}-byte read of unmapped address {address:#x}"))
+        }
+        Fault::UnmappedWrite { address, size } => {
+            (StopReason::UnmappedWrite, format!("{size}-byte write to unmapped address {address:#x}"))
+        }
+        Fault::ExternalRead { name, .. } => {
+            (StopReason::ExternalRead, format!("read of imported data {name}, which lies outside the image"))
+        }
+        Fault::Unsupported(what) => (StopReason::UnsupportedOp, format!("unsupported: {what}")),
+        Fault::UserOp(name) => (
+            StopReason::UserOp,
+            format!("processor operation {name} (system call, trap or special register) is not interpreted"),
+        ),
+        Fault::DivisionByZero => (StopReason::DivisionByZero, "integer division by zero".to_owned()),
+        Fault::MemoryLimit { pages } => (
+            StopReason::MemoryLimit,
+            format!("the run wrote more than {pages} image pages ({} MiB)", (pages as u64 * PAGE) >> 20),
+        ),
+        Fault::Malformed(what) => (StopReason::UnsupportedOp, format!("malformed p-code: {what}")),
     }
 }
 
@@ -634,10 +724,58 @@ fn candidates(pointer_bytes: u32) -> Vec<u64> {
     }
 }
 
+/// What a probing run (string_decoding's `evaluate`) also looks at.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Probe {
+    /// Start at `.0`, a caller's code, and end when the call instruction at `.1` returns, instead of running a
+    /// function from its entry to its return.
+    pub replay: Option<(u64, u64)>,
+}
+
+/// What a probing run found.
+#[derive(Debug, Default)]
+pub(crate) struct Probed {
+    /// The replayed call's argument values, by location, when it was reached.
+    pub arguments: Option<Vec<(String, u64)>>,
+    /// Printable NUL-terminated strings, different from the file's bytes there, at the result or an argument.
+    pub texts: Vec<ProbedText>,
+    /// Imports without a model that a replay skipped (returning 0) before the replayed call, with call counts.
+    pub skipped: Vec<(String, u64)>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ProbedText {
+    /// `result`, an argument location, or `argument N`.
+    pub source: String,
+    pub address: u64,
+    pub text: String,
+}
+
+/// Argument locations a replay reads at the call.
+const REPLAY_ARGUMENTS: usize = 4;
+/// Bytes of a probed string read; longer strings are cut.
+const PROBED_TEXT_BYTES: usize = 256;
+const MIN_PROBED_TEXT: usize = 4;
+/// Frame-pointer registers a replay points into its stack, so a caller's frame-relative locals are mapped.
+const FRAME_POINTERS: [&str; 7] = ["RBP", "EBP", "x29", "r11", "fp", "s0", "r31"];
+
 impl Project {
     pub fn evaluate_function(&self, request: &EvaluateRequest) -> Result<EvaluateReport, ApiError> {
+        self.evaluate_probed(request, None).map(|(report, _)| report)
+    }
+
+    /// `evaluate_function`, plus what `probe` asks for.
+    pub(crate) fn evaluate_probed(
+        &self,
+        request: &EvaluateRequest,
+        probe: Option<Probe>,
+    ) -> Result<(EvaluateReport, Probed), ApiError> {
         let binary = &self.binary;
-        let entry = self.resolve(&request.at)?;
+        let replay = probe.and_then(|probe| probe.replay);
+        let entry = match replay {
+            Some((start, _)) => start,
+            None => self.resolve(&request.at)?,
+        };
         let max_steps = request.max_steps.unwrap_or(DEFAULT_MAX_STEPS);
         if !(1..=MAX_STEPS).contains(&max_steps) {
             return Err(invalid(format!("max_steps must be 1..={MAX_STEPS}")));
@@ -714,6 +852,16 @@ impl Project {
             ram.slots.insert(slot.address, stand_in);
             ram.stand_ins.insert(stand_in, slot.name.clone());
         }
+        // The library models use the binary's own convention, whatever the evaluated function's.
+        let stub_abi = if request.stubs.unwrap_or(true) {
+            Abi::select(binary.arch, binary.format, big_endian, Convention::Default).ok()
+        } else {
+            None
+        };
+        if stub_abi.is_some() {
+            let base = ram.free_range(&bases, HEAP_BYTES).ok_or_else(|| invalid("no free range for the heap"))?;
+            ram.heap = Some(Heap::new(base));
+        }
         let sentinel_candidates: Vec<u64> = if width >= 8 {
             vec![0xffff_ffff_ffff_ff00, 0x7fff_ffff_ff00, 0x0fff_ffff_ff00]
         } else {
@@ -781,6 +929,7 @@ impl Project {
             Link::Register(_) => (aligned, aligned + abi.stack_arguments),
         };
         let mut placements = Vec::new();
+        let mut probed_arguments = Vec::new();
         let mut buffer_index = 0usize;
         let mut buffers = Vec::new();
         for (index, ((argument, place), &bytes)) in prepared.iter().zip(&places).zip(&widths).enumerate() {
@@ -835,6 +984,7 @@ impl Project {
                     format!("stack+{:#x}", address - sp)
                 }
             };
+            probed_arguments.push((format!("argument {index}"), value));
             placements.push(ArgumentPlacement { index, location, hex: format!("{value:#x}"), buffer });
         }
         run.set_register(abi.stack_pointer, u128::from(sp))?;
@@ -862,6 +1012,13 @@ impl Project {
         {
             let _ = run.machine.write_int(&varnode(storage), u128::from(thread_base + THREAD_BYTES / 2));
         }
+        if replay.is_some() {
+            for name in FRAME_POINTERS {
+                if let Some(storage) = run.decoder.register(name).filter(|storage| storage.size == width) {
+                    let _ = run.machine.write_int(&varnode(storage), u128::from(sp + 0x400));
+                }
+            }
+        }
 
         // Interpret.
         let mut pc = entry;
@@ -869,23 +1026,63 @@ impl Project {
         let mut calls: Vec<(u64, u64)> = Vec::new();
         let mut call_index: HashMap<u64, usize> = HashMap::new();
         let mut last_text = None;
+        let mut stubbed: Vec<(String, u64)> = Vec::new();
+        let mut skipped: Vec<(String, u64)> = Vec::new();
+        let mut replay_return = None;
+        let mut replay_arguments = None;
         let (stop, detail) = loop {
             if pc == sentinel {
                 break (StopReason::Returned, "the function returned".to_owned());
             }
-            if let Some(name) = run.machine.ram.stand_in(pc) {
+            if replay_return == Some(pc) {
+                break (StopReason::Returned, "the replayed call returned".to_owned());
+            }
+            let stand_in = run.machine.ram.stand_in(pc).cloned();
+            let stub = stand_in.as_deref().filter(|_| stub_abi.is_some()).and_then(stubs::lookup);
+            // Replaying a caller, imports before the replayed call that have no model return 0.
+            let skip = stub.is_none() && replay.is_some() && replay_return.is_none();
+            if let Some(name) = &stand_in
+                && stub.is_none()
+                && !skip
+            {
                 break (StopReason::ExternalCall, format!("call to imported function {name}, outside the image"));
             }
             if steps >= max_steps {
                 break (StopReason::StepLimit, format!("stopped after {max_steps} instructions (max_steps)"));
             }
-            if steps.is_multiple_of(4096) && Instant::now() >= deadline {
+            if (stand_in.is_some() || steps.is_multiple_of(4096)) && Instant::now() >= deadline {
                 break (StopReason::Timeout, format!("stopped after {timeout_ms} ms (timeout_ms)"));
+            }
+            if let Some(name) = &stand_in {
+                let budget = (max_steps - steps).saturating_mul(BYTES_PER_STEP);
+                match run.call_import(stub, stub_abi.as_ref().unwrap_or(&abi), name, budget) {
+                    Ok((target, cost)) => {
+                        let rows = if stub.is_some() { &mut stubbed } else { &mut skipped };
+                        match rows.iter_mut().find(|(seen, _)| seen == name) {
+                            Some(row) => row.1 += 1,
+                            None => rows.push((name.clone(), 1)),
+                        }
+                        steps = steps.saturating_add(cost);
+                        pc = target;
+                        continue;
+                    }
+                    Err(stop) => {
+                        steps += 1;
+                        break stop;
+                    }
+                }
             }
             let decoded = match run.decode(pc) {
                 Ok(decoded) => decoded,
                 Err(stop) => break stop,
             };
+            if let Some((_, call)) = replay
+                && call == pc
+                && replay_return.is_none()
+            {
+                replay_return = Some(pc.wrapping_add(decoded.extent));
+                replay_arguments = run.arguments(&abi, REPLAY_ARGUMENTS, false).ok();
+            }
             last_text = Some(decoded.text.clone());
             if let Some(storage) = run.mode_switch {
                 let _ = run.machine.write_int(&varnode(storage), u128::from(run.thumb));
@@ -912,7 +1109,7 @@ impl Project {
                 }
                 Err(fault) => {
                     steps += 1;
-                    break run.fault(fault);
+                    break fault_stop(fault);
                 }
             }
             if std::mem::take(&mut run.machine.ram.code_written) {
@@ -970,6 +1167,28 @@ impl Project {
                 }
             })
             .collect();
+        skipped.truncate(MAX_CALL_ROWS);
+        let mut probed = Probed { arguments: replay_arguments, texts: Vec::new(), skipped };
+        if probe.is_some() && stop == StopReason::Returned {
+            let mut pointers = match &probed.arguments {
+                Some(arguments) => arguments.clone(),
+                None if replay.is_some() => Vec::new(),
+                None => probed_arguments,
+            };
+            if let Ok(value) = run.get_register(abi.result.0) {
+                pointers.insert(0, ("result".to_owned(), value as u64 & width_mask(width)));
+            }
+            for (source, address) in pointers {
+                if probed.texts.iter().any(|text| text.address == address) {
+                    continue;
+                }
+                if let Some(text) = self.probed_text(&mut run.machine.ram, address) {
+                    probed.texts.push(ProbedText { source, address, text });
+                }
+            }
+        }
+        let stubbed_omitted = stubbed.len().saturating_sub(MAX_CALL_ROWS);
+        let stubbed = stubbed.into_iter().take(MAX_CALL_ROWS).map(|(name, count)| StubRow { name, count }).collect();
         let calls_omitted = calls.len().saturating_sub(MAX_CALL_ROWS);
         let calls = calls
             .into_iter()
@@ -980,7 +1199,7 @@ impl Project {
                 count,
             })
             .collect();
-        Ok(EvaluateReport {
+        let report = EvaluateReport {
             function: entry,
             name: self.name_at(entry),
             convention: abi.name(),
@@ -993,10 +1212,38 @@ impl Project {
             buffers,
             calls,
             calls_omitted,
+            stubbed,
+            stubbed_omitted,
             max_steps,
             timeout_ms,
-        })
+        };
+        Ok((report, probed))
     }
+
+    /// The printable NUL-terminated string at `address` after a run, unless the file holds the same bytes there.
+    fn probed_text(&self, ram: &mut ImageRam<'_>, address: u64) -> Option<String> {
+        let mut bytes = Vec::new();
+        while bytes.len() < PROBED_TEXT_BYTES {
+            let mut byte = [0u8];
+            ram.read(address.wrapping_add(bytes.len() as u64), &mut byte).ok()?;
+            if byte[0] == 0 {
+                break;
+            }
+            bytes.push(byte[0]);
+        }
+        let printable = |byte: &u8| byte.is_ascii_graphic() || matches!(byte, b' ' | b'\t' | b'\n' | b'\r');
+        if bytes.len() < MIN_PROBED_TEXT || !bytes.iter().all(printable) {
+            return None;
+        }
+        let unchanged = self.binary.read_to_segment_end(address).is_some_and(|file| {
+            file.get(..bytes.len()) == Some(&bytes[..]) && file.get(bytes.len()).is_none_or(|&byte| byte == 0)
+        });
+        (!unchanged).then(|| String::from_utf8_lossy(&bytes).into_owned())
+    }
+}
+
+fn width_mask(width: u32) -> u64 {
+    if width >= 8 { u64::MAX } else { (1u64 << (width * 8)) - 1 }
 }
 
 /// User operations without effect on a single thread's results.
