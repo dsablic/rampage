@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use rampage_eval::agent_bench::{FailureKind, NeutralSuite, RunnerResult, score, score_with_artifact};
+use rampage_eval::agent_bench::{
+    FailureKind, NeutralSuite, RunnerResult, contamination, mark_contaminated, score, score_with_artifact,
+};
 use rampage_eval::parity_tasks::{ParityTask, TaskKind, TaskOutcome, load_tasks};
 use serde_json::{Value, json};
 
@@ -101,6 +103,9 @@ fn suite_v4_covers_its_manifests_with_categories_scoring_and_neutral_prompts() {
         for (_, path) in &companions {
             assert!(prompt.contains(&format!("\"{path}\"")), "{}", task.id);
         }
+        // A prompt never trips the contamination screen by itself.
+        let line = json!({"type": "user", "message": {"content": prompt}}).to_string();
+        assert_eq!(contamination(&line, &root()), None, "{}", task.id);
         if let Some(output) = &neutral.output {
             assert!(prompt.contains(&format!("\"/tmp/work/{}\"", output.name)), "{}", task.id);
             assert_eq!(category, "patching", "{}", task.id);
@@ -155,6 +160,37 @@ fn suite_v4_checkers_accept_correct_and_reject_incorrect_replies() {
             assert_ne!(row(text).outcome, TaskOutcome::AnswerMatches, "{}: {text}", task.id);
         }
     }
+}
+
+#[test]
+fn runs_that_reach_the_suites_own_files_are_scored_wrong() {
+    let (suite, tasks) = suite_v4();
+    let root = root();
+    let call = |path: String| {
+        json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "disassemble",
+               "input": {"path": path}}]}})
+        .to_string()
+    };
+    let workdir = "/private/var/tmp/agent-bench-1-0/fixture.bin".to_owned();
+    assert_eq!(contamination(&call(workdir), &root), None);
+    for path in [
+        root.join("tests/fixtures/bench-v4/twins/emulate-thumb.elf").to_string_lossy().into_owned(),
+        "../../tests/fixtures/bench-v4/truth/patch-export-bin-cm4-raw.bin".to_owned(),
+        "/x/tools/agent-bench/v4/derive-truth.py".to_owned(),
+        root.join("README.md").to_string_lossy().into_owned(),
+    ] {
+        assert!(contamination(&call(path.clone()), &root).is_some(), "{path}");
+    }
+    // The client's own setup lines (the configured server's path) are not the agent's doing.
+    let setup = json!({"type": "system", "subtype": "init", "cwd": root.join("x")}).to_string();
+    assert_eq!(contamination(&setup, &root), None);
+
+    let task = tasks.iter().find(|task| task.id == "emulate-control-thumb-elf").unwrap();
+    let mut row = score(task, &suite, "rea", 1, 0, &reply(r#"{"result": 2568817383}"#)).unwrap();
+    assert_eq!(row.outcome, TaskOutcome::AnswerMatches);
+    mark_contaminated(&mut row, "transcript line 3 mentions \"twins\"".into());
+    assert_eq!((row.outcome, row.failure), (TaskOutcome::AnswerMismatch, Some(FailureKind::Contaminated)));
+    assert!(!row.lenient && row.contamination.is_some());
 }
 
 #[test]
@@ -219,6 +255,17 @@ fn suite_v4_image_checks_accept_a_real_export_and_reject_near_misses() {
     // The termination record missing.
     let open = write("open.srec", lines[..lines.len() - 1].join("\n"));
     assert!(srec.check(&root, &open).unwrap_err().contains("termination"));
+    // A non-ASCII character in a record (where its type digit goes) is a wrong file, not a scorer panic.
+    let mut accented = lines.iter().map(|line| (*line).to_owned()).collect::<Vec<_>>();
+    accented[5].replace_range(1..2, "\u{e9}");
+    assert!(srec.check(&root, &write("accented.srec", accented.join("\n"))).unwrap_err().contains("ASCII"));
+    // A symbolic link to the expected file is not a file the agent wrote.
+    #[cfg(unix)]
+    {
+        let link = scratch.join("linked.srec");
+        std::os::unix::fs::symlink(cases.join("srec-exported-correct.srec"), &link).unwrap();
+        assert!(srec.check(&root, &link).unwrap_err().contains("not a regular file"));
+    }
     // A flat image one byte short, and one byte long.
     let expected = std::fs::read(root.join(&binary.expected)).unwrap();
     let short = write("short.bin", String::new());

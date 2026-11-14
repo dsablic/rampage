@@ -189,6 +189,16 @@ checker defined before any run, no task that only rampage's documentation makes 
 - **General command runner (confirm).** `patch-export-srec-cm4-srec` is the one task whose only REA route found is
   Rizin's shell escape (to encode S-records). That is part of REA's advertised catalog and v3 counted it; the view
   `without_general_runner` scores the suite without that task, so the call can go either way after the run.
+- **The suite's own files stay out of reach, and a run that reaches them fails.** The truth export images
+  (`tests/fixtures/bench-v4/truth/*.bin`), the unstripped twins, the sources and `derive-truth.py` live in the
+  repository, and both servers can open any path (rampage's `path`, REA's Rizin shell escape). The runner already
+  stages only the task's input file and companions, copied into a private `0700` directory under the system temp
+  directory, outside the repository, and names only those paths in the prompt; it does not sandbox the servers.
+  So every scored run's transcript (tool calls, tool results and the agent's text; not the client's setup lines)
+  is screened: a mention of `bench-v4/`, `/twins/`, `truth/`, `derive-truth` or the repository root scores the run
+  wrong with failure `contaminated` and the line it was found on, whatever it answered, on rescores too. The
+  export check refuses a symbolic link in place of the written file, and `--rescore` checks the saved copy of the
+  file again against the current truth.
 - **No rampage-only rows in the head-to-head.** No v4 task lacks an REA route, so all 20 are scored head-to-head.
 - **`debug_snapshot raw: true` is left out of v4.** A flash dump needs a live target: the harness would have to
   start an emulated board (QEMU with a GDB stub) per run, which it has no lifecycle for, and REA's GDB sessions are

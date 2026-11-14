@@ -564,7 +564,7 @@ fn run_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
     let result: RunnerResult =
         serde_json::from_str(&text).map_err(|error| format!("{}: {error}", result_path.display()))?;
     let artifact = check_output(setup, &target, &run_dir)?;
-    score_with_artifact(
+    let row = score_with_artifact(
         setup.task,
         setup.suite,
         setup.server,
@@ -572,7 +572,18 @@ fn run_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
         setup.position,
         &result,
         artifact.as_ref(),
-    )
+    )?;
+    screened(setup, &run_dir, row)
+}
+
+/// The row, scored wrong when its transcript reached the suite's own files or the repository.
+fn screened(setup: &RunSetup<'_>, run_dir: &Path, mut row: RunRow) -> Result<RunRow, String> {
+    let path = run_dir.join("transcript.jsonl");
+    let transcript = read(&path).unwrap_or_default();
+    if let Some(reason) = rampage_eval::agent_bench::contamination(&transcript, setup.root) {
+        rampage_eval::agent_bench::mark_contaminated(&mut row, reason);
+    }
+    Ok(row)
 }
 
 /// For a task that asks for a file: check what the run wrote beside the fixture, keep a private copy of it in the
@@ -582,7 +593,7 @@ fn check_output(setup: &RunSetup<'_>, target: &Path, run_dir: &Path) -> Result<O
     let Some(output) = &setup.suite.tasks[&setup.task.id].output else { return Ok(None) };
     let produced = target.with_file_name(&output.name);
     let verdict = output.check(setup.root, &produced);
-    if let Ok(metadata) = std::fs::metadata(&produced)
+    if let Ok(metadata) = std::fs::symlink_metadata(&produced)
         && metadata.is_file()
         && metadata.len() <= rampage_eval::agent_bench_artifact::MAX_OUTPUT_BYTES
     {
@@ -594,10 +605,16 @@ fn check_output(setup: &RunSetup<'_>, target: &Path, run_dir: &Path) -> Result<O
     Ok(Some(verdict))
 }
 
-/// The verdict `check_output` recorded for a run, for a rescore.
+/// The verdict for a run's file, for a rescore: its saved copy checked again against the current truth, or, when no
+/// copy was saved (nothing was written, or it was too large or not a regular file), the verdict recorded then.
 fn recorded_output(setup: &RunSetup<'_>, run_dir: &Path) -> Result<Option<Result<(), String>>, String> {
-    if setup.suite.tasks[&setup.task.id].output.is_none() {
-        return Ok(None);
+    let Some(output) = &setup.suite.tasks[&setup.task.id].output else { return Ok(None) };
+    let copy = run_dir.join(format!("output-{}", output.name));
+    if std::fs::symlink_metadata(&copy).is_ok_and(|metadata| metadata.is_file()) {
+        let verdict = output.check(setup.root, &copy);
+        let record = json!({"ok": verdict.is_ok(), "reason": verdict.as_ref().err(), "rechecked": true});
+        write_private(&run_dir.join("artifact.json"), record.to_string().as_bytes())?;
+        return Ok(Some(verdict));
     }
     let path = run_dir.join("artifact.json");
     let record: Value = serde_json::from_str(&read(&path)?).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -636,7 +653,7 @@ fn rescore_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
     let result: RunnerResult =
         serde_json::from_str(&text).map_err(|error| format!("{}: {error}", result_path.display()))?;
     let artifact = recorded_output(setup, &run_dir)?;
-    score_with_artifact(
+    let row = score_with_artifact(
         setup.task,
         setup.suite,
         setup.server,
@@ -644,7 +661,8 @@ fn rescore_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
         setup.position,
         &result,
         artifact.as_ref(),
-    )
+    )?;
+    screened(setup, &run_dir, row)
 }
 
 /// A fresh private directory outside the repository, so no project file or other run's output is visible.

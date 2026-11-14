@@ -310,6 +310,9 @@ pub enum FailureKind {
     WrongAnswer,
     /// The answer matched, but the file the task asked for was missing or did not encode the expected image.
     WrongArtifact,
+    /// The run reached the suite's own files (truth images, unstripped twins, sources, the truth script) or the
+    /// repository holding them: whatever it answered is scored wrong.
+    Contaminated,
 }
 
 /// How the final answer's JSON object was found. Only `Exact` follows the prompt to the letter; every kind is
@@ -426,6 +429,45 @@ pub struct RunRow {
     /// Tasks with an output file only: `ok`, or why the written file failed the check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<String>,
+    /// What in the transcript reached the suite's own files, for a run scored [`FailureKind::Contaminated`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contamination: Option<String>,
+}
+
+/// Path fragments a run must never mention: suite v4's truth images, unstripped twins, sources and truth script
+/// (all inside the repository), and the repository itself. The runner stages only the task's files, in a private
+/// directory outside the repository, so a mention means the agent went looking for them.
+const CONTAMINATION_MARKERS: [&str; 4] = ["bench-v4/", "/twins/", "truth/", "derive-truth"];
+
+/// Where a recorded transcript (the runner's stream-JSON lines) reaches the suite's own files or `root`, the
+/// repository: tool calls, tool results and the agent's text. The client's own setup lines are left out.
+pub fn contamination(transcript: &str, root: &std::path::Path) -> Option<String> {
+    let root = root.to_string_lossy();
+    let root = root.trim_end_matches('/');
+    let markers = CONTAMINATION_MARKERS.iter().copied().chain((root.len() > 1).then_some(root));
+    let markers: Vec<&str> = markers.collect();
+    for (number, line) in transcript.lines().enumerate() {
+        let Ok(event) = serde_json::from_str::<Value>(line) else { continue };
+        if event.get("type").and_then(Value::as_str) == Some("system") {
+            continue;
+        }
+        let text = event.to_string();
+        if let Some(marker) = markers.iter().find(|marker| text.contains(**marker)) {
+            return Some(format!("transcript line {} mentions {marker:?}", number + 1));
+        }
+    }
+    None
+}
+
+/// Scores a row whose run reached the suite's own files as wrong, keeping why.
+pub fn mark_contaminated(row: &mut RunRow, reason: String) {
+    row.outcome = TaskOutcome::AnswerMismatch;
+    row.failure = Some(FailureKind::Contaminated);
+    row.lenient = false;
+    if row.partial.is_some() {
+        row.partial = Some(0.0);
+    }
+    row.contamination = Some(bounded(&reason, 300));
 }
 
 pub fn score(
@@ -517,6 +559,7 @@ pub fn score_with_artifact(
             Ok(()) => "ok".to_owned(),
             Err(reason) => bounded(reason, 300),
         }),
+        contamination: None,
     })
 }
 

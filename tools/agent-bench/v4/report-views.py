@@ -15,10 +15,11 @@ Views:
   its v3 headline result, per server.
 - without_general_runner: every task except patch-export-srec-cm4-srec, the one task whose REA route found before
   the run needs a general command runner (Rizin's shell escape) to write the file; see the plan's fairness notes.
-- known_rampage_gaps: the six tasks where validation found rampage's scripted tool route short of the truth
-  (tools/agent-bench/v4/validate-rampage.py GAPS), and the other ten, scored apart, so a fix made before the run
-  is visible in both.
+- known_rampage_gaps: the six tasks where validation found rampage's scripted tool route short of the truth (four
+  were fixed before any run, which the report must disclose; validate-rampage.py GAPS keeps the two still open),
+  and the other ten, scored apart, so the fixes are visible in both.
 - artifacts: per server, export runs whose file failed while the answer passed.
+- contaminated_runs: runs scored wrong because their transcript reached the suite's own files or the repository.
 - timing: per server and category, agent wall time (median and range), apart from accuracy.
 
 Usage: python3 -I tools/agent-bench/v4/report-views.py REPORT.json OUT.json [V3_REPORT.json]
@@ -90,6 +91,9 @@ def main() -> None:
         "known_rampage_gaps": score([row for row in headline if row["task_id"] in KNOWN_GAPS], True),
         "outside_known_gaps": score([row for row in headline if row["task_id"] not in KNOWN_GAPS], True),
         "artifacts": artifacts(headline),
+        # Runs whose transcript reached the suite's own files (truth, twins, sources) or the repository; scored wrong.
+        "contaminated_runs": sorted(f"{row['task_id']}:{row['server']}:{row['repetition']}: {row.get('contamination')}"
+                                    for row in headline if row.get("failure") == "contaminated"),
         "headline_runs": sorted(f"{row['task_id']}:{row['server']}:{row['repetition']}:{row['outcome']}"
                                 for row in headline),
         "timing": timing(headline),
