@@ -828,7 +828,7 @@ fn sleigh_file_schema() -> Value {
 
 /// Project tools that serve a Raw Project opened with [`crate::Session::open_raw`]: each returns a result or an
 /// explicit typed refusal on Raw input. Clients offer the `raw` selector only on these.
-pub const RAW_CAPABLE_TOOLS: [&str; 25] = [
+pub const RAW_CAPABLE_TOOLS: [&str; 26] = [
     "binary_info",
     "list_functions",
     "disassemble",
@@ -845,6 +845,7 @@ pub const RAW_CAPABLE_TOOLS: [&str; 25] = [
     "undo",
     "redo",
     "decompile",
+    "evaluate_function",
     "import_svd",
     "peripheral_access",
     "list_patches",

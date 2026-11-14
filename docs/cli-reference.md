@@ -277,7 +277,8 @@ rampage --raw-json '{"profile":"cortex-m3","format":"srec"}' function list tests
 
 The two options exclude each other, `--arch` and `--image-*`. They apply only to `binary inspect`, `binary audit`,
 `binary capabilities`, `binary search`, `function list`, `function disassemble`, `function graph`,
-`function xrefs`, `function decompile` and `function identify` (without `--apply`); other commands refuse them.
+`function xrefs`, `function decompile`, `function evaluate` and `function identify` (without `--apply`); other
+commands refuse them.
 Raw annotations are memory-only and never written beside the source, so every annotation command is refused here:
 each CLI run would discard edits and could only ever list nothing.
 

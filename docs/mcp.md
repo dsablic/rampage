@@ -468,10 +468,12 @@ Errors start with a code: `unknown_session`, `endpoint_not_allowed`, `session_li
 
 Raw-capable tools (`binary_info`, `list_functions`, `disassemble`, `function_graph`, `xrefs`, `search`,
 `analysis_diagnostics`, `entry_diagnostics`, `capabilities`, `rename`, `set_comment`, `annotate_batch`,
-`list_annotations`, `undo`, `redo`, `decompile`, `import_svd`, `peripheral_access`, `list_patches`, `patch_bytes`,
-`revert_patch`, `integrity_checks`, `export_image`, `identify_functions`, `lock_mechanisms`) take an optional `raw`
-object in place
-of a native image:
+`list_annotations`, `undo`, `redo`, `decompile`, `evaluate_function`, `import_svd`, `peripheral_access`,
+`list_patches`, `patch_bytes`, `revert_patch`, `integrity_checks`, `export_image`, `identify_functions`,
+`lock_mechanisms`) take an optional `raw` object in place of a native image. `evaluate_function` runs a Raw
+project's code when the interpreter supports its processor (the Cortex-M profiles among them); others, such as
+MSP430, are refused with the reason. Only the selected bytes are mapped (RAM and peripherals are not): `memory`
+changes image bytes, `mmio` maps a page for each value it sets, and imported SVD register names work in `mmio`:
 
 ```json
 {

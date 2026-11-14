@@ -14,6 +14,9 @@ see the [stability policy](docs/stability.md) for what the version promises.
   routines and their callers form as immediates, and a dropped nested value is kept when the image's own routine
   computes it. `fix` writes inner values first and never writes an outer value over a stale inner one it knows of:
   that write is reported as `blocked`, naming the value; a CRC routine with no matching check is named in `notes`.
+- `evaluate_function` (and `function evaluate`) accepts a Raw project's `raw` selector, so a firmware image's own
+  routines (a checksum, a decoder) can be run; processors the interpreter does not support, such as MSP430, are
+  refused with the reason. `mmio`, with imported SVD register names, works as on an ELF image.
 
 ## 1.3.0 (2026-11-14)
 

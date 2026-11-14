@@ -136,7 +136,8 @@ views report them apart (`known_rampage_gaps`).
    correct CRC-16 patched in by hand, the rest of the route (`integrity_checks fix`, `export_image` to S-records)
    produces exactly the expected image; that export is the checker's test file. **Fixed after the suite found it** (Unreleased):
    `integrity_checks` now finds the nested CRC-16 (table address formed by `movw`/`movt`, range and stored value
-   passed as immediates) and fixes it before the CRC-32; all three patching routes reach the truth.
+   passed as immediates) and fixes it before the CRC-32; all three patching routes reach the truth. `evaluate_function`
+   now also accepts Raw projects (Unreleased), so the image's CRC-16 routine can be run directly.
 3. **Embedded signatures name 4 of the 10 asked library functions** (`libid-names-m0-elf`: strlen, strcmp,
    strchr, not strncpy or qsort; `libid-names-m0-raw`: `__udivsi3`, not memset, memmove, malloc or strtol). That
    matches the published 31% recall on this held-out fixture; the rest must be recognised from their code.

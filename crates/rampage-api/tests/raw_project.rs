@@ -262,6 +262,7 @@ fn every_raw_capable_tool_answers_on_a_reviewed_msp430_project() {
         ("undo", json!({})),
         ("redo", json!({})),
         ("decompile", json!({ "at": "0x4400" })),
+        ("evaluate_function", json!({ "at": "0x4410" })),
         ("import_svd", json!({ "svd": svd("edge-cases.svd"), "apply": true })),
         ("peripheral_access", json!({ "peripheral": "CTRL" })),
         ("list_patches", json!({})),
@@ -279,6 +280,11 @@ fn every_raw_capable_tool_answers_on_a_reviewed_msp430_project() {
         assert!(raw_capable(name));
         let input = reviewed_input(&project, name, 0x4404, &MSP430[4..6], &export).unwrap_or(input);
         let (text, failed) = call_shared(&registry, &mut project, name, input);
+        if name == "evaluate_function" {
+            // The interpreter has no MSP430 semantics: an explicit refusal naming the processor.
+            assert!(failed && text.contains("Msp430"), "{text}");
+            continue;
+        }
         assert!(!failed, "{name}: {text}");
         serde_json::from_str::<Value>(&text).unwrap_or_else(|error| panic!("{name}: {error}: {text}"));
         outcomes.push((name, text));
@@ -422,6 +428,10 @@ fn cortex_m_raw_projects_serve_every_raw_capable_tool_with_native_evidence() {
         ("undo", json!({})),
         ("redo", json!({})),
         ("decompile", json!({ "at": reset })),
+        (
+            "evaluate_function",
+            json!({ "at": format!("{:#x}", truth("checksum")), "args": [format!("{:#x}", truth("BANNER")), 27] }),
+        ),
         ("import_svd", json!({ "svd": svd("ARM_Example.svd"), "apply": true })),
         ("peripheral_access", json!({})),
         ("list_patches", json!({})),
@@ -454,6 +464,20 @@ fn cortex_m_raw_projects_serve_every_raw_capable_tool_with_native_evidence() {
     // ARM v8 Thumb with its reviewed C model decompiles the reset handler and names the analyst's callee.
     let decompiled = outcome("decompile");
     assert!(decompiled.contains("uart_puts(") && decompiled.contains("while"), "{decompiled}");
+    // The image's own checksum routine runs over its banner string.
+    let banner = b"rampage cortex-m fixture v1";
+    let expected = banner.iter().fold(0x811c_9dc5u32, |sum, &byte| (sum ^ u32::from(byte)).wrapping_mul(0x0100_0193));
+    let evaluated: Value = serde_json::from_str(outcome("evaluate_function")).unwrap();
+    assert_eq!(evaluated["stop"], "returned", "{evaluated}");
+    assert_eq!(evaluated["result"]["hex"], format!("{expected:#010x}"), "{evaluated}");
+    // uart_putc polls the status register: it stops at the unmapped peripheral, and returns once mmio sets TXE.
+    let putc = format!("{:#x}", truth("uart_putc"));
+    let (text, failed) =
+        call_shared(&registry, &mut project, "evaluate_function", json!({ "at": putc, "args": [0x41] }));
+    assert!(!failed && text.contains("\"stop\":\"unmapped_read\""), "{text}");
+    let input = json!({ "at": putc, "args": [0x41], "mmio": [{ "at": "0x40011000", "value": "0x80" }] });
+    let (text, failed) = call_shared(&registry, &mut project, "evaluate_function", input);
+    assert!(!failed && text.contains("\"stop\":\"returned\""), "{text}");
     assert_eq!(std::fs::read(&export).unwrap(), CORTEX_M);
     assert_eq!(owned.names(), ["export.bin", "firmware.bin"]);
 }
