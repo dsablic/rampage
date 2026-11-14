@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Owned synthetic Cortex-M3 firmware for lock_mechanisms. It runs on the made-up device described by
  * tests/fixtures/svd/lock-device.svd and holds one example of each lock-mechanism category plus negative controls
- * (see truth.json): ordinary integrity checks, identity reads and crypto that gates nothing must not be reported as
- * locks. All keys are synthetic (test_keys.c and service_key below). */
+ * (see truth.json): ordinary integrity checks, identity reads, a fault handler's debugger check and crypto that
+ * gates nothing must not be reported as locks. All keys are synthetic (test_keys.c and service_key below). */
 #include "crypto.h"
 
 #define REG(address) (*(volatile uint32_t *)(address))
@@ -284,6 +284,15 @@ void maintenance_handler(void) {
     load_config();
 }
 
+/* Negative control: a fault handler that breaks into an attached debugger and otherwise resets. */
+void hardfault_handler(void) {
+    if (DHCSR & 1u) {
+        __asm__ volatile("bkpt #0");
+        return;
+    }
+    system_reset();
+}
+
 void reset_handler(void) {
     boot_main();
 }
@@ -295,7 +304,7 @@ void default_handler(void) {
 
 extern uint32_t __stack_top;
 __attribute__((section(".vectors"), used)) const void *const vectors[] = {
-    &__stack_top,     reset_handler,   default_handler, default_handler, default_handler,     default_handler,
+    &__stack_top,     reset_handler,   default_handler, hardfault_handler, default_handler,   default_handler,
     default_handler,  0,               0,               0,               0,                   default_handler,
     default_handler,  0,               default_handler, systick_handler, service_handler,     motor_handler,
     maintenance_handler,

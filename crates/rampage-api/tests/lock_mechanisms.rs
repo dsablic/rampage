@@ -54,6 +54,11 @@ fn hex(value: &Value) -> u64 {
     u64::from_str_radix(value.as_str().unwrap().trim_start_matches("0x"), 16).unwrap()
 }
 
+/// The address of a mechanism's decision, if it has one.
+fn decision_at(mechanism: &Value) -> Option<u64> {
+    mechanism["decision"]["at"].as_str().map(|_| hex(&mechanism["decision"]["at"]))
+}
+
 /// Every address a mechanism decides at: its decision and its inner decisions.
 fn decision_sites(mechanism: &Value) -> Vec<u64> {
     let mut sites: Vec<u64> =
@@ -83,26 +88,38 @@ fn score(report: &LockReport, truth: &Value, scores: &mut BTreeMap<String, Score
     for want in expected {
         let category = want["category"].as_str().unwrap();
         let function = want["function"].as_str().unwrap();
+        // The decision itself lies in the named function; a mechanism without a branch (protection configured
+        // by writes alone) matches by the function it was found in.
         let found = mechanisms.iter().enumerate().position(|(index, mechanism)| {
-            !matched[index]
-                && mechanism["category"] == category
-                && decision_sites(mechanism).iter().any(|&at| inside(&ranges, function, at))
+            let site = decision_at(mechanism)
+                .or_else(|| mechanism["related"][0]["at"].as_str().map(|_| hex(&mechanism["related"][0]["at"])));
+            !matched[index] && mechanism["category"] == category && site.is_some_and(|at| inside(&ranges, function, at))
         });
         let entry = scores.entry(category.to_owned()).or_default();
         match found {
             Some(index) => {
                 matched[index] = true;
                 entry.true_positives += 1;
-                if let Some(failure) = want["failure"].as_str() {
-                    let mechanism = &mechanisms[index];
-                    let path = mechanism["failure_path"].as_str().unwrap();
-                    let outcome =
-                        mechanism["outcomes"].as_array().unwrap().iter().find(|outcome| outcome["path"] == path);
-                    assert_eq!(
-                        outcome.map(|outcome| outcome["effect"].as_str().unwrap()),
-                        Some(failure),
-                        "{category} in {function}: {mechanism:#}"
-                    );
+                let mechanism = &mechanisms[index];
+                let failure = want["failure"].as_str().expect("every truth entry states the refusal's effect");
+                let path = mechanism["failure_path"].as_str().unwrap();
+                let effect = match path {
+                    "unknown" => Some("unknown"),
+                    _ => mechanism["outcomes"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|outcome| outcome["path"] == path)
+                        .map(|outcome| outcome["effect"].as_str().unwrap()),
+                };
+                assert_eq!(effect, Some(failure), "{category} in {function}: {mechanism:#}");
+                if let Some(inner) = want["inner"].as_str() {
+                    let folded = mechanism["related"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|row| row["role"] == "inner_decision" && inside(&ranges, inner, hex(&row["at"])));
+                    assert!(folded, "{category} in {function}: no inner decision in {inner}: {mechanism:#}");
                 }
             }
             None => {
@@ -140,6 +157,7 @@ fn fixtures_score_full_precision_and_recall_per_category() {
         serde_json::from_str(&std::fs::read_to_string(format!("{FIXTURES}firmware/locks/truth.json")).unwrap())
             .unwrap();
     let mut scores: BTreeMap<String, Score> = BTreeMap::new();
+    let mut checked = 0;
     for fixture in truth["fixtures"].as_array().unwrap() {
         let project = if fixture["svd"].is_string() {
             firmware(true)
@@ -147,9 +165,12 @@ fn fixtures_score_full_precision_and_recall_per_category() {
             Project::new(Binary::open(format!("{FIXTURES}firmware/{}", fixture["image"].as_str().unwrap())).unwrap())
         };
         let report = report(&project);
+        eprintln!("fixture {}", fixture["image"]);
         assert!(report.supported && !report.coverage.incomplete, "{:?}", report.coverage);
         score(&report, fixture, &mut scores);
+        checked += 1;
     }
+    assert_eq!(checked, 5);
     for (category, score) in &scores {
         let precision = score.true_positives as f64 / (score.true_positives + score.false_positives).max(1) as f64;
         let recall = score.true_positives as f64 / (score.true_positives + score.false_negatives).max(1) as f64;
@@ -186,11 +207,47 @@ fn explanations_name_what_is_checked_and_where_it_fails() {
     assert!(unlock.consults.iter().any(|row| row.kind == "mac_algorithm" && row.name.starts_with("HMAC")), "{json:#}");
     assert!(unlock.outcomes.iter().any(|outcome| outcome.effect == "writes"), "{json:#}");
     assert!(unlock.related.iter().any(|row| row.role == "flag_consumer"), "{json:#}");
-    // No suggestion to patch anything, anywhere.
+    // No suggestion to patch anything, and no route to the patch tools.
     let text = serde_json::to_string(&report).unwrap().to_lowercase();
-    for word in ["patch", "bypass", "nop", "disable the"] {
+    for word in ["patch", "bypass", "nop", "disable the", "integrity_checks", "export_image"] {
         assert!(!text.contains(word), "{word:?} in the report");
     }
+}
+
+/// Values the firmware writes or holds that could be key material never appear in a report: the option-byte unlock
+/// sequence it writes, and any word of the synthetic keys in its read-only data.
+#[test]
+fn reports_leak_no_key_values() {
+    let project = firmware(true);
+    let mut pages = Vec::new();
+    let all = report(&project);
+    pages.push(serde_json::to_string(&all).unwrap().to_lowercase());
+    for category in ["debug_lock", "challenge_response", "signature_verification"] {
+        let query = LockQuery { category: Some(category.into()), offset: 0, limit: 50 };
+        pages.push(serde_json::to_string(&project.lock_mechanisms(&query).unwrap()).unwrap().to_lowercase());
+    }
+    let text = pages.join("\n");
+    assert!(text.contains("flashc.optkeyr"), "the key register write is still explained");
+    for key in ["13572468", "24681357", "324478056", "610800471"] {
+        assert!(!text.contains(key), "{key} in the report");
+    }
+    // Every 32-bit word of the synthetic keys, in both byte orders, as hex and decimal.
+    let elf = Binary::open(format!("{FIXTURES}firmware/raw-cortex-m-locks.elf")).unwrap();
+    let mut words = 0;
+    for symbol in ["test_p256_public_key", "service_key"] {
+        let symbol = elf.symbol_by_name(symbol).unwrap();
+        let bytes = elf.read(symbol.address, symbol.size).unwrap();
+        for &chunk in bytes.as_chunks::<4>().0 {
+            for word in [u32::from_le_bytes(chunk), u32::from_be_bytes(chunk)] {
+                if word > 0xffff {
+                    words += 1;
+                    assert!(!text.contains(&format!("{word:x}")), "{word:#x} of a key in the report");
+                    assert!(!text.contains(&word.to_string()), "{word} of a key in the report");
+                }
+            }
+        }
+    }
+    assert!(words >= 24, "{words}");
 }
 
 #[test]
@@ -202,6 +259,8 @@ fn without_an_svd_register_roles_are_unknown() {
         categories.contains(&"debug_lock"),
         "the architectural debug status is named without a map: {categories:?}"
     );
+    // The fault handler's debugger check is not a lock with or without the map.
+    assert!(report.not_locks.iter().any(|row| row.kind == "debugger_presence_check"), "{:?}", report.not_locks);
     for unknown in ["device_binding", "anti_rollback", "feature_lock", "challenge_response"] {
         assert!(!categories.contains(&unknown), "{unknown} without register names: {categories:?}");
     }
@@ -256,4 +315,47 @@ fn ordinary_programs_report_no_locks() {
         checked += 1;
     }
     assert_eq!(checked, 19);
+}
+
+/// A measurement probe for binaries outside the repository: `LOCK_PROBE=/usr/bin/ssh:/usr/bin/curl cargo nextest
+/// run -p rampage-api --run-ignored only -E 'test(/lock_mechanisms::probe/)' --no-capture`. Universal Mach-O files
+/// are read as their arm64 slice.
+#[test]
+#[ignore = "reads binaries named in LOCK_PROBE"]
+fn probe() {
+    let paths = std::env::var("LOCK_PROBE").unwrap_or_default();
+    for path in paths.split(':').filter(|path| !path.is_empty()) {
+        let binary = Binary::open(path)
+            .or_else(|_| Binary::open_with(path, Some(rampage_arch::Arch::Aarch64)))
+            .or_else(|_| Binary::open_with(path, Some(rampage_arch::Arch::X86_64)));
+        let Ok(binary) = binary else {
+            eprintln!("PROBE {path}: cannot open");
+            continue;
+        };
+        let start = std::time::Instant::now();
+        let project = Project::new(binary);
+        let report = report(&project);
+        let mut all = report.mechanisms.clone();
+        while all.len() < report.total {
+            let query = LockQuery { category: None, offset: all.len(), limit: 50 };
+            all.extend(project.lock_mechanisms(&query).unwrap().mechanisms);
+        }
+        let mut categories: BTreeMap<&str, usize> = BTreeMap::new();
+        for mechanism in &all {
+            *categories.entry(mechanism.category).or_default() += 1;
+        }
+        eprintln!(
+            "PROBE {path}: {} mechanisms {categories:?}, {} not locks, {} functions, incomplete {} ({:?})",
+            report.total,
+            report.not_locks_total,
+            report.coverage.functions_analyzed,
+            report.coverage.incomplete,
+            start.elapsed()
+        );
+        if std::env::var("LOCK_PROBE_VERBOSE").is_ok() {
+            for mechanism in &all {
+                eprintln!("   {} {} {}", mechanism.category, mechanism.confidence, mechanism.summary);
+            }
+        }
+    }
 }

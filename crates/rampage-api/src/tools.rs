@@ -2811,10 +2811,9 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Detection,
             "lock_mechanisms",
-            "Explain mechanisms that can make a device refuse a repair (experimental): signature/MAC checks, \
-             challenge-response unlocks, chip-ID binding, anti-rollback counters, debug/readout protection, fuse \
-             feature locks. Each: what is checked, data consulted, decision site, what each path does, evidence, \
-             confidence; plus checks that are not locks. Register roles need import_svd. Paginated.",
+            "Explain what can make a device refuse a repair (experimental): signature/MAC checks, challenge-response, \
+             chip-ID binding, anti-rollback, debug/readout and fuse locks, each with what is checked, the data \
+             consulted, the decision site and each path's effect (register roles need import_svd).",
             |project, args: LockMechanismsArgs| {
                 project.lock_mechanisms(&crate::LockQuery {
                     category: args.category,

@@ -197,6 +197,11 @@ const STOP_APIS: &[(&str, &str)] = &[
     ("abort", "exit"),
     ("__assert_fail", "exit"),
     ("panic", "halt"),
+    // Stack-protector and fortify failures end the program, but they report memory corruption, not a check's
+    // verdict.
+    ("stack_chk_fail", "ignore"),
+    ("chk_fail", "ignore"),
+    ("fortify_fail", "ignore"),
 ];
 
 pub(super) fn signature_api(name: &str) -> Option<&'static str> {
@@ -213,4 +218,9 @@ pub(super) fn random_api(name: &str) -> Option<&'static str> {
 
 pub(super) fn stop_api(name: &str) -> Option<&'static str> {
     match_api(STOP_APIS, name)
+}
+
+/// Whether `name` is a library name from the API tables (a label known by a function's name, not by a constant).
+pub(super) fn is_library(name: &str) -> bool {
+    SIGNATURE_APIS.iter().chain(MAC_APIS).any(|(_, library)| *library == name)
 }

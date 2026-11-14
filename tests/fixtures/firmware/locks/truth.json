@@ -1,39 +1,67 @@
 {
-  "description": "Lock mechanisms the fixtures in this directory contain, by the function whose code makes the decision (a reported decision or inner decision inside that function's symbol range matches), and negative controls in which no decision may be reported. Symbols come from the -sym/.elf builds; the analyzed images are the stripped or raw ones.",
+  "description": "Lock mechanisms the fixtures in this directory contain: the function whose branch is the reported decision (the decision address must lie in its symbol range), the function an inner decision is folded from where there is one, and the refusal's effect ('unknown' where the code does not show which side refuses). Negative controls are functions in which no decision may lie. Symbols come from the -sym/.elf builds; the analyzed images are the stripped or raw ones.",
   "fixtures": [
     {
       "image": "raw-cortex-m-locks.bin",
       "symbols": "raw-cortex-m-locks.elf",
       "svd": "lock-device.svd",
       "mechanisms": [
-        { "category": "signature_verification", "function": "boot_main", "failure": "reset" },
-        { "category": "anti_rollback", "function": "boot_main", "failure": "reset" },
+        { "category": "signature_verification", "function": "boot_main", "inner": "verify_application", "failure": "reset" },
+        { "category": "anti_rollback", "function": "boot_main", "inner": "version_allowed", "failure": "reset" },
         { "category": "debug_lock", "function": "boot_main", "failure": "halt" },
-        { "category": "debug_lock", "function": "apply_readout_protection" },
-        { "category": "device_binding", "function": "check_pairing" },
-        { "category": "feature_lock", "function": "power_limit_watts" },
-        { "category": "feature_lock", "function": "motor_handler" },
-        { "category": "challenge_response", "function": "service_unlock" }
+        { "category": "debug_lock", "function": "apply_readout_protection", "failure": "unknown" },
+        { "category": "device_binding", "function": "check_pairing", "inner": "paired_unit", "failure": "unknown" },
+        { "category": "feature_lock", "function": "power_limit_watts", "failure": "unknown" },
+        { "category": "feature_lock", "function": "motor_handler", "failure": "unknown" },
+        { "category": "challenge_response", "function": "service_unlock", "failure": "unknown" }
       ],
       "not_locks": [
         { "kind": "integrity_check", "function": "load_config" },
         { "kind": "identity_read", "function": "format_serial" },
-        { "kind": "crypto_without_decision", "function": "log_event" }
+        { "kind": "crypto_without_decision", "function": "log_event" },
+        { "kind": "debugger_presence_check", "function": "hardfault_handler" }
       ],
-      "negatives": ["load_config", "probe_sensor", "log_event", "format_serial", "core_is_m4", "systick_handler"]
+      "negatives": ["load_config", "probe_sensor", "log_event", "format_serial", "core_is_m4", "systick_handler", "hardfault_handler"]
     },
     {
       "image": "locks-x64.elf",
       "symbols": "locks-x64-sym.elf",
       "mechanisms": [
         { "category": "signature_verification", "function": "install_update", "failure": "exit" },
-        { "category": "challenge_response", "function": "enter_service_mode" }
+        { "category": "challenge_response", "function": "main", "inner": "enter_service_mode", "failure": "unknown" }
       ],
       "not_locks": [
         { "kind": "integrity_check", "function": "load_settings" },
         { "kind": "crypto_without_decision", "function": "log_digest" }
       ],
       "negatives": ["load_settings", "log_digest", "read_file"]
+    },
+    {
+      "image": "locks-x64-O0.elf",
+      "symbols": "locks-x64-O0-sym.elf",
+      "mechanisms": [
+        { "category": "signature_verification", "function": "install_update", "failure": "exit" },
+        { "category": "challenge_response", "function": "main", "inner": "enter_service_mode", "failure": "unknown" }
+      ],
+      "not_locks": [],
+      "negatives": ["load_settings", "log_digest", "read_file"]
+    },
+    {
+      "image": "locks-x64-noplt.elf",
+      "symbols": "locks-x64-noplt-sym.elf",
+      "mechanisms": [
+        { "category": "signature_verification", "function": "install_update", "failure": "exit" },
+        { "category": "challenge_response", "function": "main", "inner": "enter_service_mode", "failure": "unknown" }
+      ],
+      "not_locks": [],
+      "negatives": ["load_settings", "log_digest", "read_file"]
+    },
+    {
+      "image": "locks-negative-x64.elf",
+      "symbols": "locks-negative-x64-sym.elf",
+      "mechanisms": [],
+      "not_locks": [],
+      "negatives": ["handle_request", "main"]
     }
   ]
 }

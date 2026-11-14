@@ -21,8 +21,8 @@ Additions only; nothing in the stable surface changed.
   and readout protection and fuse feature locks. A p-code dataflow over the functions near crypto constants,
   library names and SVD-named registers finds the branch each decision is made at, what it consults and what each
   path does (reset, halt, error return, a flag written), with evidence and a confidence; CRC and unkeyed digest
-  checks, unused identity reads and crypto that decides nothing are listed as not locks. It explains only: no
-  patch suggestions, no key extraction. Accepts a Cortex-M Raw project's `raw` selector. `find_crypto` also
+  checks, unused identity reads, debugger presence checks and crypto that decides nothing are listed as not locks.
+  It explains only: no patch suggestions, no key extraction. Accepts a Cortex-M Raw project's `raw` selector. `find_crypto` also
   recognizes the PKCS#1 v1.5 DigestInfo prefixes for SHA-224/256/384/512. See
   [lock mechanisms](docs/lock-mechanisms.md).
 

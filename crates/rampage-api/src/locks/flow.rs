@@ -18,14 +18,20 @@ use rampage_analysis::discover::DiscoveredFunction;
 use rampage_decompiler::sleigh_decode::{DecodeStatus, PcodeOp, SleighDecoder, Varnode};
 use rampage_loaders::Binary;
 
-/// Sources tracked per function; later ones share the last bit.
+/// Sources tracked per function: the last bit is shared by every source past the others (an overflow source with
+/// no role, which marks the function's analysis incomplete).
 pub(super) const MAX_SOURCES: usize = 64;
 /// Bytes of a buffer a pointer argument is taken to cover (read from and written to by the callee).
 const BUFFER_SPAN: i64 = 64;
+/// Stack-passed argument slots tracked as the function's own arguments.
+const STACK_ARGUMENTS: usize = 4;
 /// Bytes past a base address an indexed access is taken to cover.
 const INDEX_SPAN: i64 = 256;
 /// Constants recorded per function (addresses it forms or loads), for crypto-table references.
 const MAX_CONSTANTS: usize = 1024;
+
+/// A varnode's identity: (space, offset, size), offset absent for a space selector.
+type Slot = (u32, Option<u64>, u32);
 
 /// A register or temporary: (space, offset, size).
 pub(super) type Key = (u32, u64, u32);
@@ -44,21 +50,26 @@ pub(super) enum Val {
 
 /// How a condition was formed, as bits.
 pub(super) mod flags {
-    pub const ZERO: u8 = 1;
-    pub const EQ_CONST: u8 = 2;
-    pub const EQ_VALUE: u8 = 4;
-    pub const ORDERED: u8 = 8;
-    pub const BIT: u8 = 16;
-    pub const SUB_CONST: u8 = 32;
-    pub const SUB_VALUE: u8 = 64;
-    pub const AND_CONST: u8 = 128;
+    pub const ZERO: u16 = 1;
+    pub const EQ_CONST: u16 = 2;
+    pub const EQ_VALUE: u16 = 4;
+    pub const ORDERED: u16 = 8;
+    pub const BIT: u16 = 16;
+    pub const SUB_CONST: u16 = 32;
+    pub const SUB_VALUE: u16 = 64;
+    pub const AND_CONST: u16 = 128;
+    /// A boolean that is true when the source value it tests is nonzero.
+    pub const WHEN_NONZERO: u16 = 256;
+    /// A boolean that is true when the source value it tests is zero.
+    pub const WHEN_ZERO: u16 = 512;
+    pub const POLARITY: u16 = WHEN_NONZERO | WHEN_ZERO;
 }
 
 /// The sources a value derives from (one bit per source) and how it was compared.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct Taint {
     pub mask: u64,
-    pub flags: u8,
+    pub flags: u16,
 }
 
 impl Taint {
@@ -76,6 +87,16 @@ impl Taint {
 
     pub fn bits(self) -> impl Iterator<Item = usize> {
         (0..MAX_SOURCES).filter(move |bit| self.mask & (1 << bit) != 0)
+    }
+
+    /// Whether the condition is true when its source is nonzero (`Some(true)`), when it is zero (`Some(false)`),
+    /// or unknown.
+    pub fn when_nonzero(self) -> Option<bool> {
+        match self.flags & flags::POLARITY {
+            flags::WHEN_NONZERO => Some(true),
+            flags::WHEN_ZERO => Some(false),
+            _ => None,
+        }
     }
 
     /// The comparison the flags describe, most specific first.
@@ -98,14 +119,18 @@ impl Taint {
 /// What a tainted value derives from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Source {
-    /// The result of a call (and what it writes through its pointer arguments); `None` when the target is unknown.
+    /// The result of a call; `None` when the target is unknown.
     Call(Option<u64>),
+    /// What a call writes through its pointer arguments.
+    Written(Option<u64>),
     /// A load from a constant address outside read-only image data, or an indexed load from a constant base.
     Load(u64),
     /// Memory a pointer argument with this constant address refers to, as passed to a call.
     Pointer(u64),
-    /// The function's own argument (by position).
+    /// The function's own argument (by position; register arguments first, then stack slots).
     Param(usize),
+    /// Every source past the first 63: no role.
+    Overflow,
 }
 
 /// A memory location tracked for taint: stack offsets and constant addresses, word aligned.
@@ -126,6 +151,9 @@ struct State {
     conditional_values: HashMap<Key, (u64, Val)>,
     /// The condition signature of the instruction being stepped, once its condition is known.
     condition: Option<u64>,
+    /// Registers whose known value was read from memory (a literal pool, read-only data), not formed from
+    /// instruction immediates: such values are never reported.
+    loaded: BTreeSet<Key>,
 }
 
 impl State {
@@ -158,7 +186,8 @@ impl State {
             let entry = memory.entry(*key).or_default();
             *entry = entry.union(*value);
         }
-        State { values, taint, stack_values, memory, conditional_values, condition: None }
+        let loaded = self.loaded.union(&other.loaded).copied().collect();
+        State { values, taint, stack_values, memory, conditional_values, condition: None, loaded }
     }
 
     fn memory_range(&self, from: Loc, span: i64) -> Taint {
@@ -171,8 +200,8 @@ impl State {
 
     fn taint_memory_range(&mut self, from: Loc, span: i64, taint: Taint) {
         let step = |loc: Loc, delta: i64| match loc {
-            Loc::Stack(offset) => Loc::Stack(offset + delta),
-            Loc::Abs(address) => Loc::Abs(address.wrapping_add(delta as u64)),
+            Loc::Stack(offset) => Loc::Stack(offset.saturating_add(delta)),
+            Loc::Abs(address) => Loc::Abs(address.saturating_add(delta.unsigned_abs())),
         };
         let base = align(from);
         for delta in (0..span).step_by(4) {
@@ -205,9 +234,13 @@ pub(super) struct Gate {
 /// What a conditionally executed instruction does.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Effect {
+    /// The returned value, when formed from instruction immediates.
     Returns(Option<Val>),
     Branches(u64),
-    Stores { address: u64, value: Option<u64> },
+    Stores {
+        address: u64,
+        value: Option<u64>,
+    },
     Sets,
 }
 
@@ -227,6 +260,7 @@ pub(super) struct Store {
     /// A constant address, or the base of an indexed store.
     pub address: u64,
     pub indexed: bool,
+    /// The value written, when an instruction immediate formed it (never a value read from memory).
     pub value: Option<u64>,
     pub taint: Taint,
     /// Written by a call through a pointer argument, not by a store instruction.
@@ -239,6 +273,8 @@ pub(super) struct Store {
 pub(super) struct Return {
     pub at: u64,
     pub value: Option<Val>,
+    /// Whether `value` was formed from instruction immediates (and may be reported).
+    pub immediate: bool,
     pub taint: Taint,
 }
 
@@ -271,8 +307,10 @@ pub(super) struct FunctionFlow {
     pub returns: Vec<Return>,
     /// Indirect calls whose target is unknown.
     pub indirect_calls: Vec<u64>,
-    /// Indirect branches that are not a return or a resolved switch (an import stub's jump, a computed jump).
+    /// Indirect branches that are not a return, a resolved switch or a jump through an import slot.
     pub indirect_jumps: Vec<u64>,
+    /// Jumps through an import slot (a stub that continues in the imported function).
+    pub import_jumps: Vec<u64>,
     /// Blocks that only branch to themselves.
     pub self_loops: Vec<u64>,
     /// Constants the function forms or loads (addresses and immediates of at least 0x100), capped.
@@ -284,11 +322,15 @@ pub(super) struct FunctionFlow {
     pads: BTreeSet<u64>,
     /// The arguments (by position, as bits) the returned value derives from.
     pub parameters: u64,
+    /// What the function writes through the pointers it was given.
+    pub param_writes: Taint,
+    /// More sources than the taint tracks: the last bit stands for all the rest.
+    pub overflowed: bool,
 }
 
 impl FunctionFlow {
     pub fn source_of(&self, bit: usize) -> Option<Source> {
-        self.sources.get(bit).copied()
+        self.sources.get(bit).copied().filter(|source| *source != Source::Overflow)
     }
 }
 
@@ -484,13 +526,21 @@ impl<'a> Lifter<'a> {
             let taint = self.source(&mut sources, Source::Param(index));
             initial.taint.insert(key, taint);
         }
+        // The first stack-passed arguments, above the return address on x86-64.
+        let registers = self.convention.arguments.len();
+        for slot in 0..STACK_ARGUMENTS {
+            let taint = self.source(&mut sources, Source::Param(registers + slot));
+            let offset = self.convention.stack_arguments + (slot as i64) * self.convention.word;
+            initial.memory.insert(Loc::Stack(offset & !3), taint);
+        }
+        let param_bits = (1u64 << sources.len()) - 1;
         if let Some(first) = index_of(function.address) {
             entry[first] = Some(initial);
         }
         let mut work: BTreeSet<usize> =
             entry.iter().enumerate().filter(|(_, state)| state.is_some()).map(|(index, _)| index).collect();
         let mut budget = blocks.len().saturating_mul(24).max(64);
-        let mut sink = Recorder::default();
+        let mut sink = Recorder { param_bits, ..Recorder::default() };
         while let Some(index) = work.pop_first() {
             if budget == 0 {
                 break;
@@ -512,7 +562,7 @@ impl<'a> Lifter<'a> {
                 }
             }
         }
-        let mut recorder = Recorder::default();
+        let mut recorder = Recorder { param_bits, ..Recorder::default() };
         for (index, block) in blocks.iter().enumerate() {
             let mut state = entry[index].clone().unwrap_or_default();
             if block.successors.len() == 1 && block.successors[0] == block.start {
@@ -544,8 +594,12 @@ impl<'a> Lifter<'a> {
                 _ => None,
             })
             .fold(0, |acc, bit| acc | bit);
+        let param_writes = recorder.param_writes;
+        let overflowed = sources.contains(&Source::Overflow);
         FunctionFlow {
             parameters,
+            param_writes,
+            overflowed,
             sources,
             gates: recorder.gates,
             calls: recorder.calls,
@@ -553,6 +607,7 @@ impl<'a> Lifter<'a> {
             returns: recorder.returns,
             indirect_calls: recorder.indirect_calls,
             indirect_jumps: recorder.indirect_jumps,
+            import_jumps: recorder.import_jumps,
             self_loops: recorder.self_loops,
             constants: recorder.constants,
             blocks,
@@ -605,7 +660,7 @@ impl<'a> Lifter<'a> {
             .fold(Taint::default(), |acc, (_, taint)| acc.union(*taint))
     }
 
-    fn write(&self, node: &Varnode, value: Option<Val>, taint: Taint, state: &mut State) {
+    fn write(&self, node: &Varnode, value: Option<Val>, taint: Taint, loaded: bool, state: &mut State) {
         let Some(offset) = node.offset else { return };
         if node.space == self.ram || node.space == self.constant {
             return;
@@ -617,7 +672,11 @@ impl<'a> Lifter<'a> {
         state.values.retain(|key, _| !overlaps(key));
         state.taint.retain(|key, _| !overlaps(key));
         state.conditional_values.retain(|key, _| !overlaps(key));
+        state.loaded.retain(|key| !overlaps(key));
         let key = (node.space, offset, node.size);
+        if loaded {
+            state.loaded.insert(key);
+        }
         if let Some(value) = value {
             state.values.insert(key, value);
         }
@@ -627,13 +686,32 @@ impl<'a> Lifter<'a> {
     }
 
     fn source(&self, sources: &mut Vec<Source>, source: Source) -> Taint {
-        let bit = sources.iter().position(|known| *known == source).unwrap_or_else(|| {
-            if sources.len() < MAX_SOURCES {
-                sources.push(source);
-            }
-            sources.len() - 1
-        });
-        Taint::source(bit)
+        if let Some(bit) = sources.iter().position(|known| *known == source) {
+            return Taint::source(bit);
+        }
+        if sources.len() < MAX_SOURCES - 1 {
+            sources.push(source);
+            return Taint::source(sources.len() - 1);
+        }
+        if sources.len() == MAX_SOURCES - 1 {
+            sources.push(Source::Overflow);
+        }
+        Taint::source(MAX_SOURCES - 1)
+    }
+
+    /// Whether `node` holds a value read from memory rather than formed from instruction immediates.
+    fn is_loaded(&self, node: &Varnode, state: &State) -> bool {
+        let Some(offset) = node.offset else { return true };
+        if node.space == self.constant {
+            return false;
+        }
+        if node.space == self.ram {
+            return true;
+        }
+        let end = offset.saturating_add(u64::from(node.size));
+        state.loaded.iter().any(|&(space, start, size)| {
+            space == node.space && start < end && offset < start.saturating_add(u64::from(size))
+        })
     }
 
     /// Whether `address` is constant data the image maps read-only (its loads fold to constants).
@@ -686,6 +764,9 @@ impl<'a> Lifter<'a> {
                         .is_some_and(|node| node.space != self.ram || node.offset == Some(instruction.next))
             })
             .map(|branch| condition_signature(&instruction.ops, branch, self.register));
+        // Constant addresses this instruction has loaded from, by output: an indirect call through an import slot
+        // loads the slot first.
+        let mut loaded_from: Vec<(Slot, u64)> = Vec::new();
         for op in &instruction.ops {
             // Memory operands at a constant address appear as direct varnodes (x86 RIP-relative operands): a read
             // of writable or unmapped memory is a load source, first read before any store.
@@ -699,6 +780,14 @@ impl<'a> Lifter<'a> {
                     self.wide_pad(at, node.size, recorder);
                 }
             }
+            // A copy of a direct memory operand (x86 `call [rip+slot]`) loads from that address too.
+            if op.name == "COPY"
+                && let (Some(source), Some(output)) = (op.inputs.first(), &op.output)
+                && source.space == self.ram
+                && let Some(at) = source.offset
+            {
+                loaded_from.push(((output.space, output.offset, output.size), at));
+            }
             let input = |index: usize, state: &State| op.inputs.get(index).and_then(|node| self.value(node, state));
             let taint_of = |index: usize, state: &State| {
                 op.inputs.get(index).map_or(Taint::default(), |node| self.taint(node, state))
@@ -706,6 +795,10 @@ impl<'a> Lifter<'a> {
             let size = op.output.as_ref().map_or(8, |node| node.size);
             let mut out_taint: Taint;
             let mut out_value: Option<Val> = None;
+            // Whether the output's value comes from memory: a load, or any operand that did.
+            let mut out_loaded =
+                op.inputs.iter().any(|node| node.space != self.constant && self.is_loaded(node, state))
+                    && op.inputs.iter().any(|node| node.space != self.constant);
             match op.name.as_str() {
                 "CBRANCH" => {
                     let condition = taint_of(1, state);
@@ -737,7 +830,12 @@ impl<'a> Lifter<'a> {
                         let result =
                             self.call(scope, Some(target), instruction.address, state, sources, recorder, record);
                         if record {
-                            recorder.returns.push(Return { at: instruction.address, value: None, taint: result });
+                            recorder.returns.push(Return {
+                                at: instruction.address,
+                                value: None,
+                                immediate: false,
+                                taint: result,
+                            });
                         }
                     } else if let Some(index) = gate_index
                         && let Some(target) = op.inputs.first().and_then(|node| node.offset)
@@ -750,23 +848,31 @@ impl<'a> Lifter<'a> {
                     if record {
                         let node = self.result_node();
                         let value = self.value(&node, state);
+                        let immediate = !self.is_loaded(&node, state);
                         let taint = self.taint(&node, state).union(conditional.unwrap_or_default());
-                        recorder.returns.push(Return { at: instruction.address, value, taint });
+                        recorder.returns.push(Return { at: instruction.address, value, immediate, taint });
                         if let Some(index) = gate_index {
-                            recorder.gates[index].effect = Some(Effect::Returns(value));
+                            recorder.gates[index].effect = Some(Effect::Returns(value.filter(|_| immediate)));
                         }
                     }
                     continue;
                 }
                 "BRANCHIND" => {
                     if record && function.switch_cases(instruction.address).is_none() {
-                        recorder.indirect_jumps.push(instruction.address);
+                        if self.import_slot_operand(op, &loaded_from).is_some() {
+                            recorder.import_jumps.push(instruction.address);
+                        } else {
+                            recorder.indirect_jumps.push(instruction.address);
+                        }
                     }
                     continue;
                 }
                 "CALL" | "CALLIND" => {
+                    // A call through an import slot (PE IAT, -fno-plt GOT) is a call to the import, named by its slot.
                     let target = if op.name == "CALL" {
                         op.inputs.first().and_then(|node| node.offset)
+                    } else if let Some(slot) = self.import_slot_operand(op, &loaded_from) {
+                        Some(slot)
                     } else {
                         match input(0, state) {
                             Some(Val::Const(target)) => Some(target),
@@ -790,6 +896,10 @@ impl<'a> Lifter<'a> {
                     let address = input(1, state);
                     let pointer_taint = taint_of(1, state);
                     out_taint = pointer_taint;
+                    out_loaded = true;
+                    if let (Some(Val::Const(at)), Some(output)) = (address, &op.output) {
+                        loaded_from.push(((output.space, output.offset, output.size), at));
+                    }
                     match address {
                         Some(Val::Const(at)) => {
                             if record {
@@ -800,6 +910,8 @@ impl<'a> Lifter<'a> {
                                 if record && value >= 0x100 && recorder.constants.len() < MAX_CONSTANTS {
                                     recorder.constants.insert(value);
                                 }
+                            } else if !self.writable_or_unmapped(at) {
+                                // A vector-wide read of constant data: no value tracked, and no source either.
                             } else {
                                 out_taint = out_taint
                                     .union(self.source(sources, Source::Load(at)))
@@ -826,7 +938,9 @@ impl<'a> Lifter<'a> {
                 }
                 "STORE" => {
                     let address = input(1, state);
-                    let value = input(2, state);
+                    let immediate = op.inputs.get(2).is_some_and(|node| !self.is_loaded(node, state));
+                    let raw_value = input(2, state);
+                    let value = raw_value.filter(|_| immediate);
                     let taint = taint_of(2, state).union(conditional.unwrap_or_default());
                     let bytes = op.inputs.get(2).map_or(4, |node| node.size);
                     let whole = bytes >= 4 && conditional.is_none();
@@ -861,7 +975,7 @@ impl<'a> Lifter<'a> {
                             }
                         }
                         Some(Val::Stack(offset)) => {
-                            match value {
+                            match raw_value {
                                 Some(value) if conditional.is_none() && matches!(bytes, 4 | 8) => {
                                     state.stack_values.insert(offset, value);
                                 }
@@ -895,9 +1009,27 @@ impl<'a> Lifter<'a> {
                                 });
                             }
                         }
-                        None => {}
+                        None => {
+                            // Through a pointer the function was given: an output of the function.
+                            if record && taint_of(1, state).mask & recorder.param_bits != 0 {
+                                recorder.param_writes = recorder.param_writes.union(taint);
+                            }
+                        }
                     }
                     continue;
+                }
+                "BOOL_NEGATE" => {
+                    out_taint = taint_of(0, state);
+                    let polarity = out_taint.flags & flags::POLARITY;
+                    out_taint.flags &= !flags::POLARITY;
+                    out_taint.flags |= match polarity {
+                        flags::WHEN_NONZERO => flags::WHEN_ZERO,
+                        flags::WHEN_ZERO => flags::WHEN_NONZERO,
+                        other => other,
+                    };
+                    if let Some(Val::Const(x)) = input(0, state) {
+                        out_value = Some(Val::Const(u64::from(x == 0)));
+                    }
                 }
                 "INT_EQUAL" | "INT_NOTEQUAL" => {
                     let (a, b) = (input(0, state), input(1, state));
@@ -906,6 +1038,20 @@ impl<'a> Lifter<'a> {
                     let zero = matches!(a, Some(Val::Const(0))) || matches!(b, Some(Val::Const(0)));
                     let constant = matches!(a, Some(Val::Const(_))) || matches!(b, Some(Val::Const(_)));
                     let from_sub = out_taint.flags;
+                    // A test against zero is true when its operand is zero (INT_EQUAL) or nonzero; testing a
+                    // boolean against zero negates it.
+                    let polarity = from_sub & flags::POLARITY;
+                    out_taint.flags &= !flags::POLARITY;
+                    if zero {
+                        let equal = op.name == "INT_EQUAL";
+                        out_taint.flags |= match (polarity, equal) {
+                            (0, true) => flags::WHEN_ZERO,
+                            (0, false) => flags::WHEN_NONZERO,
+                            (flags::WHEN_NONZERO, true) | (flags::WHEN_ZERO, false) => flags::WHEN_ZERO,
+                            (flags::WHEN_ZERO, true) | (flags::WHEN_NONZERO, false) => flags::WHEN_NONZERO,
+                            _ => flags::POLARITY,
+                        };
+                    }
                     out_taint.flags |= if zero {
                         flags::ZERO
                             | if from_sub & flags::SUB_CONST != 0 { flags::EQ_CONST } else { 0 }
@@ -923,7 +1069,17 @@ impl<'a> Lifter<'a> {
                 "INT_LESS" | "INT_SLESS" | "INT_LESSEQUAL" | "INT_SLESSEQUAL" | "INT_CARRY" | "INT_SCARRY"
                 | "INT_SBORROW" => {
                     out_taint = taint_of(0, state).union(taint_of(1, state));
-                    out_taint.flags |= flags::ORDERED;
+                    out_taint.flags = (out_taint.flags & !flags::POLARITY) | flags::ORDERED;
+                }
+                // `xor eax, eax` and `sub r, r` zero a register: the result derives from nothing.
+                "INT_XOR" | "INT_SUB"
+                    if op.inputs.len() == 2
+                        && (op.inputs[0].space, op.inputs[0].offset, op.inputs[0].size)
+                            == (op.inputs[1].space, op.inputs[1].offset, op.inputs[1].size) =>
+                {
+                    out_taint = Taint::default();
+                    out_value = Some(Val::Const(0));
+                    out_loaded = false;
                 }
                 _ => {
                     let (a, b) = (input(0, state), input(1, state));
@@ -1020,7 +1176,7 @@ impl<'a> Lifter<'a> {
                 state.memory.insert(Loc::Abs(at & !3), taint);
                 if record {
                     let value = match out_value {
-                        Some(Val::Const(value)) if conditional.is_none() => Some(mask(value, size)),
+                        Some(Val::Const(value)) if conditional.is_none() && !out_loaded => Some(mask(value, size)),
                         _ => None,
                     };
                     recorder.stores.push(Store {
@@ -1047,19 +1203,33 @@ impl<'a> Lifter<'a> {
                     recorder.gates[index].effect = Some(Effect::Sets);
                 }
                 let known = out_value.zip(state.condition);
-                self.write(output, None, out_taint.union(old).union(condition), state);
+                self.write(output, None, out_taint.union(old).union(condition), out_loaded, state);
                 if let (Some((value, signature)), Some(offset)) = (known, output.offset) {
                     state.conditional_values.insert((output.space, offset, output.size), (signature, value));
                 }
             } else {
-                self.write(output, out_value, out_taint, state);
+                self.write(output, out_value, out_taint, out_loaded, state);
             }
         }
         // Temporaries do not outlive the instruction.
         state.values.retain(|&(space, _, _), _| space == self.register);
         state.taint.retain(|&(space, _, _), _| space == self.register);
         state.conditional_values.retain(|&(space, _, _), _| space == self.register);
+        state.loaded.retain(|&(space, _, _)| space == self.register);
         state.condition = None;
+    }
+
+    /// The import slot an indirect call or jump goes through: a direct memory operand, or a slot this instruction
+    /// loaded the target from.
+    fn import_slot_operand(&self, branch: &PcodeOp, loaded_from: &[(Slot, u64)]) -> Option<u64> {
+        let target = branch.inputs.first()?;
+        let slot = if target.space == self.ram {
+            target.offset?
+        } else {
+            let key = (target.space, target.offset, target.size);
+            loaded_from.iter().rev().find(|(output, _)| *output == key)?.1
+        };
+        self.binary.import_slot(slot).map(|_| slot)
     }
 
     /// Records an HMAC pad when `size` (more than 8) bytes of read-only data at `at` repeat one pad byte, as a
@@ -1114,9 +1284,11 @@ impl<'a> Lifter<'a> {
         }
         // Arguments past the registers: the words at the stack pointer (above the return address on x86-64).
         let stacked: Vec<Option<Val>> = match state.values.get(&self.convention.stack_pointer) {
-            Some(&Val::Stack(top)) => (0..4)
+            Some(&Val::Stack(top)) => (0..4i64)
                 .map(|slot| {
-                    let offset = top + self.convention.stack_arguments + slot * self.convention.word;
+                    let offset = top
+                        .saturating_add(self.convention.stack_arguments)
+                        .saturating_add(slot.saturating_mul(self.convention.word));
                     state.stack_values.get(&offset).copied()
                 })
                 .collect(),
@@ -1129,23 +1301,38 @@ impl<'a> Lifter<'a> {
         }
         let call = self.source(sources, Source::Call(target));
         let result = call.union(Taint { mask: passed.mask, flags: 0 });
-        // What a callee writes through a pointer argument derives from the call and what it was given.
-        let written = call.union(Taint { mask: buffers.mask | passed.mask, flags: 0 });
+        // What a callee writes through a pointer argument derives from its writes and what it was given.
+        let output = self.source(sources, Source::Written(target));
+        let written = output.union(Taint { mask: buffers.mask | passed.mask, flags: 0 });
         let all: Vec<Option<Val>> = arguments.iter().chain(&stacked).copied().collect();
+        // A pointer the function was given, passed on: what the callee writes there is the function's output.
+        if record {
+            let given = self
+                .convention
+                .arguments
+                .iter()
+                .any(|&key| self.taint(&self.node(key), state).mask & recorder.param_bits != 0);
+            if given {
+                recorder.param_writes = recorder.param_writes.union(written);
+            }
+        }
         for (index, value) in all.iter().enumerate() {
             // A (pointer, length) pair gives the buffer's size; otherwise a small buffer is assumed.
-            let span = match all.get(index + 1) {
-                Some(Some(Val::Const(length))) if (1..=4096).contains(length) => *length as i64,
-                _ => 16,
+            let length = match all.get(index + 1) {
+                Some(Some(Val::Const(length))) if (1..=4096).contains(length) => Some(*length as i64),
+                _ => None,
             };
             match value {
                 Some(Val::Stack(offset) | Val::StackFrom(offset)) => {
-                    state.taint_memory_range(Loc::Stack(*offset), BUFFER_SPAN, written);
-                    state.stack_values.retain(|key, _| !(*offset..offset + BUFFER_SPAN).contains(key));
+                    let span = length.unwrap_or(BUFFER_SPAN);
+                    state.taint_memory_range(Loc::Stack(*offset), span, written);
+                    let end = offset.saturating_add(span);
+                    state.stack_values.retain(|key, _| !(*offset..end).contains(key));
                 }
                 Some(Val::Const(address) | Val::AbsFrom(address))
                     if *address >= 0x1000 && self.writable_or_unmapped(*address) =>
                 {
+                    let span = length.unwrap_or(16);
                     state.taint_memory_range(Loc::Abs(*address), span, written);
                     if record {
                         recorder.stores.push(Store {
@@ -1166,6 +1353,7 @@ impl<'a> Lifter<'a> {
         let keep = |key: &Key| *key == stack || self.convention.preserved.contains(key);
         state.values.retain(|key, _| key.0 != self.register || keep(key));
         state.taint.retain(|key, _| key.0 != self.register || keep(key));
+        state.loaded.retain(|key| key.0 != self.register || keep(key));
         state.taint.insert(self.convention.result, result);
         if record {
             recorder.calls.push(CallSite { at, target, arguments, result });
@@ -1226,6 +1414,10 @@ struct Recorder {
     returns: Vec<Return>,
     indirect_calls: Vec<u64>,
     indirect_jumps: Vec<u64>,
+    import_jumps: Vec<u64>,
+    /// The bits of the function's own arguments, and what is written through them.
+    param_bits: u64,
+    param_writes: Taint,
     self_loops: Vec<u64>,
     constants: BTreeSet<u64>,
     pads: BTreeSet<u64>,

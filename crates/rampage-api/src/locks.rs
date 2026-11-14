@@ -40,7 +40,11 @@ const CALLER_DEPTH: usize = 4;
 const PROFILE_DEPTH: usize = 4;
 const PROFILE_NODES: usize = 128;
 /// Levels a call's result is followed into the callee's own sources.
-const RESULT_DEPTH: usize = 4;
+const RESULT_DEPTH: usize = 6;
+/// The largest written or returned constant a report shows.
+const MAX_SHOWN_VALUE: u64 = 0xffff;
+/// Bytes before a curve parameter a reference to the structure holding it may point at.
+const CURVE_SLACK: u64 = 64;
 /// Blocks explored on each side of a decision.
 const PATH_BLOCKS: usize = 16;
 pub const DEFAULT_LIMIT: usize = 10;
@@ -116,6 +120,12 @@ pub struct Mechanism {
     /// Inner decisions that pass their verdict up, further decision sites, flag consumers and configuration writes.
     pub related: Vec<Related>,
     pub evidence: Vec<String>,
+    /// Fixed RAM addresses an outcome writes (flags other decisions may test).
+    #[serde(skip)]
+    written: Vec<u64>,
+    /// A decision on the debug status alone, and whether the side taken with a debugger attached is the refusal.
+    #[serde(skip)]
+    debugger_only: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -216,8 +226,14 @@ struct Context<'p> {
     noreturn: Vec<u64>,
     peripherals: std::sync::Arc<crate::peripherals::PeripheralMap>,
     /// Labels of what analyzed functions store at RAM addresses: (start, end) to labels.
-    globals: Vec<(u64, u64, BTreeSet<Label>)>,
+    globals: Vec<Stored>,
+    /// Functions each function reaches through calls (bounded), for telling a challenge issued elsewhere from
+    /// randomness a check draws itself.
+    reached: std::cell::RefCell<HashMap<u64, BTreeSet<u64>>>,
     profiles: std::cell::RefCell<HashMap<u64, Profile>>,
+    /// What each function's result (returned value and pointer outputs) derives from, by role; with and without
+    /// other functions' stores to RAM.
+    results: std::cell::RefCell<HashMap<(u64, bool, bool), BTreeSet<Label>>>,
     names: std::cell::RefCell<HashMap<u64, String>>,
 }
 
@@ -229,7 +245,10 @@ impl Context<'_> {
             return true;
         }
         self.flows.get(&target).is_some_and(|callee| {
-            callee.returns.is_empty() && callee.indirect_jumps.is_empty() && !callee.blocks.is_empty()
+            callee.returns.is_empty()
+                && callee.indirect_jumps.is_empty()
+                && callee.import_jumps.is_empty()
+                && !callee.blocks.is_empty()
         })
     }
 
@@ -240,7 +259,15 @@ impl Context<'_> {
     }
 
     fn name(&self, address: u64) -> String {
-        self.names.borrow_mut().entry(address).or_insert_with(|| self.project.function_name(address)).clone()
+        self.names
+            .borrow_mut()
+            .entry(address)
+            .or_insert_with(|| match self.project.binary.import_slot(address) {
+                // A call through an import slot is a call to the import.
+                Some(slot) => slot.name.clone(),
+                None => self.project.function_name(address),
+            })
+            .clone()
     }
 
     /// The role of the register or memory at `address`.
@@ -315,55 +342,141 @@ impl Context<'_> {
         profile
     }
 
+    /// The roles `function` itself has: crypto constants it references and library names.
+    fn own_labels(&self, function: u64, out: &mut BTreeSet<Label>) {
+        for (kind, algorithm) in self.crypto.get(&function).into_iter().flatten() {
+            match kind {
+                Kind::PublicKey => {
+                    out.insert(Label::Signature(algorithm.clone()));
+                }
+                Kind::Mac => {
+                    out.insert(Label::Mac(algorithm.clone()));
+                }
+                Kind::Hash => {
+                    out.insert(Label::Hash(algorithm.clone()));
+                }
+                Kind::Checksum => {
+                    out.insert(Label::Crc);
+                }
+                _ => {}
+            }
+        }
+        if self.crc_routines.contains(&function) {
+            out.insert(Label::Crc);
+        }
+        let name = self.name(function);
+        if let Some(library) = labels::signature_api(&name) {
+            out.insert(Label::Signature(library.to_owned()));
+        }
+        if let Some(library) = labels::mac_api(&name) {
+            out.insert(Label::Mac(library.to_owned()));
+        }
+        if let Some(library) = labels::random_api(&name) {
+            out.insert(Label::Random(library.to_owned()));
+        }
+    }
+
+    /// The roles of what `function` hands back, its returned value or (`written`) what it writes through the
+    /// pointers it was given: its own roles, and the roles of the sources that output derives from, followed through
+    /// callees. Crypto elsewhere in its call tree whose result does not reach that output does not count.
+    fn result_labels(&self, function: u64, depth: usize, globals: bool) -> BTreeSet<Label> {
+        self.output_labels(function, false, depth, globals)
+    }
+
+    fn output_labels(&self, function: u64, written: bool, depth: usize, globals: bool) -> BTreeSet<Label> {
+        if let Some(known) = self.results.borrow().get(&(function, written, globals)) {
+            return known.clone();
+        }
+        let mut out = BTreeSet::new();
+        self.own_labels(function, &mut out);
+        let Some(flow) = self.flows.get(&function) else { return out };
+        if depth >= RESULT_DEPTH {
+            return out;
+        }
+        // A cycle reads the partial answer.
+        self.results.borrow_mut().insert((function, written, globals), out.clone());
+        let output = if written { flow.param_writes } else { flow.returned };
+        for bit in output.bits() {
+            self.source_labels(function, bit, depth + 1, globals, &mut out);
+        }
+        if flow.hmac_pads() {
+            let hashes: Vec<String> = out
+                .iter()
+                .filter_map(|label| if let Label::Hash(name) = label { Some(name.clone()) } else { None })
+                .collect();
+            if !hashes.is_empty() {
+                out.insert(Label::Mac(format!("HMAC-{}", tidy(hashes).join("/"))));
+            }
+        }
+        self.results.borrow_mut().insert((function, written, globals), out.clone());
+        out
+    }
+
     /// The labels of source `bit` of `function`; `globals` adds what other functions stored at a RAM address.
     fn source_labels(&self, function: u64, bit: usize, depth: usize, globals: bool, out: &mut BTreeSet<Label>) {
         let Some(flow) = self.flows.get(&function) else { return };
         let Some(source) = flow.source_of(bit) else { return };
         match source {
             Source::Call(Some(target)) => {
-                let profile = self.profile(target);
-                out.extend(profile.signature.iter().cloned().map(Label::Signature));
-                out.extend(profile.mac.iter().cloned().map(Label::Mac));
-                out.extend(profile.hash.iter().cloned().map(Label::Hash));
-                if profile.crc {
-                    out.insert(Label::Crc);
-                }
-                let name = self.name(target);
-                if let Some(library) = labels::random_api(&name) {
-                    out.insert(Label::Random(library.to_owned()));
-                }
-                if depth < RESULT_DEPTH
-                    && target != function
-                    && let Some(callee) = self.flows.get(&target)
-                {
-                    for bit in callee.returned.bits() {
-                        self.source_labels(target, bit, depth + 1, globals, out);
-                    }
+                if target != function {
+                    out.extend(self.output_labels(target, false, depth, globals));
                 }
             }
-            Source::Call(None) => {}
+            Source::Written(Some(target)) => {
+                if target != function {
+                    out.extend(self.output_labels(target, true, depth, globals));
+                }
+            }
+            Source::Call(None) | Source::Written(None) | Source::Overflow => {}
             Source::Load(address) => {
                 out.extend(self.address_label(address));
                 if globals {
-                    self.global_labels(address, 4, out);
+                    self.global_labels(function, address, 4, out);
                 }
             }
             Source::Pointer(address) => {
                 if globals {
-                    self.global_labels(address, 32, out);
+                    self.global_labels(function, address, 32, out);
                 }
             }
             Source::Param(_) => {}
         }
     }
 
-    fn global_labels(&self, address: u64, span: u64, out: &mut BTreeSet<Label>) {
+    /// The roles of what other functions stored in `span` bytes at `address`, as `reader` reads it. Randomness
+    /// the reader stored itself or through its callees (a nonce drawn for the same computation) is not a challenge
+    /// issued earlier, so it does not count.
+    fn global_labels(&self, reader: u64, address: u64, span: u64, out: &mut BTreeSet<Label>) {
         let end = address.saturating_add(span);
-        for (start, stop, labels) in &self.globals {
-            if *start < end && address < *stop {
-                out.extend(labels.iter().cloned());
+        for stored in &self.globals {
+            if stored.start < end && address < stored.end {
+                let related = stored.by == reader || self.reaches(reader).contains(&stored.by);
+                out.extend(
+                    stored.labels.iter().filter(|label| !related || !matches!(label, Label::Random(_))).cloned(),
+                );
             }
         }
+    }
+
+    fn reaches(&self, root: u64) -> BTreeSet<u64> {
+        if let Some(known) = self.reached.borrow().get(&root) {
+            return known.clone();
+        }
+        let mut seen = BTreeSet::new();
+        let mut frontier = vec![root];
+        for _ in 0..PROFILE_DEPTH {
+            let mut next = Vec::new();
+            for function in frontier {
+                for &callee in self.callees.get(&function).into_iter().flatten() {
+                    if seen.len() < PROFILE_NODES && seen.insert(callee) {
+                        next.push(callee);
+                    }
+                }
+            }
+            frontier = next;
+        }
+        self.reached.borrow_mut().insert(root, seen.clone());
+        seen
     }
 
     fn taint_labels(&self, function: u64, taint: Taint, globals: bool) -> BTreeSet<Label> {
@@ -371,15 +484,43 @@ impl Context<'_> {
         for bit in taint.bits() {
             self.source_labels(function, bit, 0, globals, &mut out);
         }
+        // "SHA-256 / BLAKE2s" (an initial value two algorithms share) adds nothing next to "SHA-256".
+        let plain: Vec<String> = out
+            .iter()
+            .filter_map(|label| match label {
+                Label::Hash(name) | Label::Signature(name) if !name.contains(" / ") => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        out.retain(|label| match label {
+            Label::Hash(name) | Label::Signature(name) => {
+                !name.contains(" / ") || !name.split(" / ").any(|part| plain.iter().any(|p| p == part))
+            }
+            _ => true,
+        });
         out
     }
+}
+
+/// Algorithm names without the shared ones another name already covers ("SHA-256 / BLAKE2s" next to "SHA-256").
+fn tidy(names: Vec<String>) -> Vec<String> {
+    let plain: Vec<String> = names.iter().filter(|name| !name.contains(" / ")).cloned().collect();
+    let mut kept: Vec<String> = names
+        .into_iter()
+        .filter(|name| !name.contains(" / ") || !name.split(" / ").any(|part| plain.iter().any(|p| p == part)))
+        .collect();
+    kept.sort();
+    kept.dedup();
+    kept
 }
 
 /// The category a decision's labels make it, or `None` when they are not a lock (see [`not_lock_kind`]).
 fn categorize(labels: &BTreeSet<Label>) -> Option<&'static str> {
     let any = |predicate: fn(&Label) -> bool| labels.iter().any(predicate);
-    let crypto = any(|label| matches!(label, Label::Signature(_) | Label::Mac(_) | Label::Hash(_)));
-    if any(|label| matches!(label, Label::Random(_))) && crypto {
+    // A response to a challenge proves something only under a key: a signature or a MAC (a plain digest of the
+    // challenge could come from anyone).
+    let keyed = any(|label| matches!(label, Label::Signature(_) | Label::Mac(_)));
+    if any(|label| matches!(label, Label::Random(_))) && keyed {
         return Some("challenge_response");
     }
     if any(|label| matches!(label, Label::UniqueId(..))) {
@@ -435,6 +576,8 @@ struct Side {
     at: u64,
     effect: &'static str,
     detail: String,
+    /// Fixed addresses this side writes.
+    written: Vec<u64>,
 }
 
 impl Side {
@@ -514,39 +657,68 @@ impl Project {
             })
             .collect();
         coverage.crypto_constants = hits.iter().filter(|hit| hit.kind != Kind::Checksum).count();
-        let mut ranges: Vec<(u64, u64, Kind, String)> = hits
-            .iter()
-            .map(|hit| {
-                // Curve parameters often sit in a struct referenced at its base, a little before the hit.
-                let slack = if hit.kind == Kind::PublicKey { 64 } else { 0 };
-                (
-                    hit.address.saturating_sub(slack),
-                    hit.address + hit.length as u64,
-                    hit.kind,
-                    hit.algorithm.to_string(),
-                )
-            })
-            .collect();
-        ranges.sort_by_key(|range| range.0);
+        let ranges: Vec<CryptoRange> = {
+            let mut ranges: Vec<CryptoRange> = hits
+                .iter()
+                .map(|hit| {
+                    // Curve parameters often sit in a struct referenced at its base, a little before the hit.
+                    let curve = hit.kind == Kind::PublicKey && !hit.algorithm.starts_with("RSA");
+                    let slack = if curve { CURVE_SLACK } else { 0 };
+                    CryptoRange {
+                        start: hit.address.saturating_sub(slack),
+                        hit: hit.address,
+                        end: hit.address.saturating_add(hit.length as u64),
+                        kind: hit.kind,
+                        algorithm: hit.algorithm.to_string(),
+                    }
+                })
+                .collect();
+            ranges.sort_by_key(|range| range.start);
+            ranges
+        };
+        // A reference before a curve parameter reaches it only through one object: no symbol starts and no other
+        // reference points between them.
+        let mut symbol_starts: Vec<u64> = binary.symbols.iter().map(|symbol| symbol.address).collect();
+        symbol_starts.sort_unstable();
+        let reaches = |range: &CryptoRange, at: u64| -> bool {
+            if at < range.start || at >= range.end {
+                return false;
+            }
+            if at >= range.hit {
+                return true;
+            }
+            let after = |sorted: &[u64]| {
+                let first = sorted.partition_point(|&address| address <= at);
+                sorted.get(first).is_some_and(|&address| address <= range.hit)
+            };
+            let first = program.xrefs.partition_point(|xref| xref.to <= at);
+            let referenced_between = program.xrefs.get(first).is_some_and(|xref| xref.to < range.hit);
+            // Another algorithm's constant in the gap (a DigestInfo table before curve parameters) is its own object.
+            let other_algorithm = hits.iter().any(|other| {
+                other.algorithm != range.algorithm.as_str()
+                    && other.address < range.hit
+                    && at < other.address.saturating_add(other.length as u64)
+            });
+            !after(&symbol_starts) && !referenced_between && !other_algorithm
+        };
         let mut crypto: BTreeMap<u64, BTreeSet<(Kind, String)>> = BTreeMap::new();
-        for (start, end, kind, algorithm) in &ranges {
-            let first = program.xrefs.partition_point(|xref| xref.to < *start);
-            for xref in program.xrefs[first..].iter().take_while(|xref| xref.to < *end) {
-                if let Some(function) = analysis.function_containing(xref.from) {
-                    crypto.entry(function).or_default().insert((*kind, algorithm.clone()));
+        for range in &ranges {
+            let first = program.xrefs.partition_point(|xref| xref.to < range.start);
+            for xref in program.xrefs[first..].iter().take_while(|xref| xref.to < range.end) {
+                if reaches(range, xref.to)
+                    && let Some(function) = analysis.function_containing(xref.from)
+                {
+                    crypto.entry(function).or_default().insert((range.kind, range.algorithm.clone()));
                 }
             }
         }
         if binary.arch == rampage_arch::Arch::Arm && !ranges.is_empty() {
             // Thumb code reaches tables through literal-pool words holding their address.
-            for (slot, value) in pool_words(binary) {
-                for (start, end, kind, algorithm) in &ranges {
-                    if *start <= value && value < *end {
-                        let first = program.xrefs.partition_point(|xref| xref.to < slot);
-                        for xref in program.xrefs[first..].iter().take_while(|xref| xref.to == slot) {
-                            if let Some(function) = analysis.function_containing(xref.from) {
-                                crypto.entry(function).or_default().insert((*kind, algorithm.clone()));
-                            }
+            for (slot, value) in pool_words(binary, &ranges) {
+                for range in ranges.iter().filter(|range| reaches(range, value)) {
+                    for from in xrefs_to(program, slot) {
+                        if let Some(function) = analysis.function_containing(from) {
+                            crypto.entry(function).or_default().insert((range.kind, range.algorithm.clone()));
                         }
                     }
                 }
@@ -653,9 +825,9 @@ impl Project {
 
         // Tables the analyzed code forms or loads the address of (literal pools, movw/movt pairs).
         for (address, flow) in &flows {
-            for (start, end, kind, algorithm) in &ranges {
-                if flow.constants.range(*start..*end).next().is_some() {
-                    crypto.entry(*address).or_default().insert((*kind, algorithm.clone()));
+            for range in &ranges {
+                if flow.constants.range(range.start..range.end).any(|&at| reaches(range, at)) {
+                    crypto.entry(*address).or_default().insert((range.kind, range.algorithm.clone()));
                 }
             }
         }
@@ -672,7 +844,9 @@ impl Project {
             noreturn,
             peripherals: peripherals.clone(),
             globals: Vec::new(),
+            reached: Default::default(),
             profiles: Default::default(),
+            results: Default::default(),
             names: Default::default(),
         };
         // Reset routines: a write of SYSRESETREQ with the AIRCR key, or any AIRCR write in a routine that never
@@ -710,7 +884,12 @@ impl Project {
                 if labels.is_empty() {
                     continue;
                 }
-                globals.push((store.address & !3, store.address.saturating_add(store.span.max(1)), labels));
+                globals.push(Stored {
+                    start: store.address & !3,
+                    end: store.address.saturating_add(store.span.max(1)),
+                    labels,
+                    by: *address,
+                });
             }
         }
         context.globals = globals;
@@ -727,10 +906,17 @@ impl Project {
             for (index, gate) in flow.gates.iter().enumerate() {
                 // A decision on nothing but data another function stored (a flag a mechanism sets) consumes that
                 // mechanism's verdict; it is listed with it as a flag consumer, not as a mechanism of its own.
-                if context.taint_labels(*address, gate.taint, false).is_empty() {
+                let direct = context.taint_labels(*address, gate.taint, false);
+                if direct.is_empty() {
                     continue;
                 }
-                let labels = context.taint_labels(*address, gate.taint, true);
+                let mut labels = context.taint_labels(*address, gate.taint, true);
+                // A challenge is issued before the response is checked: randomness counts only when it reaches the
+                // decision through data another function stored. Randomness the check itself draws (a nonce for
+                // key exchange, signature padding) is not a challenge.
+                if direct.iter().any(|label| matches!(label, Label::Random(_))) {
+                    labels.retain(|label| !matches!(label, Label::Random(_)));
+                }
                 match categorize(&labels) {
                     Some(category) => {
                         found.push(Candidate { function: *address, gate: index, labels, category, outer: None })
@@ -814,6 +1000,30 @@ impl Project {
         }
         // Flags a mechanism writes, and the decisions elsewhere that test them.
         add_flag_consumers(&context, &mut lifter, program, &starts, &mut mechanisms, &mut coverage);
+        // A debugger presence check whose debugger side is not shown to be the refusal (a HardFault handler that
+        // breaks into an attached debugger, semihosting, trace output) is not a lock.
+        let mut presence_checks = Vec::new();
+        mechanisms.retain(|mechanism| {
+            if mechanism.debugger_only != Some(false) {
+                return true;
+            }
+            if let Some(decision) = &mechanism.decision {
+                let paths: Vec<String> =
+                    mechanism.outcomes.iter().map(|outcome| format!("{}: {}", outcome.path, outcome.detail)).collect();
+                presence_checks.push(NotLock {
+                    kind: "debugger_presence_check",
+                    function: decision.function,
+                    function_name: decision.function_name.clone(),
+                    at: decision.at,
+                    detail: format!(
+                        "decides on whether a debugger is attached (DHCSR), but the code does not show the attached \
+                         side refusing while the other continues ({})",
+                        paths.join("; ")
+                    ),
+                });
+            }
+            false
+        });
 
         if let Some(category) = &query.category {
             mechanisms.retain(|mechanism| mechanism.category == category.as_str());
@@ -855,8 +1065,7 @@ impl Project {
                 function_name: context.name(*function),
                 at: *at,
                 detail: format!(
-                    "decides on {} with no key, so it detects damage but does not restrict who may change the data \
-                     (see integrity_checks)",
+                    "decides on {} with no key, so it detects damage but does not restrict who may change the data",
                     what.join(" and ")
                 ),
             });
@@ -883,11 +1092,19 @@ impl Project {
                 });
             }
         }
+        not_locks.extend(presence_checks);
         not_locks.extend(crypto_without_decision(&context, &consulted_functions));
         let not_locks_total = not_locks.len();
         not_locks.truncate(MAX_NOT_LOCKS);
 
         coverage.functions_analyzed = context.flows.len();
+        if context.flows.values().any(|flow| flow.overflowed) {
+            coverage.incomplete = true;
+            limitations.push(
+                "Some functions had more data sources than the dataflow tracks; their surplus sources carry no role."
+                    .into(),
+            );
+        }
         coverage.instructions = lifter.instructions;
         if coverage.instructions > MAX_INSTRUCTIONS {
             coverage.incomplete = true;
@@ -938,7 +1155,7 @@ impl Project {
         while report.mechanisms.len() > 1 && serde_json::to_string(&report).map_or(0, |text| text.len()) > MAX_BYTES {
             report.mechanisms.pop();
         }
-        let end = query.offset + report.mechanisms.len();
+        let end = query.offset.saturating_add(report.mechanisms.len());
         report.next_offset = (end < total).then_some(end);
         Ok(report)
     }
@@ -950,15 +1167,47 @@ fn xrefs_to(program: &rampage_analysis::discover::Program, target: u64) -> impl 
     program.xrefs[first..].iter().take_while(move |xref| xref.to == target).map(|xref| xref.from)
 }
 
-/// Aligned 32-bit words in mapped, read-only image data or code: (address, value).
-fn pool_words(binary: &rampage_loaders::Binary) -> impl Iterator<Item = (u64, u64)> + '_ {
-    binary.segments.iter().filter(|segment| segment.perms.read && !segment.perms.write).flat_map(move |segment| {
-        let start = segment.address.next_multiple_of(4);
-        let end = segment.address + segment.file_size;
-        (start..end.saturating_sub(3))
-            .step_by(4)
-            .filter_map(move |address| binary.read_constant(address, 4).map(|value| (address, value)))
-    })
+/// What an analyzed function stored at fixed addresses, by role.
+struct Stored {
+    start: u64,
+    end: u64,
+    labels: BTreeSet<Label>,
+    /// The storing function.
+    by: u64,
+}
+
+/// A crypto constant found in the image and the addresses a reference to it may point at.
+struct CryptoRange {
+    /// The hit, less the slack a curve parameter gets for a structure that holds it.
+    start: u64,
+    hit: u64,
+    end: u64,
+    kind: Kind,
+    algorithm: String,
+}
+
+/// Aligned 32-bit words in mapped, read-only image data or code whose value falls in one of `ranges` (sorted by
+/// start): (address, value).
+fn pool_words(binary: &rampage_loaders::Binary, ranges: &[CryptoRange]) -> Vec<(u64, u64)> {
+    let lowest = ranges.iter().map(|range| range.start).min().unwrap_or(u64::MAX);
+    let highest = ranges.iter().map(|range| range.end).max().unwrap_or(0);
+    let mut found = Vec::new();
+    for segment in binary.segments.iter().filter(|segment| segment.perms.read && !segment.perms.write) {
+        let Some(bytes) = binary.read(segment.address, segment.file_size) else { continue };
+        let skip = usize::try_from(segment.address.next_multiple_of(4) - segment.address).unwrap_or(0);
+        let (words, _) = bytes.get(skip..).unwrap_or_default().as_chunks::<4>();
+        for (index, &word) in words.iter().enumerate() {
+            let value = u64::from(if binary.big_endian { u32::from_be_bytes(word) } else { u32::from_le_bytes(word) });
+            if value < lowest || value >= highest {
+                continue;
+            }
+            let after = ranges.partition_point(|range| range.start <= value);
+            if ranges[..after].iter().rev().take(8).any(|range| value < range.end) {
+                found.push((segment.address + (skip + 4 * index) as u64, value));
+            }
+        }
+    }
+    found
 }
 
 fn build_mechanism(
@@ -978,16 +1227,22 @@ fn build_mechanism(
     for (_, name) in configures {
         labels.insert(Label::Protection(name.clone(), 0));
     }
-    // The decision shown is the most telling of the function's gates: a branch, else a conditional instruction that
-    // returns, branches or writes memory, else the last conditional select (the end of a compare chain).
+    // The decision shown is the most telling of the function's gates: the earliest branch on the result of a call
+    // that carries the evidence, else the earliest other branch, else a conditional instruction that returns,
+    // branches or writes memory, else the last conditional select (the end of a compare chain).
     let telling = |member: usize| {
-        let gate = flow.map(|flow| &flow.gates[found[member].gate]);
-        let rank = match gate.map(|gate| (gate.target, &gate.effect)) {
-            Some((Some(_), _)) => 0,
-            Some((None, Some(Effect::Returns(_) | Effect::Branches(_) | Effect::Stores { .. }))) => 1,
-            _ => 2,
-        };
-        (rank, std::cmp::Reverse(gate.map_or(0, |gate| gate.at)))
+        let Some(flow) = flow else { return (4, 0) };
+        let gate = &flow.gates[found[member].gate];
+        let on_result = gate.taint.bits().any(|bit| match flow.source_of(bit) {
+            Some(Source::Call(Some(target))) => !context.result_labels(target, 0, true).is_empty(),
+            _ => false,
+        });
+        match (gate.target, &gate.effect) {
+            (Some(_), _) if on_result => (0, gate.at),
+            (Some(_), _) => (1, gate.at),
+            (None, Some(Effect::Returns(_) | Effect::Branches(_) | Effect::Stores { .. })) => (2, gate.at),
+            _ => (3, u64::MAX - gate.at),
+        }
     };
     let mut members = members.to_vec();
     members.sort_by_key(|&member| telling(member));
@@ -1064,12 +1319,22 @@ fn build_mechanism(
                 if carried.is_empty() {
                     continue;
                 }
-                let profile = context.profile(target);
-                let mut what: Vec<String> = Vec::new();
-                what.extend(profile.signature.iter().map(|name| format!("{name} signature")));
-                what.extend(profile.mac.iter().map(|name| format!("{name} MAC")));
-                if profile.signature.is_empty() && profile.mac.is_empty() {
-                    what.extend(profile.hash.iter().map(|name| format!("{name} digest")));
+                let result = context.result_labels(target, 0, true);
+                let signatures: Vec<String> = result
+                    .iter()
+                    .filter_map(|label| {
+                        if let Label::Signature(name) = label { Some(format!("{name} signature")) } else { None }
+                    })
+                    .collect();
+                let macs: Vec<String> = result
+                    .iter()
+                    .filter_map(|label| if let Label::Mac(name) = label { Some(format!("{name} MAC")) } else { None })
+                    .collect();
+                let mut what: Vec<String> = signatures.into_iter().chain(macs).collect();
+                if what.is_empty() {
+                    what.extend(result.iter().filter_map(|label| {
+                        if let Label::Hash(name) = label { Some(format!("{name} digest")) } else { None }
+                    }));
                 }
                 let name = context.name(target);
                 if what.is_empty() {
@@ -1117,6 +1382,31 @@ fn build_mechanism(
         _ => "low",
     };
     let confidence = if decision.is_none() && !configures.is_empty() { "high" } else { confidence };
+    // A check known only by a library function's name (no algorithm constant) is at most medium.
+    let named_only = matches!(category, "signature_verification" | "mac_verification")
+        && labels.iter().all(|label| match label {
+            Label::Signature(name) | Label::Mac(name) => labels::is_library(name),
+            _ => true,
+        });
+    let confidence = if named_only && confidence == "high" { "medium" } else { confidence };
+    // A decision on the debug status alone is a lock only when the side a debugger takes is the refusal and the
+    // other continues; the condition's polarity says which side that is.
+    let debugger_only = (category == "debug_lock"
+        && configures.is_empty()
+        && labels.iter().all(|label| matches!(label, Label::DebugStatus(..))))
+    .then(|| {
+        let Some(gate) = primary.and_then(|primary| flow.map(|flow| &flow.gates[primary.gate])) else { return false };
+        let attached = match (gate.target, gate.taint.when_nonzero()) {
+            (Some(_), Some(true)) => "branch",
+            (Some(_), Some(false)) => "fallthrough",
+            // A conditionally executed instruction is skipped when its condition holds.
+            (None, Some(true)) => "otherwise",
+            (None, Some(false)) => "conditional",
+            (_, None) => return false,
+        };
+        failure_path == attached && sides.iter().any(|side| side.path != attached && !side.fails())
+    });
+    let confidence = if debugger_only.is_some() && confidence == "high" { "medium" } else { confidence };
 
     let what = match category {
         "signature_verification" => format!(
@@ -1184,6 +1474,7 @@ fn build_mechanism(
         }
         None => format!("{what}, in `{}`.", context.name(function)),
     };
+    let written: Vec<u64> = sides.iter().flat_map(|side| side.written.iter().copied()).collect();
     let mut evidence: Vec<String> = Vec::new();
     for label in &labels {
         match label {
@@ -1224,6 +1515,8 @@ fn build_mechanism(
         failure_path,
         related,
         evidence,
+        written,
+        debugger_only,
     }
 }
 
@@ -1274,7 +1567,11 @@ fn outcomes(context: &Context, flow: &FunctionFlow, gate: &flow::Gate) -> Vec<Si
                 Some(Effect::Stores { address, value }) => ("writes", write_text(context, *address, *value)),
                 _ => ("selects", "selects a different value".to_owned()),
             };
-            let conditional = Side { path: "conditional", at: gate.at, effect: kind, detail };
+            let written = match effect {
+                Some(Effect::Stores { address, value: Some(_) }) => vec![*address],
+                _ => Vec::new(),
+            };
+            let conditional = Side { path: "conditional", at: gate.at, effect: kind, detail, written };
             let otherwise = if matches!(effect, Some(Effect::Returns(_))) {
                 side(context, flow, "otherwise", gate.next, &reach(context, flow, gate.next), &BTreeMap::new())
             } else {
@@ -1283,6 +1580,7 @@ fn outcomes(context: &Context, flow: &FunctionFlow, gate: &flow::Gate) -> Vec<Si
                     at: gate.next,
                     effect: "continues",
                     detail: "continues without it".to_owned(),
+                    written: Vec::new(),
                 }
             };
             vec![conditional, otherwise]
@@ -1290,13 +1588,13 @@ fn outcomes(context: &Context, flow: &FunctionFlow, gate: &flow::Gate) -> Vec<Si
     }
 }
 
-/// A returned constant as text: small values in decimal (negative ones signed), others not at all, since a
-/// register left over in a function with no result is not a result.
+/// A returned constant as text: small values formed by instructions in decimal (negative ones signed), others not
+/// at all, since a register left over in a function with no result is not a result.
 fn returns_text(value: Option<Val>) -> String {
     match value {
         Some(Val::Const(value)) => {
             let signed = value as u32 as i32;
-            if value <= 0xffff {
+            if value <= MAX_SHOWN_VALUE {
                 format!("returns {value}")
             } else if value <= u64::from(u32::MAX) && (-0x10000..0).contains(&signed) {
                 format!("returns {signed}")
@@ -1308,10 +1606,15 @@ fn returns_text(value: Option<Val>) -> String {
     }
 }
 
+/// A write as text. The value is shown only when it is a small, flag-like constant an instruction formed (the flow
+/// drops values read from memory) and the target is not a key register; anything else could be key material.
 fn write_text(context: &Context, address: u64, value: Option<u64>) -> String {
+    let place = place(context, address);
     match value {
-        Some(value) => format!("writes {value:#x} to {}", place(context, address)),
-        None => format!("writes {}", place(context, address)),
+        Some(value) if value <= MAX_SHOWN_VALUE && !place.to_ascii_uppercase().contains("KEY") => {
+            format!("writes {value:#x} to {place}")
+        }
+        _ => format!("writes {place}"),
     }
 }
 
@@ -1365,6 +1668,7 @@ fn side(
     let mut kind: Option<&'static str> = None;
     let mut details: Vec<String> = Vec::new();
     let mut returns: Option<String> = None;
+    let mut written: Vec<u64> = Vec::new();
     let rank = |effect: &str| match effect {
         "reset" => 0,
         "exit" => 1,
@@ -1400,7 +1704,6 @@ fn side(
             let name = context.name(target);
             let callee = context.flows.get(&target);
             let stops = context.stops(target);
-            let _ = callee;
             if context.reset_routines.contains(&target) || labels::stop_api(&name) == Some("reset") {
                 note("reset", format!("calls `{name}`, which requests a system reset"), &mut kind, &mut details);
             } else if labels::stop_api(&name) == Some("exit") {
@@ -1412,6 +1715,8 @@ fn side(
                     &mut kind,
                     &mut details,
                 );
+            } else if labels::stop_api(&name) == Some("ignore") {
+                note("calls", format!("calls `{name}`"), &mut kind, &mut details);
             } else if stops || labels::stop_api(&name) == Some("halt") {
                 note("halt", format!("calls `{name}`, which does not return"), &mut kind, &mut details);
             } else {
@@ -1426,15 +1731,34 @@ fn side(
                 note("reset", "requests a system reset (AIRCR.SYSRESETREQ)".to_owned(), &mut kind, &mut details);
                 continue;
             }
+            if store.value.is_some() {
+                written.push(store.address);
+            }
             note("writes", write_text(context, store.address, store.value), &mut kind, &mut details);
         }
+        // Control leaves through a pointer: a computed jump, or an indirect call that does not come back (nothing
+        // but a loop forever follows it). Calls through import slots are calls to the import, not transfers.
+        let leaves = |at: u64| {
+            flow.indirect_jumps.contains(&at)
+                || flow.indirect_calls.contains(&at)
+                    && block.successors.iter().all(|&next| {
+                        flow.self_loops.contains(&next) || next == block.end() && flow.self_loops.contains(&block.end())
+                    })
+        };
         for &indirect in flow.indirect_calls.iter().chain(&flow.indirect_jumps).filter(|at| range.contains(at)) {
-            note("transfer", format!("transfers control through a pointer at {indirect:#x}"), &mut kind, &mut details);
+            if leaves(indirect) {
+                note(
+                    "transfer",
+                    format!("transfers control through a pointer at {indirect:#x}"),
+                    &mut kind,
+                    &mut details,
+                );
+            }
         }
         if returns.is_none()
             && let Some(ret) = flow.returns.iter().find(|ret| range.contains(&ret.at))
         {
-            returns = Some(returns_text(ret.value));
+            returns = Some(returns_text(ret.value.filter(|_| ret.immediate)));
         }
     }
     if let Some(text) = returns {
@@ -1442,7 +1766,7 @@ fn side(
     }
     let effect = kind.unwrap_or("continues");
     let detail = if details.is_empty() { "continues".to_owned() } else { details.join(", ") };
-    Side { path, at, effect, detail }
+    Side { path, at, effect, detail, written }
 }
 
 /// Mechanisms whose paths write a flag in RAM: the decisions elsewhere that read it are listed as consumers.
@@ -1470,10 +1794,7 @@ fn add_flag_consumers(
                     && context.address_label(store.address).is_none()
                     && context.project.binary.read_constant(store.address, 1).is_none()
                     && store.address != labels::AIRCR
-                    && mechanism
-                        .outcomes
-                        .iter()
-                        .any(|outcome| outcome.detail.contains(&format!("{:#x}", store.address)))
+                    && mechanism.written.contains(&store.address)
             })
             .map(|store| store.address)
             .collect();
@@ -1482,7 +1803,7 @@ fn add_flag_consumers(
                 .filter_map(|from| context.project.function_containing(from).ok().flatten())
                 .collect();
             if let Some(accesses) = &accesses {
-                readers.extend(accesses.in_range(flag, flag + 4).iter().map(|access| access.function));
+                readers.extend(accesses.in_range(flag, flag.saturating_add(4)).iter().map(|access| access.function));
             }
             readers.remove(&decision.function);
             for reader in readers.into_iter().take(MAX_RELATED) {

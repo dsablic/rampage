@@ -24,12 +24,12 @@ Thumb, AArch64 and x86-64. Other architectures return `supported: false`.
 
 | Category | Reported when a branch decides on |
 | --- | --- |
-| `signature_verification` | the result of a routine whose call tree holds public-key evidence: curve parameters (P-256, secp256k1, Ed25519), PKCS#1 v1.5 DigestInfo prefixes, or a known verify function (mbed TLS, micro-ecc, libsodium, OpenSSL, BearSSL, wolfCrypt and platform APIs) |
+| `signature_verification` | a result that derives from public-key evidence: a routine referencing curve parameters (P-256, secp256k1, Ed25519) or PKCS#1 v1.5 DigestInfo prefixes, or a known verify function (mbed TLS, micro-ecc, libsodium, OpenSSL, BearSSL, wolfCrypt and platform APIs) |
 | `mac_verification` | a keyed MAC: HMAC pads (0x36, 0x5c) applied around a hash routine, or a known MAC function |
 | `challenge_response` | a signature, MAC or digest computed over data that derives from a random source (an RNG register, `getrandom` and similar), in the same function or through a buffer another function filled |
 | `device_binding` | a value derived from a unique-ID register |
 | `anti_rollback` | a value derived from a counter in fuses or protected storage (a register named as a version or monotonic counter in OTP, fuse or option storage) |
-| `debug_lock` | a readout, write or debug protection setting (option-byte fields such as RDP or WRP, a debug-disable bit, ARMv8-M `DAUTHCTRL`), the architectural `DHCSR` debug status (a debugger attached), or a function that writes such a setting |
+| `debug_lock` | a readout, write or debug protection setting (option-byte fields such as RDP or WRP, a debug-disable bit, ARMv8-M `DAUTHCTRL`), or a function that writes such a setting; or the architectural `DHCSR` debug status when the side taken with a debugger attached is the refusal and the other side continues |
 | `feature_lock` | fuse, OTP or option bits that are none of the above (feature and region bits) |
 
 Register roles come from an imported [SVD map](peripheral-maps.md), by generic names (`UID`, `DEVICEID`, `OTP`,
@@ -40,22 +40,27 @@ known without a map are architectural: `DHCSR`, `DAUTHCTRL` and `AIRCR` (a reset
 
 ## How a decision is found
 
-1. Evidence: algorithm constants (`find_crypto`'s database) and the functions referencing them, library function
-   names, CRC routines (as [`integrity_checks`](firmware-patching.md) finds them), and constant-address register
-   accesses (as `peripheral_access` finds them).
+1. Evidence: algorithm constants (`find_crypto`'s database) and the functions referencing them (a reference a little
+   before a curve parameter counts only when no symbol, other reference or other algorithm's constant lies between),
+   library function names, CRC routines, and constant-address register accesses (as `peripheral_access` finds them).
 2. Those functions, their callers up to four levels and their direct callees are lifted to p-code with the bundled
    Sleigh specifications, callees first. A forward dataflow tracks known values (constants, stack offsets) and which
    sources each value derives from: a call's result and the buffers it may write through pointer arguments, and loads
    from fixed addresses outside read-only image data. It follows stack slots, ARM conditional execution (IT blocks)
    and, for an analyzed callee, the arguments its result derives from.
 3. Every conditional branch whose condition derives from a source is a decision. Its sources' roles give the
-   category. A decision whose verdict is only passed up (a `verify_image` that returns an error code) is folded into
+   category. A call's role is that of what it hands back: its returned value (or, for the buffers it fills, what it
+   writes through the pointers it was given) and the sources that derive from, followed through callees; crypto
+   elsewhere in its call tree whose result does not reach that output does not count. A decision whose verdict is only passed up (a `verify_image` that returns an error code) is folded into
    the caller's decision on it and listed under `related` as `inner_decision`.
 4. Each path is followed within the function, up to the next decision: a call that requests a reset (writes
    `SYSRESETREQ` to `AIRCR` or is `NVIC_SystemReset`, `reboot`), exits, never returns, jumps through a pointer (into a
-   verified image), a fixed address written, a return value. `failure_path` names the side that resets, exits or
-   halts while the other does not, or the side that does not transfer control when the other does; otherwise
-   `unknown`.
+   verified image), a fixed address written, a return value. Calls through import slots (a PLT, `-fno-plt` GOT or
+   PE IAT entry) are calls to the import; a transfer is a computed jump or an indirect call after which nothing but
+   a loop follows. `failure_path` names the side that resets, exits or halts while the other does not, or the side
+   that does not transfer control when the other does; otherwise `unknown`. A written or returned value is shown only
+   when instructions formed it, it is at most 0xffff and the target is not a key register; values read from memory
+   are never shown.
 5. A flag in RAM one side writes, tested by decisions in other functions, lists those as `flag_consumer`s.
 
 ## Results
@@ -67,7 +72,7 @@ known without a map are architectural: `DHCSR`, `DAUTHCTRL` and `AIRCR` (a reset
   a `summary` sentence;
 - `decision`: the function, the branch address and how the condition is formed (`equality with a constant`,
   `equality with another value`, `ordered comparison`, `bit test` or `zero or nonzero test`);
-- `checks`: the routine whose result is decided on and what its call tree computes;
+- `checks`: the routine whose result is decided on and what that result derives from;
 - `consults`: algorithms, registers by name and address, and `constant_data` / `external_data` addresses passed to
   the checking routine (a key table, an image header in another flash area);
 - `outcomes`, one per path (`branch`/`fallthrough`, or `conditional`/`otherwise` for a conditionally executed
@@ -77,28 +82,34 @@ known without a map are architectural: `DHCSR`, `DAUTHCTRL` and `AIRCR` (a reset
 
 `not_locks` lists what was found and is not a lock: `integrity_check` (a decision on a CRC or an unkeyed digest:
 it detects damage but does not restrict who may change the data), `identity_read` (a unique ID read that no traced
-decision depends on, such as a serial-number string) and `crypto_without_decision` (a digest or signature computed
-with no branch or return value depending on it, such as a log digest). `coverage` gives the functions and
+decision depends on, such as a serial-number string), `debugger_presence_check` (a `DHCSR` decision whose debugger
+side is not shown to be the refusal, such as a fault handler that breaks into an attached debugger) and
+`crypto_without_decision` (a digest or signature computed with no branch or return value depending on it, such as a
+log digest). `coverage` gives the functions and
 instructions analyzed, whether a budget stopped the analysis, the crypto constants and SVD peripherals seen, and
 whether the image was treated as firmware.
 
 ## Measured
 
 `tests/fixtures/firmware/locks` builds, from committed sources with synthetic keys, a Cortex-M3 firmware for a
-made-up device (`tests/fixtures/svd/lock-device.svd`) and an x86-64 Linux program. They hold an ECDSA P-256 boot
-signature check that resets on failure, a thermometer-coded OTP rollback counter, a readout-protection setter,
-debugger detection, unique-ID pairing, fuse feature and region bits, an HMAC challenge-response unlock (RNG register
-and `getrandom`), an RSA-2048 PKCS#1 v1.5 update check, and negative controls: a CRC-checked configuration, a sensor
-`WHO_AM_I` read, a log digest, the unique ID formatted as a serial string and a CPUID check. Against `truth.json`
-each of the six categories they contain scores precision and recall 1.0 (10 mechanisms; `mac_verification` has no
-fixture), the negative controls report nothing or a not-lock, and the repository's ordinary programs (the hello
-programs, static musl, a Go program and the other firmware fixtures) report no mechanism. The fixtures were written together with the detector, so these are regression gates, not an estimate of
-accuracy on real firmware.
+made-up device (`tests/fixtures/svd/lock-device.svd`), an x86-64 Linux program (at `-O2`, at `-O0` and with
+`-fno-plt` imports) and a negative x86-64 program. They hold an ECDSA P-256 boot signature check that resets on
+failure, a thermometer-coded OTP rollback counter, a readout-protection setter, debugger detection that halts, unique-ID
+pairing, fuse feature and region bits, an HMAC challenge-response unlock (RNG register and `getrandom`), an RSA-2048
+PKCS#1 v1.5 update check, and negative controls: a CRC-checked configuration, a sensor `WHO_AM_I` read, a log digest,
+the unique ID formatted as a serial string, a CPUID check, a fault handler that breaks into an attached debugger and
+otherwise resets, and a request handler that reaches HMAC on one path while its status drives ordinary error handling.
+Against `truth.json` each of the six categories they contain scores precision and recall 1.0 (14 mechanisms; the
+decision's address, inner decision and refusal effect are all checked; `mac_verification` has no fixture), the
+negative controls report nothing or a not-lock, no report contains the firmware's key words or the option-byte unlock
+values it writes, and the repository's ordinary programs (the hello programs, static musl, a Go program and the other
+firmware fixtures) report no mechanism. The fixtures were written together with the detector, so these are
+regression gates, not an estimate of accuracy on real firmware.
 
 ## Limits
 
-The analysis lifts at most 2,048 functions and 1,500,000 instructions (`coverage.incomplete` says when it stopped);
-call trees are searched four levels deep. Data flow is tracked through registers, stack slots, fixed addresses and
+The analysis lifts at most 2,048 functions and 1,500,000 instructions and tracks at most 63 sources per function
+(`coverage.incomplete` says when either stopped); results are followed six call levels deep. Data flow is tracked through registers, stack slots, fixed addresses and
 buffers passed by pointer (a pointer argument is taken to cover 64 bytes, or the length passed after it), not
 through heap objects, structures reached through pointers in memory, indirect calls or other threads; a decision
 made that way is missed. Crypto is recognized only by constants and names: an implementation without distinctive
