@@ -210,7 +210,7 @@ Text output is bounded to four MiB and tokens to 262,144; the engine also retain
 Sessions select a sibling worker automatically when installed beside the application; `tools/install.sh`
 installs the worker and CLI together, optionally with the UI. Direct `Project` construction remains explicitly
 opt-in; `Session::open` also selects a sibling worker when present.
-Worker protocol version 10 carries ordered symbol/type/prototype/global/mode, `no_return`, data-name/region,
+Worker protocol version 11 carries ordered symbol/type/prototype/global/mode, `no_return`, data-name/region, volatile-range,
 read-only folding, callee-inference, local-variable, soft-type-hint and layout-assertion operations; mismatched
 request or response versions are rejected. Install CLI and worker together rather than mixing builds.
 The protocol bounds input/output, drains pipes concurrently, cancels/times out and reaps failed children without

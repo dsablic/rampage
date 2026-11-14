@@ -3167,7 +3167,7 @@ pub fn tools() -> Vec<Tool> {
             Group::Types,
             "import_svd",
             "Import a CMSIS-SVD peripheral map (preview unless apply; replaces an earlier import, one undo step). \
-             Decompiled MMIO then reads `TIMER0.CR = TIMER0.CR | 0x21; /* TIMER0.CR: EN|MODE=... */`; \
+             Decompiled MMIO then reads `TIMER0.CR = uVar1 | 0x21; /* CR: EN|MODE=... */`; \
              disassembly, xrefs and evaluate_function faults name registers, and PERIPH or PERIPH.REG works as an \
              address.",
             |project, args: ImportSvdArgs| {

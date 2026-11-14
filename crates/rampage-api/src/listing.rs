@@ -119,7 +119,7 @@ impl Project {
         }
         for line in lines {
             let mut names: Vec<String> = Vec::new();
-            if let Some(name) = line.immediate.and_then(|value| self.peripheral_name(value))
+            if let Some(name) = line.immediate.and_then(|value| self.immediate_register_name(line.address, value))
                 && !line.comment.as_deref().is_some_and(|comment| comment.contains(&name))
             {
                 names.push(format!("={name}"));
@@ -263,7 +263,10 @@ impl Project {
         }
         // A pointer-sized immediate (x86 `mov`/`push`) counts only when it names something or points at a string.
         let data = insn.data_ref.or(insn.immediate)?;
-        if let Some(name) = self.name_at(data) {
+        // An immediate is only maybe an address: name it by symbol, never as a peripheral register (small
+        // constants fall inside peripherals on low-address profiles); name_register_accesses vets those.
+        let name = if insn.data_ref.is_some() { self.name_at(data) } else { self.symbolic_name_at(data) };
+        if let Some(name) = name {
             return Some(name);
         }
         string_at(&self.binary, data).map(|text| format!("{text:?}"))

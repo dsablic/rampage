@@ -1936,6 +1936,18 @@ const char *rampage_decomp_data_region(void *h, uint64_t first, uint64_t last, c
     });
 }
 
+// Marks [first, last] of the data space volatile, as memory-mapped registers are: their loads and stores are never
+// merged, forwarded or removed. Symbols added in the range afterwards take the property.
+const char *rampage_decomp_volatile_range(void *h, uint64_t first, uint64_t last) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &nativeMutation) {
+        AddrSpace *space = handle->arch->getDefaultDataSpace();
+        if (first > last || last > space->getHighest()) throw LowlevelError("Volatile range exceeds the data space");
+        nativeMutation = true;
+        handle->arch->symboltab->setPropertyRange(Varnode::volatil, Range(space, first, last));
+    });
+}
+
 // Registers one MSVC vftable for virtual call resolution: its slots, its complete class (type descriptor
 // address) and vfptr offset, and the NUL-separated type names whose pointers it serves at offset 0.
 const char *rampage_decomp_virtual_table(void *h, uint64_t address, uint64_t complete, int64_t offset,

@@ -113,6 +113,8 @@ fn plan_with(
         operations.push(WorkerOperation::Global { address, declaration: declaration.clone() });
     }
     let peripherals = super::peripheral_typing(&project.binary, annotations);
+    let highest = super::highest_data_address(&project.binary);
+    operations.extend(crate::peripherals::volatile_operations(annotations, highest));
     operations.extend(crate::peripherals::decompiler_operations(&peripherals));
     for (&address, declaration) in annotations.signatures() {
         let declaration = crate::debug_type_import::signature_declaration(declaration, annotations)?;

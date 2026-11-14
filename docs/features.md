@@ -47,7 +47,7 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   [Raw Projects in MCP](mcp.md#multiple-regions-intel-hex-and-s-records). Limits: base addresses and regions are
   the analyst's assertion; Sleigh profiles other than MSP430 and AVR8 do not decompile.
 - [CMSIS-SVD peripheral maps](peripheral-maps.md) (`import_svd`, `peripheral_access`) name memory-mapped
-  registers everywhere: decompiled C reads `TIMER0.CR = TIMER0.CR | 0x21; /* CR: EN|MODE=Single_MATCH */`,
+  registers everywhere: decompiled C reads `TIMER0.CR = uVar1 | 0x21; /* CR: EN|MODE=Single_MATCH */`,
   disassembly, xrefs and evaluation faults say `TIMER0.CR`, and `peripheral_access` lists the functions that read
   or write each register. Limits: accesses are found only through constants a function forms itself; bit fields
   are comments, not C bit-fields.

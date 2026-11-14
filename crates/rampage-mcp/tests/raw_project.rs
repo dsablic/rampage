@@ -310,7 +310,7 @@ async fn an_svd_map_names_registers_across_tools() {
         call(&client, "import_svd", json!({ "path": path, "raw": selector, "svd": svd, "apply": true })).await;
     assert!(!failed && text.contains("\"applied\":true"), "{text}");
     let (text, failed) = call(&client, "decompile", json!({ "path": path, "raw": selector, "at": "0x8000040" })).await;
-    assert!(!failed && text.contains("TIMER0.CR = TIMER0.CR | 0x21; /* CR: EN|MODE=Single_MATCH */"), "{text}");
+    assert!(!failed && text.contains("TIMER0.CR = uVar1 | 0x21; /* CR: EN|MODE=Single_MATCH */"), "{text}");
     let (text, failed) = call(&client, "xrefs", json!({ "path": path, "raw": selector, "to": "TIMER1" })).await;
     assert!(!failed && text.contains("\"to_name\":\"TIMER1.COUNT\"") && text.contains("\"access\":\"read\""), "{text}");
     let (text, failed) =

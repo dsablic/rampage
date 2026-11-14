@@ -494,6 +494,12 @@ impl Project {
         if peripherals.is_empty() { None } else { peripherals.name(address) }
     }
 
+    /// The user's or a symbol's name at `address`, never a peripheral register's.
+    pub(crate) fn symbolic_name_at(&self, address: u64) -> Option<String> {
+        let annotations = self.annotations();
+        annotations.name(address).or_else(|| self.names.get(address)).map(str::to_owned)
+    }
+
     /// The function's name: the user's, a symbol's, or `sub_<hex>`.
     pub fn function_name(&self, address: u64) -> String {
         self.function_name_in(&self.annotations(), address)
@@ -930,10 +936,9 @@ impl Project {
         if let Ok(address) = text.parse() {
             return Ok(address);
         }
-        if let Some(address) = self.address_named(annotations, text) {
-            return Ok(address);
-        }
-        if let Some(address) = annotations.peripheral_map().resolve(text) {
+        let symbol = self.address_named(annotations, text);
+        let peripheral = annotations.peripheral_map().resolve(text);
+        if let Some(address) = crate::peripherals::unambiguous(text, symbol, peripheral)? {
             return Ok(address);
         }
         if let Some(address) = default_name_address(text) {

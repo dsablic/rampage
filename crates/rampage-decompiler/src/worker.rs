@@ -34,7 +34,7 @@ pub use metrics::{
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// Parent-owned cleanup proof, independent of result category and diagnostic metrics. Confirmed covers
 /// the supported owned group and direct-root reap, not descendants outside the supervisor's group boundary.
@@ -207,6 +207,11 @@ pub enum WorkerOperation {
         first: u64,
         last: u64,
         prefix: String,
+    },
+    /// Mark `first..=last` volatile (see `Decompiler::add_volatile_range`).
+    VolatileRange {
+        first: u64,
+        last: u64,
     },
     /// Infer callee effects and prototypes (see [`crate::CalleeInference`]).
     CalleeInference {
@@ -1142,6 +1147,7 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
             WorkerOperation::NoReturn { address, indirect } => engine.set_noreturn(address, indirect),
             WorkerOperation::DataName { address, name } => engine.set_data_name(address, &name),
             WorkerOperation::DataRegion { first, last, prefix } => engine.add_data_region(first, last, &prefix),
+            WorkerOperation::VolatileRange { first, last } => engine.add_volatile_range(first, last),
             WorkerOperation::CalleeInference { inference } => engine.set_callee_inference(inference),
             WorkerOperation::FoldReadOnly { enabled } => engine.set_read_only_folding(enabled),
             WorkerOperation::VirtualTables { tables, names } => engine.add_virtual_tables(&tables, &names),

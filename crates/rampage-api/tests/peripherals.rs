@@ -61,7 +61,9 @@ fn decompiled_register_accesses_read_as_peripheral_fields() {
     import(&project, "ARM_Example.svd", true);
     let code = decompile("timer0_start");
     assert!(code.contains("TIMER0.MATCH = param_1;"), "{code}");
-    assert!(code.contains("TIMER0.CR = TIMER0.CR | 0x21; /* CR: EN|MODE=Single_MATCH */"), "{code}");
+    // Registers are volatile: the read-modify-write keeps its read as its own statement.
+    assert!(code.contains("uVar1 = TIMER0.CR;"), "{code}");
+    assert!(code.contains("TIMER0.CR = uVar1 | 0x21; /* CR: EN|MODE=Single_MATCH */"), "{code}");
     let code = decompile("timer0_stop");
     assert!(code.contains("/* CR: ~(EN) */"), "{code}");
     let code = decompile("timer0_wait");
@@ -71,7 +73,7 @@ fn decompiled_register_accesses_read_as_peripheral_fields() {
     let code = decompile("timer0_reload");
     assert!(code.contains("TIMER0.RELOAD[2] = param_1;"), "{code}");
     let code = decompile("timer1_count");
-    assert!(code.contains("return TIMER1.COUNT;"), "{code}");
+    assert!(code.contains("uVar1 = TIMER1.COUNT;"), "{code}");
 }
 
 #[test]
@@ -80,7 +82,7 @@ fn literal_pool_accesses_resolve_to_registers() {
     import(&project, "edge-cases.svd", true);
     let at = truth("raw-cortex-m-decompile", "advance_cursor");
     let code = project.decompile(at).unwrap().code;
-    assert!(code.contains("CTRL.CONTROL = CTRL.STATUS | 0x100;"), "{code}");
+    assert!(code.contains("uVar1 = CTRL.STATUS;") && code.contains("CTRL.CONTROL = uVar1 | 0x100;"), "{code}");
     let listing = project.function_listing(at).unwrap();
     let comments: Vec<String> = listing.blocks.iter().flatten().filter_map(|line| line.comment.clone()).collect();
     assert!(comments.iter().any(|comment| comment.contains("=CTRL.STATUS")), "{comments:?}");
@@ -163,4 +165,29 @@ fn refuses_files_that_are_not_svd() {
         .import_svd(&ImportSvdRequest { svd: format!("{FIRMWARE}raw-cortex-m-svd.c").into(), apply: false })
         .unwrap_err();
     assert!(error.to_string().contains("XML") || error.to_string().contains("SVD"), "{error}");
+}
+
+/// Peripheral registers are volatile: two consecutive writes both stay, and a read right after a write reads the
+/// register rather than the value written.
+#[test]
+fn register_stores_and_loads_are_volatile() {
+    let project = project("raw-cortex-m-svd-volatile");
+    import(&project, "ARM_Example.svd", true);
+    let decompile = |symbol: &str| project.decompile(truth("raw-cortex-m-svd-volatile", symbol)).unwrap().code;
+    let pulse = decompile("timer0_pulse");
+    assert!(pulse.contains("TIMER0.CR = 2;") && pulse.contains("TIMER0.CR = 1;"), "{pulse}");
+    let echo = decompile("timer0_echo");
+    assert!(echo.contains("TIMER0.MATCH = param_1;") && echo.contains("uVar1 = TIMER0.MATCH;"), "{echo}");
+}
+
+/// A name both a symbol and an imported peripheral use is refused rather than silently picking one.
+#[test]
+fn a_name_shared_by_a_symbol_and_a_peripheral_is_ambiguous() {
+    let project = project("raw-cortex-m-svd");
+    import(&project, "ARM_Example.svd", true);
+    project.rename(truth("raw-cortex-m-svd", "scale"), Some("TIMER1")).unwrap();
+    for error in [project.resolve("TIMER1").unwrap_err(), project.xref_query_to("TIMER1").unwrap_err()] {
+        assert!(error.to_string().contains("ambiguous"), "{error}");
+    }
+    assert_eq!(project.resolve("TIMER0").unwrap(), 0x4001_0000);
 }

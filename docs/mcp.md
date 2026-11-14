@@ -223,7 +223,7 @@ hashes bind atomic library/proof/signature edits; pages do not select writes. Un
 unsupported bitfields/qualifiers remain explicit. See [checked debug-type import](debug-types.md).
 
 `import_svd` previews, or with `apply: true` stores, a CMSIS-SVD file's peripherals as annotations, replacing an
-earlier import in one undo step. Decompiled register accesses then read `TIMER0.CR = TIMER0.CR | 0x21;` with a
+earlier import in one undo step. Decompiled register accesses are volatile and read `TIMER0.CR = uVar1 | 0x21;` with a
 bit-field comment (`/* CR: EN|MODE=Single_MATCH */`); disassembly, xref rows and `evaluate_function` faults name
 `PERIPHERAL.REGISTER`; those names resolve as addresses; `xrefs` to a peripheral's name covers all its registers;
 and `evaluate_function` takes `mmio` values for polled registers. `peripheral_access` pages peripherals with

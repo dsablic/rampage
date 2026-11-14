@@ -78,6 +78,7 @@
     "firmware/raw-cortex-m-stages-lzss.elf": "a9b6248f2ae8fef7c1237da501b2b53880f0cd1fa32ee0f7a775b4ea481692fe",
     "firmware/raw-cortex-m-stages.elf": "e0476781e126e994457c9781f7fdae0f69f387f8074fc1331b981a0b04b89f52",
     "firmware/raw-cortex-m-strings.elf": "bca550a6bdd07b0d17ec4582817ad26e9c4771a32693c78e3e594454e826ece3",
+    "firmware/raw-cortex-m-svd-volatile.elf": "66c2fb77933c85623a7d3a272e7eb2e12984ec21c2eac37d41892ea7e52e7f36",
     "firmware/raw-cortex-m-svd.elf": "aaa31054ca25bb0aa96875128de170d45d865dccf0d6379be190b6143a9ec997",
     "firmware/raw-cortex-m-tables.elf": "849b8d58b11e7e2a4247fb957d7f0025e2535470d8a86695b228c6eded1abb81",
     "firmware/raw-cortex-m.elf": "e1d73a4f0e1bafdf797f6aaa5a3754e4787dbe1a450fd60465ff66c5791e6066",

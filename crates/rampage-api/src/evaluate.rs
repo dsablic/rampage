@@ -383,6 +383,8 @@ struct ImageRam<'a> {
     stand_ins: BTreeMap<u64, String>,
     code_written: bool,
     page_limit: usize,
+    /// The address of the latest unmapped read or write, for naming the register a run stopped at.
+    last_fault: Option<u64>,
     /// The library stand-ins' bump heap, reserving `HEAP_BYTES` of addresses from its base.
     heap: Option<Heap>,
 }
@@ -418,6 +420,7 @@ impl<'a> ImageRam<'a> {
             stand_ins: BTreeMap::new(),
             code_written: false,
             page_limit: MAX_WRITTEN_PAGES,
+            last_fault: None,
             heap: None,
         }
     }
@@ -497,6 +500,7 @@ impl Ram for ImageRam<'_> {
                     if let Some(name) = self.stand_in(at) {
                         return Err(Fault::ExternalRead { address: at, name: name.clone() });
                     }
+                    self.last_fault = Some(at);
                     return Err(Fault::UnmappedRead { address: at, size: out.len() as u32 });
                 }
             }
@@ -516,6 +520,7 @@ impl Ram for ImageRam<'_> {
         for index in 0..bytes.len() {
             let at = address.wrapping_add(index as u64);
             let Some(segment) = self.segment(at) else {
+                self.last_fault = Some(at);
                 return Err(Fault::UnmappedWrite { address: at, size: bytes.len() as u32 });
             };
             self.code_written |= segment.execute;
@@ -1269,7 +1274,7 @@ impl Project {
             name: self.name_at(entry),
             convention: abi.name(),
             stop,
-            detail: self.name_unmapped_register(stop, detail),
+            detail: self.name_unmapped_register(stop, detail, run.machine.ram.last_fault),
             steps,
             result,
             stopped_at,

@@ -1,6 +1,6 @@
 //! CMSIS-SVD peripheral maps on a project. `import_svd` stores each peripheral of an SVD file as a
 //! [`Field::Peripheral`] annotation at its base address. From there:
-//! - decompilation types each peripheral as a struct global at its base (`TIMER0.CR = TIMER0.CR | 0x21;`) and
+//! - decompilation types each peripheral as a struct global at its base (`TIMER0.CR = uVar1 | 0x21;`, volatile) and
 //!   comments bit-field constants on lines that touch a register (`/* TIMER0.CR: EN|MODE=Single_MATCH */`);
 //! - addresses inside a peripheral are named `TIMER0.CR` in disassembly, xrefs and evaluation faults, and those
 //!   names resolve wherever an address is accepted;
@@ -30,8 +30,10 @@ const MAX_ACCESSES: usize = 1 << 20;
 const MAX_STRUCT_BYTES: u64 = 1 << 20;
 
 pub(crate) fn decode(value: &str) -> Result<Peripheral, String> {
-    let peripheral: Peripheral =
+    let mut peripheral: Peripheral =
         serde_json::from_str(value).map_err(|error| format!("peripheral annotation: {error}"))?;
+    // Lookups rely on offset order; a stable sort keeps alternates in declaration order.
+    peripheral.registers.sort_by_key(|register| register.offset);
     let identifier = |name: &str| svd::identifier(name) == name;
     if !identifier(&peripheral.name) || peripheral.registers.len() > 65_536 {
         return Err(format!("peripheral annotation {:?} is malformed", peripheral.name));
@@ -79,6 +81,8 @@ impl Hit<'_> {
 pub(crate) struct PeripheralMap {
     by_base: BTreeMap<u64, Peripheral>,
     by_name: HashMap<String, u64>,
+    /// The largest span, which bounds how far below an address a covering peripheral's base can lie.
+    widest: u64,
 }
 
 impl PeripheralMap {
@@ -87,6 +91,7 @@ impl PeripheralMap {
         for value in stored.values() {
             if let Ok(peripheral) = decode(value) {
                 map.by_name.entry(peripheral.name.clone()).or_insert(peripheral.base);
+                map.widest = map.widest.max(peripheral.span());
                 map.by_base.insert(peripheral.base, peripheral);
             }
         }
@@ -105,18 +110,25 @@ impl PeripheralMap {
         self.by_name.get(name).and_then(|base| self.by_base.get(base))
     }
 
-    /// The peripheral (and register) whose registers cover `address`.
+    /// The peripheral (and register) whose registers cover `address`: of overlapping peripherals the one with the
+    /// highest base; of overlapping registers one starting exactly there, else the covering one starting highest,
+    /// the first declared breaking ties.
     pub fn at(&self, address: u64) -> Option<Hit<'_>> {
-        let (_, peripheral) = self.by_base.range(..=address).next_back()?;
+        let lowest = address.saturating_sub(self.widest);
+        let peripheral = self
+            .by_base
+            .range(lowest..=address)
+            .rev()
+            .map(|(_, peripheral)| peripheral)
+            .find(|peripheral| address - peripheral.base < peripheral.span())?;
         let offset = address - peripheral.base;
-        if offset >= peripheral.span() {
-            return None;
-        }
         let end = peripheral.registers.partition_point(|register| register.offset <= offset);
-        // Registers are sorted by offset (stably, so the first declared of alternates sharing one comes first).
-        let mut register = None;
+        // Registers are sorted by offset (stably, so alternates sharing one stay in declaration order). Walking
+        // down, the first covering register has the highest offset; keep walking through that same offset to reach
+        // the first declared.
+        let mut register: Option<&Register> = None;
         for candidate in peripheral.registers[..end].iter().rev() {
-            if candidate.offset + 8 < offset {
+            if register.is_some_and(|found| found.offset != candidate.offset) || candidate.offset + 8 < offset {
                 break;
             }
             if offset < candidate.offset + candidate.bytes() {
@@ -145,6 +157,18 @@ impl PeripheralMap {
                 .find(|register| register.name == name)
                 .map(|register| peripheral.base + register.offset),
         }
+    }
+}
+
+/// The address `text` names, given what a symbol (or the analyst's name) and an imported peripheral say: one of
+/// them, or an ambiguity error naming both when they differ.
+pub(crate) fn unambiguous(text: &str, symbol: Option<u64>, peripheral: Option<u64>) -> Result<Option<u64>, ApiError> {
+    match (symbol, peripheral) {
+        (Some(symbol), Some(peripheral)) if symbol != peripheral => Err(ApiError::Invalid(format!(
+            "{text:?} is ambiguous: a symbol at {symbol:#x} and an imported peripheral register at {peripheral:#x}; \
+             pass the address"
+        ))),
+        (symbol, peripheral) => Ok(symbol.or(peripheral)),
     }
 }
 
@@ -257,7 +281,8 @@ impl Project {
         }
         let removed: Vec<u64> = current.keys().filter(|base| !encoded.contains_key(base)).copied().collect();
         changes.extend(removed.iter().map(|&base| (Field::Peripheral, base, None)));
-        let candidate = PeripheralMap { by_name: HashMap::new(), by_base: peripherals };
+        let widest = peripherals.values().map(Peripheral::span).max().unwrap_or(0);
+        let candidate = PeripheralMap { by_name: HashMap::new(), by_base: peripherals, widest };
         let untyped = {
             let mapped = crate::decompile::mapped_ranges(&self.binary);
             let highest = crate::decompile::highest_data_address(&self.binary);
@@ -308,17 +333,18 @@ impl Project {
         })
     }
 
-    /// An unmapped_read/unmapped_write detail with the imported register at its address appended.
-    pub(crate) fn name_unmapped_register(&self, stop: crate::evaluate::StopReason, detail: String) -> String {
+    /// An unmapped_read/unmapped_write detail with the imported register at the faulting `address` appended.
+    pub(crate) fn name_unmapped_register(
+        &self,
+        stop: crate::evaluate::StopReason,
+        detail: String,
+        address: Option<u64>,
+    ) -> String {
         use crate::evaluate::StopReason;
-        if !matches!(stop, StopReason::UnmappedRead | StopReason::UnmappedWrite) {
-            return detail;
-        }
-        let address = detail
-            .rsplit("unmapped address 0x")
-            .next()
-            .and_then(|hex| u64::from_str_radix(hex.split(|c: char| !c.is_ascii_hexdigit()).next()?, 16).ok());
-        match address.and_then(|address| self.peripheral_name(address)) {
+        let name = address
+            .filter(|_| matches!(stop, StopReason::UnmappedRead | StopReason::UnmappedWrite))
+            .and_then(|address| self.peripheral_name(address));
+        match name {
             Some(name) => format!("{detail} ({name})"),
             None => detail,
         }
@@ -488,6 +514,23 @@ pub(crate) fn decompiler_typing(
     struct_plan(&map, &occupied(annotations), mapped, highest).0
 }
 
+/// Decompiler operations marking every imported peripheral's registers volatile, typed or not, so loads and stores
+/// to them are never merged, forwarded or dropped. They precede the globals, which take the property.
+pub(crate) fn volatile_operations(
+    annotations: &crate::annotations::Annotations,
+    highest: u64,
+) -> Vec<rampage_decompiler::worker::WorkerOperation> {
+    let map = annotations.peripheral_map();
+    map.peripherals()
+        .filter(|peripheral| peripheral.span() > 0)
+        .filter_map(|peripheral| {
+            let last = peripheral.base.checked_add(peripheral.span() - 1)?.min(highest);
+            (peripheral.base <= last)
+                .then_some(rampage_decompiler::worker::WorkerOperation::VolatileRange { first: peripheral.base, last })
+        })
+        .collect()
+}
+
 /// Decompiler operations declaring each typed peripheral's struct and global.
 pub(crate) fn decompiler_operations(typed: &[Typed]) -> Vec<rampage_decompiler::worker::WorkerOperation> {
     use rampage_decompiler::worker::WorkerOperation;
@@ -500,12 +543,6 @@ pub(crate) fn decompiler_operations(typed: &[Typed]) -> Vec<rampage_decompiler::
             ]
         })
         .collect()
-}
-
-/// Whether `address` lies in a peripheral typed for decompilation, whose data names would clash with its global.
-pub(crate) fn covers(annotations: &crate::annotations::Annotations, address: u64) -> bool {
-    let map = annotations.peripheral_map();
-    !map.is_empty() && map.at(address).is_some()
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -568,7 +605,9 @@ fn literals(line: &str) -> Vec<u64> {
             };
             // Subscripts and shift counts are not register values.
             let before = line[..start].trim_end();
+            // A literal right after `-` is negative: a comparison bound, not a mask.
             if previous != Some(b'[')
+                && previous != Some(b'-')
                 && !before.ends_with("<<")
                 && !before.ends_with(">>")
                 && let Some(value) = parsed
@@ -745,6 +784,9 @@ impl Evaluator<'_> {
         values: &mut Values,
         mut record: impl FnMut(u64, bool),
     ) {
+        // After a CBRANCH inside the instruction (ARM conditional execution, IT blocks) the rest of its p-code may
+        // not run, so what it writes is unknown.
+        let mut conditional = false;
         for op in ops {
             let branch = matches!(op.name.as_str(), "BRANCH" | "CBRANCH" | "CALL");
             // Direct memory operands in the code space are accesses at constant addresses.
@@ -807,10 +849,11 @@ impl Evaluator<'_> {
                         || start.saturating_add(u64::from(size)) <= offset
                         || offset.saturating_add(u64::from(output.size)) <= start
                 });
-                if let Some(result) = result {
+                if let Some(result) = result.filter(|_| !conditional) {
                     values.insert((output.space, offset, output.size), result);
                 }
             }
+            conditional |= op.name == "CBRANCH";
         }
     }
 }
@@ -827,6 +870,16 @@ impl Project {
     /// registers and temporaries across blocks (meeting where paths join), and a call forgets all but the
     /// registers the callee preserves.
     fn scan_accesses(&self) -> Result<AccessIndex, ApiError> {
+        self.scan_accesses_within(MAX_SCAN_INSTRUCTIONS, MAX_ACCESSES)
+    }
+
+    /// [`Self::scan_accesses`] decoding at most `max_instructions` and keeping at most `max_accesses`; a function
+    /// either limit cuts short contributes nothing, and the index says `incomplete`.
+    pub(crate) fn scan_accesses_within(
+        &self,
+        max_instructions: usize,
+        max_accesses: usize,
+    ) -> Result<AccessIndex, ApiError> {
         let binary = &self.binary;
         let target = binary.target();
         let mut decoder = SleighDecoder::for_emulation(&target)
@@ -874,7 +927,7 @@ impl Project {
                 let mut address = block.start;
                 while address < block.end {
                     decoded += 1;
-                    if decoded > MAX_SCAN_INSTRUCTIONS {
+                    if decoded > max_instructions {
                         incomplete = true;
                         break;
                     }
@@ -896,6 +949,10 @@ impl Project {
                     address += u64::from(instruction.length);
                 }
                 blocks.push(decoded_block);
+            }
+            // A function cut short by the budget would report a partial set of accesses: report none of it.
+            if incomplete {
+                break;
             }
             blocks.sort_by_key(|block| block.start);
             let index_of = |address: u64| blocks.binary_search_by_key(&address, |block| block.start).ok();
@@ -932,19 +989,21 @@ impl Project {
                     }
                 }
             }
+            let mut found: Vec<Access> = Vec::new();
             for (index, block) in blocks.iter().enumerate() {
                 let mut values = entry[index].clone().unwrap_or_default();
                 for (address, ops) in &block.instructions {
                     evaluator.step(ops, &mut values, |at, write| {
-                        accesses.push(Access { instruction: *address, function: function.address, address: at, write });
+                        found.push(Access { instruction: *address, function: function.address, address: at, write });
                     });
                 }
             }
-            if incomplete || accesses.len() >= MAX_ACCESSES {
+            // A function's accesses are kept whole or not at all.
+            if accesses.len() + found.len() > max_accesses {
                 incomplete = true;
-                accesses.truncate(MAX_ACCESSES);
                 break;
             }
+            accesses.append(&mut found);
         }
         accesses.sort_by_key(|access| (access.address, access.instruction, access.write));
         accesses.dedup();
@@ -969,6 +1028,21 @@ impl Project {
             }
         }
         (!names.is_empty()).then(|| names.join(", "))
+    }
+
+    /// The register an immediate at `instruction` names, when it is plausibly an address: at least 0x100, and inside
+    /// a peripheral that the function holding the instruction loads or stores at a constant address.
+    pub(crate) fn immediate_register_name(&self, instruction: u64, value: u64) -> Option<String> {
+        const MIN_ADDRESS: u64 = 0x100;
+        if value < MIN_ADDRESS {
+            return None;
+        }
+        let map = self.peripheral_map();
+        let hit = map.at(value)?;
+        let function = self.function_containing(instruction).ok()??;
+        let index = self.access_index().ok()?;
+        let (start, end) = (hit.peripheral.base, hit.peripheral.base + hit.peripheral.span());
+        index.in_range(start, end).iter().any(|access| access.function == function).then(|| hit.name())
     }
 
     /// Xref rows for the constant-address accesses in `[start, end)`, when imported peripherals cover them.
@@ -999,10 +1073,13 @@ impl Project {
             .collect())
     }
 
-    /// The xref query for a `to` argument: a peripheral's name covers all its registers.
+    /// The xref query for a `to` argument: a peripheral's name covers all its registers. A name that is also a
+    /// symbol's is refused as ambiguous, as [`Project::resolve`] refuses it.
     pub fn xref_query_to(&self, text: &str) -> Result<crate::XrefQuery, ApiError> {
         let map = self.peripheral_map();
         if let Some(peripheral) = map.named(text.trim()) {
+            let symbol = self.address_named(&self.annotations(), text.trim());
+            unambiguous(text.trim(), symbol, Some(peripheral.base))?;
             return Ok(crate::XrefQuery::ToRange(peripheral.base, peripheral.base + peripheral.span()));
         }
         self.resolve(text).map(crate::XrefQuery::To)

@@ -22,7 +22,9 @@ from device to peripheral to cluster to register, field positions as `bitOffset`
 ## What changes
 
 - **Decompilation.** Each peripheral becomes a struct global at its base (`struct TIMER0_regs TIMER0;`), with
-  padding for gaps, so register accesses read `TIMER0.CR = TIMER0.CR | 0x21;`. A peripheral the image does not
+  padding for gaps, so register accesses read `uVar1 = TIMER0.CR; TIMER0.CR = uVar1 | 0x21;`. Every imported
+  peripheral's range, typed or not, is volatile in the decompiler, so consecutive stores are all kept and a read
+  after a write reads the register, not the value written. A peripheral the image does not
   map gets a writable, zero-filled region of its own, so reads never fold to constants. On a line that touches
   one register, each constant gets a comment naming the fields it sets or clears:
   `/* CR: EN|MODE=Single_MATCH */`, `/* CR: ~(EN) */`. Shift counts and subscripts are not decoded.
@@ -44,20 +46,27 @@ from device to peripheral to cluster to register, field positions as `bitOffset`
 ## Limits
 
 The SVD file is at most 64 MiB, with at most 4,000,000 XML elements nested at most 64 deep, 4096 peripherals,
-131,072 registers, 4096 elements per `dim`, 256 fields per register and 256 enumerated values per field; clusters
-nest at most 16 deep and `derivedFrom` chains at most 16 links. No XML entity other than the predefined and
+131,072 registers and 1,048,576 fields plus enumerated values across the device (array copies counted; past any
+of these the file is refused), 4096 elements per `dim`, 256 fields per register and 256 enumerated values per
+field; clusters nest at most 16 deep and `derivedFrom` chains at most 16 links. A dotted register `derivedFrom`
+(`PERIPHERAL.REGISTER`) resolves in the named peripheral; one that names nothing is warned about. A field whose
+position overflows or lies outside its register is skipped with a warning. No XML entity other than the predefined and
 character references is expanded and no DTD is read. Descriptions are cut to 96 characters, and dropped if the
 stored map would pass 4 MiB; past that the import is refused. Peripherals that duplicate an earlier name or base
 are skipped with a warning.
 
 A peripheral is typed for decompilation only when its struct does not overlap another peripheral, an analyst
 global or typed data, code, or the edge of a mapped range; the import lists the untyped ones, whose addresses are
-still named. Overlapping registers (alternates) take the first declared in the struct and in names. Registers
+still named. Overlapping registers (alternates) take the first declared in the struct; a name is the register starting exactly
+at the address, else the covering one starting highest, the first declared breaking ties. Of overlapping
+peripherals, the one with the highest base covering the address names it. A name both a symbol and a peripheral
+use is refused as ambiguous; pass the address. Disassembly names an immediate as a register only when it is at
+least 0x100 and its function loads or stores in that peripheral. Registers
 whose width is not 1, 2, 4 or 8 bytes, or that are misaligned, are named but left out of the struct. Bit fields
 are comments, not C bit-fields, and a constant is decoded only on a line that names exactly one register. The
 access scan follows constants within a function only (not through memory, stack slots or callers' arguments),
-decodes at most 4,000,000 instructions and keeps at most 1,048,576 accesses; past either, results say
-`incomplete`. It needs the target's Sleigh p-code decoder, as `evaluate_function` does. Peripheral annotations
+decodes at most 4,000,000 instructions and keeps at most 1,048,576 accesses; past either, the function cut short
+contributes nothing and results say `incomplete`. What an ARM conditionally executed instruction writes is unknown. It needs the target's Sleigh p-code decoder, as `evaluate_function` does. Peripheral annotations
 are not carried by `transfer_annotations`; import the map again on the new build.
 
 Test data: `tests/fixtures/svd/ARM_Example.svd` is Arm's CMSIS-SVD example (BSD-3-Clause, notice kept in the

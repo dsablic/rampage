@@ -20,7 +20,7 @@ Additions only; nothing in the stable surface changed.
 - CMSIS-SVD peripheral maps (types group): `import_svd` previews, or with `apply` stores, a device's peripherals,
   registers and bit fields (`derivedFrom`, `dim` arrays, clusters, inherited sizes and reset values, enumerated
   values; bounded, no entity expansion), replacing an earlier import in one undo step. Decompiled MMIO accesses
-  then read `TIMER0.CR = TIMER0.CR | 0x21; /* CR: EN|MODE=Single_MATCH */`; disassembly comments, xref rows (with
+  are volatile and read `TIMER0.CR = uVar1 | 0x21; /* CR: EN|MODE=Single_MATCH */`; disassembly comments, xref rows (with
   `access: read|write`) and `evaluate_function` faults name `PERIPHERAL.REGISTER`; those names resolve as
   addresses, and `xrefs` to a peripheral's name covers all its registers. `peripheral_access` lists peripherals
   with access counts, or one peripheral's registers with bit fields and the functions reading or writing each.

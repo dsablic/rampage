@@ -135,3 +135,83 @@ fn random_text_never_panics() {
         let _ = parse(&text);
     }
 }
+
+fn device(peripherals: &str) -> String {
+    format!("<device><name>D</name><peripherals>{peripherals}</peripherals></device>")
+}
+
+/// A peripheral array copies every register; the copies count against the device-wide limits before any is made.
+#[test]
+fn peripheral_arrays_are_charged_before_they_are_copied() {
+    let registers: String = (0..64)
+        .map(|index| format!("<register><name>R{index}</name><addressOffset>{}</addressOffset></register>", index * 4))
+        .collect();
+    let array = |name: &str, base: u64| {
+        format!(
+            "<peripheral><name>{name}[%s]</name><dim>4096</dim><dimIncrement>0x1000</dimIncrement>\
+             <baseAddress>{base:#x}</baseAddress><registers>{registers}</registers></peripheral>"
+        )
+    };
+    // 4096 copies of 64 registers pass the register limit: the whole file is refused.
+    let error = parse(&device(&array("P", 0x4000_0000))).unwrap_err();
+    assert!(error.contains("registers"), "{error}");
+    // Two arrays of 4096 pass the peripheral limit.
+    let small = |name: &str, base: u64| {
+        format!(
+            "<peripheral><name>{name}[%s]</name><dim>4096</dim><dimIncrement>0x1000</dimIncrement>\
+             <baseAddress>{base:#x}</baseAddress></peripheral>"
+        )
+    };
+    let error = parse(&device(&(small("A", 0x4000_0000) + &small("B", 0x5000_0000)))).unwrap_err();
+    assert!(error.contains("peripherals"), "{error}");
+}
+
+/// Fields and enumerated values share one device-wide budget, every copy counted; past it the file is refused.
+#[test]
+fn fields_and_values_have_a_device_wide_budget() {
+    let values: String = (0..255)
+        .map(|index| format!("<enumeratedValue><name>V{index}</name><value>{index}</value></enumeratedValue>"))
+        .collect();
+    let peripheral = format!(
+        "<peripheral><name>P</name><baseAddress>0</baseAddress><registers><register><name>R%s</name><dim>65</dim>\
+         <dimIncrement>4</dimIncrement><addressOffset>0</addressOffset><fields><field><name>F%s</name><dim>64</dim>\
+         <dimIncrement>0</dimIncrement><bitOffset>0</bitOffset><bitWidth>8</bitWidth><enumeratedValues>{values}\
+         </enumeratedValues></field></fields></register></registers></peripheral>"
+    );
+    let error = parse(&device(&peripheral)).unwrap_err();
+    assert!(error.contains("fields and enumerated values"), "{error}");
+}
+
+/// Field positions that overflow or lie outside the register skip that field with a warning; the rest import.
+#[test]
+fn overflowing_field_positions_skip_the_field() {
+    let peripheral = "<peripheral><name>P</name><baseAddress>0</baseAddress><registers><register><name>R</name>\
+        <addressOffset>0</addressOffset><fields>\
+        <field><name>HUGE</name><bitOffset>0xffffffffffffffff</bitOffset><bitWidth>2</bitWidth></field>\
+        <field><name>WIDE</name><lsb>0</lsb><msb>0xffffffffffffffff</msb></field>\
+        <field><name>RANGE</name><bitRange>[18446744073709551615:0]</bitRange></field>\
+        <field><name>SHIFTED%s</name><dim>2</dim><dimIncrement>0xffffffffffffffff</dimIncrement><bitOffset>4</bitOffset>\
+        <bitWidth>1</bitWidth></field>\
+        <field><name>OK</name><bitOffset>3</bitOffset><bitWidth>2</bitWidth></field>\
+        </fields></register></registers></peripheral>";
+    let parsed = parse(&device(peripheral)).unwrap();
+    let fields: Vec<_> = parsed.peripherals[0].registers[0].fields.iter().map(|field| field.name.as_str()).collect();
+    assert_eq!(fields, ["OK", "SHIFTED0"]);
+    assert!(parsed.warnings.iter().filter(|warning| warning.contains("skipped")).count() >= 4, "{:?}", parsed.warnings);
+}
+
+/// A dotted register `derivedFrom` resolves in another peripheral; one that names nothing warns.
+#[test]
+fn dotted_register_derivations_cross_peripherals() {
+    let peripherals = "<peripheral><name>A</name><baseAddress>0x1000</baseAddress><registers>\
+        <register><name>CTL</name><addressOffset>0</addressOffset><size>16</size><fields><field><name>GO</name>\
+        <bitOffset>2</bitOffset><bitWidth>1</bitWidth></field></fields></register></registers></peripheral>\
+        <peripheral><name>B</name><baseAddress>0x2000</baseAddress><registers>\
+        <register derivedFrom=\"A.CTL\"><name>CTL2</name><addressOffset>8</addressOffset></register>\
+        <register derivedFrom=\"A.NOPE\"><name>X</name><addressOffset>12</addressOffset></register>\
+        </registers></peripheral>";
+    let parsed = parse(&device(peripherals)).unwrap();
+    let ctl2 = &parsed.peripherals[1].registers[0];
+    assert_eq!((ctl2.name.as_str(), ctl2.bits, ctl2.offset, ctl2.fields[0].name.as_str()), ("CTL2", 16, 8, "GO"));
+    assert!(parsed.warnings.iter().any(|warning| warning.contains("A.NOPE")), "{:?}", parsed.warnings);
+}

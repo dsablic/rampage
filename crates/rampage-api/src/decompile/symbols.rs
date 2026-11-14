@@ -308,12 +308,16 @@ fn data_names(
         Some(_) => u64::MAX,
         None => u64::from(u16::MAX),
     };
-    // Addresses inside an imported peripheral are named by its struct global instead.
+    // Addresses inside a peripheral typed as a struct global are named by that global instead.
+    let typed: Vec<(u64, u64)> = super::peripheral_typing(&project.binary, annotations)
+        .iter()
+        .map(|typed| (typed.base, typed.base.saturating_add(typed.size)))
+        .collect();
     let data = |address: &u64| {
         *address <= highest
             && !functions.contains_key(address)
             && !slots.contains(address)
-            && !crate::peripherals::covers(annotations, *address)
+            && !typed.iter().any(|&(start, end)| (start..end).contains(address))
     };
     let mut names: BTreeMap<u64, String> = BTreeMap::new();
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
@@ -438,6 +442,9 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
             WorkerOperation::DataRegion { first, last, prefix } => engine
                 .add_data_region(first, last, &prefix)
                 .map_err(|error| failure(first, "name data region", error))?,
+            WorkerOperation::VolatileRange { first, last } => {
+                engine.add_volatile_range(first, last).map_err(|error| failure(first, "mark volatile range", error))?
+            }
             WorkerOperation::CalleeInference { inference } => engine
                 .set_callee_inference(inference)
                 .map_err(|error| ApiError::Unavailable(format!("callee inference: {error}")))?,

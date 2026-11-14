@@ -16,6 +16,8 @@ const MAX_PERIPHERALS: usize = 4096;
 const MAX_REGISTERS: usize = 131_072;
 const MAX_FIELDS: usize = 256;
 const MAX_VALUES: usize = 256;
+/// Fields plus their enumerated values across the device, every copy counted.
+const MAX_FIELD_ITEMS: usize = 1 << 20;
 const MAX_DIM: u64 = 4096;
 const MAX_DERIVATION: usize = 16;
 const MAX_CLUSTER_DEPTH: usize = 16;
@@ -325,8 +327,18 @@ fn register_name(text: &str) -> String {
 
 struct Reader<'a> {
     warnings: Vec<String>,
+    /// Registers, peripherals and fields-plus-enumerated-values produced so far, `dim` copies included.
     registers: usize,
+    peripheral_count: usize,
+    items: usize,
+    /// A device-wide limit was passed: the file is refused, not just the element.
+    fatal: Option<String>,
     peripherals: HashMap<&'a str, &'a Element>,
+}
+
+/// The fields and enumerated values a list of fields holds, as charged against [`MAX_FIELD_ITEMS`].
+fn field_items(fields: &[BitField]) -> usize {
+    fields.iter().map(|field| 1 + field.values.len()).sum()
 }
 
 /// Reads an SVD document.
@@ -338,7 +350,14 @@ pub fn parse(text: &str) -> Result<Device, String> {
     let device = root.text_of("name").map(identifier).unwrap_or_else(|| "device".to_owned());
     let defaults = Properties::default().over(&root);
     let list = root.child("peripherals").ok_or("the SVD has no <peripherals>")?;
-    let mut reader = Reader { warnings: Vec::new(), registers: 0, peripherals: HashMap::new() };
+    let mut reader = Reader {
+        warnings: Vec::new(),
+        registers: 0,
+        peripheral_count: 0,
+        items: 0,
+        fatal: None,
+        peripherals: HashMap::new(),
+    };
     for element in list.children("peripheral") {
         if let Some(name) = element.text_of("name") {
             reader.peripherals.entry(name).or_insert(element);
@@ -346,10 +365,11 @@ pub fn parse(text: &str) -> Result<Device, String> {
     }
     let mut peripherals = Vec::new();
     for element in list.children("peripheral") {
-        if peripherals.len() >= MAX_PERIPHERALS {
-            return Err(format!("the SVD has more than {MAX_PERIPHERALS} peripherals"));
+        let found = reader.peripheral(&device, element, &defaults);
+        if let Some(error) = reader.fatal.take() {
+            return Err(error);
         }
-        match reader.peripheral(&device, element, &defaults) {
+        match found {
             Ok(mut found) => peripherals.append(&mut found),
             Err(error) => reader.warnings.push(error),
         }
@@ -358,6 +378,29 @@ pub fn parse(text: &str) -> Result<Device, String> {
 }
 
 impl<'a> Reader<'a> {
+    /// Refuses the whole file: a device-wide limit was passed.
+    fn refuse(&mut self, message: String) -> String {
+        self.fatal.get_or_insert(message).clone()
+    }
+
+    /// Counts `count` more of something whose total may not pass `limit`.
+    fn charge(
+        &mut self,
+        which: fn(&mut Self) -> &mut usize,
+        count: usize,
+        limit: usize,
+        what: &str,
+    ) -> Result<(), String> {
+        let total = which(self).checked_add(count).filter(|&total| total <= limit);
+        match total {
+            Some(total) => {
+                *which(self) = total;
+                Ok(())
+            }
+            None => Err(self.refuse(format!("the SVD has more than {limit} {what}"))),
+        }
+    }
+
     /// The chain of elements `element` derives from, itself first.
     fn chain(&self, element: &'a Element) -> Result<Vec<&'a Element>, String> {
         let mut chain = vec![element];
@@ -373,6 +416,24 @@ impl<'a> Reader<'a> {
             current = next;
         }
         Ok(chain)
+    }
+
+    /// The register or cluster a dotted `derivedFrom` path names in another peripheral: `PERIPHERAL.REGISTER` or
+    /// `PERIPHERAL.CLUSTER.REGISTER`, through that peripheral's own or derived registers.
+    fn find_path(&self, path: &str) -> Option<&'a Element> {
+        let mut parts = path.split('.');
+        let peripheral = *self.peripherals.get(parts.next()?)?;
+        let chain = self.chain(peripheral).ok()?;
+        let mut container = chain.iter().find_map(|element| element.child("registers"))?;
+        let mut found = None;
+        for part in parts {
+            let next = container.children.iter().find(|child| {
+                (child.name == "register" || child.name == "cluster") && child.text_of("name") == Some(part)
+            })?;
+            container = next;
+            found = Some(next);
+        }
+        found
     }
 
     fn peripheral(
@@ -392,12 +453,29 @@ impl<'a> Reader<'a> {
         for element in chain.iter().rev() {
             properties = properties.over(element);
         }
+        let instances = instances(element, raw_name, None)?;
+        // A peripheral array copies every register: charge the copies before making any.
+        self.charge(|reader| &mut reader.peripheral_count, instances.len(), MAX_PERIPHERALS, "peripherals")?;
         let registers_element = chain.iter().find_map(|element| element.child("registers"));
         let mut registers = Vec::new();
         if let Some(block) = registers_element {
             self.walk(block, "", 0, &properties, 0, &mut registers).map_err(|error| format!("{raw_name}: {error}"))?;
         }
         registers.sort_by_key(|register| register.offset);
+        let copies = instances.len() - 1;
+        let items: usize = registers.iter().map(|register| field_items(&register.fields)).sum();
+        self.charge(
+            |reader| &mut reader.registers,
+            copies.saturating_mul(registers.len()),
+            MAX_REGISTERS,
+            "registers",
+        )?;
+        self.charge(
+            |reader| &mut reader.items,
+            copies.saturating_mul(items),
+            MAX_FIELD_ITEMS,
+            "fields and enumerated values",
+        )?;
         let template = Peripheral {
             device: device.to_owned(),
             name: String::new(),
@@ -406,11 +484,12 @@ impl<'a> Reader<'a> {
             base,
             registers,
         };
-        let mut result = Vec::new();
-        for (name, offset) in instances(element, raw_name, None)? {
+        let mut result = Vec::with_capacity(instances.len());
+        for (name, offset) in instances {
             let base = base.checked_add(offset).ok_or_else(|| format!("peripheral {name}: address overflows"))?;
-            if template.registers.iter().any(|register| base.checked_add(register.offset + register.bytes()).is_none())
-            {
+            if template.registers.iter().any(|register| {
+                register.offset.checked_add(register.bytes()).and_then(|end| base.checked_add(end)).is_none()
+            }) {
                 return Err(format!("peripheral {name}: a register address overflows"));
             }
             result.push(Peripheral { name: identifier(&name), base, ..template.clone() });
@@ -422,7 +501,7 @@ impl<'a> Reader<'a> {
     /// names prefixed by `prefix`.
     fn walk(
         &mut self,
-        container: &Element,
+        container: &'a Element,
         prefix: &str,
         offset: u64,
         properties: &Properties,
@@ -432,7 +511,7 @@ impl<'a> Reader<'a> {
         if depth > MAX_CLUSTER_DEPTH {
             return Err(format!("clusters nest deeper than {MAX_CLUSTER_DEPTH}"));
         }
-        let siblings: BTreeMap<&str, &Element> = container
+        let siblings: BTreeMap<&str, &'a Element> = container
             .children
             .iter()
             .filter(|child| child.name == "register" || child.name == "cluster")
@@ -446,14 +525,15 @@ impl<'a> Reader<'a> {
                 self.warnings.push(format!("{prefix}: a {} has no name; skipped", child.name));
                 continue;
             };
-            // derivedFrom on a register or cluster names a sibling (or a dotted path whose last part is one).
+            // derivedFrom on a register or cluster names a sibling, or with a dotted path an element of another
+            // peripheral.
             let mut chain = vec![child];
             let mut current = child;
             while let Some(base) = current.attribute("derivedFrom") {
-                let base = base.rsplit('.').next().unwrap_or(base);
-                match siblings.get(base) {
+                let next = if base.contains('.') { self.find_path(base) } else { siblings.get(base).copied() };
+                match next {
                     Some(next)
-                        if chain.len() <= MAX_DERIVATION && !chain.iter().any(|seen| std::ptr::eq(*seen, *next)) =>
+                        if chain.len() <= MAX_DERIVATION && !chain.iter().any(|seen| std::ptr::eq(*seen, next)) =>
                     {
                         chain.push(next);
                         current = next;
@@ -493,14 +573,17 @@ impl<'a> Reader<'a> {
                 continue;
             }
             let size = u64::from(bits.div_ceil(8));
-            let fields =
-                chain.iter().find_map(|element| element.child("fields")).map(|fields| self.fields(fields, bits));
+            let fields = match chain.iter().find_map(|element| element.child("fields")) {
+                Some(fields) => self.fields(fields, bits)?,
+                None => Vec::new(),
+            };
             let description = chain.iter().find_map(|element| description(element));
-            for (instance, step) in instances(child, name, Some(size))? {
-                self.registers += 1;
-                if self.registers > MAX_REGISTERS {
-                    return Err(format!("the SVD has more than {MAX_REGISTERS} registers"));
-                }
+            let instances = instances(child, name, Some(size))?;
+            self.charge(|reader| &mut reader.registers, instances.len(), MAX_REGISTERS, "registers")?;
+            // `fields` charged the first copy's fields; every further copy clones them.
+            let copies = (instances.len() - 1).saturating_mul(field_items(&fields));
+            self.charge(|reader| &mut reader.items, copies, MAX_FIELD_ITEMS, "fields and enumerated values")?;
+            for (instance, step) in instances {
                 out.push(Register {
                     name: format!("{prefix}{}", register_name(&instance)),
                     offset: base.checked_add(step).ok_or("register offsets overflow")?,
@@ -508,25 +591,29 @@ impl<'a> Reader<'a> {
                     access: own.access.clone(),
                     reset: own.reset,
                     description: description.clone(),
-                    fields: fields.clone().unwrap_or_default(),
+                    fields: fields.clone(),
                 });
             }
         }
         Ok(())
     }
 
-    fn fields(&mut self, container: &Element, bits: u32) -> Vec<BitField> {
+    fn fields(&mut self, container: &Element, bits: u32) -> Result<Vec<BitField>, String> {
         let mut result: Vec<BitField> = Vec::new();
         let siblings: BTreeMap<&str, &Element> =
             container.children("field").filter_map(|child| child.text_of("name").map(|name| (name, child))).collect();
+        let bits = u64::from(bits);
+        // Inside the register: lsb and width at most 64, and their sum within the register's bits.
+        let inside = |lsb: u64, width: u64| width >= 1 && lsb.checked_add(width).is_some_and(|end| end <= bits);
         for element in container.children("field") {
             let Some(name) = element.text_of("name") else { continue };
             let base = element.attribute("derivedFrom").and_then(|base| siblings.get(base.rsplit('.').next()?));
             let text = |key: &str| element.text_of(key).or_else(|| base.and_then(|base| base.text_of(key)));
+            let span = |lsb: u64, msb: u64| msb.checked_sub(lsb).and_then(|difference| difference.checked_add(1));
             let position = if let (Some(offset), Some(width)) = (text("bitOffset"), text("bitWidth")) {
                 number(offset).zip(number(width))
             } else if let (Some(lsb), Some(msb)) = (text("lsb"), text("msb")) {
-                number(lsb).zip(number(msb)).filter(|(lsb, msb)| msb >= lsb).map(|(lsb, msb)| (lsb, msb - lsb + 1))
+                number(lsb).zip(number(msb)).and_then(|(lsb, msb)| Some((lsb, span(lsb, msb)?)))
             } else if let Some(range) = text("bitRange") {
                 range
                     .trim()
@@ -534,12 +621,11 @@ impl<'a> Reader<'a> {
                     .and_then(|range| range.strip_suffix(']'))
                     .and_then(|range| range.split_once(':'))
                     .and_then(|(msb, lsb)| number(lsb).zip(number(msb)))
-                    .filter(|(lsb, msb)| msb >= lsb)
-                    .map(|(lsb, msb)| (lsb, msb - lsb + 1))
+                    .and_then(|(lsb, msb)| Some((lsb, span(lsb, msb)?)))
             } else {
                 None
             };
-            let Some((lsb, width)) = position.filter(|&(lsb, width)| width >= 1 && lsb + width <= u64::from(bits))
+            let Some((lsb, width)) = position.filter(|&(lsb, width)| lsb <= 64 && width <= 64 && inside(lsb, width))
             else {
                 self.warnings.push(format!("field {name}: bit position missing or outside the register; skipped"));
                 continue;
@@ -558,10 +644,19 @@ impl<'a> Reader<'a> {
             }
             let field_description = description(element).or_else(|| base.and_then(|base| description(base)));
             for (instance, step) in instances(element, name, Some(width)).unwrap_or_default() {
-                let lsb = lsb + step;
-                if lsb + width > u64::from(bits) || result.len() >= MAX_FIELDS {
+                let Some(lsb) = lsb.checked_add(step).filter(|&lsb| inside(lsb, width)) else {
+                    self.warnings.push(format!("field {instance}: outside the register; skipped"));
+                    continue;
+                };
+                if result.len() >= MAX_FIELDS {
                     continue;
                 }
+                self.charge(
+                    |reader| &mut reader.items,
+                    1 + values.len(),
+                    MAX_FIELD_ITEMS,
+                    "fields and enumerated values",
+                )?;
                 result.push(BitField {
                     name: identifier(&instance),
                     lsb: lsb as u32,
@@ -572,7 +667,7 @@ impl<'a> Reader<'a> {
             }
         }
         result.sort_by_key(|field| field.lsb);
-        result
+        Ok(result)
     }
 }
 
