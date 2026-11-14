@@ -53,6 +53,7 @@ pub mod pack_archive;
 pub mod packs;
 mod patches;
 mod pe_inspect;
+mod peripherals;
 mod plugin_triage;
 mod pointer_compare;
 mod pointer_observation;
@@ -74,6 +75,7 @@ mod signature_import;
 mod signatures;
 pub mod sleigh_window;
 mod summary;
+mod svd;
 pub mod tool_views;
 pub mod tools;
 mod transfer;
@@ -200,6 +202,9 @@ pub use patches::{
 };
 pub use pe_inspect::{
     MAX_RESOURCE_DECODE_BYTES, PeResourcesQuery, PeResourcesSummary, ResourceEntry, ResourceTypeCount,
+};
+pub use peripherals::{
+    ImportSvdReport, ImportSvdRequest, PeripheralAccess, PeripheralAccessQuery, PeripheralRow, RegisterRow,
 };
 pub use plugin_triage::{
     MAX_PLUGIN_TRIAGE_REPORT_BYTES, MAX_PLUGIN_TRIAGE_SOURCE_BYTES, PluginTriageProvenance, PluginTriageReport,

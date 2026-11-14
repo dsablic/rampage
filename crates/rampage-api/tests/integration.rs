@@ -55,6 +55,7 @@ mod packs;
 mod patch_frontends;
 mod pdb;
 mod pe_metadata;
+mod peripherals;
 mod plugin_triage;
 mod pointer_compare;
 mod pointer_observation;

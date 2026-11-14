@@ -135,7 +135,8 @@ impl Group {
             }
             Group::Types => {
                 "Project type libraries, C headers, signatures, type declarations and globals, \
-                 reviewed checked DWARF/PDB type and signature import, and explicit identity-matched PDB names."
+                 reviewed checked DWARF/PDB type and signature import, explicit identity-matched PDB names, and \
+                 CMSIS-SVD peripheral maps."
             }
             Group::Runtime => {
                 "Memory snapshot evidence: captured pointer slots, pointer comparisons across captures, runtime \
@@ -826,7 +827,7 @@ fn sleigh_file_schema() -> Value {
 
 /// Project tools that serve a Raw Project opened with [`crate::Session::open_raw`]: each returns a result or an
 /// explicit typed refusal on Raw input. Clients offer the `raw` selector only on these.
-pub const RAW_CAPABLE_TOOLS: [&str; 16] = [
+pub const RAW_CAPABLE_TOOLS: [&str; 18] = [
     "binary_info",
     "list_functions",
     "disassemble",
@@ -843,6 +844,8 @@ pub const RAW_CAPABLE_TOOLS: [&str; 16] = [
     "undo",
     "redo",
     "decompile",
+    "import_svd",
+    "peripheral_access",
 ];
 
 /// Whether the project tool `name` accepts a Raw Project selector.
@@ -1398,6 +1401,25 @@ struct PropagateTypesArgs {
     apply: bool,
     max_functions: Option<usize>,
     max_candidates: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ImportSvdArgs {
+    /// The .svd file.
+    svd: String,
+    /// Store the map; omit to preview.
+    #[serde(default)]
+    apply: bool,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PeripheralAccessArgs {
+    /// A peripheral (name or address) whose registers to list; omit to list peripherals.
+    peripheral: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -3068,7 +3090,7 @@ pub fn tools() -> Vec<Tool> {
              references. Paginated.",
             |project, arguments: XrefsArgs| {
                 let query = match (arguments.to, arguments.from) {
-                    (Some(to), None) => XrefQuery::To(project.resolve(&to)?),
+                    (Some(to), None) => project.xref_query_to(&to)?,
                     (None, Some(from)) => XrefQuery::From(project.resolve(&from)?),
                     _ => return Err(ApiError::Invalid("pass exactly one of `to` and `from`".to_owned())),
                 };
@@ -3141,6 +3163,31 @@ pub fn tools() -> Vec<Tool> {
             },
         )
         .annotates(),
+        tool(
+            Group::Types,
+            "import_svd",
+            "Import a CMSIS-SVD peripheral map (preview unless apply; replaces an earlier import, one undo step). \
+             Decompiled MMIO then reads `TIMER0.CR = TIMER0.CR | 0x21; /* TIMER0.CR: EN|MODE=... */`; \
+             disassembly, xrefs and evaluate_function faults name registers, and PERIPH or PERIPH.REG works as an \
+             address.",
+            |project, args: ImportSvdArgs| {
+                project.import_svd(&crate::ImportSvdRequest { svd: args.svd.into(), apply: args.apply })
+            },
+        )
+        .annotates(),
+        tool(
+            Group::Types,
+            "peripheral_access",
+            "Imported peripherals with access counts, or one peripheral's registers with bit fields and the \
+             functions reading/writing each (constant-address loads/stores). Paginated.",
+            |project, args: PeripheralAccessArgs| {
+                project.peripheral_access(&crate::PeripheralAccessQuery {
+                    peripheral: args.peripheral,
+                    offset: args.offset.unwrap_or(0),
+                    limit: page_limit(args.limit).unwrap_or(DEFAULT_PAGE),
+                })
+            },
+        ),
         tool(
             Group::Types,
             "propagate_types",

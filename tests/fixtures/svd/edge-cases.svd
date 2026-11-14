@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- A synthetic device for the CMSIS-SVD reader's edge cases: clusters and cluster arrays, dimIndex lists, register
+     and peripheral derivedFrom, inherited sizes and reset values, enumerated values, 8-bit registers and a circular
+     derivation. CTRL sits at the peripheral that tests/fixtures/firmware/raw-cortex-m-decompile.c drives. -->
+<device schemaVersion="1.3" xmlns:xs="http://www.w3.org/2001/XMLSchema-instance">
+  <name>EDGE</name>
+  <size>32</size>
+  <resetValue>0x00000000</resetValue>
+  <peripherals>
+    <peripheral>
+      <name>CTRL</name>
+      <groupName>SYS</groupName>
+      <description>Control &amp; status block</description>
+      <baseAddress>0x40021000</baseAddress>
+      <resetValue>0x11</resetValue>
+      <addressBlock><offset>0</offset><size>0x400</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register>
+          <name>STATUS</name>
+          <description>Status</description>
+          <addressOffset>0x0</addressOffset>
+          <access>read-only</access>
+          <fields>
+            <field><name>READY</name><bitOffset>0</bitOffset><bitWidth>1</bitWidth></field>
+            <field>
+              <name>MODE</name><lsb>4</lsb><msb>5</msb>
+              <enumeratedValues>
+                <enumeratedValue><name>Idle</name><value>0</value></enumeratedValue>
+                <enumeratedValue><name>Busy</name><value>#10</value></enumeratedValue>
+                <enumeratedValue><name>Any</name><value>#1x</value></enumeratedValue>
+              </enumeratedValues>
+            </field>
+            <field><name>ERR</name><bitRange>[8:8]</bitRange></field>
+          </fields>
+        </register>
+        <register>
+          <name>CONTROL</name>
+          <addressOffset>4</addressOffset>
+          <resetValue>0x0</resetValue>
+          <fields>
+            <field><name>START</name><bitOffset>0</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>ENABLE</name><bitOffset>8</bitOffset><bitWidth>1</bitWidth></field>
+            <field><name>IE%s</name><dim>2</dim><dimIncrement>1</dimIncrement><bitOffset>12</bitOffset><bitWidth>1</bitWidth></field>
+          </fields>
+        </register>
+        <cluster>
+          <dim>2</dim>
+          <dimIncrement>0x10</dimIncrement>
+          <name>CH[%s]</name>
+          <addressOffset>0x10</addressOffset>
+          <register><name>CR</name><addressOffset>0</addressOffset></register>
+          <register><name>DR</name><addressOffset>4</addressOffset><size>16</size></register>
+        </cluster>
+        <register>
+          <dim>3</dim>
+          <dimIncrement>4</dimIncrement>
+          <dimIndex>A,B,C</dimIndex>
+          <name>DATA%s</name>
+          <addressOffset>0x40</addressOffset>
+        </register>
+        <register derivedFrom="STATUS">
+          <name>ALT</name>
+          <addressOffset>0x50</addressOffset>
+        </register>
+        <register>
+          <name>BYTE</name>
+          <addressOffset>0x54</addressOffset>
+          <size>8</size>
+        </register>
+      </registers>
+    </peripheral>
+    <peripheral derivedFrom="CTRL">
+      <name>CTRL2</name>
+      <baseAddress>0x40022000</baseAddress>
+    </peripheral>
+    <peripheral derivedFrom="LOOP2">
+      <name>LOOP1</name>
+      <baseAddress>0x40030000</baseAddress>
+    </peripheral>
+    <peripheral derivedFrom="LOOP1">
+      <name>LOOP2</name>
+      <baseAddress>0x40031000</baseAddress>
+    </peripheral>
+  </peripherals>
+</device>

@@ -624,6 +624,17 @@
     "warnings_total",
     "whole_apply_succeeded"
   ],
+  "import_svd": [
+    "added",
+    "applied",
+    "device",
+    "fields",
+    "peripherals",
+    "registers",
+    "removed",
+    "replaced",
+    "unchanged"
+  ],
   "list_types": [
     "caveats",
     "limit",
@@ -685,6 +696,33 @@
     "types[].size",
     "types[].target",
     "types[].type_name"
+  ],
+  "peripheral_access": [
+    "description",
+    "device",
+    "offset",
+    "peripheral",
+    "peripherals",
+    "peripherals[].base",
+    "peripherals[].functions",
+    "peripherals[].group",
+    "peripherals[].name",
+    "peripherals[].reads",
+    "peripherals[].registers",
+    "peripherals[].span",
+    "peripherals[].writes",
+    "registers",
+    "registers[].access",
+    "registers[].address",
+    "registers[].bits",
+    "registers[].description",
+    "registers[].fields",
+    "registers[].functions",
+    "registers[].name",
+    "registers[].reads",
+    "registers[].reset",
+    "registers[].writes",
+    "total"
   ],
   "propagate_types": [
     "address",

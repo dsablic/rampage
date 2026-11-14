@@ -28,6 +28,7 @@ toml.workspace = true
 rusqlite.workspace = true
 regex = "1.13.1"
 memchr = "2.8.3"
+quick-xml = "0.42.0"
 flate2 = "1.1.10"
 
 [target.'cfg(unix)'.dependencies]

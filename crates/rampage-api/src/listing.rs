@@ -107,7 +107,32 @@ impl Project {
                 .ok_or_else(|| ApiError::Invalid("no entry point; pass an address or symbol".to_owned()))?,
         };
         let operands = self.operand_listing_context()?;
-        self.decode_lines(start, u64::MAX, count, operands.as_ref())
+        let mut lines = self.decode_lines(start, u64::MAX, count, operands.as_ref())?;
+        self.name_register_accesses(lines.iter_mut());
+        Ok(lines)
+    }
+
+    /// Adds the imported peripheral registers each line loads or stores, or names as a constant, to its comment.
+    fn name_register_accesses<'a>(&self, lines: impl IntoIterator<Item = &'a mut DisassemblyLine>) {
+        if self.peripheral_map().is_empty() {
+            return;
+        }
+        for line in lines {
+            let mut names: Vec<String> = Vec::new();
+            if let Some(name) = line.immediate.and_then(|value| self.peripheral_name(value))
+                && !line.comment.as_deref().is_some_and(|comment| comment.contains(&name))
+            {
+                names.push(format!("={name}"));
+            }
+            if let Some(accessed) = self.register_accesses_at(line.address) {
+                names.push(accessed);
+            }
+            if names.is_empty() {
+                continue;
+            }
+            let parts: Vec<String> = line.comment.take().into_iter().chain(names).collect();
+            line.comment = Some(parts.join("; "));
+        }
     }
 
     /// The function containing `address`, disassembled block by block in address order.
@@ -161,6 +186,7 @@ impl Project {
                 line.comment = Some(parts.join("; "));
             }
         }
+        self.name_register_accesses(blocks.iter_mut().flatten());
         Ok(FunctionListing { address: start, name: self.function_name(start), blocks })
     }
 

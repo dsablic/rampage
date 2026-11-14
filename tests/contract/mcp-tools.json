@@ -1792,6 +1792,10 @@
           "type": "array",
           "required": false
         },
+        "mmio": {
+          "type": "array",
+          "required": false
+        },
         "path": {
           "type": "string",
           "required": true
@@ -2387,6 +2391,81 @@
           "required": true
         },
         "pdb": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "import_svd": {
+      "group": "types",
+      "arguments": {
+        "apply": {
+          "type": "boolean",
+          "required": false
+        },
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "offset": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
+        },
+        "svd": {
           "type": "string",
           "required": true
         }
@@ -3169,6 +3248,85 @@
         "type": {
           "type": "null|string",
           "required": false
+        }
+      }
+    },
+    "peripheral_access": {
+      "group": "types",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "peripheral": {
+          "type": "null|string",
+          "required": false
+        },
+        "raw": {
+          "type": "null|object",
+          "required": false,
+          "fields": {
+            "base_address": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "entry": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "format": {
+              "type": "null|string",
+              "required": false
+            },
+            "length": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "offset": {
+              "type": "integer|null|string",
+              "required": false
+            },
+            "pointer_tables": {
+              "type": "boolean|null",
+              "required": false
+            },
+            "profile": {
+              "type": "string",
+              "required": true
+            },
+            "regions": {
+              "type": "array|null",
+              "required": false
+            },
+            "seeds": {
+              "type": "array",
+              "required": false
+            },
+            "vector_table": {
+              "type": "boolean|integer|null|string",
+              "required": false
+            }
+          }
         }
       }
     },

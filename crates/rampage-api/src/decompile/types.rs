@@ -112,6 +112,8 @@ fn plan_with(
         reject_late_type_definitions(declaration, &layouts)?;
         operations.push(WorkerOperation::Global { address, declaration: declaration.clone() });
     }
+    let peripherals = super::peripheral_typing(&project.binary, annotations);
+    operations.extend(crate::peripherals::decompiler_operations(&peripherals));
     for (&address, declaration) in annotations.signatures() {
         let declaration = crate::debug_type_import::signature_declaration(declaration, annotations)?;
         let declaration = debug_layout_import::signature(declaration, &layouts)?;

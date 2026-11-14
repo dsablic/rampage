@@ -129,7 +129,7 @@ fn run(
     };
     check()?;
     let binary = &project.binary;
-    let mappings = image::regions(binary)?
+    let mappings = image::regions_with_peripherals(binary, annotations)?
         .iter()
         .map(|region| {
             check()?;

@@ -197,6 +197,7 @@ fn field_name(field: Field) -> &'static str {
         Field::DebugTypes => "debug_types",
         Field::Patch => "patch",
         Field::Finding => "finding",
+        Field::Peripheral => "peripheral",
         Field::Unknown => "unknown",
     }
 }

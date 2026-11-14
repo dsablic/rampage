@@ -122,6 +122,8 @@ pub struct Project {
     analysis_store_status: OnceLock<crate::AnalysisStoreStatus>,
     /// A fresh analysis still to be written to the store, after the analysis itself is published.
     analysis_store_pending: std::sync::Mutex<Option<PendingStore>>,
+    /// Loads and stores at constant addresses, scanned once on the first peripheral query.
+    pub(crate) mmio_accesses: OnceLock<Result<Arc<crate::peripherals::AccessIndex>, String>>,
 }
 
 /// A fresh analysis to store: the store, its key, and why an existing entry was rejected, if one was.
@@ -381,6 +383,7 @@ impl Project {
             analysis_store: RwLock::new(crate::AnalysisStore::from_env()),
             analysis_store_status: OnceLock::new(),
             analysis_store_pending: std::sync::Mutex::new(None),
+            mmio_accesses: OnceLock::new(),
         }
     }
 
@@ -482,7 +485,13 @@ impl Project {
 
     /// The name at `address`: the user's, or else a symbol, export, stub or import-slot name.
     pub fn name_at(&self, address: u64) -> Option<String> {
-        self.annotations().name(address).map(str::to_owned).or_else(|| self.names.get(address).map(str::to_owned))
+        let annotations = self.annotations();
+        if let Some(name) = annotations.name(address).or_else(|| self.names.get(address)) {
+            return Some(name.to_owned());
+        }
+        let peripherals = annotations.peripheral_map();
+        drop(annotations);
+        if peripherals.is_empty() { None } else { peripherals.name(address) }
     }
 
     /// The function's name: the user's, a symbol's, or `sub_<hex>`.
@@ -922,6 +931,9 @@ impl Project {
             return Ok(address);
         }
         if let Some(address) = self.address_named(annotations, text) {
+            return Ok(address);
+        }
+        if let Some(address) = annotations.peripheral_map().resolve(text) {
             return Ok(address);
         }
         if let Some(address) = default_name_address(text) {

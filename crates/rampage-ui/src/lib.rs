@@ -383,6 +383,7 @@ impl App {
             Field::DebugTypes => "Checked debug type imports".to_owned(),
             Field::Patch => format!("Byte patch {:#x}", editing.address),
             Field::Finding => format!("Finding #{}", editing.address),
+            Field::Peripheral => format!("Peripheral {:#x}", editing.address),
             Field::Unknown => "Unknown annotation".to_owned(),
         };
         let mut done = false;

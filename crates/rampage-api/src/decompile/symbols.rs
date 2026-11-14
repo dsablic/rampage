@@ -308,7 +308,13 @@ fn data_names(
         Some(_) => u64::MAX,
         None => u64::from(u16::MAX),
     };
-    let data = |address: &u64| *address <= highest && !functions.contains_key(address) && !slots.contains(address);
+    // Addresses inside an imported peripheral are named by its struct global instead.
+    let data = |address: &u64| {
+        *address <= highest
+            && !functions.contains_key(address)
+            && !slots.contains(address)
+            && !crate::peripherals::covers(annotations, *address)
+    };
     let mut names: BTreeMap<u64, String> = BTreeMap::new();
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for symbol in &project.binary.symbols {

@@ -289,3 +289,32 @@ async fn a_cortex_m_image_opens_with_its_vector_table_in_one_call() {
     assert_eq!(info["segments"][0]["address"], "0x0");
     client.cancel().await.unwrap();
 }
+
+/// A CMSIS-SVD map imported once over MCP names a Cortex-M Raw project's registers in later calls with the same
+/// `raw` selector: decompiled C, xrefs by peripheral name and the per-register access listing.
+#[tokio::test]
+async fn an_svd_map_names_registers_across_tools() {
+    let client = connect().await;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let path = root.join("firmware/raw-cortex-m-svd.bin");
+    let svd = root.join("svd/ARM_Example.svd");
+    let length = std::fs::metadata(&path).unwrap().len();
+    let selector = json!({
+        "profile": "cortex-m", "offset": 0, "length": length, "base_address": "0x8000000", "vector_table": true,
+    });
+    let (text, failed) = call(&client, "enable_tools", json!({ "groups": ["types"] })).await;
+    assert!(!failed, "{text}");
+    let (text, failed) = call(&client, "import_svd", json!({ "path": path, "raw": selector, "svd": svd })).await;
+    assert!(!failed && text.contains("\"applied\":false") && text.contains("\"added\":3"), "{text}");
+    let (text, failed) =
+        call(&client, "import_svd", json!({ "path": path, "raw": selector, "svd": svd, "apply": true })).await;
+    assert!(!failed && text.contains("\"applied\":true"), "{text}");
+    let (text, failed) = call(&client, "decompile", json!({ "path": path, "raw": selector, "at": "0x8000040" })).await;
+    assert!(!failed && text.contains("TIMER0.CR = TIMER0.CR | 0x21; /* CR: EN|MODE=Single_MATCH */"), "{text}");
+    let (text, failed) = call(&client, "xrefs", json!({ "path": path, "raw": selector, "to": "TIMER1" })).await;
+    assert!(!failed && text.contains("\"to_name\":\"TIMER1.COUNT\"") && text.contains("\"access\":\"read\""), "{text}");
+    let (text, failed) =
+        call(&client, "peripheral_access", json!({ "path": path, "raw": selector, "peripheral": "TIMER0" })).await;
+    assert!(!failed && text.contains("\"name\":\"RELOAD[2]\""), "{text}");
+    client.cancel().await.unwrap();
+}

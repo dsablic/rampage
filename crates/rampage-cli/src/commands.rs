@@ -1340,7 +1340,7 @@ pub enum XrefTarget<'a> {
 pub fn xrefs(out: &mut impl Write, path: &Path, target: XrefTarget, options: &Options) -> Result<()> {
     let project = open(path, options)?;
     let query = match target {
-        XrefTarget::To(text) => XrefQuery::To(project.resolve(text)?),
+        XrefTarget::To(text) => project.xref_query_to(text)?,
         XrefTarget::From(text) => XrefQuery::From(project.resolve(text)?),
     };
     let rows = project.xrefs(query, None, None)?.items;

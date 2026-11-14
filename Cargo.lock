@@ -4571,6 +4571,7 @@ version = "1.1.0"
 dependencies = [
  "flate2",
  "memchr",
+ "quick-xml 0.42.0",
  "rampage-analysis",
  "rampage-arch",
  "rampage-capabilities",

@@ -44,6 +44,8 @@ pub enum Field {
     Patch,
     /// An investigation ledger entry (see `crate::findings`), keyed by its id rather than an address.
     Finding,
+    /// A CMSIS-SVD peripheral (see `crate::peripherals`) at its base address: its registers and bit fields as JSON.
+    Peripheral,
     /// A field written by a later build. Readers, checked or not, skip its edits rather than refuse the log; it is
     /// never applied, and never written.
     #[serde(other)]
@@ -713,6 +715,7 @@ fn canonical_local_value(field: Field, value: Option<&str>) -> Result<Option<Str
             Field::DataType => encode_data_type(&parse_data_type(value)?),
             Field::OperandType => encode_operand_types(&parse_operand_types(value)?),
             Field::Patch => crate::patches::encode_patch(&crate::patches::parse_patch(value)?),
+            Field::Peripheral => crate::peripherals::encode(&crate::peripherals::decode(value)?),
             _ => Ok(value.to_owned()),
         })
         .transpose()
@@ -728,6 +731,7 @@ fn validate_local_value(field: Field, value: &str) -> Result<(), String> {
         Field::DataType => parse_data_type(value).map(|_| ()),
         Field::OperandType => parse_operand_types(value).map(|_| ()),
         Field::Patch => crate::patches::parse_patch(value).map(|_| ()),
+        Field::Peripheral => crate::peripherals::decode(value).map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -869,6 +873,9 @@ pub struct Annotations {
     /// this process hands an id out twice (a process opening a log restored from an older copy can, though).
     findings: BTreeMap<u64, String>,
     finding_high: u64,
+    /// Imported peripherals by base address, and their parsed lookup index, built on first use after an edit.
+    peripherals: BTreeMap<u64, String>,
+    peripheral_map: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::peripherals::PeripheralMap>>>,
     patch_validator: Option<PatchValidator>,
     patch_freezer: Option<PatchFreezer>,
     unpatched_view: Option<std::sync::Arc<Annotations>>,
@@ -1591,6 +1598,8 @@ impl Annotations {
             patches: self.patches.clone(),
             findings: self.findings.clone(),
             finding_high: self.finding_high,
+            peripherals: self.peripherals.clone(),
+            peripheral_map: std::sync::Arc::clone(&self.peripheral_map),
             patch_validator: self.patch_validator.clone(),
             patch_freezer: None,
             unpatched_view: self.unpatched_view.clone(),
@@ -1809,7 +1818,11 @@ impl Annotations {
             | Field::TypeHint
             | Field::DataType
             | Field::OperandType
-            | Field::Patch => {
+            | Field::Patch
+            | Field::Peripheral => {
+                if edit.field == Field::Peripheral {
+                    self.peripheral_map = Default::default();
+                }
                 let values = match edit.field {
                     Field::Signature => &mut self.signatures,
                     Field::Types => &mut self.types,
@@ -1821,6 +1834,7 @@ impl Annotations {
                     Field::DataType => &mut self.data_types,
                     Field::OperandType => &mut self.operand_types,
                     Field::Patch => &mut self.patches,
+                    Field::Peripheral => &mut self.peripherals,
                     _ => &mut self.globals,
                 };
                 match &edit.value {
@@ -2384,6 +2398,7 @@ impl Annotations {
                     | Field::DataType
                     | Field::OperandType
                     | Field::Patch
+                    | Field::Peripheral
             ) || (edit.field == Field::Name && (!candidate.globals().is_empty() || !candidate.data_types().is_empty()))
         });
         if checked {
@@ -2441,6 +2456,7 @@ impl Annotations {
             Field::OperandType => &self.operand_types,
             Field::Patch => &self.patches,
             Field::Finding => &self.findings,
+            Field::Peripheral => &self.peripherals,
             Field::Unknown => {
                 static NONE: BTreeMap<u64, String> = BTreeMap::new();
                 &NONE
@@ -2524,6 +2540,19 @@ impl Annotations {
         self.log.as_ref().and_then(|log| log.image.as_deref())
     }
 
+    /// Imported CMSIS-SVD peripherals by base address, as stored JSON.
+    pub fn peripherals(&self) -> &BTreeMap<u64, String> {
+        &self.peripherals
+    }
+
+    /// The imported peripherals' lookup index.
+    pub(crate) fn peripheral_map(&self) -> std::sync::Arc<crate::peripherals::PeripheralMap> {
+        std::sync::Arc::clone(
+            self.peripheral_map
+                .get_or_init(|| std::sync::Arc::new(crate::peripherals::PeripheralMap::new(&self.peripherals))),
+        )
+    }
+
     pub fn patches(&self) -> &BTreeMap<u64, String> {
         &self.patches
     }
@@ -2552,6 +2581,8 @@ impl Annotations {
             patches,
             findings,
             finding_high: _,
+            peripherals,
+            peripheral_map: _,
             patch_validator: _,
             patch_freezer: _,
             unpatched_view: _,
@@ -2577,6 +2608,7 @@ impl Annotations {
             (operand_types, &other.operand_types),
             (patches, &other.patches),
             (findings, &other.findings),
+            (peripherals, &other.peripherals),
         ]
         .into_iter()
         .all(|(mine, theirs)| mine == theirs)
@@ -2584,6 +2616,9 @@ impl Annotations {
 
     fn validate_local_collections(&self) -> Result<(), String> {
         self.validate_patches()?;
+        for value in self.peripherals.values() {
+            crate::peripherals::decode(value)?;
+        }
         for value in self.type_hints.values() {
             parse_type_hints(value)?;
         }

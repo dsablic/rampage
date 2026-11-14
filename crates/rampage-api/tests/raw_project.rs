@@ -46,6 +46,10 @@ impl Drop for OwnedDirectory {
     }
 }
 
+fn svd(name: &str) -> String {
+    format!("{}/../../tests/fixtures/svd/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
 fn request(value: Value) -> RawProjectRequest {
     serde_json::from_value(value).unwrap()
 }
@@ -230,6 +234,8 @@ fn every_raw_capable_tool_answers_on_a_reviewed_msp430_project() {
         ("undo", json!({})),
         ("redo", json!({})),
         ("decompile", json!({ "at": "0x4400" })),
+        ("import_svd", json!({ "svd": svd("edge-cases.svd"), "apply": true })),
+        ("peripheral_access", json!({ "peripheral": "CTRL" })),
     ];
     assert_eq!(inputs.each_ref().map(|(name, _)| *name), RAW_CAPABLE_TOOLS);
     let mut outcomes = Vec::new();
@@ -374,6 +380,8 @@ fn cortex_m_raw_projects_serve_every_raw_capable_tool_with_native_evidence() {
         ("undo", json!({})),
         ("redo", json!({})),
         ("decompile", json!({ "at": reset })),
+        ("import_svd", json!({ "svd": svd("ARM_Example.svd"), "apply": true })),
+        ("peripheral_access", json!({})),
     ];
     assert_eq!(inputs.each_ref().map(|(name, _)| *name), RAW_CAPABLE_TOOLS);
     let mut outcomes = Vec::new();

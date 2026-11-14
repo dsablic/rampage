@@ -189,6 +189,15 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
   running candidate decoders on their blobs. Open: models for `sprintf`/`strdup`/`operator new`, and replays
   that start before the caller's block.
 
+## CMSIS-SVD peripheral maps (2026-11-14)
+
+- [x] `import_svd` and `peripheral_access` (types group): SVD registers as struct globals in decompiled C with
+  bit-field comments, names in disassembly/xrefs/evaluation faults, constant-address access scan, `mmio` values
+  for `evaluate_function`. Open: an `svd` field on the `raw` selector (Raw annotations are per session, so the
+  map must be imported again after a restart; skipped to keep the catalog small), carrying maps in
+  `transfer_annotations`, accesses through pointers passed between functions, `evaluate_function` on Raw
+  projects (not raw-capable yet), and a run on a real vendor SVD and image.
+
 ## Objective-C dispatch (2026-11-13)
 
 - [x] `objc_msgSend` resolution (selectors, receiver classes, method lookup, `objc_sends`, xref rows, comments).

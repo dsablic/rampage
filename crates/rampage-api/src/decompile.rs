@@ -150,10 +150,44 @@ pub(crate) struct DecompilerState {
     local_names: std::collections::BTreeMap<u64, String>,
     local_types: std::collections::BTreeMap<u64, String>,
     type_hints: std::collections::BTreeMap<u64, String>,
+    peripherals: std::collections::BTreeMap<u64, String>,
     hint_address: Option<u64>,
     pub(crate) propagation_cache: Option<crate::propagation::LazyContext>,
     pub(crate) worker: Option<rampage_decompiler::worker::WorkerConfig>,
     configuration_revision: Arc<()>,
+}
+
+/// The decompiler image as `(start, end, executable)` ranges; empty when it cannot be built.
+pub(crate) fn mapped_ranges(binary: &rampage_loaders::Binary) -> Vec<(u64, u64, bool)> {
+    image::regions(binary)
+        .map(|regions| {
+            regions
+                .iter()
+                .map(|region| (region.base, region.base.saturating_add(region.size), region.executable))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The highest address of the decompiler's data space: as wide as a pointer, 16 bits for the Raw profiles with a
+/// C model but no native width.
+pub(crate) fn highest_data_address(binary: &rampage_loaders::Binary) -> u64 {
+    match binary.arch.default_pointer_size() {
+        Some(size) if size < 8 => (1u64 << (8 * u32::from(size))) - 1,
+        Some(_) => u64::MAX,
+        None => u64::from(u16::MAX),
+    }
+}
+
+/// The imported peripherals typed as struct globals for this binary's decompiler image.
+pub(crate) fn peripheral_typing(
+    binary: &rampage_loaders::Binary,
+    annotations: &crate::annotations::Annotations,
+) -> Vec<crate::peripherals::Typed> {
+    if annotations.peripherals().is_empty() {
+        return Vec::new();
+    }
+    crate::peripherals::decompiler_typing(annotations, &mapped_ranges(binary), highest_data_address(binary))
 }
 
 pub(crate) fn default_options(binary: &rampage_loaders::Binary) -> DecompilerOptions {
@@ -300,6 +334,7 @@ impl Project {
             && candidate.globals().is_empty()
             && candidate.data_types().is_empty()
             && candidate.operand_types().is_empty()
+            && candidate.peripherals().is_empty()
         {
             return Ok(());
         }
@@ -461,6 +496,7 @@ impl Project {
     ) -> Result<Decompilation, ApiError> {
         let mut decompilation = self.decompile_guarded(address, cancellation, false)?;
         self.annotate_objc_sends(&mut decompilation);
+        self.annotate_register_fields(&mut decompilation);
         Ok(decompilation)
     }
 
@@ -469,6 +505,7 @@ impl Project {
     pub fn decompile_encrypted(&self, address: u64) -> Result<Decompilation, ApiError> {
         let mut decompilation = self.decompile_guarded(address, &std::sync::atomic::AtomicBool::new(false), true)?;
         self.annotate_objc_sends(&mut decompilation);
+        self.annotate_register_fields(&mut decompilation);
         Ok(decompilation)
     }
 
@@ -544,6 +581,7 @@ impl Project {
             || slot.local_names != *annotations.local_names()
             || slot.local_types != *annotations.local_types()
             || slot.type_hints != *annotations.type_hints()
+            || slot.peripherals != *annotations.peripherals()
         {
             slot.engine = None;
         }
@@ -568,6 +606,7 @@ impl Project {
             slot.local_names = annotations.local_names().clone();
             slot.local_types = annotations.local_types().clone();
             slot.type_hints = annotations.type_hints().clone();
+            slot.peripherals = annotations.peripherals().clone();
         }
         let options = slot.options.clone().unwrap_or_else(|| default_options(&self.binary));
         let decompiler = slot.engine.as_mut().expect("just built");
@@ -633,7 +672,7 @@ impl Project {
         crate::debug_type_import::validate_options(annotations, options)?;
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
         let binary = &self.binary;
-        let regions = image::regions(binary)?;
+        let regions = image::regions_with_peripherals(binary, annotations)?;
         crate::debug_layout_import::validate_replay_source(self, annotations)?;
         // A segment can hold more than code (a Mach-O __TEXT starts with headers), so require an executable
         // segment rather than one that begins at code.

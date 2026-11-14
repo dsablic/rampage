@@ -10,6 +10,8 @@ pub enum XrefQuery {
     To(u64),
     /// References made by the function starting at this address, or by the instruction at it.
     From(u64),
+    /// References whose target lies in `[start, end)`: an imported peripheral's registers.
+    ToRange(u64, u64),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -25,6 +27,9 @@ pub struct XrefRow {
     /// selector, receiver class and how certain the edge is. Absent on every other reference.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub objc: Option<ObjcEdge>,
+    /// `read` or `write`, for a load or store at a constant address in an imported peripheral.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access: Option<&'static str>,
 }
 
 /// How an Objective-C send reaches the implementation an xref row points at.
@@ -71,7 +76,7 @@ impl Project {
             by_source[first..last].iter().map(|&index| xrefs[index])
         };
         let ranges: Vec<(u64, u64)> = match query {
-            XrefQuery::To(_) => Vec::new(),
+            XrefQuery::To(_) | XrefQuery::ToRange(..) => Vec::new(),
             XrefQuery::From(address) => match analysis.program.function_at(address) {
                 Some(function) => function.blocks.iter().map(|block| (block.start, block.end)).collect(),
                 None => vec![(address, address.saturating_add(1))],
@@ -82,11 +87,26 @@ impl Project {
             XrefQuery::From(_) => {
                 ranges.iter().flat_map(|&(start, end)| from_range(start, end)).map(|xref| (xref, None)).collect()
             }
+            XrefQuery::ToRange(start, end) => {
+                xrefs.iter().filter(|xref| (start..end).contains(&xref.to)).map(|&xref| (xref, None)).collect()
+            }
         };
+        // Loads and stores at constant addresses inside imported peripherals, which discovery does not record.
+        let registers = match query {
+            XrefQuery::To(address) => self.register_xrefs(address, address.saturating_add(1))?,
+            XrefQuery::ToRange(start, end) => self.register_xrefs(start, end)?,
+            XrefQuery::From(_) => Vec::new(),
+        };
+        let writes: std::collections::BTreeSet<(u64, u64)> =
+            registers.iter().filter(|(_, write)| *write).map(|(xref, _)| (xref.from, xref.to)).collect();
+        let reads: std::collections::BTreeSet<(u64, u64)> =
+            registers.iter().filter(|(_, write)| !*write).map(|(xref, _)| (xref.from, xref.to)).collect();
+        selected.extend(registers.into_iter().map(|(xref, _)| (xref, None)));
         // Objective-C sends add call edges to the implementations they may reach. They are resolved only when
         // this query can involve one: it is to a method implementation, or its references reach a send entry.
         let dispatch = match query {
             XrefQuery::To(address) => self.objc_dispatch_if(|hints| hints.is_implementation(address))?,
+            XrefQuery::ToRange(..) => None,
             XrefQuery::From(_) => {
                 self.objc_dispatch_if(|hints| selected.iter().any(|(xref, _)| hints.reaches_send(xref.to)))?
             }
@@ -99,6 +119,7 @@ impl Project {
             (Some(dispatch), XrefQuery::From(_)) => {
                 ranges.iter().flat_map(|&(start, end)| dispatch.sends_in(start, end)).collect()
             }
+            (Some(_), XrefQuery::ToRange(..)) => Vec::new(),
         };
         for send in sends.into_iter().filter(|send| send.confidence.has_edges()) {
             for &target in &send.targets {
@@ -120,6 +141,13 @@ impl Project {
                 from_function: analysis.function_containing(xref.from).map(|function| self.function_name(function)),
                 to_name: self.name_at(xref.to),
                 objc: send.map(ObjcEdge::of),
+                access: if writes.contains(&(xref.from, xref.to)) {
+                    Some("write")
+                } else if reads.contains(&(xref.from, xref.to)) {
+                    Some("read")
+                } else {
+                    None
+                },
             });
         }
         Ok(Page { total: page.total, offset: page.offset, items: rows })

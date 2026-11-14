@@ -613,5 +613,15 @@ async fn contract_mcp_types_results() {
     exercise(c, o, "list_types", json!({"path": go, "contains": "main.", "limit": 2})).await;
     exercise(c, o, "import_pdb_names", json!({"path": exe, "pdb": pdb, "limit": 2})).await;
     exercise(c, o, "import_pdb_names", json!({"path": exe, "pdb": pdb, "limit": 2, "apply": true})).await;
+    // A CMSIS-SVD peripheral map on a Cortex-M Raw project.
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let firmware = owned(&scratch, &root.join("firmware/raw-cortex-m-svd.bin"));
+    let svd = root.join("svd/ARM_Example.svd");
+    let raw =
+        json!({"profile": "cortex-m", "offset": 0, "length": 256, "base_address": "0x8000000", "vector_table": true});
+    exercise(c, o, "import_svd", json!({"path": firmware, "raw": raw, "svd": svd, "apply": true})).await;
+    exercise(c, o, "peripheral_access", json!({"path": firmware, "raw": raw})).await;
+    let registers = json!({"path": firmware, "raw": raw, "peripheral": "TIMER0", "limit": 3});
+    exercise(c, o, "peripheral_access", registers).await;
     check_group(client, "types", &observed, &[]).await;
 }

@@ -1453,6 +1453,7 @@ mod tests {
                 from_function: Some("github.com/gohugoio/hugo/resources/images.DecodeImageConfig".into()),
                 to_name: Some(name(index as usize)),
                 objc: None,
+                access: None,
             })
             .collect();
         let mut summary: Value = native_function_summary();

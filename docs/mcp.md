@@ -96,7 +96,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 that answer common first questions, such as `language_metadata` and `class_evidence` for class names and
 hierarchies, are in `core` so that a client deferring schemas still sees their names.
 
-A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling every group lists 88. The
+A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling every group lists 90. The
 `debug` group adds 14 tools (16 with `--debug-writes`), `--observations` adds `report_observation`, and a
 `--corpus` server lists `enable_tools` and the 4 `improve` tools only.
 
@@ -113,7 +113,8 @@ A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling
   `capa_detect`, `find_crypto`, `list_packs`.
 - `types`: `set_signature`, `set_types`, `set_global`, `import_debug_signatures`, `import_debug_layouts`,
   `import_pdb_names`, `edit_variable`, `declare_types`, `list_types`, `get_type`, `delete_type`, `apply_data_type`,
-  `read_data`, `apply_enum`, `apply_offset`, `function_frame`, `propagate_types`, `import_debug_types`.
+  `read_data`, `apply_enum`, `apply_offset`, `function_frame`, `propagate_types`, `import_debug_types`,
+  `import_svd`, `peripheral_access`.
 - `runtime`: `observe_pointer`, `compare_pointer_observations`, `compare_runtime_bytes`, `observe_indirect_branch`,
   `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `entry_diagnostics`, `inspect_jump_table`.
@@ -220,6 +221,14 @@ profiles are not default recognition coverage.
 library, independently checking retained producer constraints against native measurements. Whole-plan review
 hashes bind atomic library/proof/signature edits; pages do not select writes. Unknown producer alignment and
 unsupported bitfields/qualifiers remain explicit. See [checked debug-type import](debug-types.md).
+
+`import_svd` previews, or with `apply: true` stores, a CMSIS-SVD file's peripherals as annotations, replacing an
+earlier import in one undo step. Decompiled register accesses then read `TIMER0.CR = TIMER0.CR | 0x21;` with a
+bit-field comment (`/* CR: EN|MODE=Single_MATCH */`); disassembly, xref rows and `evaluate_function` faults name
+`PERIPHERAL.REGISTER`; those names resolve as addresses; `xrefs` to a peripheral's name covers all its registers;
+and `evaluate_function` takes `mmio` values for polled registers. `peripheral_access` pages peripherals with
+access counts, or one peripheral's registers with bit fields and accessing functions. Limits: accesses are found
+only through constants a function forms itself. See [peripheral maps](peripheral-maps.md).
 
 `propagate_types` previews direct-call type candidates; `apply=true` persists separate unlocked hints with
 source fingerprints. Analyst annotations take priority, conflicts remain explicit and unsupported mappings

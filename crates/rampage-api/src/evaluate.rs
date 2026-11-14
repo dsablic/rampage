@@ -63,6 +63,10 @@ pub struct EvaluateRequest {
     /// Up to 64 byte writes into the image (copy-on-write) before the run.
     #[serde(default)]
     pub memory: Vec<MemoryWrite>,
+    /// Up to 64 memory-mapped register values {at: address or PERIPHERAL.REGISTER, value}: each maps its 4 KiB
+    /// page as RAM, so polled status registers read as given.
+    #[serde(default)]
+    pub mmio: Vec<MmioValue>,
     /// Instruction budget (default 1000000, at most 20000000).
     pub max_steps: Option<u64>,
     /// Wall-clock milliseconds (default 10000, at most 60000).
@@ -110,6 +114,13 @@ pub struct MemoryWrite {
     /// Address or symbol.
     pub address: String,
     pub hex: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MmioValue {
+    pub at: String,
+    pub value: IntegerText,
 }
 
 /// Why the run ended.
@@ -789,7 +800,7 @@ impl Project {
         if request.args.len() > MAX_ARGUMENTS {
             return Err(invalid(format!("at most {MAX_ARGUMENTS} arguments")));
         }
-        if request.memory.len() > MAX_MEMORY_WRITES {
+        if request.memory.len() > MAX_MEMORY_WRITES || request.mmio.len() > MAX_MEMORY_WRITES {
             return Err(invalid(format!("at most {MAX_MEMORY_WRITES} memory writes")));
         }
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
@@ -879,6 +890,27 @@ impl Project {
             }
             ram.write(address, &bytes)
                 .map_err(|_| invalid(format!("memory write at {address:#x} is outside the image")))?;
+        }
+        for register in &request.mmio {
+            let address = self.resolve(&register.at)?;
+            let value = match &register.value {
+                IntegerText::Unsigned(value) => *value,
+                IntegerText::Signed(value) => *value as u64,
+                IntegerText::Text(text) => parse_integer(text)?.0,
+            };
+            let size = self.register_bytes(address);
+            let mut bytes = value.to_le_bytes()[..size].to_vec();
+            if big_endian {
+                bytes.reverse();
+            }
+            if ram.region_mut(address, size).is_none() {
+                let page = address & !(PAGE - 1);
+                if ram.overlaps(page, PAGE) {
+                    return Err(invalid(format!("mmio address {address:#x} is inside the image; use memory")));
+                }
+                ram.map(page, vec![0; PAGE as usize]);
+            }
+            ram.write(address, &bytes).map_err(|_| invalid(format!("mmio value at {address:#x} crosses its page")))?;
         }
 
         let thumb = binary.arch == Arch::Arm
@@ -1237,7 +1269,7 @@ impl Project {
             name: self.name_at(entry),
             convention: abi.name(),
             stop,
-            detail,
+            detail: self.name_unmapped_register(stop, detail),
             steps,
             result,
             stopped_at,

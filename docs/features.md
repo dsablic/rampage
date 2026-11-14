@@ -46,6 +46,11 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   RAM regions (from file ranges, decoded bytes or zero fill), and reads Intel HEX and Motorola S-records. See
   [Raw Projects in MCP](mcp.md#multiple-regions-intel-hex-and-s-records). Limits: base addresses and regions are
   the analyst's assertion; Sleigh profiles other than MSP430 and AVR8 do not decompile.
+- [CMSIS-SVD peripheral maps](peripheral-maps.md) (`import_svd`, `peripheral_access`) name memory-mapped
+  registers everywhere: decompiled C reads `TIMER0.CR = TIMER0.CR | 0x21; /* CR: EN|MODE=Single_MATCH */`,
+  disassembly, xrefs and evaluation faults say `TIMER0.CR`, and `peripheral_access` lists the functions that read
+  or write each register. Limits: accesses are found only through constants a function forms itself; bit fields
+  are comments, not C bit-fields.
 - ELF, PE and Mach-O, including universal Mach-O binaries and explicitly selected embedded executable images.
 - x86 and x86-64 use [iced-x86](https://github.com/icedland/iced).
 - AArch64 and 32-bit ARM decode natively from Arm's

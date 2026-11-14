@@ -17,6 +17,15 @@ Additions only; nothing in the stable surface changed.
   microcontroller's flash read through OpenOCD, pyOCD, J-Link or QEMU, which then opens as a Cortex-M Raw project.
   The debug docs gain a Cortex-M probes section and the flash-dump recipe; a live QEMU test checks the dump against
   the loaded image.
+- CMSIS-SVD peripheral maps (types group): `import_svd` previews, or with `apply` stores, a device's peripherals,
+  registers and bit fields (`derivedFrom`, `dim` arrays, clusters, inherited sizes and reset values, enumerated
+  values; bounded, no entity expansion), replacing an earlier import in one undo step. Decompiled MMIO accesses
+  then read `TIMER0.CR = TIMER0.CR | 0x21; /* CR: EN|MODE=Single_MATCH */`; disassembly comments, xref rows (with
+  `access: read|write`) and `evaluate_function` faults name `PERIPHERAL.REGISTER`; those names resolve as
+  addresses, and `xrefs` to a peripheral's name covers all its registers. `peripheral_access` lists peripherals
+  with access counts, or one peripheral's registers with bit fields and the functions reading or writing each.
+  `evaluate_function` takes `mmio` register values, so routines that poll a status register run. See
+  [peripheral maps](docs/peripheral-maps.md).
 
 ## 1.1.0 (2026-11-14)
 

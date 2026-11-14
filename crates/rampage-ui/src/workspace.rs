@@ -594,6 +594,9 @@ impl Workspace {
             Field::Finding => Err(rampage_api::ApiError::Invalid(
                 "ledger entries are recorded with the record_finding tool".to_owned(),
             )),
+            Field::Peripheral => {
+                Err(rampage_api::ApiError::Invalid("peripheral maps are imported with the import_svd tool".to_owned()))
+            }
             Field::Unknown => {
                 Err(rampage_api::ApiError::Invalid("this build does not know that annotation field".to_owned()))
             }

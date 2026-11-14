@@ -39,6 +39,26 @@ fn raw_regions(binary: &Binary) -> Result<Vec<MemoryRegion<'_>>, ApiError> {
         .collect()
 }
 
+/// [`regions`] and a writable, zero-filled region for each typed peripheral the image does not map, so its struct
+/// global has memory to live in. Writable, its registers never fold to constants.
+pub(super) fn regions_with_peripherals<'a>(
+    binary: &'a Binary,
+    annotations: &crate::annotations::Annotations,
+) -> Result<Vec<MemoryRegion<'a>>, ApiError> {
+    let mut regions = regions(binary)?;
+    for peripheral in super::peripheral_typing(binary, annotations).into_iter().filter(|typed| typed.unmapped) {
+        regions.push(MemoryRegion {
+            base: peripheral.base,
+            bytes: &[],
+            size: peripheral.size,
+            readable: true,
+            writable: true,
+            executable: false,
+        });
+    }
+    Ok(regions)
+}
+
 pub(super) fn regions(binary: &Binary) -> Result<Vec<MemoryRegion<'_>>, ApiError> {
     if binary.format == Format::Raw || binary.raw_code_image().is_some() {
         return raw_regions(binary);

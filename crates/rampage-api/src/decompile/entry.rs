@@ -285,7 +285,7 @@ impl Project {
             return Err(ApiError::Invalid("exact-entry selected image exceeds the 128 MiB byte budget".to_owned()));
         }
         source(self)?;
-        let regions = image::regions(&self.binary)?;
+        let regions = image::regions_with_peripherals(&self.binary, &annotations)?;
         let mut mapped_backed_bytes = 0usize;
         for region in &regions {
             check("full-image mapping preparation")?;
