@@ -6,6 +6,8 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+## 1.3.0 (2026-11-14)
+
 Additions only; nothing in the stable surface changed.
 
 - Embedded library signatures: identification of firmware (Cortex-M Raw projects and static Thumb ELF
@@ -25,6 +27,8 @@ Additions only; nothing in the stable surface changed.
   It explains only: no patch suggestions, no key extraction. Accepts a Cortex-M Raw project's `raw` selector. `find_crypto` also
   recognizes the PKCS#1 v1.5 DigestInfo prefixes for SHA-224/256/384/512. See
   [lock mechanisms](docs/lock-mechanisms.md).
+- Fixed: `evaluate_function`'s `timeout_ms` now starts after the instruction decoder is built, so a cold
+  language load no longer uses up a short run's budget (seen as `string_decoding` replays timing out).
 
 ## 1.2.0 (2026-11-14)
 
