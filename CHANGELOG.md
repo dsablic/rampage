@@ -4,8 +4,12 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
-## Unreleased
+## 1.1.0 (2026-11-14)
 
+Additions only; nothing in the stable surface changed.
+
+- Server instructions now say that `get_type` and `list_types` read Go runtime type data, stripped binaries
+  included, as well as DWARF and PDB, so agents stop decoding Go type descriptors by hand.
 - `evaluate_function` (core, experimental) runs a function of the image on integer and buffer arguments and
   returns its result, so agents stop simulating loops by hand. A p-code interpreter over the bundled Sleigh
   specifications executes x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC and RISC-V code with the
