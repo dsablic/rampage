@@ -571,8 +571,6 @@ struct Match {
     field: u64,
     endian: Endian,
     range: (u64, u64),
-    field_origin: Origin,
-    bounds_from_code: bool,
     adjacent: bool,
 }
 
@@ -737,14 +735,11 @@ impl Search<'_> {
                 if !admitted || uniform(block.slice(start, end)) {
                     continue;
                 }
-                let in_code = |address: u64| self.constants.contains(&address);
                 self.matches.push(Match {
                     algorithm,
                     field,
                     endian,
                     range: (start, end),
-                    field_origin: fields[&field],
-                    bounds_from_code: in_code(start) || in_code(end),
                     adjacent: field == end || field + width == start,
                 });
                 if self.matches.len() >= MAX_MATCHES {

@@ -145,27 +145,19 @@ fn brute_force_finds_a_crc_after_padding_and_stops_at_its_budget() {
 /// it.
 #[test]
 fn values_inside_a_stronger_checks_range_are_dropped_unless_code_references_them() {
-    let found = |algorithm, field, range, field_origin| Match {
-        algorithm,
-        field,
-        endian: Endian::Little,
-        range,
-        field_origin,
-        bounds_from_code: false,
-        adjacent: true,
-    };
-    let strong = found(Algorithm::Crc32, 0x7fc, (0x400, 0x7fc), Origin::Layout);
-    let weak = found(Algorithm::Sum8, 0x500, (0x440, 0x500), Origin::Layout);
+    let found = |algorithm, field, range| Match { algorithm, field, endian: Endian::Little, range, adjacent: true };
+    let strong = found(Algorithm::Crc32, 0x7fc, (0x400, 0x7fc));
+    let weak = found(Algorithm::Sum8, 0x500, (0x440, 0x500));
     let (checks, dropped) = select(vec![strong.clone(), weak.clone()], &CodeEvidence::default());
     assert_eq!(checks.iter().map(|check| check.field).collect::<Vec<_>>(), [0x7fc]);
     assert_eq!(dropped.iter().map(|check| check.field).collect::<Vec<_>>(), [0x500]);
     // A weak value whose range ends at the stronger check's code-referenced field does not borrow that reference.
     let code = CodeEvidence { constants: BTreeSet::from([0x7fc]), ..CodeEvidence::default() };
-    let borrowed = found(Algorithm::Sum8, 0x500, (0x501, 0x7fc), Origin::Layout);
+    let borrowed = found(Algorithm::Sum8, 0x500, (0x501, 0x7fc));
     let (checks, _) = select(vec![strong.clone(), borrowed], &code);
     assert_eq!(checks.iter().map(|check| check.field).collect::<Vec<_>>(), [0x7fc]);
     let code = CodeEvidence { constants: BTreeSet::from([0x500]), ..CodeEvidence::default() };
-    let referenced = Match { field_origin: Origin::Code, ..weak };
+    let referenced = weak;
     let (checks, _) = select(vec![strong, referenced], &code);
     assert_eq!(checks.len(), 2);
     assert!(checks[1].code_bound);
