@@ -158,11 +158,16 @@ def fix(route: Route, selector: dict[str, Any]) -> dict[str, Any]:
 def patch_values(route: Route) -> dict[str, Any]:
     selector = {"profile": "cortex-m4", "format": "ihex", "vector_table": True}
     patch(route, selector, 0x808, (115200).to_bytes(4, "little"), (57600).to_bytes(4, "little"))
+
+    def fields(report: dict[str, Any]) -> list[list[int]]:
+        return [[int(write["address"], 16), int.from_bytes(bytes.fromhex(write["replacement_hex"]), "little")]
+                for write in report["fix"]["writes"]]
+
+    # The preview (no fix) must already show the values a fix writes: an agent may read them from it.
+    preview = route.call("integrity_checks", raw=selector)
     fixed = fix(route, selector)
-    fields = []
-    for write in fixed["fix"]["writes"]:
-        fields.append([int(write["address"], 16), int.from_bytes(bytes.fromhex(write["replacement_hex"]), "little")])
-    return {"fields": fields}
+    assert fields(preview) == fields(fixed), (fields(preview), fields(fixed))
+    return {"fields": fields(fixed)}
 
 
 def export(route: Route, selector: dict[str, Any], **arguments: Any) -> Path:

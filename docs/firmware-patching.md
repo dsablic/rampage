@@ -44,9 +44,11 @@ measured on the patched image (`valid`, `stored_hex`, `computed_hex`).
   matches are otherwise common. Uniform ranges and erased (all 0x00 or 0xff) values are skipped.
 - **Code.** Functions that reference a CRC table (from `find_crypto`'s constants), load a 32-bit polynomial literal,
   or form one (or a table's address) with a Thumb `movw`/`movt` pair are reported in `routines` with their callers;
-  the addresses they and their callers reference or form as immediates (`mov r0, #0x800` passing a range,
-  `mov r1, #0x840` before reading a stored value) become candidates, and a match whose algorithm the code
-  implements gains confidence. A routine with no matching check is named in `notes`.
+  the addresses they and their callers reference, form with `movw`/`movt`, or load and store through a constant
+  base (`mov r1, #0x840; ldrh r1, [r1]` reading a stored value) become candidates, and a match whose algorithm the
+  code implements gains confidence. A weak value (16 bits or less, a sum, an XOR) counts code evidence only at its
+  own stored address, and no match counts a range bound that is another match's stored value. A routine with no
+  matching check is named in `notes`.
 - **Emulation.** With `emulate` (the default), the routine is run with `evaluate_function` on `(start, length)` and
   then `(start, end)` of each matched range up to 64 KiB, at most four runs; a result equal to the computed value
   marks the check `confirmed_by_emulation`.
@@ -64,9 +66,12 @@ measured on the patched image (`valid`, `stored_hex`, `computed_hex`).
 By default a fix writes only checks with independent evidence: confirmed by emulation, or whose stored value or
 range bound the code references. Other invalid checks appear in `fix.writes` as `preview_only` with the reason;
 pass their `ids` to fix them. Writes go in dependency order: a check whose range covers another's stored value is
-computed after it (inner values first), and a cycle refuses. A check whose range covers another check's value
-that is stale and not being fixed (not chosen, or a dropped match whose algorithm the image's code implements) is
-not written: it appears as `blocked`, naming that value, since its new value would cover a stale one. Each write is a patch over the original bytes at the stored value, or a
+computed after it (inner values first), over the image as the earlier planned writes leave it, so a preview without
+`fix` shows the values a fix writes. A check whose range covers another check's value that would still be stale
+(not chosen, or itself blocked) is not written: it appears as `blocked`, naming that check, since its new value would
+cover a stale one. A value dropped as a chance match inside the range, whose algorithm the image's code implements and
+which no longer matches, only adds a warning to `notes`: it has no id to fix it by. Each write is a patch over the
+original bytes at the stored value, or a
 `revert` of the record that covers exactly those bytes when the original bytes are correct again. Every write is
 validated before the first is committed (admission, preimage, the patch budget, and any user patch overlapping the
 value without matching it exactly, which refuses the whole fix); if a write still fails, the earlier ones are undone.

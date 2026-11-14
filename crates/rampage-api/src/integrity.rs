@@ -260,6 +260,27 @@ fn blocks(binary: &Binary) -> (Vec<Block<'_>>, usize) {
     (blocks, omitted)
 }
 
+/// The blocks' bytes as an owned copy that planned writes can change.
+fn owned_blocks(binary: &Binary) -> Vec<(String, u64, Vec<u8>)> {
+    blocks(binary).0.into_iter().map(|block| (block.name, block.start, block.bytes.to_vec())).collect()
+}
+
+fn views(image: &[(String, u64, Vec<u8>)]) -> Vec<Block<'_>> {
+    image.iter().map(|(name, start, bytes)| Block::new(name.clone(), *start, bytes)).collect()
+}
+
+fn write_into(image: &mut [(String, u64, Vec<u8>)], address: u64, bytes: &[u8]) {
+    for (_, start, block) in image.iter_mut() {
+        let Some(offset) = address.checked_sub(*start).and_then(|offset| usize::try_from(offset).ok()) else {
+            continue;
+        };
+        if offset + bytes.len() <= block.len() {
+            block[offset..offset + bytes.len()].copy_from_slice(bytes);
+            return;
+        }
+    }
+}
+
 fn read<'a>(blocks: &'a [Block], start: u64, end: u64) -> Option<&'a [u8]> {
     let block = blocks.iter().find(|block| block.start <= start && end <= block.end())?;
     Some(block.slice(start, end))
@@ -340,16 +361,13 @@ fn slots_holding(blocks: &[Block], value: u32, big_endian: bool, cap: usize) -> 
     slots
 }
 
-/// Immediates the function's instructions carry (decoded operands, ARM `#` immediates and Thumb-2 movw/movt
-/// pairs); at most 256.
-fn immediate_addresses(project: &Project, function: u64) -> Vec<u64> {
+/// Addresses the function forms without leaving a data reference: Thumb-2 `movw`/`movt` pairs, and the addresses its
+/// loads and stores resolve to through a constant base (`mov r1, #0x840; ldrh r1, [r1]`). Other immediates (counts,
+/// masks, arguments) are not addresses. Only those `keep` admits, at most 256.
+fn immediate_addresses(project: &Project, function: u64, keep: impl Fn(u64) -> bool) -> Vec<u64> {
     let Ok(listing) = project.function_listing_for_frame(function) else { return Vec::new() };
-    let mut values = Vec::new();
-    for line in listing.blocks.iter().flatten() {
-        values.extend(line.immediate);
-        let listed = line.immediates_hex.iter().flat_map(|list| list.split(','));
-        values.extend(listed.filter_map(|value| u64::from_str_radix(value.trim().trim_start_matches("0x"), 16).ok()));
-    }
+    let mut values: Vec<u64> =
+        listing.blocks.iter().flatten().filter(|line| line.accesses).filter_map(|line| line.data_ref).collect();
     let thumb = project.binary.thumb.iter().any(|range| range.contains(&function));
     if thumb && !project.binary.big_endian {
         for block in &listing.blocks {
@@ -361,6 +379,7 @@ fn immediate_addresses(project: &Project, function: u64) -> Vec<u64> {
             }
         }
     }
+    values.retain(|&value| keep(value));
     values.sort_unstable();
     values.dedup();
     values.truncate(256);
@@ -489,13 +508,13 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
                     }
                 }
             }
-            // Addresses code forms as immediates leave no data reference: a range passed as `mov r0, #0x800`,
+            // Addresses code forms in registers may leave no data reference: a table or range formed by movw/movt,
             // or a stored value read after `mov r1, #0x840`.
             // Those in a block's header words are layout candidates already, and small counts land there in an
             // image based at 0, so they are left out.
             let header =
                 |value: u64| blocks.iter().any(|block| value >= block.start && value - block.start < 4 * HEADER_WORDS);
-            values.extend(immediate_addresses(project, function).into_iter().filter(|&value| !header(value)));
+            values.extend(immediate_addresses(project, function, |value| in_image(value) && !header(value)));
             for value in values.into_iter().filter(|&value| in_image(value)) {
                 if evidence.constants.len() < MAX_CODE_CONSTANTS {
                     evidence.constants.insert(value);
@@ -778,7 +797,22 @@ fn confidence(score: f64) -> &'static str {
     }
 }
 
-fn score_match(found: &Match, code: &CodeEvidence) -> (f64, Vec<String>) {
+/// The addresses of a match that code references: its stored value, and for a strong algorithm a range bound that is
+/// not another match's stored value (a bound there is that value's evidence: a weak chance match ending at a CRC's
+/// field would otherwise borrow the CRC's reference). A weak value counts code evidence only at its own field.
+fn code_addresses(found: &Match, code: &CodeEvidence, fields: &BTreeSet<u64>) -> Vec<u64> {
+    let (start, end) = found.range;
+    let mut addresses = vec![found.field];
+    if found.algorithm.strong() {
+        addresses.extend([start, end].into_iter().filter(|bound| !fields.contains(bound)));
+    }
+    addresses.retain(|address| code.constants.contains(address));
+    addresses.sort_unstable();
+    addresses.dedup();
+    addresses
+}
+
+fn score_match(found: &Match, code: &CodeEvidence, fields: &BTreeSet<u64>) -> (f64, Vec<String>) {
     let (start, end) = found.range;
     let mut evidence = vec![format!(
         "brute force: the {} of {start:#x}..{end:#x} in the original image equals the {} value stored at {:#x}",
@@ -790,9 +824,9 @@ fn score_match(found: &Match, code: &CodeEvidence) -> (f64, Vec<String>) {
     if found.adjacent {
         score += 0.1;
     }
+    let addresses = code_addresses(found, code, fields);
     // A routine counts only when it (or a caller) references this check's value or range.
-    let referenced =
-        |routine: &&Routine| [found.field, start, end].iter().any(|address| routine.constants.contains(address));
+    let referenced = |routine: &&Routine| addresses.iter().any(|address| routine.constants.contains(address));
     if let Some(routine) = code.routines.iter().filter(referenced).find(|routine| routine.admits(found.algorithm)) {
         score += 0.2;
         evidence.push(format!(
@@ -803,15 +837,9 @@ fn score_match(found: &Match, code: &CodeEvidence) -> (f64, Vec<String>) {
             routine.evidence.first().map_or("", String::as_str)
         ));
     }
-    if found.field_origin == Origin::Code || found.bounds_from_code {
+    if !addresses.is_empty() {
         score += 0.1;
-        let referenced: Vec<String> = [found.field, start, end]
-            .into_iter()
-            .filter(|address| code.constants.contains(address))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .map(|address| format!("{address:#x}"))
-            .collect();
+        let referenced: Vec<String> = addresses.iter().map(|address| format!("{address:#x}")).collect();
         evidence.push(format!("code: the CRC routine or its callers reference {}", referenced.join(", ")));
     }
     (score.min(0.95), evidence)
@@ -822,8 +850,9 @@ fn score_match(found: &Match, code: &CodeEvidence) -> (f64, Vec<String>) {
 /// while they are stale.
 fn select(matches: Vec<Match>, code: &CodeEvidence) -> (Vec<Found>, Vec<Found>) {
     let mut by_field: BTreeMap<u64, Vec<(f64, Vec<String>, Match)>> = BTreeMap::new();
+    let fields: BTreeSet<u64> = matches.iter().map(|found| found.field).collect();
     for found in matches {
-        let (score, evidence) = score_match(&found, code);
+        let (score, evidence) = score_match(&found, code, &fields);
         by_field.entry(found.field).or_default().push((score, evidence, found));
     }
     let mut checks: Vec<Found> = Vec::new();
@@ -843,7 +872,7 @@ fn select(matches: Vec<Match>, code: &CodeEvidence) -> (Vec<Found>, Vec<Found>) 
             range: best.range,
             score,
             emulated: false,
-            code_bound: best.field_origin == Origin::Code || best.bounds_from_code,
+            code_bound: !code_addresses(&best, code, &fields).is_empty(),
             evidence,
             alternatives,
         });
@@ -1163,9 +1192,12 @@ impl Project {
         let mut revision = tokens.as_ref().map(|(_, revision)| revision.clone());
         let mut applied: Vec<(u64, Option<crate::BytePatch>)> = Vec::new();
         let mut failure = None;
+        // The image as the planned writes leave it, whether or not they are committed: each later value is computed
+        // over the earlier ones, so a preview shows what a fix would write.
+        let mut image = owned_blocks(&project.binary);
         for (index, original, previous) in planned {
             let check = &found[index];
-            let (current_blocks, _) = blocks(&project.binary);
+            let current_blocks = views(&image);
             let field_end = check.field + width(check) as u64;
             let (Some(current), Some(desired)) = (
                 read(&current_blocks, check.field, field_end).map(<[u8]>::to_vec),
@@ -1177,38 +1209,15 @@ impl Project {
                 continue;
             }
             // A value written over a range that holds another check's stale value would be wrong as soon as that
-            // value is corrected: name it and write nothing for this check.
+            // value is corrected (an inner check not chosen, or chosen but itself blocked): name it, write nothing.
             let big_endian = project.binary.big_endian;
             let stale_inner = found
                 .iter()
                 .enumerate()
-                .filter(|&(other, inner)| other != index && !chosen[other] && covers(check, inner))
-                .find(|(_, inner)| stale(inner, &current_blocks, big_endian))
-                .map(|(other, inner)| {
-                    format!("check {other} ({}) at {:#x}, not chosen for fixing", algorithm_name(inner), inner.field)
-                })
-                .or_else(|| {
-                    // Dropped values are mostly chance matches on the covered bytes; one counts when the image holds
-                    // code for its algorithm.
-                    let credible = |inner: &&Found| {
-                        inner.algorithm.is_some_and(|algorithm| code.routines.iter().any(|r| r.admits(algorithm)))
-                    };
-                    suspects
-                        .iter()
-                        .filter(credible)
-                        .find(|inner| covers(check, inner) && stale(inner, &current_blocks, big_endian))
-                        .map(|inner| {
-                            format!(
-                                "a {} value at {:#x} over {:#x}..{:#x} (matched in the original image but not kept as \
-                                 a check)",
-                                algorithm_name(inner),
-                                inner.field,
-                                inner.range.0,
-                                inner.range.1
-                            )
-                        })
-                });
-            if let Some(inner) = stale_inner {
+                .filter(|&(other, inner)| other != index && covers(check, inner))
+                .find(|(_, inner)| stale(inner, &current_blocks, big_endian));
+            if let Some((other, inner)) = stale_inner {
+                let inner = format!("check {other} ({}) at {:#x}", algorithm_name(inner), inner.field);
                 notes.push(format!("check {index} at {:#x} was not fixed: its range covers {inner}", check.field));
                 writes.push(FixWrite {
                     check: index,
@@ -1217,12 +1226,34 @@ impl Project {
                     replacement_hex: hex(&desired),
                     action: "blocked",
                     detail: Some(format!(
-                        "its range covers {inner}, which no longer matches its own range; correct that value first \
-                         (pass its id, or patch it), or this value would be computed over a stale one"
+                        "its range covers {inner}, which no longer matches its own range and is not being corrected; \
+                         fix it first (pass its id), or this value would be computed over a stale one"
                     )),
                 });
                 continue;
             }
+            // A dropped match is mostly chance on the covered bytes and has no id to fix it by, so it only warns, and
+            // only when the image holds code for its algorithm.
+            let credible = |inner: &&Found| {
+                inner.algorithm.is_some_and(|algorithm| code.routines.iter().any(|r| r.admits(algorithm)))
+            };
+            if let Some(inner) = suspects
+                .iter()
+                .filter(credible)
+                .find(|inner| covers(check, inner) && stale(inner, &current_blocks, big_endian))
+            {
+                notes.push(format!(
+                    "check {index} at {:#x} covers a {} value at {:#x} over {:#x}..{:#x} that matched in the original \
+                     image but was not kept as a check and no longer matches; if it is a check, correct it first, then \
+                     fix check {index} again",
+                    check.field,
+                    algorithm_name(inner),
+                    inner.field,
+                    inner.range.0,
+                    inner.range.1
+                ));
+            }
+            write_into(&mut image, check.field, &desired);
             // The original bytes are correct again: remove the record at the value, which covers exactly its bytes
             // (anything else was refused above).
             let revert = desired == original;
@@ -1290,12 +1321,13 @@ impl Project {
             let state = if restored { "earlier writes were undone" } else { "earlier writes could not all be undone" };
             return Err(ApiError::Invalid(format!("fix failed at {failure}; {state}")));
         }
+        let planned_blocks = views(&image);
         for (index, check) in found.iter().enumerate().filter(|(index, _)| !chosen[*index]) {
-            let (current_blocks, _) = blocks(&project.binary);
+            let current_blocks = &planned_blocks;
             let field_end = check.field + width(check) as u64;
             let (Some(current), Some(desired)) = (
-                read(&current_blocks, check.field, field_end).map(<[u8]>::to_vec),
-                compute(check, &current_blocks, project.binary.big_endian),
+                read(current_blocks, check.field, field_end).map(<[u8]>::to_vec),
+                compute(check, current_blocks, project.binary.big_endian),
             ) else {
                 continue;
             };

@@ -276,6 +276,12 @@ fn nested_checks_are_found_and_fixed_inner_first() {
     project = project.patch_bytes(0x808, &baud, &slower, true).unwrap().project;
     let report = call(&mut project, "integrity_checks", json!({}));
     assert_eq!(report["invalid"], 2, "{report:#}");
+    // The preview computes the outer value over the planned inner one, as a fix would write it.
+    let pairs = |report: &Value| -> Vec<(String, String)> {
+        let writes = report["fix"]["writes"].as_array().unwrap();
+        writes.iter().map(|write| (write["address"].to_string(), write["replacement_hex"].to_string())).collect()
+    };
+    let preview = pairs(&report);
 
     // Fixing only the outer check while the inner one is stale writes nothing and names the inner value.
     let mut fix = tokens(&report);
@@ -295,6 +301,20 @@ fn nested_checks_are_found_and_fixed_inner_first() {
     let writes = fixed["fix"]["writes"].as_array().unwrap();
     let order: Vec<&str> = writes.iter().map(|write| write["address"].as_str().unwrap()).collect();
     assert_eq!(order, ["0x840", "0x13fc"], "{fixed:#}");
+    assert_eq!(pairs(&fixed), preview, "the preview showed other values than the fix wrote");
     assert_eq!(fixed["fix"]["applied"], true, "{fixed:#}");
     assert_eq!(fixed["invalid"], 0, "{fixed:#}");
+}
+
+/// The application CRC-32 is the image's only check: no weak value inside its range borrows the code reference to
+/// that CRC's stored value as evidence of a range end of its own.
+#[test]
+fn the_elf_has_exactly_one_check() {
+    let path = PathBuf::from(format!("{FIRMWARE}.elf"));
+    let mut project = Session::default().open(&path, None).unwrap();
+    let report = call(&mut project, "integrity_checks", json!({}));
+    let checks = report["checks"].as_array().unwrap();
+    assert_eq!(checks.len(), 1, "{report:#}");
+    assert_eq!(checks[0]["stored"]["address"], format!("{CRC_FIELD:#x}"), "{report:#}");
+    assert_eq!(checks[0]["depends_on"], json!([]), "{report:#}");
 }

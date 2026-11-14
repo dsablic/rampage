@@ -11,9 +11,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
   `unmapped_fetch`; shared objects, PIEs, PE and Mach-O images keep the null-page guard.
 - Fix: `integrity_checks` finds checks nested inside another check's range (a CRC-16 over a configuration block
   inside an image CRC-32): code evidence includes CRC tables whose address `movw`/`movt` forms and the addresses
-  routines and their callers form as immediates, and a dropped nested value is kept when the image's own routine
-  computes it. `fix` writes inner values first and never writes an outer value over a stale inner one it knows of:
-  that write is reported as `blocked`, naming the value; a CRC routine with no matching check is named in `notes`.
+  routines and their callers form with `movw`/`movt` or load through a constant base, and a dropped nested value is
+  kept when the image's own routine computes it. Fixes and previews compute each value over the earlier planned
+  writes, inner values first; an outer value over an inner check that would stay stale is reported as `blocked`,
+  naming it; a stale dropped match, or a CRC routine with no matching check, is noted in `notes`.
 - `evaluate_function` (and `function evaluate`) accepts a Raw project's `raw` selector, so a firmware image's own
   routines (a checksum, a decoder) can be run; processors the interpreter does not support, such as MSP430, are
   refused with the reason. `mmio`, with imported SVD register names, works as on an ELF image.
