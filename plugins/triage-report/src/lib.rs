@@ -501,7 +501,7 @@ fn step(report: &mut ReportBody, action: Action, reason: &str, fact_refs: Vec<Fa
 
 fn signature_origin(source: &SignatureSource) -> String {
     match source {
-        SignatureSource::Bundled => "the bundled starter database".to_owned(),
+        SignatureSource::Bundled => "the bundled signature corpus".to_owned(),
         SignatureSource::User => "the user-supplied database".to_owned(),
         SignatureSource::Pack { name } => format!("data pack `{name}`"),
     }
