@@ -571,7 +571,7 @@ fn compact_raw_selector() -> Value {
 fn raw_refusal(name: &str) -> String {
     format!(
         "tool {name} does not accept Raw projects; nothing was run. Raw-capable tools: {}",
-        tools::RAW_CAPABLE_TOOLS.join(", ")
+        tools::RAW_CAPABLE_TOOLS.iter().chain(&tools::RAW_CAPABLE_FILE_TOOLS).copied().collect::<Vec<_>>().join(", ")
     )
 }
 
@@ -863,8 +863,13 @@ impl RampageServer {
             };
         }
         if let Some(tool) = self.file_tools.iter().find(|tool| tool.name == name) {
-            if raw.is_some() {
-                return CallToolResult::error(vec![ContentBlock::text(raw_refusal(name))]);
+            match raw {
+                // A raw-capable file tool reads the Raw image itself, from its own arguments.
+                Some(raw) if tools::raw_capable(name) => {
+                    arguments.insert(RAW.to_owned(), raw);
+                }
+                Some(_) => return CallToolResult::error(vec![ContentBlock::text(raw_refusal(name))]),
+                None => {}
             }
             return match tool.call(&self.packs(), Value::Object(arguments)) {
                 Ok(output) if name == "query_debugger" && output.get("ok") == Some(&Value::Bool(false)) => {
@@ -1038,7 +1043,12 @@ impl ServerHandler for RampageServer {
             rmcp::model::Tool::new(tool.name, tool.description, with_binary_arguments(tool.name, &tool.input_schema))
         });
         let file_tools = self.file_tools.iter().filter(|tool| served(&tool.group, tool.name)).map(|tool| {
-            let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
+            let mut schema = tool.input_schema.as_object().cloned().unwrap_or_default();
+            if tools::raw_capable(tool.name)
+                && let Some(Value::Object(properties)) = schema.get_mut("properties")
+            {
+                properties.insert(RAW.to_owned(), compact_raw_selector());
+            }
             let listed = rmcp::model::Tool::new(tool.name, tool.description, schema);
             match tool.effect {
                 // endpoint_blocklist and decode_file_range (with output_path) replace the regular file they name (never

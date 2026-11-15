@@ -105,7 +105,7 @@ decoded code.
   this as a Raw project with ..."), and have `probe_compression` return a ready `raw` selector.
 - [x] **Write decoded bytes to a file** (`decode_file_range` with an absolute `output_path`, same rules as
   `fs_extract`), for tools that need a file.
-- [ ] **String and data tools on Raw projects.** `list_strings` and `inspect_data` refuse them.
+- [x] **String and data tools on Raw projects.** `list_strings` and `inspect_data` refuse them.
 - [ ] **Image records in containers.** Recognise records that name a payload's offset, compressed length, checksum and
   decoded size, and report them from `carve`/`file_layout` with the matching `decode` arguments.
 - [ ] **Vector table placed at runtime.** When offset 0 is code that writes VTOR, follow the VTOR store to find the

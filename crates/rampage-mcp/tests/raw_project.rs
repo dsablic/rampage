@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rampage_api::tools::RAW_CAPABLE_TOOLS;
+use rampage_api::tools::raw_capable;
 use rampage_mcp::RampageServer;
 use rmcp::model::{CallToolRequestParams, CallToolResult, ClientConfig};
 use rmcp::service::{RoleClient, RunningService};
@@ -134,7 +134,7 @@ async fn raw_selector_is_offered_only_on_raw_capable_tools() {
     for tool in &tools {
         let properties = tool.input_schema.get("properties").and_then(Value::as_object);
         let selector = properties.and_then(|properties| properties.get("raw"));
-        assert_eq!(selector.is_some(), RAW_CAPABLE_TOOLS.contains(&tool.name.as_ref()), "{}", tool.name);
+        assert_eq!(selector.is_some(), raw_capable(&tool.name), "{}", tool.name);
         if let Some(selector) = selector {
             assert_eq!(selector["additionalProperties"], false);
             assert_eq!(selector["properties"]["profile"]["type"], "string");
@@ -270,6 +270,16 @@ async fn a_cortex_m_image_opens_with_its_vector_table_in_one_call() {
     assert!(!failed && text.contains("\"kind\":\"call\""), "{text}");
     let (text, failed) = call(&client, "decompile", json!({ "path": path, "raw": selector, "at": "0x80001a0" })).await;
     assert!(!failed && text.contains("sub_800008c("), "{text}");
+    // inspect_data reads the Raw image's words at their mapped addresses: the vector table's initial SP.
+    let (text, failed) =
+        call(&client, "inspect_data", json!({ "path": path, "raw": selector, "at": "0x8000000", "size": 8 })).await;
+    assert!(!failed && text.contains("0x20005000"), "{text}");
+    let (text, failed) =
+        call(&client, "inspect_data", json!({ "path": path, "raw": selector, "at": "0x8000000", "image_offset": 0 }))
+            .await;
+    assert!(failed && text.contains("cannot be combined"), "{text}");
+    let (text, failed) = call(&client, "list_strings", json!({ "path": path, "raw": selector })).await;
+    assert!(!failed, "{text}");
 
     // A wrong base reads the same words but seeds nothing, and only suggests a base.
     let mut wrong = selector.clone();

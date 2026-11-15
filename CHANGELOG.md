@@ -39,6 +39,9 @@ see the [stability policy](docs/stability.md) for what the version promises.
   compressed streams, Intel HEX, S-records, text), sorted by name and paged by cursor, so an agent given only a
   folder can start. `endpoint_inventory` names the first 20 files it ignored, with the reason, in
   `ignored_entries`. See [MCP](docs/mcp.md).
+- Raw projects: `list_strings` and `inspect_data` take the `raw` selector. Strings come from every backed region
+  at mapped addresses, decoded regions included; in a code region a run is listed when a NUL ends it, since flash
+  images keep constants among their code. See [MCP](docs/mcp.md#raw-projects).
 
 ## 1.5.0 (2026-11-15)
 

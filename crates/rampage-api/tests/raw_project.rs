@@ -252,6 +252,7 @@ fn every_raw_capable_tool_answers_on_a_reviewed_msp430_project() {
         ("function_graph", json!({ "at": "0x4400" })),
         ("xrefs", json!({ "to": "0x4410" })),
         ("search", json!({ "mode": { "kind": "bytes", "pattern": "30 41" } })),
+        ("list_strings", json!({})),
         ("analysis_diagnostics", json!({ "include_discovery": true })),
         ("entry_diagnostics", json!({})),
         ("capabilities", json!({})),
@@ -490,6 +491,7 @@ fn cortex_m_raw_projects_serve_every_raw_capable_tool_with_native_evidence() {
             "search",
             json!({ "mode": { "kind": "immediate", "immediate": { "value": { "kind": "unsigned", "value": 0x1b } } } }),
         ),
+        ("list_strings", json!({ "contains": "fixture" })),
         ("analysis_diagnostics", json!({ "include_discovery": true })),
         ("entry_diagnostics", json!({})),
         ("capabilities", json!({})),
@@ -533,6 +535,15 @@ fn cortex_m_raw_projects_serve_every_raw_capable_tool_with_native_evidence() {
     // is partial, as for ARM ELF, and the result says so.
     assert!(outcome("search").contains("native operand evidence"), "{}", outcome("search"));
     assert!(outcome("binary_info").contains("\"vector_table\""), "{}", outcome("binary_info"));
+    // Strings among the flash code are listed at their mapped addresses when a NUL ends them.
+    let strings: Value = serde_json::from_str(outcome("list_strings")).unwrap();
+    assert_eq!(strings["items"][0]["text"], "rampage cortex-m fixture v1", "{strings}");
+    assert_eq!(strings["items"][0]["address"], format!("{:#x}", truth("BANNER")), "{strings}");
+    let (text, failed) = call_shared(&registry, &mut project, "list_strings", json!({ "limit": 100 }));
+    assert!(!failed, "{text}");
+    for expected in ["\"cmd> \"", "\"unknown command\"", "\"hard fault\"", "\"0123456789abcdef\""] {
+        assert!(text.contains(expected), "{expected}: {text}");
+    }
     // ARM v8 Thumb with its reviewed C model decompiles the reset handler and names the analyst's callee.
     let decompiled = outcome("decompile");
     assert!(decompiled.contains("uart_puts(") && decompiled.contains("while"), "{decompiled}");

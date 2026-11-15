@@ -908,7 +908,7 @@ async fn unknown_or_missing_arguments_are_refused_naming_the_tool_arguments() {
     let carve = call(&client, "carve", json!({ "path": path, "bogus": 1 })).await;
     assert!(text(&carve).contains("unknown field `bogus`"), "{}", text(&carve));
     // The Raw selector keeps its own refusal on tools that cannot serve it.
-    let raw = call(&client, "inspect_data", json!({ "path": path, "at": "0x0", "raw": {} })).await;
+    let raw = call(&client, "carve", json!({ "path": path, "raw": {} })).await;
     assert!(text(&raw).contains("does not accept Raw projects"), "{}", text(&raw));
     client.cancel().await.unwrap();
 }

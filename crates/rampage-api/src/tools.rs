@@ -754,7 +754,7 @@ pub fn file_tools() -> Vec<FileTool> {
             effect: Effect::None,
             group: Group::Core,
             name: "inspect_data",
-            description: "Inspect 1..=1024 native-image bytes and 4/8-byte words without discovery, naming scans or \
+            description: "Inspect 1..=1024 native-image (or `raw` Raw-image) bytes and 4/8-byte words without discovery, naming scans or \
                 sidecars. Image VAs, selected-image and outer-file offsets are distinct. Gaps, zero-fill, unreadable \
                 and unavailable bytes stay explicit. Raw words remain candidates; retained Mach-O chained rebases \
                 and import identities are separate. Partial encoded-pointer words are not followed. Metadata links \
@@ -769,16 +769,29 @@ pub fn file_tools() -> Vec<FileTool> {
                     return Err("data inspection arguments exceed the input budget".into());
                 }
                 let args: InspectDataArgs = arguments(input)?;
-                let arch = args.arch.map(|arch| arch.parse::<rampage_arch::Arch>()).transpose()?;
-                let image = match (args.image_offset, args.image_length) {
-                    (Some(offset), length) => {
-                        Some(rampage_loaders::ImageAt::new(offset.0, length.map(|length| length.0)))
+                let binary = match &args.raw {
+                    Some(raw) => {
+                        if args.arch.is_some() || args.image_offset.is_some() || args.image_length.is_some() {
+                            return Err("`raw` cannot be combined with arch, image_offset or image_length: a Raw \
+                                        project's profile and range select the bytes; nothing was run"
+                                .into());
+                        }
+                        crate::open_raw_binary(&args.path, raw)
+                            .map_err(|error| format!("`raw`: {}", error_chain(&error)))?
                     }
-                    (None, Some(_)) => return Err("image_length requires image_offset".into()),
-                    (None, None) => None,
+                    None => {
+                        let arch = args.arch.map(|arch| arch.parse::<rampage_arch::Arch>()).transpose()?;
+                        let image = match (args.image_offset, args.image_length) {
+                            (Some(offset), length) => {
+                                Some(rampage_loaders::ImageAt::new(offset.0, length.map(|length| length.0)))
+                            }
+                            (None, Some(_)) => return Err("image_length requires image_offset".into()),
+                            (None, None) => None,
+                        };
+                        rampage_loaders::Binary::open_image_metadata(&args.path, image, arch)
+                            .map_err(|error| error_chain(&ApiError::Load { path: args.path, source: error }))?
+                    }
                 };
-                let binary = rampage_loaders::Binary::open_image_metadata(&args.path, image, arch)
-                    .map_err(|error| error_chain(&ApiError::Load { path: args.path, source: error }))?;
                 let address = crate::resolve_data_address(&binary, &args.at).map_err(|error| error_chain(&error))?;
                 let report = crate::inspect_native_data(
                     &binary,
@@ -1105,13 +1118,14 @@ fn sleigh_file_schema() -> Value {
 
 /// Project tools that serve a Raw Project opened with [`crate::Session::open_raw`]: each returns a result or an
 /// explicit typed refusal on Raw input. Clients offer the `raw` selector only on these.
-pub const RAW_CAPABLE_TOOLS: [&str; 26] = [
+pub const RAW_CAPABLE_TOOLS: [&str; 27] = [
     "binary_info",
     "list_functions",
     "disassemble",
     "function_graph",
     "xrefs",
     "search",
+    "list_strings",
     "analysis_diagnostics",
     "entry_diagnostics",
     "capabilities",
@@ -1134,9 +1148,13 @@ pub const RAW_CAPABLE_TOOLS: [&str; 26] = [
     "lock_mechanisms",
 ];
 
-/// Whether the project tool `name` accepts a Raw Project selector.
+/// File tools that take a `raw` selector in place of their native-image arguments, reading the Raw image without a
+/// project.
+pub const RAW_CAPABLE_FILE_TOOLS: [&str; 1] = ["inspect_data"];
+
+/// Whether the tool `name` accepts a Raw Project selector.
 pub fn raw_capable(name: &str) -> bool {
-    RAW_CAPABLE_TOOLS.contains(&name)
+    RAW_CAPABLE_FILE_TOOLS.contains(&name) || RAW_CAPABLE_TOOLS.contains(&name)
 }
 
 /// JSON schema of the `raw` selector object MCP and CLI add to raw-capable tools in place of a native binary.
@@ -1366,6 +1384,8 @@ struct InspectDataArgs {
     word_size: Option<u8>,
     #[serde(default)]
     view: ToolView,
+    /// Read the bytes of a headerless Raw image as the other Raw-capable tools map it, in place of a native image.
+    raw: Option<crate::RawProjectRequest>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]

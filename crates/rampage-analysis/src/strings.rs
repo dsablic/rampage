@@ -18,12 +18,24 @@ pub struct FoundString {
 
 /// Strings in the image's data. Runs inside code sections are left out: there they are instruction bytes that
 /// happen to be printable (push sequences such as `UAWAVAUATVWSH`), not text.
+///
+/// A Raw image (headerless firmware) keeps its constants among its code, so there a run in a code region is kept
+/// when a NUL ends it, as a C string's terminator does; printable instruction bytes rarely end in one.
 pub fn scan(binary: &Binary, min_len: usize) -> Vec<FoundString> {
+    let raw = binary.raw_code_image().is_some();
     let mut found = Vec::new();
     for segment in &binary.segments {
         if let Some(bytes) = binary.read_to_segment_end(segment.address) {
-            found
-                .extend(scan_bytes(bytes, segment.address, min_len).into_iter().filter(|s| !binary.is_code(s.address)));
+            let terminated = |string: &FoundString| {
+                let unit = if string.encoding == Encoding::Utf16Le { 2 } else { 1 };
+                let end = (string.address - segment.address) as usize + string.text.chars().count() * unit;
+                bytes.get(end..end + unit).is_some_and(|terminator| terminator.iter().all(|&byte| byte == 0))
+            };
+            found.extend(
+                scan_bytes(bytes, segment.address, min_len)
+                    .into_iter()
+                    .filter(|string| !binary.is_code(string.address) || (raw && terminated(string))),
+            );
         }
     }
     found
