@@ -340,8 +340,14 @@ fn intel_hex_and_s_records_map_their_record_runs_and_start_address() {
         .iter()
         .map(|region| region["base_address"].as_str().unwrap())
         .collect();
-    assert_eq!(bases, ["0x8000000", "0x8000400", "0x8000800"]);
+    // The reset code copies stage 2 and its data from flash to SRAM, so both are mapped where they run too.
+    assert_eq!(bases, ["0x8000000", "0x8000400", "0x8000800", "0x20000000", "0x20000800"]);
     assert_eq!(summary["raw"]["regions"][1]["source"], json!({ "type": "records", "format": "ihex" }));
+    assert_eq!(
+        summary["raw"]["regions"][3]["source"],
+        json!({ "type": "scatter_load", "copy": 0, "region": "raw.code.1", "offset": 0 })
+    );
+    assert_eq!(summary["raw"]["regions"][3]["kind"], "code");
 
     // The S-records' stage-2 data run is stated writable RAM by a `regions` entry matching it exactly.
     let srec = json!({

@@ -264,6 +264,15 @@ pub enum RawRegionSource {
     /// primary one, decoded bytes included), mapped at this region's base: code or data a program copies to its
     /// run address. The opener passes no bytes; admission copies them.
     Slice { region: String, offset: u64, length: u64 },
+    /// Mapped from `scatter_load.copies[copy]`: a copy of `offset` onwards in the region named `region`, or a
+    /// zero fill (no region, no bytes) the reset code made.
+    ScatterLoad {
+        copy: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        region: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        offset: Option<u64>,
+    },
     /// No bytes: zero-filled or uninitialised RAM, or memory-mapped I/O.
     Unbacked,
 }
@@ -300,6 +309,10 @@ pub struct RawImage {
     /// Additional regions; only the natively decoded Cortex-M profile admits any.
     pub regions: Vec<RawRegion>,
     pub records: Option<RawRecordFacts>,
+    /// Cortex-M only: follow the reset code from the entry for scatter-load copies ([`crate::raw_scatter`]).
+    /// `Some(true)` also maps each well-evidenced copy at its run address; `Some(false)` reports them only;
+    /// `None` does not follow.
+    pub scatter_load: Option<bool>,
 }
 
 /// One mapped region as admitted, the primary code region first.
@@ -428,6 +441,11 @@ pub struct RawCodeImage {
     vector_table: Option<crate::raw_vectors::VectorTable>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pointer_tables: Option<crate::raw_pointers::PointerTables>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scatter_load: Option<crate::raw_scatter::ScatterLoad>,
+    /// Whether scatter-load copies were followed, and mapped.
+    #[serde(skip)]
+    scatter_load_mode: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -450,7 +468,7 @@ impl RawCodeImage {
     /// Admits `image` and returns the retained facts with the project's owned bytes: the primary region's bytes
     /// followed by every other backed region's, in region order.
     pub(crate) fn admit(image: RawImage) -> Result<(Self, Vec<u8>), LoadError> {
-        let RawImage { bytes, mut options, source, regions: extra, records } = image;
+        let RawImage { bytes, mut options, source, regions: extra, records, scatter_load: scatter_load_mode } = image;
         let length = bytes.len();
         let max = options.profile.max_bytes();
         if length == 0 || length > max || options.seeds.len() > MAX_RAW_SEEDS {
@@ -491,6 +509,9 @@ impl RawCodeImage {
         for (index, mut region) in extra.into_iter().enumerate() {
             let name = format!("raw.{}.{}", region.kind.name(), index + 1);
             let refuse = |message: &str| Err(LoadError::Malformed(format!("Raw region {name}: {message}")));
+            if matches!(region.source, RawRegionSource::ScatterLoad { .. }) {
+                return refuse("scatter-load regions are derived at admission, never stated");
+            }
             if let RawRegionSource::Slice { region: from, offset, length } = &region.source {
                 if region.bytes.is_some() || region.size != *length {
                     return refuse("a slice takes its bytes from its source region; size must equal its length");
@@ -628,6 +649,23 @@ impl RawCodeImage {
                 Some(_) => {}
             }
         }
+        let scatter_load = match (scatter_load_mode, options.entry) {
+            (Some(map), Some(entry)) if options.profile.m_profile() => {
+                let report = scatter_regions(&mut regions, &mut data, entry, map, max);
+                // The jump into copied code starts a function there, once that code is mapped.
+                if let Some(target) = report.continues_at
+                    && target != entry
+                    && regions
+                        .iter()
+                        .any(|region| region.kind == RawRegionKind::Code && region.range().contains(&target))
+                {
+                    options.seeds.push(target);
+                }
+                Some(report)
+            }
+            _ => None,
+        };
+        let primary = &data[..length as usize];
         let pointer_tables = if !options.pointer_tables {
             None
         } else if !options.profile.m_profile() {
@@ -658,6 +696,8 @@ impl RawCodeImage {
             records,
             vector_table,
             pointer_tables,
+            scatter_load,
+            scatter_load_mode,
         };
         Ok((image, data))
     }
@@ -705,6 +745,12 @@ impl RawCodeImage {
     }
 
     /// Evidence for every pointer table found when pointer-table seeding was requested.
+    /// What following the reset code found, when scatter-load following was requested on a Cortex-M image with an
+    /// entry.
+    pub fn scatter_load(&self) -> Option<&crate::raw_scatter::ScatterLoad> {
+        self.scatter_load.as_ref()
+    }
+
     pub fn pointer_tables(&self) -> Option<&crate::raw_pointers::PointerTables> {
         self.pointer_tables.as_ref()
     }
@@ -795,8 +841,21 @@ impl RawCodeImage {
                     hash.update(offset.to_be_bytes());
                     hash.update(length.to_be_bytes());
                 }
+                // Schema v6 binds a scatter-load region's copy and source; the copy itself follows from the bytes.
+                Some(RawRegionSource::ScatterLoad { copy, region, offset }) => {
+                    hash.update([6]);
+                    hash.update((*copy as u64).to_be_bytes());
+                    text(&mut hash, region.as_deref().unwrap_or(""));
+                    hash.update(offset.unwrap_or(u64::MAX).to_be_bytes());
+                }
             }
         }
+        // Schema v6 binds whether the reset code was followed, and whether its copies were mapped.
+        hash.update([match self.scatter_load_mode {
+            None => 0,
+            Some(false) => 1,
+            Some(true) => 2,
+        }]);
         for value in [self.base, self.length, self.end] {
             hash.update(value.to_be_bytes());
         }
@@ -829,6 +888,103 @@ impl RawCodeImage {
         }
         RawInterpretationIdentity { schema: IDENTITY_SCHEMA, sha256: rampage_arch::hex::bytes(&hash.finalize()) }
     }
+}
+
+/// Follows the reset code at `entry` over the admitted `regions` and, when `map`, maps each well-evidenced write at
+/// its run address as a further region: a complete copy whose source lies in one backed region, or a complete zero
+/// fill, whose destination no region maps, within the region and byte caps. Returns the report, every write's
+/// mapping or the reason it was not mapped included.
+fn scatter_regions(
+    regions: &mut Vec<RawRegionInfo>,
+    data: &mut Vec<u8>,
+    entry: u64,
+    map: bool,
+    max: usize,
+) -> crate::raw_scatter::ScatterLoad {
+    use crate::raw_scatter::{CopyKind, CopyStatus, Mapped, NotMappedReason};
+    let follow = {
+        let memory: Vec<Mapped<'_>> = regions
+            .iter()
+            .map(|region| Mapped {
+                range: region.range(),
+                bytes: region.backed().then(|| &data[region.data_range()]),
+                code: region.kind == RawRegionKind::Code,
+            })
+            .collect();
+        crate::raw_scatter::follow(&memory, entry)
+    };
+    let mut report = follow.report;
+    for (index, copy) in report.copies.iter_mut().enumerate() {
+        let range = copy.destination..copy.destination + copy.length;
+        let source = copy.source.and_then(|source| {
+            let region = regions.iter().position(|region| {
+                region.backed() && region.base_address <= source && source + copy.length <= region.range().end
+            })?;
+            Some((region, source - regions[region].base_address))
+        });
+        if let Some((region, offset)) = source {
+            copy.source_region = Some(regions[region].name.clone());
+            copy.source_offset = Some(offset);
+        }
+        let reason = if !map {
+            Some(NotMappedReason::NotRequested)
+        } else if !follow.complete[index] {
+            Some(NotMappedReason::Incomplete)
+        } else if follow.overwritten[index] {
+            Some(NotMappedReason::Overwritten)
+        } else if copy.kind == CopyKind::Computed {
+            Some(NotMappedReason::ComputedBytes)
+        } else if copy.kind == CopyKind::Copy && source.is_none() {
+            Some(NotMappedReason::SourceNotMapped)
+        } else if range.end > 1 << 32 {
+            Some(NotMappedReason::OutOfRange)
+        } else if regions.iter().any(|region| region.base_address < range.end && range.start < region.range().end) {
+            Some(NotMappedReason::DestinationMapped)
+        } else if regions.len() >= MAX_RAW_REGIONS {
+            Some(NotMappedReason::RegionLimit)
+        } else if copy.kind == CopyKind::Copy && data.len() as u64 + copy.length > max as u64 {
+            Some(NotMappedReason::ByteLimit)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            copy.not_mapped_reason = Some(reason);
+            continue;
+        }
+        // Copied code runs where it was copied to (or lies in the Cortex-M Code region); copied data is writable.
+        let kind = if copy.kind == CopyKind::Copy
+            && copy.destination.is_multiple_of(2)
+            && (copy.executed || copy.destination < 0x2000_0000)
+        {
+            RawRegionKind::Code
+        } else {
+            RawRegionKind::Ram
+        };
+        let name = format!("raw.{}.{}", kind.name(), regions.len());
+        let (bytes, source) = match source {
+            Some((region, offset)) if copy.kind == CopyKind::Copy => {
+                let start = regions[region].data_range().start + offset as usize;
+                (Some(data[start..start + copy.length as usize].to_vec()), Some((regions[region].name.clone(), offset)))
+            }
+            _ => (None, None),
+        };
+        let (region, offset) = source.map_or((None, None), |(region, offset)| (Some(region), Some(offset)));
+        regions.push(RawRegionInfo {
+            name: name.clone(),
+            kind,
+            base_address: copy.destination,
+            length: copy.length,
+            sha256: bytes.as_deref().map(sha256_hex),
+            source: Some(RawRegionSource::ScatterLoad { copy: index, region, offset }),
+            data_offset: data.len() as u64,
+        });
+        if let Some(bytes) = bytes {
+            data.extend_from_slice(&bytes);
+        }
+        copy.status = CopyStatus::Mapped;
+        copy.region = Some(name);
+    }
+    report
 }
 
 /// A copy of `length` bytes at `offset` of the admitted region named `from`, whose bytes lie in `data`; refused

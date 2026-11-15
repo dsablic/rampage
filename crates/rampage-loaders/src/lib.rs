@@ -12,6 +12,7 @@ pub mod msvc;
 mod raw;
 pub mod raw_pointers;
 pub mod raw_records;
+pub mod raw_scatter;
 pub mod raw_vectors;
 mod slots;
 pub mod snapshot;

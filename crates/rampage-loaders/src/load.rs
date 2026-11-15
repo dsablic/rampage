@@ -255,7 +255,14 @@ impl Binary {
     /// Owns one explicitly interpreted code image. No header parsing, entry inference or filesystem access.
     /// All addresses are internal byte offsets; this is not a C data-space or capture mapping.
     pub fn from_raw_code(data: Vec<u8>, options: crate::RawCodeOptions) -> Result<Self, LoadError> {
-        Self::from_raw_image(crate::RawImage { bytes: data, options, source: None, regions: Vec::new(), records: None })
+        Self::from_raw_image(crate::RawImage {
+            bytes: data,
+            options,
+            source: None,
+            regions: Vec::new(),
+            records: None,
+            scatter_load: None,
+        })
     }
 
     /// Owns one explicitly interpreted image of a primary code region and any further analyst-stated regions

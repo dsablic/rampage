@@ -68,6 +68,7 @@ mod raw;
 mod raw_project;
 mod raw_regions;
 mod raw_roster;
+mod raw_scatter;
 mod runtime;
 mod runtime_compare;
 mod search_wrapper;

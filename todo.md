@@ -111,11 +111,14 @@ decoded code.
 - [ ] **Vector table placed at runtime.** When offset 0 is code that writes VTOR, follow the VTOR store to find the
   table. In the run's image the reset code does not store VTOR itself: it first copies sections (next item) and
   jumps into the copy, so the store is only reachable once copied code is mapped.
-- [ ] **Scatter-load copies.** The decoded image's reset code calls a copy loop and a zero loop for a list of
+- [x] **Scatter-load copies.** The decoded image's reset code calls a copy loop and a zero loop for a list of
   (destination, length, source) triples (flash to TCM and RAM), then `bx` to an address in the copied code, so
   discovery from the entry stops after one function (`pointer_tables` still recovers thousands). Recognise such
   copy-table calls from the entry, and let a region take its bytes from a slice of another region (the decoded
-  primary) at its run address, reporting each copy as evidence in `binary_info`.
+  primary) at its run address, reporting each copy as evidence in `binary_info`. Done: regions take
+  `from: {region, offset}`, and the reset code is followed by a bounded Thumb interpreter whose copies are reported
+  in `raw.scatter_load` and mapped by default; on the run's image all six non-empty copies and fills map and the
+  jump target decompiles.
 - [ ] **Raw selectors with decode re-decode on every call**: the session's cache key hashes the decoded bytes, so
   each call decodes again before it can find the project (key the cache on the selector and source metadata
   first). `inspect_data` opens its Raw image outside `Session::open_raw` (a file tool has no session), so analyst

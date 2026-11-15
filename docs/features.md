@@ -47,9 +47,12 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   decompiles, seeds from the vector table and optional code-pointer tables, maps up to 15 further code, data or
   RAM regions (from file ranges, decoded bytes, a slice of another region or zero fill), and reads Intel HEX and
   Motorola S-records. A compressed image opens with its decoded bytes as the code region, from the selector the
-  decoders return. See
+  decoders return. The reset code is followed by a bounded interpreter for the [scatter-load
+  copies](mcp.md#scatter-load-copies) startup code makes, which are reported and mapped at their run addresses so
+  discovery continues into the copied code. See
   [Raw Projects in MCP](mcp.md#multiple-regions-intel-hex-and-s-records). Limits: base addresses and regions are
-  the analyst's assertion; Sleigh profiles other than MSP430 and AVR8 do not decompile.
+  the analyst's assertion; Sleigh profiles other than MSP430 and AVR8 do not decompile; the reset-code follow
+  models the integer Thumb instructions startup code uses and skips calls it cannot follow.
 - [CMSIS-SVD peripheral maps](peripheral-maps.md) (`import_svd`, `peripheral_access`) name memory-mapped
   registers everywhere: decompiled C reads `TIMER0.CR = uVar1 | 0x21; /* CR: EN|MODE=Single_MATCH */`,
   disassembly, xrefs and evaluation faults say `TIMER0.CR`, and `peripheral_access` lists the functions that read

@@ -295,6 +295,9 @@ pub struct RawSummary<'a> {
     pub vector_table: Option<&'a rampage_loaders::raw_vectors::VectorTable>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pointer_tables: Option<&'a rampage_loaders::raw_pointers::PointerTables>,
+    /// Cortex-M: the copies and zero fills the reset code makes, and which were mapped at their run addresses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scatter_load: Option<&'a rampage_loaders::raw_scatter::ScatterLoad>,
 }
 
 #[derive(Debug, Serialize)]

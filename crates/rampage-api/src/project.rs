@@ -874,6 +874,7 @@ impl Project {
                 records: raw.records(),
                 vector_table: raw.vector_table(),
                 pointer_tables: raw.pointer_tables(),
+                scatter_load: raw.scatter_load(),
             }),
             analysis_store: self.analysis_store_status(),
             encrypted_or_packed_code: self.encrypted_regions().cloned().collect(),

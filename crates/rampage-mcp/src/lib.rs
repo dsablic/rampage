@@ -216,17 +216,22 @@ base_address (or give its address); accepted Thumb handlers become the entry and
 every word with its verdict and, for a base that misplaces the handlers, a base_address suggestion it never applies. \
 pointer_tables true also seeds functions from tables of Thumb code pointers (handler arrays, command tables) that \
 show prologue or call evidence; binary_info reports each table, accepted or refused, with evidence per entry. \
+The reset code at the entry is followed (a bounded interpreter; nothing runs natively) for the sections startup \
+code copies to their run addresses and the RAM it zeroes: binary_info's raw.scatter_load lists each copy \
+(destination, length, source, store sites, routine) and, by default, a complete copy from mapped bytes to an \
+unmapped destination is mapped there (code where the copy runs or below 0x20000000, else RAM; zero fill as \
+unbacked RAM) and the jump into the copied code is seeded; scatter_load false reports them only. \
 Cortex-M only: regions (up to 15) maps more of the same file beside the primary code region, each {kind: code|data|\
 ram, base_address, offset, length, decode?, from?}: e.g. a second stage at its RAM base \
 {\"kind\":\"code\",\"base_address\":\"0x20000000\",\"offset\":\"0x400\",\"length\":128}; ram is writable (its bytes \
 are never folded as constants) and may omit offset for unbacked RAM/MMIO; decode {codec, lzss?, \
 expected_output_size, initial_write_offset?, dictionary_fill?, timeout_ms?} maps decode_file_range's in-memory \
 output of the range instead; from {region: 0|\"primary\"|n, offset} (no offset) copies length bytes of the primary \
-region or regions[n-1] (decoded bytes too), as startup code copies code to its run address. A top-level raw.decode (same shape, any profile) maps the decoded output as the \
-primary code region (length then counts encoded bytes), so vector_table, pointer_tables and seeds read decoded \
-bytes. Overlaps are refused; references, calls and seeds cross regions; binary_info lists \
-every region with its SHA-256 and source (file range, decode receipt, slice, records). format ihex|srec reads Intel HEX \
-or S-records instead (omit offset/length/base_address): each contiguous run is a code region, a regions entry \
+region or regions[n-1] (decoded bytes too), as startup code copies code to its run address. A top-level \
+raw.decode (same shape, any profile) maps the decoded output as the primary code region (length then counts \
+encoded bytes), so vector_table, pointer_tables and seeds read decoded bytes. Overlaps are refused; references, \
+calls and seeds cross regions; binary_info lists every region with its SHA-256 and source (file range, decode \
+receipt, slice, scatter_load copy, records). format ihex|srec reads Intel HEX or S-records instead (omit offset/length/base_address): each contiguous run is a code region, a regions entry \
 without offset matching a run exactly states its kind, and the start-address record becomes the entry, reported \
 with its verdict.
 

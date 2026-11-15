@@ -50,6 +50,15 @@ see the [stability policy](docs/stability.md) for what the version promises.
   cap, `binary_info` reports the source as `slice` (`region`, `offset`, `length`) with the region's SHA-256, and
   patches go to the source region. The interpretation identity is now `rampage-raw-interpretation-v6`. See
   [MCP](docs/mcp.md#multiple-regions-intel-hex-and-s-records).
+- Scatter-load copies: a Cortex-M Raw project follows its reset code from the entry with a bounded, deterministic
+  Thumb interpreter (no host effects, 2,000,000 instructions at most) and records what startup code copies to run
+  addresses and zeroes: GCC-style loops over linker symbols, Arm-style region tables walked with copy and zero
+  handlers, and routines called with constant triples alike. `binary_info` reports `raw.scatter_load` (why the
+  follow stopped, the jump into copied code, and each copy's kind, destination, length, source, store sites and
+  calling routine); by default a complete copy from mapped bytes to an unmapped destination is mapped there (code
+  where it runs, RAM for data, zero fills as unbacked RAM) and the jump into the copied code is seeded, so
+  discovery and decompilation reach code that runs from TCM or RAM. `"scatter_load": false` reports without
+  mapping. Calls the follow cannot complete are skipped and listed. See [MCP](docs/mcp.md#scatter-load-copies).
 
 ## 1.5.0 (2026-11-15)
 

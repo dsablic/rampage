@@ -68,6 +68,13 @@ pub struct RawProjectRequest {
     #[serde(default, deserialize_with = "pointer_tables")]
     #[schemars(schema_with = "pointer_tables_schema")]
     pub pointer_tables: bool,
+    /// ARM:LE:32:Cortex only: the reset code at the entry is followed (a bounded interpreter, nothing runs) for the
+    /// sections startup code copies to their run addresses and the RAM it zeroes; binary_info reports each with its
+    /// evidence. By default each complete copy from mapped bytes to an unmapped destination is mapped there (code,
+    /// or RAM for data) and the jump into copied code is seeded; `false` reports them only.
+    #[serde(default)]
+    #[schemars(schema_with = "scatter_load_schema")]
+    pub scatter_load: Option<bool>,
     /// ARM:LE:32:Cortex only: up to 15 further regions of the same file mapped beside the primary code region, e.g.
     /// a second stage at its RAM base, constant data, or RAM. Regions never overlap; references between them
     /// resolve, entry and seeds may lie in any code region, and binary_info reports each region with its source
@@ -223,6 +230,14 @@ fn pointer_tables<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D:
 fn pointer_tables_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
         "description": "ARM:LE:32:Cortex only: true seeds functions from tables of Thumb code pointers it accepts.",
+        "type": ["boolean", "null"]
+    })
+}
+
+fn scatter_load_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "description": "ARM:LE:32:Cortex only: maps the copies the reset code makes at their run addresses (default \
+                        true); false reports them only.",
         "type": ["boolean", "null"]
     })
 }
@@ -504,6 +519,18 @@ impl RawProjectRequest {
         })
     }
 
+    /// Whether admission follows the reset code for scatter-load copies, and maps them: by default on Cortex-M.
+    fn scatter_load_mode(&self, profile: RawProfile) -> Result<Option<bool>, ApiError> {
+        match (profile.m_profile(), self.scatter_load) {
+            (true, requested) => Ok(Some(requested.unwrap_or(true))),
+            (false, None) => Ok(None),
+            (false, Some(_)) => Err(ApiError::Invalid(format!(
+                "Raw scatter_load is defined only for ARM:LE:32:Cortex, not {}",
+                profile.language_id()
+            ))),
+        }
+    }
+
     /// Reads every additional region's bytes. `budget` is the byte count the profile still admits.
     fn read_regions(&self, path: &Path, profile: RawProfile, mut budget: usize) -> Result<Vec<RawRegion>, ApiError> {
         if self.regions.is_empty() {
@@ -631,7 +658,8 @@ impl RawProjectRequest {
             }
         };
         let regions = self.read_regions(path, profile, max - bytes.len())?;
-        Ok(RawImage { bytes, options, source: Some(source), regions, records: None })
+        let scatter_load = self.scatter_load_mode(profile)?;
+        Ok(RawImage { bytes, options, source: Some(source), regions, records: None, scatter_load })
     }
 
     fn record_image(&self, path: &Path, profile: RawProfile, format: RawRecordFormat) -> Result<RawImage, ApiError> {
@@ -719,6 +747,7 @@ impl RawProjectRequest {
                 regions.len() + 1
             )));
         }
+        let scatter_load = self.scatter_load_mode(profile)?;
         let options = self.options(profile, base)?;
         Ok(RawImage {
             bytes,
@@ -726,6 +755,7 @@ impl RawProjectRequest {
             source: Some(RawRegionSource::Records { format }),
             regions,
             records: Some(facts),
+            scatter_load,
         })
     }
 }

@@ -63,6 +63,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -136,6 +140,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {
@@ -403,6 +411,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -559,6 +571,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {
@@ -1329,6 +1345,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -1501,6 +1521,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {
@@ -1841,6 +1865,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -1956,6 +1984,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {
@@ -2102,6 +2134,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {
@@ -2446,6 +2482,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -2637,6 +2677,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {
@@ -2854,6 +2898,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -2931,6 +2979,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {
@@ -3171,6 +3223,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -3265,6 +3321,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {
@@ -3449,6 +3509,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -3565,6 +3629,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -3650,6 +3718,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {
@@ -3770,6 +3842,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {
@@ -3976,6 +4052,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -4119,6 +4199,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {
@@ -4456,6 +4540,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -4539,6 +4627,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -4616,6 +4708,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {
@@ -4735,6 +4831,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -4812,6 +4912,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {
@@ -5108,6 +5212,10 @@
               "type": "array|null",
               "required": false
             },
+            "scatter_load": {
+              "type": "boolean|null",
+              "required": false
+            },
             "seeds": {
               "type": "array",
               "required": false
@@ -5255,6 +5363,10 @@
             },
             "regions": {
               "type": "array|null",
+              "required": false
+            },
+            "scatter_load": {
+              "type": "boolean|null",
               "required": false
             },
             "seeds": {

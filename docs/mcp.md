@@ -629,6 +629,34 @@ reports `raw.records`: `format`, `data_records` and `start_address` (`word` as w
 address becomes the entry unless `entry` or the vector table's Reset names another address, in which case it is a
 seed. Sleigh profiles take a record file with one contiguous run and no `regions`.
 
+### Scatter-load copies
+
+Startup code often copies code and initialised data from flash to the addresses they run at (TCM, SRAM) and zeroes
+`.bss` before it jumps into the copied code, so discovery from the entry alone stops in the startup code and calls
+into the copy have no bytes. A Cortex-M project with an entry (or a vector table's Reset) follows the reset code
+instead: a deterministic Thumb interpreter over the mapped bytes, with no host effects, runs from the entry and
+records every store with where its bytes came from, until the code jumps into memory it wrote, returns, halts or
+spends 2,000,000 instructions. It handles the usual shapes alike (GCC-style loops over linker symbols, an Arm-style
+region table walked with copy and zero handlers, a routine called with constant triples). A call it cannot follow
+(an unmodelled instruction, a branch on a peripheral's value) is skipped with r0-r3, r12, lr and the flags unknown,
+and listed in `skipped_calls`.
+
+`binary_info` reports `raw.scatter_load`: `entry`, `steps`, `stop` (`jumped_into_copied_code`, `returned`, `halted`,
+`step_budget`, `unsupported_instruction`, `unknown_branch`, `unknown_store_address`, `bad_fetch`,
+`too_many_writes`, `call_depth`), `stopped_at`, `continues_at` (the jump into copied code, seeded as a function)
+and `copies`: every write of at least 8 bytes by more than one store, in the order they began, with `kind` (`copy`
+from mapped bytes, `zero`, or `computed` bytes such as a decompressor's output), `destination`, `length`, `source`
+with its `source_region` and `source_offset`, `stores`, `store_sites`, the entry-level `call_site` and `routine`
+that wrote it, `executed`, and `status`. By default each copy with strong evidence is mapped as a region
+(`raw.<kind>.<n>`, source `scatter_load` with the copy's index): the follow ended cleanly and the write was not
+interrupted or overwritten, a copy's source lies wholly in one backed region, the destination is unmapped, and the
+16-region and 4 MiB caps hold. Copied code (it ran, or it lies in the Code region below 0x20000000) maps as
+`code`; other copies as writable `ram` with their initial bytes; a zero fill as unbacked `ram`. Otherwise
+`not_mapped_reason` says why: `not_requested`, `incomplete`, `overwritten`, `computed_bytes`, `source_not_mapped`,
+`destination_mapped`, `region_limit`, `byte_limit` or `out_of_range`. `"scatter_load": false` reports the copies
+without mapping them; a region you state yourself (for example with `from`) always wins, since a copy into it is
+`destination_mapped`. Other profiles have no reset-code follow.
+
 ### A compressed image as the code region
 
 `decode` on the selector itself maps a decoder provider's output as the primary code region, so a compressed
