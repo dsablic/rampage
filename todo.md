@@ -126,10 +126,19 @@ above stay under review until each is approved.
   `endpoint_blocklist` (group `carve`): URLs, PSL-checked hosts, IPv4/IPv6, pins and PEM/DER certificates in a binary
   or an extracted tree, with noise rules, `local`/`package` labels, xref and networking-caller evidence, decoded
   strings, domain and component groups, cursor paging; hosts/dnsmasq/unbound/domain/IP blocklists.
+- [ ] **`privacy_surface` workflow (1.6.0, in progress).** Capture sources (ALSA/tinyalsa, V4L2, framebuffer and
+  screen capture, input events, Android audio/camera APIs by name) and network/file sinks, call paths between them
+  ranked by evidence, and capture started without a user-facing trigger (boot, timer, network command).
 - [ ] Endpoint follow-ups: IPv4 addresses stored as integers in code (immediates passed to `connect`/`sin_addr`);
   `network_code` through one call level (a string passed to a helper that calls `connect`); hex SHA-256 and
   SHA-1 pins; DEX/APK strings once Android support lands; a CLI route; merging groups across directory pages; a
   real-firmware precision check (local only).
+
+- [ ] **Committed fixtures without local paths.** About 16 older fixtures embed the builder's home directory in
+  debug info (e.g. `tests/fixtures/bin/debug-x64.elf`, `tests/fixtures/bench-v2/twins/widgets-x64.elf`,
+  `tests/fixtures/firmware/locks-*-sym.elf`, `crates/rampage-api/tests/fixtures/decode-*.elf`). Rebuild them with
+  `-ffile-prefix-map` (or same-length filler, as for the endpoints fixtures) and add a CI check that no committed
+  binary contains `/Users/` or `/home/`.
 
 ## Proposed tracks (2026-11-08, not started)
 
