@@ -34,6 +34,7 @@ quick-xml = "0.42.0"
 flate2 = "1.1.10"
 psl = "2.1.241"
 x509-parser = "0.18.1"
+idna = "1.1.0"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.5", features = ["fs"] }

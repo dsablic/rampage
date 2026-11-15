@@ -4709,6 +4709,7 @@ name = "rampage-api"
 version = "1.4.0"
 dependencies = [
  "flate2",
+ "idna",
  "md-5 0.11.0",
  "memchr",
  "psl",

@@ -19,7 +19,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
   (`signal: network_code`). Findings group by registrable domain and by file; a directory scan pages by `cursor`
   under `max_files` and `timeout_ms`. `endpoint_blocklist` writes the chosen hosts or domains as a hosts file,
   dnsmasq (`address=` or `server=`), unbound, a plain domain list (Pi-hole, AdGuard Home) or an IP list, at domain or
-  host level with allow/deny filters, to an absolute output path (never through a symlink). The Public Suffix List
+  host level with allow/deny filters, to an absolute output path (never through a symlink; an existing file only
+  when this tool wrote it, or with `overwrite`). Domain level widens a host only to the registrable domain the
+  Public Suffix List gives, never to a public suffix or a shared cloud/CDN domain (`amazonaws.com`, Akamai, Fastly...),
+  and on-network addresses, single-label names and public suffixes are never written. The Public Suffix List
   (MPL-2.0 data, compiled into the `psl` crate) is now listed in THIRD-PARTY-NOTICES. See
   [endpoint inventory and blocklists](docs/endpoint-inventory.md).
 - Firmware filesystem images: the new `fs_list` and `fs_extract` file tools (group `carve`) list and extract

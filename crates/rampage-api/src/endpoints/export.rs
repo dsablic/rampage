@@ -2,30 +2,59 @@
 //! dnsmasq or unbound configuration, a plain domain list (Pi-hole, AdGuard Home) or an IP list (firewall rules).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use super::classify::valid_name;
 use super::{Form, InventoryQuery, Kind, extract, registrable, scan};
 
 /// Explicit entries and allow/deny patterns a call may give, and the lines quoted back in the result.
 const MAX_ENTRIES: usize = 10_000;
 const MAX_PATTERNS: usize = 1000;
 const PREVIEW_LINES: usize = 20;
-/// Words of the `local` reasons a scanned finding is never written for, even with `include_local`: loopback,
-/// unspecified, private, link-local, multicast and other on-network addresses.
-const NEVER_BLOCKED: [&str; 9] = [
-    "loopback",
-    "unspecified",
-    "private",
-    "link-local",
-    "unique local",
-    "shared address",
-    "multicast",
-    "broadcast",
-    "IETF",
+/// The first line of every file this tool writes; an existing file is replaced only when it starts with it, or
+/// with `overwrite`.
+const HEADER: &str = "# rampage endpoint blocklist";
+/// Shared hosting, cloud and CDN domains (and everything under them). Many unrelated customers' hosts live under
+/// each, so a host under one is never widened to its domain: blocking the domain would block them all.
+const SHARED_INFRASTRUCTURE: [&str; 34] = [
+    "amazonaws.com",
+    "amazonaws.com.cn",
+    "cloudfront.net",
+    "elasticbeanstalk.com",
+    "azure-devices.net",
+    "azurewebsites.net",
+    "azureedge.net",
+    "azurefd.net",
+    "cloudapp.net",
+    "cloudapp.azure.com",
+    "windows.net",
+    "trafficmanager.net",
+    "googleapis.com",
+    "googleusercontent.com",
+    "gstatic.com",
+    "appspot.com",
+    "firebaseio.com",
+    "firebaseapp.com",
+    "web.app",
+    "akamai.net",
+    "akamaiedge.net",
+    "akamaihd.net",
+    "akamaized.net",
+    "akamaitechnologies.com",
+    "edgekey.net",
+    "edgesuite.net",
+    "fastly.net",
+    "fastlylb.net",
+    "herokuapp.com",
+    "cloudflare.net",
+    "workers.dev",
+    "github.io",
+    "githubusercontent.com",
+    "digitaloceanspaces.com",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,7 +95,7 @@ impl Format {
             lines.push("server:".to_owned());
         }
         lines.extend(entries.iter().map(|entry| match self {
-            Format::Hosts => format!("0.0.0.0 {entry}"),
+            Format::Hosts => format!("0.0.0.0 {entry}\n:: {entry}"),
             Format::Dnsmasq => format!("address=/{entry}/0.0.0.0"),
             Format::DnsmasqServer => format!("server=/{entry}/"),
             Format::Unbound => format!("    local-zone: \"{entry}\" always_nxdomain"),
@@ -87,6 +116,8 @@ pub struct BlocklistQuery {
     pub allow: Vec<String>,
     pub deny: Vec<String>,
     pub include_local: bool,
+    /// Replace an existing file that is not a blocklist this tool wrote.
+    pub overwrite: bool,
     pub decode: bool,
     pub max_files: Option<usize>,
     pub timeout_ms: Option<u64>,
@@ -134,6 +165,14 @@ impl Pattern {
     }
 }
 
+/// The shared-infrastructure domain `name` is, or is under, if any.
+fn shared_infrastructure(name: &str) -> Option<&'static str> {
+    SHARED_INFRASTRUCTURE
+        .iter()
+        .copied()
+        .find(|domain| name == *domain || name.strip_suffix(domain).is_some_and(|rest| rest.ends_with('.')))
+}
+
 fn in_network(address: IpAddr, network: IpAddr, bits: u8) -> bool {
     match (address, network) {
         (IpAddr::V4(address), IpAddr::V4(network)) => {
@@ -155,66 +194,157 @@ fn patterns(texts: &[String], what: &str) -> Result<Vec<Pattern>, String> {
     texts.iter().map(|text| Pattern::parse(text)).collect()
 }
 
-/// The host or address an explicit entry names: a URL's host, an address, or a name.
+/// The host or address an explicit entry names, which must be the whole entry: a URL (its host), an address, or a
+/// host name (internationalized names become punycode).
 fn entry_target(text: &str) -> Result<(String, bool), String> {
+    let refused = || format!("`{}` is not one host, URL or IP address", text.escape_debug());
     let trimmed = text.trim();
-    let bare = trimmed.trim_start_matches('[').trim_end_matches(']');
+    if trimmed.is_empty() || trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(refused());
+    }
+    let bare = trimmed.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')).unwrap_or(trimmed);
     if let Ok(address) = bare.parse::<IpAddr>() {
         return Ok((address.to_string(), true));
     }
-    let found = extract(trimmed).found;
-    let target = found.iter().find_map(|candidate| {
-        let host = candidate.host.clone()?;
-        (candidate.form.is_some()).then_some((host, candidate.form == Some(Form::Ip)))
-    });
-    if let Some(target) = target {
-        return Ok(target);
+    if trimmed.contains("://") {
+        let found = extract(trimmed).found;
+        let url = found.iter().find(|candidate| candidate.form == Some(Form::Url) && candidate.value == trimmed);
+        let host = url.and_then(|candidate| candidate.host.clone()).ok_or_else(refused)?;
+        let address = host.parse::<IpAddr>().is_ok();
+        return Ok((host, address));
     }
-    let name = trimmed.trim_end_matches('.').to_ascii_lowercase();
-    let valid = !name.is_empty()
-        && name.len() <= 253
-        && name.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        });
-    if valid { Ok((name, false)) } else { Err(format!("`{text}` is not a host, URL or IP address")) }
+    let name = trimmed.trim_end_matches('.');
+    let name =
+        if name.is_ascii() { name.to_ascii_lowercase() } else { idna::domain_to_ascii(name).map_err(|_| refused())? };
+    if valid_name(&name) { Ok((name, false)) } else { Err(refused()) }
 }
 
-/// Checks `output`: absolute, not a symlink, a regular file if it exists, in an existing directory.
-fn check_output(output: &Path) -> Result<(), String> {
+/// Where the list goes: the output's directory resolved once (symlinks in it followed), and the file name in it.
+struct Target {
+    directory: PathBuf,
+    name: std::ffi::OsString,
+    /// The permission bits of the file being replaced, kept on the new one.
+    replaced_mode: Option<u32>,
+}
+
+impl Target {
+    fn path(&self) -> PathBuf {
+        self.directory.join(&self.name)
+    }
+}
+
+/// Whether the regular file at `path` starts with [`HEADER`], so this tool wrote it.
+fn is_our_blocklist(path: &Path) -> bool {
+    let mut head = [0u8; HEADER.len()];
+    std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut head)).is_ok() && head == HEADER.as_bytes()
+}
+
+/// Checks `output`: absolute, naming a file that is new, a blocklist this tool wrote, or (with `overwrite`) any
+/// regular file, never a symlink, in an existing directory. The directory is resolved to its canonical path here,
+/// and the list is written there.
+fn check_output(output: &Path, overwrite: bool) -> Result<Target, String> {
     if !output.is_absolute() {
         return Err("output must be an absolute path".to_owned());
     }
-    match std::fs::symlink_metadata(output) {
+    let name = match output.components().next_back() {
+        Some(std::path::Component::Normal(name)) => name.to_owned(),
+        _ => return Err("output must name a file".to_owned()),
+    };
+    let parent = output.parent().filter(|parent| !parent.as_os_str().is_empty()).ok_or("output has no directory")?;
+    let directory = parent
+        .canonicalize()
+        .ok()
+        .filter(|directory| directory.is_dir())
+        .ok_or_else(|| format!("output's directory {} does not exist", parent.display()))?;
+    let mut target = Target { directory, name, replaced_mode: None };
+    let path = target.path();
+    match std::fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err("output is a symlink; name a regular file".to_owned());
         }
         Ok(metadata) if !metadata.is_file() => return Err("output exists and is not a regular file".to_owned()),
-        _ => {}
+        Ok(metadata) => {
+            if !overwrite && !is_our_blocklist(&path) {
+                return Err(format!(
+                    "output {} exists and is not a blocklist this tool wrote; pass overwrite: true to replace it",
+                    path.display()
+                ));
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                target.replaced_mode = Some(metadata.permissions().mode() & 0o7777);
+            }
+            #[cfg(not(unix))]
+            let _ = metadata;
+        }
+        Err(_) => {}
     }
-    let parent = output.parent().filter(|parent| !parent.as_os_str().is_empty()).ok_or("output has no directory")?;
-    if !parent.is_dir() {
-        return Err(format!("output's directory {} does not exist", parent.display()));
-    }
-    if output.file_name().is_none() {
-        return Err("output must name a file".to_owned());
-    }
-    Ok(())
+    Ok(target)
 }
 
-/// Writes `text` to a new temporary file beside `output` and renames it over `output`, so a symlink planted at
-/// `output` meanwhile is replaced, never followed.
-fn write_atomically(output: &Path, text: &str) -> Result<(), String> {
+/// Writes `text` to a new temporary file in the target's directory and renames it over the target, checking right
+/// before the rename that the name is still not a symlink or anything but a regular file. On Unix every step goes
+/// through the opened directory, so a directory swapped in the path meanwhile is not followed.
+#[cfg(unix)]
+fn write_atomically(target: &Target, text: &str) -> Result<(), String> {
+    use rustix::fs::{AtFlags, CWD, FileType, Mode, OFlags, fchmod, openat, renameat, statat, unlinkat};
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let name = output.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let failed = |error: &dyn std::fmt::Display| format!("write {}: {error}", target.path().display());
+    let directory = openat(CWD, &target.directory, OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC, Mode::empty())
+        .map_err(|error| failed(&error))?;
     let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let temporary = output.with_file_name(format!(".{name}.rampage-{}-{serial}.tmp", std::process::id()));
+    let mut temporary = std::ffi::OsString::from(".");
+    temporary.push(&target.name);
+    temporary.push(format!(".rampage-{}-{serial}.tmp", std::process::id()));
+    let mode = Mode::from_bits_truncate(target.replaced_mode.unwrap_or(0o644) as _);
+    let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let file = openat(&directory, &temporary, flags, mode).map_err(|error| failed(&error))?;
+    let written = (|| -> Result<(), String> {
+        // The umask may have narrowed the mode; a replaced file keeps exactly its own.
+        if target.replaced_mode.is_some() {
+            fchmod(&file, mode).map_err(|error| failed(&error))?;
+        }
+        let mut file = std::fs::File::from(file);
+        file.write_all(text.as_bytes()).map_err(|error| failed(&error))?;
+        file.sync_all().map_err(|error| failed(&error))?;
+        match statat(&directory, &target.name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(stat) if FileType::from_raw_mode(stat.st_mode as _) != FileType::RegularFile => {
+                return Err(format!(
+                    "{} changed into a symlink or non-file; nothing was written",
+                    target.path().display()
+                ));
+            }
+            Ok(_) if target.replaced_mode.is_none() => {
+                return Err(format!("{} appeared while writing; nothing was written", target.path().display()));
+            }
+            _ => {}
+        }
+        renameat(&directory, &temporary, &directory, &target.name).map_err(|error| failed(&error))
+    })();
+    if written.is_err() {
+        let _ = unlinkat(&directory, &temporary, AtFlags::empty());
+    }
+    written
+}
+
+#[cfg(not(unix))]
+fn write_atomically(target: &Target, text: &str) -> Result<(), String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let output = target.path();
+    let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut temporary = std::ffi::OsString::from(".");
+    temporary.push(&target.name);
+    temporary.push(format!(".rampage-{}-{serial}.tmp", std::process::id()));
+    let temporary = target.directory.join(temporary);
     let written = (|| -> std::io::Result<()> {
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
-        std::fs::rename(&temporary, output)
+        if std::fs::symlink_metadata(&output).is_ok_and(|metadata| !metadata.is_file()) {
+            return Err(std::io::Error::other("the output changed into a symlink or non-file"));
+        }
+        std::fs::rename(&temporary, &output)
     })();
     written.map_err(|error| {
         let _ = std::fs::remove_file(&temporary);
@@ -232,7 +362,7 @@ pub fn endpoint_blocklist(query: &BlocklistQuery) -> Result<Value, String> {
     };
     let allow = patterns(&query.allow, "allow")?;
     let deny = patterns(&query.deny, "deny")?;
-    check_output(&query.output)?;
+    let target = check_output(&query.output, query.overwrite)?;
 
     let mut left_out: BTreeMap<&str, usize> = BTreeMap::new();
     // Each target: (host or address, whether it is an address).
@@ -257,7 +387,7 @@ pub fn endpoint_blocklist(query: &BlocklistQuery) -> Result<Value, String> {
             }
             for row in inventory.rows.values() {
                 // Blocking these at a router means nothing or cuts devices off their own network.
-                if row.reason.is_some_and(|reason| NEVER_BLOCKED.iter().any(|word| reason.contains(word))) {
+                if row.on_network {
                     *left_out.entry("never_blocked").or_default() += 1;
                     continue;
                 }
@@ -298,22 +428,44 @@ pub fn endpoint_blocklist(query: &BlocklistQuery) -> Result<Value, String> {
             *left_out.entry("not_denied").or_default() += 1;
         } else if address {
             addresses.insert(target);
+        } else if !target.contains('.') {
+            // A single-label name is no DNS name a router can block.
+            *left_out.entry("single_label").or_default() += 1;
+        } else if psl::domain(target.as_bytes()).is_none() {
+            // A public suffix itself (`co.uk`, `s3.amazonaws.com`): blocking it blocks every domain under it.
+            *left_out.entry("public_suffix").or_default() += 1;
         } else {
             names.insert(target);
         }
     }
 
-    let mut kept_at_host_level = BTreeSet::new();
+    // Domain (or host) to why its hosts stay listed one by one.
+    let mut kept_at_host_level: BTreeMap<String, &str> = BTreeMap::new();
     if domain_level {
         let mut by_domain: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for name in &names {
-            by_domain.entry(registrable(name)).or_default().push(name.clone());
-        }
         let mut reduced = BTreeSet::new();
+        for name in &names {
+            // Under a shared cloud or CDN domain, even the suffix list's registrable name can be shared by many
+            // customers (`iot.us-east-1.amazonaws.com`), so such hosts are never widened.
+            if let Some(shared) = shared_infrastructure(name) {
+                kept_at_host_level
+                    .insert(shared.to_owned(), "shared hosting or cloud domain: other customers use it too");
+                reduced.insert(name.clone());
+                continue;
+            }
+            let domain = registrable(name);
+            by_domain.entry(domain).or_default().push(name.clone());
+        }
         for (domain, hosts) in by_domain {
-            // An allowed name under the domain keeps the domain's hosts listed one by one, so it stays reachable.
-            if allow.iter().any(|pattern| pattern.under(&domain)) {
-                kept_at_host_level.insert(domain);
+            let why = if allow.iter().any(|pattern| pattern.under(&domain)) {
+                Some("allow keeps a name under it reachable")
+            } else if !deny.is_empty() && !deny.iter().any(|pattern| pattern.matches(&domain)) {
+                Some("deny names hosts under it, not the whole domain")
+            } else {
+                None
+            };
+            if let Some(why) = why {
+                kept_at_host_level.insert(domain, why);
                 reduced.extend(hosts);
             } else {
                 // A hosts file cannot block a whole domain, so it lists the domain and every host seen under it.
@@ -346,13 +498,16 @@ pub fn endpoint_blocklist(query: &BlocklistQuery) -> Result<Value, String> {
     }
     let level = if domain_level { "domain" } else { "host" };
     let count = if entries.len() == 1 { "1 entry".to_owned() } else { format!("{} entries", entries.len()) };
-    let mut lines = vec![format!("# rampage endpoint blocklist ({} format, {level} level): {count}", format.name())];
+    let mut lines = vec![format!("{HEADER} ({} format, {level} level): {count}", format.name())];
     lines.extend(format.lines(&entries));
     let mut text = lines.join("\n");
     text.push('\n');
-    write_atomically(&query.output, &text)?;
+    write_atomically(&target, &text)?;
+    let kept_at_host_level: Vec<Value> =
+        kept_at_host_level.iter().map(|(domain, reason)| json!({"domain": domain, "reason": reason})).collect();
     Ok(json!({
-        "output": query.output,
+        "output": target.path(),
+        "replaced": target.replaced_mode.is_some(),
         "format": format.name(),
         "level": level,
         "entries": entries.len(),
@@ -382,6 +537,15 @@ mod tests {
     }
 
     #[test]
+    fn shared_infrastructure_matches_whole_labels() {
+        // The suffix list widens this host only to a name AWS shares among customers.
+        assert_eq!(registrable("abc-ats.iot.us-east-1.amazonaws.com"), "iot.us-east-1.amazonaws.com");
+        assert_eq!(shared_infrastructure("abc-ats.iot.us-east-1.amazonaws.com"), Some("amazonaws.com"));
+        assert_eq!(shared_infrastructure("amazonaws.com"), Some("amazonaws.com"));
+        assert_eq!(shared_infrastructure("notamazonaws.com"), None);
+    }
+
+    #[test]
     fn explicit_entries_name_hosts_and_addresses() {
         assert_eq!(
             entry_target("https://Telemetry.Vendor-Cloud.example/x").unwrap(),
@@ -393,5 +557,10 @@ mod tests {
             ("updates.vendor-cloud.example".to_owned(), false)
         );
         assert!(entry_target("not a host").is_err());
+        assert!(entry_target("foo bar.com").is_err());
+        assert!(entry_target("a.example.com\nb.example.com").is_err());
+        assert!(entry_target("https://a.example.com/x y").is_err());
+        assert_eq!(entry_target("bücher.example").unwrap(), ("xn--bcher-kva.example".to_owned(), false));
+        assert_eq!(entry_target("https://203.0.113.9:8443/x").unwrap(), ("203.0.113.9".to_owned(), true));
     }
 }

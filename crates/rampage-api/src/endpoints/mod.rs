@@ -115,6 +115,9 @@ pub struct Row {
     pub domain: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
+    /// Only the device, its host or its own network answers it; never written to a blocklist.
+    #[serde(skip)]
+    pub on_network: bool,
     pub component: String,
     pub signal: Signal,
     pub occurrences: usize,
@@ -156,6 +159,7 @@ impl Inventory {
             host: candidate.host,
             domain: candidate.domain,
             reason: candidate.reason,
+            on_network: candidate.on_network,
             component: component.to_owned(),
             signal,
             occurrences: 0,
@@ -192,6 +196,7 @@ impl Inventory {
             host: None,
             domain: None,
             reason: None,
+            on_network: false,
         };
         let key = (component.to_owned(), Kind::Certificate, candidate.value.clone());
         self.add(component, candidate, evidence, signal);
@@ -505,16 +510,54 @@ fn scan_file(
     }
 }
 
-/// A regular file in a tree: its path relative to the root (with `/`), its full path and its size.
-type TreeFile = (String, PathBuf, u64);
+/// A regular file in a tree: its path relative to the root as raw bytes (`/`-separated; the sort key), that path
+/// escaped as text (the component name and cursor), its full path and its size.
+type TreeFile = (Vec<u8>, String, PathBuf, u64);
 
-/// The regular files under `root` in path order, never following symlinks, and how many symlinks were passed over;
-/// an error when the walk is too large.
-fn walk(root: &Path) -> Result<(Vec<TreeFile>, usize), String> {
+/// A relative path's raw bytes as text: UTF-8 as is, a backslash doubled, any other byte as `\xHH`, so distinct
+/// names never share a text form.
+fn escape_path(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(bytes.len());
+    for chunk in bytes.utf8_chunks() {
+        text.push_str(&chunk.valid().replace('\\', "\\\\"));
+        for byte in chunk.invalid() {
+            text.push_str(&format!("\\x{byte:02x}"));
+        }
+    }
+    text
+}
+
+/// The raw bytes [`escape_path`] wrote as `text`; an error for an escape it never writes.
+fn unescape_path(text: &str) -> Result<Vec<u8>, String> {
+    let bytes = text.as_bytes();
+    let mut raw = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'\\' {
+            raw.push(bytes[index]);
+            index += 1;
+        } else if bytes.get(index + 1) == Some(&b'\\') {
+            raw.push(b'\\');
+            index += 2;
+        } else if bytes.get(index + 1) == Some(&b'x')
+            && let Some(byte) = text.get(index + 2..index + 4).and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        {
+            raw.push(byte);
+            index += 4;
+        } else {
+            return Err("cursor is not a next_cursor this tool returned".to_owned());
+        }
+    }
+    Ok(raw)
+}
+
+/// The regular files under `root` in raw path order, never following symlinks, and how many symlinks were passed
+/// over; an error when the walk is too large or outlasts `deadline`.
+fn walk(root: &Path, deadline: Instant) -> Result<(Vec<TreeFile>, usize), String> {
     let mut files = Vec::new();
     let mut symlinks = 0;
     let mut entries = 0;
-    let mut stack = vec![(root.to_path_buf(), String::new(), 0usize)];
+    let mut stack = vec![(root.to_path_buf(), Vec::new(), 0usize)];
     while let Some((directory, relative, depth)) = stack.pop() {
         let listing =
             std::fs::read_dir(&directory).map_err(|error| format!("read {}: {error}", directory.display()))?;
@@ -526,9 +569,15 @@ fn walk(root: &Path) -> Result<(Vec<TreeFile>, usize), String> {
                     "the tree has more than {MAX_WALK_ENTRIES} entries; scan a subdirectory (such as usr/bin or etc)"
                 ));
             }
-            let name = entry.file_name().to_string_lossy().into_owned();
+            if entries % 1024 == 0 && Instant::now() >= deadline {
+                return Err("listing the tree took longer than timeout_ms; scan a subdirectory or raise it".to_owned());
+            }
             let path = entry.path();
-            let child = if relative.is_empty() { name } else { format!("{relative}/{name}") };
+            let mut child = relative.clone();
+            if !child.is_empty() {
+                child.push(b'/');
+            }
+            child.extend_from_slice(entry.file_name().as_encoded_bytes());
             let Ok(metadata) = std::fs::symlink_metadata(&path) else { continue };
             if metadata.file_type().is_symlink() {
                 symlinks += 1;
@@ -537,7 +586,8 @@ fn walk(root: &Path) -> Result<(Vec<TreeFile>, usize), String> {
                     stack.push((path, child, depth + 1));
                 }
             } else if metadata.is_file() {
-                files.push((child, path, metadata.len()));
+                let text = escape_path(&child);
+                files.push((child, text, path, metadata.len()));
             }
         }
     }
@@ -545,8 +595,9 @@ fn walk(root: &Path) -> Result<(Vec<TreeFile>, usize), String> {
     Ok((files, symlinks))
 }
 
-/// Scans `query.path`: one file whole, or a directory's files in path order from `query.cursor` until the file or
-/// time budget runs out (at least one file per call).
+/// Scans `query.path`: one file whole (`timeout_ms` does not apply: analysis of one binary is not interrupted), or
+/// a directory's files in raw path order from `query.cursor` until the file or time budget runs out (at least one
+/// file per call).
 pub fn scan(query: &InventoryQuery) -> Result<Inventory, String> {
     let max_files = query.max_files.unwrap_or(DEFAULT_MAX_FILES);
     if !(1..=MAX_FILES).contains(&max_files) {
@@ -588,14 +639,25 @@ pub fn scan(query: &InventoryQuery) -> Result<Inventory, String> {
             scan_bytes(&bytes, &component, &mut inventory);
         }
     } else {
-        let (files, symlinks) = walk(&query.path)?;
+        let (files, symlinks) = walk(&query.path, deadline)?;
         inventory.symlinks = symlinks;
-        let start = query.cursor.as_ref().map_or(0, |cursor| files.partition_point(|(path, ..)| path < cursor));
+        let start = match &query.cursor {
+            Some(cursor) => {
+                let cursor = unescape_path(cursor)?;
+                files.partition_point(|(key, ..)| *key < cursor)
+            }
+            None => 0,
+        };
         let xrefs = query.xrefs.unwrap_or(false);
         let mut scanned = 0;
-        for (relative, path, size) in &files[start..] {
-            // Files the scan passes over cost a 64-byte read and never end a page, so a page stops at a file it
-            // would scan and the last page is never empty.
+        for (_, relative, path, size) in &files[start..] {
+            if scanned > 0 && Instant::now() >= deadline {
+                inventory.next_cursor = Some(relative.clone());
+                inventory.stopped = Some("timeout_ms");
+                break;
+            }
+            // Files the scan passes over cost a 64-byte read and never end a page on max_files, so such a page
+            // stops at a file it would scan and the last page is not empty.
             let kind = match read_head(path) {
                 Ok(head) => file_kind(path, &head),
                 Err(error) => {
@@ -607,9 +669,9 @@ pub fn scan(query: &InventoryQuery) -> Result<Inventory, String> {
                 inventory.ignored += 1;
                 continue;
             }
-            if scanned > 0 && (inventory.files >= max_files || Instant::now() >= deadline) {
+            if scanned > 0 && inventory.files >= max_files {
                 inventory.next_cursor = Some(relative.clone());
-                inventory.stopped = Some(if inventory.files >= max_files { "max_files" } else { "timeout_ms" });
+                inventory.stopped = Some("max_files");
                 break;
             }
             let before = inventory.files;
@@ -810,6 +872,19 @@ pub fn endpoint_inventory(query: &InventoryQuery) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_escape_without_collisions_and_round_trip() {
+        let names: [&[u8]; 5] =
+            [b"etc/a.conf", b"etc/\xff.conf", b"etc/\\xff.conf", "etc/caf\u{e9}".as_bytes(), b"a\\b"];
+        let escaped: BTreeSet<String> = names.iter().map(|name| escape_path(name)).collect();
+        assert_eq!(escaped.len(), names.len(), "{escaped:?}");
+        for name in names {
+            assert_eq!(unescape_path(&escape_path(name)).unwrap(), name);
+        }
+        assert_eq!(escape_path(b"etc/\xff.conf"), "etc/\\xff.conf");
+        assert!(unescape_path("bad\\q").is_err());
+    }
 
     #[test]
     fn file_kinds_follow_magic_extension_and_shebang() {

@@ -1,0 +1,7 @@
+# rampage endpoint blocklist (dnsmasq format, domain level): 6 entries
+address=/abc-ats.iot.us-east-1.amazonaws.com/0.0.0.0
+address=/device.azure-devices.net/0.0.0.0
+address=/docs.example-project.github.io/0.0.0.0
+address=/example-blog.blogspot.com/0.0.0.0
+address=/status.example-project.herokuapp.com/0.0.0.0
+address=/vendor-cloud.co.uk/0.0.0.0

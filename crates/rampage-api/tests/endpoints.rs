@@ -271,7 +271,8 @@ fn a_tree_pages_by_cursor_under_the_file_budget() {
     let scratch = Scratch::new("endpoint-pages");
     let root = firmware_tree(&scratch);
     let whole = inventory(&query(&root));
-    let mut seen = BTreeSet::new();
+    // A list, not a set: a finding on two pages would show up twice.
+    let mut seen = Vec::new();
     let mut cursor = None;
     let mut pages = 0;
     loop {
@@ -279,7 +280,7 @@ fn a_tree_pages_by_cursor_under_the_file_budget() {
         pages += 1;
         assert!(page["scanned"]["files"].as_u64().unwrap() <= 2);
         for row in rows(&page) {
-            seen.insert((row["component"].to_string(), row["kind"].to_string(), row["value"].to_string()));
+            seen.push((row["component"].to_string(), row["kind"].to_string(), row["value"].to_string()));
         }
         match page["next_cursor"].as_str() {
             Some(next) => {
@@ -291,11 +292,13 @@ fn a_tree_pages_by_cursor_under_the_file_budget() {
         }
     }
     assert_eq!(pages, 3);
-    let all: BTreeSet<_> = rows(&whole)
+    let mut all: Vec<_> = rows(&whole)
         .iter()
         .map(|row| (row["component"].to_string(), row["kind"].to_string(), row["value"].to_string()))
         .collect();
-    assert_eq!(seen, all, "the pages together hold every finding once");
+    seen.sort();
+    all.sort();
+    assert_eq!(seen, all, "the pages together hold every finding exactly once");
 }
 
 #[test]
@@ -348,6 +351,7 @@ fn blocklist(path: Option<&Path>, output: &Path, format: &str) -> BlocklistQuery
         allow: Vec::new(),
         deny: Vec::new(),
         include_local: true,
+        overwrite: false,
         decode: false,
         max_files: None,
         timeout_ms: None,
@@ -382,11 +386,121 @@ fn blocklists_match_their_golden_files() {
             std::fs::write(&golden, &written).unwrap();
         }
         assert_eq!(written, std::fs::read_to_string(&golden).unwrap(), "{format} {level}");
-        assert_eq!(
-            result["entries"].as_u64().unwrap() as usize,
-            written.lines().filter(|line| !line.starts_with('#') && *line != "server:").count()
-        );
+        let lines = written.lines().filter(|line| !line.starts_with(['#', ':']) && *line != "server:").count();
+        assert_eq!(result["entries"].as_u64().unwrap() as usize, lines, "{format} {level}");
     }
+}
+
+/// Domain level widens a host only to the registrable domain the Public Suffix List gives, never to a public or
+/// shared suffix: hosts under shared cloud and CDN domains, and names that are suffixes themselves, stay as they are.
+#[test]
+fn domain_level_never_widens_to_a_public_or_shared_suffix() {
+    let scratch = Scratch::new("endpoint-suffixes");
+    let goldens = local_fixture("endpoint-blocklists");
+    let output = scratch.0.join("suffixes.txt");
+    let mut request = blocklist(None, &output, "dnsmasq");
+    request.entries = Some(
+        [
+            "https://s3.amazonaws.com/bucket/object",
+            "abc-ats.iot.us-east-1.amazonaws.com",
+            "device.azure-devices.net",
+            "api.vendor-cloud.co.uk",
+            "upload.vendor-cloud.co.uk",
+            "docs.example-project.github.io",
+            "status.example-project.herokuapp.com",
+            // blogspot.com is in the list's private section and not shared infrastructure here: the blog's own name
+            // is the registrable domain.
+            "feed.example-blog.blogspot.com",
+            "co.uk",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+    );
+    let result = endpoint_blocklist(&request).unwrap();
+    let written = std::fs::read_to_string(&output).unwrap();
+    let golden = goldens.join("dnsmasq-suffixes.txt");
+    if std::env::var_os("RAMPAGE_UPDATE_GOLDEN").is_some() {
+        std::fs::write(&golden, &written).unwrap();
+    }
+    assert_eq!(written, std::fs::read_to_string(&golden).unwrap());
+    for line in ["/amazonaws.com/", "/iot.us-east-1.amazonaws.com/", "/azure-devices.net/", "=/github.io/", "/uk/"] {
+        assert!(!written.contains(line), "{line} in {written}");
+    }
+    assert!(written.contains("address=/vendor-cloud.co.uk/0.0.0.0\n"), "{written}");
+    let kept = result["kept_at_host_level"].as_array().unwrap();
+    let reason = |domain: &str| {
+        kept.iter().find(|kept| kept["domain"] == domain).map(|kept| kept["reason"].as_str().unwrap().to_owned())
+    };
+    assert!(reason("amazonaws.com").unwrap().starts_with("shared"), "{kept:?}");
+    assert!(reason("azure-devices.net").unwrap().starts_with("shared"), "{kept:?}");
+    // Names that are public suffixes themselves are never written: blocking one blocks every domain under it.
+    assert_eq!(result["left_out"]["public_suffix"], 2, "co.uk and s3.amazonaws.com: {result:#}");
+    assert!(!written.contains("/co.uk/") && !written.contains("/s3.amazonaws.com/"), "{written}");
+}
+
+/// A deny pattern naming hosts keeps their domain at host level; one covering the domain widens to it.
+#[test]
+fn deny_narrows_domain_level_to_the_hosts_it_names() {
+    let scratch = Scratch::new("endpoint-deny");
+    let output = scratch.0.join("deny.txt");
+    let mut request = blocklist(None, &output, "domains");
+    request.entries = Some(vec!["telemetry.vendor.com".into(), "updater.vendor.com".into()]);
+    request.deny = vec!["telemetry.vendor.com".into()];
+    let result = endpoint_blocklist(&request).unwrap();
+    assert_eq!(std::fs::read_to_string(&output).unwrap().lines().skip(1).collect::<Vec<_>>(), ["telemetry.vendor.com"]);
+    assert_eq!(result["kept_at_host_level"][0]["domain"], "vendor.com");
+    request.deny = vec!["vendor.com".into()];
+    endpoint_blocklist(&request).unwrap();
+    assert_eq!(std::fs::read_to_string(&output).unwrap().lines().skip(1).collect::<Vec<_>>(), ["vendor.com"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn replacing_keeps_the_mode_and_refuses_files_this_tool_did_not_write() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new("endpoint-replace");
+    let output = scratch.0.join("list.txt");
+    let mut request = blocklist(None, &output, "hosts");
+    request.entries = Some(vec!["telemetry.vendor-cloud.example".into()]);
+    request.level = Some("host".into());
+    endpoint_blocklist(&request).unwrap();
+    std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let result = endpoint_blocklist(&request).unwrap();
+    assert_eq!(result["replaced"], true);
+    assert_eq!(std::fs::metadata(&output).unwrap().permissions().mode() & 0o7777, 0o640);
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap().lines().skip(1).collect::<Vec<_>>(),
+        ["0.0.0.0 telemetry.vendor-cloud.example", ":: telemetry.vendor-cloud.example"]
+    );
+
+    let other = scratch.0.join("hosts");
+    std::fs::write(&other, "127.0.0.1 localhost\n").unwrap();
+    let mut refused = blocklist(None, &other, "hosts");
+    refused.entries = request.entries.clone();
+    let error = endpoint_blocklist(&refused).unwrap_err();
+    assert!(error.contains("overwrite: true"), "{error}");
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), "127.0.0.1 localhost\n");
+    refused.overwrite = true;
+    endpoint_blocklist(&refused).unwrap();
+    assert!(std::fs::read_to_string(&other).unwrap().starts_with("# rampage endpoint blocklist"));
+}
+
+/// A symlink in the output's directory path is resolved once; the list lands in the real directory and the result
+/// names the canonical path.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_parent_directory_is_resolved_once() {
+    let scratch = Scratch::new("endpoint-parent");
+    let real = scratch.0.join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, scratch.0.join("link")).unwrap();
+    let mut request = blocklist(None, &scratch.0.join("link/list.txt"), "domains");
+    request.entries = Some(vec!["telemetry.vendor-cloud.example".into()]);
+    let result = endpoint_blocklist(&request).unwrap();
+    assert_eq!(result["output"], real.join("list.txt").to_str().unwrap());
+    assert!(real.join("list.txt").is_file());
+    let names: Vec<_> = std::fs::read_dir(&real).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+    assert_eq!(names.len(), 1, "no temporary file is left: {names:?}");
 }
 
 #[test]
@@ -406,7 +520,8 @@ fn blocklists_leave_out_local_findings_unless_asked_and_honour_allow_and_deny() 
     let mut request = blocklist(Some(&binary), &output, "dnsmasq");
     request.allow = vec!["updates.vendor-cloud.example".to_owned()];
     let result = endpoint_blocklist(&request).unwrap();
-    assert_eq!(result["kept_at_host_level"], serde_json::json!(["vendor-cloud.example"]));
+    assert_eq!(result["kept_at_host_level"][0]["domain"], "vendor-cloud.example");
+    assert_eq!(result["kept_at_host_level"][0]["reason"], "allow keeps a name under it reachable");
     let written = std::fs::read_to_string(&output).unwrap();
     assert!(written.contains("address=/telemetry.vendor-cloud.example/0.0.0.0\n"), "{written}");
     assert!(!written.contains("updates.") && !written.contains("address=/vendor-cloud.example/"), "{written}");
@@ -456,8 +571,11 @@ fn blocklist_output_paths_are_checked() {
     let error = endpoint_blocklist(&request).unwrap_err();
     assert!(error.contains("stopped at") && error.contains("nothing was written"), "{error}");
     let mut request = blocklist(None, &scratch.0.join("both.txt"), "hosts");
-    request.entries = Some(vec!["not a host".into()]);
-    assert!(endpoint_blocklist(&request).unwrap_err().contains("not a host"));
+    for entry in ["not a host", "foo bar.com", "a.vendor-cloud.example\nb.vendor-cloud.example", "localhost"] {
+        request.entries = Some(vec![entry.into()]);
+        let error = endpoint_blocklist(&request).unwrap_err();
+        assert!(error.contains("not one host") || error.contains("single_label"), "{entry}: {error}");
+    }
     assert!(
         endpoint_blocklist(&blocklist(None, &scratch.0.join("none.txt"), "hosts")).unwrap_err().contains("exactly one")
     );

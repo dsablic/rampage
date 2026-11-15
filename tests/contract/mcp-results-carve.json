@@ -87,7 +87,8 @@
     "left_out.never_blocked",
     "level",
     "output",
-    "preview"
+    "preview",
+    "replaced"
   ],
   "endpoint_inventory": [
     "components",

@@ -95,6 +95,9 @@ pub struct Candidate {
     pub domain: Option<String>,
     /// Why a finding is `local`, or a note on its form (an e-mail address's domain, a bare pin).
     pub reason: Option<&'static str>,
+    /// A name or address that only the device, its host or its own network answers (loopback, private,
+    /// link-local, multicast, single-label...): never written to a blocklist.
+    pub on_network: bool,
 }
 
 #[derive(Debug, Default)]
@@ -224,6 +227,10 @@ const PACKAGE_ROOTS: [&str; 16] = [
     "sun", "de", "uk",
 ];
 
+/// TLDs a reversed-DNS package name never ends in: a dotted name starting with a package root (`net.`, `io.`)
+/// but ending in one of these is a host (`io.x-cloud.com`, `net.vendor-cloud.org`).
+const CLASSIC_TLDS: [&str; 11] = ["com", "net", "org", "edu", "gov", "mil", "int", "info", "biz", "io", "co"];
+
 /// Second labels of Linux sysctl keys (`net.core.somaxconn`), which read as package names but are neither.
 const SYSCTL_GROUPS: [&str; 8] = ["ipv4", "ipv6", "core", "unix", "netfilter", "bridge", "nf_conntrack_max", "inet"];
 
@@ -330,20 +337,35 @@ fn classify_url(url: &str, authority: usize, extracted: &mut Extracted) {
         host: None,
         domain: None,
         reason: None,
+        on_network: false,
     };
     if host.is_empty() {
         return;
     }
     if let Ok(address) = host.parse::<IpAddr>() {
         candidate.host = Some(address.to_string());
-        if let Some(reason) = local_address(address) {
+        if let Some(local) = local_address(address) {
             candidate.kind = Kind::Local;
-            candidate.reason = Some(reason);
+            candidate.reason = Some(local.reason);
+            candidate.on_network = local.on_network;
         }
         extracted.found.push(candidate);
         return;
     }
-    let name = host.trim_end_matches('.').to_ascii_lowercase();
+    let host = host.trim_end_matches('.');
+    let name = if host.is_ascii() {
+        host.to_ascii_lowercase()
+    } else {
+        // An internationalized name, written as its punycode (ASCII) form, which is what DNS carries.
+        match idna::domain_to_ascii(host) {
+            Ok(ascii) if !ascii.is_empty() => ascii,
+            _ => {
+                candidate.reason = Some("host is not a valid internationalized name");
+                extracted.found.push(candidate);
+                return;
+            }
+        }
+    };
     if !valid_name(&name) {
         // A host built at run time (`%s`, `{host}`) or not a name at all: the URL is kept, its host is unknown.
         candidate.reason = Some("host is not a literal name (built at run time)");
@@ -358,9 +380,11 @@ fn classify_url(url: &str, authority: usize, extracted: &mut Extracted) {
     if let Some(reason) = reserved(&name) {
         candidate.kind = Kind::Local;
         candidate.reason = Some(reason);
+        candidate.on_network = on_network_name(&name);
     } else if !name.contains('.') {
         candidate.kind = Kind::Local;
         candidate.reason = Some("single-label name (resolves only on a local network)");
+        candidate.on_network = true;
     } else if !known_suffix(&name) {
         candidate.kind = Kind::Local;
         candidate.reason = Some("name under a suffix the public suffix list does not know (a local network name)");
@@ -390,6 +414,7 @@ fn pins(text: &str, lower: &str, taken: &mut Vec<(usize, usize)>, extracted: &mu
                 host: None,
                 domain: None,
                 reason: None,
+                on_network: false,
             });
         }
     }
@@ -403,6 +428,7 @@ fn pins(text: &str, lower: &str, taken: &mut Vec<(usize, usize)>, extracted: &mu
             host: None,
             domain: None,
             reason: Some("bare base64 SHA-256 digest, a pin only by shape"),
+            on_network: false,
         });
     }
 }
@@ -480,6 +506,7 @@ fn host_token(token: &str, before: Option<char>, after: Option<char>, extracted:
     if labels.len() >= 3
         && PACKAGE_ROOTS.contains(&lower_labels[0])
         && labels.iter().all(|label| label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
+        && !ends_like_a_host(&lower_labels)
     {
         if lower_labels[0] == "net" && SYSCTL_GROUPS.contains(&lower_labels[1]) {
             return;
@@ -491,6 +518,7 @@ fn host_token(token: &str, before: Option<char>, after: Option<char>, extracted:
             host: None,
             domain: None,
             reason: None,
+            on_network: false,
         });
         return;
     }
@@ -498,16 +526,21 @@ fn host_token(token: &str, before: Option<char>, after: Option<char>, extracted:
         extracted.noise.push((Noise::Filename, token.to_owned()));
         return;
     }
-    let mixed = |label: &&str| {
-        label.bytes().any(|byte| byte.is_ascii_uppercase()) && label.bytes().any(|byte| byte.is_ascii_lowercase())
-    };
-    if labels.iter().any(mixed) || after == Some('(') {
+    // DNS names are case-insensitive (`Api.Vendor-Cloud.com` is a host); a mixed-case last label is a type or
+    // member name (`Settings.Builder`), and so is a name before `(`.
+    let original_last = labels.last().expect("split yields one label");
+    let mixed_last = original_last.bytes().any(|byte| byte.is_ascii_uppercase())
+        && original_last.bytes().any(|byte| byte.is_ascii_lowercase());
+    if mixed_last || after == Some('(') {
         extracted.noise.push((Noise::Identifier, token.to_owned()));
         return;
     }
     if last.bytes().all(|byte| byte.is_ascii_digit()) || !valid_name(&lower) {
         return;
     }
+    let mixed_case = labels.iter().any(|label| {
+        label.bytes().any(|byte| byte.is_ascii_uppercase()) && label.bytes().any(|byte| byte.is_ascii_lowercase())
+    });
     if NAMESPACE_HOSTS.contains(&lower.as_str()) {
         extracted.noise.push((Noise::Namespace, token.to_owned()));
         return;
@@ -519,6 +552,7 @@ fn host_token(token: &str, before: Option<char>, after: Option<char>, extracted:
         host: Some(lower.clone()),
         domain: Some(registrable(&lower)),
         reason: (before == Some('@')).then_some("domain of an e-mail address"),
+        on_network: false,
     };
     if let Some(reason) = reserved(&lower) {
         // Two-label names under the word-like reserved TLDs (`unit.test`, `value.invalid`) are identifiers.
@@ -527,7 +561,11 @@ fn host_token(token: &str, before: Option<char>, after: Option<char>, extracted:
         }
         candidate.kind = Kind::Local;
         candidate.reason = Some(reason);
+        candidate.on_network = on_network_name(&lower);
     } else if !known_suffix(&lower) {
+        if mixed_case {
+            extracted.noise.push((Noise::Identifier, token.to_owned()));
+        }
         return;
     } else if labels.len() == 2 && !STRONG_TLDS.contains(&last) {
         extracted.noise.push((Noise::Identifier, token.to_owned()));
@@ -537,15 +575,32 @@ fn host_token(token: &str, before: Option<char>, after: Option<char>, extracted:
 }
 
 fn push_ip(address: IpAddr, written: &str, extracted: &mut Extracted) {
-    let reason = local_address(address);
+    let local = local_address(address);
     extracted.found.push(Candidate {
-        kind: if reason.is_some() { Kind::Local } else { Kind::Ip },
+        kind: if local.is_some() { Kind::Local } else { Kind::Ip },
         value: written.to_owned(),
         form: Some(Form::Ip),
         host: Some(address.to_string()),
         domain: None,
-        reason,
+        reason: local.map(|local| local.reason),
+        on_network: local.is_some_and(|local| local.on_network),
     });
+}
+
+/// Endings a reversed-DNS package name does not have but a host does: the classic generic TLDs, or a country code
+/// in a name of four or more labels or one that starts with a country code too (`de.pool.ntp.org`).
+fn ends_like_a_host(labels: &[&str]) -> bool {
+    let last = labels[labels.len() - 1];
+    let country =
+        |label: &str| label.len() == 2 && psl::suffix(label.as_bytes()).is_some_and(|suffix| suffix.is_known());
+    CLASSIC_TLDS.contains(&last) || country(last) && (labels.len() >= 4 || country(labels[0]))
+}
+
+/// Whether a reserved name resolves only on the device or its own network (`localhost`, mDNS `.local`, `home.arpa`)
+/// rather than naming nothing at all (documentation and test names).
+fn on_network_name(name: &str) -> bool {
+    let last = name.rsplit('.').next().unwrap_or(name);
+    matches!(last, "localhost" | "local" | "internal") || name == "home.arpa" || name.ends_with(".home.arpa")
 }
 
 /// A dotted quad without leading zeros (which some parsers read as octal), optionally followed by `:port`.
@@ -587,7 +642,7 @@ fn is_library_name(labels: &[&str]) -> bool {
 }
 
 /// Labels of 1..=63 letters, digits and hyphens, not starting or ending with a hyphen, 253 bytes at most.
-fn valid_name(name: &str) -> bool {
+pub(super) fn valid_name(name: &str) -> bool {
     name.len() <= 253
         && name.split('.').all(|label| {
             !label.is_empty()
@@ -604,17 +659,13 @@ fn known_suffix(name: &str) -> bool {
     psl::suffix(name.as_bytes()).is_some_and(|suffix| suffix.is_known())
 }
 
-/// The registrable domain of a lowercase name: one label under its public suffix, or the last two labels when the
-/// list does not know the suffix (reserved and local names), or the name itself.
+/// The registrable domain of a lowercase name: one label under its public suffix (the list's private section
+/// included, so `x.github.io` stays itself), or under the TLD when the list does not know it (reserved and local
+/// names), or the name itself when it is a public suffix or has no registrable part.
 pub fn registrable(name: &str) -> String {
-    if let Some(domain) = psl::domain(name.as_bytes())
-        && domain.suffix().is_known()
-        && let Ok(text) = std::str::from_utf8(domain.as_bytes())
-    {
-        return text.to_owned();
-    }
-    let labels: Vec<&str> = name.split('.').collect();
-    labels[labels.len().saturating_sub(2)..].join(".")
+    psl::domain(name.as_bytes())
+        .and_then(|domain| std::str::from_utf8(domain.as_bytes()).ok().map(str::to_owned))
+        .unwrap_or_else(|| name.to_owned())
 }
 
 /// Why a lowercase name is reserved, if it is: a reserved TLD, `localhost`, or a documentation domain
@@ -631,50 +682,61 @@ fn reserved(name: &str) -> Option<&'static str> {
     (domain.split('.').next() == Some("example") && known_suffix(name)).then_some("documentation name (RFC 2606)")
 }
 
+/// Why an address is local, and whether it is on the device's own host or network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Local {
+    pub reason: &'static str,
+    /// Loopback, unspecified, private, shared, link-local, site-local, multicast, broadcast and reserved addresses;
+    /// not documentation and benchmarking ranges, which name nothing.
+    pub on_network: bool,
+}
+
 /// Why an address is local, if it is: unspecified, loopback, private, shared, link-local, documentation,
 /// benchmarking, multicast, broadcast or reserved.
-pub fn local_address(address: IpAddr) -> Option<&'static str> {
+pub fn local_address(address: IpAddr) -> Option<Local> {
+    let on_network = |reason| Some(Local { reason, on_network: true });
+    let names_nothing = |reason| Some(Local { reason, on_network: false });
     match address {
         IpAddr::V4(address) => {
             let [a, b, c, _] = address.octets();
-            Some(match (a, b, c) {
-                (0, ..) => "unspecified or this-network address",
-                (127, ..) => "loopback address",
-                (10, ..) | (172, 16..=31, _) | (192, 168, _) => "private address (RFC 1918)",
-                (100, 64..=127, _) => "shared address space (RFC 6598)",
-                (169, 254, _) => "link-local address",
-                (192, 0, 2) | (198, 51, 100) | (203, 0, 113) => "documentation range (RFC 5737)",
-                (198, 18..=19, _) => "benchmarking range (RFC 2544)",
-                (192, 0, 0) => "IETF protocol assignment",
-                (224..=239, ..) => "multicast address",
-                (240..=255, ..) => "reserved or broadcast address",
-                _ => return None,
-            })
+            match (a, b, c) {
+                (0, ..) => on_network("unspecified or this-network address"),
+                (127, ..) => on_network("loopback address"),
+                (10, ..) | (172, 16..=31, _) | (192, 168, _) => on_network("private address (RFC 1918)"),
+                (100, 64..=127, _) => on_network("shared address space (RFC 6598)"),
+                (169, 254, _) => on_network("link-local address"),
+                (192, 0, 2) | (198, 51, 100) | (203, 0, 113) => names_nothing("documentation range (RFC 5737)"),
+                (198, 18..=19, _) => names_nothing("benchmarking range (RFC 2544)"),
+                (192, 0, 0) => on_network("IETF protocol assignment"),
+                (224..=239, ..) => on_network("multicast address"),
+                (240..=255, ..) => on_network("reserved or broadcast address"),
+                _ => None,
+            }
         }
         IpAddr::V6(address) => {
             if let Some(mapped) = address.to_ipv4_mapped() {
                 return local_address(IpAddr::V4(mapped));
             }
             let segments = address.segments();
-            Some(if address.is_unspecified() {
-                "unspecified address"
+            if address.is_unspecified() {
+                on_network("unspecified address")
             } else if address.is_loopback() {
-                "loopback address"
+                on_network("loopback address")
             } else if segments[0] & 0xffc0 == 0xfe80 {
-                "link-local address"
+                on_network("link-local address")
             } else if segments[0] & 0xffc0 == 0xfec0 {
-                "site-local address (deprecated)"
+                on_network("site-local address (deprecated)")
             } else if segments[0] & 0xfe00 == 0xfc00 {
-                "unique local address (RFC 4193)"
+                on_network("unique local address (RFC 4193)")
             } else if segments[0] == 0x2001 && segments[1] == 0x0db8 {
-                "documentation range (RFC 3849)"
+                names_nothing("documentation range (RFC 3849)")
             } else if segments[0] == 0x3fff && segments[1] & 0xf000 == 0 {
-                "documentation range (RFC 9637)"
+                names_nothing("documentation range (RFC 9637)")
             } else if segments[0] & 0xff00 == 0xff00 {
-                "multicast address"
+                on_network("multicast address")
             } else {
-                return None;
-            })
+                None
+            }
         }
     }
 }
@@ -803,6 +865,47 @@ mod tests {
         assert_eq!(kinds("Lorg/apache/http"), []);
         assert_eq!(kinds("android.intent.action.BOOT_COMPLETED"), []);
         assert_eq!(kinds("androidx.core.app"), [(Kind::Package, "androidx.core.app".to_owned())]);
+    }
+
+    #[test]
+    fn host_endings_beat_package_roots_and_case() {
+        for host in ["de.pool.ntp.org", "uk.pool.ntp.org", "io.x-cloud.com", "net.x-cloud.com"] {
+            assert_eq!(kinds(host), [(Kind::Host, host.to_owned())], "{host}");
+        }
+        assert_eq!(kinds("Api.Vendor-Cloud.com"), [(Kind::Host, "api.vendor-cloud.com".to_owned())]);
+        assert_eq!(kinds("MQTT.VendorCloud.com"), [(Kind::Host, "mqtt.vendorcloud.com".to_owned())]);
+        assert_eq!(noise("Foo.BarBaz"), [Noise::Identifier]);
+        assert_eq!(kinds("com.example.app"), [(Kind::Package, "com.example.app".to_owned())]);
+        // The list makes amazonaws.com registrable but s3.amazonaws.com a suffix (the blocklist keeps both shared
+        // domains at host level).
+        assert_eq!(extract("cdn.amazonaws.com").found[0].domain.as_deref(), Some("amazonaws.com"));
+        assert_eq!(extract("s3.amazonaws.com").found[0].domain.as_deref(), Some("s3.amazonaws.com"));
+        assert_eq!(extract("api.vendor-cloud.co.uk").found[0].domain.as_deref(), Some("vendor-cloud.co.uk"));
+        assert_eq!(extract("docs.someone.github.io").found[0].domain.as_deref(), Some("someone.github.io"));
+    }
+
+    #[test]
+    fn internationalized_url_hosts_become_punycode() {
+        let found = &extract("https://bücher.example/x").found[0];
+        assert_eq!(found.host.as_deref(), Some("xn--bcher-kva.example"));
+        assert_eq!(found.reason, Some("documentation name (RFC 2606)"));
+    }
+
+    #[test]
+    fn on_network_addresses_and_names_are_flagged() {
+        for (text, on_network) in [
+            ("fec0::1", true),
+            ("fe80::1", true),
+            ("192.168.1.1", true),
+            ("http://localhost/", true),
+            ("http://router/", true),
+            ("printer.local", true),
+            ("203.0.113.5", false),
+            ("2001:db8::5", false),
+            ("a.vendor-cloud.example", false),
+        ] {
+            assert_eq!(extract(text).found[0].on_network, on_network, "{text}");
+        }
     }
 
     #[test]

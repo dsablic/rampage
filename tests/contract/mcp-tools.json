@@ -1695,6 +1695,10 @@
           "type": "string",
           "required": true
         },
+        "overwrite": {
+          "type": "boolean|null",
+          "required": false
+        },
         "path": {
           "type": "null|string",
           "required": false

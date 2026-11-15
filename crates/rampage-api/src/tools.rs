@@ -479,7 +479,7 @@ struct EndpointBlocklistArgs {
     path: Option<std::path::PathBuf>,
     /// Hosts, URLs or IP addresses to block instead of scanning.
     entries: Option<Vec<String>>,
-    /// Absolute path of the file to write (a regular file or new; never a symlink).
+    /// Absolute path of a new file or a blocklist this tool wrote (never a symlink).
     output: std::path::PathBuf,
     /// hosts, dnsmasq, dnsmasq_server, unbound, domains or ips.
     format: String,
@@ -489,8 +489,10 @@ struct EndpointBlocklistArgs {
     allow: Option<Vec<String>>,
     /// When given, only entries matching these are written.
     deny: Option<Vec<String>>,
-    /// Include local findings: private, documentation and single-label names (default false).
+    /// Include local findings: documentation and reserved names and ranges (default false).
     include_local: Option<bool>,
+    /// Replace an existing file this tool did not write (default false).
+    overwrite: Option<bool>,
     /// As endpoint_inventory's decode.
     decode: Option<bool>,
     max_files: Option<usize>,
@@ -851,6 +853,7 @@ pub fn file_tools() -> Vec<FileTool> {
                     allow: args.allow.unwrap_or_default(),
                     deny: args.deny.unwrap_or_default(),
                     include_local: args.include_local.unwrap_or(false),
+                    overwrite: args.overwrite.unwrap_or(false),
                     decode: args.decode.unwrap_or(false),
                     max_files: args.max_files,
                     timeout_ms: args.timeout_ms,
