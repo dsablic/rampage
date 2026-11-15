@@ -24,6 +24,7 @@ rampage-constants = { path = "crates/rampage-constants" }
 rampage-debug = { path = "crates/rampage-debug" }
 rampage-plugin = { path = "crates/rampage-plugin" }
 rampage-plugin-contract = { path = "crates/rampage-plugin-contract" }
+rampage-unpack = { path = "crates/rampage-unpack" }
 anyhow = "1.0.104"
 assert_cmd = "2.2.2"
 # Fallback decoders for architectures without a native, spec-generated one.

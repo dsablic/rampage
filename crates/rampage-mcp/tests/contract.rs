@@ -421,6 +421,10 @@ async fn contract_mcp_carve_results() {
     let (c, o) = (&client, &mut observed);
     exercise(c, o, "carve", json!({"path": firmware})).await;
     exercise(c, o, "archive_inventory", json!({"path": archive.path})).await;
+    let payload = crate::fs_image::fsimage("payload.bin");
+    exercise(c, o, "fs_list", json!({"path": payload, "inner": ["system.img"], "limit": 2})).await;
+    exercise(c, o, "fs_extract", json!({"path": payload, "inner": ["system.img"], "output_dir": scratch.0.join("fs")}))
+        .await;
     check_group(client, "carve", &observed, &[]).await;
 }
 

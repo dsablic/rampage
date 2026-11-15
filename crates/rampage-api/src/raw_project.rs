@@ -651,8 +651,12 @@ pub fn sniff_record_format(path: &Path) -> Option<&'static str> {
     None
 }
 
-/// [`headerless_guidance`], led by the record format when the file looks like Intel HEX or S-records.
+/// [`headerless_guidance`], led by the record format when the file looks like Intel HEX or S-records. A filesystem
+/// image gets the filesystem tools instead.
 pub fn headerless_guidance_for(path: &Path) -> String {
+    if let Some(guidance) = crate::filesystem_guidance(path) {
+        return guidance;
+    }
     match sniff_record_format(path) {
         Some(format) => {
             let name = if format == "ihex" { "an Intel HEX" } else { "a Motorola S-record" };

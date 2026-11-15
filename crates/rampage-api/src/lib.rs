@@ -38,6 +38,7 @@ mod files;
 mod findings;
 pub mod flywheel;
 mod frame;
+mod fs_image;
 mod fuzzy_signatures;
 mod go_strings;
 mod graph;
@@ -179,6 +180,7 @@ pub use frame::{
     FrameCategory, FrameCoordinate, FrameLocation, FrameQuery, FrameRow, FrameSource, FrameTrackerSlot,
     FunctionFrameReport, MAX_FRAME_PAGE, MAX_FRAME_WORK, NativeFrameEvidence, TrackerFrameEvidence,
 };
+pub use fs_image::{FsExtractQuery, FsListQuery, MAX_FS_PAGE, filesystem_guidance, fs_extract, fs_list};
 pub use fuzzy_signatures::{
     FuzzyBuildReport, FuzzyBuildRequest, FuzzyExactEvidence, FuzzyFeatureRejection, FuzzySuggestRequest,
     FuzzySuggestion, FuzzySuggestionStatus, FuzzySuggestions, FuzzyTarget, MAX_FUZZY_BUILD_FUNCTIONS,

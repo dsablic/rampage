@@ -1,0 +1,157 @@
+//! fs_list and fs_extract over MCP: carve-gated, paged, nested, safe extraction, and the hint a filesystem image
+//! gets when opened as a binary.
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use rampage_api::tools::Group;
+use rampage_mcp::RampageServer;
+use rmcp::ServiceExt;
+use rmcp::model::{CallToolRequestParams, CallToolResult};
+use rmcp::service::{RoleClient, RunningService};
+use serde_json::{Value, json};
+
+type Client = RunningService<RoleClient, ()>;
+
+async fn connect(server: RampageServer) -> Client {
+    let (server_transport, client_transport) = tokio::io::duplex(1 << 20);
+    tokio::spawn(async move {
+        server.serve(server_transport).await.unwrap().waiting().await.unwrap();
+    });
+    ().serve(client_transport).await.unwrap()
+}
+
+async fn call(client: &Client, name: &str, arguments: Value) -> CallToolResult {
+    client
+        .call_tool(CallToolRequestParams::new(name.to_owned()).with_arguments(arguments.as_object().unwrap().clone()))
+        .await
+        .unwrap()
+}
+
+fn text(result: &CallToolResult) -> &str {
+    result.content.first().unwrap().as_text().unwrap().text.as_str()
+}
+
+fn json_of(result: &CallToolResult) -> Value {
+    assert_ne!(result.is_error, Some(true), "{}", text(result));
+    assert!(text(result).len() <= 60_000);
+    serde_json::from_str(text(result)).unwrap()
+}
+
+pub(crate) fn fsimage(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/fsimages").join(name)
+}
+
+/// A new directory path (not created) under the system temporary directory, removed on drop.
+pub(crate) struct Output(pub(crate) PathBuf);
+
+impl Output {
+    pub(crate) fn new() -> Self {
+        static SERIAL: AtomicUsize = AtomicUsize::new(0);
+        let base = std::env::temp_dir().join(format!(
+            "rampage-mcp-fs-{}-{}",
+            std::process::id(),
+            SERIAL.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        Self(base)
+    }
+
+    pub(crate) fn dir(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for Output {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[tokio::test]
+async fn fs_tools_are_carve_gated_and_list_pages() {
+    let client = connect(RampageServer::default()).await;
+    let refused = call(&client, "fs_list", json!({ "path": fsimage("squashfs-xz.img") })).await;
+    assert_eq!(refused.is_error, Some(true));
+    assert!(text(&refused).contains("`carve` group"));
+    json_of(&call(&client, "enable_tools", json!({ "groups": ["carve"] })).await);
+    let tools = client.list_all_tools().await.unwrap();
+    let extract = tools.iter().find(|tool| tool.name == "fs_extract").unwrap();
+    assert_eq!(extract.annotations.as_ref().unwrap().read_only_hint, Some(false));
+    assert_eq!(extract.annotations.as_ref().unwrap().destructive_hint, Some(false));
+
+    let first = json_of(&call(&client, "fs_list", json!({ "path": fsimage("squashfs-xz.img"), "limit": 3 })).await);
+    assert_eq!(first["layers"][0]["format"], "squashfs");
+    assert_eq!(first["entries"].as_array().unwrap().len(), 3);
+    assert_eq!(first["next_offset"], 3);
+    assert_eq!(first["counts"]["symlink"], 2);
+    let total = first["total"].as_u64().unwrap();
+    let rest = json_of(&call(&client, "fs_list", json!({ "path": fsimage("squashfs-xz.img"), "offset": 3 })).await);
+    assert_eq!(rest["entries"].as_array().unwrap().len() as u64, total - 3);
+    assert!(rest["next_offset"].is_null());
+    let prefixed = json_of(
+        &call(&client, "fs_list", json!({ "path": fsimage("ext4.img"), "prefix": "/usr/share/demo/nested" })).await,
+    );
+    let paths: Vec<&str> =
+        prefixed["entries"].as_array().unwrap().iter().map(|e| e["path"].as_str().unwrap()).collect();
+    assert_eq!(paths, ["usr/share/demo/nested", "usr/share/demo/nested/deep.txt"]);
+    let hello = rest["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(first["entries"].as_array().unwrap())
+        .find(|e| e["path"] == "bin/hello")
+        .unwrap();
+    assert_eq!(hello["type"], "file");
+    assert_eq!(hello["mode"], 0o4755);
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn fs_extract_writes_a_nested_partition_and_returns_openable_executables() {
+    let client = connect(RampageServer::with_groups(Group::ALL)).await;
+    let payload = fsimage("payload.bin");
+    let partitions = json_of(&call(&client, "fs_list", json!({ "path": payload })).await);
+    assert_eq!(partitions["layers"][0]["format"], "ota_payload");
+    assert!(partitions["hint"].as_str().unwrap().contains("inner"));
+    let nested = json_of(&call(&client, "fs_list", json!({ "path": payload, "inner": ["vendor.img"] })).await);
+    assert_eq!(nested["layers"][1]["format"], "squashfs");
+    assert_eq!(nested["layers"][1]["entry"], "vendor.img");
+
+    let output = Output::new();
+    let out = output.dir("system");
+    let report = json_of(
+        &call(&client, "fs_extract", json!({ "path": payload, "inner": ["system.img"], "output_dir": out })).await,
+    );
+    assert_eq!(report["layers"][1]["format"], "ext");
+    let elf = report["executables"][0]["path"].as_str().unwrap();
+    assert_eq!(report["executables"][0]["format"], "elf");
+    assert!(report["skipped"].as_array().unwrap().iter().any(|skip| skip["path"] == "dev/console"));
+    // An extracted executable opens as an analysis target by its path.
+    let info = json_of(&call(&client, "binary_info", json!({ "path": elf })).await);
+    assert_eq!(info["format"], "elf", "{info}");
+    assert_eq!(info["arch"], "mips", "{info}");
+
+    // The output directory must be new or empty, and a refusal says so.
+    let again =
+        call(&client, "fs_extract", json!({ "path": payload, "inner": ["system.img"], "output_dir": out })).await;
+    assert_eq!(again.is_error, Some(true));
+    assert!(text(&again).contains("new or empty"), "{}", text(&again));
+    let delta =
+        call(&client, "fs_extract", json!({ "path": fsimage("delta.bin"), "output_dir": output.dir("d") })).await;
+    assert_eq!(delta.is_error, Some(true));
+    assert!(text(&delta).contains("only full payloads"), "{}", text(&delta));
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
+async fn opening_a_filesystem_image_as_a_binary_points_at_fs_list() {
+    let client = connect(RampageServer::default()).await;
+    for name in ["squashfs-gzip.img", "ext4.img", "payload.bin", "ext4.simg"] {
+        let result = call(&client, "triage_report", json!({ "path": fsimage(name) })).await;
+        assert_eq!(result.is_error, Some(true), "{name}");
+        assert!(text(&result).contains("fs_list"), "{name}: {}", text(&result));
+    }
+    client.cancel().await.unwrap();
+}

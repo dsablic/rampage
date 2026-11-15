@@ -119,7 +119,7 @@ A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling
   `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `entry_diagnostics`, `inspect_jump_table`.
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
-- `carve`: `carve`, `archive_inventory`.
+- `carve`: `carve`, `archive_inventory`, `fs_list`, `fs_extract`.
 - `formats`: `build_info`, `pe_resources`, `pe_load_config`, `exception_handlers`, `pyinstaller_archive`,
   `wasm_module`, `integrity_checks`, `export_image`.
 - `debug`, only on a server started with a debug endpoint: `debug_connect`, `debug_bind`, `debug_status`,
@@ -141,7 +141,8 @@ improve group alone; see [the flywheel](#flywheel-improve).
 
 Workflow reports name the `group` of suggested next tools. The [desktop assistant](desktop-ui.md) uses the same
 tools without group gating, plus the interactive `show_address`, which is not an MCP tool because the server has
-no listing to navigate. It does not offer the file tools (`carve`, `archive_inventory`, `list_packs`,
+no listing to navigate. It does not offer the file tools (`carve`, `archive_inventory`, `fs_list`, `fs_extract`,
+`list_packs`,
 `query_debugger`, `inspect_data`, `decode_file_range`, `probe_compression`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`,
 `pyinstaller_archive`, `wasm_module`) or the `debug` tools.
 
@@ -414,6 +415,10 @@ not a total; scanning stops at the candidate after the page. It extracts/decompr
 `archive_inventory` similarly needs no image or sidecar, but inventories bounded standalone ZIP32 central-directory
 metadata. Its member ordinals and metadata hashes are not payload validation or extraction-safe paths; whole-record
 JSON pages stay within 60,000 bytes and errors within 4,096 bytes. See [archive inventory](archive-inventory.md).
+`fs_list` and `fs_extract` list and extract firmware filesystem images (SquashFS, ext2/3/4, Android sparse, Android
+OTA payloads, cpio, tar) in any file, at an `image_offset` or nested through `inner`; `fs_extract` writes into a new
+or empty `output_dir` under traversal, symlink, special-file and size limits and returns the executables it wrote.
+See [firmware filesystem images](firmware-images.md).
 `build_info` returns `{go, rust}`: Go build info (toolchain version, main package and module, dependency modules with
 `=>` replacements, build settings, and a cross-check of the version against the pclntab layout) and cargo-auditable
 `.dep-v0` packages. Each is `null` when absent, or has `status` `present` or `unreadable` with a `reason`. `offset`/

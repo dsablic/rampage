@@ -124,7 +124,10 @@ fn group_summary(group: Group) -> &'static str {
         }
         Group::Diagnostics => "decode trouble: analysis_diagnostics, entry_diagnostics, inspect_jump_table.",
         Group::DotNet => ".NET: dotnet_metadata (types, methods, P/Invokes), dotnet_il (CIL).",
-        Group::Carve => "files inside files: carve (embedded executables), archive_inventory (ZIP listing).",
+        Group::Carve => {
+            "files inside files: carve (embedded executables), archive_inventory (ZIP), fs_list/fs_extract \
+             (filesystems)."
+        }
         Group::Formats => {
             "build_info (Go modules, Rust dependencies), pe_resources, pe_load_config, exception_handlers (MSVC C++ \
              try/catch tables), pyinstaller_archive, wasm_module; firmware: integrity_checks (CRC/checksum fields; fix \
@@ -1031,7 +1034,13 @@ impl ServerHandler for RampageServer {
         });
         let file_tools = self.file_tools.iter().filter(|tool| served(&tool.group, tool.name)).map(|tool| {
             let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
-            rmcp::model::Tool::new(tool.name, tool.description, schema)
+            let listed = rmcp::model::Tool::new(tool.name, tool.description, schema);
+            // fs_extract writes new files under a directory the caller names, never over existing ones.
+            if tool.name == "fs_extract" {
+                let annotations = rmcp::model::ToolAnnotations::new().read_only(false).destructive(false);
+                return listed.annotate(annotations.idempotent(false).open_world(false));
+            }
+            listed
         });
         let debug_enabled = self.debug.is_some() && self.improve.is_none() && enabled.contains(&Group::Debug);
         let debug_tools = self.debug_tools.iter().filter(|_| debug_enabled).map(|tool| {
@@ -1366,7 +1375,7 @@ mod tests {
         (Group::Runtime, &["observe_pointer", "compare_runtime_bytes", "query_debugger"]),
         (Group::Diagnostics, &["analysis_diagnostics", "entry_diagnostics", "inspect_jump_table"]),
         (Group::DotNet, &["dotnet_metadata", "dotnet_il"]),
-        (Group::Carve, &["carve", "archive_inventory"]),
+        (Group::Carve, &["carve", "archive_inventory", "fs_list", "fs_extract"]),
         (Group::Formats, &["build_info", "pe_resources", "pe_load_config", "pyinstaller_archive", "wasm_module"]),
         (
             Group::Debug,

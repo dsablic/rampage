@@ -19,6 +19,7 @@ rampage-constants.workspace = true
 rampage-debug.workspace = true
 rampage-plugin.workspace = true
 rampage-plugin-contract.workspace = true
+rampage-unpack.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

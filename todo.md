@@ -65,10 +65,8 @@ Smart TVs and similar devices may run automatic content recognition (fingerprint
 keep microphones live, and send telemetry. These capabilities would help an owner find and stop that on their own
 device:
 
-- **Unpack device firmware.** TV and set-top firmware usually ships as SquashFS, UBI/UBIFS, ext4, Android sparse or
-  OTA payload images inside vendor containers. Today `carve` and `archive_inventory` find embedded executables and
-  ZIPs. Next: list and extract these filesystems, so the binaries and configuration inside can be analysed. Without
-  this, nothing else on this list applies to a TV.
+- **Unpack device firmware.** Approved and moved to the
+  [smart-device privacy track](#smart-device-privacy-track-approved-2026-11-15).
 - **Android/DEX support.** Many TVs run Android TV, so the interesting logic is in APKs: DEX bytecode, the manifest's
   permissions and receivers, and native JNI libraries. A `dex_metadata`/`dex_code` pair, like the .NET tools, plus
   linking JNI exports to their Java callers.
@@ -106,6 +104,28 @@ device:
   for explaining a result.
 - **Run checksum routines with `evaluate_function`.** For the patching round trip, run the device's own check
   routine to confirm a recomputed value instead of trusting a recognised algorithm.
+
+## Smart-device privacy track (approved 2026-11-15)
+
+Device owners inspect what their own devices record and send (right to repair, privacy). The other privacy ideas
+above stay under review until each is approved.
+
+- [x] **Unpack device firmware, first slice** ([plan](docs/plans/2026-11-15-firmware-unpacking.md),
+  [docs](docs/firmware-images.md)). `fs_list` and `fs_extract` (group `carve`, crate `rampage-unpack`): SquashFS 4.0
+  with all six codecs, ext2/3/4, Android sparse, full OTA payloads (delta refused by name), cpio and tar; nesting via
+  `inner`, embedded images via `image_offset`; hostile-input limits; pure-Rust codecs on `backhand` and
+  `ext4-view`. Opening a filesystem image as a binary points at `fs_list`.
+- [ ] **UBI and UBIFS.** Recognised and refused today. UBI: volume table, PEB-to-LEB mapping, volumes as `image`
+  entries. UBIFS: superblock and master node, the index B-tree, inode/dentry/data nodes with LZO, zlib and zstd
+  data. No local `ubinize`/`mkfs.ubifs` here (mtd-utils is not in Homebrew), so fixtures need a test-side
+  generator or a Linux recipe; evaluate the `ubifs` crate (MIT, 0.1) first.
+- [ ] **Vendor SquashFS variants and SquashFS 3.x** (backhand has AVM and several LZMA variants behind features
+  that build C; they would need pure-Rust codec hooks), and a big-endian SquashFS fixture.
+- [ ] **Finding images inside vendor containers.** `carve` tags SquashFS and cpio but not ext4, Android sparse, OTA
+  payloads or UBI; teach it those (and `file_layout` hints), so `image_offset` comes from a tool, not by hand.
+- [ ] Compressed tar (`.tar.gz`, `.tar.xz`) and a CLI route (`rampage binary fs-list`/`fs-extract`).
+- [ ] Acceptance on a real vendor update (local only, never committed or named): from the vendor's update file to
+  the binaries inside.
 
 ## Proposed tracks (2026-11-08, not started)
 

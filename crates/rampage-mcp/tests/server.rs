@@ -108,6 +108,8 @@ async fn lists_all_tools_with_instructions() {
         "file_layout",
         "find_crypto",
         "find_main",
+        "fs_extract",
+        "fs_list",
         "function_frame",
         "function_graph",
         "function_summary",

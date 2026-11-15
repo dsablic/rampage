@@ -4,6 +4,20 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
+## Unreleased
+
+- Firmware filesystem images: the new `fs_list` and `fs_extract` file tools (group `carve`) list and extract
+  SquashFS 4.0 (gzip, xz, lzma, lzo, lz4, zstd), ext2/3/4 (extents included), Android sparse images (unsparsed on
+  the fly, the filesystem inside opened directly), full Android OTA `payload.bin` updates (REPLACE, REPLACE_BZ,
+  REPLACE_XZ, ZERO; operation and partition SHA-256 checked; delta operations refused by name), cpio (newc) and tar.
+  `image_offset` reads an image embedded in a larger file and `inner` opens nested ones (an OTA partition, an image
+  inside an archive). Extraction writes only into a new or empty `output_dir`, refuses `..` paths, creates symlinks
+  only when they stay inside it (never following them), skips device nodes, FIFOs and sockets, never writes setuid
+  bits, and caps total bytes, file count, file size, compression ratio and nesting; it returns the executables it
+  wrote, ready to open by path. Opening a filesystem image as a binary now points at `fs_list`. Every codec is pure
+  Rust (new crate `rampage-unpack`, on `backhand` and `ext4-view`); nothing external is run. UBI/UBIFS images are
+  recognised but not read yet. See [firmware filesystem images](docs/firmware-images.md).
+
 ## 1.4.0 (2026-11-15)
 
 - Cortex-M ELF firmware decompiles like a Cortex-M Raw project: an ARM ELF whose build attributes

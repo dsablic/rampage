@@ -369,6 +369,14 @@ sizes, CRCs and local-header offsets remain unverified payload declarations. Met
 revalidated but not atomic, and tail search may overlap member data. No member offset is followed, and no extraction,
 decompression, automatic member opening or execution occurs. See [archive inventory](archive-inventory.md).
 
+## Firmware filesystem images
+
+`fs_list` and `fs_extract` (MCP `carve` group) list and extract SquashFS 4.0 (all six codecs), ext2/3/4, Android
+sparse images, full Android OTA payloads, cpio and tar, including images nested in one another or embedded at an
+offset. Extraction treats every image as hostile: no traversal, symlinks contained and never followed, no device
+nodes or setuid bits, and caps on size, file count, compression ratio and nesting. See
+[firmware filesystem images](firmware-images.md).
+
 ## File formats
 
 These read embedded metadata and containers without executing, extracting or decompiling anything. The

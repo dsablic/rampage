@@ -148,8 +148,9 @@ impl Group {
             }
             Group::DotNet => "Managed (.NET) metadata (types, methods, properties, P/Invokes, attributes) and CIL.",
             Group::Carve => concat!(
-                "Scan files for embedded executables/containers and inventory ",
-                "standalone ZIP32 metadata without extraction."
+                "Scan files for embedded executables/containers, inventory ",
+                "standalone ZIP32 metadata without extraction, and list and extract firmware filesystem images ",
+                "(SquashFS, ext2/3/4, Android sparse and OTA payloads, cpio, tar)."
             ),
             Group::Formats => {
                 "Toolchain and container metadata: Go build info, Rust dependency audit data, PE resources and load config, PyInstaller archives and WebAssembly modules; firmware integrity checks (CRC/checksum fields, recomputed after patches) and patched-image export in the original container."
@@ -396,6 +397,45 @@ struct ArchiveInventoryArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct FsListArgs {
+    /// Any regular file holding the image.
+    path: std::path::PathBuf,
+    /// Byte offset of the image in the file (default 0), e.g. from carve.
+    image_offset: Option<crate::FileOffset>,
+    /// The image's length (default: to the end of the file).
+    image_length: Option<crate::FileOffset>,
+    /// Entry paths to a nested image, outermost first, e.g. ["system.img"] in an OTA payload.
+    inner: Option<Vec<String>>,
+    /// Only entries at or below this path.
+    prefix: Option<String>,
+    /// Entries to skip.
+    offset: Option<usize>,
+    /// Entries per page, 1..=1000 (default 200).
+    #[schemars(range(min = 1, max = 1000))]
+    limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FsExtractArgs {
+    path: std::path::PathBuf,
+    image_offset: Option<crate::FileOffset>,
+    image_length: Option<crate::FileOffset>,
+    inner: Option<Vec<String>>,
+    /// A new or empty directory; its parent must exist.
+    output_dir: std::path::PathBuf,
+    /// Entries or directories to write (default all).
+    paths: Option<Vec<String>>,
+    /// Total bytes written (default 4 GiB, at most 64 GiB).
+    max_bytes: Option<crate::FileOffset>,
+    /// Entries written (default 100000).
+    max_files: Option<u64>,
+    /// Bytes per file (default 2 GiB).
+    max_file_bytes: Option<crate::FileOffset>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct QueryDebuggerArgs {
     /// Explicit absolute path of an operator-started LLDB Unix socket in a same-user 0700 directory.
     socket: std::path::PathBuf,
@@ -404,6 +444,17 @@ struct QueryDebuggerArgs {
     /// End-to-end timeout in milliseconds (1..=30000, default 3000).
     #[schemars(range(min = 1, max = 30000))]
     timeout_ms: Option<u64>,
+}
+
+/// The image range of the filesystem tools: from `offset` (default 0), for `length` bytes or to the end.
+fn image_at(
+    offset: Option<crate::FileOffset>,
+    length: Option<crate::FileOffset>,
+) -> Result<rampage_unpack::At, String> {
+    if offset.is_none() && length.is_some() {
+        return Err("image_length requires image_offset".into());
+    }
+    Ok(rampage_unpack::At { offset: offset.map_or(0, |offset| offset.0), length: length.map(|length| length.0) })
 }
 
 /// Every tool that works without a loaded binary.
@@ -654,6 +705,46 @@ pub fn file_tools() -> Vec<FileTool> {
                         text.push_str(MARKER);
                     }
                     text
+                })
+            },
+        },
+        FileTool {
+            group: Group::Carve,
+            name: "fs_list",
+            description: "List a firmware filesystem image (SquashFS, ext2/3/4, Android sparse, OTA payload.bin, cpio, \
+                          tar) in any file: path, type, size, mode, link per entry, paged. image_offset reads one \
+                          embedded in a larger file; inner opens nested images (an OTA partition, an image file).",
+            input_schema: schema::<FsListArgs>(),
+            handler: |_, input| {
+                let args: FsListArgs = arguments(input)?;
+                crate::fs_list(&crate::FsListQuery {
+                    path: args.path,
+                    at: image_at(args.image_offset, args.image_length)?,
+                    inner: args.inner.unwrap_or_default(),
+                    prefix: args.prefix,
+                    offset: args.offset.unwrap_or(0),
+                    limit: args.limit,
+                })
+            },
+        },
+        FileTool {
+            group: Group::Carve,
+            name: "fs_extract",
+            description: "Extract an image fs_list reads (same path/image_offset/inner), or chosen paths, into a new \
+                          or empty output_dir. Refuses traversal, keeps symlinks inside, skips devices and setuid \
+                          bits, caps size/count/compression ratio. Returns executables to open by path.",
+            input_schema: schema::<FsExtractArgs>(),
+            handler: |_, input| {
+                let args: FsExtractArgs = arguments(input)?;
+                crate::fs_extract(&crate::FsExtractQuery {
+                    path: args.path,
+                    at: image_at(args.image_offset, args.image_length)?,
+                    inner: args.inner.unwrap_or_default(),
+                    output_dir: args.output_dir,
+                    paths: args.paths.unwrap_or_default(),
+                    max_bytes: args.max_bytes.map(|bytes| bytes.0),
+                    max_files: args.max_files,
+                    max_file_bytes: args.max_file_bytes.map(|bytes| bytes.0),
                 })
             },
         },

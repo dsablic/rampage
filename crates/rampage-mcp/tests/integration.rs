@@ -20,6 +20,7 @@ mod evaluate;
 mod file_layout;
 mod findings;
 mod flywheel;
+mod fs_image;
 mod function_frame;
 mod inspect_sleigh;
 mod local_variables;

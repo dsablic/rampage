@@ -66,6 +66,8 @@ Formats and raw code:
 - [Raw-code windows](raw-code.md), [explicit Sleigh decoding and Raw Projects](sleigh-decoding.md),
   [explicit content decoding](decoding.md), [native data inspection](data-inspection.md),
   [ZIP32 inventory](archive-inventory.md).
+- [Firmware filesystem images](firmware-images.md): list and extract SquashFS, ext2/3/4, Android sparse and OTA
+  payload, cpio and tar images safely.
 - [File formats](file-formats.md): Go and Rust build info, PyInstaller archives, WebAssembly modules, PE resources
   and load config, MSVC C++ metadata (vftables and exception tables), and .NET metadata.
 
