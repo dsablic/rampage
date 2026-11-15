@@ -225,7 +225,9 @@ fn single_immediates_are_decoded_in_thumb_and_a32() {
     assert!(!found.iter().any(|(_, value)| *value == 0x1021), "movw completed by movt is a 32-bit value: {found:x?}");
     assert_eq!(thumb_expand_immediate(0xc20), 0xa000);
     assert_eq!(thumb_expand_immediate(0x3ab), 0xabab_abab);
-    // movw r1, #0x8408; mov r2, #0xff000000; an unconditional-space word is not decoded.
-    let a32: Vec<u8> = [0xe308_1408u32, 0xe3a0_24ff, 0xf308_1408].iter().flat_map(|word| word.to_le_bytes()).collect();
-    assert_eq!(arm_narrow_constants(&a32, 0x2000), [(0x2000, 0x8408), (0x2004, 0xff00_0000)]);
+    // movw r1, #0x8408; mov r2, #0xff000000; an unconditional-space word is not decoded; movw r0, #0x1021 completed by
+    // movt r0, #0x1234 is the 32-bit value 0x12341021, not a CRC-16 polynomial; movw r3, #0xa001 then movt r4 stays.
+    let words = [0xe308_1408u32, 0xe3a0_24ff, 0xf308_1408, 0xe301_0021, 0xe341_0234, 0xe30a_3001, 0xe341_4234];
+    let a32: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+    assert_eq!(arm_narrow_constants(&a32, 0x2000), [(0x2000, 0x8408), (0x2004, 0xff00_0000), (0x2014, 0xa001)]);
 }

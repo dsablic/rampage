@@ -370,19 +370,51 @@ fn thumb_narrow_constants(bytes: &[u8], base: u64) -> Vec<(u64, u32)> {
 /// (address, value); little-endian words at word alignment.
 fn arm_narrow_constants(bytes: &[u8], base: u64) -> Vec<(u64, u32)> {
     let mut found = Vec::new();
+    // A movw stands alone unless a movt of the same register completes it within 64 bytes.
+    let mut pending: [Option<(usize, u32)>; 16] = [None; 16];
     let mut at = ((4 - base % 4) % 4) as usize;
     while at + 4 <= bytes.len() {
+        for slot in &mut pending {
+            if let Some((movw, value)) = *slot
+                && at - movw > 64
+            {
+                found.push((base + movw as u64, value));
+                *slot = None;
+            }
+        }
         let word = u32::from_le_bytes(bytes[at..at + 4].try_into().expect("word"));
+        let register = ((word >> 12) & 0xf) as usize;
         if word >> 28 != 0xf {
             if word & 0x0ff0_0000 == 0x0300_0000 {
-                found.push((base + at as u64, ((word >> 4) & 0xf000) | (word & 0xfff)));
+                let value = ((word >> 4) & 0xf000) | (word & 0xfff);
+                if let Some((movw, value)) = pending[register].replace((at, value)) {
+                    found.push((base + movw as u64, value));
+                }
+            } else if word & 0x0ff0_0000 == 0x0340_0000 {
+                pending[register] = None;
             } else if word & 0x0fef_0000 == 0x03a0_0000 {
                 found.push((base + at as u64, (word & 0xff).rotate_right(2 * ((word >> 8) & 0xf))));
             }
         }
         at += 4;
     }
+    found.extend(pending.into_iter().flatten().map(|(movw, value)| (base + movw as u64, value)));
+    found.sort_unstable();
     found
+}
+
+/// Whether the instruction at `address` loads a PC-relative literal: Thumb `ldr rt, [pc, #imm]`, Thumb-2 `ldr.w rt,
+/// [pc, #±imm]`, or A32 `ldr rt, [pc, #±imm]`.
+fn loads_literal(binary: &Binary, address: u64) -> bool {
+    if binary.thumb.iter().any(|range| range.contains(&address)) {
+        let Some(bytes) = binary.read(address, 4).or_else(|| binary.read(address, 2)) else { return false };
+        let first = u16::from_le_bytes([bytes[0], bytes[1]]);
+        return first & 0xf800 == 0x4800 || first & 0xff7f == 0xf85f;
+    }
+    binary.read(address, 4).is_some_and(|bytes| {
+        let word = u32::from_le_bytes(bytes.try_into().expect("word"));
+        word >> 28 != 0xf && word & 0x0f7f_0000 == 0x051f_0000
+    })
 }
 
 /// 32-bit polynomial words a table-less CRC loop loads, and their family.
@@ -518,11 +550,6 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
             anchors.push((slot, family, format!("polynomial {value:#010x} literal at {slot:#x}")));
         }
     }
-    for (value, family) in POLYNOMIALS_16 {
-        for slot in slots_holding(blocks, value, big_endian, 8) {
-            anchors.push((slot, family, format!("polynomial {value:#06x} literal at {slot:#x}")));
-        }
-    }
     // (referencing instruction, family, what): xrefs to each anchor, and polynomials Thumb code forms in a register
     // with a movw/movt pair, which leave no literal to reference.
     let mut sites: Vec<(u64, &'static str, String)> = Vec::new();
@@ -547,8 +574,23 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
             }
         }
     }
-    // CRC-16 polynomials formed by one 16-bit or modified immediate, in Thumb or A32 code.
+    // CRC-16 polynomials in ARM code: formed by one 16-bit or modified immediate, in Thumb or A32 code, or loaded from
+    // a literal pool by a PC-relative load (cores without movw). Small numbers are common, so these weaker sites come
+    // after the others, with their own cap.
+    sites.truncate(128);
+    let mut narrow = Vec::new();
     if project.binary.arch == rampage_arch::Arch::Arm && !project.binary.big_endian {
+        for (value, family) in POLYNOMIALS_16 {
+            for slot in slots_holding(blocks, value, big_endian, 8) {
+                let Ok(page) = project.xrefs(XrefQuery::To(slot), None, Some(16)) else { continue };
+                narrow.extend(
+                    page.items
+                        .iter()
+                        .filter(|row| loads_literal(&project.binary, row.from))
+                        .map(|row| (row.from, family, format!("polynomial {value:#06x} literal at {slot:#x}"))),
+                );
+            }
+        }
         let thumb = |address: u64| project.binary.thumb.iter().any(|range| range.contains(&address));
         // A word outside Thumb code is A32 code only inside a function that is not Thumb either.
         let arm = |address: u64| {
@@ -568,13 +610,14 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
                     continue;
                 };
                 if if in_thumb { thumb(site) } else { arm(site) } {
-                    sites.push((site, family, format!("polynomial {value:#06x} formed by an immediate")));
+                    narrow.push((site, family, format!("polynomial {value:#06x} formed by an immediate")));
                 }
             }
         }
     }
+    sites.extend(narrow.into_iter().take(16));
     let mut routines: BTreeMap<u64, Routine> = BTreeMap::new();
-    for (site, family, what) in sites.into_iter().take(128) {
+    for (site, family, what) in sites {
         let Ok(Some(function)) = project.function_containing(site) else { continue };
         if routines.len() == MAX_ROUTINES && !routines.contains_key(&function) {
             continue;
@@ -1165,6 +1208,18 @@ impl Project {
         let mut notes = Vec::new();
         let (original_blocks, blocks_omitted) = blocks(&source.binary);
         let code = code_evidence(&source, &original_blocks, &mut notes);
+        // The search reads run addresses. An ELF32 section loaded elsewhere (firmware `.data` initial values in flash)
+        // also sits inside the flash image a check may cover, which this search cannot see.
+        if source.binary.format == Format::Elf
+            && let Some(Ok(sections)) = crate::image_export::elf32_load_sections(source.binary.file_bytes())
+            && let Some(moved) = sections.iter().find(|section| section.load != section.run)
+        {
+            notes.push(format!(
+                "{} runs at {:#x} but is loaded at {:#x}: checks are searched at run addresses, so a check over the \
+                 flash image that includes its initial values is not found, and patching them may leave one stale",
+                moved.name, moved.run, moved.load
+            ));
+        }
         let mut search = Search {
             blocks: &original_blocks,
             big_endian: source.binary.big_endian,

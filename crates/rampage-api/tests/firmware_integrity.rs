@@ -376,6 +376,9 @@ fn an_elf_firmware_crc_is_fixed_and_exported_in_place() {
     assert_eq!((check["algorithm"].as_str(), check["valid"].as_bool()), (Some("crc32"), Some(true)), "{check:#}");
     assert_eq!(check["ranges"], json!([{ "start": format!("{APP:#x}"), "end": format!("{FIELD:#x}") }]));
     assert_eq!(check["confirmed_by_emulation"], true, "{check:#}");
+    // .data's initial values live in flash at another address than the search reads: said so.
+    let notes = report["notes"].to_string();
+    assert!(notes.contains(".data runs at 0x20000000 but is loaded at 0x8000114"), "{notes}");
 
     // Change the application's table and an initial value in .data, then let the fix write the CRC.
     let table = elf_truth(32, "app_table");

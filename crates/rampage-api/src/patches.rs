@@ -539,8 +539,6 @@ struct ElfProgram {
     kind: u64,
     flags: u64,
     address: u64,
-    /// `p_paddr`: where a flash programmer writes the segment's file bytes (firmware `.data` initial values).
-    load_address: u64,
     offset: u64,
     file_size: u64,
     memory_size: u64,
@@ -591,9 +589,6 @@ impl ElfClass {
         (stride, 2 * self.word() as u64)
     }
 }
-
-/// A file-backed loadable segment: its load (physical) address and file range.
-pub(crate) type LoadImage = (u64, Range<usize>);
 
 struct ElfPayload {
     class: ElfClass,
@@ -697,7 +692,6 @@ impl ElfPayload {
                 flags: uint(bytes, at + if class == ElfClass::Elf64 { 4 } else { 24 }, 4)?,
                 offset: field(8, 4)?,
                 address: field(16, 8)?,
-                load_address: field(24, 12)?,
                 file_size: field(32, 16)?,
                 memory_size: field(40, 20)?,
             };
@@ -705,9 +699,13 @@ impl ElfPayload {
                 return Err("native patches refuse PT_DYNAMIC and PT_INTERP images".into());
             }
             let range = checked_range(program.offset, program.file_size, bytes.len())?;
-            for base in [program.address, program.load_address] {
-                if base.checked_add(program.memory_size).is_none_or(|end| end > address_limit) {
-                    return Err("ELF program address overflow".into());
+            program.address.checked_add(program.memory_size).ok_or("ELF program address overflow")?;
+            // A 32-bit run or load (p_paddr) range past 4 GiB wraps in the loader's and the programmer's view.
+            if class == ElfClass::Elf32 {
+                for base in [program.address, field(24, 12)?] {
+                    if base + program.memory_size > address_limit {
+                        return Err("ELF program address overflow".into());
+                    }
                 }
             }
             if program.file_size > program.memory_size {
@@ -746,24 +744,6 @@ impl ElfPayload {
             }
         }
         Ok(Self { class, programs, sections, protected })
-    }
-
-    /// File-backed loadable segments as (load address, file range), ascending by load address; overlapping load
-    /// ranges are refused.
-    fn load_images(&self) -> Result<Vec<LoadImage>, String> {
-        let mut images: Vec<_> = self
-            .programs
-            .iter()
-            .filter(|program| program.kind == 1 && program.file_size > 0)
-            .map(|program| {
-                (program.load_address, program.offset as usize..(program.offset + program.file_size) as usize)
-            })
-            .collect();
-        images.sort_by_key(|(load, _)| *load);
-        if images.windows(2).any(|pair| pair[0].0 + pair[0].1.len() as u64 > pair[1].0) {
-            return Err("ELF segments overlap at their load addresses".into());
-        }
-        Ok(images)
     }
 
     fn file_offset(&self, bytes: &[u8], address: u64, length: usize, allow_data: bool) -> Result<u64, String> {
@@ -897,16 +877,6 @@ impl PatchTarget {
             PatchTarget::Raw => RAW_PATCH_VERSION,
         }
     }
-}
-
-/// The file-backed loadable segments of an admitted static ELF image as (load address, file range), ascending; `None`
-/// for any other image. Firmware flashes segments at their load (physical) addresses.
-pub(crate) fn elf_load_images(binary: &Binary) -> Option<Result<Vec<LoadImage>, String>> {
-    if binary.format != Format::Elf {
-        return None;
-    }
-    let elf = ElfPayload::parse(binary.file_bytes(), binary.arch).ok()?;
-    Some(elf.load_images())
 }
 
 /// The owned-bytes offset of a Raw patch: wholly inside one backed region whose bytes the export can write back

@@ -45,8 +45,9 @@ measured on the patched image (`valid`, `stored_hex`, `computed_hex`).
   matches are otherwise common. Uniform ranges and erased (all 0x00 or 0xff) values are skipped.
 - **Code.** Functions that reference a CRC table (from `find_crypto`'s constants), load a 32-bit polynomial literal,
   or form one (or a table's address) with a Thumb `movw`/`movt` pair are reported in `routines` with their callers.
-  So are table-less CRC-16 loops whose polynomial (0xa001 and 0x8408 reflected, 0x1021) is a literal word or one
-  ARM immediate: a Thumb or A32 `movw` that no `movt` completes, or a `mov` modified immediate;
+  So are table-less CRC-16 loops in ARM code whose polynomial (0xa001 and 0x8408 reflected, 0x1021) is one
+  immediate (a Thumb or A32 `movw` that no `movt` completes, or a `mov` modified immediate) or a literal word read by
+  a PC-relative load; these small values count after the other evidence, at most 16 sites;
   the addresses they and their callers reference, form with `movw`/`movt`, or load and store through a constant
   base (`mov r1, #0x840; ldrh r1, [r1]` reading a stored value) become candidates, and a match whose algorithm the
   code implements gains confidence. A weak value (16 bits or less, a sum, an XOR) counts code evidence only at its
@@ -93,9 +94,16 @@ regions.
   patched bytes (`pe_checksum: true` recomputes a PE's CheckSum). The source file must still hold the bytes the
   project admitted.
 - `format: binary`: the bytes of the region holding `region`, or every non-RAM region laid out flat from the lowest
-  address with `fill` (default 0xff) in the gaps, at most 64 MiB. A patchable static ELF lays out its file-backed
-  segments at their load (physical) addresses, as `objcopy -O binary` and a flash programmer do: `.data` initial
-  values follow the code in flash, and `region` names a load address.
+  address with `fill` (default 0xff) in the gaps, at most 64 MiB. A little-endian ELF32 image (patchable or not)
+  lays out its allocated sections with file contents at their load addresses, as `objcopy -O binary` and a flash
+  programmer do: each section's offset is mapped through its `PT_LOAD` segment to `p_paddr` when the segments'
+  physical ranges are disjoint (else to `p_vaddr`), so `.data` initial values follow the code in flash, headers and
+  bytes outside sections are left out, and `region` names a load address. An ELF32 without section headers, and
+  ELF64 and other native images, lay out file-backed segments at their run addresses.
+
+When an ELF32 section is loaded at another address than it runs at, `integrity_checks` says so in `notes`: checks are
+searched at run addresses, so a check over the flash image that covers `.data` initial values is not found, and
+patching those values can leave such a check stale.
 
 An unpatched export is byte-identical to the input for HEX, S-record and binary files.
 

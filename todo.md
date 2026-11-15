@@ -201,6 +201,11 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
 - [x] Static ELF32 ARM firmware patched in place (record version 3, PT_LOAD file-byte mapping, no dynamic/RELR
   relocations or overlapping segments), `integrity_checks` fixes and `export_image` (patched ELF, flat binary at load
   addresses) on it; CRC-16 polynomials formed by one Thumb/A32 immediate or a literal word.
+- [ ] Search ELF firmware checks in load-address space too: a CRC over flash that includes `.data` initial values
+  (a section loaded at another address than it runs) is not found today, since blocks are run-address segments, and
+  a `.data` patch can leave such a check stale (only a note says so). Add the load-address image (the
+  `objcopy -O binary` layout) as search blocks, map a found range back to file offsets for the fix, and report the
+  check's space as `load`.
 
 ## CMSIS-SVD peripheral maps (2026-11-14)
 

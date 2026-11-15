@@ -11,11 +11,14 @@ see the [stability policy](docs/stability.md) for what the version promises.
   `integrity_checks` fixes a firmware ELF's checksum without converting it to a Raw project. Patches map through
   `PT_LOAD` file bytes only (never `.bss` or another zero-fill tail) and never touch headers or tables; any executable
   section is code, any other payload section needs `allow_data`. Version-1 and version-2 records load unchanged.
-  `export_image` writes the patched ELF, and `format: binary` lays an admitted ELF's segments out at their load
-  addresses like `objcopy -O binary` (`.data` initial values in flash after the code).
-- `integrity_checks` recognises table-less CRC-16 loops whose polynomial (0xa001, 0x8408 and 0x1021) is one ARM
-  immediate (a Thumb or A32 `movw` with no `movt`, or a `mov` modified immediate) or a literal word, as compilers
-  emit at `-Os`; 0x8408 reports `crc16_kermit`.
+  `export_image` writes the patched ELF. ELF32 images that admission refuses still export unchanged.
+- `export_image` `format: binary` on a little-endian ELF32 image lays its allocated sections out at their load
+  addresses like `objcopy -O binary` (`.data` initial values in flash after the code; headers left out), using
+  `p_paddr` only when the segments' physical ranges are disjoint. ELF64 keeps its segment layout.
+- `integrity_checks` recognises table-less CRC-16 loops in ARM code whose polynomial (0xa001, 0x8408 and 0x1021) is
+  one immediate (a Thumb or A32 `movw` with no `movt`, or a `mov` modified immediate) or a literal word read by a
+  PC-relative load, as compilers emit at `-Os`; 0x8408 reports `crc16_kermit`. On an ELF32 whose sections load
+  elsewhere than they run, `notes` says that checks over the flash image including them are not searched.
 - Opening an Intel HEX or S-record file without `raw` now says which it looks like and gives the `raw` selector
   (`"format":"ihex"` or `"srec"`) to read it; the general headerless hint mentions `format` too.
 - Fix: `evaluate_function` runs code and reads data in page 0 of a fixed-address image linked there (a Raw project,

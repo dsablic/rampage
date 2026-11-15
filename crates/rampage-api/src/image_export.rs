@@ -1,6 +1,7 @@
 //! `export_image`: the effective (patched) image written to a new file in its original container (Intel HEX,
 //! S-record, the original binary file, or the native file) or as a flat binary.
 
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -85,10 +86,10 @@ fn digest(bytes: &[u8]) -> String {
     rampage_arch::hex::bytes(&Sha256::digest(bytes))
 }
 
-/// The backed regions of a Raw image with their bytes, or a native image's file-backed segments.
 /// A region to write: name, address, bytes and, for a Raw project, its region facts.
 type Region<'a> = (String, u64, &'a [u8], Option<&'a RawRegionInfo>);
 
+/// The backed regions of a Raw image with their bytes, or a native image's file-backed segments.
 fn regions(binary: &Binary) -> Vec<Region<'_>> {
     if let Some(raw) = binary.raw_code_image() {
         return raw
@@ -112,22 +113,122 @@ fn regions(binary: &Binary) -> Vec<Region<'_>> {
         .collect()
 }
 
-/// The regions a flat binary lays out: an admitted static ELF's file-backed segments at their load (physical)
-/// addresses, as a flash programmer writes them (firmware `.data` initial values follow the code), else `regions`.
+/// An allocated section with file contents in a little-endian ELF32 image: where it runs and where it is loaded.
+pub(crate) struct LoadSection {
+    pub name: String,
+    /// `sh_addr`.
+    pub run: u64,
+    /// The load address: its offset mapped through the PT_LOAD segment holding it, at that segment's `p_paddr`.
+    pub load: u64,
+    pub file: Range<usize>,
+}
+
+fn le(bytes: &[u8], at: usize, width: usize) -> Option<u64> {
+    let mut value = [0u8; 8];
+    value[..width].copy_from_slice(bytes.get(at..at.checked_add(width)?)?);
+    Some(u64::from_le_bytes(value))
+}
+
+/// The allocated file-backed (non-NOBITS) sections of a little-endian ELF32 image at their load addresses, ascending,
+/// as `objcopy -O binary` lays them out: headers, tables and bytes outside sections are left out. Each section's load
+/// address is its file offset mapped through the PT_LOAD segment holding it, at the segment's `p_paddr` when the
+/// segments' physical ranges are pairwise disjoint, else at `p_vaddr`; sections outside every segment's file bytes
+/// are not loaded. `None` for any other image, or one without section and program headers (its segments then lay
+/// out at their run addresses). Independent of patch admission; the tables are bounded and range-checked.
+pub(crate) fn elf32_load_sections(bytes: &[u8]) -> Option<Result<Vec<LoadSection>, String>> {
+    if bytes.get(..6) != Some(b"\x7fELF\x01\x01") {
+        return None;
+    }
+    let (phoff, shoff) = (le(bytes, 28, 4)? as usize, le(bytes, 32, 4)? as usize);
+    let (phnum, shnum, shstr) = (le(bytes, 44, 2)? as usize, le(bytes, 48, 2)? as usize, le(bytes, 50, 2)? as usize);
+    if phnum == 0 || shnum == 0 || le(bytes, 42, 2)? != 32 || le(bytes, 46, 2)? != 40 || phnum > 1024 || shnum > 4096 {
+        return None;
+    }
+    Some(
+        load_sections(bytes, phoff, phnum, shoff, shnum, shstr)
+            .unwrap_or_else(|| Err("unreadable ELF32 program or section headers".into())),
+    )
+}
+
+fn load_sections(
+    bytes: &[u8],
+    phoff: usize,
+    phnum: usize,
+    shoff: usize,
+    shnum: usize,
+    shstr: usize,
+) -> Option<Result<Vec<LoadSection>, String>> {
+    // (file range, run address, physical address) of each PT_LOAD with file bytes.
+    let mut loads = Vec::new();
+    for index in 0..phnum {
+        let at = phoff.checked_add(index * 32)?;
+        if le(bytes, at, 4)? != 1 || le(bytes, at + 16, 4)? == 0 {
+            continue;
+        }
+        let (offset, size) = (le(bytes, at + 4, 4)?, le(bytes, at + 16, 4)?);
+        let end = offset.checked_add(size).filter(|&end| end <= bytes.len() as u64)?;
+        loads.push((offset..end, le(bytes, at + 8, 4)?, le(bytes, at + 12, 4)?));
+    }
+    let physical = |(file, _, paddr): &(Range<u64>, u64, u64)| *paddr..paddr + (file.end - file.start);
+    let use_physical = loads.iter().enumerate().all(|(index, left)| {
+        loads[index + 1..].iter().all(|right| {
+            let (left, right) = (physical(left), physical(right));
+            left.end <= right.start || right.end <= left.start
+        })
+    });
+    let names = (shstr < shnum).then(|| {
+        let at = shoff.checked_add(shstr * 40)?;
+        let (offset, size) = (le(bytes, at + 16, 4)? as usize, le(bytes, at + 20, 4)? as usize);
+        bytes.get(offset..offset.checked_add(size)?)
+    });
+    let mut sections = Vec::new();
+    for index in 0..shnum {
+        let at = shoff.checked_add(index * 40)?;
+        let (kind, flags, run) = (le(bytes, at + 4, 4)?, le(bytes, at + 8, 4)?, le(bytes, at + 12, 4)?);
+        let (offset, size) = (le(bytes, at + 16, 4)?, le(bytes, at + 20, 4)?);
+        if kind == 0 || kind == 8 || flags & 2 == 0 || size == 0 {
+            continue;
+        }
+        let file = offset..offset.checked_add(size)?;
+        let Some((segment, vaddr, paddr)) =
+            loads.iter().find(|(segment, ..)| segment.start <= file.start && file.end <= segment.end)
+        else {
+            continue;
+        };
+        let base = if use_physical { *paddr } else { *vaddr };
+        let name = names
+            .flatten()
+            .and_then(|names| {
+                let name = names.get(le(bytes, at, 4)? as usize..)?;
+                let end = name.iter().take(256).position(|&byte| byte == 0)?;
+                String::from_utf8(name[..end].to_vec()).ok()
+            })
+            .unwrap_or_else(|| format!("section{index}"));
+        sections.push(LoadSection {
+            name,
+            run,
+            load: base + (file.start - segment.start),
+            file: file.start as usize..file.end as usize,
+        });
+    }
+    sections.sort_by_key(|section| section.load);
+    if sections.windows(2).any(|pair| pair[0].load + pair[0].file.len() as u64 > pair[1].load) {
+        return Some(Err("ELF32 sections overlap at their load addresses".into()));
+    }
+    Some(Ok(sections))
+}
+
+/// The regions a flat binary lays out: a little-endian ELF32 image's allocated sections at their load addresses, as a
+/// flash programmer writes them (firmware `.data` initial values follow the code), else `regions`.
 fn load_regions(binary: &Binary) -> Result<Vec<Region<'_>>, ApiError> {
-    let Some(images) = crate::patches::elf_load_images(binary) else { return Ok(regions(binary)) };
     let bytes = binary.file_bytes();
-    Ok(images
+    let Some(sections) = (binary.format == Format::Elf).then(|| elf32_load_sections(bytes)).flatten() else {
+        return Ok(regions(binary));
+    };
+    Ok(sections
         .map_err(invalid)?
         .into_iter()
-        .filter_map(|(load, range)| {
-            let name = binary
-                .segments
-                .iter()
-                .find(|segment| segment.file_offset == range.start as u64 && segment.file_size > 0)
-                .map_or_else(|| format!("load@{load:#x}"), |segment| segment.name.clone());
-            Some((name, load, bytes.get(range)?, None))
-        })
+        .map(|section| (section.name, section.load, &bytes[section.file], None))
         .collect())
 }
 

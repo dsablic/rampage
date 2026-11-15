@@ -956,22 +956,64 @@ fn elf32_firmware_maps_patches_through_its_loadable_segments() {
     assert!(elf.file_offset(&bytes, 0x2000_0004, 4, true).is_err());
     assert!(elf.file_offset(&bytes, 0x0800_0400, 4, true).is_err());
     assert!(elf.file_offset(&bytes, 0x0800_0bfa, 4, true).is_err());
-    // A p_filesz < p_memsz tail is not file-backed either.
+    // A p_filesz < p_memsz tail is not file-backed either: .data's segment and section grow to 6 bytes in memory, so
+    // only p_filesz (4) bounds the patch.
     let mut tail = bytes.clone();
     let data = program_header(&tail, 1);
     put32(&mut tail, data + 20, 6);
+    let data_section = section_header(&tail, 2);
+    put32(&mut tail, data_section + 20, 6);
     let bss = program_header(&tail, 2);
     put32(&mut tail, bss + 8, 0x2000_0008);
     let elf = ElfPayload::parse(&tail, Arch::Arm).unwrap();
     assert_eq!(elf.file_offset(&tail, 0x2000_0000, 4, true), Ok(0x208));
-    assert!(elf.file_offset(&tail, 0x2000_0002, 4, true).is_err(), "bytes past p_filesz are not file-backed");
-    // Flat images use the load (physical) address: .data's initial values follow .text in flash.
-    let loads = ElfPayload::parse(&bytes, Arch::Arm).unwrap().load_images().unwrap();
-    let loads: Vec<_> = loads.into_iter().map(|(load, range)| (load, range.start, range.len())).collect();
-    assert_eq!(
-        loads,
-        [(0x0800_0000, 0xf4, 0x114), (0x0800_0114, 0x208, 4), (0x0800_0800, 0x20c, 0x3fc), (0x0800_0bfc, 0x608, 4)]
-    );
+    let error = elf.file_offset(&tail, 0x2000_0002, 4, true).unwrap_err();
+    assert!(error.contains("wholly file-backed"), "bytes past p_filesz are not file-backed: {error}");
+}
+
+/// The flat layout is derived from the program and section headers alone, not from patch admission.
+#[test]
+fn elf32_flat_layout_places_allocated_sections_at_their_load_addresses() {
+    use crate::image_export::elf32_load_sections;
+    let layout = |bytes: &[u8]| -> Vec<(String, u64, u64, usize, usize)> {
+        let sections = elf32_load_sections(bytes).unwrap().unwrap();
+        sections.into_iter().map(|s| (s.name, s.run, s.load, s.file.start, s.file.len())).collect()
+    };
+    let bytes = firmware_elf();
+    // .data's initial values follow .text in flash; headers, tables and .bss are not part of the image.
+    let expected = [
+        (".text".to_string(), 0x0800_0000, 0x0800_0000, 0xf4, 0x114),
+        (".data".to_string(), 0x2000_0000, 0x0800_0114, 0x208, 4),
+        (".app".to_string(), 0x0800_0800, 0x0800_0800, 0x20c, 0x3fc),
+        (".app_crc".to_string(), 0x0800_0bfc, 0x0800_0bfc, 0x608, 4),
+    ];
+    assert_eq!(layout(&bytes), expected);
+    // Physical addresses that overlap (all zero) say nothing: the run addresses are used.
+    let mut zero = bytes.clone();
+    for index in 0..6 {
+        let at = program_header(&zero, index);
+        put32(&mut zero, at + 12, 0);
+    }
+    let data = layout(&zero).into_iter().find(|section| section.0 == ".data").unwrap();
+    assert_eq!(data.2, 0x2000_0000);
+    // An image admission refuses still has a layout (here: a loaded relocation section).
+    let mut refused = bytes.clone();
+    let slot = section_header(&refused, 5);
+    put32(&mut refused, slot + 4, 9);
+    assert!(ElfPayload::parse(&refused, Arch::Arm).is_err());
+    assert_eq!(layout(&refused), expected);
+    // Sections overlapping at both their load and run addresses have no flat image; no sections, no layout.
+    let mut overlap = bytes.clone();
+    let crc = program_header(&overlap, 4);
+    put32(&mut overlap, crc + 8, 0x0800_0bf8);
+    put32(&mut overlap, crc + 12, 0x0800_0bf8);
+    assert!(elf32_load_sections(&overlap).unwrap().is_err());
+    let mut stripped = bytes.clone();
+    stripped[48..50].copy_from_slice(&[0, 0]);
+    assert!(elf32_load_sections(&stripped).is_none());
+    let x64 =
+        fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf")).unwrap();
+    assert!(elf32_load_sections(&x64).is_none(), "ELF64 keeps its segment layout");
 }
 
 #[test]
@@ -1008,9 +1050,47 @@ fn elf32_admission_refuses_dynamic_interp_big_endian_truncated_and_overlapping_i
     refused(&edited(&|bytes| put32(bytes, crc + 4, 0x600)), "segments sharing file bytes");
     let text = program_header(&bytes, 0);
     refused(&edited(&|bytes| put32(bytes, text + 8, 0xffff_ff80)), "a segment past 4 GiB");
+    refused(&edited(&|bytes| put32(bytes, text + 12, 0xffff_ff80)), "a load address past 4 GiB");
     refused(&edited(&|bytes| put32(bytes, slot + 20, 0x1000_0000)), "a section past the file");
-    let elf = ElfPayload::parse(&edited(&|bytes| put32(bytes, crc + 12, 0x0800_0bf8)), Arch::Arm).unwrap();
-    assert!(elf.load_images().is_err(), "segments overlapping at their load addresses have no flat image");
+    // ELF64 admission does not read p_paddr.
+    let mut far = x64.clone();
+    let phoff = uint(&far, 32, 8).unwrap() as usize;
+    far[phoff + 24..phoff + 32].copy_from_slice(&(u64::MAX - 8).to_le_bytes());
+    assert!(ElfPayload::parse(&far, Arch::X86_64).is_ok());
+}
+
+/// Patchability is decided once, by admission: an ARM ELF that admission refuses takes no patches but still exports
+/// unchanged, and its checks are still reported (as unsupported fixes).
+#[test]
+fn refused_arm_elfs_export_unpatched() {
+    let mut bytes = firmware_elf();
+    // Strip the section headers: e_shoff, e_shnum and e_shstrndx.
+    put32(&mut bytes, 32, 0);
+    bytes[48..52].copy_from_slice(&[0; 4]);
+    assert!(ElfPayload::parse(&bytes, Arch::Arm).is_err());
+    let files = Files::from_bytes(&bytes);
+    let project = files.project();
+    assert!(project.patch_receipt().is_err());
+    assert!(project.patch_bytes(0x0800_0800, &bytes[0x20c..0x20d], &[!bytes[0x20c]], false).is_err());
+    let request = crate::ExportImageRequest {
+        destination: files.export.clone(),
+        format: crate::ExportFormat::Original,
+        region: None,
+        fill: 0xff,
+        pe_checksum: false,
+        expected_revision: None,
+    };
+    let exported = project.export_image(&request).unwrap();
+    assert_eq!((exported.format, exported.receipt.is_none()), ("native", true));
+    assert_eq!(fs::read(&files.export).unwrap(), bytes);
+    // Without section headers, the flat binary lays segments out at their run addresses.
+    fs::remove_file(&files.export).unwrap();
+    let flat = crate::ExportImageRequest { format: crate::ExportFormat::Binary, region: Some(0x0800_0000), ..request };
+    let exported = project.export_image(&flat).unwrap();
+    assert_eq!(exported.base_address, Some(0x0800_0000));
+    assert_eq!(fs::read(&files.export).unwrap(), &bytes[0xf4..0xf4 + 0x114]);
+    let outcome = project.integrity_checks(&crate::IntegrityRequest { emulate: false, ..Default::default() }).unwrap();
+    assert!(outcome.report.receipt.is_none());
 }
 
 #[test]
@@ -1041,8 +1121,36 @@ fn elf32_patches_are_version_3_records_and_older_records_still_load() {
     forged.preimage_sha256 = preimage_digest(&forged);
     assert!(encode_patch(&forged).is_err());
     let (_, mut elf64) = logged_patch();
-    assert!(parse_patch(&encode_patch(&elf64).unwrap()).is_ok(), "version-1 records still load");
     elf64.version = 3;
     elf64.preimage_sha256 = preimage_digest(&elf64);
     assert!(encode_patch(&elf64).is_err());
+}
+
+/// Records of the earlier versions still apply: a version-1 record logged for an ELF64 image patches a fresh project
+/// opened from that log, and a Raw project's patch is a version-2 record over its region bytes.
+#[test]
+fn version_1_and_2_records_still_apply() {
+    let (_, patch) = logged_patch();
+    assert_eq!(patch.version, 1);
+    let files = Files::new("hello-x64.elf");
+    fs::write(&files.log, format!("{}\n", patch_edit(&patch))).unwrap();
+    let project = files.project().effective_snapshot().unwrap();
+    assert_eq!(project.list_patches().unwrap(), [patch]);
+    assert_eq!(project.binary.read(0x100191e, 5), Some(&[0xb8, 7, 0, 0, 0][..]));
+    assert_return(&project, 7);
+
+    let options = rampage_loaders::RawCodeOptions {
+        profile: rampage_loaders::RawProfile::Msp430,
+        base: 0x1000,
+        entry: None,
+        seeds: vec![],
+        vector_table: None,
+        pointer_tables: false,
+    };
+    let raw = Arc::new(Project::new(Binary::from_raw_code(vec![0x30, 0x41, 0, 0], options).unwrap()));
+    let outcome = raw.patch_bytes(0x1002, &[0, 0], &[0x12, 0x34], true).unwrap();
+    let record = outcome.project.list_patches().unwrap().remove(0);
+    assert_eq!((record.version, record.file_offset), (2, 2));
+    assert!(parse_patch(&encode_patch(&record).unwrap()).is_ok());
+    assert_eq!(outcome.project.binary.read(0x1000, 4), Some(&[0x30, 0x41, 0x12, 0x34][..]));
 }
