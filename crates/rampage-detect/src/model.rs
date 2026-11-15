@@ -83,6 +83,10 @@ pub enum Condition {
     /// A DWARF debug section (`.debug_*` in ELF and PE, `__debug_*` in Mach-O, or their compressed `z` forms)
     /// contains this byte needle.
     DebugContains(Vec<u8>),
+    /// A DWARF debug section holds a path with a component starting with `component` (and longer than it) directly
+    /// followed by `then` (which starts with `/`): `zig-` and `/lib/libc/` match `.../zig-aarch64-macos-0.17.0/lib/
+    /// libc/...`, the layout of a release tarball, wherever it was unpacked.
+    DebugPathComponent { component: String, then: String },
     /// The overlay (data appended past everything the image's structures describe) contains this byte needle:
     /// where installers keep their payload.
     OverlayContains(Vec<u8>),
@@ -122,6 +126,7 @@ impl Condition {
             Self::EntryJumps(pattern) => pattern.fixed_nibbles() >= MIN_DISTINCTIVE_NIBBLES,
             Self::SectionContains { .. }
             | Self::DebugContains(_)
+            | Self::DebugPathComponent { .. }
             | Self::OverlayContains(_)
             | Self::CodeViewGuid(_)
             | Self::ImportFunction(_)

@@ -264,6 +264,15 @@ fn check(image: &impl Image, unanchored: &Unanchored, condition: &Condition) -> 
                 .find(|(_, bytes)| bytes.is_some_and(|bytes| contains(bytes, needle)))
                 .map(|(name, _)| format!("debug section {name} contains {:?}", preview(needle)))
         }
+        Condition::DebugPathComponent { component, then } => {
+            let prefix = if image.format() == Some(Format::MachO) { "__debug_" } else { ".debug_" };
+            image
+                .sections()
+                .into_iter()
+                .filter(|(name, _)| name.starts_with(prefix))
+                .find(|(_, bytes)| bytes.is_some_and(|bytes| path_component_then(bytes, component, then)))
+                .map(|(name, _)| format!("debug section {name} has a path {component}*{then}"))
+        }
         Condition::OverlayContains(needle) => {
             contains(image.overlay_bytes()?, needle).then(|| format!("overlay contains {:?}", preview(needle)))
         }
@@ -490,6 +499,21 @@ impl Image for Binary {
     fn pointer_bits(&self) -> Option<u8> {
         self.arch.pointer_size().map(|bytes| bytes * 8)
     }
+}
+
+/// Whether `bytes` hold a path component that starts with `component`, has more after it, and is directly followed
+/// by `then` (which starts with `/`). Components end at `/`, NUL or the start of the bytes.
+fn path_component_then(bytes: &[u8], component: &str, then: &str) -> bool {
+    let (component, then) = (component.as_bytes(), then.as_bytes());
+    if then.is_empty() {
+        return false;
+    }
+    let found = bytes.windows(then.len()).enumerate().filter(|(_, window)| *window == then).map(|(at, _)| at);
+    found.into_iter().any(|at| {
+        let start = bytes[..at].iter().rposition(|&byte| byte == b'/' || byte == 0).map_or(0, |index| index + 1);
+        let name = &bytes[start..at];
+        name.len() > component.len() && name.starts_with(component)
+    })
 }
 
 #[cfg(test)]
@@ -846,6 +870,28 @@ mod tests {
         let record = [b"RSDS".as_slice(), &guid, &[1, 0, 0, 0]].concat();
         assert!(lld(&Fake { format: Some(Format::Pe), image: record.clone(), ..Fake::default() }).is_none());
         assert!(lld(&Fake { format: Some(Format::MachO), image: record, ..Fake::default() }).is_none());
+    }
+
+    #[test]
+    fn a_zig_release_tarball_libc_path_counts_only_as_a_whole_component_in_debug_sections() {
+        let zig = |section: &str, path: &[u8]| {
+            let image = Fake { format: Some(Format::Elf), ..Fake::default() }.with_section(section, path);
+            identify_image(&image, &SignatureDb::bundled()).into_iter().find(|d| d.name == "Zig")
+        };
+        let release = b"/zig-aarch64-macos-0.17.0/lib/libc/glibc/sysdeps/x86_64/start.S\0";
+        assert_eq!(zig(".debug_line_str", release).map(|d| d.confidence), Some(Confidence::Tentative));
+        assert!(zig(".debug_str", b"\0/home/me/zig-0.17.0/lib/libc/musl/src/a.c\0").is_some());
+        assert!(zig(".rodata", release).is_none(), "a string in data is just a string");
+        // `zig-` must start a path component, with more after it, right before /lib/libc/.
+        for other in [
+            &b"/opt/notzig-1.0/lib/libc/a.c\0"[..],
+            b"/opt/zig-/lib/libc/a.c\0",
+            b"/opt/zig-1.0/src/lib/libc/a.c\0",
+            b"/usr/lib/libc/zig-1.0/a.c\0",
+            b"/zig-1.0\0/lib/libc/a.c\0",
+        ] {
+            assert!(zig(".debug_line_str", other).is_none(), "{}", String::from_utf8_lossy(other));
+        }
     }
 
     #[test]

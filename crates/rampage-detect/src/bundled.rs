@@ -169,12 +169,19 @@ fn compilers() -> Vec<Signature> {
         // (compiler_rt.memcpy.memcpyFast); LLVM's and GCC's runtime libraries use bare C names. Needs symbols.
         Signature::new("Zig", Kind::Compiler, vec![Condition::SymbolPrefix("compiler_rt.".to_owned())])
             .with_note("Zig compiler_rt symbols"),
-        // Debug info naming the libc sources zig compiles from its own tree (lib/zig/libc/ where a package
-        // manager installs it; a release tarball's lib/libc/ is not matched). Only a path, so it corroborates,
+        // Debug info naming the libc sources zig compiles from its own tree: lib/zig/libc/ where a package manager
+        // installs it, zig-<os>-<arch>-<version>/lib/libc/ in a release tarball. Only a path, so it corroborates,
         // and only in DWARF: the same text in data is just a string.
         Signature::new("Zig", Kind::Compiler, vec![debug_contains("/lib/zig/libc/")])
             .with_note("zig bundled libc source path in debug info")
             .corroborating(),
+        Signature::new(
+            "Zig",
+            Kind::Compiler,
+            vec![Condition::DebugPathComponent { component: "zig-".to_owned(), then: "/lib/libc/".to_owned() }],
+        )
+        .with_note("zig release tarball libc source path in debug info")
+        .corroborating(),
         // Delphi/Borland name their code and data segments in upper case and tag the toolchain vendor.
         Signature::new("Delphi/Borland", Kind::Compiler, vec![format(Format::Pe), contains("Embarcadero Delphi")])
             .with_note("Embarcadero banner"),

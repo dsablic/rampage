@@ -23,6 +23,37 @@ zig cc -target aarch64-linux-gnu -O1 -g0 -o decode-alloc-arm64.elf decode-alloc.
 #   openssl req -x509 -new -key key.pem -sha256 -subj "/O=Invented Device Maker/CN=device-ca.vendor-cloud.example" \
 #     -addext "subjectAltName=DNS:telemetry.vendor-cloud.example,DNS:*.vendor-cloud.example" -set_serial 0x5a5a01 \
 #     -not_before 20260101000000Z -not_after 20360101000000Z -out cert.pem
-zig cc -target x86_64-linux-gnu -O1 -g0 -o endpoints-x64.elf endpoints.c
-zig cc -target aarch64-linux-gnu -O1 -g0 -o endpoints-arm64.elf endpoints.c
+#
+# endpoints-*.elf are built with the official zig release tarball for this host (zig-aarch64-macos-$expected.tar.xz
+# from ziglang.org, checked against the SHA-256 in https://ziglang.org/download/index.json), unpacked anywhere: set
+# ZIG_RELEASE to the unpacked zig-aarch64-macos-$expected directory. Zig compiles its C runtime start files itself,
+# without the caller's -ffile-prefix-map, so their debug info names the unpack directory and this one as the
+# compilation directory. After linking, both are overwritten in place with a same-length no-op run: the unpack
+# directory (everything before /zig-aarch64-macos-...) with `/./.`, so the paths read
+# /./././zig-aarch64-macos-$expected/lib/libc/..., and this directory with `./.` (that is, `.`). No local path is
+# left, and same length keeps every DWARF string offset valid.
+if [ -n "${ZIG_RELEASE:-}" ]; then
+    release=$(cd "$ZIG_RELEASE" && pwd -P)
+    if [ "$("$release/zig" version)" != "$expected" ]; then
+        echo "ZIG_RELEASE must be zig $expected" >&2
+        exit 1
+    fi
+    for target in x86_64:x64 aarch64:arm64; do
+        "$release/zig" cc -target "${target%%:*}-linux-gnu" -O1 -g0 -o "endpoints-${target##*:}.elf" endpoints.c
+    done
+    python3 -I - "$(dirname "$release")" "$(pwd -P)" endpoints-x64.elf endpoints-arm64.elf <<'PY'
+import sys
+unpack, here = sys.argv[1].encode(), sys.argv[2].encode()
+# /./. (absolute, the root) for the unpack directory; ./. (relative, `.`) for the compilation directory.
+root = (b"/." * (len(unpack) // 2)) if len(unpack) % 2 == 0 else b"//" + b"./" * ((len(unpack) - 3) // 2) + b"."
+dot = (b"./" * (len(here) // 2)) if len(here) % 2 == 0 else b"./" * (len(here) // 2) + b"."
+assert len(root) == len(unpack) and len(dot) == len(here)
+for name in sys.argv[3:]:
+    data = open(name, "rb").read()
+    data = data.replace(unpack + b"/zig-", root + b"/zig-").replace(here + b"\0", dot + b"\0").replace(here + b"/", dot + b"/")
+    open(name, "wb").write(data)
+PY
+else
+    echo "ZIG_RELEASE is not set: endpoints-*.elf were not rebuilt" >&2
+fi
 rm -f *.pdb
