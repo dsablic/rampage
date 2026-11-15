@@ -4,7 +4,7 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
-## Unreleased
+## 1.5.0 (2026-11-15)
 
 - Endpoint inventory and blocklists: the new `endpoint_inventory` and `endpoint_blocklist` file tools (group
   `carve`). `endpoint_inventory` lists the network endpoints of one binary or of a whole extracted firmware tree
