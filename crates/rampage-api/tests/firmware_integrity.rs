@@ -318,3 +318,169 @@ fn the_elf_has_exactly_one_check() {
     assert_eq!(checks[0]["stored"]["address"], format!("{CRC_FIELD:#x}"), "{report:#}");
     assert_eq!(checks[0]["depends_on"], json!([]), "{report:#}");
 }
+
+const ELF_FIRMWARE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/elf-cortex-m-crc");
+
+/// A copy of `elf-cortex-m-crc<bits>.elf` in its own directory (its annotation log lands next to it).
+fn elf_copy(owned: &Owned, bits: u32) -> PathBuf {
+    let path = owned.0.join(format!("firmware{bits}.elf"));
+    std::fs::copy(format!("{ELF_FIRMWARE}{bits}.elf"), &path).unwrap();
+    path
+}
+
+fn elf_truth(bits: u32, name: &str) -> u64 {
+    let elf = rampage_loaders::Binary::open(format!("{ELF_FIRMWARE}{bits}.elf")).unwrap();
+    elf.symbol_by_name(name).unwrap().address & !1
+}
+
+/// The bytes at `address` of an ELF file, through its program headers (the test's own reading, not the loader's).
+fn elf_bytes(file: &[u8], address: u64, length: usize) -> Vec<u8> {
+    let word = |at: usize| u64::from(u32::from_le_bytes(file[at..at + 4].try_into().unwrap()));
+    let (phoff, phnum) = (word(28) as usize, u16::from_le_bytes([file[44], file[45]]) as usize);
+    for at in (0..phnum).map(|index| phoff + index * 32) {
+        let (offset, vaddr, filesz) = (word(at + 4), word(at + 8), word(at + 16));
+        if word(at) == 1 && vaddr <= address && address + length as u64 <= vaddr + filesz {
+            let start = (offset + address - vaddr) as usize;
+            return file[start..start + length].to_vec();
+        }
+    }
+    panic!("{address:#x} is not file-backed");
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    !bytes.iter().fold(!0u32, |crc, &byte| {
+        (0..8).fold(crc ^ u32::from(byte), |crc, _| (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1)))
+    })
+}
+
+fn crc16_arc(bytes: &[u8]) -> u16 {
+    bytes.iter().fold(0u16, |crc, &byte| {
+        (0..8).fold(crc ^ u16::from(byte), |crc, _| if crc & 1 != 0 { (crc >> 1) ^ 0xa001 } else { crc >> 1 })
+    })
+}
+
+/// A static ELF32 firmware executable is patched in place: integrity_checks fixes its CRC-32 as a patch to the ELF,
+/// export_image writes the patched ELF (whose own bytes then pass the check by recompute) and a flat binary of its
+/// loaded segments at their load addresses.
+#[test]
+fn an_elf_firmware_crc_is_fixed_and_exported_in_place() {
+    const APP: u64 = 0x0800_0800;
+    const FIELD: u64 = 0x0800_0bfc;
+    let owned = Owned::new();
+    let path = elf_copy(&owned, 32);
+    let source = std::fs::read(&path).unwrap();
+    let mut project = Session::default().open(&path, None).unwrap();
+    let report = call(&mut project, "integrity_checks", json!({}));
+    let check = report["checks"].as_array().unwrap().iter().find(|check| check["stored"]["address"] == "0x8000bfc");
+    let check = check.unwrap_or_else(|| panic!("{report:#}"));
+    assert_eq!((check["algorithm"].as_str(), check["valid"].as_bool()), (Some("crc32"), Some(true)), "{check:#}");
+    assert_eq!(check["ranges"], json!([{ "start": format!("{APP:#x}"), "end": format!("{FIELD:#x}") }]));
+    assert_eq!(check["confirmed_by_emulation"], true, "{check:#}");
+
+    // Change the application's table and an initial value in .data, then let the fix write the CRC.
+    let table = elf_truth(32, "app_table");
+    let mut patch = tokens(&report);
+    patch["at"] = json!(format!("{table:#x}"));
+    patch["original_hex"] = json!("11");
+    patch["replacement_hex"] = json!("42");
+    patch["allow_data"] = json!(false);
+    call(&mut project, "patch_bytes", patch);
+    let receipt = call(&mut project, "list_patches", json!({}))["receipt"].clone();
+    let mut period =
+        json!({ "source_sha256": receipt["source_sha256"], "expected_revision": receipt["revision_sha256"] });
+    period["at"] = json!("0x20000000"); // blink_period, the only .data word
+    period["original_hex"] = json!("45230100");
+    period["replacement_hex"] = json!("e8030000");
+    period["allow_data"] = json!(true);
+    call(&mut project, "patch_bytes", period);
+    let report = call(&mut project, "integrity_checks", json!({ "emulate": false }));
+    let mut fix = tokens(&report);
+    fix["fix"] = json!(true);
+    let fixed = call(&mut project, "integrity_checks", fix);
+    assert_eq!((fixed["fix"]["applied"].as_bool(), fixed["invalid"].as_u64()), (Some(true), Some(0)), "{fixed:#}");
+    let patches = call(&mut project, "list_patches", json!({}));
+    assert_eq!(patches["total"], 3, "{patches:#}");
+    assert!(patches["patches"].as_array().unwrap().iter().all(|row| row["version"] == 3), "{patches:#}");
+
+    // The patched ELF: only payload bytes changed, and its own CRC holds by recompute.
+    let revision = fixed["receipt"]["revision_sha256"].clone();
+    let exported = owned.0.join("patched.elf");
+    let receipt = call(&mut project, "export_image", json!({ "destination": exported, "expected_revision": revision }));
+    assert_eq!(receipt["format"], "native", "{receipt:#}");
+    let written = std::fs::read(&exported).unwrap();
+    assert_eq!(written.len(), source.len());
+    assert!(written.iter().zip(&source).filter(|(left, right)| left != right).count() <= 1 + 4 + 4);
+    assert_eq!(elf_bytes(&written, table, 1), [0x42]);
+    let stored = u32::from_le_bytes(elf_bytes(&written, FIELD, 4).try_into().unwrap());
+    assert_eq!(stored, crc32(&elf_bytes(&written, APP, (FIELD - APP) as usize)));
+    assert_ne!(stored, crc32(&elf_bytes(&source, APP, (FIELD - APP) as usize)));
+    let mut reopened = Session::default().open(&exported, None).unwrap();
+    let report = call(&mut reopened, "integrity_checks", json!({ "emulate": false }));
+    assert_eq!(report["invalid"], 0, "{report:#}");
+
+    // The flat binary lays the loaded segments out at their load addresses, .data's initial values after .text.
+    let flat = owned.0.join("patched.bin");
+    let receipt = call(
+        &mut project,
+        "export_image",
+        json!({ "destination": flat, "format": "binary", "expected_revision": revision }),
+    );
+    assert_eq!(receipt["base_address"], "0x8000000", "{receipt:#}");
+    let mut expected = std::fs::read(format!("{ELF_FIRMWARE}32.bin")).unwrap();
+    let data_load = 0x114; // .data loads from flash right after .text (0x08000000..0x08000114)
+    expected[data_load as usize..data_load as usize + 4].copy_from_slice(&1000u32.to_le_bytes());
+    let app = (APP - 0x0800_0000) as usize;
+    expected[app..app + 0x3fc].copy_from_slice(&elf_bytes(&written, APP, 0x3fc));
+    expected[app + 0x3fc..].copy_from_slice(&stored.to_le_bytes());
+    assert_eq!(std::fs::read(&flat).unwrap(), expected);
+
+    // Unpatched, the flat binary equals the toolchain's own (llvm-objcopy -O binary).
+    let pristine = Owned::new();
+    let mut original = Session::default().open(&elf_copy(&pristine, 32), None).unwrap();
+    let plain = owned.0.join("plain.bin");
+    call(&mut original, "export_image", json!({ "destination": plain, "format": "binary" }));
+    assert_eq!(std::fs::read(&plain).unwrap(), std::fs::read(format!("{ELF_FIRMWARE}32.bin")).unwrap());
+}
+
+/// A CRC-16/ARC routine that forms its polynomial with one 16-bit movw (no literal, no movw/movt pair) is found as
+/// code evidence, its check confirmed by running it, and a configuration change is fixed in the ELF.
+#[test]
+fn a_crc16_polynomial_formed_by_an_immediate_is_recognised() {
+    const CONFIG: u64 = 0x0800_0c00;
+    const FIELD: u64 = CONFIG + 66;
+    let owned = Owned::new();
+    let path = elf_copy(&owned, 16);
+    let mut project = Session::default().open(&path, None).unwrap();
+    let report = call(&mut project, "integrity_checks", json!({}));
+    let routine = format!("{:#x}", elf_truth(16, "crc16_compute"));
+    let row = report["routines"].as_array().unwrap().iter().find(|row| row["address"] == routine);
+    let row = row.unwrap_or_else(|| panic!("{report:#}"));
+    assert!(row["algorithms"].as_array().unwrap().contains(&json!("crc16_arc")), "{row:#}");
+    assert!(row["evidence"].to_string().contains("polynomial 0xa001 formed by an immediate"), "{row:#}");
+    let check =
+        report["checks"].as_array().unwrap().iter().find(|check| check["stored"]["address"] == format!("{FIELD:#x}"));
+    let check = check.unwrap_or_else(|| panic!("{report:#}"));
+    assert_eq!(check["algorithm"], "crc16_arc", "{check:#}");
+    assert_eq!(check["confirmed_by_emulation"], true, "{check:#}");
+
+    // A slower baud rate invalidates the block; the fix rewrites its CRC-16 in the ELF.
+    let mut patch = tokens(&report);
+    patch["at"] = json!(format!("{:#x}", CONFIG + 4));
+    patch["original_hex"] = json!(rampage_arch::hex::bytes(&115_200u32.to_le_bytes()));
+    patch["replacement_hex"] = json!(rampage_arch::hex::bytes(&57_600u32.to_le_bytes()));
+    patch["allow_data"] = json!(true);
+    call(&mut project, "patch_bytes", patch);
+    let report = call(&mut project, "integrity_checks", json!({}));
+    assert_eq!(report["invalid"], 1, "{report:#}");
+    let mut fix = tokens(&report);
+    fix["fix"] = json!(true);
+    let fixed = call(&mut project, "integrity_checks", fix);
+    assert_eq!((fixed["fix"]["applied"].as_bool(), fixed["invalid"].as_u64()), (Some(true), Some(0)), "{fixed:#}");
+    let exported = owned.0.join("patched.elf");
+    let export = json!({ "destination": exported, "expected_revision": fixed["receipt"]["revision_sha256"] });
+    call(&mut project, "export_image", export);
+    let written = std::fs::read(&exported).unwrap();
+    let stored = u16::from_le_bytes(elf_bytes(&written, FIELD, 2).try_into().unwrap());
+    assert_eq!(stored, crc16_arc(&elf_bytes(&written, CONFIG, 66)));
+    assert_eq!(elf_bytes(&written, CONFIG + 4, 4), 57_600u32.to_le_bytes());
+}

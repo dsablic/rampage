@@ -211,3 +211,21 @@ fn pe_checksum_matches_the_reference_algorithm() {
     bytes[field..field + 4].copy_from_slice(&[1, 2, 3, 4]);
     assert_eq!(pe_checksum(&bytes, field), sum + bytes.len() as u32);
 }
+
+/// CRC-16 polynomials formed by one immediate: a lone Thumb `movw` (not one completed by a `movt`), a Thumb `mov.w`
+/// modified immediate, and A32 `movw`/`mov`.
+#[test]
+fn single_immediates_are_decoded_in_thumb_and_a32() {
+    let halfwords = |values: &[u16]| values.iter().flat_map(|value| value.to_le_bytes()).collect::<Vec<u8>>();
+    // movw r12, #0xa001; movw r0, #0x1021; movt r0, #0x1234; mov.w r3, #0x00ab00ab
+    let thumb = halfwords(&[0xf24a, 0x0c01, 0xf241, 0x0021, 0xf2c1, 0x2034, 0xf04f, 0x13ab]);
+    let found = thumb_narrow_constants(&thumb, 0x1000);
+    assert!(found.contains(&(0x1000, 0xa001)), "{found:x?}");
+    assert!(found.contains(&(0x100c, 0x00ab_00ab)), "{found:x?}");
+    assert!(!found.iter().any(|(_, value)| *value == 0x1021), "movw completed by movt is a 32-bit value: {found:x?}");
+    assert_eq!(thumb_expand_immediate(0xc20), 0xa000);
+    assert_eq!(thumb_expand_immediate(0x3ab), 0xabab_abab);
+    // movw r1, #0x8408; mov r2, #0xff000000; an unconditional-space word is not decoded.
+    let a32: Vec<u8> = [0xe308_1408u32, 0xe3a0_24ff, 0xf308_1408].iter().flat_map(|word| word.to_le_bytes()).collect();
+    assert_eq!(arm_narrow_constants(&a32, 0x2000), [(0x2000, 0x8408), (0x2004, 0xff00_0000)]);
+}

@@ -305,8 +305,84 @@ fn family_algorithms(family: &str) -> &'static [Algorithm] {
         "crc32-msb-first" => &[Algorithm::Crc32Bzip2, Algorithm::Crc32Mpeg2, Algorithm::Crc32Mpeg2Words],
         "crc16-arc" => &[Algorithm::Crc16Arc, Algorithm::Crc16Modbus],
         "crc16-ccitt" => &[Algorithm::Crc16CcittFalse, Algorithm::Crc16Xmodem],
+        "crc16-kermit" => &[Algorithm::Crc16Kermit],
         _ => &[],
     }
+}
+
+/// 16-bit polynomials a table-less CRC-16 loop forms in a register (a 16-bit immediate, or a literal word on cores
+/// without `movw`), and their family: 0xa001 is 0x8005 reflected, 0x8408 is 0x1021 reflected.
+const POLYNOMIALS_16: [(u32, &str); 3] = [(0xa001, "crc16-arc"), (0x8408, "crc16-kermit"), (0x1021, "crc16-ccitt")];
+
+/// Thumb `mov.w`/`movs.w` modified immediate (ThumbExpandImm of `i:imm3:imm8`).
+fn thumb_expand_immediate(imm12: u32) -> u32 {
+    let imm8 = imm12 & 0xff;
+    if imm12 >> 10 == 0 {
+        return match (imm12 >> 8) & 3 {
+            0 => imm8,
+            1 => imm8 * 0x0001_0001,
+            2 => imm8 * 0x0100_0100,
+            _ => imm8 * 0x0101_0101,
+        };
+    }
+    (0x80 | (imm12 & 0x7f)).rotate_right(imm12 >> 7)
+}
+
+/// Constants Thumb code forms in a register with one instruction: a `movw` no `movt` of the same register completes
+/// within 64 bytes, or a `mov.w` modified immediate. (`movs` takes 8 bits, which forms no CRC-16 polynomial.)
+/// (address of the instruction, value); little-endian halfwords, every halfword position tried.
+fn thumb_narrow_constants(bytes: &[u8], base: u64) -> Vec<(u64, u32)> {
+    let mut found = Vec::new();
+    let mut pending: [Option<(usize, u32)>; 16] = [None; 16];
+    let halfword = |at: usize| u32::from(u16::from_le_bytes([bytes[at], bytes[at + 1]]));
+    let mut at = (base % 2) as usize;
+    while at + 4 <= bytes.len() {
+        let (first, second) = (halfword(at), halfword(at + 2));
+        let register = ((second >> 8) & 0xf) as usize;
+        for slot in &mut pending {
+            if let Some((movw, value)) = *slot
+                && at - movw > 64
+            {
+                found.push((base + movw as u64, value));
+                *slot = None;
+            }
+        }
+        if second & 0x8000 == 0 {
+            let imm12 = (((first >> 10) & 1) << 11) | (((second >> 12) & 7) << 8) | (second & 0xff);
+            match first & 0xfbf0 {
+                0xf240 => {
+                    if let Some((movw, value)) = pending[register].replace((at, ((first & 0xf) << 12) | imm12)) {
+                        found.push((base + movw as u64, value));
+                    }
+                }
+                0xf2c0 => pending[register] = None,
+                _ if first & 0xfbef == 0xf04f => found.push((base + at as u64, thumb_expand_immediate(imm12))),
+                _ => {}
+            }
+        }
+        at += 2;
+    }
+    found.extend(pending.into_iter().flatten().map(|(movw, value)| (base + movw as u64, value)));
+    found
+}
+
+/// Constants A32 code forms with one instruction: `movw` (ARMv6T2+) or `mov` with a rotated 8-bit immediate.
+/// (address, value); little-endian words at word alignment.
+fn arm_narrow_constants(bytes: &[u8], base: u64) -> Vec<(u64, u32)> {
+    let mut found = Vec::new();
+    let mut at = ((4 - base % 4) % 4) as usize;
+    while at + 4 <= bytes.len() {
+        let word = u32::from_le_bytes(bytes[at..at + 4].try_into().expect("word"));
+        if word >> 28 != 0xf {
+            if word & 0x0ff0_0000 == 0x0300_0000 {
+                found.push((base + at as u64, ((word >> 4) & 0xf000) | (word & 0xfff)));
+            } else if word & 0x0fef_0000 == 0x03a0_0000 {
+                found.push((base + at as u64, (word & 0xff).rotate_right(2 * ((word >> 8) & 0xf))));
+            }
+        }
+        at += 4;
+    }
+    found
 }
 
 /// 32-bit polynomial words a table-less CRC loop loads, and their family.
@@ -442,6 +518,11 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
             anchors.push((slot, family, format!("polynomial {value:#010x} literal at {slot:#x}")));
         }
     }
+    for (value, family) in POLYNOMIALS_16 {
+        for slot in slots_holding(blocks, value, big_endian, 8) {
+            anchors.push((slot, family, format!("polynomial {value:#06x} literal at {slot:#x}")));
+        }
+    }
     // (referencing instruction, family, what): xrefs to each anchor, and polynomials Thumb code forms in a register
     // with a movw/movt pair, which leave no literal to reference.
     let mut sites: Vec<(u64, &'static str, String)> = Vec::new();
@@ -462,6 +543,32 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
                 // A CRC table whose address the code forms in a register leaves no reference to it either.
                 for (_, family, what) in anchors.iter().filter(|(address, ..)| *address == u64::from(value)) {
                     sites.push((site, family, format!("{what}, its address formed by movw/movt")));
+                }
+            }
+        }
+    }
+    // CRC-16 polynomials formed by one 16-bit or modified immediate, in Thumb or A32 code.
+    if project.binary.arch == rampage_arch::Arch::Arm && !project.binary.big_endian {
+        let thumb = |address: u64| project.binary.thumb.iter().any(|range| range.contains(&address));
+        // A word outside Thumb code is A32 code only inside a function that is not Thumb either.
+        let arm = |address: u64| {
+            !thumb(address) && matches!(project.function_containing(address), Ok(Some(function)) if !thumb(function))
+        };
+        for block in blocks {
+            let formed = thumb_narrow_constants(block.bytes, block.start)
+                .into_iter()
+                .map(|(site, value)| (site, value, true))
+                .chain(
+                    arm_narrow_constants(block.bytes, block.start)
+                        .into_iter()
+                        .map(|(site, value)| (site, value, false)),
+                );
+            for (site, value, in_thumb) in formed {
+                let Some(&(_, family)) = POLYNOMIALS_16.iter().find(|(polynomial, _)| *polynomial == value) else {
+                    continue;
+                };
+                if if in_thumb { thumb(site) } else { arm(site) } {
+                    sites.push((site, family, format!("polynomial {value:#06x} formed by an immediate")));
                 }
             }
         }

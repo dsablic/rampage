@@ -7,6 +7,14 @@ whole-file, little-endian, static `ET_EXEC` ELF64 images for x86-64 and AArch64.
 snapshots/captures, embedded/fat images, relocatable objects, ambiguous mappings, zero-fill, headers and
 loader-control metadata reject. Unsupported relocation/control encodings also reject explicitly.
 
+Static ELF32 ARM executables (firmware: `ET_EXEC`, little-endian, no `PT_INTERP`, `PT_DYNAMIC`, dynamic section or
+symbols, loaded or RELR relocations) take patches as record version 3, with the same table bounds as ELF64.
+Loadable segments may not overlap in memory or in the file, and addresses past 4 GiB reject. A patch maps through
+exactly one `PT_LOAD` segment's file bytes (never a `p_filesz < p_memsz` tail such as `.bss`) into one allocated
+`PROGBITS` section. Firmware names sections freely, so any executable section is code and any other (`.data`
+initial values, `.rodata`, a checksum slot) is data needing `allow_data`; GOT/PLT lookalikes reject. Version-1 and
+version-2 records load unchanged.
+
 Raw projects take patches too (record version 2): each range lies wholly inside one backed region that is not
 decoder output, its offset indexes the project's region bytes, and the source identity is the Raw interpretation
 identity. Code regions are patched by default, data and RAM initial values with `allow_data`. Raw patches live in

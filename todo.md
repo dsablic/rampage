@@ -196,8 +196,11 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
 - [x] `integrity_checks` (CRC/checksum/digest fields, brute force + code + emulation, fix as patches in dependency
   order), `export_image` (HEX/S-record record rewrite, binary file, flat binary, PE CheckSum), Raw project patches.
   Open: checks over several discontiguous ranges or with the value's bytes skipped/zeroed inside the range;
-  polynomials formed other than by literal or Thumb movw/movt (16-bit CRC immediates); ELF32/PE patch admission so
-  native firmware ELFs patch in place; persisting Raw patches across sessions; a run on a real owner's image.
+  polynomials built over several instructions (`movs` + shifts/adds) and 8-bit CRC polynomials in code; PE patch
+  admission; persisting Raw patches across sessions; a run on a real owner's image.
+- [x] Static ELF32 ARM firmware patched in place (record version 3, PT_LOAD file-byte mapping, no dynamic/RELR
+  relocations or overlapping segments), `integrity_checks` fixes and `export_image` (patched ELF, flat binary at load
+  addresses) on it; CRC-16 polynomials formed by one Thumb/A32 immediate or a literal word.
 
 ## CMSIS-SVD peripheral maps (2026-11-14)
 

@@ -921,3 +921,128 @@ fn review_revert_witness_matches_captured_snapshot_for_own_noop_and_external_nam
     assert_eq!(reverted.project.name_at(0x100191e).as_deref(), Some("external_before_revert"));
     assert_return(&reverted.project, 5);
 }
+
+/// The owned static ELF32 Cortex-M fixture: .text at 0x08000000, .data in SRAM loaded from flash at 0x08000114, a
+/// zero-fill .bss, executable .app at 0x08000800 and the CRC slot .app_crc at 0x08000bfc.
+fn firmware_elf() -> Vec<u8> {
+    fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware/elf-cortex-m-crc32.elf"))
+        .unwrap()
+}
+
+fn put32(bytes: &mut [u8], at: usize, value: u32) {
+    bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+/// File offset of ELF32 program header `index` (32 bytes each at e_phoff).
+fn program_header(bytes: &[u8], index: usize) -> usize {
+    uint(bytes, 28, 4).unwrap() as usize + index * 32
+}
+
+/// File offset of ELF32 section header `index` (40 bytes each at e_shoff).
+fn section_header(bytes: &[u8], index: usize) -> usize {
+    uint(bytes, 32, 4).unwrap() as usize + index * 40
+}
+
+#[test]
+fn elf32_firmware_maps_patches_through_its_loadable_segments() {
+    let bytes = firmware_elf();
+    let elf = ElfPayload::parse(&bytes, Arch::Arm).unwrap();
+    // Code is admitted by default; the CRC slot and .data initial values only as data.
+    assert_eq!(elf.file_offset(&bytes, 0x0800_0800, 4, false), Ok(0x20c));
+    assert!(elf.file_offset(&bytes, 0x0800_0bfc, 4, false).is_err());
+    assert_eq!(elf.file_offset(&bytes, 0x0800_0bfc, 4, true), Ok(0x608));
+    assert_eq!(elf.file_offset(&bytes, 0x2000_0000, 4, true), Ok(0x208));
+    // Zero-fill .bss, unmapped gaps and segment crossings have no file bytes.
+    assert!(elf.file_offset(&bytes, 0x2000_0004, 4, true).is_err());
+    assert!(elf.file_offset(&bytes, 0x0800_0400, 4, true).is_err());
+    assert!(elf.file_offset(&bytes, 0x0800_0bfa, 4, true).is_err());
+    // A p_filesz < p_memsz tail is not file-backed either.
+    let mut tail = bytes.clone();
+    let data = program_header(&tail, 1);
+    put32(&mut tail, data + 20, 6);
+    let bss = program_header(&tail, 2);
+    put32(&mut tail, bss + 8, 0x2000_0008);
+    let elf = ElfPayload::parse(&tail, Arch::Arm).unwrap();
+    assert_eq!(elf.file_offset(&tail, 0x2000_0000, 4, true), Ok(0x208));
+    assert!(elf.file_offset(&tail, 0x2000_0002, 4, true).is_err(), "bytes past p_filesz are not file-backed");
+    // Flat images use the load (physical) address: .data's initial values follow .text in flash.
+    let loads = ElfPayload::parse(&bytes, Arch::Arm).unwrap().load_images().unwrap();
+    let loads: Vec<_> = loads.into_iter().map(|(load, range)| (load, range.start, range.len())).collect();
+    assert_eq!(
+        loads,
+        [(0x0800_0000, 0xf4, 0x114), (0x0800_0114, 0x208, 4), (0x0800_0800, 0x20c, 0x3fc), (0x0800_0bfc, 0x608, 4)]
+    );
+}
+
+#[test]
+fn elf32_admission_refuses_dynamic_interp_big_endian_truncated_and_overlapping_images() {
+    let bytes = firmware_elf();
+    let refused = |bytes: &[u8], why: &str| assert!(ElfPayload::parse(bytes, Arch::Arm).is_err(), "{why}");
+    let edited = |edit: &dyn Fn(&mut Vec<u8>)| {
+        let mut bytes = bytes.clone();
+        edit(&mut bytes);
+        bytes
+    };
+    assert!(ElfPayload::parse(&bytes, Arch::Aarch64).is_err(), "an ELF32 image is not an ELF64 one");
+    let x64 =
+        fs::read(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-x64.elf")).unwrap();
+    assert!(ElfPayload::parse(&x64, Arch::Arm).is_err(), "an ELF64 image is not an ELF32 ARM one");
+    let stack = program_header(&bytes, 5);
+    refused(&edited(&|bytes| put32(bytes, stack, 2)), "PT_DYNAMIC");
+    refused(&edited(&|bytes| put32(bytes, stack, 3)), "PT_INTERP");
+    refused(&edited(&|bytes| bytes[5] = 2), "big-endian");
+    refused(&edited(&|bytes| bytes[16] = 3), "ET_DYN");
+    refused(&edited(&|bytes| bytes[18] = 3), "another machine");
+    refused(&edited(&|bytes| bytes[42] = 56), "an ELF64-sized program header");
+    refused(&edited(&|bytes| bytes[44..46].copy_from_slice(&2000u16.to_le_bytes())), "unbounded program headers");
+    let slot = section_header(&bytes, 5);
+    refused(&edited(&|bytes| put32(bytes, slot + 4, 6)), "a dynamic section");
+    refused(&edited(&|bytes| put32(bytes, slot + 4, 11)), "a dynamic symbol table");
+    refused(&edited(&|bytes| put32(bytes, slot + 4, 9)), "loaded (dynamic) relocations");
+    refused(&edited(&|bytes| put32(bytes, slot + 4, 19)), "RELR relocations");
+    for length in [4, 40, 52, program_header(&bytes, 3), section_header(&bytes, 4)] {
+        refused(&bytes[..length], &format!("truncated at {length}"));
+    }
+    let crc = program_header(&bytes, 4);
+    refused(&edited(&|bytes| put32(bytes, crc + 8, 0x0800_0bf8)), "segments overlapping in memory");
+    refused(&edited(&|bytes| put32(bytes, crc + 4, 0x600)), "segments sharing file bytes");
+    let text = program_header(&bytes, 0);
+    refused(&edited(&|bytes| put32(bytes, text + 8, 0xffff_ff80)), "a segment past 4 GiB");
+    refused(&edited(&|bytes| put32(bytes, slot + 20, 0x1000_0000)), "a section past the file");
+    let elf = ElfPayload::parse(&edited(&|bytes| put32(bytes, crc + 12, 0x0800_0bf8)), Arch::Arm).unwrap();
+    assert!(elf.load_images().is_err(), "segments overlapping at their load addresses have no flat image");
+}
+
+#[test]
+fn elf32_patches_are_version_3_records_and_older_records_still_load() {
+    let source = firmware_elf();
+    let files = Files::from_bytes(&source);
+    let project = files.project();
+    let original = source[0x20c..0x20e].to_vec();
+    let replacement = [!original[0], original[1]];
+    assert!(project.patch_bytes(0x2000_0004, &[0], &[1], true).is_err(), ".bss has no file bytes");
+    assert!(project.patch_bytes(0x0800_0bfc, &source[0x608..0x60c], &[0; 4], false).is_err(), "data needs consent");
+    let outcome = project.patch_bytes(0x0800_0800, &original, &replacement, false).unwrap();
+    let patch = outcome.project.list_patches().unwrap().remove(0);
+    assert_eq!((patch.version, patch.arch.as_str(), patch.file_offset), (3, "arm", 0x20c));
+    assert_eq!(outcome.project.binary.read(0x0800_0800, 2), Some(&replacement[..]));
+    let receipt = outcome.project.patch_receipt().unwrap();
+    outcome.project.export_patched(&files.export, &receipt.revision_sha256).unwrap();
+    let mut expected = source.clone();
+    expected[0x20c..0x20e].copy_from_slice(&replacement);
+    assert_eq!(fs::read(&files.export).unwrap(), expected);
+    let reopened = files.project().effective_snapshot().unwrap();
+    assert_eq!(reopened.binary.read(0x0800_0800, 2), Some(&replacement[..]));
+    assert_eq!(fs::read(&files.source).unwrap(), source);
+
+    // The version names the identity: an ELF32 record cannot claim version 1, nor an ELF64 record version 3.
+    let mut forged = patch.clone();
+    forged.version = 1;
+    forged.preimage_sha256 = preimage_digest(&forged);
+    assert!(encode_patch(&forged).is_err());
+    let (_, mut elf64) = logged_patch();
+    assert!(parse_patch(&encode_patch(&elf64).unwrap()).is_ok(), "version-1 records still load");
+    elf64.version = 3;
+    elf64.preimage_sha256 = preimage_digest(&elf64);
+    assert!(encode_patch(&elf64).is_err());
+}

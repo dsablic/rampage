@@ -5,9 +5,10 @@ checksum or CRC over part of the image, and the programming tool expects the ima
 `integrity_checks` and `export_image` (group `formats`) close that loop together with the
 [checked byte patches](patching.md):
 
-1. Open the image: a native file, or a Raw project (`raw` selector) of a flat binary, Intel HEX or S-record file.
+1. Open the image: a native file (a static ARM firmware ELF is patched in place), or a Raw project (`raw` selector)
+   of a flat binary, Intel HEX or S-record file.
 2. `integrity_checks` finds the checksum fields and the ranges they cover, and returns a patch receipt.
-3. `patch_bytes` changes what you need (Raw code regions directly; data and RAM regions with `allow_data`).
+3. `patch_bytes` changes what you need (code directly; data, RAM regions and ELF data sections with `allow_data`).
 4. `integrity_checks` reports which checks no longer hold and, in `fix.writes`, the values that would correct them.
    With `fix: true` and the receipt's `source_sha256` and `expected_revision`, it writes them as further patch
    records, undoable with `revert_patch` like any other.
@@ -43,7 +44,9 @@ measured on the patched image (`valid`, `stored_hex`, `computed_hex`).
   right after or right before a range of at least 64 bytes whose other end is a layout boundary, since chance
   matches are otherwise common. Uniform ranges and erased (all 0x00 or 0xff) values are skipped.
 - **Code.** Functions that reference a CRC table (from `find_crypto`'s constants), load a 32-bit polynomial literal,
-  or form one (or a table's address) with a Thumb `movw`/`movt` pair are reported in `routines` with their callers;
+  or form one (or a table's address) with a Thumb `movw`/`movt` pair are reported in `routines` with their callers.
+  So are table-less CRC-16 loops whose polynomial (0xa001 and 0x8408 reflected, 0x1021) is a literal word or one
+  ARM immediate: a Thumb or A32 `movw` that no `movt` completes, or a `mov` modified immediate;
   the addresses they and their callers reference, form with `movw`/`movt`, or load and store through a constant
   base (`mov r1, #0x840; ldrh r1, [r1]` reading a stored value) become candidates, and a match whose algorithm the
   code implements gains confidence. A weak value (16 bits or less, a sum, an XOR) counts code evidence only at its
@@ -90,7 +93,9 @@ regions.
   patched bytes (`pe_checksum: true` recomputes a PE's CheckSum). The source file must still hold the bytes the
   project admitted.
 - `format: binary`: the bytes of the region holding `region`, or every non-RAM region laid out flat from the lowest
-  address with `fill` (default 0xff) in the gaps, at most 64 MiB.
+  address with `fill` (default 0xff) in the gaps, at most 64 MiB. A patchable static ELF lays out its file-backed
+  segments at their load (physical) addresses, as `objcopy -O binary` and a flash programmer do: `.data` initial
+  values follow the code in flash, and `region` names a load address.
 
 An unpatched export is byte-identical to the input for HEX, S-record and binary files.
 
@@ -99,4 +104,5 @@ indexed by their bytes, so each computed value is one lookup; `search.budget_exh
 it stopped), 32 reported checks and 8 CRC routines. Checks whose value is stored inside its own range, that
 skip the value's bytes, cover several discontiguous ranges, or use a keyed MAC or signature are not found;
 hardware CRC units are found by their result, not their registers. Native patches cover only the
-[supported ELF64 profile](patching.md); other native files export unpatched. Decoded Raw regions cannot be patched.
+[supported static ELF64 and ELF32 ARM profiles](patching.md); other native files export unpatched. Decoded Raw
+regions cannot be patched.

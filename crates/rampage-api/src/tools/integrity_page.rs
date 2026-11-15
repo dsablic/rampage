@@ -31,7 +31,8 @@ struct ExportImageArgs {
     /// `original` (default): the source container (HEX/S-record records, binary file, native file); `binary`: raw
     /// bytes.
     format: Option<String>,
-    /// binary: write only the region holding this address (default: all non-RAM regions, gaps filled).
+    /// binary: write only the region holding this address (ELF: load address; default: all non-RAM regions, gaps
+    /// filled).
     region: Option<String>,
     /// binary: gap fill byte (default 255).
     fill: Option<u8>,

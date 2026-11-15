@@ -6,6 +6,16 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- Static ELF32 ARM firmware executables (`ET_EXEC`, little-endian, no interpreter, dynamic section or loaded
+  relocations, non-overlapping loadable segments) take byte patches in place as record version 3, so
+  `integrity_checks` fixes a firmware ELF's checksum without converting it to a Raw project. Patches map through
+  `PT_LOAD` file bytes only (never `.bss` or another zero-fill tail) and never touch headers or tables; any executable
+  section is code, any other payload section needs `allow_data`. Version-1 and version-2 records load unchanged.
+  `export_image` writes the patched ELF, and `format: binary` lays an admitted ELF's segments out at their load
+  addresses like `objcopy -O binary` (`.data` initial values in flash after the code).
+- `integrity_checks` recognises table-less CRC-16 loops whose polynomial (0xa001, 0x8408 and 0x1021) is one ARM
+  immediate (a Thumb or A32 `movw` with no `movt`, or a `mov` modified immediate) or a literal word, as compilers
+  emit at `-Os`; 0x8408 reports `crc16_kermit`.
 - Opening an Intel HEX or S-record file without `raw` now says which it looks like and gives the `raw` selector
   (`"format":"ihex"` or `"srec"`) to read it; the general headerless hint mentions `format` too.
 - Fix: `evaluate_function` runs code and reads data in page 0 of a fixed-address image linked there (a Raw project,

@@ -279,7 +279,7 @@ signatures, types and globals as an undoable batch with a provenance ledger entr
 
 ## Checked patches and assembly
 
-Static ELF64 x86-64/AArch64 and Raw project patches use the annotation log, original identity/preimage checks,
+Static ELF64 x86-64/AArch64, static ELF32 ARM (firmware) and Raw project patches use the annotation log, original identity/preimage checks,
 reviewed revisions and immutable effective projects. Listing, analysis and decompilation consume the same
 effective bytes. Export publishes only a new file; source files and debugger/capture memory remain unchanged.
 Unsupported profiles and incompatible image-sealed metadata reject rather than weakening evidence gates.

@@ -86,7 +86,10 @@ fn digest(bytes: &[u8]) -> String {
 }
 
 /// The backed regions of a Raw image with their bytes, or a native image's file-backed segments.
-fn regions(binary: &Binary) -> Vec<(String, u64, &[u8], Option<&RawRegionInfo>)> {
+/// A region to write: name, address, bytes and, for a Raw project, its region facts.
+type Region<'a> = (String, u64, &'a [u8], Option<&'a RawRegionInfo>);
+
+fn regions(binary: &Binary) -> Vec<Region<'_>> {
     if let Some(raw) = binary.raw_code_image() {
         return raw
             .regions()
@@ -107,6 +110,25 @@ fn regions(binary: &Binary) -> Vec<(String, u64, &[u8], Option<&RawRegionInfo>)>
                 .map(|bytes| (segment.name.clone(), segment.address, bytes, None))
         })
         .collect()
+}
+
+/// The regions a flat binary lays out: an admitted static ELF's file-backed segments at their load (physical)
+/// addresses, as a flash programmer writes them (firmware `.data` initial values follow the code), else `regions`.
+fn load_regions(binary: &Binary) -> Result<Vec<Region<'_>>, ApiError> {
+    let Some(images) = crate::patches::elf_load_images(binary) else { return Ok(regions(binary)) };
+    let bytes = binary.file_bytes();
+    Ok(images
+        .map_err(invalid)?
+        .into_iter()
+        .filter_map(|(load, range)| {
+            let name = binary
+                .segments
+                .iter()
+                .find(|segment| segment.file_offset == range.start as u64 && segment.file_size > 0)
+                .map_or_else(|| format!("load@{load:#x}"), |segment| segment.name.clone());
+            Some((name, load, bytes.get(range)?, None))
+        })
+        .collect())
 }
 
 impl Project {
@@ -158,7 +180,7 @@ impl Project {
         let mut pe = None;
         let (format, mut bytes) = match request.format {
             ExportFormat::Binary => {
-                let mut chosen: Vec<(String, u64, &[u8], Option<&RawRegionInfo>)> = regions(&self.binary);
+                let mut chosen = load_regions(&self.binary)?;
                 match request.region {
                     Some(address) => {
                         chosen.retain(|(_, start, bytes, _)| (*start..*start + bytes.len() as u64).contains(&address));
@@ -186,7 +208,15 @@ impl Project {
                     let at = (start - base) as usize;
                     flat[at..at + region.len()].copy_from_slice(region);
                 }
-                regions_out.retain(|row| chosen.iter().any(|(_, start, _, _)| *start == row.start));
+                regions_out = chosen
+                    .iter()
+                    .map(|(name, start, bytes, _)| ExportedRegion {
+                        name: name.clone(),
+                        start: *start,
+                        end: start + bytes.len() as u64,
+                        sha256: digest(bytes),
+                    })
+                    .collect();
                 base_address = Some(base);
                 ("flat_binary", flat)
             }

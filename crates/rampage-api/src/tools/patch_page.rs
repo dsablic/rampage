@@ -125,7 +125,7 @@ pub(super) fn tools() -> Vec<Tool> {
             "patch_bytes",
             "Persist a bounded equal-length byte patch in the existing annotation history and return an effective \
              revision receipt. Requires explicit original-source preimage, source hash, reviewed revision and \
-             allow_data consent. Only whole-file little-endian ELF64 x86-64/AArch64 payloads and Raw project \
+             allow_data consent. Only static little-endian ELF64 x86-64/AArch64 or ELF32 ARM payloads and Raw project \
              regions; no headers, captured/debugger memory writes, execution, assembly or source-file \
              modification. Read list_patches first.",
             Effect::Annotations,

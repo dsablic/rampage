@@ -216,6 +216,9 @@ const ELF_PATCH_VERSION: u32 = 1;
 /// Record version of a patch to a Raw project; `source_sha256` is its interpretation identity and `file_offset`
 /// the offset in its owned region bytes.
 const RAW_PATCH_VERSION: u32 = 2;
+/// Record version of a patch to a whole-file static ELF32 ARM image (firmware); `file_offset` is a file offset.
+/// A version of its own, so a build that predates it refuses these records instead of misreading them.
+const ELF32_PATCH_VERSION: u32 = 3;
 
 fn validate_patch(patch: &BytePatch) -> Result<(), String> {
     let arch = match patch.version {
@@ -224,6 +227,7 @@ fn validate_patch(patch: &BytePatch) -> Result<(), String> {
             (1..=32).contains(&patch.arch.len())
                 && patch.arch.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
         }
+        ELF32_PATCH_VERSION => patch.arch == "arm",
         _ => false,
     };
     if !arch
@@ -233,10 +237,11 @@ fn validate_patch(patch: &BytePatch) -> Result<(), String> {
         || patch.image_length == 0
         || patch.image_length > MAX_PATCH_SOURCE_BYTES as u64
     {
-        return Err(
-            "patch requires a version-1 whole-file ELF64 or version-2 Raw source identity and supported architecture"
-                .into(),
-        );
+        return Err(concat!(
+            "patch requires a version-1 whole-file ELF64, version-2 Raw or version-3 whole-file ELF32 ARM source ",
+            "identity and supported architecture"
+        )
+        .into());
     }
     let original = decode_hex(&patch.original_hex)?;
     let replacement = decode_hex(&patch.replacement_hex)?;
@@ -534,54 +539,129 @@ struct ElfProgram {
     kind: u64,
     flags: u64,
     address: u64,
+    /// `p_paddr`: where a flash programmer writes the segment's file bytes (firmware `.data` initial values).
+    load_address: u64,
     offset: u64,
     file_size: u64,
     memory_size: u64,
 }
 
+/// The admitted ELF classes: ELF64 x86-64/AArch64 (version-1 records) and ELF32 ARM (version-3 records).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ElfClass {
+    Elf64,
+    Elf32,
+}
+
+impl ElfClass {
+    /// Width of an address/offset field.
+    fn word(self) -> usize {
+        match self {
+            ElfClass::Elf64 => 8,
+            ElfClass::Elf32 => 4,
+        }
+    }
+
+    fn header_size(self) -> u64 {
+        match self {
+            ElfClass::Elf64 => 64,
+            ElfClass::Elf32 => 52,
+        }
+    }
+
+    fn program_size(self) -> u64 {
+        match self {
+            ElfClass::Elf64 => 56,
+            ElfClass::Elf32 => 32,
+        }
+    }
+
+    fn section_size(self) -> u64 {
+        16 + 6 * self.word() as u64
+    }
+
+    /// The entry size of an SHT_RELA (4) or SHT_REL (9) table, and how many bytes from each target are protected.
+    fn relocation(self, kind: u64) -> (u64, u64) {
+        let stride = match (self, kind) {
+            (ElfClass::Elf64, 4) => 24,
+            (ElfClass::Elf64, _) => 16,
+            (ElfClass::Elf32, 4) => 12,
+            (ElfClass::Elf32, _) => 8,
+        };
+        (stride, 2 * self.word() as u64)
+    }
+}
+
+/// A file-backed loadable segment: its load (physical) address and file range.
+pub(crate) type LoadImage = (u64, Range<usize>);
+
 struct ElfPayload {
+    class: ElfClass,
     programs: Vec<ElfProgram>,
     sections: Vec<ElfSection>,
     protected: Vec<Range<u64>>,
 }
 
 impl ElfPayload {
+    /// Admits a bounded static ET_EXEC little-endian image: ELF64 x86-64/AArch64, or ELF32 ARM (firmware). The
+    /// input is untrusted: every table is bounded and every range checked against the file.
     fn parse(bytes: &[u8], arch: Arch) -> Result<Self, String> {
+        let (class, ident, machine) = match arch {
+            Arch::X86_64 => (ElfClass::Elf64, b"\x7fELF\x02\x01\x01", 62),
+            Arch::Aarch64 => (ElfClass::Elf64, b"\x7fELF\x02\x01\x01", 183),
+            Arch::Arm => (ElfClass::Elf32, b"\x7fELF\x01\x01\x01", 40),
+            _ => return Err("native patches require an ELF64 x86-64/AArch64 or ELF32 ARM image".into()),
+        };
+        let word = class.word();
         if bytes.len() > MAX_PATCH_SOURCE_BYTES
-            || bytes.get(..7) != Some(b"\x7fELF\x02\x01\x01")
-            || uint(bytes, 52, 2)? != 64
+            || bytes.get(..7) != Some(ident.as_slice())
+            || uint(bytes, 28 + 3 * word, 2)? != class.header_size()
             || uint(bytes, 16, 2)? != 2
             || uint(bytes, 20, 4)? != 1
-            || uint(bytes, 18, 2)? != if arch == Arch::X86_64 { 62 } else { 183 }
+            || uint(bytes, 18, 2)? != machine
         {
-            return Err("V1 patches require a bounded static ET_EXEC little-endian ELF64 x86-64/AArch64 image".into());
+            return Err(concat!(
+                "native patches require a bounded static ET_EXEC little-endian ELF64 x86-64/AArch64 or ELF32 ARM ",
+                "image"
+            )
+            .into());
         }
-        let phoff = uint(bytes, 32, 8)?;
-        let shoff = uint(bytes, 40, 8)?;
-        let phnum = uint(bytes, 56, 2)?;
-        let shnum = uint(bytes, 60, 2)?;
-        let shstr = uint(bytes, 62, 2)?;
+        let phoff = uint(bytes, 24 + word, word)?;
+        let shoff = uint(bytes, 24 + 2 * word, word)?;
+        let phnum = uint(bytes, 32 + 3 * word, 2)?;
+        let shnum = uint(bytes, 36 + 3 * word, 2)?;
+        let shstr = uint(bytes, 38 + 3 * word, 2)?;
+        let (program_size, section_size) = (class.program_size(), class.section_size());
         if !(1..=1024).contains(&phnum)
             || !(1..=4096).contains(&shnum)
             || shstr == 0
             || shstr >= shnum
-            || uint(bytes, 54, 2)? != 56
-            || uint(bytes, 58, 2)? != 64
+            || uint(bytes, 30 + 3 * word, 2)? != program_size
+            || uint(bytes, 34 + 3 * word, 2)? != section_size
         {
             return Err("patches require bounded ordinary ELF program/section tables and section names".into());
         }
-        let mut protected =
-            vec![0..64, checked_range(phoff, phnum * 56, bytes.len())?, checked_range(shoff, shnum * 64, bytes.len())?];
-        let name_header = (shoff + shstr * 64) as usize;
+        let mut protected = vec![
+            0..class.header_size(),
+            checked_range(phoff, phnum * program_size, bytes.len())?,
+            checked_range(shoff, shnum * section_size, bytes.len())?,
+        ];
+        let name_header = (shoff + shstr * section_size) as usize;
         if uint(bytes, name_header + 4, 4)? != 3 {
             return Err("ELF section-name table is not a string table".into());
         }
-        let names = checked_range(uint(bytes, name_header + 24, 8)?, uint(bytes, name_header + 32, 8)?, bytes.len())?;
+        let names = checked_range(
+            uint(bytes, name_header + 8 + 2 * word, word)?,
+            uint(bytes, name_header + 8 + 3 * word, word)?,
+            bytes.len(),
+        )?;
         protected.push(names.clone());
         let names = &bytes[names.start as usize..names.end as usize];
+        // ELF32 addresses are 32-bit: a range past 4 GiB wraps in the loader's view.
+        let address_limit = if class == ElfClass::Elf32 { 1u64 << 32 } else { u64::MAX };
         let mut sections = Vec::new();
         for index in 0..shnum {
-            let at = (shoff + index * 64) as usize;
+            let at = (shoff + index * section_size) as usize;
             let name_offset = uint(bytes, at, 4)? as usize;
             let name = names.get(name_offset..).ok_or("invalid ELF section name offset")?;
             let end = name.iter().position(|byte| *byte == 0).ok_or("unterminated ELF section name")?;
@@ -591,13 +671,15 @@ impl ElfPayload {
             let section = ElfSection {
                 name: String::from_utf8(name[..end].to_vec()).map_err(|_| "non-UTF-8 ELF section name")?,
                 kind: uint(bytes, at + 4, 4)?,
-                flags: uint(bytes, at + 8, 8)?,
-                address: uint(bytes, at + 16, 8)?,
-                offset: uint(bytes, at + 24, 8)?,
-                size: uint(bytes, at + 32, 8)?,
-                entry_size: uint(bytes, at + 56, 8)?,
+                flags: uint(bytes, at + 8, word)?,
+                address: uint(bytes, at + 8 + word, word)?,
+                offset: uint(bytes, at + 8 + 2 * word, word)?,
+                size: uint(bytes, at + 8 + 3 * word, word)?,
+                entry_size: uint(bytes, at + 16 + 5 * word, word)?,
             };
-            section.address.checked_add(section.size).ok_or("ELF section address overflow")?;
+            if section.address.checked_add(section.size).is_none_or(|end| end > address_limit) {
+                return Err("ELF section address overflow".into());
+            }
             if section.kind != 8 {
                 checked_range(section.offset, section.size, bytes.len())?;
             }
@@ -605,20 +687,29 @@ impl ElfPayload {
         }
         let mut programs = Vec::new();
         for index in 0..phnum {
-            let at = (phoff + index * 56) as usize;
+            let at = (phoff + index * program_size) as usize;
+            let field = |elf64: usize, elf32: usize| match class {
+                ElfClass::Elf64 => uint(bytes, at + elf64, 8),
+                ElfClass::Elf32 => uint(bytes, at + elf32, 4),
+            };
             let program = ElfProgram {
                 kind: uint(bytes, at, 4)?,
-                flags: uint(bytes, at + 4, 4)?,
-                offset: uint(bytes, at + 8, 8)?,
-                address: uint(bytes, at + 16, 8)?,
-                file_size: uint(bytes, at + 32, 8)?,
-                memory_size: uint(bytes, at + 40, 8)?,
+                flags: uint(bytes, at + if class == ElfClass::Elf64 { 4 } else { 24 }, 4)?,
+                offset: field(8, 4)?,
+                address: field(16, 8)?,
+                load_address: field(24, 12)?,
+                file_size: field(32, 16)?,
+                memory_size: field(40, 20)?,
             };
             if matches!(program.kind, 2 | 3) {
-                return Err("V1 patches refuse PT_DYNAMIC and PT_INTERP images".into());
+                return Err("native patches refuse PT_DYNAMIC and PT_INTERP images".into());
             }
             let range = checked_range(program.offset, program.file_size, bytes.len())?;
-            program.address.checked_add(program.memory_size).ok_or("ELF program address overflow")?;
+            for base in [program.address, program.load_address] {
+                if base.checked_add(program.memory_size).is_none_or(|end| end > address_limit) {
+                    return Err("ELF program address overflow".into());
+                }
+            }
             if program.file_size > program.memory_size {
                 return Err("ELF program file size exceeds memory size".into());
             }
@@ -631,9 +722,48 @@ impl ElfPayload {
             matches!(section.kind, 6 | 11)
                 || matches!(section.name.as_str(), ".dynamic" | ".dynsym" | ".dynstr" | ".interp")
         }) {
-            return Err("V1 patches refuse dynamic loader metadata and payload lookalikes".into());
+            return Err("native patches refuse dynamic loader metadata and payload lookalikes".into());
         }
-        Ok(Self { programs, sections, protected })
+        if class == ElfClass::Elf32 {
+            // Firmware has no dynamic loader: loaded relocations, RELR and overlapping loadable segments would make
+            // the image's bytes depend on something other than the file.
+            if sections
+                .iter()
+                .any(|section| section.kind == 19 || matches!(section.kind, 4 | 9) && section.flags & 2 != 0)
+            {
+                return Err("ELF32 patches refuse loaded (dynamic) and RELR relocations".into());
+            }
+            let memory = |program: &ElfProgram| program.address..program.address + program.memory_size;
+            let file = |program: &ElfProgram| program.offset..program.offset + program.file_size;
+            let loads: Vec<_> = programs.iter().filter(|program| program.kind == 1).collect();
+            for (index, left) in loads.iter().enumerate() {
+                if loads[index + 1..]
+                    .iter()
+                    .any(|right| overlaps(&memory(left), &memory(right)) || overlaps(&file(left), &file(right)))
+                {
+                    return Err("ELF32 patches refuse overlapping loadable segments".into());
+                }
+            }
+        }
+        Ok(Self { class, programs, sections, protected })
+    }
+
+    /// File-backed loadable segments as (load address, file range), ascending by load address; overlapping load
+    /// ranges are refused.
+    fn load_images(&self) -> Result<Vec<LoadImage>, String> {
+        let mut images: Vec<_> = self
+            .programs
+            .iter()
+            .filter(|program| program.kind == 1 && program.file_size > 0)
+            .map(|program| {
+                (program.load_address, program.offset as usize..(program.offset + program.file_size) as usize)
+            })
+            .collect();
+        images.sort_by_key(|(load, _)| *load);
+        if images.windows(2).any(|pair| pair[0].0 + pair[0].1.len() as u64 > pair[1].0) {
+            return Err("ELF segments overlap at their load addresses".into());
+        }
+        Ok(images)
     }
 
     fn file_offset(&self, bytes: &[u8], address: u64, length: usize, allow_data: bool) -> Result<u64, String> {
@@ -686,19 +816,38 @@ impl ElfPayload {
         {
             return Err("patch section and segment mappings disagree or do not describe allocated payload".into());
         }
-        let code = section.flags & 4 != 0
-            && mapping.flags & 1 != 0
-            && (section.name == ".text" || section.name.starts_with(".text."));
-        let data = section.flags & 4 == 0
-            && mapping.flags & 1 == 0
-            && allow_data
-            && (section.name == ".data"
-                || section.name.starts_with(".data.")
-                || section.name == ".rodata"
-                || section.name.starts_with(".rodata."))
-            && !section.name.starts_with(".data.rel");
+        let executable = section.flags & 4 != 0 && mapping.flags & 1 != 0;
+        let (code, data) = match self.class {
+            ElfClass::Elf64 => (
+                executable && (section.name == ".text" || section.name.starts_with(".text.")),
+                section.flags & 4 == 0
+                    && mapping.flags & 1 == 0
+                    && allow_data
+                    && (section.name == ".data"
+                        || section.name.starts_with(".data.")
+                        || section.name == ".rodata"
+                        || section.name.starts_with(".rodata."))
+                    && !section.name.starts_with(".data.rel"),
+            ),
+            // Firmware names its sections freely (vector tables, flash regions, checksum slots) and keeps constants
+            // in executable flash segments: any executable payload section is code, any other is data. No dynamic
+            // loader reads a GOT, but its lookalikes stay refused.
+            ElfClass::Elf32 => (
+                executable,
+                !executable
+                    && allow_data
+                    && !matches!(section.name.as_str(), ".got" | ".got.plt" | ".plt")
+                    && !section.name.starts_with(".data.rel"),
+            ),
+        };
         if !code && !data {
-            return Err("only .text code payload is admitted by default; plain .data/.rodata require allow_data".into());
+            return Err(match self.class {
+                ElfClass::Elf64 => {
+                    "only .text code payload is admitted by default; plain .data/.rodata require allow_data"
+                }
+                ElfClass::Elf32 => "only executable payload sections are admitted by default; data requires allow_data",
+            }
+            .into());
         }
         if self.sections.iter().any(|section| {
             section.flags & 2 != 0
@@ -716,15 +865,15 @@ impl ElfPayload {
             if !matches!(section.kind, 4 | 9) || section.size == 0 {
                 continue;
             }
-            let stride = if section.kind == 4 { 24 } else { 16 };
+            let (stride, reach) = self.class.relocation(section.kind);
             relocation_entries =
                 relocation_entries.checked_add(section.size / stride).ok_or("ELF relocation count overflow")?;
             if section.entry_size != stride || section.size % stride != 0 || relocation_entries > 65536 {
                 return Err("ELF relocation table exceeds patch admission limits".into());
             }
             for index in 0..section.size / stride {
-                let target = uint(bytes, (section.offset + index * stride) as usize, 8)?;
-                let end = target.checked_add(16).ok_or("ELF relocation target overflow")?;
+                let target = uint(bytes, (section.offset + index * stride) as usize, self.class.word())?;
+                let end = target.checked_add(reach).ok_or("ELF relocation target overflow")?;
                 if overlaps(&(target..end), &virtual_range) {
                     return Err("patch overlaps a loader relocation target".into());
                 }
@@ -734,7 +883,7 @@ impl ElfPayload {
     }
 }
 
-/// What a patch's `file_offset` indexes: an admitted ELF64 file, or a Raw project's owned region bytes.
+/// What a patch's `file_offset` indexes: an admitted ELF file, or a Raw project's owned region bytes.
 enum PatchTarget {
     Elf(ElfPayload),
     Raw,
@@ -743,10 +892,21 @@ enum PatchTarget {
 impl PatchTarget {
     fn version(&self) -> u32 {
         match self {
+            PatchTarget::Elf(elf) if elf.class == ElfClass::Elf32 => ELF32_PATCH_VERSION,
             PatchTarget::Elf(_) => ELF_PATCH_VERSION,
             PatchTarget::Raw => RAW_PATCH_VERSION,
         }
     }
+}
+
+/// The file-backed loadable segments of an admitted static ELF image as (load address, file range), ascending; `None`
+/// for any other image. Firmware flashes segments at their load (physical) addresses.
+pub(crate) fn elf_load_images(binary: &Binary) -> Option<Result<Vec<LoadImage>, String>> {
+    if binary.format != Format::Elf {
+        return None;
+    }
+    let elf = ElfPayload::parse(binary.file_bytes(), binary.arch).ok()?;
+    Some(elf.load_images())
 }
 
 /// The owned-bytes offset of a Raw patch: wholly inside one backed region whose bytes the export can write back
@@ -888,14 +1048,18 @@ impl Project {
             return Ok(hash);
         }
         if self.binary.format != Format::Elf
-            || !matches!(self.binary.arch, Arch::X86_64 | Arch::Aarch64)
+            || !matches!(self.binary.arch, Arch::X86_64 | Arch::Aarch64 | Arch::Arm)
             || self.binary.big_endian
             || self.binary.embedded.is_some()
             || self.binary.slices.len() != 1
             || self.binary.file_bytes().len() > MAX_PATCH_SOURCE_BYTES
             || self.binary.image_bytes().len() != self.binary.file_bytes().len()
         {
-            return Err("patches require an original mapped whole-file little-endian ELF64 x86-64/AArch64 image".into());
+            return Err(concat!(
+                "patches require an original mapped whole-file little-endian ELF64 x86-64/AArch64 or ELF32 ARM ",
+                "image"
+            )
+            .into());
         }
         if matches!(&self.binary.details, rampage_loaders::Details::Elf(details)
             if details.interpreter.is_some()
@@ -903,7 +1067,7 @@ impl Project {
                 || details.soname.is_some()
                 || details.pie)
         {
-            return Err("V1 patches refuse ELF interpreters, dynamic dependencies, SONAME and PIE images".into());
+            return Err("native patches refuse ELF interpreters, dynamic dependencies, SONAME and PIE images".into());
         }
         self.binary.validate_backing_source().map_err(|error| error.to_string())?;
         let hash: [u8; 32] = Sha256::digest(self.binary.file_bytes()).into();
@@ -952,7 +1116,7 @@ impl Project {
         let target = self.patch_target()?;
         let mut bytes = original.to_vec();
         self.check_patch_backing()?;
-        if target.version() == ELF_PATCH_VERSION && Sha256::digest(&bytes).as_slice() != source_hash {
+        if matches!(target, PatchTarget::Elf(_)) && Sha256::digest(&bytes).as_slice() != source_hash {
             return Err("original source changed while copying patch materialization".into());
         }
         let mut total = 0usize;
