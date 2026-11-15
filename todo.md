@@ -219,7 +219,18 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
   address not folding) from Cortex-M Raw projects to Cortex-M ELF firmware: recognise it by the ARM attributes
   section's CPU profile 'M' (Tag_CPU_arch_profile), not by load address. Done: `Binary::m_profile()` covers
   M-profile ELFs (attributes profile 'M' or an M-only Tag_CPU_arch); the decompiler settings apply to M-profile
-  ELF executables (not relocatable objects).
+  ELF executables (statically linked: no interpreter, needed libraries or `.dynamic`; not relocatable objects).
+- [ ] Cortex-M decompilation is slow on library-heavy firmware, Raw and ELF alike (the settings are the same): on
+  `embedded-libs-m0` both find the same 549 functions and `0x80092ca` takes 6.5 s to decompile, about 75% of it
+  callee prototype derivation. `resetCalleeInference` (shim.cc) drops every derived prototype before each top-level
+  decompile, so each one re-derives up to 64 callees (`calleePrototypeBudget`). Keeping them on the engine is not
+  order-independent as derivation stands: a cached locked callee costs no budget, so a subtree that runs out of
+  the 64-function budget from a cold engine derives fully after earlier decompiles warmed it (the callee-effects
+  walk's 256-function budget and cached `Known` verdicts behave the same); and `deriving` starts with the top-level
+  function, so a callee on a cycle through it is cached as underivable for every later top-level. Options: a
+  per-project bottom-up derivation pass in a fixed order (Ghidra's Decompiler Parameter ID), whose result does not
+  depend on the query; or caching only verdicts reached without the budget or the top-level cycle and charging
+  cached subtrees their cold cost.
 
 ## Objective-C dispatch (2026-11-13)
 

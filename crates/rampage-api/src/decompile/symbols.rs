@@ -289,15 +289,13 @@ fn cortex_m_operations(project: &Project) -> Vec<WorkerOperation> {
     operations
 }
 
-/// An M-profile image whose read-only mappings are flash at their run addresses: a Cortex-M Raw image, or an
-/// M-profile ELF executable (`ET_EXEC`). An M-profile relocatable object is not: its literal pools hold unrelocated
-/// zeros, and its sections all sit at address 0.
+/// An M-profile image whose read-only mappings are flash at their run addresses: a Cortex-M Raw image, or a
+/// statically linked M-profile ELF executable ([`rampage_signatures::firmware_like`]: `ET_EXEC`, no interpreter,
+/// no needed libraries, no `.dynamic`). An M-profile relocatable object is not (its literal pools hold
+/// unrelocated zeros and its sections all sit at address 0), nor is a dynamically linked one, whose loader can
+/// write its read-only pages.
 pub(super) fn cortex_m_firmware(binary: &rampage_loaders::Binary) -> bool {
-    binary.m_profile()
-        && match &binary.details {
-            rampage_loaders::Details::Elf(elf) => elf.kind == "executable",
-            _ => binary.raw_code_image().is_some(),
-        }
+    binary.m_profile() && rampage_signatures::firmware_like(binary)
 }
 
 /// The ARMv6-M/ARMv7-M ranges with Device or Strongly-ordered memory: peripherals, external devices, the private
@@ -697,6 +695,15 @@ mod tests {
         for path in ["bin/hello-arm.elf", "bin/hello-thumb.elf", "bench-v3/bin/semantics-arm32.elf"] {
             assert!(cortex_m_operations(&elf(path)).is_empty(), "{path}");
         }
+        // A dynamically linked executable (PT_INTERP, DT_NEEDED) is not firmware even when its attributes say M.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-arm.elf");
+        let mut bytes = std::fs::read(path).unwrap();
+        let aeabi = bytes.windows(6).position(|window| window == b"aeabi\0").unwrap();
+        let profile = aeabi + bytes[aeabi..].windows(2).position(|window| window == [7, b'A']).unwrap();
+        bytes[profile + 1] = b'M';
+        let binary = rampage_loaders::Binary::from_owned_native_bytes(bytes, rampage_arch::Arch::Arm).unwrap();
+        assert!(binary.m_profile());
+        assert!(cortex_m_operations(&Project::new(binary)).is_empty());
     }
 
     #[test]

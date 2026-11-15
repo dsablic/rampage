@@ -219,23 +219,32 @@ fn headered_binaries_keep_ghidra_defaults() {
 }
 
 /// An ELF build of Cortex-M firmware is M-profile by its build attributes and decompiles with the same settings as
-/// the Raw image: the reset request before system_reset's endless loop is a volatile store and stays, and the CRC
-/// word reset_handler reads through an address it forms stays a read instead of folding to its flash value.
+/// the Raw image: the reset request before system_reset's endless loop is a volatile store and stays; literal-pool
+/// words fold into the addresses they hold, so advance_cursor reads and writes `cursor` itself rather than through
+/// a pool pointer (`*piRam080001c0`) and the peripheral it touches is named by region; and the CRC word
+/// reset_handler reads through an address it forms stays a read instead of folding to its flash value.
 #[test]
 fn m_profile_elf_firmware_gets_the_cortex_m_settings() {
     let elf = |name: &str| {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware").join(name);
-        Project::new(Binary::open(path).unwrap())
+        let project = Project::new(Binary::open(path).unwrap());
+        assert!(project.binary.m_profile(), "{name}");
+        project
     };
     let decompile = |project: &Project, name: &str| {
         project.decompile(project.binary.symbol_by_name(name).unwrap().address & !1).unwrap().code
     };
     let locks = elf("raw-cortex-m-locks.elf");
-    assert!(locks.binary.m_profile());
     let code = decompile(&locks, "system_reset");
     assert!(code.contains("= 0x5fa0004;"), "{code}");
+    let pools = elf("raw-cortex-m-decompile.elf");
+    let code = decompile(&pools, "advance_cursor");
+    assert!(code.contains("cursor = cursor + 4;"), "{code}");
+    assert!(code.contains("periph_40021004 = "), "{code}");
+    assert!(!code.contains("Ram"), "{code}");
     let crc = elf("raw-cortex-m-crc.elf");
     let code = decompile(&crc, "reset_handler");
     let stored = u32::from_le_bytes(crc.binary.read(0x0800_07fc, 4).unwrap().try_into().unwrap());
+    assert!(code.contains("app_crc"), "{code}");
     assert!(!code.contains(&format!("{stored:#x}")), "{code}");
 }

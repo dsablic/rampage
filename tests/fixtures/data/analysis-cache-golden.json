@@ -75,7 +75,7 @@
     "bin/tls-x64.exe": "78fbca40fd2a82fe688ee1e64d7fcde6c5a30ca128db421028ddef2f15be5fdc",
     "firmware/cortex-m3.elf": "8127806ebad2c8f97d3a9ae69ea057688b57593ff37fa2e95531837660e19dff",
     "firmware/elf-cortex-m-crc16.elf": "31ea6084d92a8ae0d6f5dcc4a5ce5d63702c5dcc2e1bfe6fa2be902eacd13036",
-    "firmware/elf-cortex-m-crc32.elf": "09ba2e6eb086743b19c9f9e5518a4bd99f6054c6d5ab9535405c449bb86a2ad1",
+    "firmware/elf-cortex-m-crc32.elf": "51bdee2d6e270f6481a0bd74a479d8dfe355bb93222f0b12f9781a32caab3cf0",
     "firmware/embedded-libs-m0.elf": "179494f32d18b3b52c66be850c5f7ed3def4636f3cc04a2e98db745151a7abd5",
     "firmware/embedded-libs-m4f.elf": "b8881e1840d49dbf9d20b4f362463d3a01afd7ddc9ec28308da7e0773fafbc84",
     "firmware/locks-negative-x64-sym.elf": "56c57f6d7ac8f609c64b626066d8c93dbb3140dc6d3e4c38582bea97f6eb3f33",

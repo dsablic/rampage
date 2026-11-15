@@ -980,11 +980,18 @@ impl Binary {
             msvc: None,
             go_arguments: std::collections::BTreeMap::new(),
             raw_identity: std::sync::OnceLock::new(),
-            elf_m_profile: false,
+            elf_m_profile,
             raw: None,
             image,
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);
+        if elf_m_profile {
+            // An M-profile processor has no A32 state: all of its executable memory is Thumb, `$d` islands and code
+            // no `$t` or odd symbol covers alike, as a Cortex-M Raw image's code regions are.
+            let executable = binary.segments.iter().filter(|segment| segment.perms.execute && segment.size > 0);
+            let ranges = executable.map(|segment| segment.address..segment.address.saturating_add(segment.size));
+            binary.thumb = merged(binary.thumb.drain(..).chain(ranges).collect());
+        }
         if let Some(tables) = arm_exidx_tables {
             let (starts, warnings) = starts::arm_exidx(&binary, &tables);
             function_starts.extend(starts);
@@ -1014,7 +1021,6 @@ impl Binary {
         let (starts, warning) = starts::eh_frame(&binary);
         function_starts.extend(starts);
         binary.warnings.extend(warning);
-        binary.elf_m_profile = elf_m_profile;
         // Stripped firmware names its interrupt handlers only in the vector table, as a Raw image does.
         if elf_m_profile && let Some(table) = crate::raw_vectors::elf_table(&binary) {
             function_starts.extend(table.handlers());

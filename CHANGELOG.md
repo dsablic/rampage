@@ -8,9 +8,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 - Cortex-M ELF firmware decompiles like a Cortex-M Raw project: an ARM ELF whose build attributes
   (`.ARM.attributes`) name an M-profile CPU (profile `M`, or an M-only architecture such as v6-M or v7E-M) is
-  decoded as M-profile, and an M-profile executable gets the Cortex-M decompiler settings (the peripheral and system
-  ranges are volatile, so a reset-register store before an endless loop is kept; literal pools fold; flash words
-  read through a formed address stay reads; region names for unnamed globals; callee inference). Its vector table
+  decoded as M-profile with all executable memory Thumb, and a statically linked M-profile executable gets the
+  Cortex-M decompiler settings (the peripheral and system ranges are volatile, so a reset-register store before an
+  endless loop is kept; literal pools fold; flash words read through a formed address stay reads; region names for
+  unnamed globals; callee inference). Its vector table
   (an `.isr_vector`/`.vectors` section, or the first words of flash, when the Reset vector is the ELF entry) seeds
   the interrupt handlers as functions, so stripped firmware finds handlers only the table names (embedded library
   identification on the owned stripped ELF fixtures now matches their Raw projects: 81 and 71 names, up from 80
