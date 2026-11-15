@@ -54,6 +54,7 @@ mod module_references;
 mod objc;
 mod offset;
 mod operand_types;
+mod output_file;
 pub mod pack_archive;
 pub mod packs;
 mod patches;

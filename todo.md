@@ -103,7 +103,7 @@ decoded code.
   region; Haiku never found it and concluded nothing could analyse decoded output. Allow `decode` on the primary
   region (vector table and seeds then read the decoded bytes), mention it in `decode_file_range`'s result ("open
   this as a Raw project with ..."), and have `probe_compression` return a ready `raw` selector.
-- [ ] **Write decoded bytes to a file** (`decode_file_range` with an absolute `output_path`, same rules as
+- [x] **Write decoded bytes to a file** (`decode_file_range` with an absolute `output_path`, same rules as
   `fs_extract`), for tools that need a file.
 - [ ] **String and data tools on Raw projects.** `list_strings` and `inspect_data` refuse them.
 - [ ] **Image records in containers.** Recognise records that name a payload's offset, compressed length, checksum and

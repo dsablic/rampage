@@ -31,6 +31,9 @@ see the [stability policy](docs/stability.md) for what the version promises.
 - Decoders name the next step: `decode_file_range` and each reproduced `probe_compression` candidate return
   `open_as_raw`, a `raw` selector for the decoded bytes (offset, length and `decode`), with a one-line `next`
   saying to add a profile and load address and pass it to a Raw-capable tool.
+- `decode_file_range` writes the whole decoded output to a file on request: `output_path` (absolute, in an existing
+  directory, never through a symlink; an existing file only with `overwrite: true`), reported as `written`. The
+  tool is now annotated as writing files. See [decoding](docs/decoding.md#mcp).
 
 ## 1.5.0 (2026-11-15)
 

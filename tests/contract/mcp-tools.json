@@ -1240,6 +1240,14 @@
           "type": "integer|string",
           "required": true
         },
+        "output_path": {
+          "type": "null|string",
+          "required": false
+        },
+        "overwrite": {
+          "type": "boolean|null",
+          "required": false
+        },
         "path": {
           "type": "string",
           "required": true

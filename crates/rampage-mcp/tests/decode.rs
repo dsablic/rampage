@@ -86,6 +86,47 @@ async fn decoder_is_explicit_core_and_returns_whole_transient_receipts_without_n
     client.cancel().await.unwrap();
 }
 
+/// output_path writes the whole decoded output to a new file; an existing one only with overwrite, never a
+/// symlink, and only at an absolute path in an existing directory.
+#[cfg(unix)]
+#[tokio::test]
+async fn decoder_writes_the_output_to_an_absolute_path_on_request() {
+    let fixture = Fixture::new();
+    let client = connect().await;
+    let tools = client.list_all_tools().await.unwrap();
+    let tool = tools.iter().find(|tool| tool.name == "decode_file_range").unwrap();
+    let hints = tool.annotations.as_ref().unwrap();
+    assert_eq!((hints.read_only_hint, hints.destructive_hint), (Some(false), Some(true)));
+    let output = fixture.0.join("decoded.bin");
+    let arguments = |output: &std::path::Path, overwrite: bool| {
+        json!({
+            "path": fixture.0.join("input.bin"), "codec": "lzss-4k", "offset": 0, "length": 4,
+            "expected_output_size": 3, "output_path": output, "overwrite": overwrite,
+        })
+    };
+    let result = call(&client, arguments(&output, false)).await;
+    assert_ne!(result.is_error, Some(true), "{result:?}");
+    let receipt: Value = serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+    assert_eq!(receipt["written"]["bytes"], 3);
+    assert_eq!(receipt["written"]["replaced"], false);
+    assert_eq!(std::fs::read(&output).unwrap(), b"ABC");
+    let refused = |result: CallToolResult| {
+        assert_eq!(result.is_error, Some(true));
+        result.content[0].as_text().unwrap().text.clone()
+    };
+    assert!(refused(call(&client, arguments(&output, false)).await).contains("overwrite: true"));
+    let result = call(&client, arguments(&output, true)).await;
+    assert_ne!(result.is_error, Some(true), "{result:?}");
+    std::os::unix::fs::symlink(fixture.0.join("elsewhere.bin"), fixture.0.join("link.bin")).unwrap();
+    let text = refused(call(&client, arguments(&fixture.0.join("link.bin"), true)).await);
+    assert!(text.contains("symlink"), "{text}");
+    assert!(!fixture.0.join("elsewhere.bin").exists());
+    assert!(refused(call(&client, arguments(std::path::Path::new("decoded.bin"), false)).await).contains("absolute"));
+    let text = refused(call(&client, arguments(&fixture.0.join("missing/decoded.bin"), false)).await);
+    assert!(text.contains("does not exist"), "{text}");
+    client.cancel().await.unwrap();
+}
+
 #[tokio::test]
 async fn decoder_rejects_implicit_selection_and_native_image_selectors_before_io() {
     let client = connect().await;

@@ -38,8 +38,8 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   only; no code detection, function discovery or execution.
 - [Native data inspection](data-inspection.md) links bounded stored words to metadata candidates, while
   [explicit decoding](decoding.md) provides LZSS (classic 4K and every explicit variant) and LZ4-block providers,
-  transient previews and a bounded probe that ranks parameter sets for an unknown variant. Limits: pointer
-  links are suppressed on loader warnings; decoding is not extraction, authentication or a load mapping.
+  transient previews (or a written file on request) and a bounded probe that ranks parameter sets for an unknown
+  variant. Limits: pointer links are suppressed on loader warnings; decoding is not authentication or a load mapping.
 - [Raw Projects](sleigh-decoding.md) open headerless images with an asserted profile and base address: sixteen
   Sleigh families, and the *experimental* Cortex-M profile (`ARM:LE:32:Cortex`), which decodes Thumb natively,
   decompiles, seeds from the vector table and optional code-pointer tables, maps up to 15 further code, data or

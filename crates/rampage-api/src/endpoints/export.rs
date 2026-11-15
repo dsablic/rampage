@@ -2,9 +2,11 @@
 //! dnsmasq or unbound configuration, a plain domain list (Pi-hole, AdGuard Home) or an IP list (firewall rules).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+
+use crate::output_file::{check_output, write_atomically};
 
 use serde_json::{Value, json};
 
@@ -219,137 +221,10 @@ fn entry_target(text: &str) -> Result<(String, bool), String> {
     if valid_name(&name) { Ok((name, false)) } else { Err(refused()) }
 }
 
-/// Where the list goes: the output's directory resolved once (symlinks in it followed), and the file name in it.
-struct Target {
-    directory: PathBuf,
-    name: std::ffi::OsString,
-    /// The permission bits of the file being replaced, kept on the new one.
-    replaced_mode: Option<u32>,
-}
-
-impl Target {
-    fn path(&self) -> PathBuf {
-        self.directory.join(&self.name)
-    }
-}
-
 /// Whether the regular file at `path` starts with [`HEADER`], so this tool wrote it.
 fn is_our_blocklist(path: &Path) -> bool {
     let mut head = [0u8; HEADER.len()];
     std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut head)).is_ok() && head == HEADER.as_bytes()
-}
-
-/// Checks `output`: absolute, naming a file that is new, a blocklist this tool wrote, or (with `overwrite`) any
-/// regular file, never a symlink, in an existing directory. The directory is resolved to its canonical path here,
-/// and the list is written there.
-fn check_output(output: &Path, overwrite: bool) -> Result<Target, String> {
-    if !output.is_absolute() {
-        return Err("output must be an absolute path".to_owned());
-    }
-    let name = match output.components().next_back() {
-        Some(std::path::Component::Normal(name)) => name.to_owned(),
-        _ => return Err("output must name a file".to_owned()),
-    };
-    let parent = output.parent().filter(|parent| !parent.as_os_str().is_empty()).ok_or("output has no directory")?;
-    let directory = parent
-        .canonicalize()
-        .ok()
-        .filter(|directory| directory.is_dir())
-        .ok_or_else(|| format!("output's directory {} does not exist", parent.display()))?;
-    let mut target = Target { directory, name, replaced_mode: None };
-    let path = target.path();
-    match std::fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err("output is a symlink; name a regular file".to_owned());
-        }
-        Ok(metadata) if !metadata.is_file() => return Err("output exists and is not a regular file".to_owned()),
-        Ok(metadata) => {
-            if !overwrite && !is_our_blocklist(&path) {
-                return Err(format!(
-                    "output {} exists and is not a blocklist this tool wrote; pass overwrite: true to replace it",
-                    path.display()
-                ));
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                target.replaced_mode = Some(metadata.permissions().mode() & 0o7777);
-            }
-            #[cfg(not(unix))]
-            let _ = metadata;
-        }
-        Err(_) => {}
-    }
-    Ok(target)
-}
-
-/// Writes `text` to a new temporary file in the target's directory and renames it over the target, checking right
-/// before the rename that the name is still not a symlink or anything but a regular file. On Unix every step goes
-/// through the opened directory, so a directory swapped in the path meanwhile is not followed.
-#[cfg(unix)]
-fn write_atomically(target: &Target, text: &str) -> Result<(), String> {
-    use rustix::fs::{AtFlags, CWD, FileType, Mode, OFlags, fchmod, openat, renameat, statat, unlinkat};
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let failed = |error: &dyn std::fmt::Display| format!("write {}: {error}", target.path().display());
-    let directory = openat(CWD, &target.directory, OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC, Mode::empty())
-        .map_err(|error| failed(&error))?;
-    let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut temporary = std::ffi::OsString::from(".");
-    temporary.push(&target.name);
-    temporary.push(format!(".rampage-{}-{serial}.tmp", std::process::id()));
-    let mode = Mode::from_bits_truncate(target.replaced_mode.unwrap_or(0o644) as _);
-    let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let file = openat(&directory, &temporary, flags, mode).map_err(|error| failed(&error))?;
-    let written = (|| -> Result<(), String> {
-        // The umask may have narrowed the mode; a replaced file keeps exactly its own.
-        if target.replaced_mode.is_some() {
-            fchmod(&file, mode).map_err(|error| failed(&error))?;
-        }
-        let mut file = std::fs::File::from(file);
-        file.write_all(text.as_bytes()).map_err(|error| failed(&error))?;
-        file.sync_all().map_err(|error| failed(&error))?;
-        match statat(&directory, &target.name, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(stat) if FileType::from_raw_mode(stat.st_mode as _) != FileType::RegularFile => {
-                return Err(format!(
-                    "{} changed into a symlink or non-file; nothing was written",
-                    target.path().display()
-                ));
-            }
-            Ok(_) if target.replaced_mode.is_none() => {
-                return Err(format!("{} appeared while writing; nothing was written", target.path().display()));
-            }
-            _ => {}
-        }
-        renameat(&directory, &temporary, &directory, &target.name).map_err(|error| failed(&error))
-    })();
-    if written.is_err() {
-        let _ = unlinkat(&directory, &temporary, AtFlags::empty());
-    }
-    written
-}
-
-#[cfg(not(unix))]
-fn write_atomically(target: &Target, text: &str) -> Result<(), String> {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let output = target.path();
-    let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut temporary = std::ffi::OsString::from(".");
-    temporary.push(&target.name);
-    temporary.push(format!(".rampage-{}-{serial}.tmp", std::process::id()));
-    let temporary = target.directory.join(temporary);
-    let written = (|| -> std::io::Result<()> {
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        if std::fs::symlink_metadata(&output).is_ok_and(|metadata| !metadata.is_file()) {
-            return Err(std::io::Error::other("the output changed into a symlink or non-file"));
-        }
-        std::fs::rename(&temporary, &output)
-    })();
-    written.map_err(|error| {
-        let _ = std::fs::remove_file(&temporary);
-        format!("write {}: {error}", output.display())
-    })
 }
 
 /// Builds the blocklist `query` asks for and writes it to `query.output`.
@@ -362,7 +237,7 @@ pub fn endpoint_blocklist(query: &BlocklistQuery) -> Result<Value, String> {
     };
     let allow = patterns(&query.allow, "allow")?;
     let deny = patterns(&query.deny, "deny")?;
-    let target = check_output(&query.output, query.overwrite)?;
+    let target = check_output("output", &query.output, query.overwrite, is_our_blocklist)?;
 
     let mut left_out: BTreeMap<&str, usize> = BTreeMap::new();
     // Each target: (host or address, whether it is an address).
@@ -502,12 +377,12 @@ pub fn endpoint_blocklist(query: &BlocklistQuery) -> Result<Value, String> {
     lines.extend(format.lines(&entries));
     let mut text = lines.join("\n");
     text.push('\n');
-    write_atomically(&target, &text)?;
+    write_atomically(&target, text.as_bytes())?;
     let kept_at_host_level: Vec<Value> =
         kept_at_host_level.iter().map(|(domain, reason)| json!({"domain": domain, "reason": reason})).collect();
     Ok(json!({
         "output": target.path(),
-        "replaced": target.replaced_mode.is_some(),
+        "replaced": target.replaces(),
         "format": format.name(),
         "level": level,
         "entries": entries.len(),

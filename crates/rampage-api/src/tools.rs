@@ -583,15 +583,15 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
-            effect: Effect::None,
+            effect: Effect::FileWrite,
             group: Group::Core,
             name: "decode_file_range",
             description: "Decode an explicit regular-file range with a named built-in decoder, without requiring \
                 an executable header. Codecs: lzss-4k (LSB-first flags, 1=literal, 12-bit references, lengths \
                 nibble+3; ring start default 4078 and fill explicit), lzss (every variant parameter explicit in an \
                 lzss object, as probe_compression's decode_arguments give it) and lz4-block. Expected output size \
-                is supplied, not discovered: no end marker, auto-detection, recursion, extraction, file publication \
-                or execution. \
+                is supplied, not discovered: no end marker, auto-detection, recursion or \
+                execution. output_path (absolute, new unless overwrite) also writes the whole output to a file. \
                 Return range/output hashes, consumed/trailing counts, a bounded decoded-offset preview, and \
                 open_as_raw: a `raw` selector that opens the decoded bytes as a Raw project's code (see next). \
                 Limits: 8 MiB input, 16 MiB output, 128:1 against selected input, cooperative decode deadline. \
@@ -619,7 +619,28 @@ pub fn file_tools() -> Vec<FileTool> {
                         .map_err(|_| "preview offset exceeds host width")?,
                     preview_size: args.preview_size.unwrap_or(256),
                 };
+                // The output path is checked before decoding, so a refused path costs no decode.
+                let target = args
+                    .output_path
+                    .as_deref()
+                    .map(|output| {
+                        crate::output_file::check_output("output_path", output, args.overwrite.unwrap_or(false), |_| {
+                            false
+                        })
+                    })
+                    .transpose()?;
                 let decoded = crate::decode_file_range(&args.path, &request).map_err(|error| error_chain(&error))?;
+                let written = match &target {
+                    Some(target) => {
+                        crate::output_file::write_atomically(target, decoded.bytes())?;
+                        Some(serde_json::json!({
+                            "path": target.path(),
+                            "bytes": decoded.bytes().len(),
+                            "replaced": target.replaces(),
+                        }))
+                    }
+                    None => None,
+                };
                 let selector = crate::open_as_raw(&crate::DecodeArguments {
                     codec: request.codec,
                     offset: request.offset,
@@ -633,6 +654,9 @@ pub fn file_tools() -> Vec<FileTool> {
                 if let Some(selector) = selector {
                     value["open_as_raw"] = selector;
                     value["next"] = Value::String(crate::OPEN_AS_RAW_NEXT.to_owned());
+                }
+                if let Some(written) = written {
+                    value["written"] = written;
                 }
                 Ok(value)
             },
@@ -1342,6 +1366,11 @@ struct DecodeFileArgs {
     preview_offset: Option<crate::FileOffset>,
     /// Preview bytes, 0..1024; default 256. Zero requests a hash/metadata-only receipt.
     preview_size: Option<usize>,
+    /// Absolute path of a file to write the whole decoded output to, in an existing directory; never through a
+    /// symlink. An existing file is refused unless overwrite is true.
+    output_path: Option<std::path::PathBuf>,
+    /// Replace an existing regular file at output_path.
+    overwrite: Option<bool>,
 }
 
 type DecompileView = ToolView;

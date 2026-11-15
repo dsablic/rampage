@@ -2,7 +2,8 @@
 
 `binary decode` and MCP `decode_file_range` decode a selected regular-file range without requiring an
 executable header. The API returns an owned `DecodedContent` buffer and a separate bounded `DecodeReceipt`.
-CLI/MCP return only the receipt and a requested preview; the full content stays transient.
+CLI/MCP return the receipt and a requested preview; the full content stays transient unless MCP `output_path` names a
+file to write it to.
 
 When the variant is unknown, `binary probe-compression` and MCP `probe_compression` sweep the built-in families
 over the range and return ranked parameter sets that `decode_file_range` accepts unchanged
@@ -73,6 +74,11 @@ Native-image `--arch`, `--image-offset` and `--image-length` selectors do not ap
 and `expected_output_size`, with `lzss` and underscore spellings for the optional CLI parameters above. File
 offsets and lengths may be nonnegative JSON integers or hexadecimal/decimal strings. Unknown selectors and missing
 codec selection refuse before source access.
+
+`output_path` (an absolute path in an existing directory) also writes the whole decoded output to that file, for
+tools that need one; the result's `written` gives its `path`, `bytes` and whether it `replaced` a file. An existing
+file is refused unless `overwrite` is true, the final name is never a symlink, and the bytes go to a temporary file
+renamed over the target. Nothing is written when the path or the decode is refused.
 
 Preview paging repeats the bounded decode rather than retaining a hidden payload cache. Compare source-range
 and output hashes across observations; matching hashes are content evidence, not authenticity or atomicity.
