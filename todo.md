@@ -109,7 +109,13 @@ decoded code.
 - [ ] **Image records in containers.** Recognise records that name a payload's offset, compressed length, checksum and
   decoded size, and report them from `carve`/`file_layout` with the matching `decode` arguments.
 - [ ] **Vector table placed at runtime.** When offset 0 is code that writes VTOR, follow the VTOR store to find the
-  table.
+  table. In the run's image the reset code does not store VTOR itself: it first copies sections (next item) and
+  jumps into the copy, so the store is only reachable once copied code is mapped.
+- [ ] **Scatter-load copies.** The decoded image's reset code calls a copy loop and a zero loop for a list of
+  (destination, length, source) triples (flash to TCM and RAM), then `bx` to an address in the copied code, so
+  discovery from the entry stops after one function (`pointer_tables` still recovers thousands). Recognise such
+  copy-table calls from the entry, and let a region take its bytes from a slice of another region (the decoded
+  primary) at its run address, reporting each copy as evidence in `binary_info`.
 
 ### Other ideas (2026-11-14)
 
