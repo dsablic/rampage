@@ -4,7 +4,7 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
-## Unreleased
+## 1.4.0 (2026-11-15)
 
 - Cortex-M ELF firmware decompiles like a Cortex-M Raw project: an ARM ELF whose build attributes
   (`.ARM.attributes`) name an M-profile CPU (profile `M`, or an M-only architecture such as v6-M or v7E-M) is
