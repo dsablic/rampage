@@ -813,6 +813,17 @@
     "type_library",
     "types"
   ],
+  "list_dir": [
+    "entries",
+    "entries[].format",
+    "entries[].kind",
+    "entries[].name",
+    "entries[].size",
+    "next",
+    "next_cursor",
+    "path",
+    "total"
+  ],
   "list_exports": [
     "items",
     "items[].address",

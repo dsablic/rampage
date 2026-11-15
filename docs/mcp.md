@@ -107,7 +107,8 @@ A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling
   `annotate_batch`, `batch`, `check_names`, `undo`, `redo`, `discard_undo`, `list_annotations`, `record_finding`,
   `list_findings`, `transfer_annotations`, `triage_report`,
   `find_main`, `network_surface`, `persistence_surface`, `string_decoding`, `diff_builds`, `inspect_data`,
-  `decode_file_range`, `probe_compression`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`, `language_metadata`,
+  `list_dir`, `decode_file_range`, `probe_compression`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`,
+  `language_metadata`,
   `objc_sends`, `class_evidence`; with --observations (or RAMPAGE_OBSERVATIONS), also `report_observation`.
 - `detection`: `detect_tools`, `identify_functions`, `build_signatures`, `capabilities`, `yara_scan`,
   `capa_detect`, `find_crypto`, `list_packs`, `lock_mechanisms`.
@@ -145,7 +146,7 @@ tools without group gating, plus the interactive `show_address`, which is not an
 no listing to navigate. It does not offer the file tools (`carve`, `archive_inventory`, `fs_list`, `fs_extract`,
 `endpoint_inventory`, `endpoint_blocklist`,
 `list_packs`,
-`query_debugger`, `inspect_data`, `decode_file_range`, `probe_compression`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`,
+`query_debugger`, `list_dir`, `inspect_data`, `decode_file_range`, `probe_compression`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`,
 `pyinstaller_archive`, `wasm_module`) or the `debug` tools.
 
 ## Flywheel (improve)
@@ -316,6 +317,14 @@ CLI listing prints them after the instruction as `; 0x78e`, before the comment c
 headerless code: `inspect_raw_code` for ARM/Thumb, AArch64 and x86, or the `raw` selector for the Raw profiles.
 See [raw-code windows](raw-code.md). `decode_file_range` and `inspect_data` have separate source/coordinate
 contracts; see [decoding](decoding.md) and [data inspection](data-inspection.md).
+
+`list_dir` (core) lists one directory, so an agent given only a folder can start: each entry's `name`, `kind`
+(`file`, `dir`, `symlink` with its stored `link` target, or `other`; links are never followed), `size` and, for
+files, a `format` sniffed from the first 1088 bytes (`elf`, `pe`, `macho`, `macho_universal`, `dex`, `wasm`,
+`squashfs`, `ext`, `cpio`, `tar`, `android_sparse`, `ota_payload`, `ubi`, `ubifs`, `ar`, `zip`, `gzip`, `xz`,
+`zstd`, `bzip2`, `lz4_frame`, `7z`, `ihex`, `srec`, `text` or `unknown`). Entries are sorted by name and paged by
+`cursor` (`limit` 1..=500, default 100); a directory of more than 100,000 entries is refused, as is a path that is
+a symlink or not a directory. Names that are not UTF-8 show other bytes as `\xHH`.
 
 `file_layout` maps any regular file, or an explicit range of at most 64 MiB, in one call and without a loader:
 fill (0xff, 0x00, other repeated byte) and occupied regions with per-region SHA-256 and entropy, block entropy

@@ -3237,6 +3237,23 @@
         }
       }
     },
+    "list_dir": {
+      "group": "core",
+      "arguments": {
+        "cursor": {
+          "type": "null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
     "list_exports": {
       "group": "core",
       "arguments": {

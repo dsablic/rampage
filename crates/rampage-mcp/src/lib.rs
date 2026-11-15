@@ -199,6 +199,7 @@ provides bounded linear decoding of original-file windows with an explicitly ass
 architecture/mode/orders/base, without native-image admission or target following. inspect_data provides bounded \
 native bytes/word candidates without discovery or sidecars; names resolve only through retained metadata. \
 decode_file_range instead accepts an explicit regular-file range and codec without an executable header. \
+Given a folder, list_dir lists it (kind, size and sniffed format per entry). \
 file_layout maps any file or range (padding, entropy, string clusters, hashes, hints) as a first look at firmware; \
 its compressed_component_candidate hints give a payload range and decoded-size words for probe_compression, whose \
 ranked decode_arguments go to decode_file_range unchanged; both return open_as_raw, which with a profile and \

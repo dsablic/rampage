@@ -151,6 +151,7 @@
     "endpoints_omitted",
     "endpoints_total",
     "hint",
+    "ignored_entries",
     "limitations",
     "next_cursor",
     "noise",

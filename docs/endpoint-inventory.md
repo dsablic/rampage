@@ -29,7 +29,8 @@ Both are file tools in the `carve` group. They take a path, open no project and 
 - `path` is an executable or any other file, or a directory. A directory is walked without following symlinks; its
   executables (ELF, PE, Mach-O, by their magic) and configuration-like text files (a `#!` line, or `.sh`, `.conf`,
   `.cfg`, `.json`, `.xml`, `.prop`, `.properties`, `.ini`, `.yaml`, `.yml`, `.rc`, `.service`, `.env`, `.lua`) are
-  scanned, in the byte order of their paths. Other files are counted as `ignored`. A path that is not UTF-8 is
+  scanned, in the byte order of their paths. Other files are counted as `ignored`, and the first 20 are named in
+  `ignored_entries` with the reason (binary data under a text name, or neither kind). A path that is not UTF-8 is
   written with `\xHH` escapes (and a backslash doubled), in components and cursors alike.
 - A directory scan stops after `max_files` scanned files (default 200, at most 5000) or `timeout_ms` (default
   20000, at most 120000), whichever comes first, and always after at least one file. It then returns `next_cursor`

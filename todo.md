@@ -97,7 +97,7 @@ behind a six-word record (base, payload offset, compressed length, additive sum,
 container, codec, sums and architecture in 29 turns ($0.32) but no function-level facts, because it never reached the
 decoded code.
 
-- [ ] **List a directory.** No tool lists files, so an agent given only a folder cannot start. A small `list_dir`
+- [x] **List a directory.** No tool lists files, so an agent given only a folder cannot start. A small `list_dir`
   (names, sizes, kinds, a magic sniff), and `endpoint_inventory` naming the entries it ignored.
 - [x] **Open decoded bytes as the primary Raw region.** A Raw region can already carry `decode`, but only as a further
   region; Haiku never found it and concluded nothing could analyse decoded output. Allow `decode` on the primary

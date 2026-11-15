@@ -23,6 +23,7 @@ mod flywheel;
 mod fs_image;
 mod function_frame;
 mod inspect_sleigh;
+mod list_dir;
 mod local_variables;
 mod msvc_cpp;
 mod objc;

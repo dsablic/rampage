@@ -234,6 +234,10 @@ fn a_tree_groups_endpoints_by_domain_and_component() {
     let scanned = &value["scanned"];
     assert_eq!((&scanned["executables"], &scanned["text_files"]), (&2.into(), &4.into()), "{scanned:#}");
     assert_eq!((&scanned["ignored"], &scanned["symlinks"]), (&1.into(), &1.into()), "{scanned:#}");
+    // The ignored file is named with the reason.
+    let ignored = &value["ignored_entries"];
+    assert_eq!(ignored[0]["path"], "usr/share/doc/readme.txt", "{ignored:#}");
+    assert!(ignored[0]["reason"].as_str().unwrap().contains("file_layout"), "{ignored:#}");
     assert_eq!(value["next_cursor"], Value::Null);
     let domains = value["domains"].as_array().unwrap();
     // The vendor domain is named by every component but app.xml, so it leads.

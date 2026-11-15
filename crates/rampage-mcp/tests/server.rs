@@ -129,6 +129,7 @@ async fn lists_all_tools_with_instructions() {
         "integrity_checks",
         "language_metadata",
         "list_annotations",
+        "list_dir",
         "list_exports",
         "list_findings",
         "list_functions",

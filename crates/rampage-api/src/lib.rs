@@ -48,6 +48,7 @@ mod import_types;
 pub mod integrity;
 mod jumptable;
 pub mod layout_containers;
+mod list_dir;
 mod listing;
 mod locks;
 mod module_references;
@@ -196,6 +197,7 @@ pub use image_export::{ExportFormat, ExportImageRequest, ImageExport};
 pub use import_types::{ImportPrototype, PosixContext, import_prototype};
 pub use integrity::{IntegrityOutcome, IntegrityReport, IntegrityRequest};
 pub use jumptable::{JumpTable, JumpTableEntry};
+pub use list_dir::{DirEntry, DirListing, ListDirQuery, MAX_DIR_ENTRIES, MAX_LIST_DIR_PAGE, list_dir};
 pub use listing::{DisassemblyLine, FunctionListing};
 pub use locks::{LockQuery, LockReport, Mechanism as LockMechanism};
 pub use module_references::{

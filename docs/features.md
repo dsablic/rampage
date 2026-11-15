@@ -29,6 +29,8 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 
 ## Formats and instruction decoding
 
+- `list_dir` lists a folder with each entry's kind, size and sniffed format, so work can start from a directory.
+  See [MCP](mcp.md). Limits: one directory per call, at most 100,000 entries; formats come from magic bytes only.
 - [File layout](file-layout.md) maps any file or range of up to 64 MiB in one call: padding and occupied
   regions with hashes, block entropy, string clusters and labelled hints, including header-checked
   compressed-component candidates. Limits: statistics and heuristic

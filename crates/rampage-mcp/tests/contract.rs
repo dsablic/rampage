@@ -286,6 +286,7 @@ async fn contract_mcp_core_results() {
     std::fs::write(&firmware, contract::layout_fixture()).unwrap();
     let layout = json!({"path": firmware, "block_size": 512, "block_limit": 2, "utf16": true});
     exercise(c, o, "file_layout", layout).await;
+    exercise(c, o, "list_dir", json!({"path": scratch.0, "limit": 1})).await;
     client.cancel().await.unwrap();
 
     let missing: Vec<String> = core_tools().into_iter().filter(|name| !observed.contains_key(name)).collect();

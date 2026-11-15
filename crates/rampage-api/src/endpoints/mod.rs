@@ -43,6 +43,11 @@ const MAX_GROUPS: usize = 100;
 const MAX_GROUP_ITEMS: usize = 10;
 const MAX_NOISE_EXAMPLES: usize = 3;
 const MAX_SKIPPED: usize = 20;
+/// Ignored entries named in a result; the count covers the rest.
+const MAX_IGNORED_NAMED: usize = 20;
+/// Why most ignored files were passed over.
+const NOT_SCANNED: &str =
+    "neither an executable nor configuration-like text (by magic, extension or shebang); file_layout reads any file";
 /// Extensions of the configuration-like text files a tree scan reads (besides scripts with a `#!` line).
 const TEXT_EXTENSIONS: [&str; 14] =
     ["sh", "conf", "cfg", "json", "xml", "prop", "properties", "ini", "yaml", "yml", "rc", "service", "env", "lua"];
@@ -144,6 +149,8 @@ pub struct Inventory {
     pub skipped: Vec<(String, String)>,
     /// Other files passed over (neither executable nor configuration-like text).
     pub ignored: usize,
+    /// The first ignored files with the reason each was passed over.
+    pub ignored_entries: Vec<(String, &'static str)>,
     pub symlinks: usize,
     pub next_cursor: Option<String>,
     pub stopped: Option<&'static str>,
@@ -217,6 +224,14 @@ impl Inventory {
             let pin =
                 if row.value.starts_with("sha256/") { row.value.clone() } else { format!("sha256/{}", row.value) };
             row.pins_certificate = pins.get(&pin).cloned();
+        }
+    }
+
+    /// Counts a file passed over, naming the first [`MAX_IGNORED_NAMED`] with the reason.
+    fn ignore(&mut self, path: &str, reason: &'static str) {
+        self.ignored += 1;
+        if self.ignored_entries.len() < MAX_IGNORED_NAMED {
+            self.ignored_entries.push((path.to_owned(), reason));
         }
     }
 
@@ -497,7 +512,7 @@ fn scan_file(
                 Err(error) => return inventory.skip(component, format!("unreadable: {error}")),
             };
             if bytes[..bytes.len().min(8192)].contains(&0) {
-                inventory.ignored += 1;
+                inventory.ignore(component, "binary data under a text name");
                 return;
             }
             inventory.files += 1;
@@ -506,7 +521,7 @@ fn scan_file(
             inventory.components.insert(component.to_owned(), "text".to_owned());
             scan_text(&String::from_utf8_lossy(&bytes), component, inventory);
         }
-        FileKind::Other => inventory.ignored += 1,
+        FileKind::Other => inventory.ignore(component, NOT_SCANNED),
     }
 }
 
@@ -633,6 +648,7 @@ pub fn scan(query: &InventoryQuery) -> Result<Inventory, String> {
             }
             let bytes = std::fs::read(&query.path).map_err(|error| error.to_string())?;
             inventory.ignored = 0;
+            inventory.ignored_entries.clear();
             inventory.files = 1;
             inventory.bytes = bytes.len() as u64;
             inventory.components.insert(component.clone(), "data".to_owned());
@@ -666,7 +682,7 @@ pub fn scan(query: &InventoryQuery) -> Result<Inventory, String> {
                 }
             };
             if matches!(kind, FileKind::Other) {
-                inventory.ignored += 1;
+                inventory.ignore(relative, NOT_SCANNED);
                 continue;
             }
             if scanned > 0 && inventory.files >= max_files {
@@ -838,6 +854,7 @@ pub fn endpoint_inventory(query: &InventoryQuery) -> Result<Value, String> {
         },
         "skipped": skipped,
         "skipped_total": skipped_total,
+        "ignored_entries": inventory.ignored_entries.iter().map(|(path, reason)| json!({"path": path, "reason": reason})).collect::<Vec<_>>(),
         "next_cursor": inventory.next_cursor,
         "stopped": inventory.stopped,
         "counts": counts,

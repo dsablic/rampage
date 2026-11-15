@@ -401,6 +401,18 @@ struct ArchiveInventoryArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct ListDirArgs {
+    /// A directory (not a symlink to one).
+    path: std::path::PathBuf,
+    /// next_cursor of the previous page.
+    cursor: Option<String>,
+    /// Entries per page, 1..=500 (default 100).
+    #[schemars(range(min = 1, max = 500))]
+    limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct FsListArgs {
     /// Any regular file holding the image.
     path: std::path::PathBuf,
@@ -580,6 +592,22 @@ pub fn file_tools() -> Vec<FileTool> {
                 let request: crate::RawFileRequest = arguments(input)?;
                 let report = crate::inspect_raw_file(&path, &request).map_err(|error| error_chain(&error))?;
                 serde_json::to_value(report).map_err(|error| error.to_string())
+            },
+        },
+        FileTool {
+            effect: Effect::None,
+            group: Group::Core,
+            name: "list_dir",
+            description: "List a directory: each entry's name, kind (file, dir, symlink, other; links are never \
+                          followed), size and a format sniffed from its first bytes (elf, pe, macho, squashfs, ext, \
+                          cpio, tar, zip, gzip, ihex, srec, text, unknown, ...). Sorted by name, paged by cursor. \
+                          Start here when given a folder.",
+            input_schema: schema::<ListDirArgs>(),
+            handler: |_, input| {
+                let args: ListDirArgs = arguments(input)?;
+                let listing =
+                    crate::list_dir(&crate::ListDirQuery { path: args.path, cursor: args.cursor, limit: args.limit })?;
+                serde_json::to_value(listing).map_err(|error| error.to_string())
             },
         },
         FileTool {

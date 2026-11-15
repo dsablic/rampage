@@ -34,6 +34,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
 - `decode_file_range` writes the whole decoded output to a file on request: `output_path` (absolute, in an existing
   directory, never through a symlink; an existing file only with `overwrite: true`), reported as `written`. The
   tool is now annotated as writing files. See [decoding](docs/decoding.md#mcp).
+- Folders: the new `list_dir` file tool (group `core`) lists a directory, each entry with its kind (symlinks shown,
+  never followed), size and a format sniffed from its first bytes (executables, filesystem images, archives and
+  compressed streams, Intel HEX, S-records, text), sorted by name and paged by cursor, so an agent given only a
+  folder can start. `endpoint_inventory` names the first 20 files it ignored, with the reason, in
+  `ignored_entries`. See [MCP](docs/mcp.md).
 
 ## 1.5.0 (2026-11-15)
 
