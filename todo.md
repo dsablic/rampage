@@ -120,6 +120,18 @@ decoded code.
   each call decodes again before it can find the project (key the cache on the selector and source metadata
   first). `inspect_data` opens its Raw image outside `Session::open_raw` (a file tool has no session), so analyst
   names do not resolve in `at` and its 16 KiB input budget refuses large selectors; route it through the session.
+- [ ] **Second Haiku run (2026-11-15, after cd681a9).** With the decoded image open as a Raw project, Haiku found
+  the startup copy/zero routine, the relocated code's run addresses, the updater's main loop, the sum ranges, and
+  USB, MIDI and storage strings, in 63 turns ($0.64). Started from a folder only, it used `list_dir` and got as far.
+  What it still hit:
+  - scatter-load (above): calls into the copied code fail with "decompilation requires a file-backed code
+    address", so the application's main is never reached;
+  - `decompile` with `exact_entry` refuses ARM ("x86, x86-64 and AArch64 only");
+  - `triage`, `find_main`, `find_crypto` and `function_summary` refuse Raw projects, so it searched bytes by hand;
+  - `xrefs` found no references to strings that Thumb code loads through literal pools in the Raw image;
+  - entry-only discovery found three functions and Haiku never tried `pointer_tables`: `binary_info` or
+    `list_functions` should suggest it when discovery from the entry is that small;
+  - it never ran `integrity_checks` on the decoded code to find the routine that checks the sums.
 - [ ] **Read-only annotations for file tools.** MCP lists read-only file tools (`list_dir`, `decode_file_range`,
   `file_layout`, `carve`, ...) without annotations, which the MCP spec treats as possibly destructive; give them
   `read_only(true)`.
