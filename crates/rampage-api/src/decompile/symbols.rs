@@ -262,8 +262,8 @@ fn class_type_names(name: &str) -> Vec<String> {
 /// inference never overrides a locked (library or analyst) prototype. Other headered images keep Ghidra's defaults
 /// (a PE's `.rdata` can be rewritten at run time by its pseudo-relocator, and a Linux ELF's by its dynamic loader),
 /// and so do the other Raw profiles, whose image is often RAM that the program writes (`lda counter` would fold to
-/// its load-time byte). The engine resets the callee inference before each top-level decompilation, so a cached
-/// engine gives the same C whatever was decompiled before.
+/// its load-time byte). The engine keeps what callee inference derives, each verdict a property of the callee
+/// alone, so a cached engine is fast and gives the same C whatever was decompiled before.
 ///
 /// Loads from the flash mapping fold into the values they read, so a literal-pool word reads as the address or
 /// constant it holds. Flash the code reads or writes at an address it forms itself (`mov r1, #0xc80; ldr r1, [r1]`)

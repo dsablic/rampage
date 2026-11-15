@@ -153,13 +153,18 @@ but ARMv8-M-only instructions are not reviewed, and `cortex-m33`/`cortex-m55` ar
   through untouched still reaches the call. Return types stay inferred: a locked return changes how Ghidra
   recovers a caller's own return. A callee is left as Ghidra infers it when its code has an indirect call or jump,
   a supervisor call (`svc`, which passes registers its p-code never shows), a branch into another function (a
-  thunk or tail call, conditional or not), a recursive cycle, or a callee that cannot be derived; at most 64 callee
-  decompilations per request. A branch into the middle of another function is not recognised (the decompiler knows
-  entries, not extents). Before each decompilation the engine puts back every derived lock and effect and forgets
-  what it learned, so the result never depends on what was decompiled before, and matches the isolated worker,
-  which opens a fresh engine per request. Keeping one engine costs about 10 ms per decompilation (dev build) on a
-  generated 680 KiB image (50 functions in 0.49 s, against 0.32 s without callee inference; reopening the engine
-  each time took 13.7 s).
+  thunk or tail call, conditional or not), a recursive cycle, or a callee that cannot be derived. A branch into the
+  middle of another function is not recognised (the decompiler knows entries, not extents).
+
+  Every verdict is a property of the callee alone, so one engine keeps them all: effects are known when what the
+  callee reaches through direct calls is at most 256 functions and 16 calls deep; a prototype is derived (once)
+  when what it reaches is at most 64 functions. Which derived callees a decompilation sees is fixed by the function
+  too: its direct callees in address order, each while what they reach together stays within 64 functions, which
+  bounds the derivations a fresh engine (the isolated worker opens one per request) makes for it. Other derived
+  locks among its callees, and its own, are set aside while it is decompiled, and globals an earlier decompilation
+  discovered are dropped, so the result never depends on what was decompiled before. On the stripped
+  `embedded-libs-m0` fixture (549 functions) the largest function takes about 2 s on a fresh engine, and one engine
+  decompiles every function in about 2 minutes (release build).
 - **Bit fields.** `ubfx r0, r0, #4, #12` reads as `(x & 0xffff) >> 4` and `lsls #4; uxth` as `(int2)x << 4`:
   Ghidra keeps the mask beside the operand it applies to, which is equivalent to `(x >> 4) & 0xfff`. Compare
   against the disassembly; the expression is right, only its grouping differs.

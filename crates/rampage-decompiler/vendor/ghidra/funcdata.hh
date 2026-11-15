@@ -203,6 +203,8 @@ public:
   /// \param val is \b true if data-type analysis is enabled
   void setTypeRecovery(bool val) { flags = val ? (flags | typerecovery_on) : (flags & ~typerecovery_on); }
   void setTypeRecoveryExceeded(void) { flags |= typerecovery_exceeded; }	///< Mark propagation passes have reached maximum
+  /// rampage: forget a previous analysis reaching the maximum, which clear() keeps, so a new one starts the same
+  void clearTypeRecoveryExceeded(void) { flags &= ~((uint4)typerecovery_exceeded); }
   void startCastPhase(void) { cast_phase_index = vbank.getCreateIndex(); }	///< Start the \b cast insertion phase
   uint4 getCastPhaseIndex(void) const { return cast_phase_index; }	///< Get creation index at the start of \b cast insertion
   uint4 getHighLevelIndex(void) const { return high_level_index; }	///< Get creation index at the start of HighVariable creation

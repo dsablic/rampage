@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <sstream>
 #include <iterator>
 #include <map>
@@ -152,9 +153,28 @@ public:
 class NamedGlobalScope : public ScopeInternal {
     std::map<uintb, std::string> labels;
     std::map<uintb, std::pair<uintb, std::string>> regions;  // first byte -> (last byte, prefix)
+    // Global symbols a decompilation discovered (Funcdata::mapGlobals), while `recording`.
+    std::vector<Symbol *> discovered;
 
 public:
+    bool recording = false;
+
     explicit NamedGlobalScope(Architecture *architecture) : ScopeInternal(0, "", architecture) {}
+
+    void addSymbolInternal(Symbol *symbol) override {
+        ScopeInternal::addSymbolInternal(symbol);
+        if (recording) discovered.push_back(symbol);
+    }
+    void removeSymbol(Symbol *symbol) override {
+        discovered.erase(std::remove(discovered.begin(), discovered.end(), symbol), discovered.end());
+        ScopeInternal::removeSymbol(symbol);
+    }
+    // Removes every discovered symbol; no function's analysis may still refer to one.
+    void forgetDiscovered() {
+        std::vector<Symbol *> symbols = std::move(discovered);
+        discovered.clear();
+        for (auto symbol = symbols.rbegin(); symbol != symbols.rend(); ++symbol) ScopeInternal::removeSymbol(*symbol);
+    }
 
     void addLabel(uintb address, const std::string &name) { labels[address] = name; }
     void addRegion(uintb first, uintb last, const std::string &prefix) {
@@ -258,6 +278,21 @@ struct VirtualTable {
     bool truncated;
 };
 
+enum class Derivation { Locked, Underivable, Limited };
+
+// What one function's raw p-code says, read once from a scratch copy of its flow (flowFacts): whether anything it
+// does is hidden from its own p-code (an indirect call or jump, a supervisor call, a call outside the code space,
+// bad or unimplemented code), whether its flow runs into another function (a tail call or fall-through), the
+// processor registers it writes itself, and its direct call targets in address order.
+struct FlowFacts {
+    bool unknown = false;
+    bool foreign = false;
+    std::vector<VarnodeData> own;
+    std::vector<uintb> calls;
+    // `calls` without repeats or calls to itself.
+    std::vector<uintb> callees;
+};
+
 struct Handle {
     MemArchitecture *arch = nullptr;
     rampage::TokenEmitter *emitter = nullptr;
@@ -279,11 +314,20 @@ struct Handle {
     std::set<uintb> limitedWrites;
     std::set<uintb> effectsApplied;
     std::map<uintb, std::vector<EffectRecord>> effectOverrides;
+    std::map<uintb, FlowFacts> flowFacts;
     // Callee prototypes: committed from each callee's own decompilation, bottom-up, before its callers'.
     bool deriveCalleePrototypes = false;
     std::set<uintb> underivablePrototypes;
     // Each derived function's prototype as it was before the lock, to put back between top-level decompilations.
     std::map<uintb, std::unique_ptr<FuncProto>> derivedRestore;
+    // Without vftables, every verdict above and below depends only on the function it is about (see
+    // `deriveLocked`), so they are kept for the engine's life: each derived function's verdict and its lock, and
+    // the derived locks set aside while a function is decompiled (applyView).
+    std::map<uintb, Derivation> derivations;
+    std::map<uintb, PrototypePieces> derivedPieces;
+    std::set<uintb> aside;
+    // Functions whose analysis is kept after their decompilation, until forgetDiscovered clears it.
+    std::set<uintb> analysed;
     // MSVC vftables (see `rampage_decomp_virtual_table`), indexed for virtual call resolution.
     std::vector<VirtualTable> vtables;
     std::map<uintb, std::vector<size_t>> vtablesByMember;
@@ -491,11 +535,19 @@ const char *setError(Handle *handle, const char *message, bool poison = false) n
     return handleError(handle);
 }
 
+void resetCalleeInference(Handle *handle);
+void forgetDiscovered(Handle *handle, bool record);
+
 template <typename Operation>
 const char *mutate(Handle *handle, Operation operation) noexcept {
     if (handle->arch == nullptr || handle->poisoned) return "Decompiler handle is unavailable";
     bool nativeMutation = false;
     try {
+        // A change of symbols, prototypes, overrides or settings can change any kept callee verdict.
+        nativeMutation = true;
+        forgetDiscovered(handle, false);
+        resetCalleeInference(handle);
+        nativeMutation = false;
         operation(nativeMutation);
         handle->error.clear();
         handle->fallbackError = false;
@@ -777,6 +829,40 @@ NamedGlobalScope &namedGlobals(Handle *handle) {
     return *scope;
 }
 
+// Whether callee inference keeps its verdicts for the engine's life (see deriveLocked): Cortex-M firmware, which has
+// no vftables.
+bool keepsInference(const Handle *handle) {
+    return handle->vtables.empty() && (handle->inferCalleeEffects || handle->deriveCalleePrototypes);
+}
+
+// A decompilation adds the globals it discovers to the global scope, typed as it used them, and the next one reads
+// them back: what one function decompiles to would then depend on which were decompiled before it, and on which
+// callees were derived in the same request. Where callee inference is kept, every analysis (a top-level one, a
+// callee derivation) starts without them, as Ghidra's own decompiler starts each function from the program's
+// symbols. Clears the kept analyses that could refer to them first; `record` says whether to record the next ones.
+void forgetDiscovered(Handle *handle, bool record) {
+    if (!keepsInference(handle)) return;
+    Architecture *arch = handle->arch;
+    Scope *global = arch->symboltab->getGlobalScope();
+    for (uintb entry : handle->analysed) {
+        Funcdata *function = global->queryFunction(Address(arch->getDefaultCodeSpace(), entry));
+        if (function != nullptr) arch->clearAnalysis(function);
+    }
+    handle->analysed.clear();
+    NamedGlobalScope &scope = namedGlobals(handle);
+    scope.forgetDiscovered();
+    scope.recording = record;
+}
+
+// Readies `function` for an analysis that starts as on a fresh engine where callee inference is kept: no discovered
+// globals, and no memory of a previous analysis reaching Ghidra's type propagation limit (Funcdata::clear keeps it,
+// and a second analysis would then skip the propagation passes the first ran).
+void freshAnalysis(Handle *handle, Funcdata *function) {
+    if (!keepsInference(handle)) return;
+    forgetDiscovered(handle, true);
+    function->clearTypeRecoveryExceeded();
+}
+
 // Callee register effects. Ghidra assumes every call clobbers what the calling convention says it may (r0-r3 and
 // r12 on ARM), so a caller that keeps a value in r1 across a call to a leaf that never touches r1 (as GCC's
 // -fipa-ra and LLVM's IPRA do) loses it: the next call's argument reads as `extraout_r1` or disappears. From the
@@ -785,6 +871,7 @@ NamedGlobalScope &namedGlobals(Handle *handle) {
 enum class WritesResult { Known, Unknown, Limited };
 
 constexpr int4 calleeWritesDepth = 16;
+constexpr size_t calleeWritesBudget = 256;
 
 bool overlaps(const VarnodeData &a, const VarnodeData &b) {
     return a.space == b.space && a.offset < b.offset + b.size && b.offset < a.offset + a.size;
@@ -807,35 +894,22 @@ bool unknownUserOp(Architecture *arch, const PcodeOp *op) {
     return name.find("software") != std::string::npos || name.find("supervisor") != std::string::npos;
 }
 
-// The registers the function at `entry` may write, itself or through its direct callees. Unknown when it has an
-// indirect call or jump, a supervisor call, undecodable or unimplemented code, or a recursive cycle; Limited when
-// the depth or function budget ran out. Known and Unknown verdicts are kept until the next top-level
-// decompilation resets them (resetCalleeInference); Limited only for a top-level query.
-WritesResult calleeWrites(Handle *handle, uintb entry, std::set<uintb> &visiting, size_t &budget, int4 depth,
-                          std::vector<VarnodeData> &writes) {
-    auto known = handle->calleeWrites.find(entry);
-    if (known != handle->calleeWrites.end()) {
-        writes.insert(writes.end(), known->second.begin(), known->second.end());
-        return WritesResult::Known;
-    }
-    if (handle->unknownWrites.count(entry) != 0 || visiting.count(entry) != 0) return WritesResult::Unknown;
-    // Remembered, so a callee too deep for the budget is not walked again for every later call to it.
-    if ((depth == 0 && handle->limitedWrites.count(entry) != 0) || depth > calleeWritesDepth || budget == 0)
-        return WritesResult::Limited;
-    --budget;
+// The facts of the function at `entry` (FlowFacts), from the raw p-code of every instruction reachable from it in a
+// scratch function, without touching the registered function's own analysis state. They depend only on its code
+// and on which addresses are registered functions, so they are kept until resetCalleeInference.
+const FlowFacts &flowFacts(Handle *handle, uintb entry) {
+    auto found = handle->flowFacts.find(entry);
+    if (found != handle->flowFacts.end()) return found->second;
     Architecture *arch = handle->arch;
     AddrSpace *code = arch->getDefaultCodeSpace();
-    std::vector<VarnodeData> own;
-    std::vector<uintb> callees;
-    bool unknown = false;
+    Scope *global = arch->symboltab->getGlobalScope();
+    Address start(code, entry);
+    FlowFacts facts;
     try {
-        // A scratch function: the raw p-code of every reachable instruction, without touching the registered
-        // function's own analysis state.
-        Funcdata scratch("rampage_callee_writes", "rampage_callee_writes", arch->symboltab->getGlobalScope(),
-                         Address(code, entry), nullptr);
+        Funcdata scratch("rampage_callee_writes", "rampage_callee_writes", global, start, nullptr);
         scratch.followFlow(Address(code, 0), Address(code, code->getHighest()));
-        unknown = scratch.hasUnimplemented() || scratch.hasBadData();
-        for (auto iter = scratch.beginOpAll(); !unknown && iter != scratch.endOpAll(); ++iter) {
+        facts.unknown = scratch.hasUnimplemented() || scratch.hasBadData();
+        for (auto iter = scratch.beginOpAll(); !facts.unknown && iter != scratch.endOpAll(); ++iter) {
             const PcodeOp *op = iter->second;
             const Varnode *out = op->getOut();
             if (out != nullptr && out->getSpace()->getType() == IPTR_PROCESSOR) {
@@ -843,48 +917,115 @@ WritesResult calleeWrites(Handle *handle, uintb entry, std::set<uintb> &visiting
                 data.space = out->getSpace();
                 data.offset = out->getOffset();
                 data.size = uint4(out->getSize());
-                own.push_back(data);
+                facts.own.push_back(data);
             }
             switch (op->code()) {
             case CPUI_CALL: {
                 Address target = callTarget(scratch, op);
-                if (target.getSpace() != code) unknown = true;
-                else callees.push_back(target.getOffset());
+                if (target.getSpace() != code) facts.unknown = true;
+                else facts.calls.push_back(target.getOffset());
                 break;
             }
             case CPUI_CALLIND:
             case CPUI_BRANCHIND:
-                unknown = true;
+                facts.unknown = true;
                 break;
             case CPUI_CALLOTHER:
-                unknown = unknownUserOp(arch, op);
+                facts.unknown = unknownUserOp(arch, op);
                 break;
+            case CPUI_BRANCH:
+            case CPUI_CBRANCH: {
+                // A tail call, conditional ones too: `cmp r0, #0; bne.w other; ...`.
+                const Varnode *target = op->getIn(0);
+                if (target->getSpace() == code && target->getAddr() != start
+                    && global->queryFunction(target->getAddr()) != nullptr)
+                    facts.foreign = true;
+                break;
+            }
             default:
                 break;
             }
+            // Flow that reaches another function's entry by any path (a fall-through into it, say).
+            if (op->getAddr() != start && op->getAddr().getSpace() == code
+                && global->queryFunction(op->getAddr()) != nullptr)
+                facts.foreign = true;
         }
     } catch (const LowlevelError &) {
-        unknown = true;
+        facts.unknown = true;
     }
-    if (unknown) {
-        handle->unknownWrites.insert(entry);
-        return WritesResult::Unknown;
+    for (uintb target : facts.calls)
+        if (target != entry && std::find(facts.callees.begin(), facts.callees.end(), target) == facts.callees.end())
+            facts.callees.push_back(target);
+    return handle->flowFacts.emplace(entry, std::move(facts)).first->second;
+}
+
+// The registers the function at `entry` may write, itself or through its direct callees. Unknown when anything it
+// reaches has an indirect call or jump, a supervisor call, undecodable or unimplemented code, or a recursive cycle;
+// Limited when it reaches more than `calleeWritesBudget` functions (itself included) or calls more than
+// `calleeWritesDepth` deep. Each verdict is a property of `entry` and the code it reaches alone, never of the
+// function being decompiled or of what was walked before, so it is kept for the engine's life.
+WritesResult calleeWrites(Handle *handle, uintb entry, std::vector<VarnodeData> &writes) {
+    auto known = handle->calleeWrites.find(entry);
+    if (known != handle->calleeWrites.end()) {
+        writes.insert(writes.end(), known->second.begin(), known->second.end());
+        return WritesResult::Known;
     }
-    visiting.insert(entry);
+    if (handle->unknownWrites.count(entry) != 0) return WritesResult::Unknown;
+    if (handle->limitedWrites.count(entry) != 0) return WritesResult::Limited;
+    // Everything it reaches, breadth first in call order, up to the budget.
+    std::vector<uintb> reached{entry};
+    std::set<uintb> seen{entry};
     WritesResult result = WritesResult::Known;
-    for (uintb callee : callees) {
-        result = calleeWrites(handle, callee, visiting, budget, depth + 1, own);
-        if (result != WritesResult::Known) break;
+    for (size_t index = 0; index < reached.size() && result == WritesResult::Known; ++index) {
+        const FlowFacts &facts = flowFacts(handle, reached[index]);
+        if (facts.unknown) {
+            result = WritesResult::Unknown;
+            break;
+        }
+        for (uintb callee : facts.calls) {
+            if (!seen.insert(callee).second) continue;
+            reached.push_back(callee);
+            if (reached.size() > calleeWritesBudget) {
+                result = WritesResult::Limited;
+                break;
+            }
+        }
     }
-    visiting.erase(entry);
-    if (result == WritesResult::Unknown) handle->unknownWrites.insert(entry);
-    // Only a top-level query, with the whole budget, says the callee itself is out of reach; an intermediate ran out
-    // of what its caller left, which another caller may not.
-    if (result == WritesResult::Limited && depth == 0) handle->limitedWrites.insert(entry);
+    // The longest call chain below each reached function, in calls; -1 on a cycle.
     if (result == WritesResult::Known) {
-        handle->calleeWrites[entry] = own;
-        writes.insert(writes.end(), own.begin(), own.end());
+        std::map<uintb, int4> height;
+        std::set<uintb> active;
+        std::function<int4(uintb)> heightOf = [&](uintb node) -> int4 {
+            auto done = height.find(node);
+            if (done != height.end()) return done->second;
+            if (!active.insert(node).second) return -1;
+            int4 longest = 0;
+            for (uintb callee : flowFacts(handle, node).calls) {
+                int4 below = heightOf(callee);
+                if (below < 0) {
+                    longest = -1;
+                    break;
+                }
+                longest = std::max(longest, below + 1);
+            }
+            active.erase(node);
+            height[node] = longest;
+            return longest;
+        };
+        int4 longest = heightOf(entry);
+        if (longest < 0) result = WritesResult::Unknown;
+        else if (longest > calleeWritesDepth) result = WritesResult::Limited;
     }
+    if (result == WritesResult::Unknown) handle->unknownWrites.insert(entry);
+    if (result == WritesResult::Limited) handle->limitedWrites.insert(entry);
+    if (result != WritesResult::Known) return result;
+    std::vector<VarnodeData> all;
+    for (uintb node : reached) {
+        const FlowFacts &facts = flowFacts(handle, node);
+        all.insert(all.end(), facts.own.begin(), facts.own.end());
+    }
+    writes.insert(writes.end(), all.begin(), all.end());
+    handle->calleeWrites[entry] = std::move(all);
     return result;
 }
 
@@ -916,10 +1057,8 @@ void inferCalleeEffects(Handle *handle, Funcdata *function) {
         if (callee == nullptr || callee == function || !callee->getFuncProto().hasModel()
             || callee->getFuncProto().getModelName() != model->getName())
             continue;
-        std::set<uintb> visiting;
-        size_t budget = 256;
         std::vector<VarnodeData> writes;
-        WritesResult result = calleeWrites(handle, target.getOffset(), visiting, budget, 0, writes);
+        WritesResult result = calleeWrites(handle, target.getOffset(), writes);
         handle->effectsApplied.insert(target.getOffset());
         if (result != WritesResult::Known) continue;
         std::vector<EffectRecord> preserved;
@@ -965,7 +1104,6 @@ public:
 // an argument that is the previous call's result, or a register the caller passes through untouched, reads as
 // inactive: `f(g(x))` prints as `g(x); f();`. Ghidra's own analysis commits each function's recovered prototype,
 // leaves first, before its callers are decompiled (Decompiler Parameter ID); this does the same within a handle.
-enum class Derivation { Locked, Underivable, Limited };
 
 constexpr size_t calleePrototypeBudget = 64;
 
@@ -1025,8 +1163,34 @@ bool derivableFlow(Handle *handle, Funcdata *function) {
     return true;
 }
 
+// Decompiles `function` (whose callees are all locked), then locks its inputs to the prototype that recovers,
+// keeping the prototype it had before to put back. Returns the locked pieces.
+PrototypePieces lockDerivedPrototype(Handle *handle, Funcdata *function) {
+    Architecture *arch = handle->arch;
+    AddrSpace *code = arch->getDefaultCodeSpace();
+    function->followFlow(Address(code, 0), Address(code, code->getHighest()));
+    if (handle->inferCalleeEffects) inferCalleeEffects(handle, function);
+    freshAnalysis(handle, function);
+    OwnEffectsLifted ownEffects(handle, function);
+    arch->allacts.getCurrent()->reset(*function);
+    arch->allacts.getCurrent()->perform(*function);
+    PrototypePieces pieces;
+    function->getFuncProto().getPieces(pieces);
+    arch->clearAnalysis(function);
+    auto before = std::make_unique<FuncProto>();
+    before->copy(function->getFuncProto());
+    handle->derivedRestore[function->getAddress().getOffset()] = std::move(before);
+    function->getFuncProto().setPieces(pieces);
+    // Inputs only. A locked return changes how Ghidra recovers its callers' own returns: a caller that returns its
+    // input on one path and a constant on another lost its return value entirely.
+    function->getFuncProto().setOutputLock(false);
+    return pieces;
+}
+
 // Locks `function`'s prototype to the one its own decompilation recovers, once every function it calls has a locked
-// prototype. A cycle, a failed decompilation or an underivable callee leaves it as Ghidra would (unlocked).
+// prototype. A cycle, a failed decompilation or an underivable callee leaves it as Ghidra would (unlocked). With
+// vftables only (`agreedPrototype`): the budget is shared by one top-level decompilation, and every lock is put
+// back before the next (resetCalleeInference).
 Derivation deriveCalleePrototype(Handle *handle, Funcdata *function, std::set<uintb> &deriving, size_t &budget) {
     if (function->getFuncProto().isInputLocked()) return Derivation::Locked;
     uintb entry = function->getAddress().getOffset();
@@ -1061,23 +1225,7 @@ Derivation deriveCalleePrototype(Handle *handle, Funcdata *function, std::set<ui
                 break;
             }
         }
-        if (result == Derivation::Locked) {
-            function->followFlow(low, high);
-            if (handle->inferCalleeEffects) inferCalleeEffects(handle, function);
-            OwnEffectsLifted ownEffects(handle, function);
-            arch->allacts.getCurrent()->reset(*function);
-            arch->allacts.getCurrent()->perform(*function);
-            PrototypePieces pieces;
-            function->getFuncProto().getPieces(pieces);
-            arch->clearAnalysis(function);
-            auto before = std::make_unique<FuncProto>();
-            before->copy(function->getFuncProto());
-            handle->derivedRestore[entry] = std::move(before);
-            function->getFuncProto().setPieces(pieces);
-            // Inputs only. A locked return changes how Ghidra recovers its callers' own returns: a caller that
-            // returns its input on one path and a constant on another lost its return value entirely.
-            function->getFuncProto().setOutputLock(false);
-        }
+        if (result == Derivation::Locked) lockDerivedPrototype(handle, function);
     } catch (const LowlevelError &) {
         arch->clearAnalysis(function);
         result = Derivation::Underivable;
@@ -1087,8 +1235,179 @@ Derivation deriveCalleePrototype(Handle *handle, Funcdata *function, std::set<ui
     return result;
 }
 
-// Undoes every derived lock and effect override, and forgets every cached verdict, so each top-level decompilation
-// starts from the same engine state and its output never depends on what was decompiled before.
+// Callee prototypes without vftables (Cortex-M firmware): each verdict and lock depends only on the function it is
+// about, never on the function being decompiled or on what was decompiled before, so each function is derived at
+// most once per engine (Ghidra's Decompiler Parameter ID, run on demand). A function can be locked when everything
+// it reaches through direct calls (itself included; analyst-locked functions neither count nor are followed) is at
+// most `calleePrototypeBudget` functions with no recursive cycle, each one derivable: registered, with no analyst
+// local overrides or type hints, its own flow hiding nothing and running into no other function (FlowFacts), and its
+// decompilation succeeding. Its callees are locked first, leaves first.
+//
+// Which callees a decompilation sees locked is fixed by the function alone too (calleeView): its direct callees in
+// call order, each taken while the functions they reach together stay within the budget. That bounds the
+// derivations one decompilation may need on a fresh engine. Every other derived lock among its direct callees, and
+// its own, is set aside while it is decompiled (setAside), and put back before the next decompilation.
+
+// A function's prototype is locked by the analyst (a library or applied signature), not by a derivation.
+bool analystLocked(const Handle *handle, Funcdata *function) {
+    uintb entry = function->getAddress().getOffset();
+    return function->getFuncProto().isInputLocked() && handle->derivedRestore.count(entry) == 0
+        && handle->aside.count(entry) == 0;
+}
+
+// Whether `entry` can be locked (Locked), and if not why: Underivable, or Limited (over budget). `reached` gets the
+// functions it reaches that a derivation would lock, itself included.
+Derivation derivationShape(Handle *handle, uintb entry, std::vector<uintb> &reached) {
+    Architecture *arch = handle->arch;
+    AddrSpace *code = arch->getDefaultCodeSpace();
+    Scope *global = arch->symboltab->getGlobalScope();
+    std::vector<uintb> queue{entry};
+    std::set<uintb> seen{entry};
+    std::map<uintb, const std::vector<uintb> *> edges;
+    reached.clear();
+    for (size_t index = 0; index < queue.size(); ++index) {
+        uintb node = queue[index];
+        Funcdata *function = global->queryFunction(Address(code, node));
+        if (function != nullptr && analystLocked(handle, function)) continue;
+        if (function == nullptr || handle->localOverrides.count(node) != 0 || handle->typeHints.count(node) != 0)
+            return Derivation::Underivable;
+        // Its own decompilation must see everything it does (a supervisor call passes registers the p-code never
+        // shows: `mov r1, r0; svc #0`), and a thunk or tail call takes the target's parameters, not its own.
+        const FlowFacts &facts = flowFacts(handle, node);
+        if (facts.unknown || facts.foreign) return Derivation::Underivable;
+        reached.push_back(node);
+        if (reached.size() > calleePrototypeBudget) return Derivation::Limited;
+        edges[node] = &facts.callees;
+        for (uintb callee : facts.callees)
+            if (seen.insert(callee).second) queue.push_back(callee);
+    }
+    std::set<uintb> done;
+    std::set<uintb> active;
+    std::function<bool(uintb)> acyclic = [&](uintb node) {
+        if (done.count(node) != 0) return true;
+        if (!active.insert(node).second) return false;
+        auto out = edges.find(node);
+        if (out != edges.end())
+            for (uintb callee : *out->second)
+                if (!acyclic(callee)) return false;
+        active.erase(node);
+        done.insert(node);
+        return true;
+    };
+    return acyclic(entry) ? Derivation::Locked : Derivation::Underivable;
+}
+
+// Locks the function at `entry` if it can be (see above), its callees first; whether it is locked. Nothing may be
+// set aside while it runs (relockAside).
+bool deriveLocked(Handle *handle, uintb entry) {
+    Architecture *arch = handle->arch;
+    Funcdata *function = arch->symboltab->getGlobalScope()->queryFunction(Address(arch->getDefaultCodeSpace(), entry));
+    if (function != nullptr && analystLocked(handle, function)) return true;
+    auto cached = handle->derivations.find(entry);
+    if (cached != handle->derivations.end()) return cached->second == Derivation::Locked;
+    std::vector<uintb> reached;
+    Derivation result = derivationShape(handle, entry, reached);
+    if (result == Derivation::Locked) {
+        for (uintb callee : flowFacts(handle, entry).callees) {
+            if (!deriveLocked(handle, callee)) {
+                result = Derivation::Underivable;
+                break;
+            }
+        }
+    }
+    if (result == Derivation::Locked) {
+        try {
+            arch->clearAnalysis(function);
+            // What a caller sees while the lock is set aside is the prototype as it was before this derivation's own
+            // analysis, as on an engine that never derived it.
+            auto before = std::make_unique<FuncProto>();
+            before->copy(function->getFuncProto());
+            handle->derivedPieces[entry] = lockDerivedPrototype(handle, function);
+            handle->derivedRestore[entry] = std::move(before);
+        } catch (const LowlevelError &) {
+            arch->clearAnalysis(function);
+            result = Derivation::Underivable;
+        }
+    }
+    handle->derivations[entry] = result;
+    return result == Derivation::Locked;
+}
+
+// Puts `function`'s pre-derivation prototype back, with `lock` over it when given, and its effect overrides.
+void restoreDerived(Handle *handle, Funcdata *function, const PrototypePieces *lock) {
+    Architecture *arch = handle->arch;
+    uintb entry = function->getAddress().getOffset();
+    arch->clearAnalysis(function);
+    // The lock's parameters are symbols in the function's scope; the store finds its inputs there.
+    function->getScopeLocal()->clearCategory(Symbol::function_parameter);
+    FuncProto &proto = function->getFuncProto();
+    proto.copy(*handle->derivedRestore.at(entry));
+    if (lock != nullptr) {
+        proto.setPieces(*lock);
+        proto.setOutputLock(false);
+    }
+    proto.clearEffectOverrides();
+    auto effects = handle->effectOverrides.find(entry);
+    if (effects != handle->effectOverrides.end()) proto.overrideEffects(effects->second);
+}
+
+// Takes the derived lock off `function` until relockAside, if it has one.
+void setAside(Handle *handle, Funcdata *function) {
+    uintb entry = function->getAddress().getOffset();
+    if (handle->derivedPieces.count(entry) == 0 || !handle->aside.insert(entry).second) return;
+    restoreDerived(handle, function, nullptr);
+}
+
+void relockAside(Handle *handle) {
+    Architecture *arch = handle->arch;
+    Scope *global = arch->symboltab->getGlobalScope();
+    std::set<uintb> aside = std::move(handle->aside);
+    handle->aside.clear();
+    for (uintb entry : aside) {
+        Funcdata *function = global->queryFunction(Address(arch->getDefaultCodeSpace(), entry));
+        if (function != nullptr) restoreDerived(handle, function, &handle->derivedPieces.at(entry));
+    }
+}
+
+// The direct callees of a function being decompiled, and those of them it sees locked by derivation.
+struct CalleeView {
+    std::vector<uintb> callees;
+    std::set<uintb> locked;
+};
+
+// Derives the callees `function` sees locked (see above): its direct callees in call order, each that can be locked
+// taken while the functions they reach together stay within the budget.
+CalleeView calleeView(Handle *handle, const std::vector<uintb> &callees) {
+    Architecture *arch = handle->arch;
+    Scope *global = arch->symboltab->getGlobalScope();
+    CalleeView view{callees, {}};
+    std::set<uintb> charged;
+    std::vector<uintb> reached;
+    for (uintb target : callees) {
+        Funcdata *callee = global->queryFunction(Address(arch->getDefaultCodeSpace(), target));
+        if (callee == nullptr || analystLocked(handle, callee)) continue;
+        if (derivationShape(handle, target, reached) != Derivation::Locked) continue;
+        size_t added = std::count_if(reached.begin(), reached.end(), [&](uintb node) { return !charged.count(node); });
+        if (charged.size() + added > calleePrototypeBudget) continue;
+        charged.insert(reached.begin(), reached.end());
+        if (deriveLocked(handle, target)) view.locked.insert(target);
+    }
+    return view;
+}
+
+// Sets aside every derived lock `function` must not see: its own, and its direct callees' outside `view`.
+void applyView(Handle *handle, Funcdata *function, const CalleeView &view) {
+    Architecture *arch = handle->arch;
+    Scope *global = arch->symboltab->getGlobalScope();
+    setAside(handle, function);
+    for (uintb target : view.callees) {
+        if (view.locked.count(target) != 0) continue;
+        Funcdata *callee = global->queryFunction(Address(arch->getDefaultCodeSpace(), target));
+        if (callee != nullptr) setAside(handle, callee);
+    }
+}
+
+// Undoes every derived lock and effect override, and forgets every cached verdict and fact.
 void resetCalleeInference(Handle *handle) {
     Architecture *arch = handle->arch;
     Scope *global = arch->symboltab->getGlobalScope();
@@ -1111,27 +1430,34 @@ void resetCalleeInference(Handle *handle) {
     handle->calleeWrites.clear();
     handle->unknownWrites.clear();
     handle->limitedWrites.clear();
+    handle->flowFacts.clear();
     handle->underivablePrototypes.clear();
+    handle->derivations.clear();
+    handle->derivedPieces.clear();
+    handle->aside.clear();
 }
 
-// Derives the prototypes of `function`'s direct callees, leaving `function` cleared for a fresh flow.
-void deriveCalleePrototypes(Handle *handle, Funcdata *function) {
+// Derives the prototypes of `function`'s direct callees, leaving `function` cleared for a fresh flow. Without
+// vftables, returns the view to apply (applyView).
+CalleeView deriveCalleePrototypes(Handle *handle, Funcdata *function) {
     Architecture *arch = handle->arch;
     Scope *global = arch->symboltab->getGlobalScope();
     std::vector<uintb> callees = directCallees(function);
+    arch->clearAnalysis(function);
+    if (handle->vtables.empty()) return calleeView(handle, callees);
     bool pending = std::any_of(callees.begin(), callees.end(), [&](uintb target) {
         Funcdata *callee = global->queryFunction(Address(arch->getDefaultCodeSpace(), target));
         return callee != nullptr && !callee->getFuncProto().isInputLocked()
             && handle->underivablePrototypes.count(target) == 0;
     });
-    arch->clearAnalysis(function);
-    if (!pending) return;
+    if (!pending) return {};
     std::set<uintb> deriving{function->getAddress().getOffset()};
     size_t budget = calleePrototypeBudget;
     for (uintb target : callees) {
         Funcdata *callee = global->queryFunction(Address(arch->getDefaultCodeSpace(), target));
         if (callee != nullptr) deriveCalleePrototype(handle, callee, deriving, budget);
     }
+    return {};
 }
 
 
@@ -2285,15 +2611,20 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         }
         nativeMutation = true;
         handle->arch->resetTranslationCache();
-        if (!handle->preparingTypeHintContext
-            && (handle->inferCalleeEffects || handle->deriveCalleePrototypes || !handle->vtables.empty()))
-            resetCalleeInference(handle);
+        // With vftables, every derived lock and verdict is put back before each top-level decompilation. Without,
+        // each is a property of the function it is about (deriveLocked), kept for the engine's life; only the locks
+        // set aside for the last decompilation go back on.
+        if (handle->vtables.empty()) relockAside(handle);
+        else if (!handle->preparingTypeHintContext) resetCalleeInference(handle);
+        forgetDiscovered(handle, true);
         if (!handle->preparingTypeHintContext && !handle->virtualTouched.empty()) clearVirtualCalls(handle);
         Scope *global = arch->symboltab->getGlobalScope();
         fd = global->queryFunction(entry);
         if (fd == nullptr) {
             string funcname = (name != nullptr && name[0] != '\0') ? name : "";
             if (funcname.empty()) arch->nameFunction(entry, funcname);
+            // A new function is a call target, and a branch target that ends other functions' derivable flow.
+            if (!handle->preparingTypeHintContext) resetCalleeInference(handle);
             fd = global->addFunction(entry, funcname)->getFunction();
         }
         fd->setInferenceHint(rampage::nativeInferenceHint, &hintContext);
@@ -2304,8 +2635,11 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         Address high(arch->getDefaultCodeSpace(), arch->getDefaultCodeSpace()->getHighest());
         fd->followFlow(low, high);
         if (handle->inferCalleeEffects) inferCalleeEffects(handle, fd);
+        CalleeView view;
+        bool viewed = handle->deriveCalleePrototypes && handle->vtables.empty();
         if (handle->deriveCalleePrototypes) {
-            deriveCalleePrototypes(handle, fd);
+            view = deriveCalleePrototypes(handle, fd);
+            if (viewed) applyView(handle, fd, view);
             fd->followFlow(low, high);
         }
         if (!handle->preparingTypeHintContext) {
@@ -2357,10 +2691,17 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
                 handle->preparingTypeHintContext = false;
                 handle->tokens.clear();
                 handle->results.clear();
+                // The contexts saw their own views; this function sees its own again.
+                if (viewed) {
+                    relockAside(handle);
+                    applyView(handle, fd, view);
+                }
                 fd->followFlow(low, high);
             }
             hintContext.callees = &handle->calleeTypeShapes;
         }
+        freshAnalysis(handle, fd);
+        if (keepsInference(handle)) handle->analysed.insert(addr);
         OwnEffectsLifted ownEffects(handle, fd);
         arch->allacts.getCurrent()->reset(*fd);
         arch->allacts.getCurrent()->perform(*fd);

@@ -240,17 +240,36 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
   section's CPU profile 'M' (Tag_CPU_arch_profile), not by load address. Done: `Binary::m_profile()` covers
   M-profile ELFs (attributes profile 'M' or an M-only Tag_CPU_arch); the decompiler settings apply to M-profile
   ELF executables (statically linked: no interpreter, needed libraries or `.dynamic`; not relocatable objects).
-- [ ] Cortex-M decompilation is slow on library-heavy firmware, Raw and ELF alike (the settings are the same): on
-  `embedded-libs-m0` both find the same 549 functions and `0x80092ca` takes 6.5 s to decompile, about 75% of it
-  callee prototype derivation. `resetCalleeInference` (shim.cc) drops every derived prototype before each top-level
-  decompile, so each one re-derives up to 64 callees (`calleePrototypeBudget`). Keeping them on the engine is not
-  order-independent as derivation stands: a cached locked callee costs no budget, so a subtree that runs out of
-  the 64-function budget from a cold engine derives fully after earlier decompiles warmed it (the callee-effects
-  walk's 256-function budget and cached `Known` verdicts behave the same); and `deriving` starts with the top-level
-  function, so a callee on a cycle through it is cached as underivable for every later top-level. Options: a
-  per-project bottom-up derivation pass in a fixed order (Ghidra's Decompiler Parameter ID), whose result does not
-  depend on the query; or caching only verdicts reached without the budget or the top-level cycle and charging
-  cached subtrees their cold cost.
+- [x] Cortex-M decompilation is fast and order-independent (callee inference kept per engine). It was slow on
+  library-heavy firmware (`embedded-libs-m0` `0x80092ca` 6.5 s, most of it in callee prototype derivation) because
+  `resetCalleeInference` dropped every derived prototype before each top-level decompile; keeping them as derived
+  would have made output depend on order (budget cut-offs, cycle verdicts taken against the in-progress root).
+  Design (shim.cc, Cortex-M handles, which never have vftables; the MSVC vftable path keeps the old reset):
+  - Facts per function from one scratch flow (`flowFacts`): hidden flow (indirect call/jump, `svc`, bad code),
+    flow into another function, registers written, direct calls. The scratch flow also replaces following the
+    registered function, whose jump-table recovery cost ~150 ms per callee with a switch.
+  - Every verdict is a property of the function alone, cached for the engine's life: register effects are Known
+    when everything reached is at most 256 functions, at most 16 calls deep, acyclic and clean; a prototype can be
+    locked when everything reached (analyst-locked functions excluded) is at most 64 functions, acyclic and
+    derivable, and is then derived bottom-up once.
+  - Which callees a decompilation sees locked (`calleeView`) is fixed by the function alone: its direct callees in
+    address order, each taken while the union of what they reach stays within 64 functions (this bounds a cold
+    request's derivations as before, without the old budget spent on subtrees that could never lock). Other derived
+    locks among its direct callees, and its own, are set aside for that decompilation and put back before the next.
+  - Every analysis on these handles starts without the globals earlier analyses discovered (Ghidra's `mapGlobals`
+    adds typed symbols to the global scope) and without `typerecovery_exceeded`, which `Funcdata::clear` keeps
+    (vendored `clearTypeRecoveryExceeded`): both made output depend on history on main too (`0x80020b0` read as
+    `uint4 *` or `uint4`; `0x8002dd4` lost its "not settling" warning and some propagation once analysed before).
+  Measured (release, loaded machine): `0x80092ca` fresh 6.3-8.4 s -> 1.8-2.5 s; every fourth function (138) on one
+  engine 294 s -> 29 s; fresh engine per function, every 20th (28) 144 s -> 19 s; all 549 on one engine 1308 s ->
+  ~130 s, forward, reverse and fresh-per-function byte-identical. 66 of 549 outputs differ from main: more callees
+  locked (arguments recovered, or dropped where the callee never reads them), globals typed only by the function's
+  own use. Tested by `cortex_m_elf_decompilation_does_not_depend_on_history` (functions on cycles, over the budget,
+  the largest one, a leaf and its caller, and the two above: fresh vs after others vs after all).
+  Open: a global that only a callee's analysis typed now reads as an address constant (`(xunknown4 *)0x200009cc`
+  instead of `&ram_200009cc`); a program-wide global pass would name them deterministically. The same two leaks
+  remain on every other architecture (kept so their output is unchanged). MCP requests run in a fresh worker each,
+  so they gain the cheaper cold path but not the cache, unless a worker is kept per project.
 
 ## Objective-C dispatch (2026-11-13)
 

@@ -21,6 +21,22 @@ see the [stability policy](docs/stability.md) for what the version promises.
   may not overlap and the rebuild counts against `max_bytes`, synthesised zeros count against the compression ratio
   (`max_ratio` is an argument), a corrupt file is skipped with its reason rather than aborting the extraction, and
   `output_dir` must be absolute and not a symlink.
+- Cortex-M decompilation (Raw projects and M-profile ELF firmware) keeps the callee prototypes and register effects
+  it derives for the engine's life instead of deriving them again for every function, and what a function
+  decompiles to no longer depends on what was decompiled before it. Every verdict is a property of the callee
+  alone (what it reaches through direct calls, with fixed budgets: 64 functions for a prototype, 256 functions and
+  16 calls deep for register effects); which derived callees a decompilation sees is fixed by the function itself
+  (its direct callees in address order while what they reach stays within 64 functions), and the rest are set aside
+  while it is decompiled. Callee facts come from one scratch flow per function, which skips the jump-table recovery
+  that following each registered callee paid. On these images every analysis also starts without the globals
+  earlier analyses discovered and without Ghidra's memory of a previous analysis whose type propagation did not
+  settle, two leaks that made output depend on history before this change too. On the stripped `embedded-libs-m0`
+  fixture, `0x80092ca` decompiles in about 2 s instead of 6.5 s on a fresh engine (so in the isolated worker too),
+  and all 549 functions on one engine in about 2 minutes instead of 22. Output changes on Cortex-M images only (66
+  of those 549 functions): callees the old shared budget left unlocked now keep their arguments
+  (`sub_80067b4()` becomes `sub_80067b4(x, y)`) or lose ones they never read, and a global is typed only by the
+  function's own use (`&ram_200009cc + i * 5` can read as `i * 0x14 + 0x200009cc`). Other images are unchanged.
+  The worker protocol version is bumped.
 
 ## 1.4.0 (2026-11-15)
 

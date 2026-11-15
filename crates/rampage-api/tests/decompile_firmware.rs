@@ -3,7 +3,9 @@
 //! arguments that are another call's result. tests/fixtures/firmware/raw-cortex-m-decompile.c is the source; its
 //! .elf keeps the symbols as the truth.
 
-use rampage_api::Project;
+use std::collections::{BTreeMap, BTreeSet};
+
+use rampage_api::{FunctionsQuery, Project, XrefQuery};
 use rampage_loaders::{Binary, RawCodeOptions, RawProfile};
 
 const IMAGE: &[u8] = include_bytes!("../../../tests/fixtures/firmware/raw-cortex-m-decompile.bin");
@@ -113,10 +115,10 @@ fn data_symbols_name_their_globals_in_every_format() {
     }
 }
 
-/// One engine serves every decompilation, and it puts back derived callee prototypes and effects before each one,
-/// so a function reads the same whatever was decompiled before it. chain0..chain70 is longer than the 64 callee
-/// derivations one request may make: decompiling chain30 first would otherwise leave chain31..chain70 locked, and
-/// chain_head's own request would then reach chain0.
+/// One engine serves every decompilation and keeps the callee prototypes and effects it derives, each of which
+/// depends only on the callee, so a function reads the same whatever was decompiled before it. chain0..chain70 is
+/// longer than the 64 functions a derivation may reach: decompiling chain30 first locks chain31..chain70, which must
+/// not let chain_head's own decompilation reach chain0.
 #[test]
 fn raw_decompilation_does_not_depend_on_history() {
     let reversed = project();
@@ -247,4 +249,96 @@ fn m_profile_elf_firmware_gets_the_cortex_m_settings() {
     let stored = u32::from_le_bytes(crc.binary.read(0x0800_07fc, 4).unwrap().try_into().unwrap());
     assert!(code.contains("app_crc"), "{code}");
     assert!(!code.contains(&format!("{stored:#x}")), "{code}");
+}
+
+/// The direct calls between an image's functions, by caller, from discovery's call references.
+fn call_graph(project: &Project) -> BTreeMap<u64, BTreeSet<u64>> {
+    let query = FunctionsQuery { limit: Some(100_000), ..Default::default() };
+    let functions: BTreeSet<u64> = project.functions(&query).unwrap().items.iter().map(|row| row.address).collect();
+    functions
+        .iter()
+        .map(|&function| {
+            let rows = project.xrefs(XrefQuery::From(function), None, Some(100_000)).unwrap().items;
+            let callees = rows
+                .iter()
+                .filter(|row| row.kind.as_str() == "call" && row.to != function && functions.contains(&row.to))
+                .map(|row| row.to)
+                .collect();
+            (function, callees)
+        })
+        .collect()
+}
+
+fn reachable(graph: &BTreeMap<u64, BTreeSet<u64>>, from: u64) -> BTreeSet<u64> {
+    let mut seen = BTreeSet::new();
+    let mut pending = vec![from];
+    while let Some(function) = pending.pop() {
+        for &callee in graph.get(&function).into_iter().flatten() {
+            if seen.insert(callee) {
+                pending.push(callee);
+            }
+        }
+    }
+    seen
+}
+
+/// Library-heavy Cortex-M firmware: each function decompiles to the same C first on a fresh engine, after a set
+/// of other functions (its callers among them, which derive its own prototype first), and after all of them in
+/// reverse (so after itself too). The sample covers functions on call cycles, functions whose callees reach more
+/// than the 64 functions a derivation may, and the largest one, whose callees together exceed that budget.
+#[test]
+fn cortex_m_elf_decompilation_does_not_depend_on_history() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/embedded-libs-m0.elf");
+    let open = || Project::new(Binary::open(path).unwrap());
+    let graph = call_graph(&open());
+    let reach: BTreeMap<u64, BTreeSet<u64>> =
+        graph.keys().map(|&function| (function, reachable(&graph, function))).collect();
+    let on_cycle: Vec<u64> = reach.iter().filter(|(function, set)| set.contains(function)).map(|(&f, _)| f).collect();
+    let over_budget: Vec<u64> = reach
+        .iter()
+        .filter(|(function, set)| set.len() > 64 && !set.contains(function))
+        .map(|(&function, _)| function)
+        .collect();
+    assert!(on_cycle.len() >= 2 && over_budget.len() >= 2, "{on_cycle:x?} {over_budget:x?}");
+    let mut sample = vec![on_cycle[0], on_cycle[on_cycle.len() - 1], over_budget[0], over_budget[1], 0x80092ca];
+    // A leaf and a caller of a sampled function, so some are decompiled after being derived as a callee.
+    let (leaf, derived) = graph
+        .iter()
+        .find_map(|(&caller, callees)| {
+            callees.iter().find(|callee| graph[callee].is_empty()).map(|&leaf| (leaf, caller))
+        })
+        .unwrap();
+    sample.extend([leaf, derived]);
+    // Functions that read differently once other analyses had run: one whose type propagation does not settle
+    // (Ghidra kept that verdict across analyses of the same function), and one that used a global another
+    // function's analysis had typed.
+    sample.extend([0x8002dd4, 0x80020b0]);
+    let caller = |target: u64| graph.iter().find(|(_, callees)| callees.contains(&target)).map(|(&caller, _)| caller);
+    let others: BTreeSet<u64> = sample
+        .iter()
+        .flat_map(|&function| caller(function).into_iter().chain(graph[&function].iter().take(2).copied()))
+        .filter(|function| !sample.contains(function))
+        .collect();
+
+    let decompile = |project: &Project, function: u64| {
+        project.decompile(function).unwrap_or_else(|error| panic!("{function:#x}: {error}")).code
+    };
+    let fresh: BTreeMap<u64, String> =
+        sample.iter().map(|&function| (function, decompile(&open(), function))).collect();
+
+    let after_others = open();
+    for &function in &others {
+        decompile(&after_others, function);
+    }
+    for &function in &sample {
+        assert_eq!(decompile(&after_others, function), fresh[&function], "{function:#x} after {others:x?}");
+    }
+
+    let after_all = open();
+    for &function in others.iter().chain(&sample).rev() {
+        decompile(&after_all, function);
+    }
+    for &function in &sample {
+        assert_eq!(decompile(&after_all, function), fresh[&function], "{function:#x} after all");
+    }
 }
