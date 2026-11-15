@@ -120,19 +120,70 @@ pub struct RawRegionRequest {
     /// Internal code-space BYTE address of the region's first byte.
     pub base_address: FileOffset,
     /// Original-file BYTE offset of the region's source bytes. Omit only for a `ram` region without bytes
-    /// (zero-filled or uninitialised RAM, memory-mapped I/O), or, for ihex/srec input, to state the kind of the
-    /// record run with exactly this base_address and length (runs are `code` otherwise; the first stays code).
-    /// With ihex/srec input, regions never take offset or decode: the file is record text.
+    /// (zero-filled or uninitialised RAM, memory-mapped I/O), for a region copied `from` another one, or, for
+    /// ihex/srec input, to state the kind of the record run with exactly this base_address and length (runs are
+    /// `code` otherwise; the first stays code). With ihex/srec input, regions never take offset, decode or from:
+    /// the file is record text.
     #[serde(default)]
     pub offset: Option<FileOffset>,
-    /// Source byte count at `offset` (the encoded count when `decode` is given), or the mapped size of a `ram`
-    /// region without bytes.
+    /// Source byte count at `offset` (the encoded count when `decode` is given, the slice size with `from`), or
+    /// the mapped size of a `ram` region without bytes.
     pub length: FileOffset,
+    /// Map a copy of `length` bytes of another region's bytes instead of a file range: code or data the program
+    /// copies from its load address to its run address (scatter-load), including from the decoded primary
+    /// region. binary_info reports the source region and slice with the region's SHA-256.
+    #[serde(default)]
+    pub from: Option<RawRegionFrom>,
     /// Map the output of a decoder provider over the source range instead of the range itself, e.g. a compressed
     /// second stage at its RAM base. The decoded bytes exist only in memory; binary_info reports the decode
     /// receipt (source range and hash, codec, parameters, output hash) with the region.
     #[serde(default)]
     pub decode: Option<RawRegionDecode>,
+}
+
+/// The bytes a region copies from an earlier region.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RawRegionFrom {
+    /// The source region: 0, "primary" or "raw.code" for the primary code region (its decoded bytes with
+    /// `decode`); n or its name `raw.<kind>.<n>` for regions[n-1], which must come earlier and have bytes.
+    #[serde(deserialize_with = "region_reference")]
+    #[schemars(schema_with = "region_reference_schema")]
+    pub region: usize,
+    /// BYTE offset into the source region's bytes (not an address) of the first copied byte.
+    pub offset: FileOffset,
+}
+
+fn region_reference<'de, D: Deserializer<'de>>(deserializer: D) -> Result<usize, D::Error> {
+    let refuse = |what: &dyn std::fmt::Display| {
+        serde::de::Error::custom(format!(
+            "from.region {what}: 0, \"primary\" or \"raw.code\" for the primary region, or n or \"raw.<kind>.<n>\" \
+             for regions[n-1]"
+        ))
+    };
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Number(number) => {
+            number.as_u64().and_then(|index| usize::try_from(index).ok()).ok_or_else(|| refuse(&number))
+        }
+        serde_json::Value::String(name) if name == "primary" || name == "raw.code" => Ok(0),
+        serde_json::Value::String(name) => name
+            .strip_prefix("raw.")
+            .and_then(|rest| rest.split_once('.'))
+            .filter(|(kind, _)| matches!(*kind, "code" | "data" | "ram"))
+            .and_then(|(_, index)| index.parse::<usize>().ok())
+            .filter(|&index| index >= 1)
+            .ok_or_else(|| refuse(&format!("{name:?}"))),
+        other => Err(refuse(&other)),
+    }
+}
+
+fn region_reference_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "description": "0, \"primary\" or \"raw.code\" for the primary code region; n or \"raw.<kind>.<n>\" for \
+                        regions[n-1], which must come earlier.",
+        "type": ["integer", "string"],
+        "minimum": 0
+    })
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
@@ -419,6 +470,14 @@ fn decoded_range(
     Ok((decoded.bytes().to_vec(), RawRegionSource::Decoded { offset, length: length as u64, receipt }))
 }
 
+fn region_kind_name(kind: RawRegionKindRequest) -> &'static str {
+    match kind {
+        RawRegionKindRequest::Code => "code",
+        RawRegionKindRequest::Data => "data",
+        RawRegionKindRequest::Ram => "ram",
+    }
+}
+
 fn region_kind(kind: RawRegionKindRequest) -> RawRegionKind {
     match kind {
         RawRegionKindRequest::Code => RawRegionKind::Code,
@@ -466,6 +525,37 @@ impl RawProjectRequest {
             let refuse = |message: String| ApiError::Invalid(format!("Raw regions[{index}]: {message}"));
             let kind = region_kind(region.kind);
             let base = region.base_address.0;
+            if let Some(from) = &region.from {
+                if region.offset.is_some() || region.decode.is_some() {
+                    return Err(refuse("from copies another region's bytes: omit offset and decode".into()));
+                }
+                if from.region > index {
+                    return Err(refuse(format!(
+                        "from.region {} must name the primary region (0) or an earlier region (1..={index})",
+                        from.region
+                    )));
+                }
+                let length = region.length.0;
+                if length == 0 || length > budget as u64 {
+                    return Err(refuse(format!(
+                        "length must be 1..={budget} bytes: all backed regions together hold at most {} bytes",
+                        profile.max_bytes()
+                    )));
+                }
+                budget -= length as usize;
+                let source = match from.region {
+                    0 => "raw.code".to_owned(),
+                    n => format!("raw.{}.{n}", region_kind_name(self.regions[n - 1].kind)),
+                };
+                regions.push(RawRegion {
+                    kind,
+                    base,
+                    size: length,
+                    bytes: None,
+                    source: RawRegionSource::Slice { region: source, offset: from.offset.0, length },
+                });
+                continue;
+            }
             let Some(offset) = region.offset else {
                 if kind != RawRegionKind::Ram || region.decode.is_some() {
                     return Err(refuse(
@@ -598,6 +688,7 @@ impl RawProjectRequest {
             let run = regions.iter_mut().find(|run| {
                 region.offset.is_none()
                     && region.decode.is_none()
+                    && region.from.is_none()
                     && run.base == region.base_address.0
                     && run.size == region.length.0
             });
@@ -607,10 +698,14 @@ impl RawProjectRequest {
             }
         }
         // The opened file is record text, not bytes: a further region can only be unbacked RAM.
-        if let Some(index) = self.regions.iter().position(|region| region.offset.is_some() || region.decode.is_some()) {
+        if let Some(index) = self
+            .regions
+            .iter()
+            .position(|region| region.offset.is_some() || region.decode.is_some() || region.from.is_some())
+        {
             return Err(ApiError::Invalid(format!(
-                "Raw regions[{index}]: format {} reads record text, so a region cannot take offset or decode from \
-                 it; give a record run's exact base_address and length to state its kind, or omit offset for \
+                "Raw regions[{index}]: format {} reads record text, so a region cannot take offset, decode or from; \
+                 give a record run's exact base_address and length to state its kind, or omit offset for \
                  unbacked RAM",
                 format.name()
             )));

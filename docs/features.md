@@ -45,8 +45,9 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 - [Raw Projects](sleigh-decoding.md) open headerless images with an asserted profile and base address: sixteen
   Sleigh families, and the *experimental* Cortex-M profile (`ARM:LE:32:Cortex`), which decodes Thumb natively,
   decompiles, seeds from the vector table and optional code-pointer tables, maps up to 15 further code, data or
-  RAM regions (from file ranges, decoded bytes or zero fill), and reads Intel HEX and Motorola S-records. A
-  compressed image opens with its decoded bytes as the code region, from the selector the decoders return. See
+  RAM regions (from file ranges, decoded bytes, a slice of another region or zero fill), and reads Intel HEX and
+  Motorola S-records. A compressed image opens with its decoded bytes as the code region, from the selector the
+  decoders return. See
   [Raw Projects in MCP](mcp.md#multiple-regions-intel-hex-and-s-records). Limits: base addresses and regions are
   the analyst's assertion; Sleigh profiles other than MSP430 and AVR8 do not decompile.
 - [CMSIS-SVD peripheral maps](peripheral-maps.md) (`import_svd`, `peripheral_access`) name memory-mapped

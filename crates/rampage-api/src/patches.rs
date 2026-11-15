@@ -895,6 +895,9 @@ fn raw_patch_offset(binary: &Binary, address: u64, length: usize, allow_data: bo
     if matches!(region.source, Some(rampage_loaders::RawRegionSource::Decoded { .. })) {
         return Err(format!("Raw region {} is decoder output, which cannot be written back to its file", region.name));
     }
+    if let Some(rampage_loaders::RawRegionSource::Slice { region: source, .. }) = &region.source {
+        return Err(format!("Raw region {} is a copy of {source}'s bytes; patch {source} instead", region.name));
+    }
     if region.kind != rampage_loaders::RawRegionKind::Code && !allow_data {
         return Err(format!("Raw region {} is not code; patching it requires allow_data", region.name));
     }

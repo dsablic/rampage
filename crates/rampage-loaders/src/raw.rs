@@ -13,7 +13,7 @@ pub const MAX_RAW_NATIVE_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_RAW_SEEDS: usize = 8192;
 /// Regions one Raw project maps, the primary one included.
 pub const MAX_RAW_REGIONS: usize = 16;
-const IDENTITY_SCHEMA: &str = "rampage-raw-interpretation-v5";
+const IDENTITY_SCHEMA: &str = "rampage-raw-interpretation-v6";
 
 /// Closed set of Raw ordinary-Project profiles, admitted family by family on Project-level evidence.
 /// Every row must equal the verified native translator's metadata; the decoder factory checks this.
@@ -260,6 +260,10 @@ pub enum RawRegionSource {
     Decoded { offset: u64, length: u64, receipt: serde_json::Value },
     /// A contiguous run of data records of an Intel HEX or S-record file; the address comes from the records.
     Records { format: crate::raw_records::RawRecordFormat },
+    /// A copy of `length` bytes at `offset` of the earlier backed region named `region` (`raw.code` for the
+    /// primary one, decoded bytes included), mapped at this region's base: code or data a program copies to its
+    /// run address. The opener passes no bytes; admission copies them.
+    Slice { region: String, offset: u64, length: u64 },
     /// No bytes: zero-filled or uninitialised RAM, or memory-mapped I/O.
     Unbacked,
 }
@@ -484,9 +488,18 @@ impl RawCodeImage {
                 "Raw maps at most {MAX_RAW_REGIONS} regions, the primary one included"
             )));
         }
-        for (index, region) in extra.into_iter().enumerate() {
+        for (index, mut region) in extra.into_iter().enumerate() {
             let name = format!("raw.{}.{}", region.kind.name(), index + 1);
             let refuse = |message: &str| Err(LoadError::Malformed(format!("Raw region {name}: {message}")));
+            if let RawRegionSource::Slice { region: from, offset, length } = &region.source {
+                if region.bytes.is_some() || region.size != *length {
+                    return refuse("a slice takes its bytes from its source region; size must equal its length");
+                }
+                match slice_bytes(&regions, &data, from, *offset, *length, max - data.len()) {
+                    Ok(bytes) => region.bytes = Some(bytes),
+                    Err(message) => return refuse(&message),
+                }
+            }
             match &region.bytes {
                 Some(bytes) if bytes.len() as u64 != region.size => {
                     return refuse("size disagrees with its bytes");
@@ -775,6 +788,13 @@ impl RawCodeImage {
                 }
                 Some(RawRegionSource::Records { format }) => hash.update([3, *format as u8]),
                 Some(RawRegionSource::Unbacked) => hash.update([4]),
+                // Schema v6 binds a slice's source region and range.
+                Some(RawRegionSource::Slice { region, offset, length }) => {
+                    hash.update([5]);
+                    text(&mut hash, region);
+                    hash.update(offset.to_be_bytes());
+                    hash.update(length.to_be_bytes());
+                }
             }
         }
         for value in [self.base, self.length, self.end] {
@@ -809,6 +829,33 @@ impl RawCodeImage {
         }
         RawInterpretationIdentity { schema: IDENTITY_SCHEMA, sha256: rampage_arch::hex::bytes(&hash.finalize()) }
     }
+}
+
+/// A copy of `length` bytes at `offset` of the admitted region named `from`, whose bytes lie in `data`; refused
+/// when that region is unknown or unbacked, the range leaves it, or the copy exceeds `budget` bytes.
+fn slice_bytes(
+    regions: &[RawRegionInfo],
+    data: &[u8],
+    from: &str,
+    offset: u64,
+    length: u64,
+    budget: usize,
+) -> Result<Vec<u8>, String> {
+    let source = regions.iter().find(|earlier| earlier.name == from).ok_or_else(|| {
+        let names: Vec<&str> = regions.iter().map(|region| region.name.as_str()).collect();
+        format!("slice source {from:?} names no earlier region (earlier: {})", names.join(", "))
+    })?;
+    if !source.backed() {
+        return Err(format!("slice source {from} is unbacked and has no bytes"));
+    }
+    let end = offset.checked_add(length).filter(|&end| length >= 1 && end <= source.length).ok_or_else(|| {
+        format!("slice {offset:#x}+{length:#x} is not inside the {:#x} bytes of {from}", source.length)
+    })?;
+    if length > budget as u64 {
+        return Err(format!("a {length:#x}-byte slice exceeds the {budget:#x} bytes the regions may still hold"));
+    }
+    let start = source.data_range().start;
+    Ok(data[start + offset as usize..start + end as usize].to_vec())
 }
 
 fn checked_code_end(base: u64, length: u64, highest: u64) -> Result<u64, LoadError> {

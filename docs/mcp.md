@@ -599,16 +599,21 @@ decompiler never folds loads from it). `offset`/`length` select its bytes in the
 `offset` has no bytes (zero-filled or uninitialised RAM, memory-mapped I/O) and `length` is its size. `decode`
 maps the in-memory output of the decoder provider over the range instead: it takes `decode_file_range`'s `codec`,
 `lzss`, `expected_output_size` (the region's size), `initial_write_offset`, `dictionary_fill` and `timeout_ms`;
-nothing is written to disk. Regions never overlap (the refusal names both), all backed regions together hold at
-most 4 MiB, and `vector_table`/`pointer_tables` read the primary region only. Discovery, data references, calls and
-the decompiler's memory image span every region, so a call from flash through a literal pool into the RAM stage,
-and back, resolves.
+nothing is written to disk. `from` instead copies `length` bytes of an earlier region, which is how startup code
+moves code and initialised data from its load address to its run address (scatter-load): `"from": {"region":
+"primary", "offset": "0x400"}` takes them at that byte offset of the primary region (its decoded bytes, with a
+top-level `decode`); `region` is `0`, `"primary"` or `"raw.code"` for the primary region, or `n` or its name
+`raw.<kind>.<n>` for `regions[n-1]`, which must come earlier and have bytes. Copies count against the byte cap,
+and patches go to the source region, never to a copy. Regions never overlap (the refusal names both), all backed
+regions together hold at most 4 MiB, and `vector_table`/`pointer_tables` read the primary region only. Discovery,
+data references, calls and the decompiler's memory image span every region, so a call from flash through a literal
+pool into the RAM stage, and back, resolves.
 
 `binary_info` lists `raw.regions`, the primary region first (`raw.code`, then `raw.<kind>.<n>`), each with `kind`,
 `base_address`, `length`, `sha256` of the mapped bytes (absent when unbacked) and `source`: `file_range`
 (`offset`, `length`), `decoded` (`offset`, `length` and the provider's `receipt`: codec, parameters, source-range
-SHA-256, output SHA-256, consumption and limits, without the path and preview), `records` (`format`) or
-`unbacked`. Each region is also a segment and section with its permissions.
+SHA-256, output SHA-256, consumption and limits, without the path and preview), `slice` (`region`, `offset`,
+`length`), `records` (`format`) or `unbacked`. Each region is also a segment and section with its permissions.
 
 `"format": "ihex"` (Intel HEX) or `"srec"` (Motorola S1/S2/S3 with S7/S8/S9) reads a record file instead; omit
 `offset`, `length` and `base_address`, since every address comes from the records. Each record's checksum is

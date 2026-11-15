@@ -154,13 +154,103 @@ fn a_compressed_second_stage_maps_from_the_decoder_provider_with_its_receipt() {
     assert!(refusal(&path, bad).contains("regions[0]: decode"));
 }
 
+/// The whole flash image as the primary region, stage 2 and its data mapped at their run addresses as copies of
+/// the primary region's bytes: the same bytes as the file-range mapping, with the slice as the source.
+fn sliced() -> Value {
+    json!({
+        "profile": "cortex-m3",
+        "offset": 0,
+        "length": 2056,
+        "base_address": "0x8000000",
+        "vector_table": true,
+        "regions": [
+            { "kind": "code", "base_address": "0x20000000", "length": 128, "from": { "region": "primary", "offset": "0x400" } },
+            { "kind": "ram", "base_address": "0x20000800", "length": 8, "from": { "region": 0, "offset": "0x800" } },
+            { "kind": "ram", "base_address": "0x20001000", "length": "0x4000" },
+        ],
+    })
+}
+
+#[test]
+fn a_region_copied_from_a_slice_of_another_maps_at_its_run_address_with_its_receipt() {
+    let path = fixture("raw-cortex-m-stages.bin");
+    let mut project = Session::default().open_raw(&path, &request(sliced())).unwrap();
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    let regions = &summary["raw"]["regions"];
+    assert_eq!(regions[1]["source"], json!({ "type": "slice", "region": "raw.code", "offset": 1024, "length": 128 }));
+    assert_eq!(regions[2]["source"], json!({ "type": "slice", "region": "raw.code", "offset": 2048, "length": 8 }));
+    let copied = Session::default().open_raw(&path, &request(copied())).unwrap();
+    let plain = serde_json::to_value(copied.summary()).unwrap();
+    for index in [1, 2] {
+        assert_eq!(regions[index]["sha256"], plain["raw"]["regions"][index]["sha256"], "{index}");
+    }
+    // Slices count against the backed-byte cap: the primary region's 2056 bytes and both copies.
+    let raw = project.binary.raw_code_image().unwrap();
+    assert_eq!(raw.backed_bytes(), 2056 + 128 + 8);
+    assert_cross_region_resolution(&mut project, "raw-cortex-m-stages.elf");
+
+    // A slice of a later region names it by number or name; the selector round-trips through serde.
+    let mut chained = sliced();
+    chained["regions"][2] = json!({ "kind": "data", "base_address": "0x30000000", "length": 4,
+                                    "from": { "region": "raw.code.1", "offset": 2 } });
+    let binary = rampage_api::open_raw_binary(&path, &request(chained.clone())).unwrap();
+    let region = &binary.raw_code_image().unwrap().regions()[3];
+    assert_eq!(
+        serde_json::to_value(&region.source).unwrap(),
+        json!({ "type": "slice", "region": "raw.code.1", "offset": 2, "length": 4 })
+    );
+    chained["regions"][2]["from"]["region"] = json!(1);
+    let again = rampage_api::open_raw_binary(&path, &request(chained)).unwrap();
+    assert_eq!(again.raw_interpretation_identity().unwrap(), binary.raw_interpretation_identity().unwrap());
+
+    // Out-of-range, forward, unbacked and over-budget slices are refused before anything is copied.
+    let refused = |pointer: &str, value: Value| {
+        let mut changed = sliced();
+        *changed.pointer_mut(pointer).unwrap() = value;
+        refusal(&path, changed)
+    };
+    let error = refused("/regions/0/from/offset", json!(2000));
+    assert!(error.contains("is not inside the 0x808 bytes of raw.code"), "{error}");
+    let error = refused("/regions/0/from/region", json!(2));
+    assert!(
+        error.contains("regions[0]: from.region 2 must name the primary region (0) or an earlier region"),
+        "{error}"
+    );
+    let error = refused(
+        "/regions/2",
+        json!({ "kind": "ram", "base_address": "0x30000000", "length": 4,
+                                              "from": { "region": 3, "offset": 0 } }),
+    );
+    assert!(error.contains("must name the primary region"), "{error}");
+    let mut unbacked = sliced();
+    unbacked["regions"][1] = json!({ "kind": "ram", "base_address": "0x30000000", "length": 4,
+                                     "from": { "region": "raw.ram.2", "offset": 0 } });
+    unbacked["regions"].as_array_mut().unwrap().swap(1, 2);
+    let error = refusal(&path, unbacked);
+    assert!(error.contains("slice source raw.ram.2 is unbacked"), "{error}");
+    let error = refused("/regions/0/length", json!(4 * 1024 * 1024));
+    assert!(error.contains("all backed regions together hold at most 4194304 bytes"), "{error}");
+    let mut misnamed = sliced();
+    misnamed["regions"][0]["from"]["region"] = json!("raw.rom.1");
+    let error = serde_json::from_value::<RawProjectRequest>(misnamed).unwrap_err().to_string();
+    assert!(error.contains("from.region \"raw.rom.1\""), "{error}");
+    let mut both = sliced();
+    both["regions"][0]["offset"] = json!(0);
+    let error = refusal(&path, both);
+    assert!(error.contains("omit offset and decode"), "{error}");
+    // Patches go to the source region, never into a copy of it.
+    let original = std::fs::read(&path).unwrap()[0x400..0x402].to_vec();
+    let error = project.patch_bytes(0x2000_0000, &original, &[0x00, 0xbf], false).err().unwrap().to_string();
+    assert!(error.contains("is a copy of raw.code's bytes"), "{error}");
+}
+
 #[test]
 fn every_region_input_changes_the_interpretation_identity() {
     let path = fixture("raw-cortex-m-stages.bin");
     let identity = |value: Value| {
         let binary = rampage_api::open_raw_binary(&path, &request(value)).unwrap();
         let identity = binary.raw_interpretation_identity().unwrap().unwrap();
-        assert_eq!(identity.schema, "rampage-raw-interpretation-v5");
+        assert_eq!(identity.schema, "rampage-raw-interpretation-v6");
         identity.sha256
     };
     let base = identity(copied());

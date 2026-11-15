@@ -44,6 +44,12 @@ see the [stability policy](docs/stability.md) for what the version promises.
   at mapped addresses, decoded regions included; in a code region a run is listed when a NUL ends it and no
   discovered instruction overlaps it, since flash images keep constants among their code. `inspect_data` gives a
   file offset only for bytes mapped from a file range. See [MCP](docs/mcp.md#raw-projects).
+- Raw regions copied from another region: a Cortex-M `regions` entry takes `from: {region, offset}` instead of a
+  file range, mapping `length` bytes of the primary region (decoded bytes included) or an earlier region at its own
+  base, as startup code copies code and initialised data to their run addresses. Copies count against the 4 MiB
+  cap, `binary_info` reports the source as `slice` (`region`, `offset`, `length`) with the region's SHA-256, and
+  patches go to the source region. The interpretation identity is now `rampage-raw-interpretation-v6`. See
+  [MCP](docs/mcp.md#multiple-regions-intel-hex-and-s-records).
 
 ## 1.5.0 (2026-11-15)
 
