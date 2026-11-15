@@ -37,6 +37,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
   (`sub_80067b4()` becomes `sub_80067b4(x, y)`) or lose ones they never read, and a global is typed only by the
   function's own use (`&ram_200009cc + i * 5` can read as `i * 0x14 + 0x200009cc`). Other images are unchanged.
   The worker protocol version is bumped.
+- `integrity_checks` confirms the values a fix writes with the device's own code: with `emulate` (the default),
+  each value a fix writes, or would write in a preview, is run through the routine that confirmed its check over the
+  range as the fix leaves it, the fix's earlier values included, and reports `device_check`: `agrees`, `disagrees` (also in
+  `notes`) or `unconfirmed` with the reason (no routine confirmed the check, or the run gave no value). It never
+  blocks a write.
 
 ## 1.4.0 (2026-11-15)
 

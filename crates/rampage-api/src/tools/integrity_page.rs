@@ -15,7 +15,8 @@ struct IntegrityArgs {
     fix: Option<bool>,
     /// Check ids to fix (default: invalid checks confirmed by emulation or referenced by code).
     ids: Option<Vec<usize>>,
-    /// Confirm matches by running the image's CRC routine with evaluate_function (default true).
+    /// Confirm matches by running the image's CRC routine with evaluate_function, and each fix write (device_check)
+    /// (default true).
     emulate: Option<bool>,
     /// From receipt, required with fix.
     source_sha256: Option<String>,

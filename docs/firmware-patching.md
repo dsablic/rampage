@@ -80,6 +80,13 @@ original bytes at the stored value, or a
 validated before the first is committed (admission, preimage, the patch budget, and any user patch overlapping the
 value without matching it exactly, which refuses the whole fix); if a write still fails, the earlier ones are undone.
 
+With `emulate` (the default), each value a fix writes, or would write in a preview, is also checked by the device's
+own code: the routine whose run confirmed the check is run again with `evaluate_function`, in the same argument
+form, over the range as the fix leaves it (the fix's earlier values passed as memory writes). `device_check` on the
+write says `agrees`, `disagrees` (also named in `notes`) or `unconfirmed` with the reason: no routine confirmed the
+check (one known from code references alone), or the run did not return a value (an unsupported operation, the step
+budget, a timeout). The check never blocks a write.
+
 ## Exporting
 
 `export_image` never replaces a file (it stages privately and publishes with create-new semantics, like

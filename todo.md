@@ -102,8 +102,6 @@ device:
   session pays for it in tokens.
 - **`evaluate_function` follow-ups:** SSE/SIMD user-ops, x87 floats, float return values, and a step trace on request
   for explaining a result.
-- **Run checksum routines with `evaluate_function`.** For the patching round trip, run the device's own check
-  routine to confirm a recomputed value instead of trusting a recognised algorithm.
 
 ## Smart-device privacy track (approved 2026-11-15)
 
@@ -218,6 +216,13 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
   Open: checks over several discontiguous ranges or with the value's bytes skipped/zeroed inside the range;
   polynomials built over several instructions (`movs` + shifts/adds) and 8-bit CRC polynomials in code; PE patch
   admission; persisting Raw patches across sessions; a run on a real owner's image.
+- [x] Device confirmation of fixes: with `emulate` (the default), each value a fix writes or previews is checked by
+  running the routine that confirmed the check (`evaluate_function`, same argument form) over the range as the fix
+  leaves it, the fix's earlier writes passed as memory writes: `fix.writes[].device_check` is `agrees`, `disagrees`
+  (also a note) or `unconfirmed` with the reason (no routine was confirmed, the run did not return, it could not
+  start); it never blocks the write. Open: checks only emulation confirmed have a routine (one confirmed by code
+  references alone stays `unconfirmed`); routines with another signature than `(start, length|end)` (a context
+  struct, a seed argument, a CRC over a table of ranges); digests (SHA-256/MD5) are never run.
 - [x] Static ELF32 ARM firmware patched in place (record version 3, PT_LOAD file-byte mapping, no dynamic/RELR
   relocations or overlapping segments), `integrity_checks` fixes and `export_image` (patched ELF, flat binary at load
   addresses) on it; CRC-16 polynomials formed by one Thumb/A32 immediate or a literal word.

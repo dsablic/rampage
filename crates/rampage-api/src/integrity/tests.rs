@@ -172,6 +172,7 @@ fn a_crc_that_covers_another_checks_value_is_fixed_after_it() {
         range,
         score: 0.9,
         emulated: false,
+        routine: None,
         code_bound: false,
         evidence: Vec::new(),
         alternatives: 0,
@@ -230,4 +231,55 @@ fn single_immediates_are_decoded_in_thumb_and_a32() {
     let words = [0xe308_1408u32, 0xe3a0_24ff, 0xf308_1408, 0xe301_0021, 0xe341_0234, 0xe30a_3001, 0xe341_4234];
     let a32: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
     assert_eq!(arm_narrow_constants(&a32, 0x2000), [(0x2000, 0x8408), (0x2004, 0xff00_0000), (0x2014, 0xa001)]);
+}
+
+/// The routine that confirmed a check runs again over the range as a fix leaves it: it agrees with the recomputed
+/// value, the fix's earlier writes included; it disagrees when the value was computed over other bytes than it reads;
+/// and with no routine, or one that cannot run, the check is unconfirmed rather than an error.
+#[test]
+fn device_checks_agree_disagree_or_stay_unconfirmed() {
+    const FIRMWARE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/raw-cortex-m-crc");
+    const BASE: u64 = 0x0800_0000;
+    let image = std::fs::read(format!("{FIRMWARE}.bin")).unwrap();
+    let options = rampage_loaders::RawCodeOptions {
+        profile: rampage_loaders::RawProfile::CortexM,
+        base: BASE,
+        entry: None,
+        seeds: vec![],
+        vector_table: Some(BASE),
+        pointer_tables: false,
+    };
+    let project = Project::new(Binary::from_raw_code(image.clone(), options).unwrap());
+    let elf = Binary::open(format!("{FIRMWARE}.elf")).unwrap();
+    let routine = elf.symbol_by_name("crc32_compute").unwrap().address & !1;
+    let check = |routine: Option<(u64, bool)>| Found {
+        algorithm: Some(Algorithm::Crc32),
+        field: BASE + 0x7fc,
+        endian: Endian::Little,
+        range: (BASE + 0x400, BASE + 0x7fc),
+        score: 0.98,
+        emulated: true,
+        routine,
+        code_bound: false,
+        evidence: Vec::new(),
+        alternatives: 0,
+    };
+    let located = check(Some((routine, true)));
+    let blocks = [block(BASE, &image)];
+    let result = device_check(&project, &located, &blocks, &[]);
+    assert_eq!(result.status, "agrees", "{result:?}");
+
+    let mut changed = image.clone();
+    changed[0x500] ^= 0xff;
+    let changed_blocks = [block(BASE, &changed)];
+    let result = device_check(&project, &located, &changed_blocks, &[(BASE + 0x500, vec![changed[0x500]])]);
+    assert_eq!(result.status, "agrees", "{result:?}");
+    let result = device_check(&project, &located, &changed_blocks, &[]);
+    assert_eq!(result.status, "disagrees", "{result:?}");
+
+    let result = device_check(&project, &check(None), &blocks, &[]);
+    assert_eq!(result.status, "unconfirmed", "{result:?}");
+    let result = device_check(&project, &check(Some((BASE + 0x10_0000, true))), &blocks, &[]);
+    assert_eq!(result.status, "unconfirmed", "{result:?}");
+    assert!(result.detail.contains("could not run") || result.detail.contains("did not return"), "{result:?}");
 }

@@ -119,6 +119,12 @@ fn integrity_checks_find_fix_and_export_the_application_crc() {
     assert_eq!(check["valid"], false, "{check:#}");
     assert_eq!(report["fix"]["applied"], false);
     assert_eq!(report["fix"]["writes"][0]["action"], "patch");
+    assert!(report["fix"]["writes"][0].get("device_check").is_none(), "{report:#}");
+    // With emulation (the default), the boot code's own routine computes the corrected value over the patched range.
+    let checked = call(&mut project, "integrity_checks", json!({}));
+    let device = &checked["fix"]["writes"][0]["device_check"];
+    assert_eq!(device["status"], "agrees", "{checked:#}");
+    assert!(device["detail"].as_str().unwrap().contains(&format!("{:#x}", truth("crc32_compute"))), "{device}");
 
     // Fix needs the reviewed receipt, then writes the corrected CRC as a second patch record.
     let (text, failed) = call_shared(&tools(), &mut project, "integrity_checks", json!({ "fix": true }));
@@ -302,6 +308,10 @@ fn nested_checks_are_found_and_fixed_inner_first() {
     let order: Vec<&str> = writes.iter().map(|write| write["address"].as_str().unwrap()).collect();
     assert_eq!(order, ["0x840", "0x13fc"], "{fixed:#}");
     assert_eq!(pairs(&fixed), preview, "the preview showed other values than the fix wrote");
+    // The image's own routines compute both values, the outer one over the inner value just written.
+    for write in writes {
+        assert_eq!(write["device_check"]["status"], "agrees", "{fixed:#}");
+    }
     assert_eq!(fixed["fix"]["applied"], true, "{fixed:#}");
     assert_eq!(fixed["invalid"], 0, "{fixed:#}");
 }
@@ -401,6 +411,7 @@ fn an_elf_firmware_crc_is_fixed_and_exported_in_place() {
     fix["fix"] = json!(true);
     let fixed = call(&mut project, "integrity_checks", fix);
     assert_eq!((fixed["fix"]["applied"].as_bool(), fixed["invalid"].as_u64()), (Some(true), Some(0)), "{fixed:#}");
+    assert_eq!(fixed["fix"]["writes"][0]["device_check"]["status"], "agrees", "{fixed:#}");
     let patches = call(&mut project, "list_patches", json!({}));
     assert_eq!(patches["total"], 3, "{patches:#}");
     assert!(patches["patches"].as_array().unwrap().iter().all(|row| row["version"] == 3), "{patches:#}");
@@ -479,6 +490,7 @@ fn a_crc16_polynomial_formed_by_an_immediate_is_recognised() {
     fix["fix"] = json!(true);
     let fixed = call(&mut project, "integrity_checks", fix);
     assert_eq!((fixed["fix"]["applied"].as_bool(), fixed["invalid"].as_u64()), (Some(true), Some(0)), "{fixed:#}");
+    assert_eq!(fixed["fix"]["writes"][0]["device_check"]["status"], "agrees", "{fixed:#}");
     let exported = owned.0.join("patched.elf");
     let export = json!({ "destination": exported, "expected_revision": fixed["receipt"]["revision_sha256"] });
     call(&mut project, "export_image", export);

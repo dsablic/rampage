@@ -5,7 +5,7 @@
 //! effective (patched) image is then measured against each one. Evidence: a bounded brute-force match of every
 //! algorithm over candidate ranges against candidate stored-value locations; code that holds CRC tables or
 //! polynomials and the addresses it and its callers reference; optionally the image's own routine run by
-//! `evaluate_function` over the range.
+//! `evaluate_function` over the range, which also checks each value a fix writes.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use rampage_loaders::{Binary, Format};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::evaluate::{EvaluateArgument, EvaluateRequest, IntegerText, StopReason};
+use crate::evaluate::{EvaluateArgument, EvaluateRequest, IntegerText, MemoryWrite, StopReason};
 use crate::{ApiError, PatchReceipt, Project, XrefQuery};
 
 mod algorithms;
@@ -51,7 +51,8 @@ const MAX_ROUTINES: usize = 8;
 /// What `integrity_checks` does besides reporting.
 #[derive(Debug, Clone, Default)]
 pub struct IntegrityRequest {
-    /// Run the image's own CRC routine over a matched range with evaluate_function to confirm it.
+    /// Run the image's own CRC routine over a matched range with evaluate_function to confirm it, and over each
+    /// range as a fix write leaves it (`FixWrite::device_check`).
     pub emulate: bool,
     /// Write corrected stored values for invalid checks as byte patches.
     pub fix: bool,
@@ -153,6 +154,17 @@ pub struct FixWrite {
     pub action: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// With `emulate`: the image's own routine run over the range as this write leaves it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_check: Option<DeviceCheck>,
+}
+
+/// Whether the device's own code computes the value a fix writes.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceCheck {
+    /// `agrees`, `disagrees`, or `unconfirmed` (no routine, or it could not be run to a result; never blocks a fix).
+    pub status: &'static str,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -915,6 +927,8 @@ struct Found {
     range: (u64, u64),
     score: f64,
     emulated: bool,
+    /// The routine whose run confirmed it, and whether its second argument is the length (else the end).
+    routine: Option<(u64, bool)>,
     /// Code references the stored value or a range bound.
     code_bound: bool,
     evidence: Vec<String>,
@@ -1017,6 +1031,7 @@ fn select(matches: Vec<Match>, code: &CodeEvidence) -> (Vec<Found>, Vec<Found>) 
             range: best.range,
             score,
             emulated: false,
+            routine: None,
             code_bound: !code_addresses(&best, code, &fields).is_empty(),
             evidence,
             alternatives,
@@ -1051,20 +1066,52 @@ fn stale(check: &Found, blocks: &[Block], big_endian: bool) -> bool {
     matches!((stored, computed), (Some(stored), Some(computed)) if stored != computed.as_slice())
 }
 
+/// A check's value over `blocks` as the routine returns it: a number, for a value of at most 4 bytes.
+fn routine_value(algorithm: Algorithm, blocks: &[Block], range: (u64, u64), big_endian: bool) -> Option<u64> {
+    if range.1 - range.0 > MAX_EMULATED_RANGE || algorithm.width() > 4 {
+        return None;
+    }
+    let mut state = algorithm.start(big_endian);
+    state.update(read(blocks, range.0, range.1)?);
+    state.number()
+}
+
+/// Runs `routine(start, second)` over the image with `memory` written first: its returned value cut to the width of
+/// `algorithm`'s value, and the steps it took; or why it gave no value.
+fn run_routine(
+    project: &Project,
+    routine: u64,
+    (start, end): (u64, u64),
+    second: u64,
+    algorithm: Algorithm,
+    memory: Vec<MemoryWrite>,
+) -> Result<(u64, u64), String> {
+    let request = EvaluateRequest {
+        at: format!("{routine:#x}"),
+        args: vec![
+            EvaluateArgument::Integer(IntegerText::Unsigned(start)),
+            EvaluateArgument::Integer(IntegerText::Unsigned(second)),
+        ],
+        memory,
+        max_steps: Some((200 * (end - start) + 100_000).min(crate::evaluate::MAX_STEPS)),
+        timeout_ms: Some(5_000),
+        ..Default::default()
+    };
+    let report = project.evaluate_function(&request).map_err(|error| format!("could not run: {error}"))?;
+    let mask = if algorithm.width() >= 8 { u64::MAX } else { (1u64 << (8 * algorithm.width())) - 1 };
+    match report.result.as_ref().and_then(|result| result.unsigned.as_u64()) {
+        Some(value) if report.stop == StopReason::Returned => Ok((value & mask, report.steps)),
+        _ => Err(format!("did not return a value: {}", report.detail)),
+    }
+}
+
 /// Runs the image's CRC routine over each matched range it admits; a result equal to the computed value confirms.
 fn emulate(project: &Project, code: &CodeEvidence, blocks: &[Block], checks: &mut [Found], notes: &mut Vec<String>) {
     let mut runs = 0;
     for check in checks.iter_mut() {
         let Some(algorithm) = check.algorithm else { continue };
         let (start, end) = check.range;
-        if end - start > MAX_EMULATED_RANGE || algorithm.width() > 4 {
-            continue;
-        }
-        let Some(expected) = read(blocks, start, end).and_then(|bytes| {
-            let mut state = algorithm.start(project.binary.big_endian);
-            state.update(bytes);
-            state.number()
-        }) else {
+        let Some(expected) = routine_value(algorithm, blocks, check.range, project.binary.big_endian) else {
             continue;
         };
         'routines: for routine in code.routines.iter().filter(|routine| routine.admits(algorithm)) {
@@ -1074,31 +1121,52 @@ fn emulate(project: &Project, code: &CodeEvidence, blocks: &[Block], checks: &mu
                     return;
                 }
                 runs += 1;
-                let request = EvaluateRequest {
-                    at: format!("{:#x}", routine.address),
-                    args: vec![
-                        EvaluateArgument::Integer(IntegerText::Unsigned(start)),
-                        EvaluateArgument::Integer(IntegerText::Unsigned(second)),
-                    ],
-                    max_steps: Some((200 * (end - start) + 100_000).min(crate::evaluate::MAX_STEPS)),
-                    timeout_ms: Some(5_000),
-                    ..Default::default()
+                let Ok((value, steps)) = run_routine(project, routine.address, check.range, second, algorithm, vec![])
+                else {
+                    continue;
                 };
-                let Ok(report) = project.evaluate_function(&request) else { continue };
-                let mask = if algorithm.width() >= 8 { u64::MAX } else { (1u64 << (8 * algorithm.width())) - 1 };
-                let result = report.result.as_ref().and_then(|result| result.unsigned.as_u64());
-                if report.stop == StopReason::Returned && result.map(|value| value & mask) == Some(expected) {
+                if value == expected {
                     check.emulated = true;
+                    check.routine = Some((routine.address, label == "length"));
                     check.score = 0.98;
                     check.evidence.push(format!(
                         "emulation: evaluate_function({:#x}, {start:#x}, {label} {second:#x}) returned {expected:#x} \
-                         in {} steps",
-                        routine.address, report.steps
+                         in {steps} steps",
+                        routine.address
                     ));
                     break 'routines;
                 }
             }
         }
+    }
+}
+
+/// Runs the routine that confirmed `check` over its range in `image` (the effective image with `written`, the
+/// fix's earlier values, over it): whether the device's own code computes the value a fix writes there.
+fn device_check(project: &Project, check: &Found, image: &[Block], written: &[(u64, Vec<u8>)]) -> DeviceCheck {
+    let unconfirmed = |detail: String| DeviceCheck { status: "unconfirmed", detail };
+    let (Some((routine, length)), Some(algorithm)) = (check.routine, check.algorithm) else {
+        return unconfirmed("no routine of the image was confirmed to compute this check".into());
+    };
+    let Some(expected) = routine_value(algorithm, image, check.range, project.binary.big_endian) else {
+        return unconfirmed("the range is not in the image or is longer than 64 KiB".into());
+    };
+    let (start, end) = check.range;
+    let second = if length { end - start } else { end };
+    let memory = written
+        .iter()
+        .map(|(address, bytes)| MemoryWrite { address: format!("{address:#x}"), hex: hex(bytes) })
+        .collect();
+    let call = format!("evaluate_function({routine:#x}, {start:#x}, {second:#x})");
+    match run_routine(project, routine, check.range, second, algorithm, memory) {
+        Ok((value, steps)) if value == expected => {
+            DeviceCheck { status: "agrees", detail: format!("{call} returned {value:#x} in {steps} steps") }
+        }
+        Ok((value, _)) => DeviceCheck {
+            status: "disagrees",
+            detail: format!("{call} returned {value:#x}, not the recomputed {expected:#x}"),
+        },
+        Err(reason) => unconfirmed(format!("{call} {reason}")),
     }
 }
 
@@ -1352,6 +1420,7 @@ impl Project {
         // The image as the planned writes leave it, whether or not they are committed: each later value is computed
         // over the earlier ones, so a preview shows what a fix would write.
         let mut image = owned_blocks(&project.binary);
+        let mut written: Vec<(u64, Vec<u8>)> = Vec::new();
         for (index, original, previous) in planned {
             let check = &found[index];
             let current_blocks = views(&image);
@@ -1386,6 +1455,7 @@ impl Project {
                         "its range covers {inner}, which no longer matches its own range and is not being corrected; \
                          fix it first (pass its id), or this value would be computed over a stale one"
                     )),
+                    device_check: None,
                 });
                 continue;
             }
@@ -1410,7 +1480,13 @@ impl Project {
                     inner.range.1
                 ));
             }
+            // The device's own routine over the range as the earlier writes leave it, run on this (unfixed) image.
+            let device = request.emulate.then(|| device_check(self, check, &current_blocks, &written));
+            if let Some(DeviceCheck { status: "disagrees", detail }) = &device {
+                notes.push(format!("check {index} at {:#x}: the image's own routine disagrees: {detail}", check.field));
+            }
             write_into(&mut image, check.field, &desired);
+            written.push((check.field, desired.clone()));
             // The original bytes are correct again: remove the record at the value, which covers exactly its bytes
             // (anything else was refused above).
             let revert = desired == original;
@@ -1421,6 +1497,7 @@ impl Project {
                 replacement_hex: hex(&desired),
                 action: if revert { "revert" } else { "patch" },
                 detail: None,
+                device_check: device,
             };
             if receipt.is_none() {
                 write.action = "unsupported";
@@ -1499,6 +1576,7 @@ impl Project {
                         "not confirmed by emulation and no code references its value or range; pass its id to fix it"
                             .into(),
                     ),
+                    device_check: None,
                 });
             }
         }
