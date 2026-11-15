@@ -3965,6 +3965,31 @@
         }
       }
     },
+    "privacy_surface": {
+      "group": "carve",
+      "arguments": {
+        "arch": {
+          "type": "null|string",
+          "required": false
+        },
+        "image_length": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "image_offset": {
+          "type": "integer|null|string",
+          "required": false
+        },
+        "max_per_section": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
     "probe_compression": {
       "group": "core",
       "arguments": {

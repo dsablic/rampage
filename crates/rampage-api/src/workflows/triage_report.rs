@@ -308,6 +308,24 @@ impl Project {
                 "Networking capability tags or network-like strings were seen; map them to the functions using them.",
             );
         }
+        let capture: Vec<&str> = self
+            .binary
+            .imports
+            .iter()
+            .map(|import| import.name.as_str())
+            .filter(|name| super::privacy_surface::capture_api(name))
+            .take(3)
+            .collect();
+        if !capture.is_empty() {
+            report.step(
+                "privacy_surface",
+                json!({}),
+                format!(
+                    "It imports capture APIs ({}); map what it records, where it can send it and what starts it.",
+                    capture.join(", ")
+                ),
+            );
+        }
         if packing_signal {
             report.step(
                 "analysis_diagnostics",

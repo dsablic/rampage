@@ -435,6 +435,8 @@ async fn contract_mcp_carve_results() {
         json!({"path": endpoints, "output": list, "format": "hosts", "include_local": true}),
     )
     .await;
+    let privacy = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../rampage-api/tests/fixtures/privacy-x64.elf");
+    exercise(c, o, "privacy_surface", json!({"path": privacy})).await;
     check_group(client, "carve", &observed, &[]).await;
 }
 

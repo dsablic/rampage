@@ -353,7 +353,7 @@ rename functions. Exact signatures and existing analyst names retain priority.
 ## Guided reports and batch analysis
 
 `triage_report`, `find_main`, `network_surface`, `persistence_surface`, `string_decoding` and `diff_builds` (in
-`core`) and `find_crypto` (in the `detection` group) compose primitives into bounded reports. Each finding
+`core`), `find_crypto` (in the `detection` group) and `privacy_surface` (in `carve`) compose primitives into bounded reports. Each finding
 retains evidence, source tool and confidence; reports state limitations and end with concrete next tool calls.
 These are MCP tools or CLI workflows.
 
@@ -386,6 +386,15 @@ noise, and private, documentation and reserved names are labelled `local`. Findi
 domain and by file, with string addresses, referencing functions and the networking APIs they call; directory scans
 page under file and time budgets. `endpoint_blocklist` writes the chosen hosts as a hosts file, dnsmasq or unbound
 configuration, a domain list or an IP list. See [endpoint inventory and blocklists](endpoint-inventory.md).
+
+## Privacy surface
+
+`privacy_surface` (MCP `carve` group) reports what one binary can capture and where it can send it: microphone,
+camera, screen and input-device sources (by API name, by a capture-selecting constant argument or ioctl request code
+at the call, and by device-path and Android class-name strings), network and file sinks with the endpoints they
+name, capture-to-send call paths ranked by evidence, and what reaches each capture: program start, a timer, a
+network command or user input, with `no_user_trigger` when no input or UI handling was found on the way. Evidence,
+not intent. See [privacy surface](privacy-surface.md).
 
 ## File formats
 

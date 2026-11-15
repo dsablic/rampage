@@ -1,0 +1,117 @@
+# Privacy surface
+
+A smart device can hold a microphone, a camera, a view of what is on screen and the keys pressed on its remote.
+`privacy_surface` answers an owner's question about one of its programs: what can this code capture, where can it
+send it, how are the two connected, and can capture start without anyone asking for it. It reports evidence of what
+the code can do and how it is reached, never intent, and never that anything runs.
+
+It is a guided report in the `carve` group, beside [`endpoint_inventory`](endpoint-inventory.md). It takes the
+binary's `path` and the usual `max_per_section` (default 25, at most 200).
+
+```json
+{"tool": "privacy_surface", "path": "/work/rootfs/usr/bin/voiced"}
+```
+
+## The owner's flow
+
+1. `fs_extract` the firmware image (see [firmware filesystem images](firmware-images.md)) and pick the programs
+   that link audio, video or input libraries.
+2. `privacy_surface` on each. Read `Capture triggers` first: a `no_user_trigger` finding says a capture is reached
+   from program start with no input or UI handling on the way.
+3. `Capture-to-send paths` ranks how closely each capture is tied to a network send or a file write; decompile the
+   functions the next steps name to read what is recorded and sent.
+4. `endpoint_inventory` on the same program lists every host it names, and `endpoint_blocklist` writes them as a
+   router blocklist.
+
+## Sections
+
+| Section | What |
+| --- | --- |
+| `Capture sources` | Each capture in each function: what it uses, the medium (`microphone`, `camera`, `screen`, `input devices`) and an `evidence:` level. |
+| `Capture-to-send paths` | Each pair of a capturing function and a sending or writing function connected by calls, best first, with the call chain. |
+| `Capture triggers` | For each capturing function, what reaches it: program start, a timer, a network command, user input; and `no_user_trigger` where it applies. |
+| `Send and write sinks` | Functions that can send over the network or write a file, with the endpoints they (or their direct callers) name. |
+| `Excluded: not capture` | Calls that use a capture API in the other direction, such as an ALSA stream opened for playback. |
+| `Capture strings not referenced from code` | Device paths and class names no discovered code references. |
+
+### Evidence levels
+
+Every source carries one of three levels, strongest first:
+
+- `argument`: a capture API and a constant argument at the call that selects capture, read from the instructions
+  just before the call (on x86-64, AArch64 and 32-bit ARM). Examples: `snd_pcm_open` with stream
+  `SND_PCM_STREAM_CAPTURE`, tinyalsa `pcm_open` with `PCM_IN`, `pa_simple_new` with `PA_STREAM_RECORD`, an
+  `ioctl` with `VIDIOC_STREAMON`.
+- `name`: the API's name alone (`snd_pcm_readi`, `pa_stream_connect_record`), or a direction-selecting API whose
+  argument was not a constant just before the call (`... (direction not read)`).
+- `string`: the function references a device path (`/dev/video0`, `/dev/snd/pcmC0D0c`, `/dev/fb0`,
+  `/dev/input/event1`) or an Android framework class name (`android/media/AudioRecord`).
+
+A call whose constant argument selects the other direction is listed under `Excluded: not capture`, not as a source.
+
+### What counts as a source
+
+| Medium | APIs | Strings and request codes |
+| --- | --- | --- |
+| microphone | ALSA `snd_pcm_open` (capture stream), `snd_pcm_readi`/`readn`, `snd_pcm_mmap_readi`/`readn`; tinyalsa `pcm_open` (`PCM_IN`), `pcm_read`, `pcm_readi`; PulseAudio `pa_simple_new` (`PA_STREAM_RECORD`), `pa_simple_read`, `pa_stream_connect_record`; PortAudio input streams; AAudio `AAudioStreamBuilder_setDirection` (input); OpenSL ES `SL_IID_RECORD`; Android native `AudioRecord` and `MediaRecorder` | `/dev/snd/pcmC*D*c` (a name ending in `p` is playback and excluded), `/proc/asound`, `android/media/AudioRecord`, `android/media/MediaRecorder` |
+| camera | `ioctl`/`v4l2_ioctl` with a V4L2 request (`VIDIOC_QUERYCAP`, `S_FMT`, `REQBUFS`, `QUERYBUF`, `QBUF`, `DQBUF`, `STREAMON`), `v4l2_read`; NDK camera2 (`ACameraManager_openCamera`, capture sessions); Android native `Camera` | `/dev/video*`, `android/hardware/Camera`, `android.hardware.camera2` |
+| screen | `ioctl` with `FBIOGET_VSCREENINFO`/`FBIOGET_FSCREENINFO` or `DRM_IOCTL_MODE_GETFB`/`GETFB2`; `drmModeGetFB`/`drmModeGetFB2`; X11 `XGetImage`/`XShmGetImage`; Android `ScreenshotClient`, `captureDisplay`, `ScreenCapture` | `/dev/fb*`, `/dev/graphics/fb*`, `/dev/dri/`, `android/media/projection/MediaProjection` |
+| input devices | `ioctl` with `EVIOCGRAB`, `EVIOCGNAME` or `EVIOCGBIT`; libevdev and libinput event reads | `/dev/input/*` |
+
+ioctl requests are matched by type and number whatever their size and direction bits, so the 32- and 64-bit sizes
+of `struct v4l2_buffer` and the MIPS encoding all match. Names match as `network_surface`'s do: case-insensitive,
+with or without leading underscores, `@plt` and `__imp_` decorations; C++ framework classes match inside mangled
+names.
+
+### Sinks
+
+- Network: socket `send`/`sendto`/`sendmsg`/`connect`, TLS writes, libcurl (`curl_easy_perform`), WinINet/WinHTTP
+  sends, MQTT (`mosquitto_publish`, `mosquitto_connect`, Paho `MQTTClient_publish`, `MQTTAsync_send`) and WebSocket
+  writes (`lws_write`, nopoll). Each network sink lists up to four endpoints that the function, or a function
+  calling it directly, names in its strings, classified as [`endpoint_inventory`](endpoint-inventory.md) does.
+- File (weaker: a file leaves the device only if something uploads it): `fopen` with a writing mode, `open`/`openat`
+  with write flags, `creat`. A read-only open, or an open of `/dev/`, `/proc/` or `/sys/`, is not a sink; `fwrite`
+  and `write` are named beside a file sink but are not sinks on their own.
+
+### Paths and ranking
+
+A path connects a capturing function and a sinking function through calls, within six call levels. Best first:
+
+1. the same function captures and sends;
+2. one calls the other directly;
+3. one reaches the other a few calls down;
+4. both are reached from a shared caller within four calls in all (a caller shared only through `main` or the
+   entry point does not count: everything in a program shares it).
+
+A file sink and a string-level source each lower the confidence one step. When both functions reference the same
+writable global (a shared buffer), the path says so, as a hint of a data link. A path shows that capture and send
+code are connected, not that the captured data is what is sent.
+
+### Triggers
+
+Starting from each capturing function, the report walks callers up to six levels (and 2000 functions). Taking a
+function's address counts as calling it, so a callback, a thread start (`pthread_create`) or a signal handler is
+followed to the code that registers it. On the way it notes:
+
+- `program start`: the entry point, `main`, an `.init_array` constructor or `JNI_OnLoad` (an exported function is
+  reported as `export`: it runs when whatever loads the library calls it);
+- `timer`: a function on the chain calls `timer_create`, `setitimer`, `alarm`, `timerfd_*` or similar (stronger when
+  it registers the chain's next function as a callback); `periodic loop`: a function with a loop that sleeps;
+- `network command`: a function on the chain receives from the network (`recv`, `accept`, `SSL_read`, MQTT
+  message callbacks);
+- `user input`: a function on the chain reads an input device or runs a UI event loop.
+
+`no_user_trigger` is stated for a microphone, camera or screen capture only when it is reached from program start,
+no function among all its callers within the bounds reads input or runs a UI loop, and the walk was not cut. It means
+none was found, not that none exists.
+
+## Limits
+
+- Constant arguments are read only from the instructions just before the call in the same basic block. Values
+  passed through variables, helpers or other blocks leave a source at `name` level (and an ioctl unread).
+- Virtual calls and other indirect calls are not followed, and nothing is executed. Java and DEX code are not read:
+  Android apps show only through class-name strings and native libraries.
+- V4L2 also drives video output, decoders and HDMI input; framebuffer queries are also used to draw. A source shows
+  the capability, not what is recorded.
+- One binary at a time; running it over an extracted tree, and boot triggers across files (init scripts, Android
+  `.rc` services, systemd units starting a program with sources), are not done yet.

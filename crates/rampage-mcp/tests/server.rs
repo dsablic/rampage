@@ -147,6 +147,7 @@ async fn lists_all_tools_with_instructions() {
         "pe_resources",
         "peripheral_access",
         "persistence_surface",
+        "privacy_surface",
         "probe_compression",
         "propagate_types",
         "pyinstaller_archive",

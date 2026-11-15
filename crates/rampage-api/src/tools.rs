@@ -150,8 +150,9 @@ impl Group {
             Group::Carve => concat!(
                 "Scan files for embedded executables/containers, inventory ",
                 "standalone ZIP32 metadata without extraction, and list and extract firmware filesystem images ",
-                "(SquashFS, ext2/3/4, Android sparse and OTA payloads, cpio, tar), and inventory the network endpoints of a ",
-                "binary or extracted tree as a router blocklist."
+                "(SquashFS, ext2/3/4, Android sparse and OTA payloads, cpio, tar), inventory the network endpoints of a ",
+                "binary or extracted tree as a router blocklist, and map what a binary can capture (microphone, camera, ",
+                "screen, input) and send (privacy_surface)."
             ),
             Group::Formats => {
                 "Toolchain and container metadata: Go build info, Rust dependency audit data, PE resources and load config, PyInstaller archives and WebAssembly modules; firmware integrity checks (CRC/checksum fields, recomputed after patches) and patched-image export in the original container."

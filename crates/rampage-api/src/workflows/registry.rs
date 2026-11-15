@@ -52,6 +52,7 @@ pub static WORKFLOWS: &[&dyn Workflow] = &[
     &super::network_surface::NetworkSurface,
     &super::find_crypto::FindCrypto,
     &super::persistence_surface::PersistenceSurface,
+    &super::privacy_surface::PrivacySurface,
     &super::string_decoding::StringDecoding,
     &super::diff_builds::DiffBuilds,
 ];

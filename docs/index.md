@@ -70,6 +70,8 @@ Formats and raw code:
   payload, cpio and tar images safely.
 - [Endpoint inventory and blocklists](endpoint-inventory.md): the hosts, URLs, IPs, pins and certificates a binary or
   firmware tree names, grouped by domain, and a router blocklist of them.
+- [Privacy surface](privacy-surface.md): what a program can capture (microphone, camera, screen, input), where it
+  can send it, the call paths between, and whether capture starts without a user-facing trigger.
 - [File formats](file-formats.md): Go and Rust build info, PyInstaller archives, WebAssembly modules, PE resources
   and load config, MSVC C++ metadata (vftables and exception tables), and .NET metadata.
 

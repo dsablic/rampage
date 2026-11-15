@@ -62,6 +62,7 @@ mod peripherals;
 mod plugin_triage;
 mod pointer_compare;
 mod pointer_observation;
+mod privacy_surface;
 mod project_workspace;
 mod raw;
 mod raw_project;

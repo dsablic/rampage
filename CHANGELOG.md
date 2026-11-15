@@ -4,6 +4,23 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
+## Unreleased
+
+- Privacy surface: the new `privacy_surface` report (group `carve`) maps what one binary can capture and where it
+  can send it. Sources are microphone, camera, screen and input-device capture: ALSA, tinyalsa, PulseAudio,
+  PortAudio and AAudio input, V4L2, framebuffer, DRM and evdev ioctls (matched by type and number at any ABI size),
+  libevdev/libinput, X11 screen reads, NDK camera2, Android native `AudioRecord`/`MediaRecorder`/`Camera`/screenshot
+  classes in mangled names, and device-path and Android class-name strings. A constant argument read just before
+  the call (capture stream, `PCM_IN`, `PA_STREAM_RECORD`, an ioctl request code) raises a source's evidence from
+  `name` to `argument`, and a playback-direction call is listed as excluded instead. Sinks are socket, TLS, libcurl,
+  WinINet/WinHTTP, MQTT and WebSocket sends, with the endpoints the function or its direct callers name, and file
+  writes (`fopen` with a writing mode, `open` with write flags; device paths excluded) as weaker sinks. Paths between
+  capture and send are ranked (same function, direct call, a few calls down, a shared caller) with their call chains
+  and a shared writable global as a data-link hint. Triggers follow callers, callbacks, thread starts and signal
+  handlers up to six levels: program start (entry, `main`, `.init_array`, `JNI_OnLoad`), timers and sleeping loops,
+  network commands and user input; `no_user_trigger` says a capture is reached from program start with no input or
+  UI handling found on any chain. Evidence, never intent. See [privacy surface](docs/privacy-surface.md).
+
 ## 1.5.0 (2026-11-15)
 
 - Endpoint inventory and blocklists: the new `endpoint_inventory` and `endpoint_blocklist` file tools (group

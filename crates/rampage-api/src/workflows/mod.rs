@@ -8,6 +8,7 @@ mod find_main;
 mod indicators;
 mod network_surface;
 mod persistence_surface;
+mod privacy_surface;
 mod registry;
 mod string_decoding;
 mod triage_report;

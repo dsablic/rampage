@@ -119,7 +119,8 @@ A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling
   `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `entry_diagnostics`, `inspect_jump_table`.
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
-- `carve`: `carve`, `archive_inventory`, `fs_list`, `fs_extract`, `endpoint_inventory`, `endpoint_blocklist`.
+- `carve`: `carve`, `archive_inventory`, `fs_list`, `fs_extract`, `endpoint_inventory`, `endpoint_blocklist`,
+  `privacy_surface`.
 - `formats`: `build_info`, `pe_resources`, `pe_load_config`, `exception_handlers`, `pyinstaller_archive`,
   `wasm_module`, `integrity_checks`, `export_image`.
 - `debug`, only on a server started with a debug endpoint: `debug_connect`, `debug_bind`, `debug_status`,
@@ -424,6 +425,10 @@ See [firmware filesystem images](firmware-images.md).
 `cursor` under `max_files` and `timeout_ms`), classified and grouped by domain and component; `endpoint_blocklist`
 writes chosen hosts to an absolute `output` file as a hosts, dnsmasq, unbound, domain or IP list. See
 [endpoint inventory and blocklists](endpoint-inventory.md).
+`privacy_surface` is a guided report on one binary: microphone, camera, screen and input-device capture sources
+(with `evidence` `argument`, `name` or `string`), network and file sinks with the endpoints they name, ranked
+capture-to-send call paths, and what reaches each capture (program start, timer, network command, user input;
+`no_user_trigger`). See [privacy surface](privacy-surface.md).
 `build_info` returns `{go, rust}`: Go build info (toolchain version, main package and module, dependency modules with
 `=>` replacements, build settings, and a cross-check of the version against the pclntab layout) and cargo-auditable
 `.dep-v0` packages. Each is `null` when absent, or has `status` `present` or `unreadable` with a `reason`. `offset`/

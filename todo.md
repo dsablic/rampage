@@ -147,9 +147,15 @@ above stay under review until each is approved.
   `endpoint_blocklist` (group `carve`): URLs, PSL-checked hosts, IPv4/IPv6, pins and PEM/DER certificates in a binary
   or an extracted tree, with noise rules, `local`/`package` labels, xref and networking-caller evidence, decoded
   strings, domain and component groups, cursor paging; hosts/dnsmasq/unbound/domain/IP blocklists.
-- [ ] **`privacy_surface` workflow (1.6.0, in progress).** Capture sources (ALSA/tinyalsa, V4L2, framebuffer and
-  screen capture, input events, Android audio/camera APIs by name) and network/file sinks, call paths between them
-  ranked by evidence, and capture started without a user-facing trigger (boot, timer, network command).
+- [x] **`privacy_surface` workflow, first slice (1.6.0)** ([docs](docs/privacy-surface.md)). One binary: capture
+  sources (ALSA/tinyalsa/PulseAudio/PortAudio/AAudio, V4L2/framebuffer/DRM/evdev ioctls, device paths, Android
+  audio/camera/screen names), `argument` evidence from constant arguments at the call, network/file sinks with
+  their endpoints, ranked capture-to-send call paths, triggers (program start, timer, network command, user input)
+  and `no_user_trigger`.
+- [ ] `privacy_surface` follow-ups: directory mode over an extracted tree (cursor, `max_files`, `timeout_ms`) with
+  boot triggers across files (init.d scripts, Android `.rc` services, systemd units starting a program with
+  sources); HDMI-CEC (`CEC_RECEIVE`, libcec); MIPS argument reading (delay slots) and 32-bit x86 stack arguments;
+  arguments set in a predecessor block; DEX/APK sources once Android support lands.
 - [ ] Endpoint follow-ups: IPv4 addresses stored as integers in code (immediates passed to `connect`/`sin_addr`);
   `network_code` through one call level (a string passed to a helper that calls `connect`); hex SHA-256 and
   SHA-1 pins; DEX/APK strings once Android support lands; a CLI route; merging groups across directory pages; a

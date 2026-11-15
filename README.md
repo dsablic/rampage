@@ -148,7 +148,7 @@ Areas marked *experimental* may change in any release; see the [stability policy
   Objective-C classes, methods and properties, and message sends resolved to their selector and, where the
   receiver's class is evident, the method that runs (`objc_sends`); guided reports (`triage_report`, `find_main`,
   `network_surface`, `persistence_surface`, `string_decoding` and `diff_builds` in `core`, `find_crypto` in
-  `detection`).
+  `detection`, `privacy_surface` in `carve`).
 - **Build matching:** `transfer_annotations` matches functions one-to-one with an analysed earlier build, each
   match with a confidence and ambiguity reported rather than guessed, and previews or applies its names, comments,
   signatures, types and globals as an undoable batch. See [build diffing](docs/build-diffing.md).

@@ -31,17 +31,35 @@ zig cc -target aarch64-linux-gnu -O1 -g0 -o decode-alloc-arm64.elf decode-alloc.
 # compilation directory. After linking, both are overwritten in place with a same-length no-op run: the unpack
 # directory (everything before /zig-aarch64-macos-...) with `/./.`, so the paths read
 # /./././zig-aarch64-macos-$expected/lib/libc/..., and this directory with `./.` (that is, `.`). No local path is
-# left, and same length keeps every DWARF string offset valid.
+# left, and same length keeps every DWARF string offset valid. Zig caches those start files with the directory of
+# the build that first compiled them, so point ZIG_GLOBAL_CACHE_DIR at a fresh directory when building from
+# somewhere else; afterwards `grep -c -a -e /Users/ -e /home/` on each output must print 0.
 if [ -n "${ZIG_RELEASE:-}" ]; then
     release=$(cd "$ZIG_RELEASE" && pwd -P)
     if [ "$("$release/zig" version)" != "$expected" ]; then
         echo "ZIG_RELEASE must be zig $expected" >&2
         exit 1
     fi
+    # privacy-*.elf import the capture and network libraries from stub shared libraries (privacy-stubs.c) built
+    # with the real sonames into a temporary directory, so the calls are real imports; only the programs are kept.
+    stubs=$(mktemp -d)
+    trap 'rm -rf "$stubs"' EXIT
     for target in x86_64:x64 aarch64:arm64; do
-        "$release/zig" cc -target "${target%%:*}-linux-gnu" -O1 -g0 -o "endpoints-${target##*:}.elf" endpoints.c
+        triple="${target%%:*}-linux-gnu"
+        "$release/zig" cc -target "$triple" -O1 -g0 -o "endpoints-${target##*:}.elf" endpoints.c
+        libraries=""
+        for library in ASOUND:libasound.so.2 TINYALSA:libtinyalsa.so PULSE_SIMPLE:libpulse-simple.so.0 \
+            CURL:libcurl.so.4 MOSQUITTO:libmosquitto.so.1; do
+            out="$stubs/${target##*:}-${library#*:}"
+            "$release/zig" cc -target "$triple" -O1 -g0 -shared -fPIC "-DLIB_${library%%:*}" \
+                "-Wl,-soname,${library#*:}" -o "$out" privacy-stubs.c
+            libraries="$libraries $out"
+        done
+        # shellcheck disable=SC2086
+        "$release/zig" cc -target "$triple" -O1 -g0 -o "privacy-${target##*:}.elf" privacy.c $libraries -lpthread
     done
-    python3 -I - "$(dirname "$release")" "$(pwd -P)" endpoints-x64.elf endpoints-arm64.elf <<'PY'
+    python3 -I - "$(dirname "$release")" "$(pwd -P)" endpoints-x64.elf endpoints-arm64.elf privacy-x64.elf \
+        privacy-arm64.elf <<'PY'
 import sys
 unpack, here = sys.argv[1].encode(), sys.argv[2].encode()
 # /./. (absolute, the root) for the unpack directory; ./. (relative, `.`) for the compilation directory.
@@ -54,6 +72,6 @@ for name in sys.argv[3:]:
     open(name, "wb").write(data)
 PY
 else
-    echo "ZIG_RELEASE is not set: endpoints-*.elf were not rebuilt" >&2
+    echo "ZIG_RELEASE is not set: endpoints-*.elf and privacy-*.elf were not rebuilt" >&2
 fi
 rm -f *.pdb
