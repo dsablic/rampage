@@ -147,6 +147,9 @@ pub struct Binary {
     /// The Raw interpretation identity, hashed once: `raw` and the owned image bytes never change after load.
     #[serde(skip)]
     raw_identity: std::sync::OnceLock<crate::RawInterpretationIdentity>,
+    /// An ARM ELF whose build attributes name an M-profile CPU ([`Binary::m_profile`]).
+    #[serde(skip)]
+    elf_m_profile: bool,
 }
 
 #[derive(Debug)]
@@ -297,6 +300,7 @@ impl Binary {
             msvc: None,
             go_arguments: std::collections::BTreeMap::new(),
             raw_identity: std::sync::OnceLock::new(),
+            elf_m_profile: false,
             raw: Some(raw),
             image: 0..len,
         })
@@ -346,9 +350,11 @@ impl Binary {
         self.format == Format::Raw && !self.raw.as_ref().is_some_and(|raw| raw.profile().native_decoder())
     }
 
-    /// An ARMv6-M/ARMv7-M(E) image: all Thumb, no A32 state, M-profile instruction set (the Cortex-M Raw profile).
+    /// An ARMv6-M/ARMv7-M(E)/ARMv8-M image: all Thumb, no A32 state, M-profile instruction set. A Raw project with
+    /// the Cortex-M profile, or an ARM ELF whose build attributes (`.ARM.attributes`) name an M-profile CPU; never
+    /// keyed on load addresses, so ordinary ARM Linux, PE and Mach-O images are not.
     pub fn m_profile(&self) -> bool {
-        self.raw.as_ref().is_some_and(|raw| raw.profile().m_profile())
+        self.elf_m_profile || self.raw.as_ref().is_some_and(|raw| raw.profile().m_profile())
     }
 
     /// Content-and-interpretation identity, not a mapped-file freshness or producer/capture proof.
@@ -492,6 +498,7 @@ impl Binary {
             msvc: None,
             go_arguments: std::collections::BTreeMap::new(),
             raw_identity: std::sync::OnceLock::new(),
+            elf_m_profile: false,
             raw: None,
         })
     }
@@ -931,6 +938,7 @@ impl Binary {
         let import_slots = crate::slots::collect(&parsed, image_bytes, &mut warnings);
         let rebases = crate::slots::chained_rebases(&parsed, image_bytes, &mut warnings);
         let details = crate::details::collect(&parsed);
+        let elf_m_profile = format == Format::Elf && arch == Arch::Arm && elf_m_profile(&parsed, &mut warnings);
         let overlay = crate::details::overlay(&parsed, image_bytes, image.start as u64).unwrap_or_else(|warning| {
             warnings.push(warning);
             None
@@ -972,6 +980,7 @@ impl Binary {
             msvc: None,
             go_arguments: std::collections::BTreeMap::new(),
             raw_identity: std::sync::OnceLock::new(),
+            elf_m_profile: false,
             raw: None,
             image,
         };
@@ -1005,6 +1014,11 @@ impl Binary {
         let (starts, warning) = starts::eh_frame(&binary);
         function_starts.extend(starts);
         binary.warnings.extend(warning);
+        binary.elf_m_profile = elf_m_profile;
+        // Stripped firmware names its interrupt handlers only in the vector table, as a Raw image does.
+        if elf_m_profile && let Some(table) = crate::raw_vectors::elf_table(&binary) {
+            function_starts.extend(table.handlers());
+        }
         function_starts.retain(|&start| binary.is_code(start));
         function_starts.sort_unstable();
         function_starts.dedup();
@@ -1730,6 +1744,22 @@ fn arm_mapping_symbol(name: &str) -> Option<char> {
     let kind = chars.next()?;
     let rest = chars.as_str();
     (matches!(kind, 'a' | 't' | 'x' | 'd') && (rest.is_empty() || rest.starts_with('.'))).then_some(kind)
+}
+
+/// Whether an ARM ELF's build attributes name an M-profile CPU; an unreadable section is a warning and not M.
+fn elf_m_profile(parsed: &object::File, warnings: &mut Vec<String>) -> bool {
+    let Some(section) = parsed.section_by_name(".ARM.attributes") else { return false };
+    let parsed_attributes = section
+        .data()
+        .map_err(|_| crate::arm_attributes::AttributesError("section bytes are outside the file"))
+        .and_then(|bytes| crate::arm_attributes::parse(bytes, !parsed.is_little_endian()));
+    match parsed_attributes {
+        Ok(attributes) => attributes.m_profile(),
+        Err(error) => {
+            warnings.push(format!(".ARM.attributes unreadable, so the image is not treated as M-profile: {error}"));
+            false
+        }
+    }
 }
 
 /// The address ranges of Thumb code. A `$t` mapping symbol starts a range that runs to the next mapping symbol or

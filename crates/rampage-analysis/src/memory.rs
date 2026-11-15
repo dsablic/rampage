@@ -61,9 +61,9 @@ impl Memory for Binary {
         if self.arch == rampage_arch::Arch::Arm { address & !1 } else { address }
     }
 
-    /// An M-profile image is one executable mapping of Thumb code and constant data. An even address formed into
-    /// it (a string, a switch table) is data, since every Thumb code pointer is odd; so is an odd one whose exact
-    /// byte starts a printable NUL-terminated run, the usual odd-aligned string literal (`"Bc"` at 0x80000af).
+    /// M-profile code (a Cortex-M Raw image or an M-profile ELF) is all Thumb, mixed with constant data. An even
+    /// address formed into it (a string, a switch table) is data, since every Thumb code pointer is odd; so is an
+    /// odd one whose exact byte starts a printable NUL-terminated run, the usual odd-aligned string literal (`"Bc"` at 0x80000af).
     fn may_point_to_code(&self, address: u64) -> bool {
         if !self.m_profile() {
             return true;

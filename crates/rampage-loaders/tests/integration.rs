@@ -17,6 +17,7 @@ mod gopclntab;
 mod gotypes;
 mod linkage;
 mod load;
+mod m_profile;
 mod msvc_cpp;
 mod objc;
 mod pdb;

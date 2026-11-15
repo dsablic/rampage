@@ -119,17 +119,17 @@ fixture's own objects), so any name on the fixture's own code counts as spurious
 
 | Fixture | Library functions | Correct | Wrong or spurious | Precision | Recall |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `embedded-libs-m4f` (ELF) | 158 | 80 | 0 | 100% | 50.6% |
+| `embedded-libs-m4f` (ELF) | 158 | 81 | 0 | 100% | 51.3% |
 | `embedded-libs-m4f` (Raw, vector table) | 158 | 81 | 0 | 100% | 51.3% |
-| `embedded-libs-m0` (ELF) | 227 | 70 | 0 | 100% | 30.8% |
+| `embedded-libs-m0` (ELF) | 227 | 71 | 0 | 100% | 31.3% |
 | `embedded-libs-m0` (Raw, vector table) | 227 | 71 | 0 | 100% | 31.3% |
 
 The `libid-embedded-m4f` and `libid-embedded-m0` slices of `tests/fixtures/data/eval-manifest.json` gate the ELF
 rows; the MCP Raw-project tests (`crates/rampage-mcp/tests/raw_project.rs`) gate the Raw rows, requiring exactly
 those counts with every name matching the truth. The fixtures also join the toolid truth as `arm-none-eabi-gcc`
 builds. Misses are mostly code a different GCC generated differently (newlib's C, FreeRTOS), kernel functions whose layout depends on the
-FreeRTOS configuration, bodies below the gate, functions discovery does not reach (handlers only the vector table
-names, unused weak callbacks) and collisions without named callees (`_close_r` and friends call libnosys stubs
+FreeRTOS configuration, bodies below the gate, functions discovery does not reach (unused weak
+callbacks) and collisions without named callees (`_close_r` and friends call libnosys stubs
 that are all alike). With the newest toolchain held out instead (training 12.3, 13.3 and 14.3, firmware built
 with 15.2) recall is 36.7% (M4F) and 15.0% (M0), still with no wrong or spurious name. compiler-rt built by clang
 23.1.5 (held out) is recognised at 100% precision and 65–68% recall per core. The same toolchain's own build is

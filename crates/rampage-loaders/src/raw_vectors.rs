@@ -143,6 +143,13 @@ impl VectorTable {
 /// outside the image, or too short for the initial SP and Reset words; individual bad words are refused in the
 /// evidence instead.
 pub(crate) fn read(bytes: &[u8], base: u64, address: u64) -> Result<VectorTable, LoadError> {
+    let end = base.saturating_add(bytes.len() as u64);
+    read_with(bytes, base, address, &|target| (base..end).contains(&target))
+}
+
+/// [`read`], with `in_image` deciding which handler targets lie inside the image (an ELF's code ranges, which can
+/// span other segments than the table's bytes).
+fn read_with(bytes: &[u8], base: u64, address: u64, in_image: &dyn Fn(u64) -> bool) -> Result<VectorTable, LoadError> {
     let length = bytes.len() as u64;
     let end = base.saturating_add(length);
     let offset =
@@ -182,7 +189,7 @@ pub(crate) fn read(bytes: &[u8], base: u64, address: u64) -> Result<VectorTable,
             return refused(RefusedReason::ThumbBitClear);
         }
         let target = word & !1;
-        if !(base..end).contains(&target) {
+        if !in_image(target) {
             return refused(RefusedReason::OutsideImage);
         }
         if (address..table_end).contains(&target) {
@@ -313,6 +320,39 @@ fn suggest_base(table: &VectorTable, length: u64, base: u64) -> Option<BaseAddre
         highest_base: lowest_handler,
         note: "a suggestion from the handler words only, not applied: this project keeps the asserted base_address; \
                reopen with base_address set to use it, moving an explicit vector_table address by the same amount",
+    })
+}
+
+/// Sections GNU and LLVM linker scripts put a Cortex-M vector table in.
+const ELF_TABLE_SECTIONS: [&str; 4] = [".isr_vector", ".vectors", ".vector_table", ".isr_vectors"];
+/// Most candidate table addresses an ELF is probed at.
+const MAX_ELF_CANDIDATES: usize = 8;
+
+/// An M-profile ELF's vector table, for seeding its handlers as functions as a Raw project's `vector_table` does.
+/// Probed at a vector-table section, the lowest file-backed read-only mapping and the start of the entry's
+/// mapping, in that order; a table counts only when its Reset vector is the ELF entry. Handlers must lie in code. A
+/// table section's size bounds the table (the code after it is never read as vectors); otherwise it is bounded as
+/// [`read`] bounds it.
+pub(crate) fn elf_table(binary: &crate::Binary) -> Option<VectorTable> {
+    let entry = binary.entry?;
+    let named = binary
+        .sections
+        .iter()
+        .filter(|section| ELF_TABLE_SECTIONS.contains(&section.name.as_str()) && section.file_size > 0)
+        .map(|section| (section.address, Some(section.size)));
+    let lowest = binary
+        .segments
+        .iter()
+        .filter(|segment| segment.file_size > 0 && !segment.perms.write)
+        .map(|segment| segment.address)
+        .min();
+    let entry_mapping = binary.segments.iter().find(|segment| segment.contains(entry)).map(|segment| segment.address);
+    let unbounded = lowest.into_iter().chain(entry_mapping).map(|address| (address, None));
+    named.chain(unbounded).take(MAX_ELF_CANDIDATES).find_map(|(address, size)| {
+        let bytes = binary.read_to_segment_end(address)?;
+        let length = size.map_or(bytes.len(), |size| usize::try_from(size).unwrap_or(usize::MAX).min(bytes.len()));
+        let table = read_with(&bytes[..length], address, address, &|target| binary.is_code(target)).ok()?;
+        (table.reset() == Some(entry)).then_some(table)
     })
 }
 

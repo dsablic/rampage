@@ -215,10 +215,11 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
   map must be imported again after a restart; skipped to keep the catalog small), carrying maps in
   `transfer_annotations`, accesses through pointers passed between functions, and a run on a real vendor SVD
   and image. (`evaluate_function` on Raw projects landed with the suite v4 gap fixes.)
-- [ ] Extend the Cortex-M decompiler settings (device-range volatility, flash words read through a formed
+- [x] Extend the Cortex-M decompiler settings (device-range volatility, flash words read through a formed
   address not folding) from Cortex-M Raw projects to Cortex-M ELF firmware: recognise it by the ARM attributes
-  section's CPU profile 'M' (Tag_CPU_arch_profile), not by load address. Today `Binary::m_profile()` is Raw-only,
-  so an SVD-less ELF build of the same firmware still loses a reset-register store before an endless loop.
+  section's CPU profile 'M' (Tag_CPU_arch_profile), not by load address. Done: `Binary::m_profile()` covers
+  M-profile ELFs (attributes profile 'M' or an M-only Tag_CPU_arch); the decompiler settings apply to M-profile
+  ELF executables (not relocatable objects).
 
 ## Objective-C dispatch (2026-11-13)
 
@@ -384,8 +385,10 @@ Held-out GCC 14.3 firmware: 100% precision, 51% (M4F) and 31% (M0) recall. Open:
   libraries (licences permitting).
 - [ ] `build_signatures` still writes scheme 2, so a user's own Thumb firmware database keeps literal-pool
   addresses in its hashes; build scheme 3 for Thumb there (an additive output change).
-- [ ] ELF discovery does not seed Cortex-M vector-table handlers (Raw projects do), so `xPortPendSVHandler` and
-  friends stay unnamed in ELF firmware.
+- [x] ELF discovery does not seed Cortex-M vector-table handlers (Raw projects do), so `xPortPendSVHandler` and
+  friends stay unnamed in ELF firmware. Done: an M-profile ELF's table (vector section, or the lowest flash words,
+  corroborated by Reset == entry) seeds its handlers. Open: report the ELF table's per-word evidence in
+  `binary_info` as Raw does.
 
 ### Firmware gaps seen in an agent run on a Cortex-M image (2026-11-09, done 2026-11-12 except follow-ups)
 

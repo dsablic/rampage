@@ -217,3 +217,25 @@ fn headered_binaries_keep_ghidra_defaults() {
     let code = exe.decompile(0x1_4000_1fc0).unwrap().code;
     assert!(code.contains("*param_1 ^ uRam00000001400293c0"), "{code}");
 }
+
+/// An ELF build of Cortex-M firmware is M-profile by its build attributes and decompiles with the same settings as
+/// the Raw image: the reset request before system_reset's endless loop is a volatile store and stays, and the CRC
+/// word reset_handler reads through an address it forms stays a read instead of folding to its flash value.
+#[test]
+fn m_profile_elf_firmware_gets_the_cortex_m_settings() {
+    let elf = |name: &str| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware").join(name);
+        Project::new(Binary::open(path).unwrap())
+    };
+    let decompile = |project: &Project, name: &str| {
+        project.decompile(project.binary.symbol_by_name(name).unwrap().address & !1).unwrap().code
+    };
+    let locks = elf("raw-cortex-m-locks.elf");
+    assert!(locks.binary.m_profile());
+    let code = decompile(&locks, "system_reset");
+    assert!(code.contains("= 0x5fa0004;"), "{code}");
+    let crc = elf("raw-cortex-m-crc.elf");
+    let code = decompile(&crc, "reset_handler");
+    let stored = u32::from_le_bytes(crc.binary.read(0x0800_07fc, 4).unwrap().try_into().unwrap());
+    assert!(!code.contains(&format!("{stored:#x}")), "{code}");
+}

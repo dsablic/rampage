@@ -134,7 +134,7 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
         }
     }
     operations.extend(data_names(project, annotations, &identities, &slots));
-    operations.extend(raw_image_operations(project));
+    operations.extend(cortex_m_operations(project));
     operations.extend(virtual_tables(project, annotations));
     Ok(operations)
 }
@@ -257,21 +257,22 @@ fn class_type_names(name: &str) -> Vec<String> {
     names
 }
 
-/// Cortex-M Raw images only: their mapping is flash, they carry no prototypes, and their code is often built with
-/// interprocedural register allocation. Headered formats keep Ghidra's defaults (a PE's `.rdata` can be rewritten
-/// at run time by its pseudo-relocator, and ELF and PE callees have libc/import prototypes), and so do the other Raw
-/// profiles, whose image is often RAM that the program writes (`lda counter` would fold to its load-time byte). The
-/// engine resets the callee inference before each top-level decompilation, so a cached engine gives the same C
-/// whatever was decompiled before.
+/// Cortex-M firmware only ([`cortex_m_firmware`]): a Cortex-M Raw image or an M-profile ELF executable. Their
+/// read-only mapping is flash, and their code is often built with interprocedural register allocation; callee
+/// inference never overrides a locked (library or analyst) prototype. Other headered images keep Ghidra's defaults
+/// (a PE's `.rdata` can be rewritten at run time by its pseudo-relocator, and a Linux ELF's by its dynamic loader),
+/// and so do the other Raw profiles, whose image is often RAM that the program writes (`lda counter` would fold to
+/// its load-time byte). The engine resets the callee inference before each top-level decompilation, so a cached
+/// engine gives the same C whatever was decompiled before.
 ///
 /// Loads from the flash mapping fold into the values they read, so a literal-pool word reads as the address or
 /// constant it holds. Flash the code reads or writes at an address it forms itself (`mov r1, #0xc80; ldr r1, [r1]`)
 /// is not known to be constant: a pairing token, a version word or option bytes are written by a programmer or a
 /// bootloader, not the compiler, so those words stay reads. The peripheral, device and system ranges are volatile, so
 /// a store to a memory-mapped register (`SCB.AIRCR = 0x5fa0004` before a wait loop) is never removed as dead.
-fn raw_image_operations(project: &Project) -> Vec<WorkerOperation> {
+fn cortex_m_operations(project: &Project) -> Vec<WorkerOperation> {
     let binary = &project.binary;
-    if !binary.m_profile() {
+    if !cortex_m_firmware(binary) {
         return Vec::new();
     }
     let inference = rampage_decompiler::CalleeInference { register_effects: true, prototypes: true };
@@ -286,6 +287,17 @@ fn raw_image_operations(project: &Project) -> Vec<WorkerOperation> {
         read_only: false,
     }));
     operations
+}
+
+/// An M-profile image whose read-only mappings are flash at their run addresses: a Cortex-M Raw image, or an
+/// M-profile ELF executable (`ET_EXEC`). An M-profile relocatable object is not: its literal pools hold unrelocated
+/// zeros, and its sections all sit at address 0.
+pub(super) fn cortex_m_firmware(binary: &rampage_loaders::Binary) -> bool {
+    binary.m_profile()
+        && match &binary.details {
+            rampage_loaders::Details::Elf(elf) => elf.kind == "executable",
+            _ => binary.raw_code_image().is_some(),
+        }
 }
 
 /// The ARMv6-M/ARMv7-M ranges with Device or Strongly-ordered memory: peripherals, external devices, the private
@@ -377,8 +389,8 @@ fn c_identifier(name: &str) -> bool {
 }
 
 /// Names for globals the decompiler would otherwise call `iRam…`/`uRam…`: the analyst's name for a data address,
-/// else the binary's data symbol (when that name is unique), and on a Cortex-M Raw image the architectural
-/// region of the address. Names only; typed globals (`set_global`) keep their own symbols.
+/// else the binary's data symbol (when that name is unique), and on Cortex-M firmware the architectural region of
+/// the address. Names only; typed globals (`set_global`) keep their own symbols.
 fn data_names(
     project: &Project,
     annotations: &Annotations,
@@ -427,7 +439,7 @@ fn data_names(
     }
     let mut operations: Vec<_> =
         names.into_iter().map(|(address, name)| WorkerOperation::DataName { address, name }).collect();
-    if project.binary.m_profile() {
+    if cortex_m_firmware(&project.binary) {
         operations.extend(CORTEX_M_REGIONS.iter().map(|&(first, last, prefix)| WorkerOperation::DataRegion {
             first,
             last,
@@ -655,9 +667,9 @@ mod tests {
             Project::new(rampage_loaders::Binary::from_raw_code(vec![0; 4], options).unwrap())
         };
         for profile in [rampage_loaders::RawProfile::Msp430, rampage_loaders::RawProfile::Avr8] {
-            assert!(raw_image_operations(&raw(profile)).is_empty(), "{profile:?}");
+            assert!(cortex_m_operations(&raw(profile)).is_empty(), "{profile:?}");
         }
-        let operations = raw_image_operations(&raw(rampage_loaders::RawProfile::CortexM));
+        let operations = cortex_m_operations(&raw(rampage_loaders::RawProfile::CortexM));
         assert!(matches!(
             operations[..],
             [
@@ -668,6 +680,23 @@ mod tests {
                 WorkerOperation::VolatileRange { first: 0xe000_0000, last: 0xffff_ffff },
             ]
         ));
+    }
+
+    /// M-profile ELF executables get the Cortex-M settings by their build attributes; A-profile ARM Linux
+    /// programs do not, whatever their load address.
+    #[test]
+    fn cortex_m_settings_follow_the_elf_build_attributes() {
+        let elf = |path: &str| {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(path);
+            Project::new(rampage_loaders::Binary::open(path).unwrap())
+        };
+        for path in ["firmware/raw-cortex-m-decompile.elf", "firmware/tail-calls-stripped.elf"] {
+            let operations = cortex_m_operations(&elf(path));
+            assert!(matches!(operations[..2], [WorkerOperation::FoldReadOnly { enabled: true }, _]), "{path}");
+        }
+        for path in ["bin/hello-arm.elf", "bin/hello-thumb.elf", "bench-v3/bin/semantics-arm32.elf"] {
+            assert!(cortex_m_operations(&elf(path)).is_empty(), "{path}");
+        }
     }
 
     #[test]

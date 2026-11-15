@@ -6,6 +6,16 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- Cortex-M ELF firmware decompiles like a Cortex-M Raw project: an ARM ELF whose build attributes
+  (`.ARM.attributes`) name an M-profile CPU (profile `M`, or an M-only architecture such as v6-M or v7E-M) is
+  decoded as M-profile, and an M-profile executable gets the Cortex-M decompiler settings (the peripheral and system
+  ranges are volatile, so a reset-register store before an endless loop is kept; literal pools fold; flash words
+  read through a formed address stay reads; region names for unnamed globals; callee inference). Its vector table
+  (an `.isr_vector`/`.vectors` section, or the first words of flash, when the Reset vector is the ELF entry) seeds
+  the interrupt handlers as functions, so stripped firmware finds handlers only the table names (embedded library
+  identification on the owned stripped ELF fixtures now matches their Raw projects: 81 and 71 names, up from 80
+  and 70). Recognition never uses load addresses: A-profile ARM Linux ELFs, PE and Mach-O are unchanged. An
+  unreadable attributes section is a load warning. The analysis cache version is bumped.
 - Static ELF32 ARM firmware executables (`ET_EXEC`, little-endian, no interpreter, dynamic section or loaded
   relocations, non-overlapping loadable segments) take byte patches in place as record version 3, so
   `integrity_checks` fixes a firmware ELF's checksum without converting it to a Raw project. Patches map through

@@ -28,13 +28,13 @@
       "dbs": ["../../../crates/rampage-signatures/data/embedded-thumb.json.gz"],
       "target": "../firmware/embedded-libs-m4f.elf",
       "truth": "eval-truth-embedded-m4f.json",
-      "min_recall": 0.5063
+      "min_recall": 0.5126
     },
     "libid-embedded-m0": {
       "dbs": ["../../../crates/rampage-signatures/data/embedded-thumb.json.gz"],
       "target": "../firmware/embedded-libs-m0.elf",
       "truth": "eval-truth-embedded-m0.json",
-      "min_recall": 0.3083
+      "min_recall": 0.3127
     },
     "discovery-x86_64": {
       "family": "discovery",
