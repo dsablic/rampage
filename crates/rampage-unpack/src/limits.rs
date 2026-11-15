@@ -113,6 +113,18 @@ struct Meter {
     input: u64,
     output: u64,
     max_ratio: u64,
+    /// Set once the ratio was exceeded: every later [`account`] and [`tripped`] reports it, so a refusal that a
+    /// reader wrapped in its own error type (an I/O error inside ext4-view) is still recognised as one.
+    refused: bool,
+}
+
+impl Meter {
+    fn refusal(&self) -> UnpackError {
+        UnpackError::Limit(format!(
+            "decompression ratio above {}:1 ({} bytes from {}): likely a decompression bomb",
+            self.max_ratio, self.output, self.input
+        ))
+    }
 }
 
 thread_local! {
@@ -132,7 +144,7 @@ impl MeterScope {
             if meter.get().is_some() {
                 return false;
             }
-            meter.set(Some(Meter { input: 0, output: 0, max_ratio }));
+            meter.set(Some(Meter { input: 0, output: 0, max_ratio, refused: false }));
             true
         });
         Self { installed }
@@ -154,15 +166,28 @@ pub(crate) fn account(input: u64, output: u64) -> Result<()> {
         let Some(mut meter) = cell.get() else { return Ok(()) };
         meter.input = meter.input.saturating_add(input);
         meter.output = meter.output.saturating_add(output);
-        cell.set(Some(meter));
         if meter.output > RATIO_FLOOR && meter.output / meter.input.max(1) > meter.max_ratio {
-            return Err(UnpackError::Limit(format!(
-                "decompression ratio above {}:1 ({} bytes from {}): likely a decompression bomb",
-                meter.max_ratio, meter.output, meter.input
-            )));
+            meter.refused = true;
+        }
+        cell.set(Some(meter));
+        if meter.refused {
+            return Err(meter.refusal());
         }
         Ok(())
     })
+}
+
+/// The ratio refusal, once the meter has refused this call.
+pub(crate) fn tripped() -> Option<UnpackError> {
+    METER.with(|cell| cell.get().filter(|meter| meter.refused).map(|meter| meter.refusal()))
+}
+
+/// `error`, or the ratio refusal it wraps when the meter has refused this call.
+pub(crate) fn surface(error: UnpackError) -> UnpackError {
+    match error {
+        UnpackError::Limit(_) => error,
+        other => tripped().unwrap_or(other),
+    }
 }
 
 #[cfg(test)]

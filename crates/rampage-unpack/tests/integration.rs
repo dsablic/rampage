@@ -2,6 +2,7 @@
 
 mod fuzz;
 mod generator;
+mod hardening;
 mod refusals;
 mod round_trip;
 mod support;

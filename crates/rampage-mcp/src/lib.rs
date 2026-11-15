@@ -1035,12 +1035,17 @@ impl ServerHandler for RampageServer {
         let file_tools = self.file_tools.iter().filter(|tool| served(&tool.group, tool.name)).map(|tool| {
             let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
             let listed = rmcp::model::Tool::new(tool.name, tool.description, schema);
-            // fs_extract writes new files under a directory the caller names, never over existing ones.
-            if tool.name == "fs_extract" {
-                let annotations = rmcp::model::ToolAnnotations::new().read_only(false).destructive(false);
-                return listed.annotate(annotations.idempotent(false).open_world(false));
+            match tool.effect {
+                // New files under a directory the caller names, never over existing ones.
+                tools::Effect::FileWrite => listed.annotate(
+                    rmcp::model::ToolAnnotations::new()
+                        .read_only(false)
+                        .destructive(false)
+                        .idempotent(false)
+                        .open_world(false),
+                ),
+                _ => listed,
             }
-            listed
         });
         let debug_enabled = self.debug.is_some() && self.improve.is_none() && enabled.contains(&Group::Debug);
         let debug_tools = self.debug_tools.iter().filter(|_| debug_enabled).map(|tool| {

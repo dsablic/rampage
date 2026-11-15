@@ -68,6 +68,23 @@ depend on anything being installed. It stays a recognition reference. Nothing he
   (8 KiB SquashFS metadata, the block size for data, the extent size for OTA operations).
 - Header arithmetic is checked; each reader has a deterministic mutation-fuzz test that must not panic.
 
+## Security review fixes (2026-11-15)
+
+A fresh-context review found the extraction escape-safe and these gaps, fixed in a follow-up commit:
+
+- backhand builds the SquashFS tree recursively, one frame per directory level; an 8,000-level image aborted the
+  process on a 2 MiB thread. rampage now walks the directory table first with an explicit stack (depth 128,
+  directory count capped, cycles refused) and only then lets backhand build the tree.
+- OTA ZERO extents could overlap and were never charged: a 554-byte payload wrote 4 GiB. Extents of a partition
+  must not overlap, operation and extent counts are capped by the partition's blocks (checked before any operation
+  is kept), and the rebuild is charged to `max_bytes`.
+- Synthesised bytes (sparse fills, OTA zeros, SquashFS sparse blocks, ext holes) count against the ratio with a
+  nominal input; `max_ratio` is an `fs_extract` argument.
+- A corrupt file is skipped with its reason instead of aborting; only limits abort. ext files must read to their
+  size. The SquashFS table budget is reset by a drop guard. Off Unix, `\` and `:` in names are refused.
+- `fs_extract` needs an absolute `output_dir`, refuses a symlinked one by name, and is annotated through
+  `Effect::FileWrite` on its tool definition.
+
 ## Open
 
 - UBI (volume table, LEB mapping) and UBIFS (index tree, LZO/zlib/zstd data nodes); recognised today.

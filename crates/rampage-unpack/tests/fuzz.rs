@@ -79,7 +79,7 @@ fn fuzz(name: &str, cases: usize, seed: u64) {
             let mut total = 0u64;
             if image
                 .image
-                .read(index, limits.max_file_bytes, &mut |chunk| {
+                .read(index, &mut budget, &mut |chunk| {
                     total += chunk.len() as u64;
                     Ok(())
                 })

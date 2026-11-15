@@ -17,6 +17,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
   wrote, ready to open by path. Opening a filesystem image as a binary now points at `fs_list`. Every codec is pure
   Rust (new crate `rampage-unpack`, on `backhand` and `ext4-view`); nothing external is run. UBI/UBIFS images are
   recognised but not read yet. See [firmware filesystem images](docs/firmware-images.md).
+  Hardened after a security review: a deep SquashFS tree is refused before backhand recurses into it, OTA extents
+  may not overlap and the rebuild counts against `max_bytes`, synthesised zeros count against the compression ratio
+  (`max_ratio` is an argument), a corrupt file is skipped with its reason rather than aborting the extraction, and
+  `output_dir` must be absolute and not a symlink.
 
 ## 1.4.0 (2026-11-15)
 

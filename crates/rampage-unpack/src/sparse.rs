@@ -1,7 +1,10 @@
 //! Android sparse images, read as a virtual unsparsed image: nothing is materialised.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::error::{Result, UnpackError, checked};
 use crate::image::{Entry, EntryKind, Format, Image};
+use crate::limits::Budget;
 use crate::source::{ReadAt, Source, within};
 
 const FORMAT: &str = "android_sparse";
@@ -34,6 +37,8 @@ struct Chunk {
 pub struct SparseView {
     source: Source,
     chunks: Vec<Chunk>,
+    /// Whether each chunk's header has been charged to the ratio meter as the input of its synthesised bytes.
+    charged: Vec<AtomicBool>,
     size: u64,
     block_size: u32,
 }
@@ -115,7 +120,8 @@ impl SparseView {
         if position != size {
             return Err(malformed(format!("chunks cover {position} bytes, the header declares {size}")));
         }
-        Ok(Self { source, chunks, size, block_size })
+        let charged = chunks.iter().map(|_| AtomicBool::new(false)).collect();
+        Ok(Self { source, chunks, charged, size, block_size })
     }
 
     pub fn notes(&self) -> Vec<String> {
@@ -140,6 +146,13 @@ impl ReadAt for SparseView {
             let inside = position - chunk.start;
             let count = ((chunk.len - inside) as usize).min(buf.len() - done);
             let out = &mut buf[done..done + count];
+            if !matches!(chunk.fill, Fill::Raw(_)) {
+                // Bytes synthesised from a 12- or 16-byte chunk header count against the ratio limit, the header
+                // charged once as their input.
+                let input = if self.charged[index].swap(true, Ordering::Relaxed) { 0 } else { 16 };
+                crate::limits::account(input, count as u64)
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
+            }
             match chunk.fill {
                 Fill::Raw(base) => self.source.read_at(base + inside, out)?,
                 Fill::Zero => out.fill(0),
@@ -188,32 +201,47 @@ impl Image for Unsparsed {
         &self.entries
     }
 
-    fn read(&self, index: usize, limit: u64, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
+    fn read(&self, index: usize, budget: &mut Budget, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
         if index != 0 {
             return Err(UnpackError::Invalid("no such entry".to_owned()));
         }
-        copy_range(&*self.source, 0, self.source.size(), limit, sink)
+        copy_range(&*self.source, 0, self.source.size(), budget, sink)
     }
 }
 
-/// Streams `len` bytes of `source` from `offset` to `sink`, refusing more than `limit`.
+/// Streams `len` bytes of `source` from `offset` to `sink`, refusing more than the per-file limit and charging
+/// `budget`.
 pub(crate) fn copy_range(
     source: &dyn ReadAt,
     offset: u64,
     len: u64,
-    limit: u64,
+    budget: &mut Budget,
     sink: &mut dyn FnMut(&[u8]) -> Result<()>,
 ) -> Result<()> {
+    let limit = budget.limits.max_file_bytes;
     if len > limit {
         return Err(UnpackError::Limit(format!("{len} bytes is more than max_file_bytes ({limit})")));
     }
+    for_each_chunk(source, offset, len, &mut |chunk| {
+        budget.charge_bytes(chunk.len() as u64)?;
+        sink(chunk)
+    })
+}
+
+/// Passes `len` bytes of `source` from `offset` to `each` in chunks of at most 1 MiB.
+pub(crate) fn for_each_chunk(
+    source: &dyn ReadAt,
+    offset: u64,
+    len: u64,
+    each: &mut dyn FnMut(&[u8]) -> Result<()>,
+) -> Result<()> {
     let mut buffer = vec![0; (len.min(1 << 20)) as usize];
     let mut done = 0u64;
     while done < len {
         let count = (len - done).min(buffer.len() as u64) as usize;
         let at = offset.checked_add(done).ok_or_else(|| UnpackError::Invalid("offset overflows".to_owned()))?;
         source.read_at(at, &mut buffer[..count]).map_err(|error| UnpackError::io("read the image", error))?;
-        sink(&buffer[..count])?;
+        each(&buffer[..count])?;
         done += count as u64;
     }
     Ok(())

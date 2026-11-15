@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use crate::codec::{Codec, decompress_stream};
 use crate::error::{Result, UnpackError, checked};
 use crate::image::{Entry, EntryKind, Format, Image};
-use crate::limits::Limits;
+use crate::limits::{Budget, Limits};
 use crate::source::{Cursor, Source, Spool, write_all_at};
 
 const FORMAT: &str = "ota_payload";
@@ -160,7 +160,18 @@ fn extent(bytes: &[u8]) -> Result<Extent> {
     Ok(extent)
 }
 
-fn operation(bytes: &[u8], extents: &mut usize) -> Result<Operation> {
+/// Compressed-input bytes charged to the ratio meter for each extent a ZERO or DISCARD operation fills: the zeros
+/// are synthesised from a few bytes of manifest.
+const NOMINAL_EXTENT_INPUT: u64 = 16;
+
+/// Operation and extent counts a partition may declare: each one writes at least one block of it.
+struct Counts {
+    cap: usize,
+    operations: usize,
+    extents: usize,
+}
+
+fn operation(bytes: &[u8], counts: &mut Counts) -> Result<Operation> {
     let mut operation = Operation::default();
     let mut fields = Fields::new(bytes);
     while let Some((field, value)) = fields.next()? {
@@ -171,9 +182,9 @@ fn operation(bytes: &[u8], extents: &mut usize) -> Result<Operation> {
             (2, Value::Varint(value)) => operation.data_offset = value,
             (3, Value::Varint(value)) => operation.data_length = value,
             (6, Value::Bytes(bytes)) => {
-                *extents += 1;
-                if *extents > MAX_EXTENTS {
-                    return Err(UnpackError::Limit(format!("more than {MAX_EXTENTS} extents")));
+                counts.extents += 1;
+                if counts.extents > counts.cap.min(MAX_EXTENTS) {
+                    return Err(malformed("more destination extents than the partition has blocks"));
                 }
                 operation.dst.push(extent(bytes)?);
             }
@@ -197,20 +208,29 @@ fn partition_info(bytes: &[u8]) -> Result<(u64, Option<Vec<u8>>)> {
     Ok((size, hash))
 }
 
-fn partition(bytes: &[u8], operations: &mut usize, extents: &mut usize) -> Result<Partition> {
+fn partition(bytes: &[u8], block_size: u64) -> Result<Partition> {
     let mut partition = Partition::default();
+    // The size comes first, wherever the field sits, so operation and extent counts are capped by it before any
+    // operation is kept: each writes at least one block.
+    let mut fields = Fields::new(bytes);
+    while let Some((field, value)) = fields.next()? {
+        if let (7, Value::Bytes(info)) = (field, value) {
+            (partition.size, partition.hash) = partition_info(info)?;
+        }
+    }
+    let blocks = usize::try_from(partition.size.div_ceil(block_size)).unwrap_or(usize::MAX);
+    let mut counts = Counts { cap: blocks.max(1), operations: 0, extents: 0 };
     let mut fields = Fields::new(bytes);
     while let Some((field, value)) = fields.next()? {
         match (field, value) {
             (1, Value::Bytes(name)) => partition.name = String::from_utf8_lossy(name).into_owned(),
             (6, Value::Bytes(_)) => partition.has_old_info = true,
-            (7, Value::Bytes(info)) => (partition.size, partition.hash) = partition_info(info)?,
             (8, Value::Bytes(bytes)) => {
-                *operations += 1;
-                if *operations > MAX_OPERATIONS {
-                    return Err(UnpackError::Limit(format!("more than {MAX_OPERATIONS} operations")));
+                counts.operations += 1;
+                if counts.operations > counts.cap.min(MAX_OPERATIONS) {
+                    return Err(malformed("more operations than the partition has blocks"));
                 }
-                partition.operations.push(operation(bytes, extents)?);
+                partition.operations.push(operation(bytes, &mut counts)?);
             }
             _ => {}
         }
@@ -258,24 +278,35 @@ impl Payload {
         let mut manifest = vec![0u8; manifest_size as usize];
         source.read_at(24, &mut manifest).map_err(|_| malformed("truncated manifest"))?;
         let (mut block_size, mut minor_version) = (4096u64, 0u64);
-        let mut partitions = Vec::new();
-        let (mut operations, mut extents) = (0usize, 0usize);
         let mut fields = Fields::new(&manifest);
         while let Some((field, value)) = fields.next()? {
             match (field, value) {
                 (3, Value::Varint(value)) => block_size = value,
                 (12, Value::Varint(value)) => minor_version = value,
-                (13, Value::Bytes(bytes)) => {
-                    if partitions.len() >= MAX_PARTITIONS.min(limits.max_entries) {
-                        return Err(UnpackError::Limit("too many partitions".to_owned()));
-                    }
-                    partitions.push(partition(bytes, &mut operations, &mut extents)?);
-                }
                 _ => {}
             }
         }
         if !(512..=(1 << 20)).contains(&block_size) || !block_size.is_power_of_two() {
             return Err(malformed(format!("block size {block_size}")));
+        }
+        let mut partitions = Vec::new();
+        let (mut operations, mut extents) = (0usize, 0usize);
+        let mut fields = Fields::new(&manifest);
+        while let Some((field, value)) = fields.next()? {
+            if let (13, Value::Bytes(bytes)) = (field, value) {
+                if partitions.len() >= MAX_PARTITIONS.min(limits.max_entries) {
+                    return Err(UnpackError::Limit("too many partitions".to_owned()));
+                }
+                let partition = partition(bytes, block_size)?;
+                operations += partition.operations.len();
+                extents += partition.operations.iter().map(|operation| operation.dst.len()).sum::<usize>();
+                if operations > MAX_OPERATIONS || extents > MAX_EXTENTS {
+                    return Err(UnpackError::Limit(format!(
+                        "more than {MAX_OPERATIONS} operations or {MAX_EXTENTS} extents"
+                    )));
+                }
+                partitions.push(partition);
+            }
         }
         let entries = partitions
             .iter()
@@ -296,7 +327,9 @@ impl Payload {
     }
 
     /// Writes partition `index` into a temporary file, verifying each operation's data hash and the partition's.
-    fn materialise(&self, index: usize, limit: u64) -> Result<Source> {
+    /// The rebuild is charged to `budget` as the partition's size.
+    fn materialise(&self, index: usize, budget: &mut Budget) -> Result<Source> {
+        let limit = budget.limits.max_file_bytes;
         if let Some((cached, source)) = &*self.cached.borrow()
             && *cached == index
         {
@@ -318,9 +351,12 @@ impl Payload {
                 partition.name, partition.size
             )));
         }
+        let zero_extents = self.check_extents(partition)?;
+        let zero_bytes: u64 = zero_extents.iter().sum();
+        crate::limits::account(NOMINAL_EXTENT_INPUT.saturating_mul(zero_extents.len() as u64), zero_bytes)?;
+        budget.charge_bytes(partition.size)?;
         let mut spool = Spool::new().map_err(|error| UnpackError::io("create a temporary file", error))?;
         spool.set_size(partition.size).map_err(|error| UnpackError::io("size a temporary file", error))?;
-        let zeros = vec![0u8; 1 << 20];
         for (number, operation) in partition.operations.iter().enumerate() {
             let context =
                 |reason: String| malformed(format!("partition `{}` operation {number}: {reason}", partition.name));
@@ -341,14 +377,8 @@ impl Payload {
             }
             let mut writer = ExtentWriter { file: spool.file(), ranges: &ranges, index: 0, written: 0 };
             match operation.kind {
-                ZERO | DISCARD => {
-                    let mut left = total;
-                    while left > 0 {
-                        let count = left.min(zeros.len() as u64) as usize;
-                        writer.write(&zeros[..count])?;
-                        left -= count as u64;
-                    }
-                }
+                // Extents never overlap (checked above), so these blocks are still the file's initial zeros.
+                ZERO | DISCARD => {}
                 REPLACE | REPLACE_BZ | REPLACE_XZ => {
                     let offset = checked(self.data_start.checked_add(operation.data_offset), FORMAT, "data offset")?;
                     if !crate::source::within(offset, operation.data_length, self.source.size()) {
@@ -393,7 +423,7 @@ impl Payload {
         let source = spool.into_source();
         if let Some(expected) = &partition.hash {
             let mut hasher = Sha256::new();
-            crate::sparse::copy_range(&*source, 0, source.size(), u64::MAX, &mut |chunk| {
+            crate::sparse::for_each_chunk(&*source, 0, source.size(), &mut |chunk| {
                 hasher.update(chunk);
                 Ok(())
             })?;
@@ -406,6 +436,31 @@ impl Payload {
         }
         *self.cached.borrow_mut() = Some((index, source.clone()));
         Ok(source)
+    }
+
+    /// Checks that the destination extents of every operation of `partition` lie inside it and never overlap, so
+    /// the rebuild writes each block at most once. Returns the byte length of each ZERO or DISCARD extent.
+    fn check_extents(&self, partition: &Partition) -> Result<Vec<u64>> {
+        let blocks = partition.size / self.block_size;
+        let mut ranges = Vec::new();
+        let mut zeros = Vec::new();
+        for operation in &partition.operations {
+            for extent in &operation.dst {
+                let end = extent.start_block.checked_add(extent.num_blocks).filter(|end| *end <= blocks);
+                let Some(end) = end else {
+                    return Err(malformed(format!("partition `{}`: an extent lies outside it", partition.name)));
+                };
+                if matches!(operation.kind, ZERO | DISCARD) {
+                    zeros.push(extent.num_blocks * self.block_size);
+                }
+                ranges.push((extent.start_block, end));
+            }
+        }
+        ranges.sort_unstable();
+        if ranges.windows(2).any(|pair| pair[1].0 < pair[0].1) {
+            return Err(malformed(format!("partition `{}`: operations write overlapping extents", partition.name)));
+        }
+        Ok(zeros)
     }
 }
 
@@ -470,11 +525,11 @@ impl Image for Payload {
         ]
     }
 
-    fn read(&self, index: usize, limit: u64, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
+    fn read(&self, index: usize, budget: &mut Budget, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
         if index >= self.partitions.len() {
             return Err(UnpackError::Invalid("no such entry".to_owned()));
         }
-        let source = self.materialise(index, limit)?;
-        crate::sparse::copy_range(&*source, 0, source.size(), limit, sink)
+        let source = self.materialise(index, budget)?;
+        crate::sparse::copy_range(&*source, 0, source.size(), budget, sink)
     }
 }

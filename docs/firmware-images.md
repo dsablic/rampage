@@ -51,8 +51,9 @@ setuid, setgid and sticky, as stored), `uid`, `gid`, `link` (a symlink's target)
 {"path":"payload.bin","inner":["system.img"],"output_dir":"/tmp/system","paths":["etc","bin/busybox"]}
 ```
 
-`fs_extract` takes the image as `fs_list` selects it, an `output_dir` that must not exist yet (its parent must) or
-be empty, and optionally `paths`: entries or directories to write, default all. The result counts `files`, `dirs`,
+`fs_extract` takes the image as `fs_list` selects it, an absolute `output_dir` that must not exist yet (its parent
+must) or be an empty directory (not a symlink to one), and optionally `paths`: entries or directories to write,
+default all. The result counts `files`, `dirs`,
 `symlinks` and `bytes`, lists `executables` (absolute paths with `format` `elf`, `pe`, `macho`, `dex`, `wasm`, at
 most 200; `executables_total` counts all) and `skipped` entries with their reason (at most 200; `skipped_total`),
 and echoes the `limits` used. Open an executable by its path with `triage_report` or any binary tool.
@@ -68,14 +69,21 @@ Every image is treated as hostile:
   below another symlink, or one escaping the root, is skipped. Symlinks are never followed.
 - **Special files.** Device nodes, FIFOs and sockets are skipped. Files are written 0755 when any execute bit was
   set, else 0644; directories 0755. No setuid, setgid or sticky bit is ever written.
-- **Limits.** `max_bytes` (total written, default 4 GiB, at most 64 GiB), `max_files` (files, directories and links
-  written, default 100,000, at most 1,000,000) and `max_file_bytes` (any one file or nested image, default 2 GiB,
-  at most 16 GiB). Fixed: a compression ratio above 1000:1 over the call, once more than 64 MiB has been
-  decompressed, is refused as a decompression bomb; at most 4 image layers, 500,000 entries per image, 128
-  directory levels and 256 MiB of SquashFS tables. Exceeding a limit stops the extraction with an error; files
-  written before it stay.
-- **Malformed input.** Truncated or inconsistent images are errors, not partial listings. A partition's operations
-  must exactly fill their extents, and every size and offset is range-checked.
+- **Limits.** `max_bytes` (total written, default 4 GiB, at most 64 GiB; nested images spooled to temporary files
+  and OTA partitions rebuilt on the way count too), `max_files` (files, directories and links written, default
+  100,000, at most 1,000,000), `max_file_bytes` (any one file or nested image, default 2 GiB, at most 16 GiB) and
+  `max_ratio` (default 1000, at most 100,000): once more than 64 MiB has come out, more than `max_ratio` output bytes
+  per input byte is refused as a decompression bomb. Bytes that are synthesised rather than decompressed count too,
+  against a nominal input: Android sparse fill and don't-care chunks (their 16-byte header), OTA ZERO and DISCARD
+  extents (16 bytes each), SquashFS sparse blocks (their 4-byte block-list entry) and ext holes (4 KiB per file).
+  Fixed: at most 4 image layers, 500,000 entries per image, 128 directory levels (checked before backhand builds a
+  SquashFS tree) and 256 MiB of SquashFS tables. Exceeding a limit stops the extraction with an error; files written
+  before it stay.
+- **Malformed input.** Truncated or inconsistent images are errors, not partial listings. A file whose content
+  turns out corrupt (a bad OTA data hash, a broken SquashFS block) is skipped with its reason and its partial file
+  removed; when every file fails, the extraction is an error. OTA operations must exactly fill their extents, no two
+  extents of a partition may overlap, and a partition declares at most one operation and one extent per block.
+  Every size and offset is range-checked.
 
 ## Opening an image as a binary
 

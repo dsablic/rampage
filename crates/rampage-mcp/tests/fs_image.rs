@@ -138,6 +138,17 @@ async fn fs_extract_writes_a_nested_partition_and_returns_openable_executables()
         call(&client, "fs_extract", json!({ "path": payload, "inner": ["system.img"], "output_dir": out })).await;
     assert_eq!(again.is_error, Some(true));
     assert!(text(&again).contains("new or empty"), "{}", text(&again));
+    let relative = call(&client, "fs_extract", json!({ "path": payload, "output_dir": "relative/out" })).await;
+    assert!(text(&relative).contains("absolute"), "{}", text(&relative));
+    #[cfg(unix)]
+    {
+        let real = output.dir("real");
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, output.dir("link")).unwrap();
+        let linked = call(&client, "fs_extract", json!({ "path": payload, "output_dir": output.dir("link") })).await;
+        assert!(text(&linked).contains("output_dir is a symlink"), "{}", text(&linked));
+        assert_eq!(std::fs::read_dir(&real).unwrap().count(), 0);
+    }
     let delta =
         call(&client, "fs_extract", json!({ "path": fsimage("delta.bin"), "output_dir": output.dir("d") })).await;
     assert_eq!(delta.is_error, Some(true));

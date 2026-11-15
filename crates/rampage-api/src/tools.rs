@@ -284,6 +284,8 @@ fn error_chain(error: &ApiError) -> String {
 /// A tool that works without a loaded binary: on a file path no loader needs to open first (carve), or on the
 /// data packs in effect alone (list_packs).
 pub struct FileTool {
+    /// What calling the tool changes: [`Effect::FileWrite`] for a tool that writes files where the caller says.
+    pub effect: Effect,
     pub group: Group,
     pub name: &'static str,
     pub description: &'static str,
@@ -432,6 +434,8 @@ struct FsExtractArgs {
     max_files: Option<u64>,
     /// Bytes per file (default 2 GiB).
     max_file_bytes: Option<crate::FileOffset>,
+    /// Decompressed or synthesised bytes per input byte past 64 MiB (default 1000, at most 100000).
+    max_ratio: Option<u64>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -461,6 +465,7 @@ fn image_at(
 pub fn file_tools() -> Vec<FileTool> {
     vec![
         FileTool {
+            effect: Effect::None,
             group: Group::Core,
             name: "inspect_sleigh",
             description: "Inspect an explicit regular-file raw code window using a closed bundled Sleigh profile; \
@@ -502,6 +507,7 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
+            effect: Effect::None,
             group: Group::Core,
             name: "inspect_raw_code",
             description: "Linearly disassemble an explicit 1..4096-byte original-file window with analyst-supplied \
@@ -527,6 +533,7 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
+            effect: Effect::None,
             group: Group::Core,
             name: "decode_file_range",
             description: "Decode an explicit regular-file range with a named built-in decoder, without requiring \
@@ -566,6 +573,7 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
+            effect: Effect::None,
             group: Group::Core,
             name: "probe_compression",
             description: "Find decoder parameters for a compressed stream of unknown variant in an explicit \
@@ -593,6 +601,7 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
+            effect: Effect::None,
             group: Group::Core,
             name: "file_layout",
             description: "Map any regular file, such as headerless firmware, without a loader: in one call, regions \
@@ -624,6 +633,7 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
+            effect: Effect::None,
             group: Group::Core,
             name: "inspect_data",
             description: "Inspect 1..=1024 native-image bytes and 4/8-byte words without discovery, naming scans or \
@@ -662,6 +672,7 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
+            effect: Effect::None,
             group: Group::Carve,
             name: "archive_inventory",
             description: "Inventory central-directory metadata in an explicit standalone single-disk ZIP32 file, \
@@ -709,6 +720,7 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
+            effect: Effect::None,
             group: Group::Carve,
             name: "fs_list",
             description: "List a firmware filesystem image (SquashFS, ext2/3/4, Android sparse, OTA payload.bin, cpio, \
@@ -728,6 +740,7 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
+            effect: Effect::FileWrite,
             group: Group::Carve,
             name: "fs_extract",
             description: "Extract an image fs_list reads (same path/image_offset/inner), or chosen paths, into a new \
@@ -745,10 +758,12 @@ pub fn file_tools() -> Vec<FileTool> {
                     max_bytes: args.max_bytes.map(|bytes| bytes.0),
                     max_files: args.max_files,
                     max_file_bytes: args.max_file_bytes.map(|bytes| bytes.0),
+                    max_ratio: args.max_ratio,
                 })
             },
         },
         FileTool {
+            effect: Effect::None,
             group: Group::Runtime,
             name: "query_debugger",
             description: "Read an existing authorized stopped LLDB session through an explicitly supplied local Unix \
@@ -784,6 +799,7 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
+            effect: Effect::None,
             group: Group::Carve,
             name: "carve",
             description: "Scan any file (firmware, installer, dump, archive) for embedded executables and containers: \
@@ -804,6 +820,7 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
+            effect: Effect::None,
             group: Group::Formats,
             name: "pyinstaller_archive",
             description: "Inspect the PyInstaller CArchive appended to any file (a PyInstaller-built ELF, PE or \
@@ -831,6 +848,7 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
+            effect: Effect::None,
             group: Group::Formats,
             name: "wasm_module",
             description: "Summarise a core WebAssembly module in any file, without opening it as a project (the \
@@ -856,6 +874,7 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
+            effect: Effect::None,
             group: Group::Detection,
             name: "list_packs",
             description: "List the heuristic-database packs in effect, in precedence order: every data pack loaded \

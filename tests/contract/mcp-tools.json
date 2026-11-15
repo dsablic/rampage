@@ -2165,6 +2165,10 @@
           "type": "integer|null",
           "required": false
         },
+        "max_ratio": {
+          "type": "integer|null",
+          "required": false
+        },
         "output_dir": {
           "type": "string",
           "required": true

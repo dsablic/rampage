@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::error::{Result, UnpackError, checked};
 use crate::image::{Entry, EntryKind, Format, Image};
-use crate::limits::Limits;
+use crate::limits::{Budget, Limits};
 use crate::source::{Source, within};
 
 const FORMAT: &str = "tar";
@@ -217,8 +217,8 @@ impl Image for Tar {
         &self.entries
     }
 
-    fn read(&self, index: usize, limit: u64, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
+    fn read(&self, index: usize, budget: &mut Budget, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
         let data = self.data.get(index).ok_or_else(|| UnpackError::Invalid("no such entry".to_owned()))?;
-        crate::sparse::copy_range(&*self.source, data.offset, data.len, limit, sink)
+        crate::sparse::copy_range(&*self.source, data.offset, data.len, budget, sink)
     }
 }

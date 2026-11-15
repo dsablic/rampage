@@ -138,8 +138,9 @@ pub struct Entry {
 pub trait Image {
     fn format(&self) -> Format;
     fn entries(&self) -> &[Entry];
-    /// Streams the content of entry `index` to `sink`, refusing more than `limit` bytes.
-    fn read(&self, index: usize, limit: u64, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()>;
+    /// Streams the content of entry `index` to `sink`, refusing more than `budget`'s per-file limit and charging
+    /// every byte handed to `sink` (and any rebuild written on the way) to `budget`.
+    fn read(&self, index: usize, budget: &mut Budget, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()>;
     /// Facts about the image as a whole, for the listing's layer record.
     fn notes(&self) -> Vec<String> {
         Vec::new()
@@ -230,9 +231,7 @@ pub fn find(image: &dyn Image, path: &str) -> Option<usize> {
 /// Spools entry `index` of `image` into an unlinked temporary file, charging `budget`.
 pub(crate) fn spool(image: &dyn Image, index: usize, budget: &mut Budget) -> Result<Source> {
     let mut spool = Spool::new().map_err(|error| UnpackError::io("create a temporary file", error))?;
-    let limit = budget.limits.max_file_bytes;
-    image.read(index, limit, &mut |chunk| {
-        budget.charge_bytes(chunk.len() as u64)?;
+    image.read(index, budget, &mut |chunk| {
         spool.append(chunk).map_err(|error| UnpackError::io("write a temporary file", error))
     })?;
     Ok(spool.into_source())

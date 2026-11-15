@@ -68,6 +68,10 @@ pub fn safe_components(path: &str) -> std::result::Result<Vec<&str>, &'static st
             ".." => return Err("path traversal (`..`)"),
             _ if component.contains('\0') => return Err("NUL in path"),
             _ if component.len() > 255 => return Err("path component longer than 255 bytes"),
+            // Off Unix a backslash separates and a colon names a drive or stream (`C:`, `file:stream`).
+            _ if !cfg!(unix) && component.contains(['\\', ':']) => {
+                return Err("backslash or colon in a path (a separator or drive here)");
+            }
             _ => components.push(component),
         }
     }
@@ -211,6 +215,7 @@ pub fn extract(
     let mut report = ExtractReport { output_dir: root.clone(), ..ExtractReport::default() };
     let mut links = Vec::new();
     let mut matched = false;
+    let mut first_failure: Option<UnpackError> = None;
     for (index, entry) in image.entries().iter().enumerate() {
         let path = normalize(&entry.path);
         if !selected(path, selection) {
@@ -262,15 +267,26 @@ pub fn extract(
                 };
                 let mut head = Vec::new();
                 let mut written = 0u64;
-                let limit = budget.limits.max_file_bytes;
-                image.read(index, limit, &mut |chunk| {
-                    budget.charge_bytes(chunk.len() as u64)?;
+                let outcome = image.read(index, budget, &mut |chunk| {
                     if head.len() < 8 {
                         head.extend_from_slice(&chunk[..chunk.len().min(8 - head.len())]);
                     }
                     written += chunk.len() as u64;
                     file.write_all(chunk).map_err(|error| UnpackError::io(format!("write {}", target.display()), error))
-                })?;
+                });
+                if let Err(error) = outcome {
+                    // A limit stops the whole extraction; a corrupt file is skipped, without its partial content.
+                    drop(file);
+                    let _ = std::fs::remove_file(&target);
+                    match crate::limits::surface(error) {
+                        error @ UnpackError::Limit(_) => return Err(error),
+                        error => {
+                            report.skip(&entry.path, format!("not written: {error}"));
+                            first_failure.get_or_insert(error);
+                            continue;
+                        }
+                    }
+                }
                 report.files += 1;
                 report.bytes += written;
                 if let Some(format) = executable_format(&head) {
@@ -289,6 +305,12 @@ pub fn extract(
     }
     if !matched && !selection.is_empty() {
         return Err(UnpackError::Invalid("no entry matches `paths`".to_owned()));
+    }
+    // Skipping a corrupt file keeps the rest; when every file with content failed, the extraction failed.
+    if let Some(error) = first_failure
+        && report.files == 0
+    {
+        return Err(error);
     }
     for (path, target) in links {
         let components = safe_components(&path).expect("checked above");

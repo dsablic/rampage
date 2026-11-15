@@ -69,3 +69,26 @@ done
   --uid 0 --gid 0 --uname root --gname root -n -T -) > "$out/rootfs.tar"
 
 python3 -I craft_fsimages.py "$out"
+
+# Ratio bombs made of synthesised or highly compressible bytes: a 200 MiB hole in ext4, a 200 MiB file of sparse
+# SquashFS blocks, and 200 MiB of one byte in 1 MiB xz blocks.
+bombs="$work/bombs"
+mkdir -p "$bombs/hole" "$bombs/repeat"
+truncate -s 200M "$bombs/hole/hole.bin"
+python3 -c 'import sys; sys.stdout.buffer.write(b"A" * (200 << 20))' > "$bombs/repeat/repeat.bin"
+find "$bombs" -exec touch -h -t 202601010000 {} +
+rm -f "$out/holes.ext4" "$out/holes.sqfs" "$out/repeat-xz.sqfs"
+E2FSPROGS_FAKE_TIME=1767225600 mke2fs -q -t ext4 -O ^has_journal -b 1024 -N 16 -m 0 \
+  -U 5a5a5a5a-0000-4000-8000-000000000003 -E hash_seed=5a5a5a5a-0000-4000-8000-000000000004,root_owner=0:0 \
+  -d "$bombs/hole" "$out/holes.ext4" 128k
+printf 'sif "/hole.bin" uid 0\nsif "/hole.bin" gid 0\n' > "$work/holes.cmds"
+for field in atime ctime mtime crtime; do printf 'sif "/hole.bin" %s 20260101000000\n' "$field"; done >> "$work/holes.cmds"
+E2FSPROGS_FAKE_TIME=1767225600 debugfs -w -f "$work/holes.cmds" "$out/holes.ext4" > /dev/null 2>&1
+mksquashfs "$bombs/hole" "$out/holes.sqfs" -b 131072 -noappend -all-root -no-xattrs -mkfs-time 0 -all-time 0 \
+  -quiet -no-progress > /dev/null
+mksquashfs "$bombs/repeat" "$out/repeat-xz.sqfs" -comp xz -b 1M -noappend -all-root -no-xattrs -mkfs-time 0 \
+  -all-time 0 -quiet -no-progress > /dev/null
+
+# deep-8000.sqfs (8,000 nested directories, uncompressed) is not rebuilt here: backhand's writer takes about 40
+# minutes for it. It came from nested_squashfs(8000) in crates/rampage-unpack/tests/hardening.rs (backhand 0.25.5,
+# mtime 0), run once on a thread with a 1 GiB stack.

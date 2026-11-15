@@ -47,7 +47,10 @@ fn traversal_absolute_paths_and_special_files_are_contained() {
     .unwrap();
     let out = scratch.join("out");
     let report = extract(&archive, At::default(), &[], &out, &[], Limits::default()).unwrap().report;
-    assert!(!scratch.join("escape.txt").exists() && !scratch.0.parent().unwrap().join("escape2.txt").exists());
+    // out/../escape.txt and out/a/../../escape2.txt would both land in the scratch directory beside out/.
+    let beside: Vec<_> = std::fs::read_dir(&scratch.0).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+    assert_eq!(beside.len(), 2, "only evil.tar and out/: {beside:?}");
+    assert!(!scratch.join("escape.txt").exists() && !scratch.join("escape2.txt").exists());
     assert_eq!(std::fs::read(out.join("abs/inside.txt")).unwrap(), b"inside");
     #[cfg(unix)]
     {
@@ -162,7 +165,9 @@ fn truncated_images_are_errors_not_partial_successes() {
         let listed = list(&path, At::default(), &[], Limits::default());
         let extracted =
             extract(&path, At::default(), &[], &scratch.join(&format!("{name}.out")), &[], Limits::default());
-        assert!(listed.is_err() || extracted.is_err(), "{name} truncated to {keep} bytes was accepted");
+        // Either refused, or the damaged files are skipped with a reason: never a clean success.
+        let clean = listed.is_ok() && extracted.is_ok_and(|extraction| extraction.report.skipped_total == 0);
+        assert!(!clean, "{name} truncated to {keep} bytes was accepted");
     }
 }
 

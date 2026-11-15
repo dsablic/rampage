@@ -34,6 +34,7 @@ pub struct FsExtractQuery {
     pub max_bytes: Option<u64>,
     pub max_files: Option<u64>,
     pub max_file_bytes: Option<u64>,
+    pub max_ratio: Option<u64>,
 }
 
 fn check_inner(inner: &[String]) -> Result<(), String> {
@@ -115,9 +116,16 @@ pub fn fs_extract(query: &FsExtractQuery) -> Result<Value, String> {
         max_total_bytes: query.max_bytes.unwrap_or(defaults.max_total_bytes),
         max_files: query.max_files.unwrap_or(defaults.max_files),
         max_file_bytes: query.max_file_bytes.unwrap_or(defaults.max_file_bytes),
+        max_ratio: query.max_ratio.unwrap_or(defaults.max_ratio),
         ..defaults
     }
     .clamped();
+    if !query.output_dir.is_absolute() {
+        return Err("output_dir must be an absolute path".to_owned());
+    }
+    if std::fs::symlink_metadata(&query.output_dir).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err("output_dir is a symlink; name the real directory (it must be new or empty)".to_owned());
+    }
     let extraction =
         rampage_unpack::extract(&query.path, query.at, &query.inner, &query.output_dir, &query.paths, limits).map_err(
             |error| format!("{error} (files written before the refusal stay in {})", query.output_dir.display()),

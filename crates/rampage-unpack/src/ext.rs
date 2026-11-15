@@ -1,13 +1,21 @@
 //! ext2, ext3 and ext4 (extents included) through ext4-view, which is written for untrusted input.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use ext4_view::{Ext4, Ext4Read, PathBuf};
 
 use crate::error::{Result, UnpackError};
 use crate::image::{Entry, EntryKind, Format, Image};
-use crate::limits::Limits;
+use crate::limits::{Budget, Limits};
 use crate::source::Source;
 
-struct SourceRead(Source);
+/// The image as ext4-view reads it, counting the bytes it fetches: what a file read returns beyond them came from
+/// holes, which ext4-view fills with zeros.
+struct SourceRead {
+    source: Source,
+    fetched: Rc<Cell<u64>>,
+}
 
 impl Ext4Read for SourceRead {
     fn read(
@@ -15,9 +23,14 @@ impl Ext4Read for SourceRead {
         start_byte: u64,
         dst: &mut [u8],
     ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-        Ok(self.0.read_at(start_byte, dst)?)
+        self.source.read_at(start_byte, dst)?;
+        self.fetched.set(self.fetched.get().saturating_add(dst.len() as u64));
+        Ok(())
     }
 }
+
+/// Input charged to the ratio meter for a file's holes: about one block of inode and extent metadata.
+const NOMINAL_HOLE_INPUT: u64 = 4096;
 
 fn malformed(error: impl std::fmt::Display) -> UnpackError {
     UnpackError::malformed("ext", error.to_string())
@@ -25,6 +38,7 @@ fn malformed(error: impl std::fmt::Display) -> UnpackError {
 
 pub struct Ext {
     fs: Ext4,
+    fetched: Rc<Cell<u64>>,
     entries: Vec<Entry>,
     /// The ext4-view path of each entry, to reopen it.
     paths: Vec<PathBuf>,
@@ -33,7 +47,8 @@ pub struct Ext {
 
 impl Ext {
     pub fn open(source: Source, limits: &Limits) -> Result<Self> {
-        let fs = Ext4::load(Box::new(SourceRead(source))).map_err(malformed)?;
+        let fetched = Rc::new(Cell::new(0));
+        let fs = Ext4::load(Box::new(SourceRead { source, fetched: fetched.clone() })).map_err(malformed)?;
         let mut entries = Vec::new();
         let mut paths = Vec::new();
         // Depth-first with an explicit stack: a directory entry naming an ancestor would loop forever, so the
@@ -91,7 +106,7 @@ impl Ext {
         {
             notes.push(format!("label {label}"));
         }
-        Ok(Self { fs, entries, paths, notes })
+        Ok(Self { fs, fetched, entries, paths, notes })
     }
 }
 
@@ -128,7 +143,8 @@ impl Image for Ext {
         self.notes.clone()
     }
 
-    fn read(&self, index: usize, limit: u64, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
+    fn read(&self, index: usize, budget: &mut Budget, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
+        let limit = budget.limits.max_file_bytes;
         let entry = self.entries.get(index).ok_or_else(|| UnpackError::Invalid("no such entry".to_owned()))?;
         if entry.kind != EntryKind::File {
             return Err(UnpackError::Invalid(format!("`{}` is not a file", entry.path)));
@@ -139,7 +155,9 @@ impl Image for Ext {
         let mut file = self.fs.open(&self.paths[index]).map_err(malformed)?;
         let mut buffer = vec![0; 64 * 1024];
         let mut total = 0u64;
+        let mut hole_input = NOMINAL_HOLE_INPUT;
         loop {
+            let before = self.fetched.get();
             let read = file.read_bytes(&mut buffer).map_err(malformed)?;
             if read == 0 {
                 break;
@@ -148,7 +166,15 @@ impl Image for Ext {
             if total > entry.size {
                 return Err(malformed(format!("`{}` holds more than its size", entry.path)));
             }
+            let synthesised = (read as u64).saturating_sub(self.fetched.get().saturating_sub(before));
+            if synthesised > 0 {
+                crate::limits::account(std::mem::take(&mut hole_input), synthesised)?;
+            }
+            budget.charge_bytes(read as u64)?;
             sink(&buffer[..read])?;
+        }
+        if total != entry.size {
+            return Err(malformed(format!("`{}` ends before its size", entry.path)));
         }
         Ok(())
     }
