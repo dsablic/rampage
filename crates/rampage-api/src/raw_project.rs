@@ -624,14 +624,84 @@ pub fn headerless_guidance() -> String {
          \"base_address\":\"0x8000000\",\"vector_table\":true}}; profiles: {}. A-profile ARM, AArch64 and x86 bytes: \
          inspect_raw_code, e.g. {{\"path\":...,\"offset\":0,\"length\":256,\"arch\":\"arm\",\"mode\":\"thumb\",\
          \"code_byte_order\":\"little\",\"data_byte_order\":\"little\",\"base_address\":0}}. carve finds \
-         executables embedded in it.",
+         executables embedded in it. An Intel HEX or S-record file takes \"format\":\"ihex\" or \"srec\" in          `raw` instead of offset, length and base_address.",
         profiles.join(", ")
     )
+}
+
+/// Which record format a file's first line suggests: `ihex` for an Intel HEX record (`:` and hex digits), `srec`
+/// for a Motorola S-record (`S0`..`S9` and hex digits). Reads at most the first 4 KiB.
+pub fn sniff_record_format(path: &Path) -> Option<&'static str> {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(4096);
+    std::fs::File::open(path).ok()?.take(4096).read_to_end(&mut head).ok()?;
+    // Records are ASCII: read up to the first other byte, after an optional UTF-8 byte order mark.
+    let body = head.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&head);
+    let end = body.iter().position(|byte| !byte.is_ascii()).unwrap_or(body.len());
+    let text = std::str::from_utf8(&body[..end]).ok()?;
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let hex_tail = |tail: &str| tail.len() >= 8 && tail.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if let Some(tail) = line.strip_prefix(':') {
+        return hex_tail(tail).then_some("ihex");
+    }
+    let mut chars = line.chars();
+    if chars.next() == Some('S') && chars.next().is_some_and(|kind| kind.is_ascii_digit()) {
+        return hex_tail(&line[2..]).then_some("srec");
+    }
+    None
+}
+
+/// [`headerless_guidance`], led by the record format when the file looks like Intel HEX or S-records.
+pub fn headerless_guidance_for(path: &Path) -> String {
+    match sniff_record_format(path) {
+        Some(format) => {
+            let name = if format == "ihex" { "an Intel HEX" } else { "a Motorola S-record" };
+            format!(
+                "The file looks like {name} file: read it with \"raw\":{{\"profile\":\"cortex-m\",\"format\":\"{format}\"}}                  (or another profile), which takes every address from the records. {}",
+                headerless_guidance()
+            )
+        }
+        None => headerless_guidance(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Benchmark v4 Haiku pass: an Intel HEX file opened by path got only the headerless hint, which never
+    /// mentioned `format`, and the agent gave up.
+    #[test]
+    fn record_files_are_recognised_by_their_first_line() {
+        let directory = std::env::temp_dir().join(format!("rampage-sniff-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let path = directory.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            path
+        };
+        let ihex = write("a.bin", b"\r\n:100000000000022009010000110100001101000046\r\n:00000001FF\r\n");
+        let srec = write("b.bin", b"S00F000068656C6C6F202020202000003C\nS1130000000002200901000011010000110100004A\n");
+        let bom = write("c.bin", b"\xef\xbb\xbf:020000040800F2\n");
+        assert_eq!(sniff_record_format(&ihex), Some("ihex"));
+        assert_eq!(sniff_record_format(&srec), Some("srec"));
+        assert_eq!(sniff_record_format(&bom), Some("ihex"));
+        assert!(headerless_guidance_for(&ihex).starts_with("The file looks like an Intel HEX file"));
+        assert!(headerless_guidance_for(&srec).contains("\"format\":\"srec\""));
+        for (name, bytes) in [
+            ("d.bin", &b"\x00\x00\x02\x20\x09\x01\x00\x00"[..]),
+            ("e.bin", b":not hex at all"),
+            ("f.bin", b"Some text line"),
+            ("g.bin", b"S1 short"),
+            ("h.bin", b""),
+        ] {
+            let path = write(name, bytes);
+            assert_eq!(sniff_record_format(&path), None, "{name}");
+            assert_eq!(headerless_guidance_for(&path), headerless_guidance(), "{name}");
+        }
+        assert!(headerless_guidance().contains("\"format\":\"ihex\""));
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
 
     /// Review of the benchmark v2 fixes: ambiguous aliases and hints offered a profile for another variant.
     #[test]

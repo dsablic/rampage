@@ -6,6 +6,8 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- Opening an Intel HEX or S-record file without `raw` now says which it looks like and gives the `raw` selector
+  (`"format":"ihex"` or `"srec"`) to read it; the general headerless hint mentions `format` too.
 - Fix: `evaluate_function` runs code and reads data in page 0 of a fixed-address image linked there (a Raw project,
   or an ELF executable with a segment at 0, as Cortex-M firmware often is) instead of stopping with
   `unmapped_fetch`; shared objects, PIEs, PE and Mach-O images keep the null-page guard.

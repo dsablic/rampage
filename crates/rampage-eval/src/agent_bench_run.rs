@@ -429,7 +429,7 @@ pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
             "neutral_suite_sha256": hex(&Sha256::digest(suite_text.as_bytes())),
             "task_definition_sha256": task_hashes(&task_directory, &tasks)?,
             "runner_command": args.runner,
-            "fixture_name_in_workdir": "fixture.bin",
+            "fixture_name_in_workdir": "fixture.bin, or fixture.<extension> for Intel HEX and S-record files",
         },
         "runners": runners,
         "versions": versions,
@@ -511,12 +511,23 @@ struct RunSetup<'a> {
     args: &'a AgentBenchArgs,
 }
 
+/// The fixture's name in a run's directory: `fixture.bin`, except that an Intel HEX or S-record file keeps its
+/// extension, as a user's copy would; nothing else about the original name reaches the agent.
+pub fn fixture_file_name(fixture: &Path) -> String {
+    const RECORD_EXTENSIONS: [&str; 7] = ["hex", "ihex", "srec", "s19", "s28", "s37", "mot"];
+    let extension = fixture.extension().and_then(|extension| extension.to_str()).map(str::to_ascii_lowercase);
+    match extension {
+        Some(extension) if RECORD_EXTENSIONS.contains(&extension.as_str()) => format!("fixture.{extension}"),
+        _ => "fixture.bin".to_owned(),
+    }
+}
+
 fn run_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
     if setup.args.rescore {
         return rescore_one(setup);
     }
     let workdir = Workdir::new()?;
-    let target = workdir.path.join("fixture.bin");
+    let target = workdir.path.join(fixture_file_name(setup.fixture));
     std::fs::copy(setup.fixture, &target).map_err(|error| format!("{}: {error}", setup.fixture.display()))?;
     if hash_file(&target)? != setup.task.fixture.sha256 {
         return Err(format!("{}: fixture differs from its declared digest", setup.task.id));
@@ -816,5 +827,21 @@ mod usage_limit_tests {
         assert!(!is_usage_limit("model differs from claude-sonnet-5-5: ['<synthetic>', 'claude-haiku-5-5']"));
         assert!(!is_usage_limit("model differs from claude-sonnet-5-5: ['claude-haiku-5-5']"));
         assert!(!is_usage_limit("isolation: non-built-in plugins: []"));
+    }
+}
+
+#[cfg(test)]
+mod fixture_name_tests {
+    use super::fixture_file_name;
+    use std::path::Path;
+
+    #[test]
+    fn record_files_keep_their_extension_and_everything_else_is_fixture_bin() {
+        assert_eq!(fixture_file_name(Path::new("tests/fixtures/bench-v4/bin/boot-cm4.hex")), "fixture.hex");
+        assert_eq!(fixture_file_name(Path::new("x/boot-cm4.SREC")), "fixture.srec");
+        assert_eq!(fixture_file_name(Path::new("x/image.s19")), "fixture.s19");
+        for other in ["x/hello.elf", "x/firmware.bin", "x/app.exe", "x/noextension"] {
+            assert_eq!(fixture_file_name(Path::new(other)), "fixture.bin", "{other}");
+        }
     }
 }

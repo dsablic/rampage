@@ -40,7 +40,7 @@ pub struct OutputSpec {
 impl OutputSpec {
     pub fn validate(&self) -> Result<(), String> {
         if self.name.is_empty()
-            || self.name == "fixture.bin"
+            || self.name.starts_with("fixture.")
             || !self.name.bytes().all(|byte| byte.is_ascii_alphanumeric() || b".-_".contains(&byte))
         {
             return Err(format!("invalid output name {:?}", self.name));

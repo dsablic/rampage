@@ -970,7 +970,13 @@ fn open_error(error: &rampage_api::ApiError) -> String {
     let text = error_text(error);
     let headerless = matches!(error, rampage_api::ApiError::Load { source: rampage_loaders::LoadError::Parse(_), .. })
         && text.contains("Unknown file magic");
-    if headerless { format!("{text}. {}", rampage_api::headerless_guidance()) } else { text }
+    match error {
+        rampage_api::ApiError::Load { path, .. } if headerless => {
+            format!("{text}. {}", rampage_api::headerless_guidance_for(path))
+        }
+        _ if headerless => format!("{text}. {}", rampage_api::headerless_guidance()),
+        _ => text,
+    }
 }
 
 /// An `image_offset` or `image_length` argument (see [`FileOffset`]); `null` means none.
