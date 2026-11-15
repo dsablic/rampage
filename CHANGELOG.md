@@ -12,14 +12,17 @@ see the [stability policy](docs/stability.md) for what the version promises.
   libevdev/libinput, X11 screen reads, NDK camera2, Android native `AudioRecord`/`MediaRecorder`/`Camera`/screenshot
   classes in mangled names, and device-path and Android class-name strings. A constant argument read just before
   the call (capture stream, `PCM_IN`, `PA_STREAM_RECORD`, an ioctl request code) raises a source's evidence from
-  `name` to `argument`, and a playback-direction call is listed as excluded instead. Sinks are socket, TLS, libcurl,
-  WinINet/WinHTTP, MQTT and WebSocket sends, with the endpoints the function or its direct callers name, and file
+  `name` to `argument`, and a playback-direction call is listed as excluded instead; evidence also used without
+  capturing (device nodes, framebuffer and codec-capable requests, unread directions) is marked ambiguous and ranks
+  lower. Sinks are TLS, libcurl, WinINet/WinHTTP, MQTT and WebSocket sends, socket sends (network or local IPC, told
+  apart when the socket's domain is a constant), with the endpoints the function or its direct callers name, and file
   writes (`fopen` with a writing mode, `open` with write flags; device paths excluded) as weaker sinks. Paths between
   capture and send are ranked (same function, direct call, a few calls down, a shared caller) with their call chains
   and a shared writable global as a data-link hint. Triggers follow callers, callbacks, thread starts and signal
   handlers up to six levels: program start (entry, `main`, `.init_array`, `JNI_OnLoad`), timers and sleeping loops,
-  network commands and user input; `no_user_trigger` says a capture is reached from program start with no input or
-  UI handling found on any chain. Evidence, never intent. See [privacy surface](docs/privacy-surface.md).
+  network commands and user input (also a sibling call that reads input); `no_user_trigger` says a capture with
+  direction-specific evidence is reached from program start with no input or UI handling found among its callers,
+  and is withheld when a caller is referenced from a data table or the walk was cut. Evidence, never intent. See [privacy surface](docs/privacy-surface.md).
 
 ## 1.5.0 (2026-11-15)
 

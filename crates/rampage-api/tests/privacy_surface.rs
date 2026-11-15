@@ -1,6 +1,8 @@
 //! privacy_surface on privacy-{x64,arm64}.elf (tests/fixtures/privacy.c): an always-on microphone loop that uploads
 //! over HTTP, a camera frame grabbed from a timer and written to a file, a microphone opened on a network command
-//! and published over MQTT, push-to-talk behind an input-device read, and a playback-only decoy.
+//! and published over MQTT, push-to-talk behind an input-device read (in a caller, the same function and a sibling
+//! call), a capture also bound to a key through a handler table, one past the walk's bound, a local IPC send and a
+//! sysfs write that are not sinks, and a playback-only decoy.
 
 use std::path::PathBuf;
 
@@ -74,6 +76,9 @@ fn sinks_name_their_endpoints_and_skip_device_opens() {
         assert!(has_evidence(file, "mode \"wb\"") && has_evidence(file, "`fwrite`"), "{file:#?}");
         // open("/dev/video0", O_RDWR) and open("/dev/input/event1") are device opens, not file writes.
         assert!(sinks.findings.iter().all(|finding| !finding.observation.contains("`open")), "{name}: {sinks:#?}");
+        // A sysfs LED write is a device write, and an AF_UNIX send is IPC on the device.
+        assert!(sinks.findings.iter().all(|finding| !finding.observation.contains("/sys/")), "{name}: {sinks:#?}");
+        assert!(sinks.findings.iter().all(|finding| !finding.observation.contains("notify_daemon")), "{sinks:#?}");
     }
 }
 
@@ -149,8 +154,60 @@ fn reports_are_bounded_and_suggest_where_to_read() {
         .unwrap()
         .privacy_surface(ReportLimits::new(Some(1)))
         .unwrap();
+    // Each section is sorted before it is cut, so the one finding kept is the strongest: an argument-level source
+    // (the highest addresses are as strong as the lowest), a no_user_trigger statement, the best path.
     let sources = section(&cut, "Capture sources");
-    assert!(sources.truncated && sources.findings.len() == 1 && sources.total == 11, "{sources:#?}");
+    let all = section(&report, "Capture sources").total;
+    assert!(sources.truncated && sources.findings.len() == 1 && sources.total == all, "{sources:#?}");
+    assert_eq!(sources.findings[0].confidence, FindingConfidence::High, "{sources:#?}");
+    let triggers = section(&cut, "Capture triggers");
+    assert!(triggers.findings[0].observation.starts_with("no_user_trigger:"), "{triggers:#?}");
+    let paths = section(&cut, "Capture-to-send paths");
+    assert_eq!(paths.total, 4);
+    assert!(paths.truncated && paths.findings[0].observation.contains("in `listen_on_request`: in the same"));
+}
+
+#[test]
+fn user_input_data_tables_and_cut_walks_withhold_no_user_trigger() {
+    for name in FIXTURES {
+        let report = fixture(name);
+        let triggers = section(&report, "Capture triggers");
+        let flagged = |function: &str| {
+            triggers.findings.iter().any(|finding| {
+                finding.observation.starts_with("no_user_trigger:") && finding.observation.contains(function)
+            })
+        };
+        // Push to talk in one function: the key read and the capture share `talk_on_key`.
+        assert!(find(triggers, &["`talk_on_key` follows user input"]).is_some(), "{name}: {triggers:#?}");
+        assert!(!flagged("`talk_on_key`"));
+        // A sibling key read: `assistant_loop` records only after `button_pressed`.
+        let sibling = find(triggers, &["`record_clip` may follow user input"]).unwrap();
+        assert!(has_evidence(sibling, "`assistant_loop` also calls `button_pressed`"), "{sibling:#?}");
+        assert!(!flagged("`record_clip`"));
+        // Bound to a key through a handler table: callers through the table are not followed.
+        let assistant = find(triggers, &["`start_assistant` is reached from main"]).unwrap();
+        assert!(has_evidence(assistant, "no_user_trigger not stated: `start_assistant` is referenced from data"));
+        assert!(!flagged("`start_assistant`"));
+        // Eight calls below main: the walk is cut, so nothing is claimed about its trigger.
+        assert!(triggers.findings.iter().all(|finding| !finding.observation.contains("`deep_capture`")), "{name}");
+        assert!(report.limitations.iter().any(|text| text.contains("trigger search walks at most 6 call levels")));
+    }
+}
+
+#[test]
+fn ambiguous_evidence_is_marked_and_ranked_lower() {
+    for name in FIXTURES {
+        let report = fixture(name);
+        let sources = section(&report, "Capture sources");
+        // A PCM node whose direction letter a format fills in says neither direction.
+        let node = find(sources, &["`deep_capture`", "ALSA PCM device node (either direction)"]).unwrap();
+        assert_eq!(node.confidence, FindingConfidence::Low, "{node:#?}");
+        assert!(has_evidence(node, "ambiguous:"), "{node:#?}");
+        let video = find(sources, &["`grab_frame`", "\"/dev/video0\""]).unwrap();
+        assert!(has_evidence(video, "ambiguous:") && video.observation.contains("capture, output or codec"));
+        let argument = find(sources, &["`grab_frame`", "VIDIOC_STREAMON"]).unwrap();
+        assert!(!has_evidence(argument, "ambiguous:"), "{argument:#?}");
+    }
 }
 
 #[test]

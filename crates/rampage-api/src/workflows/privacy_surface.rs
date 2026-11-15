@@ -10,8 +10,9 @@
 //! counts as an edge.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
-use rampage_analysis::discover::XrefKind;
+use rampage_analysis::discover::{Program, XrefKind};
 use rampage_arch::{Arch, Flow};
 use serde_json::{Value, json};
 
@@ -90,10 +91,18 @@ struct SourceApi {
     medium: Medium,
     what: &'static str,
     check: Check,
+    /// For `Check::Name`: whether the name alone shows capture (a capture-only API), rather than an API also used
+    /// without capturing. With an argument check, the argument decides.
+    specific: bool,
 }
 
 const fn name(medium: Medium, what: &'static str) -> SourceApi {
-    SourceApi { medium, what, check: Check::Name }
+    SourceApi { medium, what, check: Check::Name, specific: true }
+}
+
+/// An API also used without capturing (a compositor reads the displayed framebuffer too).
+const fn vague(medium: Medium, what: &'static str) -> SourceApi {
+    SourceApi { medium, what, check: Check::Name, specific: false }
 }
 
 const SND_PCM_OPEN: SourceApi = SourceApi {
@@ -105,8 +114,10 @@ const SND_PCM_OPEN: SourceApi = SourceApi {
         capture: (1, "SND_PCM_STREAM_CAPTURE"),
         other: (0, "SND_PCM_STREAM_PLAYBACK"),
     },
+    specific: true,
 };
-const IOCTL: SourceApi = SourceApi { medium: Medium::Camera, what: "ioctl", check: Check::Ioctl { index: 1 } };
+const IOCTL: SourceApi =
+    SourceApi { medium: Medium::Camera, what: "ioctl", check: Check::Ioctl { index: 1 }, specific: false };
 
 /// Capture APIs (patterns, see `api_matches`).
 const SOURCE_APIS: &[(&str, SourceApi)] = &[
@@ -121,6 +132,7 @@ const SOURCE_APIS: &[(&str, SourceApi)] = &[
             medium: Medium::Microphone,
             what: "opens a tinyalsa PCM",
             check: Check::Flag { index: 2, argument: "flags", bit: 0x1000_0000, flag: "PCM_IN" },
+            specific: true,
         },
     ),
     ("pcm_read", name(Medium::Microphone, "reads from a tinyalsa PCM")),
@@ -137,6 +149,7 @@ const SOURCE_APIS: &[(&str, SourceApi)] = &[
                 capture: (2, "PA_STREAM_RECORD"),
                 other: (1, "PA_STREAM_PLAYBACK"),
             },
+            specific: true,
         },
     ),
     ("pa_simple_read", name(Medium::Microphone, "reads from a PulseAudio record stream")),
@@ -147,6 +160,7 @@ const SOURCE_APIS: &[(&str, SourceApi)] = &[
             medium: Medium::Microphone,
             what: "opens a PortAudio stream",
             check: Check::NonZero { index: 1, argument: "input channel count" },
+            specific: true,
         },
     ),
     (
@@ -155,6 +169,7 @@ const SOURCE_APIS: &[(&str, SourceApi)] = &[
             medium: Medium::Microphone,
             what: "opens a PortAudio stream",
             check: Check::NonZero { index: 1, argument: "input parameters" },
+            specific: true,
         },
     ),
     ("pa_readstream", name(Medium::Microphone, "reads from a PortAudio input stream")),
@@ -169,6 +184,7 @@ const SOURCE_APIS: &[(&str, SourceApi)] = &[
                 capture: (1, "AAUDIO_DIRECTION_INPUT"),
                 other: (0, "AAUDIO_DIRECTION_OUTPUT"),
             },
+            specific: true,
         },
     ),
     ("sl_iid_record", name(Medium::Microphone, "uses the OpenSL ES record interface")),
@@ -180,8 +196,8 @@ const SOURCE_APIS: &[(&str, SourceApi)] = &[
     ("acameradevice_createcapturesession", name(Medium::Camera, "creates a camera capture session (NDK camera2)")),
     ("acameracapturesession_setrepeatingrequest", name(Medium::Camera, "starts repeating camera capture")),
     ("acameracapturesession_capture", name(Medium::Camera, "captures a camera frame (NDK camera2)")),
-    ("drmmodegetfb", name(Medium::Screen, "reads the displayed DRM framebuffer's handle")),
-    ("drmmodegetfb2", name(Medium::Screen, "reads the displayed DRM framebuffer's handle")),
+    ("drmmodegetfb", vague(Medium::Screen, "reads the displayed DRM framebuffer's handle")),
+    ("drmmodegetfb2", vague(Medium::Screen, "reads the displayed DRM framebuffer's handle")),
     ("xgetimage", name(Medium::Screen, "reads screen pixels (X11)")),
     ("xshmgetimage", name(Medium::Screen, "reads screen pixels (X11 shared memory)")),
     ("libevdev_grab", name(Medium::Input, "grabs an input device exclusively (libevdev)")),
@@ -199,14 +215,16 @@ const MANGLED_SOURCES: &[(&str, SourceApi)] = &[
     ("13ScreenCapture", name(Medium::Screen, "uses the Android ScreenCapture")),
 ];
 
-/// Lowercase fragments of device paths and framework class names in strings (`.` read as `/`).
+/// Lowercase fragments of device paths and framework class names in strings (`.` read as `/`). A string shows a
+/// capability, never the direction of use, so no string drives `no_user_trigger`. ALSA PCM nodes are told apart by
+/// their last letter (see `pcm_node`).
 const SOURCE_STRINGS: &[(&str, Medium, &str)] = &[
-    ("/dev/snd/pcmc", Medium::Microphone, "ALSA PCM capture device node"),
+    ("/dev/snd/pcmc", Medium::Microphone, "ALSA PCM device node"),
     ("/proc/asound", Medium::Microphone, "ALSA sound-card listing (either direction)"),
-    ("/dev/video", Medium::Camera, "V4L2 video device node"),
-    ("/dev/graphics/fb", Medium::Screen, "framebuffer device node"),
-    ("/dev/fb", Medium::Screen, "framebuffer device node"),
-    ("/dev/dri/", Medium::Screen, "DRM display device node"),
+    ("/dev/video", Medium::Camera, "V4L2 video device node (capture, output or codec)"),
+    ("/dev/graphics/fb", Medium::Screen, "framebuffer device node (drawing or reading)"),
+    ("/dev/fb", Medium::Screen, "framebuffer device node (drawing or reading)"),
+    ("/dev/dri/", Medium::Screen, "DRM device node (display or rendering)"),
     ("/dev/input/", Medium::Input, "input event device node"),
     ("android/media/audiorecord", Medium::Microphone, "Android AudioRecord class"),
     ("android/media/mediarecorder", Medium::Microphone, "Android MediaRecorder class (audio or video)"),
@@ -214,54 +232,98 @@ const SOURCE_STRINGS: &[(&str, Medium, &str)] = &[
     ("android/media/projection/mediaprojection", Medium::Screen, "Android MediaProjection (screen capture) class"),
 ];
 
+/// What an ALSA PCM node string says: `Some(true)` capture (`...c`), `Some(false)` playback (`...p`), `None`
+/// either (no direction letter, or one a format fills in, as in `pcmC%uD%u%c`).
+fn pcm_node(lower: &str) -> Option<bool> {
+    let text = lower.trim_end();
+    let mut tail = text.chars().rev();
+    let last = tail.next()?;
+    if tail.next() == Some('%') {
+        return None;
+    }
+    match last {
+        'c' => Some(true),
+        'p' => Some(false),
+        _ => None,
+    }
+}
+
 /// ioctl request codes, matched by type and number with any size and direction encoding (which differ between
-/// 32- and 64-bit ABIs and on MIPS and PowerPC).
-const IOCTL_REQUESTS: &[(u8, u8, Medium, &str)] = &[
-    (b'V', 0, Medium::Camera, "VIDIOC_QUERYCAP"),
-    (b'V', 5, Medium::Camera, "VIDIOC_S_FMT"),
-    (b'V', 8, Medium::Camera, "VIDIOC_REQBUFS"),
-    (b'V', 9, Medium::Camera, "VIDIOC_QUERYBUF"),
-    (b'V', 15, Medium::Camera, "VIDIOC_QBUF"),
-    (b'V', 17, Medium::Camera, "VIDIOC_DQBUF"),
-    (b'V', 18, Medium::Camera, "VIDIOC_STREAMON"),
-    (b'E', 0x06, Medium::Input, "EVIOCGNAME"),
-    (b'E', 0x90, Medium::Input, "EVIOCGRAB"),
-    (b'd', 0xad, Medium::Screen, "DRM_IOCTL_MODE_GETFB"),
-    (b'd', 0xce, Medium::Screen, "DRM_IOCTL_MODE_GETFB2"),
+/// 32- and 64-bit ABIs and on MIPS and PowerPC), each with a note when the request is not specific to capture.
+const IOCTL_REQUESTS: &[(u8, u8, Medium, &str, Option<&str>)] = &[
+    (b'V', 0, Medium::Camera, "VIDIOC_QUERYCAP", Some("a capability query; output and codec devices answer it too")),
+    (b'V', 5, Medium::Camera, "VIDIOC_S_FMT", Some("format setup; also for video output and codec devices")),
+    (b'V', 8, Medium::Camera, "VIDIOC_REQBUFS", Some("buffer setup; also for video output and codec devices")),
+    (b'V', 9, Medium::Camera, "VIDIOC_QUERYBUF", Some("buffer setup; also for video output and codec devices")),
+    (b'V', 15, Medium::Camera, "VIDIOC_QBUF", Some("buffer queueing; also for video output and codec devices")),
+    (b'V', 17, Medium::Camera, "VIDIOC_DQBUF", None),
+    (b'V', 18, Medium::Camera, "VIDIOC_STREAMON", None),
+    (b'E', 0x06, Medium::Input, "EVIOCGNAME", Some("a device name query")),
+    (b'E', 0x90, Medium::Input, "EVIOCGRAB", None),
+    (b'd', 0xad, Medium::Screen, "DRM_IOCTL_MODE_GETFB", Some("compositors also read the displayed framebuffer")),
+    (b'd', 0xce, Medium::Screen, "DRM_IOCTL_MODE_GETFB2", Some("compositors also read the displayed framebuffer")),
 ];
 
-/// The capture request an ioctl code names. Framebuffer requests predate the size/direction encoding.
-fn ioctl_request(value: u64) -> Option<(Medium, &'static str)> {
+/// A known request: its medium, name, and a note when it is not specific to capture.
+type Request = (Medium, &'static str, Option<&'static str>);
+
+/// The capture request an ioctl code names. Framebuffer requests predate the size/direction encoding. A code
+/// sign-extended into a 64-bit register is read by its low 32 bits.
+fn ioctl_request(value: u64) -> Option<Request> {
+    let value = value & 0xffff_ffff;
+    const GEOMETRY: Option<&str> = Some("framebuffer geometry; drawing code issues it too");
     match value {
-        0x4600 => return Some((Medium::Screen, "FBIOGET_VSCREENINFO")),
-        0x4602 => return Some((Medium::Screen, "FBIOGET_FSCREENINFO")),
+        0x4600 => return Some((Medium::Screen, "FBIOGET_VSCREENINFO", GEOMETRY)),
+        0x4602 => return Some((Medium::Screen, "FBIOGET_FSCREENINFO", GEOMETRY)),
         _ => {}
     }
     // Encoded requests carry a size or direction above bit 16; plain 'V' codes below it are console requests.
-    if value > u64::from(u32::MAX) || value >> 16 == 0 {
+    if value >> 16 == 0 {
         return None;
     }
     let (kind, number) = ((value >> 8) as u8, value as u8);
     if kind == b'E' && (0x20..0x40).contains(&number) {
-        return Some((Medium::Input, "EVIOCGBIT"));
+        return Some((Medium::Input, "EVIOCGBIT", Some("an event-type query")));
     }
     IOCTL_REQUESTS
         .iter()
         .find(|(k, n, ..)| *k == kind && *n == number)
-        .map(|&(_, _, medium, request)| (medium, request))
+        .map(|&(_, _, medium, request, note)| (medium, request, note))
 }
 
-/// Where data can leave: the network, or a file (weaker, since a file is sent only if something uploads it).
+/// Where data can leave: the network; a socket that may be network or local IPC; or a file (weaker, since a file is
+/// sent only if something uploads it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum SinkKind {
     Network,
+    Socket,
     File,
+}
+
+impl SinkKind {
+    fn target(self) -> &'static str {
+        match self {
+            SinkKind::Network => "the network",
+            SinkKind::Socket => "a socket (network or local)",
+            SinkKind::File => "a file",
+        }
+    }
+
+    /// Rank penalty in path ordering: a direct network send outranks a file write in the same function.
+    fn weight(self) -> usize {
+        match self {
+            SinkKind::Network => 0,
+            SinkKind::Socket => 1,
+            SinkKind::File => 3,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 enum SinkCheck {
     Name,
-    /// `fopen`: argument `index` is the mode string; a read-only mode is no sink.
+    /// `fopen`: argument `index` is the mode string (a read-only mode is no sink) and argument 0 the path (a
+    /// device or pseudo-file path is no sink).
     Mode {
         index: usize,
     },
@@ -284,14 +346,18 @@ const fn network(what: &'static str) -> SinkApi {
     SinkApi { kind: SinkKind::Network, what, check: SinkCheck::Name }
 }
 
+const fn socket(what: &'static str) -> SinkApi {
+    SinkApi { kind: SinkKind::Socket, what, check: SinkCheck::Name }
+}
+
 /// Send and write APIs (patterns, see `api_matches`). The network ones are the sending part of `network_surface`'s
-/// table plus MQTT and WebSocket clients.
+/// table plus MQTT and WebSocket clients; bare socket calls serve local IPC as well (see `socket_domains`).
 const SINK_APIS: &[(&str, SinkApi)] = &[
-    ("send", network("socket send")),
-    ("sendto", network("socket send")),
-    ("sendmsg", network("socket send")),
-    ("sendmmsg", network("socket send")),
-    ("connect", network("socket connect")),
+    ("send", socket("socket send")),
+    ("sendto", socket("socket send")),
+    ("sendmsg", socket("socket send")),
+    ("sendmmsg", socket("socket send")),
+    ("connect", socket("socket connect")),
     ("wsasend", network("socket send")),
     ("wsasendto", network("socket send")),
     ("ssl_write", network("TLS write")),
@@ -325,6 +391,10 @@ const SINK_APIS: &[(&str, SinkApi)] = &[
 const WRITE_APIS: [&str; 4] = ["fwrite", "write", "writev", "fputs"];
 /// Paths that name devices or kernel interfaces: opening one for writing is not storing data.
 const DEVICE_PREFIXES: [&str; 3] = ["/dev/", "/proc/", "/sys/"];
+/// Linux socket domains: local IPC, and the two internet families.
+const AF_UNIX: u64 = 1;
+const AF_INET: u64 = 2;
+const AF_INET6: u64 = 10;
 
 /// What a function on a call chain reaching a capture says about what starts it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -377,9 +447,13 @@ const MAX_DEPTH: usize = 6;
 const MAX_VISITED: usize = 2000;
 /// Levels above both a source and a sink at which a shared caller still counts as a path.
 const MAX_SHARED_LEVELS: usize = 4;
-/// Source and sink functions paired, and pairs compared.
+/// Source and sink functions paired.
 const MAX_SOURCE_FUNCTIONS: usize = 200;
 const MAX_SINK_FUNCTIONS: usize = 400;
+/// Time the path search may take before it stops and says so.
+const PATH_BUDGET: Duration = Duration::from_secs(5);
+/// Bytes of non-code segments scanned for pointers to functions (tables of handlers and operations).
+const MAX_POINTER_SCAN: usize = 64 << 20;
 /// Instructions before a call read for its constant arguments.
 const ARGUMENT_WINDOW: usize = 12;
 /// Endpoints listed per sink function.
@@ -432,7 +506,25 @@ impl Workflow for PrivacySurface {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Held {
     Constant(u64),
+    /// A constant that is also an address in the image (a string, or a number that happens to look like one).
     Address(u64),
+}
+
+impl Held {
+    /// The number held, whether or not it looks like an address.
+    fn number(self) -> u64 {
+        match self {
+            Held::Constant(value) | Held::Address(value) => value,
+        }
+    }
+}
+
+/// One instruction as the argument reader sees it.
+struct Instruction<'a> {
+    text: &'a str,
+    data_ref: Option<u64>,
+    accesses: bool,
+    call: bool,
 }
 
 /// What one call site's arguments say about a source or sink API.
@@ -445,16 +537,21 @@ enum Outcome {
 /// An endpoint a function names: string address, value, and why it is local (when it is).
 type Named = (u64, String, Option<&'static str>);
 
-/// A capture-to-send path and its (source, sink) functions.
-type RankedPath = (Finding, (u64, u64));
-
 /// One capture source in one function.
 struct SourceHit {
     medium: Medium,
     what: String,
     level: Level,
+    /// Whether the evidence shows capture in particular, not a device or API also used the other way.
+    specific: bool,
     evidence: Vec<String>,
     address: u64,
+}
+
+impl SourceHit {
+    fn confidence(&self) -> Confidence {
+        if self.specific { self.level.confidence() } else { lower(self.level.confidence()) }
+    }
 }
 
 /// One sink API in one function.
@@ -475,10 +572,18 @@ enum Edge {
 }
 
 /// Every function's callers, by direct call (or tail jump) and by taking its address in code.
+#[derive(Default)]
 struct Graph {
     callers: BTreeMap<u64, BTreeSet<(u64, Edge)>>,
+    /// Direct calls only, caller to callees.
+    callees: BTreeMap<u64, BTreeSet<u64>>,
     /// Functions with a backward jump (a loop).
     loops: BTreeSet<u64>,
+    /// Functions whose address is stored outside code (a table of handlers or operations, a vtable): their callers
+    /// through it are not known.
+    data_referenced: BTreeSet<u64>,
+    /// Whether the scan for such pointers stopped at `MAX_POINTER_SCAN`.
+    pointer_scan_cut: bool,
 }
 
 /// The functions a backward walk reached, each with its distance and the next function toward the start.
@@ -514,6 +619,13 @@ impl Graph {
             }
         }
         Cone { reached, cut }
+    }
+
+    fn add(&mut self, caller: u64, callee: u64, edge: Edge) {
+        self.callers.entry(callee).or_default().insert((caller, edge));
+        if edge == Edge::Call {
+            self.callees.entry(caller).or_default().insert(callee);
+        }
     }
 }
 
@@ -564,6 +676,31 @@ impl Root {
     }
 }
 
+/// How a capture function relates to a sink function.
+#[derive(Debug, Clone, Copy)]
+enum Relation {
+    Same,
+    /// The capturing function reaches the sink this many calls down.
+    SourceCalls(usize),
+    /// The sending function reaches the capture this many calls down.
+    SinkCalls(usize),
+    /// Both are reached from `ancestor`, `levels` calls in all.
+    Shared {
+        ancestor: u64,
+        levels: usize,
+    },
+}
+
+/// A scored capture-to-sink pair, turned into a finding only if it ranks within the section.
+struct PathMatch {
+    score: usize,
+    confidence: Confidence,
+    source: u64,
+    sink: u64,
+    kind: SinkKind,
+    relation: Relation,
+}
+
 /// The run's state: the analysis-derived graph and per-function facts.
 struct Survey<'p> {
     project: &'p Project,
@@ -574,9 +711,11 @@ struct Survey<'p> {
     sinks: BTreeMap<u64, Vec<SinkHit>>,
     writes: BTreeMap<u64, BTreeSet<String>>,
     markers: BTreeMap<u64, BTreeMap<Marker, String>>,
+    /// The constant domain of each `socket` call, per function (`None` when not read).
+    socket_domains: BTreeMap<u64, Vec<Option<u64>>>,
     strings: BTreeMap<u64, String>,
-    /// Calls read for constant arguments, and those where the instructions before the call did not settle it.
-    calls_read: usize,
+    /// Calls whose arguments mattered but could not be read on this architecture.
+    unread_calls: usize,
 }
 
 impl Project {
@@ -602,38 +741,50 @@ impl Project {
             sinks: BTreeMap::new(),
             writes: BTreeMap::new(),
             markers: BTreeMap::new(),
+            socket_domains: BTreeMap::new(),
             strings: self.scanned_strings().iter().map(|found| (found.address, found.text.clone())).collect(),
-            calls_read: 0,
+            unread_calls: 0,
         };
         let mut unreferenced = Section::new("Capture strings not referenced from code", limits);
         survey.scan_strings(&mut unreferenced);
         if analysis.is_some() {
             survey.scan_calls();
+            survey.classify_sockets();
         }
-        let graph = analysis.map(|analysis| graph(&analysis.program, |address| analysis.function_containing(address)));
+        let graph =
+            analysis.map(|analysis| graph(self, &analysis.program, |address| analysis.function_containing(address)));
         let roots = self.roots();
 
-        let mut sources = Section::new("Capture sources", limits);
+        let mut found: Vec<Finding> = Vec::new();
         for (&function, hits) in &survey.sources {
             for hit in hits {
-                sources.push(
+                let mut evidence = vec![format!("evidence: {}", hit.level.as_str())];
+                if !hit.specific {
+                    evidence.push(
+                        "ambiguous: this API, request or device is also used without capturing (the other \
+                         direction, display or decoding)"
+                            .to_owned(),
+                    );
+                }
+                evidence.push(format!("in function at {function:#x}"));
+                evidence.extend(hit.evidence.iter().cloned());
+                found.push(
                     Finding::new(
                         source_tool(hit.level),
-                        hit.level.confidence(),
+                        hit.confidence(),
                         format!("`{}` {} ({})", self.function_name(function), hit.what, hit.medium.label()),
                     )
                     .at(hit.address)
-                    .evidence(
-                        std::iter::once(format!("evidence: {}", hit.level.as_str()))
-                            .chain(std::iter::once(format!("in function at {function:#x}")))
-                            .chain(hit.evidence.iter().cloned()),
-                    ),
+                    .evidence(evidence),
                 );
             }
         }
-        sources.findings.sort_by_key(|finding| std::cmp::Reverse(finding.confidence));
+        // Sorted before the section keeps its first findings, so the strongest are the ones kept.
+        found.sort_by_key(|finding| std::cmp::Reverse(finding.confidence));
+        let mut sources = Section::new("Capture sources", limits);
+        sources.extend(found);
 
-        let mut sinks = Section::new("Send and write sinks", limits);
+        let mut found: Vec<Finding> = Vec::new();
         let named = if survey.sinks.is_empty() { BTreeMap::new() } else { survey.endpoint_strings() };
         for (&function, hits) in &survey.sinks {
             let endpoints = graph.as_ref().map(|graph| survey.endpoints(graph, &named, function)).unwrap_or_default();
@@ -645,34 +796,40 @@ impl Project {
                 {
                     evidence.push(format!("also calls {}", ticked(writes)));
                 }
-                if hit.kind == SinkKind::Network {
+                if hit.kind != SinkKind::File {
                     evidence.extend(endpoints.iter().cloned());
                 }
+                let name = self.function_name(function);
                 let observation = match hit.kind {
-                    SinkKind::Network => {
-                        format!("`{}` can send over the network: {}", self.function_name(function), hit.what)
-                    }
-                    SinkKind::File => format!("`{}` can write a file: {}", self.function_name(function), hit.what),
+                    SinkKind::Network => format!("`{name}` can send over the network: {}", hit.what),
+                    SinkKind::Socket => format!("`{name}` can send through a socket (network or local): {}", hit.what),
+                    SinkKind::File => format!("`{name}` can write a file: {}", hit.what),
                 };
                 let confidence = match (hit.kind, hit.level) {
                     (SinkKind::Network, _) => Confidence::High,
-                    (SinkKind::File, Level::Argument) => Confidence::Medium,
+                    (SinkKind::Socket, _) | (SinkKind::File, Level::Argument) => Confidence::Medium,
                     (SinkKind::File, _) => Confidence::Low,
                 };
-                sinks.push(Finding::new("list_imports", confidence, observation).at(hit.address).evidence(evidence));
+                found.push(Finding::new("list_imports", confidence, observation).at(hit.address).evidence(evidence));
             }
         }
+        found.sort_by_key(|finding| std::cmp::Reverse(finding.confidence));
+        let mut sinks = Section::new("Send and write sinks", limits);
+        sinks.extend(found);
 
         let mut paths = Section::new("Capture-to-send paths", limits);
         let mut triggers = Section::new("Capture triggers", limits);
         let mut unprompted = 0;
         let mut ranked_paths: Vec<(u64, u64)> = Vec::new();
         if let Some(graph) = &graph {
-            let (found, cut) = survey.paths(graph, &roots);
-            for (finding, pair) in found {
-                paths.push(finding);
-                ranked_paths.push(pair);
+            let cones = survey.cones(graph);
+            let (matches, cut, timed_out) = survey.paths(&cones, &roots);
+            paths.total = matches.len();
+            for found in matches.iter().take(limits.per_section) {
+                paths.findings.push(survey.path_finding(&cones, found));
+                ranked_paths.push((found.source, found.sink));
             }
+            paths.truncated = paths.total > paths.findings.len();
             if cut {
                 report.limitation(format!(
                     "The path search was bounded ({MAX_SOURCE_FUNCTIONS} source and {MAX_SINK_FUNCTIONS} sink \
@@ -680,7 +837,17 @@ impl Project {
                      distant paths are not listed."
                 ));
             }
-            let (found, quiet, cut) = survey.triggers(graph, &roots);
+            if timed_out {
+                report.limitation(format!(
+                    "The path search stopped after {} seconds; pairs it did not reach are not listed.",
+                    PATH_BUDGET.as_secs()
+                ));
+            }
+            let (mut found, quiet, cut) = survey.triggers(graph, &cones, &roots);
+            // no_user_trigger findings first, so a cut section keeps them.
+            found.sort_by_key(|finding| {
+                (!finding.observation.starts_with("no_user_trigger:"), std::cmp::Reverse(finding.confidence))
+            });
             triggers.extend(found);
             unprompted = quiet;
             if cut {
@@ -688,6 +855,13 @@ impl Project {
                     "The trigger search walks at most {MAX_DEPTH} call levels and {MAX_VISITED} functions up from \
                      each capture and hit that bound for some; their triggers may be incomplete and they are not \
                      said to lack a user-facing trigger."
+                ));
+            }
+            if graph.pointer_scan_cut {
+                report.limitation(format!(
+                    "Only the first {} MiB of data were scanned for pointers to functions, so no capture is said to \
+                     lack a user-facing trigger.",
+                    MAX_POINTER_SCAN >> 20
                 ));
             }
         }
@@ -701,21 +875,20 @@ impl Project {
                 (count > 0).then(|| format!("{} {count}", medium.label()))
             })
             .collect();
-        let network_sinks =
-            survey.sinks.values().filter(|hits| hits.iter().any(|hit| hit.kind == SinkKind::Network)).count();
-        let file_sinks = survey.sinks.len() - network_sinks;
+        let senders = survey.sinks.values().filter(|hits| hits.iter().any(|hit| hit.kind != SinkKind::File)).count();
+        let writers = survey.sinks.len() - senders;
         report.summary.push(if survey.sources.is_empty() && unreferenced.total == 0 {
             "No microphone, camera, screen or input-device capture was observed.".to_owned()
         } else {
             format!(
-                "{} capture sources in {} functions ({}); {} functions can send over the network and {} more can \
-                 write files; {} capture-to-send paths; {} captures are reached from program start with no \
-                 user-facing trigger found on the way.",
+                "{} capture sources in {} functions ({}); {} functions can send over the network or a socket and {} \
+                 more can write files; {} capture-to-send paths; {} captures are reached from program start with no \
+                 user-facing trigger found among their callers.",
                 sources.total,
                 survey.sources.len(),
                 if counts.is_empty() { "strings only".to_owned() } else { counts.join(", ") },
-                network_sinks,
-                file_sinks,
+                senders,
+                writers,
                 paths.total,
                 unprompted
             )
@@ -773,17 +946,21 @@ impl Project {
         );
         report.limitation(
             "A trigger names a function on a call chain reaching the capture: one that calls a timer API or sleeps in \
-             a loop, receives from the network, or reads user input. \"No user-facing trigger found\" means none of \
-             these input or UI calls was seen on any chain within the bounds, not that none exists.",
+             a loop, receives from the network, or reads user input. no_user_trigger is stated only for \
+             direction-specific capture evidence, when no caller within the bounds (or a function such a caller \
+             calls directly) reads input or runs a UI loop, and none of them is referenced from data; it means none \
+             was found, not that none exists.",
         );
         report.limitation(
-            "V4L2 is also used for video output, decoders and HDMI input, and framebuffer queries for drawing; a \
-             listed source shows the capability, not what is recorded.",
+            "V4L2 is also used for video output, decoders and HDMI input, framebuffer and DRM queries for drawing, \
+             and device nodes and sound-card listings in either direction: such sources are marked ambiguous, rank \
+             lower, and never support no_user_trigger.",
         );
-        if survey.calls_read > 0 && !matches!(survey.arch, Arch::X86_64 | Arch::Aarch64 | Arch::Arm) {
+        if survey.unread_calls > 0 {
             report.limitation(format!(
-                "Constant arguments are read only on x86-64, AArch64 and 32-bit ARM; on {:?} every source is listed \
-                 at `name` level and ioctl request codes are not read.",
+                "Constant arguments are read only on x86-64, AArch64 and 32-bit ARM. On {:?} sources are listed at \
+                 `name` level without their direction, and ioctl-based sources (V4L2, framebuffer, DRM, evdev) are \
+                 missing entirely.",
                 survey.arch
             ));
         }
@@ -813,11 +990,7 @@ impl Project {
         {
             let Some(bytes) = binary.read(section.address, section.size) else { continue };
             for chunk in bytes.chunks_exact(width) {
-                let mut value = 0u64;
-                for (index, &byte) in chunk.iter().enumerate() {
-                    let shift = if binary.big_endian { (width - 1 - index) * 8 } else { index * 8 };
-                    value |= u64::from(byte) << shift;
-                }
+                let value = read_word(chunk, binary.big_endian);
                 if value != 0 && value != u64::MAX && binary.is_code(value) {
                     roots.entry(value).or_insert(Root::Constructor);
                 }
@@ -825,6 +998,17 @@ impl Project {
         }
         roots
     }
+}
+
+/// A pointer-sized word.
+fn read_word(chunk: &[u8], big_endian: bool) -> u64 {
+    let width = chunk.len();
+    let mut value = 0u64;
+    for (index, &byte) in chunk.iter().enumerate() {
+        let shift = if big_endian { (width - 1 - index) * 8 } else { index * 8 };
+        value |= u64::from(byte) << shift;
+    }
+    value
 }
 
 /// The tool that produced a source's evidence.
@@ -840,23 +1024,53 @@ fn ticked(names: &BTreeSet<String>) -> String {
     names.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ")
 }
 
-/// The call graph of `program`: callers by call, tail jump, and code taking a function's address.
-fn graph(program: &rampage_analysis::discover::Program, containing: impl Fn(u64) -> Option<u64>) -> Graph {
-    let mut callers: BTreeMap<u64, BTreeSet<(u64, Edge)>> = BTreeMap::new();
-    let mut loops = BTreeSet::new();
+/// The call graph of `program`: callers by call, tail jump, and code taking a function's address; and the
+/// functions whose address is stored outside code (references from data, and pointer-sized words in non-code
+/// segments).
+fn graph(project: &Project, program: &Program, containing: impl Fn(u64) -> Option<u64>) -> Graph {
+    let mut graph = Graph::default();
     for xref in &program.xrefs {
-        let Some(from) = containing(xref.from) else { continue };
+        let Some(from) = containing(xref.from) else {
+            if program.function_at(xref.to).is_some() {
+                graph.data_referenced.insert(xref.to);
+            }
+            continue;
+        };
         if xref.kind == XrefKind::Jump && xref.to <= xref.from && containing(xref.to) == Some(from) {
-            loops.insert(from);
+            graph.loops.insert(from);
             continue;
         }
         if from == xref.to || program.function_at(xref.to).is_none() {
             continue;
         }
         let edge = if xref.kind == XrefKind::Data { Edge::Callback } else { Edge::Call };
-        callers.entry(xref.to).or_default().insert((from, edge));
+        graph.add(from, xref.to, edge);
     }
-    Graph { callers, loops }
+    let binary = &project.binary;
+    let width = usize::from(binary.arch.pointer_size().unwrap_or(8));
+    let thumb = binary.arch == Arch::Arm;
+    let mut budget = MAX_POINTER_SCAN;
+    for segment in &binary.segments {
+        if segment.perms.execute || !segment.perms.read || segment.file_size == 0 {
+            continue;
+        }
+        let length = segment.file_size.min(segment.size);
+        let Some(bytes) = binary.read(segment.address, length) else { continue };
+        if bytes.len() > budget {
+            graph.pointer_scan_cut = true;
+            break;
+        }
+        budget -= bytes.len();
+        let skip = (width - (segment.address as usize % width)) % width;
+        for chunk in bytes.get(skip..).unwrap_or_default().chunks_exact(width) {
+            let value = read_word(chunk, binary.big_endian);
+            let target = if thumb { value & !1 } else { value };
+            if target != 0 && program.function_at(target).is_some() {
+                graph.data_referenced.insert(target);
+            }
+        }
+    }
+    graph
 }
 
 impl Survey<'_> {
@@ -873,17 +1087,24 @@ impl Survey<'_> {
             else {
                 continue;
             };
-            if pattern == "/dev/snd/pcmc" && !lower.trim_end().ends_with('c') {
-                self.excluded.push(
-                    Finding::new(
-                        "list_strings",
-                        Confidence::Medium,
-                        format!("ALSA PCM playback device node {}", quote(&found.text)),
-                    )
-                    .at(found.address)
-                    .evidence(["a PCM device node ending in `p` is a playback device"]),
-                );
-                continue;
+            let mut what = what.to_owned();
+            if pattern == "/dev/snd/pcmc" {
+                match pcm_node(&lower) {
+                    Some(true) => what = "ALSA PCM capture device node".to_owned(),
+                    Some(false) => {
+                        self.excluded.push(
+                            Finding::new(
+                                "list_strings",
+                                Confidence::Medium,
+                                format!("ALSA PCM playback device node {}", quote(&found.text)),
+                            )
+                            .at(found.address)
+                            .evidence(["a PCM device node ending in `p` is a playback device"]),
+                        );
+                        continue;
+                    }
+                    None => what = "ALSA PCM device node (either direction)".to_owned(),
+                }
             }
             let mut functions = BTreeSet::new();
             if let Some(analysis) = analysis {
@@ -913,7 +1134,7 @@ impl Survey<'_> {
                     function,
                     medium,
                     format!("references the {what} {}", quote(&found.text)),
-                    Level::String,
+                    (Level::String, false),
                     from,
                     format!("string at {:#x} referenced at {from:#x}", found.address),
                 );
@@ -921,13 +1142,22 @@ impl Survey<'_> {
         }
     }
 
-    fn add_source(&mut self, function: u64, medium: Medium, what: String, level: Level, at: u64, evidence: String) {
+    fn add_source(
+        &mut self,
+        function: u64,
+        medium: Medium,
+        what: String,
+        (level, specific): (Level, bool),
+        at: u64,
+        evidence: String,
+    ) {
         let hits = self.sources.entry(function).or_default();
         if let Some(hit) = hits.iter_mut().find(|hit| hit.what == what) {
             hit.level = hit.level.max(level);
+            hit.specific |= specific;
             hit.evidence.push(evidence);
         } else {
-            hits.push(SourceHit { medium, what, level, evidence: vec![evidence], address: at });
+            hits.push(SourceHit { medium, what, level, specific, evidence: vec![evidence], address: at });
         }
     }
 
@@ -941,7 +1171,8 @@ impl Survey<'_> {
         }
     }
 
-    /// Every call to a source, sink, write or trigger API, read for its constant arguments where they matter.
+    /// Every call to a source, sink, write, trigger or `socket` API, read for its constant arguments where they
+    /// matter.
     fn scan_calls(&mut self) {
         let project = self.project;
         let Ok(analysis) = project.analysis() else { return };
@@ -965,7 +1196,8 @@ impl Survey<'_> {
             let sink = match_api(SINK_APIS, &api);
             let marker = match_api(TRIGGER_APIS, &api);
             let write = WRITE_APIS.iter().any(|pattern| super::api_matches(pattern, &api));
-            if source.is_none() && sink.is_none() && marker.is_none() && !write {
+            let socket = super::api_matches("socket", &api);
+            if source.is_none() && sink.is_none() && marker.is_none() && !write && !socket {
                 continue;
             }
             targets.sort_unstable();
@@ -993,6 +1225,10 @@ impl Survey<'_> {
                 if write {
                     self.writes.entry(function).or_default().insert(api.clone());
                 }
+                if socket {
+                    let domain = if call { self.argument(function, site, 0).map(Held::number) } else { None };
+                    self.socket_domains.entry(function).or_default().push(domain);
+                }
             }
         }
         // Reading input devices is user input for the captures it leads to.
@@ -1011,17 +1247,36 @@ impl Survey<'_> {
         }
     }
 
+    /// Socket sends in a function whose `socket` calls all name a constant domain: local-only (AF_UNIX) ones are
+    /// dropped, and an internet domain makes them network sends.
+    fn classify_sockets(&mut self) {
+        for (function, domains) in &self.socket_domains {
+            let Some(hits) = self.sinks.get_mut(function) else { continue };
+            if domains.iter().all(|domain| *domain == Some(AF_UNIX)) {
+                hits.retain(|hit| hit.kind != SinkKind::Socket);
+            } else if domains.iter().any(|domain| matches!(domain, Some(AF_INET | AF_INET6))) {
+                for hit in hits.iter_mut().filter(|hit| hit.kind == SinkKind::Socket) {
+                    hit.kind = SinkKind::Network;
+                    hit.evidence.push("the same function opens an internet socket (AF_INET or AF_INET6)".to_owned());
+                }
+            }
+        }
+        self.sinks.retain(|_, hits| !hits.is_empty());
+    }
+
     fn source_call(&mut self, function: u64, site: u64, call: bool, api: &str, source: SourceApi) {
         let at = format!("call to `{api}` at {site:#x}");
         if let Check::Ioctl { index } = source.check {
             // An ioctl is a source only for a known capture request.
-            let request = match self.argument(function, site, index).filter(|_| call) {
-                Some(Held::Constant(value)) => ioctl_request(value).map(|request| (value, request)),
-                _ => None,
-            };
-            if let Some((value, (medium, request))) = request {
-                let what = format!("issues the {request} ioctl");
-                self.add_source(function, medium, what, Level::Argument, site, format!("{at}: request {value:#x}"));
+            let request = if call { self.argument(function, site, index).map(Held::number) } else { None };
+            let request = request.and_then(|value| ioctl_request(value).map(|request| (value & 0xffff_ffff, request)));
+            if let Some((value, (medium, name, note))) = request {
+                let what = match note {
+                    Some(note) => format!("issues the {name} ioctl ({note})"),
+                    None => format!("issues the {name} ioctl"),
+                };
+                let evidence = format!("{at}: request {value:#x}");
+                self.add_source(function, medium, what, (Level::Argument, note.is_none()), site, evidence);
             }
             return;
         }
@@ -1029,7 +1284,14 @@ impl Survey<'_> {
         match (outcome, source.check) {
             (Outcome::Confirmed(detail), _) => {
                 let what = format!("{} for capture", source.what);
-                self.add_source(function, source.medium, what, Level::Argument, site, format!("{at}: {detail}"));
+                self.add_source(
+                    function,
+                    source.medium,
+                    what,
+                    (Level::Argument, true),
+                    site,
+                    format!("{at}: {detail}"),
+                );
             }
             (Outcome::Excluded(detail), _) => {
                 let observation = format!("`{}` {}, not for capture", self.name(function), source.what);
@@ -1040,14 +1302,15 @@ impl Survey<'_> {
                 );
             }
             (Outcome::Unknown, Check::Name) => {
-                self.add_source(function, source.medium, source.what.to_owned(), Level::Name, site, at);
+                let what = source.what.to_owned();
+                self.add_source(function, source.medium, what, (Level::Name, source.specific), site, at);
             }
             (Outcome::Unknown, _) => {
                 self.add_source(
                     function,
                     source.medium,
                     format!("{} (direction not read)", source.what),
-                    Level::Name,
+                    (Level::Name, false),
                     site,
                     format!("{at}: the argument that selects capture was not set by a constant just before the call"),
                 );
@@ -1056,31 +1319,32 @@ impl Survey<'_> {
     }
 
     fn source_outcome(&mut self, function: u64, site: u64, source: SourceApi) -> Outcome {
-        let constant = |value: Option<Held>| match value {
-            Some(Held::Constant(value)) => Some(value),
-            _ => None,
-        };
         match source.check {
-            Check::Name => Outcome::Unknown,
-            Check::Equals { index, argument, capture, other } => match constant(self.argument(function, site, index)) {
-                Some(value) if value == capture.0 => {
-                    Outcome::Confirmed(format!("{argument} = {value} ({})", capture.1))
+            Check::Name | Check::Ioctl { .. } => Outcome::Unknown,
+            // A flag word can equal an address in the image (PCM_IN is 0x10000000): read it as a number.
+            Check::Equals { index, argument, capture, other } => {
+                match self.argument(function, site, index).map(Held::number) {
+                    Some(value) if value == capture.0 => {
+                        Outcome::Confirmed(format!("{argument} = {value} ({})", capture.1))
+                    }
+                    Some(value) if value == other.0 => Outcome::Excluded(format!("{argument} = {value} ({})", other.1)),
+                    _ => Outcome::Unknown,
                 }
-                Some(value) if value == other.0 => Outcome::Excluded(format!("{argument} = {value} ({})", other.1)),
-                _ => Outcome::Unknown,
-            },
-            Check::Flag { index, argument, bit, flag } => match constant(self.argument(function, site, index)) {
-                Some(value) if value & bit != 0 => Outcome::Confirmed(format!("{argument} = {value:#x} (sets {flag})")),
-                Some(value) => Outcome::Excluded(format!("{argument} = {value:#x} (without {flag})")),
+            }
+            Check::Flag { index, argument, bit, flag } => {
+                match self.argument(function, site, index).map(Held::number) {
+                    Some(value) if value & bit != 0 => {
+                        Outcome::Confirmed(format!("{argument} = {value:#x} (sets {flag})"))
+                    }
+                    Some(value) => Outcome::Excluded(format!("{argument} = {value:#x} (without {flag})")),
+                    None => Outcome::Unknown,
+                }
+            }
+            Check::NonZero { index, argument } => match self.argument(function, site, index).map(Held::number) {
+                Some(0) => Outcome::Excluded(format!("{argument} = 0 (no input)")),
+                Some(value) => Outcome::Confirmed(format!("{argument} = {value:#x}")),
                 None => Outcome::Unknown,
             },
-            Check::NonZero { index, argument } => match self.argument(function, site, index) {
-                Some(Held::Constant(0)) => Outcome::Excluded(format!("{argument} = 0 (no input)")),
-                Some(Held::Constant(value)) => Outcome::Confirmed(format!("{argument} = {value}")),
-                Some(Held::Address(address)) => Outcome::Confirmed(format!("{argument} = {address:#x}")),
-                None => Outcome::Unknown,
-            },
-            Check::Ioctl { .. } => Outcome::Unknown,
         }
     }
 
@@ -1090,33 +1354,44 @@ impl Survey<'_> {
             Some(Held::Address(address)) => survey.string_at(address),
             _ => None,
         };
+        let device = |path: &Option<String>| {
+            path.as_deref().is_some_and(|path| DEVICE_PREFIXES.iter().any(|prefix| path.starts_with(prefix)))
+        };
         match (sink.check, call) {
             (SinkCheck::Name, _) | (_, false) => {
                 self.add_sink(function, sink.kind, format!("`{api}` ({})", sink.what), Level::Name, site, at);
             }
-            (SinkCheck::Mode { index }, true) => match string(self, index) {
-                Some(mode) if mode.starts_with('r') && !mode.contains('+') => {}
-                Some(mode) => {
-                    let path = string(self, 0).map(|path| format!(" {}", quote(&path))).unwrap_or_default();
-                    self.add_sink(
-                        function,
-                        sink.kind,
-                        format!("`{api}`{path} for writing"),
-                        Level::Argument,
-                        site,
-                        format!("{at}: mode {}", quote(&mode)),
-                    );
-                }
-                None => self.add_sink(function, sink.kind, format!("`{api}` (mode not read)"), Level::Name, site, at),
-            },
-            (SinkCheck::Flags { path, flags }, true) => {
-                let path = string(self, path);
-                if path.as_deref().is_some_and(|path| DEVICE_PREFIXES.iter().any(|prefix| path.starts_with(prefix))) {
+            (SinkCheck::Mode { index }, true) => {
+                let path = string(self, 0);
+                if device(&path) {
                     return;
                 }
-                match self.argument(function, site, flags) {
-                    Some(Held::Constant(value)) if value & 3 == 0 => {}
-                    Some(Held::Constant(value)) => {
+                match string(self, index) {
+                    Some(mode) if mode.starts_with('r') && !mode.contains('+') => {}
+                    Some(mode) => {
+                        let path = path.map(|path| format!(" {}", quote(&path))).unwrap_or_default();
+                        self.add_sink(
+                            function,
+                            sink.kind,
+                            format!("`{api}`{path} for writing"),
+                            Level::Argument,
+                            site,
+                            format!("{at}: mode {}", quote(&mode)),
+                        );
+                    }
+                    None => {
+                        self.add_sink(function, sink.kind, format!("`{api}` (mode not read)"), Level::Name, site, at)
+                    }
+                }
+            }
+            (SinkCheck::Flags { path, flags }, true) => {
+                let path = string(self, path);
+                if device(&path) {
+                    return;
+                }
+                match self.argument(function, site, flags).map(Held::number) {
+                    Some(value) if value & 3 == 0 => {}
+                    Some(value) => {
                         let named = path.map(|path| format!(" {}", quote(&path))).unwrap_or_default();
                         self.add_sink(
                             function,
@@ -1127,7 +1402,9 @@ impl Survey<'_> {
                             format!("{at}: flags {value:#x}"),
                         );
                     }
-                    _ => self.add_sink(function, sink.kind, format!("`{api}` (flags not read)"), Level::Name, site, at),
+                    None => {
+                        self.add_sink(function, sink.kind, format!("`{api}` (flags not read)"), Level::Name, site, at)
+                    }
                 }
             }
         }
@@ -1147,8 +1424,10 @@ impl Survey<'_> {
     /// The constant or address argument `index` holds at the call at `site`, read from the instructions before the
     /// call in its block.
     fn argument(&mut self, function: u64, site: u64, index: usize) -> Option<Held> {
-        let register = argument_registers(self.arch)?.get(index).copied()?;
-        self.calls_read += 1;
+        let Some(register) = argument_registers(self.arch).and_then(|registers| registers.get(index).copied()) else {
+            self.unread_calls += 1;
+            return None;
+        };
         let project = self.project;
         let blocks = self
             .listings
@@ -1158,20 +1437,17 @@ impl Survey<'_> {
         let block = blocks.iter().find(|block| block.iter().any(|line| line.address == site))?;
         let position = block.iter().position(|line| line.address == site)?;
         let start = position.saturating_sub(ARGUMENT_WINDOW);
-        let mut value: Option<Held> = None;
-        for line in &block[start..position] {
-            let Some((mnemonic, operands)) = split(&line.text) else { continue };
-            if matches!(line.flow, Flow::Call(_) | Flow::IndirectCall) {
-                value = None;
-                continue;
-            }
-            let Some(destination) = operands.first() else { continue };
-            if register_index(self.arch, destination) != Some(register) || !writes_first_operand(&mnemonic) {
-                continue;
-            }
-            value = written_value(self.project, &mnemonic, &operands, line, value);
-        }
-        value
+        let lines: Vec<Instruction> = block[start..position]
+            .iter()
+            .map(|line| Instruction {
+                text: &line.text,
+                data_ref: line.data_ref,
+                accesses: line.accesses,
+                call: matches!(line.flow, Flow::Call(_) | Flow::IndirectCall),
+            })
+            .collect();
+        let binary = &project.binary;
+        track(self.arch, register, &lines, &|address, width| binary.read_constant(address, width))
     }
 
     /// The endpoints each function references in strings: (string address, endpoint value, local reason).
@@ -1240,116 +1516,159 @@ impl Survey<'_> {
         globals
     }
 
-    /// Capture-to-send paths, best first, each with its (source, sink) functions; and whether a bound was hit.
-    fn paths(&self, graph: &Graph, roots: &BTreeMap<u64, Root>) -> (Vec<RankedPath>, bool) {
-        let mut cut = self.sources.len() > MAX_SOURCE_FUNCTIONS || self.sinks.len() > MAX_SINK_FUNCTIONS;
-        let sources: Vec<u64> = self
-            .sources
-            .iter()
-            .filter(|(_, hits)| hits.iter().any(|hit| hit.medium != Medium::Input))
-            .map(|(&function, _)| function)
-            .take(MAX_SOURCE_FUNCTIONS)
-            .collect();
-        let sinks: Vec<u64> = self.sinks.keys().copied().take(MAX_SINK_FUNCTIONS).collect();
-        let globals = self.globals(&sources.iter().chain(&sinks).copied().collect());
-        let mut cones: BTreeMap<u64, Cone> = BTreeMap::new();
-        for &function in sources.iter().chain(&sinks) {
+    /// The source functions paths and triggers consider (capped), and the sink functions paths consider.
+    fn source_functions(&self) -> Vec<u64> {
+        self.sources.keys().copied().take(MAX_SOURCE_FUNCTIONS).collect()
+    }
+
+    fn sink_functions(&self) -> Vec<u64> {
+        self.sinks.keys().copied().take(MAX_SINK_FUNCTIONS).collect()
+    }
+
+    /// One backward walk per source and sink function, shared by paths and triggers.
+    fn cones(&self, graph: &Graph) -> BTreeMap<u64, Cone> {
+        let mut cones = BTreeMap::new();
+        for function in self.source_functions().into_iter().chain(self.sink_functions()) {
             cones.entry(function).or_insert_with(|| graph.cone(function));
         }
-        let mut found: Vec<(usize, Finding, (u64, u64))> = Vec::new();
+        cones
+    }
+
+    /// Whether `function` holds capture evidence that shows direction (an argument that selects capture, or a
+    /// capture-only API), for a medium other than input.
+    fn specific_capture(&self, function: u64) -> bool {
+        self.sources.get(&function).is_some_and(|hits| {
+            hits.iter().any(|hit| hit.specific && hit.level >= Level::Name && hit.medium != Medium::Input)
+        })
+    }
+
+    /// Capture-to-send pairs, best first; whether a bound was hit; and whether the time budget ran out.
+    fn paths(&self, cones: &BTreeMap<u64, Cone>, roots: &BTreeMap<u64, Root>) -> (Vec<PathMatch>, bool, bool) {
+        let deadline = Instant::now() + PATH_BUDGET;
+        let mut cut = self.sources.len() > MAX_SOURCE_FUNCTIONS || self.sinks.len() > MAX_SINK_FUNCTIONS;
+        let mut timed_out = false;
+        let sources: Vec<u64> = self
+            .source_functions()
+            .into_iter()
+            .filter(|function| self.sources[function].iter().any(|hit| hit.medium != Medium::Input))
+            .collect();
+        let sinks = self.sink_functions();
+        let mut found: Vec<PathMatch> = Vec::new();
         for &source in &sources {
+            if Instant::now() >= deadline {
+                timed_out = true;
+                break;
+            }
             let source_cone = &cones[&source];
-            let source_level = self.sources[&source].iter().map(|hit| hit.level).max().unwrap_or(Level::String);
-            let mediums: BTreeSet<&str> = self.sources[&source].iter().map(|hit| hit.medium.label()).collect();
+            let specific = self.specific_capture(source);
+            // Shared callers within reach, other than main and the entry point (which everything shares).
+            let near: Vec<(u64, usize)> = source_cone
+                .reached
+                .iter()
+                .filter(|&(_, &(up, _))| up <= MAX_SHARED_LEVELS)
+                .filter(|(function, _)| {
+                    !roots.get(function).is_some_and(|root| matches!(root, Root::Entry | Root::Main))
+                })
+                .map(|(&function, &(up, _))| (function, up))
+                .collect();
             for &sink in &sinks {
                 let sink_cone = &cones[&sink];
                 cut |= source_cone.cut || sink_cone.cut;
                 let kind = self.sinks[&sink].iter().map(|hit| hit.kind).min().unwrap_or(SinkKind::File);
-                let (rank, relation, chain) = if source == sink {
-                    (0, "in the same function".to_owned(), vec![self.name(source)])
+                let relation = if source == sink {
+                    Relation::Same
                 } else if let Some(depth) = sink_cone.depth(source) {
-                    let chain = self.render(&sink_cone.chain(source));
-                    let how = if depth == 1 {
-                        "calls the sink directly".to_owned()
-                    } else {
-                        format!("reaches the sink {depth} calls down")
-                    };
-                    (depth, format!("the capturing function {how}"), chain)
+                    Relation::SourceCalls(depth)
                 } else if let Some(depth) = source_cone.depth(sink) {
-                    let chain = self.render(&source_cone.chain(sink));
-                    let how = if depth == 1 {
-                        "calls the capture directly".to_owned()
-                    } else {
-                        format!("reaches the capture {depth} calls down")
-                    };
-                    (depth, format!("the sending function {how}"), chain)
+                    Relation::SinkCalls(depth)
                 } else {
-                    let shared = source_cone
-                        .reached
+                    let shared = near
                         .iter()
-                        .filter(|(function, _)| {
-                            !roots.get(function).is_some_and(|root| matches!(root, Root::Entry | Root::Main))
-                        })
-                        .filter_map(|(&function, &(up, _))| sink_cone.depth(function).map(|down| (up + down, function)))
+                        .filter_map(|&(function, up)| sink_cone.depth(function).map(|down| (up + down, function)))
                         .filter(|&(levels, _)| levels <= MAX_SHARED_LEVELS)
                         .min();
                     let Some((levels, ancestor)) = shared else { continue };
-                    let mut chain = self.render(&source_cone.chain(ancestor));
-                    let to_sink = self.render(&sink_cone.chain(ancestor));
-                    chain.push(format!("and {}", to_sink.join(" -> ")));
-                    (
-                        levels + 1,
-                        format!("both are reached from `{}` ({levels} calls in all)", self.name(ancestor)),
-                        chain,
-                    )
+                    Relation::Shared { ancestor, levels }
+                };
+                let rank = match relation {
+                    Relation::Same => 0,
+                    Relation::SourceCalls(depth) | Relation::SinkCalls(depth) => depth,
+                    Relation::Shared { levels, .. } => levels + 1,
                 };
                 let mut confidence = match rank {
                     0 | 1 => Confidence::High,
                     2 | 3 => Confidence::Medium,
                     _ => Confidence::Low,
                 };
-                if kind == SinkKind::File {
+                if kind != SinkKind::Network {
                     confidence = lower(confidence);
                 }
-                if source_level == Level::String {
+                if !specific {
                     confidence = lower(confidence);
                 }
-                let sink_what: Vec<&str> = self.sinks[&sink].iter().map(|hit| hit.what.as_str()).collect();
-                let target = match kind {
-                    SinkKind::Network => "the network",
-                    SinkKind::File => "a file",
-                };
-                let mut evidence = vec![
-                    format!("chain: {}", chain.join(" -> ")),
-                    format!("capture: {} (evidence: {})", self.whats(source), source_level.as_str()),
-                    format!("sink: {}", sink_what.join(", ")),
-                ];
-                if let Some(global) = self.shared_global(&globals, source, sink) {
-                    evidence.push(global);
-                }
-                // A direct call to a network send outranks a file write in the same function.
-                let score =
-                    rank * 2 + usize::from(kind == SinkKind::File) * 3 + usize::from(source_level == Level::String);
-                found.push((
-                    score,
-                    Finding::new(
-                        "xrefs",
-                        confidence,
-                        format!(
-                            "{} capture in `{}` and a send to {target} in `{}`: {relation}",
-                            mediums.iter().copied().collect::<Vec<_>>().join("/"),
-                            self.name(source),
-                            self.name(sink)
-                        ),
-                    )
-                    .at(source)
-                    .evidence(evidence),
-                    (source, sink),
-                ));
+                let score = rank * 2 + kind.weight() + usize::from(!specific);
+                found.push(PathMatch { score, confidence, source, sink, kind, relation });
             }
         }
-        found.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.confidence.cmp(&a.1.confidence)));
-        (found.into_iter().map(|(_, finding, pair)| (finding, pair)).collect(), cut)
+        found.sort_by(|a, b| a.score.cmp(&b.score).then(b.confidence.cmp(&a.confidence)));
+        (found, cut, timed_out)
+    }
+
+    /// The finding for one capture-to-sink pair.
+    fn path_finding(&self, cones: &BTreeMap<u64, Cone>, found: &PathMatch) -> Finding {
+        let (source, sink) = (found.source, found.sink);
+        let (relation, chain) = match found.relation {
+            Relation::Same => ("in the same function".to_owned(), vec![self.name(source)]),
+            Relation::SourceCalls(depth) => {
+                let how = if depth == 1 {
+                    "calls the sink directly".to_owned()
+                } else {
+                    format!("reaches the sink {depth} calls down")
+                };
+                (format!("the capturing function {how}"), self.render(&cones[&sink].chain(source)))
+            }
+            Relation::SinkCalls(depth) => {
+                let how = if depth == 1 {
+                    "calls the capture directly".to_owned()
+                } else {
+                    format!("reaches the capture {depth} calls down")
+                };
+                (format!("the sending function {how}"), self.render(&cones[&source].chain(sink)))
+            }
+            Relation::Shared { ancestor, levels } => {
+                let mut chain = self.render(&cones[&source].chain(ancestor));
+                chain.push(format!("and {}", self.render(&cones[&sink].chain(ancestor)).join(" -> ")));
+                (format!("both are reached from `{}` ({levels} calls in all)", self.name(ancestor)), chain)
+            }
+        };
+        let level = self.sources[&source].iter().map(|hit| hit.level).max().unwrap_or(Level::String);
+        let mediums: BTreeSet<&str> = self.sources[&source].iter().map(|hit| hit.medium.label()).collect();
+        let sink_what: Vec<&str> = self.sinks[&sink].iter().map(|hit| hit.what.as_str()).collect();
+        let mut evidence = vec![
+            format!("chain: {}", chain.join(" -> ")),
+            format!("capture: {} (evidence: {})", self.whats(source), level.as_str()),
+            format!("sink: {}", sink_what.join(", ")),
+        ];
+        if !self.specific_capture(source) {
+            evidence.push("the capture evidence does not show direction: ranked lower".to_owned());
+        }
+        let functions: BTreeSet<u64> = [source, sink].into();
+        if let Some(global) = self.shared_global(&self.globals(&functions), source, sink) {
+            evidence.push(global);
+        }
+        Finding::new(
+            "xrefs",
+            found.confidence,
+            format!(
+                "{} capture in `{}` and a send to {} in `{}`: {relation}",
+                mediums.into_iter().collect::<Vec<_>>().join("/"),
+                self.name(source),
+                found.kind.target(),
+                self.name(sink)
+            ),
+        )
+        .at(source)
+        .evidence(evidence)
     }
 
     /// A writable global that both functions reference, if any (a shared buffer is a cheap hint of a data link).
@@ -1387,14 +1706,21 @@ impl Survey<'_> {
 
     /// What reaches each capture, and how many captures are reached from program start with no user-facing trigger
     /// found; and whether a walk was cut.
-    fn triggers(&self, graph: &Graph, roots: &BTreeMap<u64, Root>) -> (Vec<Finding>, usize, bool) {
+    fn triggers(
+        &self,
+        graph: &Graph,
+        cones: &BTreeMap<u64, Cone>,
+        roots: &BTreeMap<u64, Root>,
+    ) -> (Vec<Finding>, usize, bool) {
         let mut findings = Vec::new();
         let mut unprompted = 0;
         let mut cut_any = false;
-        for (&source, hits) in self.sources.iter().take(MAX_SOURCE_FUNCTIONS) {
+        for source in self.source_functions() {
+            let hits = &self.sources[&source];
+            let cone = &cones[&source];
             let mediums: BTreeSet<Medium> = hits.iter().map(|hit| hit.medium).collect();
+            let input_only = mediums.iter().all(|medium| *medium == Medium::Input);
             let label = mediums.iter().map(|medium| medium.label()).collect::<Vec<_>>().join("/");
-            let cone = graph.cone(source);
             cut_any |= cone.cut;
             let mut by_depth: Vec<(usize, u64)> =
                 cone.reached.iter().map(|(&function, &(depth, _))| (depth, function)).collect();
@@ -1402,22 +1728,55 @@ impl Survey<'_> {
             let mut start: Option<(u64, Root)> = None;
             let mut seen: BTreeSet<&str> = BTreeSet::new();
             let mut user_input = false;
+            let mut indirect: Option<u64> = None;
             let name = self.name(source);
             for &(_, function) in &by_depth {
-                let chain = cone.chain(function);
-                let edge = chain.first().and_then(|(_, edge)| *edge);
-                let rendered = self.render(&chain).join(" -> ");
-                if let Some(&root) = roots.get(&function)
-                    && start.is_none_or(|(_, found)| !found.at_start() && root.at_start())
-                {
-                    start = Some((function, root));
+                if let Some(&root) = roots.get(&function) {
+                    if start.is_none_or(|(_, found)| !found.at_start() && root.at_start()) {
+                        start = Some((function, root));
+                    }
+                } else if indirect.is_none() && graph.data_referenced.contains(&function) {
+                    indirect = Some(function);
+                }
+                // A function calling a user-input reader directly may start the capture only after input, even
+                // when the reader is not on the chain (`if (button_pressed()) record();`).
+                let sibling = graph.callees.get(&function).filter(|_| !input_only).and_then(|callees| {
+                    callees.iter().copied().find(|&callee| {
+                        !cone.reached.contains_key(&callee)
+                            && self.markers.get(&callee).is_some_and(|markers| markers.contains_key(&Marker::UserInput))
+                    })
+                });
+                if let Some(reader) = sibling {
+                    user_input = true;
+                    if seen.insert("user input") {
+                        let rendered = self.render(&cone.chain(function)).join(" -> ");
+                        findings.push(
+                            Finding::new(
+                                "xrefs",
+                                Confidence::Low,
+                                format!("{label} capture in `{name}` may follow user input"),
+                            )
+                            .at(source)
+                            .evidence([
+                                "trigger: user input".to_owned(),
+                                format!(
+                                    "`{}` also calls `{}`, which reads user input",
+                                    self.name(function),
+                                    self.name(reader)
+                                ),
+                                format!("chain: {rendered}"),
+                            ]),
+                        );
+                    }
                 }
                 let Some(markers) = self.markers.get(&function) else { continue };
                 for (&marker, api) in markers {
-                    // An input reader is not its own user trigger.
-                    if marker == Marker::UserInput && function == source && mediums.contains(&Medium::Input) {
+                    // An input reader is not its own user trigger; a capture beside it in the same function is.
+                    if marker == Marker::UserInput && function == source && input_only {
                         continue;
                     }
+                    let chain = cone.chain(function);
+                    let edge = chain.first().and_then(|(_, edge)| *edge);
                     let (kind, observation, confidence) = match marker {
                         Marker::UserInput => {
                             user_input = true;
@@ -1458,6 +1817,7 @@ impl Survey<'_> {
                     if !seen.insert(kind) {
                         continue;
                     }
+                    let rendered = self.render(&chain).join(" -> ");
                     findings.push(Finding::new("xrefs", confidence, observation).at(source).evidence([
                         format!("trigger: {kind}"),
                         format!("`{}` {api}", self.name(function)),
@@ -1468,6 +1828,27 @@ impl Survey<'_> {
             if let Some((function, root)) = start {
                 let rendered = self.render(&cone.chain(function)).join(" -> ");
                 let kind = if root.at_start() { "program start" } else { "export" };
+                let withheld = if !root.at_start() || input_only || user_input {
+                    None
+                } else if cone.cut {
+                    Some("the walk up its callers hit its bound".to_owned())
+                } else if graph.pointer_scan_cut {
+                    Some("the scan for function pointers in data was cut".to_owned())
+                } else if let Some(table) = indirect {
+                    Some(format!(
+                        "`{}` is referenced from data (a table of handlers or operations), and callers through it \
+                         were not followed",
+                        self.name(table)
+                    ))
+                } else if !self.specific_capture(source) {
+                    Some("the capture evidence does not show direction".to_owned())
+                } else {
+                    None
+                };
+                let mut evidence = vec![format!("trigger: {kind}"), format!("chain: {rendered}")];
+                if let Some(reason) = &withheld {
+                    evidence.push(format!("no_user_trigger not stated: {reason}"));
+                }
                 findings.push(
                     Finding::new(
                         "xrefs",
@@ -1475,10 +1856,9 @@ impl Survey<'_> {
                         format!("{label} capture in `{name}` is reached from {}", root.label()),
                     )
                     .at(source)
-                    .evidence([format!("trigger: {kind}"), format!("chain: {rendered}")]),
+                    .evidence(evidence),
                 );
-                let capture = mediums.iter().any(|medium| *medium != Medium::Input);
-                if root.at_start() && capture && !user_input && !cone.cut {
+                if root.at_start() && !input_only && !user_input && withheld.is_none() {
                     unprompted += 1;
                     findings.push(
                         Finding::new(
@@ -1486,7 +1866,7 @@ impl Survey<'_> {
                             Confidence::Medium,
                             format!(
                                 "no_user_trigger: {label} capture in `{name}` is reached from {} with no input-event \
-                                 or UI handling found on any call chain to it",
+                                 or UI handling found among its callers within {MAX_DEPTH} levels",
                                 root.label()
                             ),
                         )
@@ -1494,7 +1874,8 @@ impl Survey<'_> {
                         .evidence([
                             format!("chain: {rendered}"),
                             format!(
-                                "{} functions within {MAX_DEPTH} call levels above it; none reads an input device or runs a UI event loop",
+                                "{} functions within {MAX_DEPTH} call levels above it; none reads an input device, \
+                                 runs a UI event loop or calls a function that does, and none is referenced from data",
                                 cone.reached.len()
                             ),
                         ]),
@@ -1533,8 +1914,10 @@ fn argument_registers(arch: Arch) -> Option<&'static [usize]> {
     }
 }
 
-/// The argument position a register name carries, if it is an argument register.
+/// The argument position a register name carries, if it is an argument register. Register-list braces and
+/// writeback marks (`{r1`, `r2}`, `sp!`) are ignored.
 fn register_index(arch: Arch, register: &str) -> Option<usize> {
+    let register = register.trim_matches(|c| c == '{' || c == '}' || c == '!' || c == ' ');
     match arch {
         Arch::X86_64 => [
             ["rdi", "edi", "di", "dil"],
@@ -1556,12 +1939,12 @@ fn register_index(arch: Arch, register: &str) -> Option<usize> {
 }
 
 /// The lowercase mnemonic and operands of an instruction's text.
-fn split(text: &str) -> Option<(String, Vec<String>)> {
+fn split(text: &str) -> (String, Vec<String>) {
     let text = text.trim().to_ascii_lowercase();
     let (mnemonic, rest) = text.split_once(char::is_whitespace).unwrap_or((&text, ""));
     let operands =
         rest.split(',').map(|operand| operand.trim().to_owned()).filter(|operand| !operand.is_empty()).collect();
-    Some((mnemonic.to_owned(), operands))
+    (mnemonic.to_owned(), operands)
 }
 
 /// Whether the instruction writes its first operand (stores, compares and pushes do not).
@@ -1578,21 +1961,80 @@ fn writes_first_operand(mnemonic: &str) -> bool {
         || mnemonic == "teq")
 }
 
+/// Mnemonics that write registers named after the first operand too (pair and multiple loads, exchanges).
+fn writes_every_operand(mnemonic: &str) -> bool {
+    mnemonic.starts_with("ldp")
+        || mnemonic.starts_with("ldnp")
+        || mnemonic.starts_with("ldxp")
+        || mnemonic.starts_with("ldaxp")
+        || mnemonic.starts_with("ldm")
+        || mnemonic.starts_with("ldrd")
+        || mnemonic.starts_with("pop")
+        || mnemonic.starts_with("xchg")
+        || mnemonic.starts_with("xadd")
+        || mnemonic.starts_with("cmpxchg")
+}
+
+/// The argument positions an x86-64 instruction writes without naming them.
+fn implicit_writes(arch: Arch, mnemonic: &str, operands: &[String]) -> &'static [usize] {
+    if arch != Arch::X86_64 {
+        return &[];
+    }
+    match mnemonic {
+        "cwd" | "cdq" | "cqo" | "mul" | "div" | "idiv" | "rdtsc" => &[2],
+        "imul" if operands.len() == 1 => &[2],
+        "rdtscp" | "cpuid" => &[2, 3],
+        "syscall" => &[3],
+        _ if mnemonic.starts_with("rep")
+            || ["movs", "stos", "cmps", "scas", "lods"].iter().any(|prefix| mnemonic.starts_with(prefix)) =>
+        {
+            &[0, 1, 3]
+        }
+        _ => &[],
+    }
+}
+
+/// The value argument register `register` holds after `lines` (the instructions before a call in its block).
+fn track(arch: Arch, register: usize, lines: &[Instruction], read: &dyn Fn(u64, u8) -> Option<u64>) -> Option<Held> {
+    let mut value: Option<Held> = None;
+    for line in lines {
+        if line.call {
+            value = None;
+            continue;
+        }
+        let (mnemonic, operands) = split(line.text);
+        if implicit_writes(arch, &mnemonic, &operands).contains(&register) {
+            value = None;
+            continue;
+        }
+        let names = |operand: &String| register_index(arch, operand) == Some(register);
+        if operands.first().is_some_and(names) && writes_first_operand(&mnemonic) {
+            value = written_value(&mnemonic, &operands, line, value, read);
+        } else if writes_every_operand(&mnemonic) && operands.iter().any(names) {
+            value = None;
+        }
+    }
+    value
+}
+
 /// The value an instruction writing an argument register leaves in it, given the value before (`movk`/`movt`
 /// merge into it); `None` when it is not a constant or address.
 fn written_value(
-    project: &Project,
     mnemonic: &str,
     operands: &[String],
-    line: &DisassemblyLine,
+    line: &Instruction,
     before: Option<Held>,
+    read: &dyn Fn(u64, u8) -> Option<u64>,
 ) -> Option<Held> {
     let source = operands.get(1).map(String::as_str);
+    let wide = operands.first().is_some_and(|register| register.starts_with('x') || register.starts_with('r'));
     match mnemonic {
-        "xor" | "eor" | "sub" if operands.len() == 2 && source == operands.first().map(String::as_str) => {
+        "xor" | "eor" | "sub" | "eors" | "subs"
+            if operands.len() == 2 && source == operands.first().map(String::as_str) =>
+        {
             Some(Held::Constant(0))
         }
-        "mov" | "movz" | "movabs" | "movw" => {
+        "mov" | "movs" | "mov.w" | "movs.w" | "movz" | "movabs" | "movw" => {
             if matches!(source, Some("wzr" | "xzr")) {
                 return Some(Held::Constant(0));
             }
@@ -1605,17 +2047,22 @@ fn written_value(
             let value = number(source?)?;
             Some(Held::Constant(value << shift(operands)))
         }
+        "mvn" | "mvns" | "mvn.w" | "movn" => {
+            let value = !(number(source?)? << shift(operands));
+            let x64 = wide && operands.first().is_some_and(|register| register.starts_with('x'));
+            Some(Held::Constant(if x64 { value } else { value & 0xffff_ffff }))
+        }
         "orr" if operands.len() == 3 && matches!(operands[1].as_str(), "wzr" | "xzr") => {
             number(&operands[2]).map(Held::Constant)
         }
         "movk" => {
-            let Some(Held::Constant(previous)) = before else { return None };
+            let previous = before?.number();
             let amount = shift(operands);
             let value = number(source?)?;
             Some(Held::Constant((previous & !(0xffff << amount)) | (value << amount)))
         }
-        "movt" => {
-            let Some(Held::Constant(previous)) = before else { return None };
+        "movt" | "movt.w" => {
+            let previous = before?.number();
             let value = number(source?)?;
             Some(Held::Constant((previous & 0xffff) | (value << 16)))
         }
@@ -1626,7 +2073,7 @@ fn written_value(
         "ldr" => {
             let address = line.data_ref.filter(|_| line.accesses)?;
             let width = if operands.first().is_some_and(|register| register.starts_with('x')) { 8 } else { 4 };
-            project.binary.read_constant(address, width).map(Held::Constant)
+            read(address, width).map(Held::Constant)
         }
         _ => None,
     }
@@ -1662,18 +2109,40 @@ fn number(text: &str) -> Option<u64> {
 mod tests {
     use super::*;
 
+    fn instruction(text: &str) -> Instruction<'_> {
+        Instruction { text, data_ref: None, accesses: false, call: false }
+    }
+
+    fn held(arch: Arch, register: usize, texts: &[&str]) -> Option<Held> {
+        let lines: Vec<Instruction> = texts.iter().map(|text| instruction(text)).collect();
+        track(arch, register, &lines, &|_, _| None)
+    }
+
     #[test]
     fn ioctl_requests_match_any_abi_size() {
-        // VIDIOC_DQBUF with a 64-bit (88-byte) and a 32-bit (68-byte) struct v4l2_buffer, and MIPS's direction bits.
-        for code in [0xc058_5611, 0xc044_5611, 0xc058_5611 & !0xc000_0000 | 0xc000_0000] {
-            assert_eq!(ioctl_request(code), Some((Medium::Camera, "VIDIOC_DQBUF")), "{code:#x}");
+        // VIDIOC_DQBUF with a 64-bit (88-byte) and a 32-bit (68-byte) struct v4l2_buffer, MIPS's direction bits,
+        // and a code sign-extended into a 64-bit register.
+        for code in [0xc058_5611, 0xc044_5611, 0x8058_5611, 0xffff_ffff_c058_5611] {
+            assert_eq!(ioctl_request(code), Some((Medium::Camera, "VIDIOC_DQBUF", None)), "{code:#x}");
         }
-        assert_eq!(ioctl_request(0x4004_5612), Some((Medium::Camera, "VIDIOC_STREAMON")));
-        assert_eq!(ioctl_request(0x4004_4590), Some((Medium::Input, "EVIOCGRAB")));
-        assert_eq!(ioctl_request(0x4600), Some((Medium::Screen, "FBIOGET_VSCREENINFO")));
+        assert_eq!(ioctl_request(0x4004_5612), Some((Medium::Camera, "VIDIOC_STREAMON", None)));
+        assert_eq!(ioctl_request(0x4004_4590), Some((Medium::Input, "EVIOCGRAB", None)));
+        let (medium, name, note) = ioctl_request(0x4600).unwrap();
+        assert_eq!((medium, name), (Medium::Screen, "FBIOGET_VSCREENINFO"));
+        assert!(note.is_some(), "a framebuffer geometry query is not specific to capture");
+        assert!(ioctl_request(0x8068_5600).unwrap().2.is_some(), "VIDIOC_QUERYCAP is ambiguous");
         // A console request (VT_OPENQRY, 0x5600) is a plain 'V' code, not V4L2.
         assert_eq!(ioctl_request(0x5600), None);
         assert_eq!(ioctl_request(0x5401), None);
+    }
+
+    #[test]
+    fn pcm_nodes_need_an_explicit_direction_letter() {
+        assert_eq!(pcm_node("/dev/snd/pcmc0d0c"), Some(true));
+        assert_eq!(pcm_node("/dev/snd/pcmc%ud%uc"), Some(true));
+        assert_eq!(pcm_node("/dev/snd/pcmc0d0p"), Some(false));
+        assert_eq!(pcm_node("/dev/snd/pcmc%ud%u%c"), None);
+        assert_eq!(pcm_node("/dev/snd/pcmc0d0"), None);
     }
 
     #[test]
@@ -1685,7 +2154,10 @@ mod tests {
         assert!(match_api(SOURCE_APIS, "Pa_OpenDefaultStream").is_some());
         assert!(match_api(SOURCE_APIS, "snd_pcm_writei").is_none());
         assert!(match_api(SOURCE_APIS, "pcm_write").is_none());
+        assert!(!match_api(SOURCE_APIS, "drmModeGetFB").unwrap().specific);
+        assert!(match_api(SOURCE_APIS, "snd_pcm_readi").unwrap().specific);
         assert_eq!(match_api(SINK_APIS, "curl_easy_perform").map(|sink| sink.kind), Some(SinkKind::Network));
+        assert_eq!(match_api(SINK_APIS, "send").map(|sink| sink.kind), Some(SinkKind::Socket));
         assert_eq!(match_api(SINK_APIS, "fopen64").map(|sink| sink.kind), Some(SinkKind::File));
         assert!(match_api(SINK_APIS, "recv").is_none());
         assert_eq!(match_api(TRIGGER_APIS, "g_timeout_add_seconds"), Some(Marker::Timer));
@@ -1712,8 +2184,52 @@ mod tests {
         assert_eq!(register_index(Arch::Aarch64, "w2"), Some(2));
         assert_eq!(register_index(Arch::Aarch64, "x19"), None);
         assert_eq!(register_index(Arch::Arm, "r3"), Some(3));
+        assert_eq!(register_index(Arch::Arm, "{r1"), Some(1));
         assert!(!writes_first_operand("str"));
         assert!(!writes_first_operand("cmp"));
         assert!(writes_first_operand("mov"));
+    }
+
+    #[test]
+    fn constants_are_tracked_across_move_forms() {
+        assert_eq!(
+            held(Arch::Aarch64, 1, &["mov w1, #0x5612", "movk w1, #0x4004, lsl #16"]),
+            Some(Held::Constant(0x4004_5612))
+        );
+        assert_eq!(held(Arch::Aarch64, 2, &["mov w2, wzr"]), Some(Held::Constant(0)));
+        assert_eq!(held(Arch::X86_64, 2, &["xor edx, edx"]), Some(Held::Constant(0)));
+        // Thumb: narrow and wide moves, movw/movt pairs and inverted moves.
+        assert_eq!(held(Arch::Arm, 2, &["movs r2, #1"]), Some(Held::Constant(1)));
+        assert_eq!(held(Arch::Arm, 2, &["mov.w r2, #0x10000000"]), Some(Held::Constant(0x1000_0000)));
+        assert_eq!(held(Arch::Arm, 1, &["movw r1, #0x5612", "movt r1, #0x4004"]), Some(Held::Constant(0x4004_5612)));
+        assert_eq!(held(Arch::Arm, 0, &["mvn r0, #0"]), Some(Held::Constant(0xffff_ffff)));
+    }
+
+    #[test]
+    fn writes_beyond_the_first_operand_end_a_constant() {
+        // A pair load, a register-list pop and x86 instructions that write rdx or rcx without naming them.
+        assert_eq!(held(Arch::Aarch64, 2, &["mov w2, #1", "ldp x1, x2, [sp, #0x10]"]), None);
+        assert_eq!(held(Arch::Arm, 2, &["movs r2, #1", "pop {r1, r2}"]), None);
+        assert_eq!(held(Arch::X86_64, 2, &["mov edx, 1", "cqo"]), None);
+        assert_eq!(held(Arch::X86_64, 3, &["mov ecx, 8", "rep stosq"]), None);
+        assert_eq!(held(Arch::X86_64, 2, &["mov edx, 1", "xchg rdx, rax"]), None);
+        // Reading the register leaves it as it was.
+        assert_eq!(held(Arch::X86_64, 2, &["mov edx, 1", "mov eax, edx"]), Some(Held::Constant(1)));
+    }
+
+    #[test]
+    fn a_walk_past_the_depth_bound_is_cut() {
+        let mut graph = Graph::default();
+        for level in 0..MAX_DEPTH as u64 + 2 {
+            graph.add(level + 1, level, Edge::Call);
+        }
+        let cone = graph.cone(0);
+        assert!(cone.cut);
+        assert_eq!(cone.reached.len(), MAX_DEPTH + 1);
+        let mut graph = Graph::default();
+        for level in 0..MAX_DEPTH as u64 {
+            graph.add(level + 1, level, Edge::Call);
+        }
+        assert!(!graph.cone(0).cut);
     }
 }

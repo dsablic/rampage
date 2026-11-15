@@ -2,7 +2,8 @@
 
 A smart device can hold a microphone, a camera, a view of what is on screen and the keys pressed on its remote.
 `privacy_surface` answers an owner's question about one of its programs: what can this code capture, where can it
-send it, how are the two connected, and can capture start without anyone asking for it. It reports evidence of what
+send it, how are the two connected, and is any capture reached from program start with no input handling found
+on the way. It reports evidence of what
 the code can do and how it is reached, never intent, and never that anything runs.
 
 It is a guided report in the `carve` group, beside [`endpoint_inventory`](endpoint-inventory.md). It takes the
@@ -49,11 +50,18 @@ Every source carries one of three levels, strongest first:
 
 A call whose constant argument selects the other direction is listed under `Excluded: not capture`, not as a source.
 
+Some evidence shows a capability without showing capture: every string; a direction-selecting API whose argument
+was not read; `/proc/asound`, `/dev/fb*`, `/dev/dri/` and `/dev/video*` (also output and codec devices); a PCM node
+without an explicit `c` (`pcmC0D0`, or `pcmC%uD%u%c` whose letter is filled in at run time); and the requests drawing,
+compositing and codec code issue too (`FBIOGET_*SCREENINFO`, `DRM_IOCTL_MODE_GETFB*`, `drmModeGetFB*`,
+`VIDIOC_QUERYCAP`, `S_FMT`, `REQBUFS`, `QUERYBUF`, `QBUF`). Such a source carries an `ambiguous:` evidence line, is
+one confidence step lower, lowers the paths it is on, and never supports `no_user_trigger`.
+
 ### What counts as a source
 
 | Medium | APIs | Strings and request codes |
 | --- | --- | --- |
-| microphone | ALSA `snd_pcm_open` (capture stream), `snd_pcm_readi`/`readn`, `snd_pcm_mmap_readi`/`readn`; tinyalsa `pcm_open` (`PCM_IN`), `pcm_read`, `pcm_readi`; PulseAudio `pa_simple_new` (`PA_STREAM_RECORD`), `pa_simple_read`, `pa_stream_connect_record`; PortAudio input streams; AAudio `AAudioStreamBuilder_setDirection` (input); OpenSL ES `SL_IID_RECORD`; Android native `AudioRecord` and `MediaRecorder` | `/dev/snd/pcmC*D*c` (a name ending in `p` is playback and excluded), `/proc/asound`, `android/media/AudioRecord`, `android/media/MediaRecorder` |
+| microphone | ALSA `snd_pcm_open` (capture stream), `snd_pcm_readi`/`readn`, `snd_pcm_mmap_readi`/`readn`; tinyalsa `pcm_open` (`PCM_IN`), `pcm_read`, `pcm_readi`; PulseAudio `pa_simple_new` (`PA_STREAM_RECORD`), `pa_simple_read`, `pa_stream_connect_record`; PortAudio input streams; AAudio `AAudioStreamBuilder_setDirection` (input); OpenSL ES `SL_IID_RECORD`; Android native `AudioRecord` and `MediaRecorder` | `/dev/snd/pcmC*D*c` (ending in `p`: playback, excluded; no letter: either direction), `/proc/asound`, `android/media/AudioRecord`, `android/media/MediaRecorder` |
 | camera | `ioctl`/`v4l2_ioctl` with a V4L2 request (`VIDIOC_QUERYCAP`, `S_FMT`, `REQBUFS`, `QUERYBUF`, `QBUF`, `DQBUF`, `STREAMON`), `v4l2_read`; NDK camera2 (`ACameraManager_openCamera`, capture sessions); Android native `Camera` | `/dev/video*`, `android/hardware/Camera`, `android.hardware.camera2` |
 | screen | `ioctl` with `FBIOGET_VSCREENINFO`/`FBIOGET_FSCREENINFO` or `DRM_IOCTL_MODE_GETFB`/`GETFB2`; `drmModeGetFB`/`drmModeGetFB2`; X11 `XGetImage`/`XShmGetImage`; Android `ScreenshotClient`, `captureDisplay`, `ScreenCapture` | `/dev/fb*`, `/dev/graphics/fb*`, `/dev/dri/`, `android/media/projection/MediaProjection` |
 | input devices | `ioctl` with `EVIOCGRAB`, `EVIOCGNAME` or `EVIOCGBIT`; libevdev and libinput event reads | `/dev/input/*` |
@@ -65,12 +73,14 @@ names.
 
 ### Sinks
 
-- Network: socket `send`/`sendto`/`sendmsg`/`connect`, TLS writes, libcurl (`curl_easy_perform`), WinINet/WinHTTP
-  sends, MQTT (`mosquitto_publish`, `mosquitto_connect`, Paho `MQTTClient_publish`, `MQTTAsync_send`) and WebSocket
+- Socket: `send`/`sendto`/`sendmsg`/`connect` serve local IPC as well as the network, so they are listed as
+  `socket (network or local)` at medium confidence. When the same function calls `socket` with a constant domain,
+  `AF_UNIX` drops them (local IPC) and `AF_INET`/`AF_INET6` makes them network sends.
+- Network: TLS writes, libcurl (`curl_easy_perform`), WinINet/WinHTTP sends, MQTT (`mosquitto_publish`, `mosquitto_connect`, Paho `MQTTClient_publish`, `MQTTAsync_send`) and WebSocket
   writes (`lws_write`, nopoll). Each network sink lists up to four endpoints that the function, or a function
   calling it directly, names in its strings, classified as [`endpoint_inventory`](endpoint-inventory.md) does.
 - File (weaker: a file leaves the device only if something uploads it): `fopen` with a writing mode, `open`/`openat`
-  with write flags, `creat`. A read-only open, or an open of `/dev/`, `/proc/` or `/sys/`, is not a sink; `fwrite`
+  with write flags, `creat`. A read-only open, or an `fopen` or `open` of `/dev/`, `/proc/` or `/sys/`, is not a sink; `fwrite`
   and `write` are named beside a file sink but are not sinks on their own.
 
 ### Paths and ranking
@@ -83,7 +93,7 @@ A path connects a capturing function and a sinking function through calls, withi
 4. both are reached from a shared caller within four calls in all (a caller shared only through `main` or the
    entry point does not count: everything in a program shares it).
 
-A file sink and a string-level source each lower the confidence one step. When both functions reference the same
+A socket or file sink and an ambiguous source each lower the confidence one step. When both functions reference the same
 writable global (a shared buffer), the path says so, as a hint of a data link. A path shows that capture and send
 code are connected, not that the captured data is what is sent.
 
@@ -99,16 +109,21 @@ followed to the code that registers it. On the way it notes:
   it registers the chain's next function as a callback); `periodic loop`: a function with a loop that sleeps;
 - `network command`: a function on the chain receives from the network (`recv`, `accept`, `SSL_read`, MQTT
   message callbacks);
-- `user input`: a function on the chain reads an input device or runs a UI event loop.
+- `user input`: a function on the chain reads an input device or runs a UI event loop, or (`may follow user
+  input`) a function on the chain also calls one directly, as in `if (button_pressed()) record();`.
 
-`no_user_trigger` is stated for a microphone, camera or screen capture only when it is reached from program start,
-no function among all its callers within the bounds reads input or runs a UI loop, and the walk was not cut. It means
-none was found, not that none exists.
+`no_user_trigger` is stated for a microphone, camera or screen capture only when all of these hold: it is reached
+from program start; its evidence shows direction (an `argument`-level capture or a capture-only API such as
+`snd_pcm_readi`); no function among its callers within the bounds, nor a function one of them calls directly, reads
+input or runs a UI loop; none of those callers is referenced from data (a table of handlers or operations, found by
+scanning non-code segments for pointers, whose callers are not followed); and the walk was not cut. Otherwise the
+program-start trigger says `no_user_trigger not stated` and why. It means none was found, not that none exists.
 
 ## Limits
 
-- Constant arguments are read only from the instructions just before the call in the same basic block. Values
-  passed through variables, helpers or other blocks leave a source at `name` level (and an ioctl unread).
+- Constant arguments are read only from the instructions just before the call in the same basic block, on x86-64,
+  AArch64 and 32-bit ARM. Values passed through variables, helpers or other blocks leave a source at `name` level
+  (and an ioctl unread); on other architectures ioctl-based sources are missing entirely, and the report says so.
 - Virtual calls and other indirect calls are not followed, and nothing is executed. Java and DEX code are not read:
   Android apps show only through class-name strings and native libraries.
 - V4L2 also drives video output, decoders and HDMI input; framebuffer queries are also used to draw. A source shows

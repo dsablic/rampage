@@ -125,7 +125,7 @@ fn group_summary(group: Group) -> &'static str {
         Group::Diagnostics => "decode trouble: analysis_diagnostics, entry_diagnostics, inspect_jump_table.",
         Group::DotNet => ".NET: dotnet_metadata (types, methods, P/Invokes), dotnet_il (CIL).",
         Group::Carve => {
-            "files inside files: carve (embedded images), archive_inventory (ZIP), fs_list/fs_extract \
+            "files inside files: carve (embedded files), archive_inventory (ZIP), fs_list/fs_extract \
              (filesystems), privacy_surface."
         }
         Group::Formats => {
