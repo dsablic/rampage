@@ -23,6 +23,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
   network commands and user input (also a sibling call that reads input); `no_user_trigger` says a capture with
   direction-specific evidence is reached from program start with no input or UI handling found among its callers,
   and is withheld when a caller is referenced from a data table or the walk was cut. Evidence, never intent. See [privacy surface](docs/privacy-surface.md).
+- Compressed images as Raw code: the `raw` selector takes `decode` (a region's decoder parameters) on the primary
+  region, so a compressed application maps its decoded bytes as the code region; `vector_table`, `pointer_tables`
+  and seeds read them, `length` counts encoded bytes (at most 8 MiB) and the decoded size obeys the profile's cap.
+  `binary_info` reports the decode receipt as the region's source. See
+  [MCP](docs/mcp.md#a-compressed-image-as-the-code-region).
 
 ## 1.5.0 (2026-11-15)
 

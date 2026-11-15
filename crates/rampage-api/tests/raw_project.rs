@@ -399,6 +399,78 @@ fn a_cortex_m_image_opens_in_one_call_and_recovers_every_elf_function() {
     assert_eq!(owned.names(), ["firmware.bin"]);
 }
 
+/// An lzss-4k stream of `bytes` (LSB-first flags, 1 = literal) that repeats its first 16 bytes once through a
+/// reference, so the decoder's ring matters, then holds every byte as a literal.
+fn lzss_4k(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut items: Vec<Vec<u8>> = bytes.iter().map(|&byte| vec![byte]).collect();
+    // Prefix the stream with 16 literal bytes and one 16-byte reference to them (ring start 0xfee, length 16 =
+    // nibble 13 + 3); the payload follows, so the decoded image is `prefix ++ prefix ++ bytes`.
+    let prefix: Vec<Vec<u8>> = bytes[..16].iter().map(|&byte| vec![byte]).collect();
+    let position: u16 = 0xfee;
+    let reference = vec![(position & 0xff) as u8, (((position >> 4) & 0xf0) as u8) | 13];
+    let mut stream = prefix;
+    stream.push(reference);
+    stream.append(&mut items);
+    for group in stream.chunks(8) {
+        let flags = group.iter().enumerate().fold(0u8, |flags, (bit, item)| flags | (u8::from(item.len() == 1) << bit));
+        out.push(flags);
+        group.iter().for_each(|item| out.extend_from_slice(item));
+    }
+    out
+}
+
+/// A compressed image opens as the primary Raw region: the vector table and seeds read the decoded bytes, and
+/// binary_info reports the decode receipt as the region's source.
+#[test]
+fn a_compressed_image_opens_as_the_primary_raw_region() {
+    let owned = OwnedDirectory::new();
+    // 32 header bytes, then the stream; the decoded image is the fixture behind a 32-byte copy of its own start,
+    // so the fixture's vector table lies 32 bytes above the base.
+    let stream = lzss_4k(CORTEX_M);
+    let mut file = vec![0xa5; 32];
+    file.extend_from_slice(&stream);
+    let path = owned.file("update.bin", &file);
+    let decoded = 32 + CORTEX_M.len();
+    let selector = |size: usize| {
+        json!({
+            "profile": "cortex-m3", "offset": 32, "length": stream.len(), "base_address": "0x7ffffe0",
+            "vector_table": "0x8000000",
+            "decode": { "codec": "lzss-4k", "expected_output_size": size },
+        })
+    };
+    let project = Session::default().open_raw(&path, &request(selector(decoded))).unwrap();
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    assert_eq!(summary["entry"], format!("{:#x}", truth("reset_handler")));
+    let region = &summary["raw"]["regions"][0];
+    assert_eq!((region["name"].as_str(), region["length"].as_u64()), (Some("raw.code"), Some(decoded as u64)));
+    let receipt = &region["source"]["receipt"];
+    assert_eq!(region["source"]["type"], "decoded");
+    assert_eq!((receipt["source_offset"].as_u64(), receipt["input_fully_consumed"].as_bool()), (Some(32), Some(true)));
+    assert_eq!(receipt["output_sha256"], region["sha256"]);
+    let functions = project.functions(&rampage_api::FunctionsQuery::default()).unwrap();
+    let found: Vec<u64> = functions.items.iter().map(|function| function.address).collect();
+    for name in ["reset_handler", "format_hex", "systick_handler"] {
+        assert!(found.contains(&truth(name)), "{name} at {:#x} missing from {found:x?}", truth(name));
+    }
+    // The decoded size obeys the profile's cap; the encoded length the decoder's input cap; a wrong size is the
+    // provider's refusal.
+    let text = refusal(&path, selector(rampage_loaders::MAX_RAW_NATIVE_BYTES + 1));
+    assert!(text.contains("decode.expected_output_size must be 1..=4194304"), "{text}");
+    let mut long = selector(decoded);
+    long["length"] = json!(8 * 1024 * 1024 + 1);
+    assert!(refusal(&path, long).contains("encoded bytes with decode"));
+    let text = refusal(&path, selector(decoded + 64));
+    assert!(text.contains("Raw decode:"), "{text}");
+    // Record input states no byte range to decode.
+    let mut records = selector(decoded);
+    records["format"] = json!("ihex");
+    for key in ["offset", "length", "base_address"] {
+        records.as_object_mut().unwrap().remove(key);
+    }
+    assert!(refusal(&path, records).contains("base_address and decode"));
+}
+
 #[test]
 fn cortex_m_raw_projects_serve_every_raw_capable_tool_with_native_evidence() {
     let owned = OwnedDirectory::new();

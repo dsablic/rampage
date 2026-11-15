@@ -295,7 +295,7 @@ fn intel_hex_and_s_records_map_their_record_runs_and_start_address() {
     // Record input takes no offset/length/base_address; a refused start address is reported, not used.
     let error =
         refusal(&fixture("raw-cortex-m-stages.hex"), json!({ "profile": "cortex-m3", "format": "ihex", "offset": 0 }));
-    assert!(error.contains("omit offset, length and base_address"), "{error}");
+    assert!(error.contains("omit offset, length, base_address and decode"), "{error}");
     let error = refusal(&fixture("raw-cortex-m-stages.bin"), json!({ "profile": "cortex-m3", "format": "srec" }));
     assert!(error.contains("srec record line 1"), "{error}");
 }

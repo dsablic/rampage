@@ -35,9 +35,16 @@ pub struct RawProjectRequest {
     /// Original-file BYTE offset of the first code byte. Required for the `binary` format.
     #[serde(default)]
     pub offset: Option<FileOffset>,
-    /// Exact source byte count: 1..=131072, or 1..=4194304 for ARM:LE:32:Cortex. Required for the `binary` format.
+    /// Exact source byte count: 1..=131072, or 1..=4194304 for ARM:LE:32:Cortex (with `decode`, the encoded
+    /// count, at most 8 MiB). Required for the `binary` format.
     #[serde(default)]
     pub length: Option<FileOffset>,
+    /// Map a decoder provider's output over offset/length as the primary code region instead of the range itself,
+    /// e.g. a compressed application image: vector_table, pointer_tables and seeds then read the decoded bytes,
+    /// whose size (expected_output_size) obeys the length cap above. Parameters as a region's `decode` or
+    /// probe_compression's decode_arguments; binary_info reports the decode receipt with the region.
+    #[serde(default)]
+    pub decode: Option<RawRegionDecode>,
     /// Internal code-space BYTE address of the first selected byte, including word-addressed processors. Required
     /// for the `binary` format.
     #[serde(default)]
@@ -377,6 +384,41 @@ fn region_receipt(receipt: &crate::DecodeReceipt) -> Result<serde_json::Value, A
     Ok(value)
 }
 
+/// `length` bytes at `offset` of the file, read once and revalidated.
+fn file_range(path: &Path, offset: u64, length: usize) -> Result<(Vec<u8>, RawRegionSource), ApiError> {
+    let source = RangeSource::open(path, offset, length)?;
+    let bytes = source.read()?;
+    source.revalidate()?;
+    Ok((bytes, RawRegionSource::FileRange { offset, length: length as u64 }))
+}
+
+/// The decoder provider's `mapped`-byte output over `length` bytes at `offset`, with its receipt as the source.
+fn decoded_range(
+    path: &Path,
+    offset: u64,
+    length: usize,
+    decode: &RawRegionDecode,
+    mapped: usize,
+) -> Result<(Vec<u8>, RawRegionSource), ApiError> {
+    let request = crate::DecodeFileRequest {
+        codec: decode.codec,
+        lzss: decode.lzss,
+        offset,
+        length,
+        expected_output_size: mapped,
+        initial_write_offset: decode
+            .initial_write_offset
+            .unwrap_or_else(|| crate::default_initial_write_offset(decode.codec)),
+        dictionary_fill: decode.dictionary_fill.unwrap_or(0),
+        timeout_ms: decode.timeout_ms.unwrap_or(3000),
+        preview_offset: 0,
+        preview_size: 0,
+    };
+    let decoded = crate::decode_file_range(path, &request)?;
+    let receipt = region_receipt(&decoded.receipt)?;
+    Ok((decoded.bytes().to_vec(), RawRegionSource::Decoded { offset, length: length as u64, receipt }))
+}
+
 fn region_kind(kind: RawRegionKindRequest) -> RawRegionKind {
     match kind {
         RawRegionKindRequest::Code => RawRegionKind::Code,
@@ -457,33 +499,9 @@ impl RawProjectRequest {
             }
             budget -= mapped;
             let (bytes, source) = match &region.decode {
-                None => {
-                    let source = RangeSource::open(path, offset.0, length)?;
-                    let bytes = source.read()?;
-                    source.revalidate()?;
-                    (bytes, RawRegionSource::FileRange { offset: offset.0, length: length as u64 })
-                }
-                Some(decode) => {
-                    let request = crate::DecodeFileRequest {
-                        codec: decode.codec,
-                        lzss: decode.lzss,
-                        offset: offset.0,
-                        length,
-                        expected_output_size: mapped,
-                        initial_write_offset: decode
-                            .initial_write_offset
-                            .unwrap_or_else(|| crate::default_initial_write_offset(decode.codec)),
-                        dictionary_fill: decode.dictionary_fill.unwrap_or(0),
-                        timeout_ms: decode.timeout_ms.unwrap_or(3000),
-                        preview_offset: 0,
-                        preview_size: 0,
-                    };
-                    let decoded = crate::decode_file_range(path, &request)
-                        .map_err(|error| refuse(format!("decode: {}", error)))?;
-                    let receipt = region_receipt(&decoded.receipt)?;
-                    let source = RawRegionSource::Decoded { offset: offset.0, length: length as u64, receipt };
-                    (decoded.bytes().to_vec(), source)
-                }
+                None => file_range(path, offset.0, length)?,
+                Some(decode) => decoded_range(path, offset.0, length, decode, mapped)
+                    .map_err(|error| refuse(format!("decode: {error}")))?,
             };
             regions.push(RawRegion { kind, base, size: bytes.len() as u64, bytes: Some(bytes), source });
         }
@@ -497,23 +515,40 @@ impl RawProjectRequest {
             ));
         };
         let max = profile.max_bytes();
-        let length = usize::try_from(length.0).ok().filter(|length| (1..=max).contains(length)).ok_or_else(|| {
-            ApiError::Invalid(format!("Raw length must be 1..={max} bytes for {}", profile.language_id()))
-        })?;
         let options = self.options(profile, base.0)?;
+        // With decode, `length` counts encoded bytes (the decoder provider's input cap) and the decoded size is the
+        // mapped one, under the profile's cap.
+        let limit = if self.decode.is_some() { crate::MAX_DECODE_INPUT_BYTES } else { max };
+        let length = usize::try_from(length.0).ok().filter(|length| (1..=limit).contains(length)).ok_or_else(|| {
+            let what = if self.decode.is_some() { "encoded bytes with decode" } else { "bytes" };
+            ApiError::Invalid(format!("Raw length must be 1..={limit} {what} for {}", profile.language_id()))
+        })?;
         offset.0.checked_add(length as u64).ok_or_else(|| invalid("Raw source range overflows"))?;
-        let source = RangeSource::open(path, offset.0, length)?;
-        let bytes = source.read()?;
-        source.revalidate()?;
-        let regions = self.read_regions(path, profile, max - length)?;
-        let source = Some(RawRegionSource::FileRange { offset: offset.0, length: length as u64 });
-        Ok(RawImage { bytes, options, source, regions, records: None })
+        let (bytes, source) = match &self.decode {
+            None => file_range(path, offset.0, length)?,
+            Some(decode) => {
+                let mapped = usize::try_from(decode.expected_output_size.0)
+                    .ok()
+                    .filter(|size| (1..=max).contains(size))
+                    .ok_or_else(|| {
+                        ApiError::Invalid(format!(
+                            "Raw decode.expected_output_size must be 1..={max} bytes for {}",
+                            profile.language_id()
+                        ))
+                    })?;
+                decoded_range(path, offset.0, length, decode, mapped)
+                    .map_err(|error| ApiError::Invalid(format!("Raw decode: {error}")))?
+            }
+        };
+        let regions = self.read_regions(path, profile, max - bytes.len())?;
+        Ok(RawImage { bytes, options, source: Some(source), regions, records: None })
     }
 
     fn record_image(&self, path: &Path, profile: RawProfile, format: RawRecordFormat) -> Result<RawImage, ApiError> {
-        if self.offset.is_some() || self.length.is_some() || self.base_address.is_some() {
+        if self.offset.is_some() || self.length.is_some() || self.base_address.is_some() || self.decode.is_some() {
             return Err(ApiError::Invalid(format!(
-                "Raw format {} takes every address from the file's records: omit offset, length and base_address",
+                "Raw format {} takes every address from the file's records: omit offset, length, base_address and \
+                 decode",
                 format.name()
             )));
         }

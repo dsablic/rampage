@@ -608,6 +608,25 @@ reports `raw.records`: `format`, `data_records` and `start_address` (`word` as w
 address becomes the entry unless `entry` or the vector table's Reset names another address, in which case it is a
 seed. Sleigh profiles take a record file with one contiguous run and no `regions`.
 
+### A compressed image as the code region
+
+`decode` on the selector itself maps a decoder provider's output as the primary code region, so a compressed
+application in a vendor update file is analysed like a plain flash image: `vector_table`, `pointer_tables`, `entry`
+and seeds read and address the decoded bytes. `offset`/`length` then select the encoded bytes (at most 8 MiB), and
+`decode.expected_output_size` is the mapped size, under the profile's cap (4 MiB for Cortex-M, 128 KiB otherwise),
+with any `regions` sharing that cap. `decode` takes the same fields as a region's; any profile accepts it.
+`binary_info` reports the receipt as the primary region's `source`, as for a decoded region.
+
+```json
+{
+  "path": "update.bin",
+  "raw": {
+    "profile": "cortex-m", "offset": "0x40", "length": 1802, "base_address": "0x8000000", "vector_table": true,
+    "decode": { "codec": "lzss-4k", "expected_output_size": 2048 }
+  }
+}
+```
+
 ## Edits and session state
 
 Analysis runs once per binary when first needed and is cached for the session, and across processes by the

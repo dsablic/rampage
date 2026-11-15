@@ -219,7 +219,9 @@ ram, base_address, offset, length, decode?}: e.g. a second stage at its RAM base
 {\"kind\":\"code\",\"base_address\":\"0x20000000\",\"offset\":\"0x400\",\"length\":128}; ram is writable (its bytes \
 are never folded as constants) and may omit offset for unbacked RAM/MMIO; decode {codec, lzss?, \
 expected_output_size, initial_write_offset?, dictionary_fill?, timeout_ms?} maps decode_file_range's in-memory \
-output of the range instead. Overlaps are refused; references, calls and seeds cross regions; binary_info lists \
+output of the range instead. A top-level raw.decode (same shape, any profile) maps the decoded output as the \
+primary code region (length then counts encoded bytes), so vector_table, pointer_tables and seeds read decoded \
+bytes. Overlaps are refused; references, calls and seeds cross regions; binary_info lists \
 every region with its SHA-256 and source (file range, decode receipt, records). format ihex|srec reads Intel HEX \
 or S-records instead (omit offset/length/base_address): each contiguous run is a code region, a regions entry \
 without offset matching a run exactly states its kind, and the start-address record becomes the entry, reported \
@@ -556,6 +558,7 @@ fn compact_raw_selector() -> Value {
     let mut raw = tools::raw_selector_schema();
     // Each region's shape (and its decoder-provider parameters) is stated once in the server instructions.
     raw["properties"]["regions"] = json!({ "type": ["array", "null"], "maxItems": 15, "items": { "type": "object" } });
+    raw["properties"]["decode"] = json!({ "type": ["object", "null"] });
     strip(&mut raw);
     raw["type"] = json!(["object", "null"]);
     raw["description"] = json!("Headerless Raw project of path's byte range; see the server instructions.");

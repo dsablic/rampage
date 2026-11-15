@@ -31,6 +31,10 @@
               "type": "integer|null|string",
               "required": false
             },
+            "decode": {
+              "type": "null|object",
+              "required": false
+            },
             "entry": {
               "type": "integer|null|string",
               "required": false
@@ -100,6 +104,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
@@ -363,6 +371,10 @@
               "type": "integer|null|string",
               "required": false
             },
+            "decode": {
+              "type": "null|object",
+              "required": false
+            },
             "entry": {
               "type": "integer|null|string",
               "required": false
@@ -515,6 +527,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
@@ -1281,6 +1297,10 @@
               "type": "integer|null|string",
               "required": false
             },
+            "decode": {
+              "type": "null|object",
+              "required": false
+            },
             "entry": {
               "type": "integer|null|string",
               "required": false
@@ -1449,6 +1469,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
@@ -1785,6 +1809,10 @@
               "type": "integer|null|string",
               "required": false
             },
+            "decode": {
+              "type": "null|object",
+              "required": false
+            },
             "entry": {
               "type": "integer|null|string",
               "required": false
@@ -1896,6 +1924,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
@@ -2038,6 +2070,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
@@ -2378,6 +2414,10 @@
               "type": "integer|null|string",
               "required": false
             },
+            "decode": {
+              "type": "null|object",
+              "required": false
+            },
             "entry": {
               "type": "integer|null|string",
               "required": false
@@ -2565,6 +2605,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
@@ -2776,6 +2820,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
@@ -3041,6 +3089,10 @@
               "type": "integer|null|string",
               "required": false
             },
+            "decode": {
+              "type": "null|object",
+              "required": false
+            },
             "entry": {
               "type": "integer|null|string",
               "required": false
@@ -3131,6 +3183,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
@@ -3294,6 +3350,10 @@
               "type": "integer|null|string",
               "required": false
             },
+            "decode": {
+              "type": "null|object",
+              "required": false
+            },
             "entry": {
               "type": "integer|null|string",
               "required": false
@@ -3404,6 +3464,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
@@ -3557,6 +3621,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
@@ -3759,6 +3827,10 @@
               "type": "integer|null|string",
               "required": false
             },
+            "decode": {
+              "type": "null|object",
+              "required": false
+            },
             "entry": {
               "type": "integer|null|string",
               "required": false
@@ -3898,6 +3970,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
@@ -4231,6 +4307,10 @@
               "type": "integer|null|string",
               "required": false
             },
+            "decode": {
+              "type": "null|object",
+              "required": false
+            },
             "entry": {
               "type": "integer|null|string",
               "required": false
@@ -4310,6 +4390,10 @@
               "type": "integer|null|string",
               "required": false
             },
+            "decode": {
+              "type": "null|object",
+              "required": false
+            },
             "entry": {
               "type": "integer|null|string",
               "required": false
@@ -4383,6 +4467,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
@@ -4498,6 +4586,10 @@
               "type": "integer|null|string",
               "required": false
             },
+            "decode": {
+              "type": "null|object",
+              "required": false
+            },
             "entry": {
               "type": "integer|null|string",
               "required": false
@@ -4571,6 +4663,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
@@ -4863,6 +4959,10 @@
               "type": "integer|null|string",
               "required": false
             },
+            "decode": {
+              "type": "null|object",
+              "required": false
+            },
             "entry": {
               "type": "integer|null|string",
               "required": false
@@ -4961,6 +5061,10 @@
           "fields": {
             "base_address": {
               "type": "integer|null|string",
+              "required": false
+            },
+            "decode": {
+              "type": "null|object",
               "required": false
             },
             "entry": {
