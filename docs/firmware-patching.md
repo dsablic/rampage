@@ -85,7 +85,8 @@ own code: the routine whose run confirmed the check is run again with `evaluate_
 form, over the range as the fix leaves it (the fix's earlier values passed as memory writes). `device_check` on the
 write says `agrees`, `disagrees` (also named in `notes`) or `unconfirmed` with the reason: no routine confirmed the
 check (one known from code references alone), or the run did not return a value (an unsupported operation, the step
-budget, a timeout). The check never blocks a write.
+budget, a timeout). The run confirms the value, not the byte order it is stored in. The check never blocks a write,
+and is skipped for an image that takes no patches.
 
 ## Exporting
 

@@ -163,6 +163,7 @@ pub struct FixWrite {
 #[derive(Debug, Clone, Serialize)]
 pub struct DeviceCheck {
     /// `agrees`, `disagrees`, or `unconfirmed` (no routine, or it could not be run to a result; never blocks a fix).
+    /// The routine's value is compared as a number: the byte order it is stored in is not confirmed.
     pub status: &'static str,
     pub detail: String,
 }
@@ -1160,7 +1161,11 @@ fn device_check(project: &Project, check: &Found, image: &[Block], written: &[(u
     let call = format!("evaluate_function({routine:#x}, {start:#x}, {second:#x})");
     match run_routine(project, routine, check.range, second, algorithm, memory) {
         Ok((value, steps)) if value == expected => {
-            DeviceCheck { status: "agrees", detail: format!("{call} returned {value:#x} in {steps} steps") }
+            // The run returns a number; the byte order it is stored in is the check's, which the run does not see.
+            DeviceCheck {
+                status: "agrees",
+                detail: format!("{call} returned {value:#x} in {steps} steps (the stored byte order is not confirmed)"),
+            }
         }
         Ok((value, _)) => DeviceCheck {
             status: "disagrees",
@@ -1481,7 +1486,9 @@ impl Project {
                 ));
             }
             // The device's own routine over the range as the earlier writes leave it, run on this (unfixed) image.
-            let device = request.emulate.then(|| device_check(self, check, &current_blocks, &written));
+            // Not for an image that takes no patches: nothing is written.
+            let device =
+                (request.emulate && receipt.is_some()).then(|| device_check(self, check, &current_blocks, &written));
             if let Some(DeviceCheck { status: "disagrees", detail }) = &device {
                 notes.push(format!("check {index} at {:#x}: the image's own routine disagrees: {detail}", check.field));
             }
