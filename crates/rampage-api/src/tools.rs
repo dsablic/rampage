@@ -592,7 +592,8 @@ pub fn file_tools() -> Vec<FileTool> {
                 lzss object, as probe_compression's decode_arguments give it) and lz4-block. Expected output size \
                 is supplied, not discovered: no end marker, auto-detection, recursion, extraction, file publication \
                 or execution. \
-                Return range/output hashes, consumed/trailing counts and a bounded decoded-offset preview. \
+                Return range/output hashes, consumed/trailing counts, a bounded decoded-offset preview, and \
+                open_as_raw: a `raw` selector that opens the decoded bytes as a Raw project's code (see next). \
                 Limits: 8 MiB input, 16 MiB output, 128:1 against selected input, cooperative decode deadline. \
                 File I/O/hash phases are not forcibly timed out. Unix regular-file checks only. \
                 Other native-image selectors are rejected; decoded offsets are not source offsets or load addresses.",
@@ -619,7 +620,21 @@ pub fn file_tools() -> Vec<FileTool> {
                     preview_size: args.preview_size.unwrap_or(256),
                 };
                 let decoded = crate::decode_file_range(&args.path, &request).map_err(|error| error_chain(&error))?;
-                serde_json::to_value(decoded.receipt).map_err(|error| error.to_string())
+                let selector = crate::open_as_raw(&crate::DecodeArguments {
+                    codec: request.codec,
+                    offset: request.offset,
+                    length: request.length as u64,
+                    expected_output_size: request.expected_output_size,
+                    initial_write_offset: args.initial_write_offset,
+                    dictionary_fill: args.dictionary_fill,
+                    lzss: request.lzss,
+                });
+                let mut value = serde_json::to_value(decoded.receipt).map_err(|error| error.to_string())?;
+                if let Some(selector) = selector {
+                    value["open_as_raw"] = selector;
+                    value["next"] = Value::String(crate::OPEN_AS_RAW_NEXT.to_owned());
+                }
+                Ok(value)
             },
         },
         FileTool {
@@ -632,7 +647,8 @@ pub fn file_tools() -> Vec<FileTool> {
                 layouts, distance or ring offsets with ring start and fill) and the LZ4 block format, within a work \
                 budget and deadline. Supply expected_output_size when a header gives one: only then can the first \
                 candidate be confident. Each ranked candidate has decode_arguments to pass to decode_file_range \
-                unchanged, the decoded size and SHA-256, consumed and trailing input, parse metrics, entropy drop, \
+                unchanged, open_as_raw (a `raw` selector for its decoded bytes; see next), the decoded size and \
+                SHA-256, consumed and trailing input, parse metrics, entropy drop, \
                 named checks, ambiguity counts and a short preview. The sweep summary and not_tried say what was \
                 and was not attempted. Evidence, not identification; nothing is extracted, published or executed.",
             input_schema: probe_compression_schema(),

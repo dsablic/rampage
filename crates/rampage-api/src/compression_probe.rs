@@ -95,6 +95,10 @@ pub struct ProbeCandidate {
     pub verdict: &'static str,
     pub score: f64,
     pub decode_arguments: DecodeArguments,
+    /// A `raw` selector mapping this candidate's decoded bytes as a Raw project's code (see the report's `next`);
+    /// present when decode_check reproduced the candidate and its size fits a Raw project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_as_raw: Option<serde_json::Value>,
     pub output_size: usize,
     pub output_sha256: String,
     pub input_consumed: usize,
@@ -154,6 +158,9 @@ pub struct ProbeCompressionReport {
     pub candidates: Vec<ProbeCandidate>,
     /// Candidates found before `candidate_limit` cut the list.
     pub candidates_found: usize,
+    /// How to analyse a candidate's decoded bytes, when one has an `open_as_raw` selector.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<&'static str>,
     pub sweep: ProbeSweep,
     pub not_tried: Vec<&'static str>,
     pub limitations: Vec<&'static str>,
@@ -197,6 +204,37 @@ fn arguments(codec: &Codec, offset: u64, length: usize, output_size: usize) -> D
             lzss: None,
         },
     }
+}
+
+/// What a result with an `open_as_raw` selector says to do with it.
+pub const OPEN_AS_RAW_NEXT: &str = "To analyse the decoded bytes as code, add profile (e.g. cortex-m) and \
+    base_address (the load address) to open_as_raw and pass it as `raw`, with the same path, to binary_info, \
+    list_functions, list_strings or decompile; for Cortex-M also vector_table.";
+
+/// A Raw project selector that maps `arguments`' decoded output as the primary code region, without the profile
+/// and base address no decoder knows; `None` when the decoded size exceeds every Raw profile's cap.
+pub fn open_as_raw(arguments: &DecodeArguments) -> Option<serde_json::Value> {
+    if arguments.expected_output_size > rampage_loaders::MAX_RAW_NATIVE_BYTES {
+        return None;
+    }
+    let mut decode = serde_json::json!({
+        "codec": arguments.codec,
+        "expected_output_size": arguments.expected_output_size,
+    });
+    if let Some(lzss) = &arguments.lzss {
+        decode["lzss"] = serde_json::to_value(lzss).ok()?;
+    }
+    if let Some(offset) = arguments.initial_write_offset {
+        decode["initial_write_offset"] = offset.into();
+    }
+    if let Some(fill) = arguments.dictionary_fill {
+        decode["dictionary_fill"] = fill.into();
+    }
+    Some(serde_json::json!({
+        "offset": format!("{:#x}", arguments.offset),
+        "length": arguments.length,
+        "decode": decode,
+    }))
 }
 
 /// Probes an explicit file range for the built-in compressed-stream families.
@@ -255,6 +293,7 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
         .map(|(index, candidate)| {
             let (decode_check, sha, preview) = reproduce(&input, candidate, preview_size, &mut reproduce_cancelled);
             let ring = matches!(candidate.codec, Codec::Lzss(lzss) if lzss.offset_mode == rampage_decode::OffsetMode::RingPosition);
+            let decode_arguments = arguments(&candidate.codec, request.offset.0, length, candidate.output_size);
             ProbeCandidate {
                 rank: index + 1,
                 verdict: match candidate.verdict {
@@ -263,7 +302,10 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
                     Verdict::Weak => "weak",
                 },
                 score: candidate.score,
-                decode_arguments: arguments(&candidate.codec, request.offset.0, length, candidate.output_size),
+                open_as_raw: (decode_check == "reproduced")
+                    .then(|| open_as_raw(&decode_arguments))
+                    .flatten(),
+                decode_arguments,
                 output_size: candidate.output_size,
                 output_sha256: sha,
                 input_consumed: candidate.consumed,
@@ -294,7 +336,8 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
                     .collect(),
             }
         })
-        .collect();
+        .collect::<Vec<ProbeCandidate>>();
+    let next = candidates.iter().any(|candidate| candidate.open_as_raw.is_some()).then_some(OPEN_AS_RAW_NEXT);
 
     let result = ProbeCompressionReport {
         file_path: path.to_owned(),
@@ -308,6 +351,7 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
         interpretation: "ranked_candidates_not_identifications",
         candidates,
         candidates_found: found,
+        next,
         sweep: ProbeSweep {
             families: vec!["lzss", "lz4-block"],
             lzss_space: vec![

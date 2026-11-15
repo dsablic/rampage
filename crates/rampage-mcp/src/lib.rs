@@ -201,7 +201,8 @@ native bytes/word candidates without discovery or sidecars; names resolve only t
 decode_file_range instead accepts an explicit regular-file range and codec without an executable header. \
 file_layout maps any file or range (padding, entropy, string clusters, hashes, hints) as a first look at firmware; \
 its compressed_component_candidate hints give a payload range and decoded-size words for probe_compression, whose \
-ranked decode_arguments go to decode_file_range unchanged. \
+ranked decode_arguments go to decode_file_range unchanged; both return open_as_raw, which with a profile and \
+base_address added is the `raw` selector for the decoded code. \
 Its transient decoded preview uses decoded offsets, not source offsets or load addresses; supplied sizes and \
 successful decoding do not authenticate content or prove stream boundaries. Tools whose schema has a `raw` \
 object open that explicit file range as a headerless Raw project with a closed profile instead of a native image \

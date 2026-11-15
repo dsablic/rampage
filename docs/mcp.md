@@ -627,6 +627,10 @@ with any `regions` sharing that cap. `decode` takes the same fields as a region'
 }
 ```
 
+`decode_file_range` (when the decode succeeds) and each reproduced `probe_compression` candidate return this selector
+without `profile` and `base_address` as `open_as_raw`, with a one-line `next`: add the profile and load address and
+pass it as `raw` with the same path. A decoded size above 4 MiB has no selector.
+
 ## Edits and session state
 
 Analysis runs once per binary when first needed and is cached for the session, and across processes by the

@@ -97,18 +97,18 @@ behind a six-word record (base, payload offset, compressed length, additive sum,
 container, codec, sums and architecture in 29 turns ($0.32) but no function-level facts, because it never reached the
 decoded code.
 
-- **List a directory.** No tool lists files, so an agent given only a folder cannot start. A small `list_dir` (names,
-  sizes, kinds, a magic sniff), and `endpoint_inventory` naming the entries it ignored.
-- **Open decoded bytes as the primary Raw region.** A Raw region can already carry `decode`, but only as a further
+- [ ] **List a directory.** No tool lists files, so an agent given only a folder cannot start. A small `list_dir`
+  (names, sizes, kinds, a magic sniff), and `endpoint_inventory` naming the entries it ignored.
+- [x] **Open decoded bytes as the primary Raw region.** A Raw region can already carry `decode`, but only as a further
   region; Haiku never found it and concluded nothing could analyse decoded output. Allow `decode` on the primary
   region (vector table and seeds then read the decoded bytes), mention it in `decode_file_range`'s result ("open
   this as a Raw project with ..."), and have `probe_compression` return a ready `raw` selector.
-- **Write decoded bytes to a file** (`decode_file_range` with an absolute `output_path`, same rules as
+- [ ] **Write decoded bytes to a file** (`decode_file_range` with an absolute `output_path`, same rules as
   `fs_extract`), for tools that need a file.
-- **String and data tools on Raw projects.** `list_strings` and `inspect_data` refuse them.
-- **Image records in containers.** Recognise records that name a payload's offset, compressed length, checksum and
+- [ ] **String and data tools on Raw projects.** `list_strings` and `inspect_data` refuse them.
+- [ ] **Image records in containers.** Recognise records that name a payload's offset, compressed length, checksum and
   decoded size, and report them from `carve`/`file_layout` with the matching `decode` arguments.
-- **Vector table placed at runtime.** When offset 0 is code that writes VTOR, follow the VTOR store to find the
+- [ ] **Vector table placed at runtime.** When offset 0 is code that writes VTOR, follow the VTOR store to find the
   table.
 
 ### Other ideas (2026-11-14)

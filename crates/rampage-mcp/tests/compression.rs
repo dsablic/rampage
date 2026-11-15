@@ -142,3 +142,55 @@ async fn probe_refuses_unknown_fields_and_decode_refuses_mismatched_codec_parame
     }
     client.cancel().await.unwrap();
 }
+
+/// A compressed Cortex-M application behind a container header: probe_compression and decode_file_range both name
+/// the next step, an `open_as_raw` selector that, with a profile and load address added, opens the decoded bytes
+/// as a Raw project whose vector table and functions come from the decoded code.
+#[tokio::test]
+async fn a_decoded_image_opens_as_a_raw_project_from_the_selector_the_decoders_return() {
+    let firmware = include_bytes!("../../../tests/fixtures/firmware/raw-cortex-m.bin");
+    let variant = Lzss {
+        window_bits: 12,
+        min_match: 3,
+        flag_order: FlagOrder::LsbFirst,
+        literal_flag: true,
+        layout: ReferenceLayout::SplitByte,
+        offset_mode: OffsetMode::RingPosition,
+        initial_write_offset: 0xfee,
+        dictionary_fill: 0,
+    };
+    let payload = encode::lzss(&variant, firmware);
+    let mut image = vec![0u8; 0x40];
+    image.extend(&payload);
+    let input = Input::new("decoded-raw", &image);
+    let client = connect().await;
+    let report = call(
+        &client,
+        "probe_compression",
+        json!({"path": input.0, "offset": "0x40", "length": payload.len(), "expected_output_size": firmware.len()}),
+    )
+    .await
+    .unwrap();
+    let best = &report["candidates"][0];
+    assert_eq!(best["decode_check"], "reproduced", "{report:#}");
+    assert!(report["next"].as_str().unwrap().contains("open_as_raw"), "{report:#}");
+    let mut arguments = best["decode_arguments"].clone();
+    arguments["path"] = json!(input.0);
+    arguments["preview_size"] = json!(0);
+    let receipt = call(&client, "decode_file_range", arguments).await.unwrap();
+    assert_eq!(receipt["open_as_raw"], best["open_as_raw"]);
+    assert_eq!(receipt["next"], report["next"]);
+
+    let mut raw = best["open_as_raw"].clone();
+    raw["profile"] = json!("cortex-m");
+    raw["base_address"] = json!("0x8000000");
+    raw["vector_table"] = json!(true);
+    let info = call(&client, "binary_info", json!({"path": input.0, "raw": raw})).await.unwrap();
+    let region = &info["raw"]["regions"][0];
+    assert_eq!(region["source"]["type"], "decoded", "{info:#}");
+    assert_eq!(region["source"]["receipt"]["output_sha256"], receipt["output_sha256"]);
+    assert_eq!(info["raw"]["vector_table"]["vectors"][1]["status"], "accepted", "{info:#}");
+    let functions = call(&client, "list_functions", json!({"path": input.0, "raw": raw})).await.unwrap();
+    assert!(functions["total"].as_u64().unwrap() >= 11, "{functions:#}");
+    client.cancel().await.unwrap();
+}

@@ -77,6 +77,12 @@ codec selection refuse before source access.
 Preview paging repeats the bounded decode rather than retaining a hidden payload cache. Compare source-range
 and output hashes across observations; matching hashes are content evidence, not authenticity or atomicity.
 
+To analyse the decoded bytes as code, the MCP result's `open_as_raw` is a Raw project selector (`offset`, `length`
+and `decode` with these parameters) and `next` says what to add: a `profile` and the `base_address` the image
+loads at. Passed as `raw` with the same `path` to `binary_info`, `list_functions`, `decompile` and the other
+Raw-capable tools, it maps the decoded output as the project's code region
+([details](mcp.md#a-compressed-image-as-the-code-region)). A decoded size above 4 MiB has no selector.
+
 ## Receipts and limits
 
 Receipts retain the selected source range and file size, SHA-256 of selected bytes, their additive byte sum,
@@ -132,7 +138,8 @@ The sweep, within 768 Mi work steps and the deadline:
 Each candidate has a `verdict`, `score`, `decode_arguments` (pass to `decode_file_range` with `path`), output
 size and SHA-256, consumed and trailing input, `stream_end`, literal and reference counts, `metrics`, named
 `checks`, `parse_equivalents`, `same_output_variants` and a short preview. `decode_check` says whether
-`decode_file_range`'s provider, with its budgets, reproduced the bytes.
+`decode_file_range`'s provider, with its budgets, reproduced the bytes; a reproduced candidate also has
+`open_as_raw`, the Raw selector for its decoded bytes, and the report a `next` hint, as `decode_file_range` gives.
 
 | Check | Passes when |
 | --- | --- |

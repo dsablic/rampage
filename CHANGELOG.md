@@ -28,6 +28,9 @@ see the [stability policy](docs/stability.md) for what the version promises.
   and seeds read them, `length` counts encoded bytes (at most 8 MiB) and the decoded size obeys the profile's cap.
   `binary_info` reports the decode receipt as the region's source. See
   [MCP](docs/mcp.md#a-compressed-image-as-the-code-region).
+- Decoders name the next step: `decode_file_range` and each reproduced `probe_compression` candidate return
+  `open_as_raw`, a `raw` selector for the decoded bytes (offset, length and `decode`), with a one-line `next`
+  saying to add a profile and load address and pass it to a Raw-capable tool.
 
 ## 1.5.0 (2026-11-15)
 

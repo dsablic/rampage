@@ -115,7 +115,9 @@ pub use benchmark::{Comparison, ReferenceAnalysis};
 pub use branch_observation::{BranchObservation, BranchSlotStatus};
 pub use build_info::{BuildInfo, BuildInfoQuery, GoBuildInfo, PclntabCheck, RustAudit};
 pub use carve::{CarvingPage, MAX_CARVE_PAGE, carve, carve_page};
-pub use compression_probe::{ProbeCompressionReport, ProbeCompressionRequest, probe_compression};
+pub use compression_probe::{
+    DecodeArguments, OPEN_AS_RAW_NEXT, ProbeCompressionReport, ProbeCompressionRequest, open_as_raw, probe_compression,
+};
 pub use correlation::RuntimeCorrelation;
 pub use data::{
     DataImport, DataInspection, DataQuery, DataSpan, DataStatus, DataTarget, DataWord, MAX_DATA_BYTES,
