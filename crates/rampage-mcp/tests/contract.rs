@@ -425,6 +425,16 @@ async fn contract_mcp_carve_results() {
     exercise(c, o, "fs_list", json!({"path": payload, "inner": ["system.img"], "limit": 2})).await;
     exercise(c, o, "fs_extract", json!({"path": payload, "inner": ["system.img"], "output_dir": scratch.0.join("fs")}))
         .await;
+    let endpoints = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../rampage-api/tests/fixtures/endpoints-x64.elf");
+    exercise(c, o, "endpoint_inventory", json!({"path": endpoints, "decode": true})).await;
+    let list = scratch.0.join("blocklist.txt");
+    exercise(
+        c,
+        o,
+        "endpoint_blocklist",
+        json!({"path": endpoints, "output": list, "format": "hosts", "include_local": true}),
+    )
+    .await;
     check_group(client, "carve", &observed, &[]).await;
 }
 

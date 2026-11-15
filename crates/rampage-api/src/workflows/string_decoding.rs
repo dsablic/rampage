@@ -301,6 +301,26 @@ struct Tracing {
     unread_sites: usize,
 }
 
+/// What the loop scan found and left out.
+struct LoopScan {
+    candidates: Vec<Candidate>,
+    scan_stopped: bool,
+    skipped_large: usize,
+    tracing: Tracing,
+    /// Why instructions could not be decoded, when they could not.
+    decoder_error: Option<String>,
+}
+
+/// Printable text a candidate decoding routine produced from a blob in emulation.
+pub(crate) struct DecodedText {
+    pub(crate) blob: u64,
+    pub(crate) text: String,
+    pub(crate) routine: u64,
+    pub(crate) routine_name: String,
+    /// The functions (start, name) whose calls pass the blob to the routine.
+    pub(crate) callers: Vec<(u64, String)>,
+}
+
 #[derive(Clone)]
 struct Blob {
     length: usize,
@@ -459,60 +479,10 @@ impl Project {
         }
         let mut report = WorkflowReport::new("string_decoding", self);
         let mut tracer = Tracer::new(self, &mut report);
-        let mut candidates = Vec::new();
-        let mut scan_stopped = false;
-        let mut skipped_large = 0;
-        let mut tracing = Tracing::default();
-        let decoder = self.binary.decoder();
-        if let Err(error) = &decoder {
+        let LoopScan { candidates, scan_stopped, skipped_large, tracing, decoder_error } = self.loop_scan();
+        if let Some(error) = decoder_error {
             report.limitation(format!("Instructions cannot be decoded ({error}); no loops were looked for."));
         }
-        if let (Ok(analysis), Ok(mut decoder)) = (self.analysis(), decoder) {
-            if self.binary.arch == Arch::Arm {
-                decoder.set_code_modes(&analysis.program.code_modes);
-            }
-            let mut scanned = 0;
-            for function in &analysis.program.functions {
-                if function.instruction_count > MAX_FUNCTION_INSTRUCTIONS {
-                    skipped_large += 1;
-                    continue;
-                }
-                if scanned >= MAX_SCANNED_INSTRUCTIONS {
-                    scan_stopped = true;
-                    break;
-                }
-                let instructions = function_instructions(self, decoder.as_mut(), function);
-                scanned += instructions.len();
-                if let Some(candidate) = self.byte_loop(decoder.as_mut(), function, &instructions) {
-                    candidates.push(candidate);
-                }
-            }
-            // XOR and rotate loops are traced first, table lookups alone last.
-            candidates.sort_by_key(|candidate| {
-                let tier = if candidate.ops.xor || candidate.ops.rotate {
-                    0
-                } else if candidate.table_only() {
-                    2
-                } else {
-                    1
-                };
-                (tier, candidate.address)
-            });
-            tracing = self.trace_call_sites(decoder.as_mut(), &mut candidates, &analysis.program.xrefs);
-            // A table lookup alone is common in ordinary code (hex formatting, case mapping, Go's runtime): such a
-            // loop is a candidate only when a call site passes it encoded-looking data.
-            let untraced = candidates.iter().filter(|candidate| candidate.table_only() && !candidate.traced).count();
-            tracing.untraced_candidates = tracing.untraced_candidates.saturating_sub(untraced);
-            candidates.retain(|candidate| !candidate.table_only() || !candidate.blobs.is_empty());
-        }
-        candidates.sort_by(|a, b| {
-            b.confidence()
-                .cmp(&a.confidence())
-                .then(b.blobs.len().cmp(&a.blobs.len()))
-                .then(b.call_sites.len().cmp(&a.call_sites.len()))
-                .then(a.address.cmp(&b.address))
-        });
-
         let (emulated, unevaluated) = if evaluate { self.emulate(&candidates) } else { (Vec::new(), 0) };
 
         let mut routines = Section::new("Candidate decoding routines", limits);
@@ -718,6 +688,92 @@ impl Project {
             );
         }
         Ok(report)
+    }
+
+    /// Finds the byte-loop candidates and traces their call sites, ranked as the report lists them.
+    fn loop_scan(&self) -> LoopScan {
+        let mut candidates = Vec::new();
+        let mut scan_stopped = false;
+        let mut skipped_large = 0;
+        let mut tracing = Tracing::default();
+        let decoder = self.binary.decoder();
+        let decoder_error = decoder.as_ref().err().map(ToString::to_string);
+        if let (Ok(analysis), Ok(mut decoder)) = (self.analysis(), decoder) {
+            if self.binary.arch == Arch::Arm {
+                decoder.set_code_modes(&analysis.program.code_modes);
+            }
+            let mut scanned = 0;
+            for function in &analysis.program.functions {
+                if function.instruction_count > MAX_FUNCTION_INSTRUCTIONS {
+                    skipped_large += 1;
+                    continue;
+                }
+                if scanned >= MAX_SCANNED_INSTRUCTIONS {
+                    scan_stopped = true;
+                    break;
+                }
+                let instructions = function_instructions(self, decoder.as_mut(), function);
+                scanned += instructions.len();
+                if let Some(candidate) = self.byte_loop(decoder.as_mut(), function, &instructions) {
+                    candidates.push(candidate);
+                }
+            }
+            // XOR and rotate loops are traced first, table lookups alone last.
+            candidates.sort_by_key(|candidate| {
+                let tier = if candidate.ops.xor || candidate.ops.rotate {
+                    0
+                } else if candidate.table_only() {
+                    2
+                } else {
+                    1
+                };
+                (tier, candidate.address)
+            });
+            tracing = self.trace_call_sites(decoder.as_mut(), &mut candidates, &analysis.program.xrefs);
+            // A table lookup alone is common in ordinary code (hex formatting, case mapping, Go's runtime): such a
+            // loop is a candidate only when a call site passes it encoded-looking data.
+            let untraced = candidates.iter().filter(|candidate| candidate.table_only() && !candidate.traced).count();
+            tracing.untraced_candidates = tracing.untraced_candidates.saturating_sub(untraced);
+            candidates.retain(|candidate| !candidate.table_only() || !candidate.blobs.is_empty());
+        }
+        candidates.sort_by(|a, b| {
+            b.confidence()
+                .cmp(&a.confidence())
+                .then(b.blobs.len().cmp(&a.blobs.len()))
+                .then(b.call_sites.len().cmp(&a.call_sites.len()))
+                .then(a.address.cmp(&b.address))
+        });
+
+        LoopScan { candidates, scan_stopped, skipped_large, tracing, decoder_error }
+    }
+
+    /// The texts the candidate decoding routines produce in emulation from the blobs passed to them (bounded as
+    /// `string_decoding` with `evaluate`), for workflows that read decoded strings.
+    pub(crate) fn decoded_texts(&self) -> Vec<DecodedText> {
+        if self.binary.is_sleigh_raw() {
+            return Vec::new();
+        }
+        let candidates = self.loop_scan().candidates;
+        let (emulated, _) = self.emulate(&candidates);
+        emulated
+            .iter()
+            .filter_map(|pair| {
+                let attempt = pair.attempts.iter().find(|attempt| attempt.text().is_some())?;
+                let candidate = &candidates[pair.candidate];
+                Some(DecodedText {
+                    blob: pair.blob,
+                    text: attempt.text()?.text.clone(),
+                    routine: candidate.address,
+                    routine_name: candidate.name.clone(),
+                    callers: candidate
+                        .call_sites
+                        .iter()
+                        .filter(|site| site.blobs.contains(&pair.blob))
+                        .filter_map(|site| site.caller.clone())
+                        .collect(),
+                })
+            })
+            .collect()
     }
 
     /// Runs candidates on their blobs, in report order, within the emulation budget. Returns the pairs run and how

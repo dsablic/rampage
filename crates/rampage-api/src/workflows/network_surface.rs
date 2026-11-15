@@ -78,7 +78,7 @@ const RUNTIME_RESOLVERS: [&str; 7] =
 const SUGGESTED_FUNCTIONS: usize = 3;
 
 /// The area of a networking API, if `name` is one.
-fn network_api(name: &str) -> Option<&'static str> {
+pub(crate) fn network_api(name: &str) -> Option<&'static str> {
     match_api(NETWORK_APIS, name)
 }
 

@@ -1,0 +1,3 @@
+# rampage endpoint blocklist (unbound format, domain level): 1 entry
+server:
+    local-zone: "vendor-cloud.example" always_nxdomain

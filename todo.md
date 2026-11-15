@@ -76,9 +76,7 @@ device:
   - Sinks: network sends and files that are later uploaded.
   - Paths between them, ranked by evidence, with the call chains.
   - Flag when capture runs without a user-facing trigger: started from boot, a timer or a network command.
-- **Telemetry endpoint inventory.** Hard-coded domains, URLs, IPs and certificate pins across every binary in a
-  firmware image, grouped by component. Export it as a DNS/firewall blocklist. Blocking at the router is the
-  least invasive fix, needs no device modification and survives updates.
+- **Telemetry endpoint inventory.** Approved and first slice done; see the privacy track below.
 - **Generic ACR/analytics SDK recognition.** Signatures for common analytics and content-recognition libraries,
   surfaced as "component X does content fingerprinting", without naming any TV vendor in the repo.
 - **Configuration and feature flags.** Find settings that switch collection on or off (a viewing-data opt-out, a
@@ -124,6 +122,14 @@ above stay under review until each is approved.
 - [ ] Compressed tar (`.tar.gz`, `.tar.xz`) and a CLI route (`rampage binary fs-list`/`fs-extract`).
 - [ ] Acceptance on a real vendor update (local only, never committed or named): from the vendor's update file to
   the binaries inside.
+- [x] **Telemetry endpoint inventory, first slice** ([docs](docs/endpoint-inventory.md)). `endpoint_inventory` and
+  `endpoint_blocklist` (group `carve`): URLs, PSL-checked hosts, IPv4/IPv6, pins and PEM/DER certificates in a binary
+  or an extracted tree, with noise rules, `local`/`package` labels, xref and networking-caller evidence, decoded
+  strings, domain and component groups, cursor paging; hosts/dnsmasq/unbound/domain/IP blocklists.
+- [ ] Endpoint follow-ups: IPv4 addresses stored as integers in code (immediates passed to `connect`/`sin_addr`);
+  `network_code` through one call level (a string passed to a helper that calls `connect`); hex SHA-256 and
+  SHA-1 pins; DEX/APK strings once Android support lands; a CLI route; merging groups across directory pages; a
+  real-firmware precision check (local only).
 
 ## Proposed tracks (2026-11-08, not started)
 

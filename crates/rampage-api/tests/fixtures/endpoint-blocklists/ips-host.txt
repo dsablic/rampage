@@ -1,0 +1,5 @@
+# rampage endpoint blocklist (ips format, host level): 4 entries
+198.51.100.20
+198.51.100.77
+2001:db8:10::25
+203.0.113.45

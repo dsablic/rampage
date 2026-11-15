@@ -371,6 +371,14 @@
       "toolchain": "zig-cc-linux-gnu",
       "built": "crates/rampage-api/tests/fixtures/build.sh"
     },
+    "../../../crates/rampage-api/tests/fixtures/endpoints-x64.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "crates/rampage-api/tests/fixtures/build.sh"
+    },
+    "../../../crates/rampage-api/tests/fixtures/endpoints-arm64.elf": {
+      "toolchain": "zig-cc-linux-gnu",
+      "built": "crates/rampage-api/tests/fixtures/build.sh"
+    },
     "../bin/hello-x64.exe": {
       "toolchain": "zig-cc-windows-gnu",
       "built": "tests/fixtures/build.sh"
@@ -497,6 +505,7 @@
     }
   },
   "excluded": {
+    "../../../crates/rampage-api/tests/fixtures/endpoint-blocklists": "a directory of golden blocklist files for endpoint_blocklist, not a binary",
     "../bin/objc-dispatch-arm64.macho": "an Objective-C message-dispatch fixture built with Apple clang; that toolchain is scored through hello-*.macho",
     "../bin/objc-dispatch-arm64-stripped.macho": "an Objective-C message-dispatch fixture built with Apple clang; that toolchain is scored through hello-*.macho",
     "../bin/objc-dispatch-x64.macho": "an Objective-C message-dispatch fixture built with Apple clang; that toolchain is scored through hello-*.macho",

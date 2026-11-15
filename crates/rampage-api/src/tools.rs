@@ -150,7 +150,8 @@ impl Group {
             Group::Carve => concat!(
                 "Scan files for embedded executables/containers, inventory ",
                 "standalone ZIP32 metadata without extraction, and list and extract firmware filesystem images ",
-                "(SquashFS, ext2/3/4, Android sparse and OTA payloads, cpio, tar)."
+                "(SquashFS, ext2/3/4, Android sparse and OTA payloads, cpio, tar), and inventory the network endpoints of a ",
+                "binary or extracted tree as a router blocklist."
             ),
             Group::Formats => {
                 "Toolchain and container metadata: Go build info, Rust dependency audit data, PE resources and load config, PyInstaller archives and WebAssembly modules; firmware integrity checks (CRC/checksum fields, recomputed after patches) and patched-image export in the original container."
@@ -447,6 +448,52 @@ struct QueryDebuggerArgs {
     request: crate::DebuggerRequest,
     /// End-to-end timeout in milliseconds (1..=30000, default 3000).
     #[schemars(range(min = 1, max = 30000))]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EndpointInventoryArgs {
+    /// An executable or other file, or a directory such as fs_extract's output_dir.
+    path: std::path::PathBuf,
+    /// next_cursor of the previous page of a directory scan.
+    cursor: Option<String>,
+    /// Files scanned per call (default 200, at most 5000).
+    max_files: Option<usize>,
+    /// Time budget per call in ms (default 20000, at most 120000).
+    timeout_ms: Option<u64>,
+    /// Find referencing functions (default true for a file, false for a directory).
+    xrefs: Option<bool>,
+    /// Emulate candidate string decoders and read their output (default false).
+    decode: Option<bool>,
+    /// Only rows of these kinds: url, host, ip, local, pin, certificate, package.
+    kinds: Option<Vec<String>>,
+    /// Endpoint rows returned (default 100, at most 500).
+    limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EndpointBlocklistArgs {
+    /// File or directory to inventory; or give entries.
+    path: Option<std::path::PathBuf>,
+    /// Hosts, URLs or IP addresses to block instead of scanning.
+    entries: Option<Vec<String>>,
+    /// Absolute path of the file to write (a regular file or new; never a symlink).
+    output: std::path::PathBuf,
+    /// hosts, dnsmasq, dnsmasq_server, unbound, domains or ips.
+    format: String,
+    /// domain (default: registrable domains) or host.
+    level: Option<String>,
+    /// Names (with everything under them), IPs or CIDR blocks to keep reachable.
+    allow: Option<Vec<String>>,
+    /// When given, only entries matching these are written.
+    deny: Option<Vec<String>>,
+    /// Include local findings: private, documentation and single-label names (default false).
+    include_local: Option<bool>,
+    /// As endpoint_inventory's decode.
+    decode: Option<bool>,
+    max_files: Option<usize>,
     timeout_ms: Option<u64>,
 }
 
@@ -759,6 +806,54 @@ pub fn file_tools() -> Vec<FileTool> {
                     max_files: args.max_files,
                     max_file_bytes: args.max_file_bytes.map(|bytes| bytes.0),
                     max_ratio: args.max_ratio,
+                })
+            },
+        },
+        FileTool {
+            effect: Effect::None,
+            group: Group::Carve,
+            name: "endpoint_inventory",
+            description: "Network endpoints in a binary or a firmware tree (path: file or directory, e.g. fs_extract's \
+                          output_dir): URLs, hosts, IPs, cert pins, certificates. Noise filtered; local and package \
+                          names labelled; grouped by domain and file, with string addresses, referencing functions \
+                          and networking callers. Directories page by cursor.",
+            input_schema: schema::<EndpointInventoryArgs>(),
+            handler: |_, input| {
+                let args: EndpointInventoryArgs = arguments(input)?;
+                crate::endpoint_inventory(&crate::InventoryQuery {
+                    path: args.path,
+                    cursor: args.cursor,
+                    max_files: args.max_files,
+                    timeout_ms: args.timeout_ms,
+                    xrefs: args.xrefs,
+                    decode: args.decode.unwrap_or(false),
+                    kinds: args.kinds,
+                    limit: args.limit,
+                })
+            },
+        },
+        FileTool {
+            effect: Effect::FileWrite,
+            group: Group::Carve,
+            name: "endpoint_blocklist",
+            description: "Write the hosts/IPs endpoint_inventory finds under path, or given entries, as a router \
+                          blocklist (hosts, dnsmasq, unbound, domains, ips) to an absolute output file. Domain or \
+                          host level, allow/deny filters; local names only with include_local.",
+            input_schema: schema::<EndpointBlocklistArgs>(),
+            handler: |_, input| {
+                let args: EndpointBlocklistArgs = arguments(input)?;
+                crate::endpoint_blocklist(&crate::BlocklistQuery {
+                    path: args.path,
+                    entries: args.entries,
+                    output: args.output,
+                    format: args.format,
+                    level: args.level,
+                    allow: args.allow.unwrap_or_default(),
+                    deny: args.deny.unwrap_or_default(),
+                    include_local: args.include_local.unwrap_or(false),
+                    decode: args.decode.unwrap_or(false),
+                    max_files: args.max_files,
+                    timeout_ms: args.timeout_ms,
                 })
             },
         },

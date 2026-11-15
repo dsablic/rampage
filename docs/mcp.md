@@ -119,7 +119,7 @@ A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling
   `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `entry_diagnostics`, `inspect_jump_table`.
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
-- `carve`: `carve`, `archive_inventory`, `fs_list`, `fs_extract`.
+- `carve`: `carve`, `archive_inventory`, `fs_list`, `fs_extract`, `endpoint_inventory`, `endpoint_blocklist`.
 - `formats`: `build_info`, `pe_resources`, `pe_load_config`, `exception_handlers`, `pyinstaller_archive`,
   `wasm_module`, `integrity_checks`, `export_image`.
 - `debug`, only on a server started with a debug endpoint: `debug_connect`, `debug_bind`, `debug_status`,
@@ -142,6 +142,7 @@ improve group alone; see [the flywheel](#flywheel-improve).
 Workflow reports name the `group` of suggested next tools. The [desktop assistant](desktop-ui.md) uses the same
 tools without group gating, plus the interactive `show_address`, which is not an MCP tool because the server has
 no listing to navigate. It does not offer the file tools (`carve`, `archive_inventory`, `fs_list`, `fs_extract`,
+`endpoint_inventory`, `endpoint_blocklist`,
 `list_packs`,
 `query_debugger`, `inspect_data`, `decode_file_range`, `probe_compression`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`,
 `pyinstaller_archive`, `wasm_module`) or the `debug` tools.
@@ -419,6 +420,10 @@ JSON pages stay within 60,000 bytes and errors within 4,096 bytes. See [archive 
 OTA payloads, cpio, tar) in any file, at an `image_offset` or nested through `inner`; `fs_extract` writes into a new
 or empty `output_dir` under traversal, symlink, special-file and size limits and returns the executables it wrote.
 See [firmware filesystem images](firmware-images.md).
+`endpoint_inventory` lists the URLs, hosts, IPs, pins and certificates of a file or a directory tree (paged by
+`cursor` under `max_files` and `timeout_ms`), classified and grouped by domain and component; `endpoint_blocklist`
+writes chosen hosts to an absolute `output` file as a hosts, dnsmasq, unbound, domain or IP list. See
+[endpoint inventory and blocklists](endpoint-inventory.md).
 `build_info` returns `{go, rust}`: Go build info (toolchain version, main package and module, dependency modules with
 `=>` replacements, build settings, and a cross-check of the version against the pclntab layout) and cargo-auditable
 `.dep-v0` packages. Each is `null` when absent, or has `status` `present` or `unreadable` with a `reason`. `offset`/

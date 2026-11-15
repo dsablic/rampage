@@ -1656,6 +1656,92 @@
         }
       }
     },
+    "endpoint_blocklist": {
+      "group": "carve",
+      "arguments": {
+        "allow": {
+          "type": "array|null",
+          "required": false
+        },
+        "decode": {
+          "type": "boolean|null",
+          "required": false
+        },
+        "deny": {
+          "type": "array|null",
+          "required": false
+        },
+        "entries": {
+          "type": "array|null",
+          "required": false
+        },
+        "format": {
+          "type": "string",
+          "required": true
+        },
+        "include_local": {
+          "type": "boolean|null",
+          "required": false
+        },
+        "level": {
+          "type": "null|string",
+          "required": false
+        },
+        "max_files": {
+          "type": "integer|null",
+          "required": false
+        },
+        "output": {
+          "type": "string",
+          "required": true
+        },
+        "path": {
+          "type": "null|string",
+          "required": false
+        },
+        "timeout_ms": {
+          "type": "integer|null",
+          "required": false
+        }
+      }
+    },
+    "endpoint_inventory": {
+      "group": "carve",
+      "arguments": {
+        "cursor": {
+          "type": "null|string",
+          "required": false
+        },
+        "decode": {
+          "type": "boolean|null",
+          "required": false
+        },
+        "kinds": {
+          "type": "array|null",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "max_files": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "timeout_ms": {
+          "type": "integer|null",
+          "required": false
+        },
+        "xrefs": {
+          "type": "boolean|null",
+          "required": false
+        }
+      }
+    },
     "entry_diagnostics": {
       "group": "diagnostics",
       "arguments": {

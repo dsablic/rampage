@@ -1,0 +1,397 @@
+//! `endpoint_blocklist`: the hosts and addresses an inventory found (or the caller lists) written as a hosts file,
+//! dnsmasq or unbound configuration, a plain domain list (Pi-hole, AdGuard Home) or an IP list (firewall rules).
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
+
+use serde_json::{Value, json};
+
+use super::{Form, InventoryQuery, Kind, extract, registrable, scan};
+
+/// Explicit entries and allow/deny patterns a call may give, and the lines quoted back in the result.
+const MAX_ENTRIES: usize = 10_000;
+const MAX_PATTERNS: usize = 1000;
+const PREVIEW_LINES: usize = 20;
+/// Words of the `local` reasons a scanned finding is never written for, even with `include_local`: loopback,
+/// unspecified, private, link-local, multicast and other on-network addresses.
+const NEVER_BLOCKED: [&str; 9] = [
+    "loopback",
+    "unspecified",
+    "private",
+    "link-local",
+    "unique local",
+    "shared address",
+    "multicast",
+    "broadcast",
+    "IETF",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Format {
+    Hosts,
+    Dnsmasq,
+    DnsmasqServer,
+    Unbound,
+    Domains,
+    Ips,
+}
+
+impl Format {
+    const ALL: [(&'static str, Format); 6] = [
+        ("hosts", Format::Hosts),
+        ("dnsmasq", Format::Dnsmasq),
+        ("dnsmasq_server", Format::DnsmasqServer),
+        ("unbound", Format::Unbound),
+        ("domains", Format::Domains),
+        ("ips", Format::Ips),
+    ];
+
+    fn parse(name: &str) -> Result<Self, String> {
+        Self::ALL.iter().find(|(known, _)| *known == name).map(|(_, format)| *format).ok_or_else(|| {
+            let names: Vec<&str> = Self::ALL.iter().map(|(name, _)| *name).collect();
+            format!("unknown format `{name}` (formats: {})", names.join(", "))
+        })
+    }
+
+    fn name(self) -> &'static str {
+        Self::ALL.iter().find(|(_, format)| *format == self).map_or("", |(name, _)| name)
+    }
+
+    /// The configuration lines blocking `entries` (names, or addresses for `Ips`).
+    fn lines(self, entries: &BTreeSet<String>) -> Vec<String> {
+        let mut lines = Vec::new();
+        if self == Format::Unbound {
+            lines.push("server:".to_owned());
+        }
+        lines.extend(entries.iter().map(|entry| match self {
+            Format::Hosts => format!("0.0.0.0 {entry}"),
+            Format::Dnsmasq => format!("address=/{entry}/0.0.0.0"),
+            Format::DnsmasqServer => format!("server=/{entry}/"),
+            Format::Unbound => format!("    local-zone: \"{entry}\" always_nxdomain"),
+            Format::Domains | Format::Ips => entry.clone(),
+        }));
+        lines
+    }
+}
+
+pub struct BlocklistQuery {
+    /// A file or directory to inventory, or `None` with `entries`.
+    pub path: Option<PathBuf>,
+    pub entries: Option<Vec<String>>,
+    pub output: PathBuf,
+    pub format: String,
+    /// `domain` (default) or `host`.
+    pub level: Option<String>,
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
+    pub include_local: bool,
+    pub decode: bool,
+    pub max_files: Option<usize>,
+    pub timeout_ms: Option<u64>,
+}
+
+/// An allow or deny pattern: a name and every name under it, or an address or CIDR block.
+enum Pattern {
+    Name(String),
+    Network(IpAddr, u8),
+}
+
+impl Pattern {
+    fn parse(text: &str) -> Result<Self, String> {
+        let text = text.trim().trim_start_matches("*.").trim_start_matches('.').trim_end_matches('.');
+        if let Some((address, bits)) = text.split_once('/') {
+            let address: IpAddr = address.parse().map_err(|_| format!("`{text}` is not a CIDR block"))?;
+            let max = if address.is_ipv4() { 32 } else { 128 };
+            let bits = bits.parse::<u8>().ok().filter(|bits| *bits <= max).ok_or(format!("bad prefix in `{text}`"))?;
+            return Ok(Pattern::Network(address, bits));
+        }
+        if let Ok(address) = text.parse::<IpAddr>() {
+            let bits = if address.is_ipv4() { 32 } else { 128 };
+            return Ok(Pattern::Network(address, bits));
+        }
+        if text.is_empty() || text.contains(char::is_whitespace) {
+            return Err(format!("`{text}` is not a host, domain, address or CIDR block"));
+        }
+        Ok(Pattern::Name(text.to_ascii_lowercase()))
+    }
+
+    fn matches(&self, entry: &str) -> bool {
+        match self {
+            Pattern::Name(name) => {
+                entry == name || entry.strip_suffix(name.as_str()).is_some_and(|rest| rest.ends_with('.'))
+            }
+            Pattern::Network(network, bits) => {
+                entry.parse::<IpAddr>().is_ok_and(|address| in_network(address, *network, *bits))
+            }
+        }
+    }
+
+    /// Whether the pattern names something strictly under `domain`.
+    fn under(&self, domain: &str) -> bool {
+        matches!(self, Pattern::Name(name) if name.strip_suffix(domain).is_some_and(|rest| rest.ends_with('.')))
+    }
+}
+
+fn in_network(address: IpAddr, network: IpAddr, bits: u8) -> bool {
+    match (address, network) {
+        (IpAddr::V4(address), IpAddr::V4(network)) => {
+            let mask = u32::MAX.checked_shl(32 - u32::from(bits)).unwrap_or(0);
+            u32::from(address) & mask == u32::from(network) & mask
+        }
+        (IpAddr::V6(address), IpAddr::V6(network)) => {
+            let mask = u128::MAX.checked_shl(128 - u32::from(bits)).unwrap_or(0);
+            u128::from(address) & mask == u128::from(network) & mask
+        }
+        _ => false,
+    }
+}
+
+fn patterns(texts: &[String], what: &str) -> Result<Vec<Pattern>, String> {
+    if texts.len() > MAX_PATTERNS {
+        return Err(format!("{what} takes at most {MAX_PATTERNS} patterns"));
+    }
+    texts.iter().map(|text| Pattern::parse(text)).collect()
+}
+
+/// The host or address an explicit entry names: a URL's host, an address, or a name.
+fn entry_target(text: &str) -> Result<(String, bool), String> {
+    let trimmed = text.trim();
+    let bare = trimmed.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(address) = bare.parse::<IpAddr>() {
+        return Ok((address.to_string(), true));
+    }
+    let found = extract(trimmed).found;
+    let target = found.iter().find_map(|candidate| {
+        let host = candidate.host.clone()?;
+        (candidate.form.is_some()).then_some((host, candidate.form == Some(Form::Ip)))
+    });
+    if let Some(target) = target {
+        return Ok(target);
+    }
+    let name = trimmed.trim_end_matches('.').to_ascii_lowercase();
+    let valid = !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        });
+    if valid { Ok((name, false)) } else { Err(format!("`{text}` is not a host, URL or IP address")) }
+}
+
+/// Checks `output`: absolute, not a symlink, a regular file if it exists, in an existing directory.
+fn check_output(output: &Path) -> Result<(), String> {
+    if !output.is_absolute() {
+        return Err("output must be an absolute path".to_owned());
+    }
+    match std::fs::symlink_metadata(output) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err("output is a symlink; name a regular file".to_owned());
+        }
+        Ok(metadata) if !metadata.is_file() => return Err("output exists and is not a regular file".to_owned()),
+        _ => {}
+    }
+    let parent = output.parent().filter(|parent| !parent.as_os_str().is_empty()).ok_or("output has no directory")?;
+    if !parent.is_dir() {
+        return Err(format!("output's directory {} does not exist", parent.display()));
+    }
+    if output.file_name().is_none() {
+        return Err("output must name a file".to_owned());
+    }
+    Ok(())
+}
+
+/// Writes `text` to a new temporary file beside `output` and renames it over `output`, so a symlink planted at
+/// `output` meanwhile is replaced, never followed.
+fn write_atomically(output: &Path, text: &str) -> Result<(), String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = output.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temporary = output.with_file_name(format!(".{name}.rampage-{}-{serial}.tmp", std::process::id()));
+    let written = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, output)
+    })();
+    written.map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        format!("write {}: {error}", output.display())
+    })
+}
+
+/// Builds the blocklist `query` asks for and writes it to `query.output`.
+pub fn endpoint_blocklist(query: &BlocklistQuery) -> Result<Value, String> {
+    let format = Format::parse(&query.format)?;
+    let domain_level = match query.level.as_deref().unwrap_or("domain") {
+        "domain" => true,
+        "host" => false,
+        other => return Err(format!("unknown level `{other}` (levels: domain, host)")),
+    };
+    let allow = patterns(&query.allow, "allow")?;
+    let deny = patterns(&query.deny, "deny")?;
+    check_output(&query.output)?;
+
+    let mut left_out: BTreeMap<&str, usize> = BTreeMap::new();
+    // Each target: (host or address, whether it is an address).
+    let mut targets: BTreeSet<(String, bool)> = BTreeSet::new();
+    match (&query.path, &query.entries) {
+        (Some(path), None) => {
+            let inventory = scan(&InventoryQuery {
+                path: path.clone(),
+                cursor: None,
+                max_files: query.max_files,
+                timeout_ms: query.timeout_ms,
+                xrefs: Some(false),
+                decode: query.decode,
+                kinds: None,
+                limit: None,
+            })?;
+            if let (Some(cursor), Some(stopped)) = (&inventory.next_cursor, inventory.stopped) {
+                return Err(format!(
+                    "the scan stopped at {cursor} ({stopped}) before covering the tree; nothing was written. Raise \
+                     max_files or timeout_ms, or pass the hosts as entries"
+                ));
+            }
+            for row in inventory.rows.values() {
+                // Blocking these at a router means nothing or cuts devices off their own network.
+                if row.reason.is_some_and(|reason| NEVER_BLOCKED.iter().any(|word| reason.contains(word))) {
+                    *left_out.entry("never_blocked").or_default() += 1;
+                    continue;
+                }
+                let wanted = matches!(row.kind, Kind::Url | Kind::Host | Kind::Ip)
+                    || (row.kind == Kind::Local && query.include_local && row.form.is_some());
+                if !wanted {
+                    if row.kind == Kind::Local {
+                        *left_out.entry("local").or_default() += 1;
+                    }
+                    continue;
+                }
+                match &row.host {
+                    Some(host) => {
+                        // A URL's host can be an address too.
+                        targets.insert((host.clone(), host.parse::<IpAddr>().is_ok()));
+                    }
+                    None => *left_out.entry("url_without_literal_host").or_default() += 1,
+                }
+            }
+        }
+        (None, Some(entries)) => {
+            if entries.len() > MAX_ENTRIES {
+                return Err(format!("entries takes at most {MAX_ENTRIES} items"));
+            }
+            for entry in entries {
+                targets.insert(entry_target(entry)?);
+            }
+        }
+        _ => return Err("give exactly one of path and entries".to_owned()),
+    }
+
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    let mut addresses: BTreeSet<String> = BTreeSet::new();
+    for (target, address) in targets {
+        if allow.iter().any(|pattern| pattern.matches(&target)) {
+            *left_out.entry("allowed").or_default() += 1;
+        } else if !deny.is_empty() && !deny.iter().any(|pattern| pattern.matches(&target)) {
+            *left_out.entry("not_denied").or_default() += 1;
+        } else if address {
+            addresses.insert(target);
+        } else {
+            names.insert(target);
+        }
+    }
+
+    let mut kept_at_host_level = BTreeSet::new();
+    if domain_level {
+        let mut by_domain: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for name in &names {
+            by_domain.entry(registrable(name)).or_default().push(name.clone());
+        }
+        let mut reduced = BTreeSet::new();
+        for (domain, hosts) in by_domain {
+            // An allowed name under the domain keeps the domain's hosts listed one by one, so it stays reachable.
+            if allow.iter().any(|pattern| pattern.under(&domain)) {
+                kept_at_host_level.insert(domain);
+                reduced.extend(hosts);
+            } else {
+                // A hosts file cannot block a whole domain, so it lists the domain and every host seen under it.
+                if format == Format::Hosts {
+                    reduced.extend(hosts);
+                }
+                reduced.insert(domain);
+            }
+        }
+        names = reduced;
+    }
+    let entries = if format == Format::Ips {
+        if !names.is_empty() {
+            left_out.insert("names_in_ip_format", names.len());
+        }
+        addresses
+    } else {
+        if !addresses.is_empty() {
+            left_out.insert("addresses_in_dns_format", addresses.len());
+        }
+        names
+    };
+    if entries.is_empty() {
+        let reasons: Vec<String> = left_out.iter().map(|(reason, count)| format!("{count} {reason}")).collect();
+        return Err(format!(
+            "nothing to write: no entries remain after filtering (left out: {}); nothing was written. Local names and \
+             addresses need include_local; IP findings need format ips",
+            if reasons.is_empty() { "none".to_owned() } else { reasons.join(", ") }
+        ));
+    }
+    let level = if domain_level { "domain" } else { "host" };
+    let count = if entries.len() == 1 { "1 entry".to_owned() } else { format!("{} entries", entries.len()) };
+    let mut lines = vec![format!("# rampage endpoint blocklist ({} format, {level} level): {count}", format.name())];
+    lines.extend(format.lines(&entries));
+    let mut text = lines.join("\n");
+    text.push('\n');
+    write_atomically(&query.output, &text)?;
+    Ok(json!({
+        "output": query.output,
+        "format": format.name(),
+        "level": level,
+        "entries": entries.len(),
+        "bytes": text.len(),
+        "preview": lines.iter().take(PREVIEW_LINES).collect::<Vec<_>>(),
+        "left_out": left_out,
+        "kept_at_host_level": kept_at_host_level,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn patterns_match_names_under_them_and_cidr_blocks() {
+        let name = Pattern::parse("*.vendor-cloud.example").unwrap();
+        assert!(name.matches("vendor-cloud.example") && name.matches("a.vendor-cloud.example"));
+        assert!(!name.matches("evilvendor-cloud.example"));
+        assert!(name.under("example") && !name.under("vendor-cloud.example"));
+        let block = Pattern::parse("198.51.100.0/24").unwrap();
+        assert!(block.matches("198.51.100.7") && !block.matches("198.51.101.7") && !block.matches("2001:db8::1"));
+        let six = Pattern::parse("2001:db8::/32").unwrap();
+        assert!(six.matches("2001:db8:10::25"));
+        assert!(Pattern::parse("10.0.0.0/33").is_err());
+        assert!(Pattern::parse("not a name").is_err());
+    }
+
+    #[test]
+    fn explicit_entries_name_hosts_and_addresses() {
+        assert_eq!(
+            entry_target("https://Telemetry.Vendor-Cloud.example/x").unwrap(),
+            ("telemetry.vendor-cloud.example".to_owned(), false)
+        );
+        assert_eq!(entry_target("[2001:db8::1]").unwrap(), ("2001:db8::1".to_owned(), true));
+        assert_eq!(
+            entry_target("updates.vendor-cloud.example.").unwrap(),
+            ("updates.vendor-cloud.example".to_owned(), false)
+        );
+        assert!(entry_target("not a host").is_err());
+    }
+}

@@ -23,6 +23,7 @@ use serde_json::Value;
 use crate::{Project, XrefQuery};
 
 pub use indicators::{Indicator, IndicatorKind, classify};
+pub(crate) use network_surface::network_api;
 pub use registry::{WORKFLOWS, Workflow, WorkflowOptions, workflow};
 
 /// Findings per section unless the caller asks for another count.

@@ -89,6 +89,15 @@ VENDORED = [
         "signature records the script it came from and that script's authors.",
         ["crates/rampage-detect/data/LICENSE.detect-it-easy"],
     ),
+    (
+        "Public Suffix List",
+        "MPL-2.0",
+        "https://publicsuffix.org/list/public_suffix_list.dat (https://github.com/publicsuffix/list)",
+        "The list's rules are compiled into the binaries by the psl crate (part 2), unmodified; endpoint_inventory\n"
+        "and endpoint_blocklist use them to validate host names and find registrable domains. The list is subject to\n"
+        "the Mozilla Public License, v. 2.0; its Source Code Form is available at the address above.",
+        ["crates/rampage-api/resources/LICENSE.public-suffix-list"],
+    ),
 ]
 COPYLEFT =re.compile(r"\b(A?GPL|LGPL|MPL|EPL|CDDL|EUPL|OSL|CECILL)", re.IGNORECASE)
 # The pristine Apache-2.0 text (template appendix, no project copyright), used when a package ships no file.

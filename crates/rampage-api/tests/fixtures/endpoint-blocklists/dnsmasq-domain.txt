@@ -1,0 +1,2 @@
+# rampage endpoint blocklist (dnsmasq format, domain level): 1 entry
+address=/vendor-cloud.example/0.0.0.0

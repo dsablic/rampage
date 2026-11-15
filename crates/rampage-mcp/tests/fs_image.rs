@@ -166,3 +166,52 @@ async fn opening_a_filesystem_image_as_a_binary_points_at_fs_list() {
     }
     client.cancel().await.unwrap();
 }
+
+/// The owner's flow over MCP: extract a filesystem image, inventory the endpoints of the tree, write a blocklist.
+#[tokio::test]
+async fn endpoints_of_an_extracted_tree_become_a_blocklist() {
+    let client = connect(RampageServer::default()).await;
+    let refused = call(&client, "endpoint_inventory", json!({ "path": fsimage("squashfs-xz.img") })).await;
+    assert!(text(&refused).contains("`carve` group"), "{}", text(&refused));
+    json_of(&call(&client, "enable_tools", json!({ "groups": ["carve"] })).await);
+    let tools = client.list_all_tools().await.unwrap();
+    let blocklist = tools.iter().find(|tool| tool.name == "endpoint_blocklist").unwrap();
+    let annotations = blocklist.annotations.as_ref().unwrap();
+    assert_eq!((annotations.read_only_hint, annotations.destructive_hint), (Some(false), Some(true)));
+    assert_eq!(annotations.idempotent_hint, Some(true));
+    let inventory = tools.iter().find(|tool| tool.name == "endpoint_inventory").unwrap();
+    assert!(inventory.annotations.is_none());
+
+    let output = Output::new();
+    let root = output.dir("rootfs");
+    json_of(&call(&client, "fs_extract", json!({ "path": fsimage("squashfs-xz.img"), "output_dir": root })).await);
+    let found = json_of(&call(&client, "endpoint_inventory", json!({ "path": root })).await);
+    assert_eq!(found["scanned"]["executables"], 1, "{found}");
+    let group = &found["domains"][0];
+    assert_eq!(group["domain"], "example.invalid", "{found}");
+    assert_eq!(group["components"], json!(["etc/device.conf"]));
+
+    let list = output.dir("blocklist.conf");
+    let written = json_of(
+        &call(
+            &client,
+            "endpoint_blocklist",
+            json!({ "path": root, "output": list, "format": "dnsmasq", "include_local": true }),
+        )
+        .await,
+    );
+    assert_eq!(written["entries"], 1, "{written}");
+    assert_eq!(
+        std::fs::read_to_string(&list).unwrap(),
+        "# rampage endpoint blocklist (dnsmasq format, domain level): 1 entry\naddress=/example.invalid/0.0.0.0\n"
+    );
+    let relative = call(
+        &client,
+        "endpoint_blocklist",
+        json!({ "entries": ["a.example.com"], "output": "x.conf", "format": "hosts" }),
+    )
+    .await;
+    assert_eq!(relative.is_error, Some(true));
+    assert!(text(&relative).contains("absolute"), "{}", text(&relative));
+    client.cancel().await.unwrap();
+}

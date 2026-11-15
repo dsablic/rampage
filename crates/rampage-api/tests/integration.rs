@@ -46,6 +46,7 @@ mod detect;
 mod diagnostics;
 mod dotnet;
 mod embedded;
+mod endpoints;
 mod ergonomics;
 mod findings;
 mod firmware_integrity;

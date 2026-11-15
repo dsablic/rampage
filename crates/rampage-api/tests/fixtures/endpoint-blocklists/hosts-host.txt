@@ -1,0 +1,7 @@
+# rampage endpoint blocklist (hosts format, host level): 6 entries
+0.0.0.0 api.vendor-cloud.example
+0.0.0.0 push.vendor-cloud.example
+0.0.0.0 telemetry.vendor-cloud.example
+0.0.0.0 time.vendor-cloud.example
+0.0.0.0 updates.vendor-cloud.example
+0.0.0.0 upload.vendor-cloud.example

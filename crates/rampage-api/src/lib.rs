@@ -31,6 +31,7 @@ pub mod derived_cache;
 mod detect;
 mod diagnostics;
 mod dotnet;
+pub mod endpoints;
 pub mod evaluate;
 mod fid_signatures;
 pub mod file_layout;
@@ -162,6 +163,7 @@ pub use decompile::{
 };
 pub use detect::ToolDetections;
 pub use dotnet::{DotNetCounts, DotNetIl, DotNetIlQuery, DotNetList, DotNetQuery, DotNetSummary, parse_il_offset};
+pub use endpoints::{BlocklistQuery, InventoryQuery, endpoint_blocklist, endpoint_inventory};
 pub use fid_signatures::{
     FidHostAdapter, FidReader, FidSignatureReport, FidSignatureRow, FidSignatureStatus, MAX_FID_QUERY_ROWS,
     MAX_FID_REPORT_BYTES,

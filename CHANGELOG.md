@@ -6,6 +6,22 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- Endpoint inventory and blocklists: the new `endpoint_inventory` and `endpoint_blocklist` file tools (group
+  `carve`). `endpoint_inventory` lists the network endpoints of one binary or of a whole extracted firmware tree
+  (executables plus scripts and `.conf`/`.json`/`.xml`/`.prop`/`.ini`-style configuration): URLs of every common
+  scheme (http(s), ws(s), mqtt(s), coap(s), ftp, rtsp...), host names validated against the Public Suffix List,
+  IPv4 and IPv6 literals, `sha256/` certificate pins, and embedded PEM or DER certificates with their names, expiry
+  and SPKI pin (a pin is linked to the certificate it pins). Version numbers, file and library names, XML namespace
+  and schema URIs, licence URLs, netmasks and dotted identifiers are counted as noise, reversed-DNS names are
+  `package`, and private, loopback, link-local, documentation and reserved names and ranges are labelled `local`
+  with the reason. Each finding carries its string address and encoding (or text line), whether it was decoded in
+  emulation (`decode`, reusing `string_decoding`), the functions referencing it and the networking APIs they call
+  (`signal: network_code`). Findings group by registrable domain and by file; a directory scan pages by `cursor`
+  under `max_files` and `timeout_ms`. `endpoint_blocklist` writes the chosen hosts or domains as a hosts file,
+  dnsmasq (`address=` or `server=`), unbound, a plain domain list (Pi-hole, AdGuard Home) or an IP list, at domain or
+  host level with allow/deny filters, to an absolute output path (never through a symlink). The Public Suffix List
+  (MPL-2.0 data, compiled into the `psl` crate) is now listed in THIRD-PARTY-NOTICES. See
+  [endpoint inventory and blocklists](docs/endpoint-inventory.md).
 - Firmware filesystem images: the new `fs_list` and `fs_extract` file tools (group `carve`) list and extract
   SquashFS 4.0 (gzip, xz, lzma, lzo, lz4, zstd), ext2/3/4 (extents included), Android sparse images (unsparsed on
   the fly, the filesystem inside opened directly), full Android OTA `payload.bin` updates (REPLACE, REPLACE_BZ,

@@ -91,6 +91,12 @@ Every image is treated as hostile:
 sparse, OTA payload, cpio or tar image and names `fs_list` and `fs_extract`, instead of the headerless-image
 guidance.
 
+## Next: the endpoints inside
+
+`endpoint_inventory` with `path` set to an extraction's `output_dir` lists the hosts, URLs, IPs and certificates the
+tree's programs and configuration name, grouped by domain, and `endpoint_blocklist` turns them into a router
+blocklist. See [endpoint inventory and blocklists](endpoint-inventory.md).
+
 ## Not supported yet
 
 UBI and UBIFS; vendor SquashFS variants and SquashFS 3.x; delta OTA payloads (by design: they need the previous

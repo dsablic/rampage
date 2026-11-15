@@ -1,0 +1,2 @@
+# rampage endpoint blocklist (dnsmasq_server format, domain level): 1 entry
+server=/vendor-cloud.example/

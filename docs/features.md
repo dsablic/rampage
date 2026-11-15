@@ -377,6 +377,16 @@ offset. Extraction treats every image as hostile: no traversal, symlinks contain
 nodes or setuid bits, and caps on size, file count, compression ratio and nesting. See
 [firmware filesystem images](firmware-images.md).
 
+## Endpoint inventory
+
+`endpoint_inventory` (MCP `carve` group) lists the network endpoints a binary or an extracted firmware tree names:
+URLs, host names checked against the Public Suffix List, IPv4 and IPv6 literals, certificate pins and embedded PEM or
+DER certificates. Look-alikes (version numbers, file names, XML namespaces, netmasks, package names) are counted as
+noise, and private, documentation and reserved names are labelled `local`. Findings are grouped by registrable
+domain and by file, with string addresses, referencing functions and the networking APIs they call; directory scans
+page under file and time budgets. `endpoint_blocklist` writes the chosen hosts as a hosts file, dnsmasq or unbound
+configuration, a domain list or an IP list. See [endpoint inventory and blocklists](endpoint-inventory.md).
+
 ## File formats
 
 These read embedded metadata and containers without executing, extracting or decompiling anything. The

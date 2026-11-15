@@ -1036,6 +1036,15 @@ impl ServerHandler for RampageServer {
             let schema = tool.input_schema.as_object().cloned().unwrap_or_default();
             let listed = rmcp::model::Tool::new(tool.name, tool.description, schema);
             match tool.effect {
+                // endpoint_blocklist replaces the regular file it names (never through a symlink) with the same
+                // content for the same arguments.
+                tools::Effect::FileWrite if tool.name == "endpoint_blocklist" => listed.annotate(
+                    rmcp::model::ToolAnnotations::new()
+                        .read_only(false)
+                        .destructive(true)
+                        .idempotent(true)
+                        .open_world(false),
+                ),
                 // New files under a directory the caller names, never over existing ones.
                 tools::Effect::FileWrite => listed.annotate(
                     rmcp::model::ToolAnnotations::new()

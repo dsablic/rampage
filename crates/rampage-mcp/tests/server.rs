@@ -100,6 +100,8 @@ async fn lists_all_tools_with_instructions() {
         "dotnet_metadata",
         "edit_variable",
         "enable_tools",
+        "endpoint_blocklist",
+        "endpoint_inventory",
         "entry_diagnostics",
         "evaluate_function",
         "exception_handlers",
