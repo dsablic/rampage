@@ -342,3 +342,82 @@ fn cortex_m_elf_decompilation_does_not_depend_on_history() {
         assert_eq!(decompile(&after_all, function), fresh[&function], "{function:#x} after all");
     }
 }
+
+/// An address discovery placed in no function (here depth_probe, when only chain_head seeds discovery) is
+/// registered for its own decompilation only: decompiling it twice, with a registered function that reaches the
+/// same callees in between, gives the same C both times and the same as on a fresh engine, and the registered
+/// function reads the same before and after it.
+#[test]
+fn an_address_outside_every_function_decompiles_the_same_each_time() {
+    let open = || {
+        let options = RawCodeOptions {
+            profile: RawProfile::CortexM,
+            base: 0x0800_0000,
+            entry: None,
+            seeds: vec![truth("chain_head")],
+            vector_table: None,
+            pointer_tables: false,
+        };
+        Project::new(Binary::from_raw_code(IMAGE.to_vec(), options).unwrap())
+    };
+    let probe = truth("depth_probe");
+    let query = FunctionsQuery { limit: Some(100_000), ..Default::default() };
+    let functions = open().functions(&query).unwrap().items;
+    assert!(functions.iter().all(|row| row.address != probe), "depth_probe was discovered");
+    assert!(functions.iter().any(|row| row.address == truth("chain53")), "chain53 was not discovered");
+    let code = |project: &Project, address: u64| project.decompile(address).unwrap().code;
+    let fresh_probe = code(&open(), probe);
+    let fresh_head = code(&open(), truth("chain_head"));
+    let project = open();
+    assert_eq!(code(&project, probe), fresh_probe);
+    assert_eq!(code(&project, truth("chain_head")), fresh_head);
+    assert_eq!(code(&project, probe), fresh_probe);
+    assert_eq!(code(&project, truth("chain_head")), fresh_head);
+}
+
+/// A function with an analyst signature whose return comes from its last call decompiles that callee first as a
+/// return-type context, inside its own decompilation; it reads the same on a fresh engine, after its callee and
+/// callers, and after itself.
+#[test]
+fn cortex_m_return_contexts_do_not_depend_on_history() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/embedded-libs-m0.elf");
+    let open = || Project::new(Binary::open(path).unwrap());
+    let graph = call_graph(&open());
+    let scan = open();
+    // A void function whose last statement before its return is a call: given a signature with an int return, its
+    // decompilation takes that callee's return type from a context decompilation of the callee. Some such contexts
+    // are refused as unsupported (on main too); the first that decompiles is taken.
+    let signed = |function: u64, declaration: &str| {
+        let project = open();
+        project.set_signature(function, Some(&format!("{declaration};"))).unwrap();
+        project
+    };
+    let (function, callee, declaration, fresh) = graph
+        .iter()
+        .filter(|(_, callees)| !callees.is_empty() && callees.len() <= 4)
+        .filter_map(|(&function, callees)| {
+            let code = scan.decompile(function).ok()?.code;
+            let lines: Vec<&str> = code.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+            let [.., last_call, "return;", "}"] = lines.as_slice() else { return None };
+            let callee = *callees.iter().find(|callee| last_call.starts_with(&format!("sub_{callee:x}(")))?;
+            let declaration = lines.iter().find(|line| line.starts_with(&format!("void sub_{function:x}(")))?;
+            Some((function, callee, declaration.replacen("void ", "int4 ", 1)))
+        })
+        .take(16)
+        .find_map(|(function, callee, declaration)| {
+            let fresh = signed(function, &declaration).decompile(function).ok()?.code;
+            Some((function, callee, declaration, fresh))
+        })
+        .expect("a void function ending in a call that decompiles with an int return");
+    let code = |project: &Project, address: u64| project.decompile(address).unwrap().code;
+    let project = signed(function, &declaration);
+    // Warming only: a caller's own decompilation may refuse a context as unsupported too.
+    let _ = project.decompile(callee);
+    for (&caller, callees) in &graph {
+        if callees.contains(&function) {
+            let _ = project.decompile(caller);
+        }
+    }
+    assert_eq!(code(&project, function), fresh, "{function:#x} after its callee and callers");
+    assert_eq!(code(&project, function), fresh, "{function:#x} after itself");
+}

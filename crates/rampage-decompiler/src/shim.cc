@@ -161,9 +161,10 @@ public:
 
     explicit NamedGlobalScope(Architecture *architecture) : ScopeInternal(0, "", architecture) {}
 
+    // A function symbol is never a discovered global: removing one would delete its Funcdata.
     void addSymbolInternal(Symbol *symbol) override {
         ScopeInternal::addSymbolInternal(symbol);
-        if (recording) discovered.push_back(symbol);
+        if (recording && dynamic_cast<FunctionSymbol *>(symbol) == nullptr) discovered.push_back(symbol);
     }
     void removeSymbol(Symbol *symbol) override {
         discovered.erase(std::remove(discovered.begin(), discovered.end(), symbol), discovered.end());
@@ -328,6 +329,8 @@ struct Handle {
     std::set<uintb> aside;
     // Functions whose analysis is kept after their decompilation, until forgetDiscovered clears it.
     std::set<uintb> analysed;
+    // Functions registered only to decompile an address that was not a function (dropTemporaryFunctions).
+    std::set<uintb> temporaryFunctions;
     // MSVC vftables (see `rampage_decomp_virtual_table`), indexed for virtual call resolution.
     std::vector<VirtualTable> vtables;
     std::map<uintb, std::vector<size_t>> vtablesByMember;
@@ -537,6 +540,7 @@ const char *setError(Handle *handle, const char *message, bool poison = false) n
 
 void resetCalleeInference(Handle *handle);
 void forgetDiscovered(Handle *handle, bool record);
+void dropTemporaryFunctions(Handle *handle);
 
 template <typename Operation>
 const char *mutate(Handle *handle, Operation operation) noexcept {
@@ -545,6 +549,7 @@ const char *mutate(Handle *handle, Operation operation) noexcept {
     try {
         // A change of symbols, prototypes, overrides or settings can change any kept callee verdict.
         nativeMutation = true;
+        dropTemporaryFunctions(handle);
         forgetDiscovered(handle, false);
         resetCalleeInference(handle);
         nativeMutation = false;
@@ -857,6 +862,25 @@ void forgetDiscovered(Handle *handle, bool record) {
 // Readies `function` for an analysis that starts as on a fresh engine where callee inference is kept: no discovered
 // globals, and no memory of a previous analysis reaching Ghidra's type propagation limit (Funcdata::clear keeps it,
 // and a second analysis would then skip the propagation passes the first ran).
+// Where callee inference is kept, unregisters the functions a decompilation registered for an address that was
+// not a function, so no later decompilation sees them as call or branch targets, and forgets every verdict taken
+// while they were registered.
+void dropTemporaryFunctions(Handle *handle) {
+    if (!keepsInference(handle) || handle->temporaryFunctions.empty()) return;
+    forgetDiscovered(handle, false);
+    resetCalleeInference(handle);
+    Architecture *arch = handle->arch;
+    Scope *global = arch->symboltab->getGlobalScope();
+    std::set<uintb> temporary = std::move(handle->temporaryFunctions);
+    handle->temporaryFunctions.clear();
+    for (uintb entry : temporary) {
+        Funcdata *function = global->queryFunction(Address(arch->getDefaultCodeSpace(), entry));
+        if (function == nullptr) continue;
+        arch->clearAnalysis(function);
+        global->removeSymbol(function->getSymbol());
+    }
+}
+
 void freshAnalysis(Handle *handle, Funcdata *function) {
     if (!keepsInference(handle)) return;
     forgetDiscovered(handle, true);
@@ -1179,11 +1203,17 @@ PrototypePieces lockDerivedPrototype(Handle *handle, Funcdata *function) {
     arch->clearAnalysis(function);
     auto before = std::make_unique<FuncProto>();
     before->copy(function->getFuncProto());
+    try {
+        function->getFuncProto().setPieces(pieces);
+        // Inputs only. A locked return changes how Ghidra recovers its callers' own returns: a caller that returns
+        // its input on one path and a constant on another lost its return value entirely.
+        function->getFuncProto().setOutputLock(false);
+    } catch (...) {
+        function->getScopeLocal()->clearCategory(Symbol::function_parameter);
+        function->getFuncProto().copy(*before);
+        throw;
+    }
     handle->derivedRestore[function->getAddress().getOffset()] = std::move(before);
-    function->getFuncProto().setPieces(pieces);
-    // Inputs only. A locked return changes how Ghidra recovers its callers' own returns: a caller that returns its
-    // input on one path and a constant on another lost its return value entirely.
-    function->getFuncProto().setOutputLock(false);
     return pieces;
 }
 
@@ -1244,7 +1274,7 @@ Derivation deriveCalleePrototype(Handle *handle, Funcdata *function, std::set<ui
 // decompilation succeeding. Its callees are locked first, leaves first.
 //
 // Which callees a decompilation sees locked is fixed by the function alone too (calleeView): its direct callees in
-// call order, each taken while the functions they reach together stay within the budget. That bounds the
+// flow order, each taken while the functions they reach together stay within the budget. That bounds the
 // derivations one decompilation may need on a fresh engine. Every other derived lock among its direct callees, and
 // its own, is set aside while it is decompiled (setAside), and put back before the next decompilation.
 
@@ -1358,14 +1388,15 @@ void setAside(Handle *handle, Funcdata *function) {
     restoreDerived(handle, function, nullptr);
 }
 
+// Puts back every lock set aside. One that fails stays set aside, with those after it, for the next attempt.
 void relockAside(Handle *handle) {
     Architecture *arch = handle->arch;
     Scope *global = arch->symboltab->getGlobalScope();
-    std::set<uintb> aside = std::move(handle->aside);
-    handle->aside.clear();
-    for (uintb entry : aside) {
+    while (!handle->aside.empty()) {
+        uintb entry = *handle->aside.begin();
         Funcdata *function = global->queryFunction(Address(arch->getDefaultCodeSpace(), entry));
         if (function != nullptr) restoreDerived(handle, function, &handle->derivedPieces.at(entry));
+        handle->aside.erase(entry);
     }
 }
 
@@ -1375,8 +1406,8 @@ struct CalleeView {
     std::set<uintb> locked;
 };
 
-// Derives the callees `function` sees locked (see above): its direct callees in call order, each that can be locked
-// taken while the functions they reach together stay within the budget.
+// Derives the callees `function` sees locked (see above): its direct callees in flow order (call specs), each that
+// can be locked taken while the functions they reach together stay within the budget.
 CalleeView calleeView(Handle *handle, const std::vector<uintb> &callees) {
     Architecture *arch = handle->arch;
     Scope *global = arch->symboltab->getGlobalScope();
@@ -2614,6 +2645,7 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         // With vftables, every derived lock and verdict is put back before each top-level decompilation. Without,
         // each is a property of the function it is about (deriveLocked), kept for the engine's life; only the locks
         // set aside for the last decompilation go back on.
+        if (!handle->preparingTypeHintContext) dropTemporaryFunctions(handle);
         if (handle->vtables.empty()) relockAside(handle);
         else if (!handle->preparingTypeHintContext) resetCalleeInference(handle);
         forgetDiscovered(handle, true);
@@ -2624,8 +2656,13 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
             string funcname = (name != nullptr && name[0] != '\0') ? name : "";
             if (funcname.empty()) arch->nameFunction(entry, funcname);
             // A new function is a call target, and a branch target that ends other functions' derivable flow.
+            // Where callee inference is kept, it is registered for this decompilation only (dropTemporaryFunctions),
+            // and a callee context is never registered in the middle of another decompilation's verdicts.
+            if (keepsInference(handle) && handle->preparingTypeHintContext)
+                throw LowlevelError("Callee context is not a registered function");
             if (!handle->preparingTypeHintContext) resetCalleeInference(handle);
             fd = global->addFunction(entry, funcname)->getFunction();
+            if (keepsInference(handle)) handle->temporaryFunctions.insert(addr);
         }
         fd->setInferenceHint(rampage::nativeInferenceHint, &hintContext);
         fd->setCallInferenceHint(rampage::nativeCallInferenceHint, &hintContext);

@@ -13,7 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// Modified for rampage: keep function display names synchronized with symbol renames.
+// Modified for rampage: keep function display names synchronized with symbol renames, and let a caller forget that
+// a previous analysis reached the type propagation limit (clearTypeRecoveryExceeded; clear() keeps that flag).
 // Also exposes bounded, unlocked native type-hint inference hooks.
 #ifndef __FUNCDATA_HH__
 #define __FUNCDATA_HH__

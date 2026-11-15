@@ -159,8 +159,8 @@ but ARMv8-M-only instructions are not reviewed, and `cortex-m33`/`cortex-m55` ar
   Every verdict is a property of the callee alone, so one engine keeps them all: effects are known when what the
   callee reaches through direct calls is at most 256 functions and 16 calls deep; a prototype is derived (once)
   when what it reaches is at most 64 functions. Which derived callees a decompilation sees is fixed by the function
-  too: its direct callees in address order, each while what they reach together stays within 64 functions, which
-  bounds the derivations a fresh engine (the isolated worker opens one per request) makes for it. Other derived
+  too: its direct callees in the order its flow finds the calls, each while what they reach together stays within
+  64 functions, which bounds the derivations a fresh engine (the isolated worker opens one per request) makes for it. Other derived
   locks among its callees, and its own, are set aside while it is decompiled, and globals an earlier decompilation
   discovered are dropped, so the result never depends on what was decompiled before. On the stripped
   `embedded-libs-m0` fixture (549 functions) the largest function takes about 2 s on a fresh engine, and one engine

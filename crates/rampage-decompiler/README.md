@@ -13,7 +13,9 @@ SLEIGH compiler. `src/shim.cc` is rampage's own C ABI over that library.
 Vendored integration changes: `loadimage.hh` adds instruction-lookahead, instruction-range
 validation and partial-string-read hooks; `sleigh.cc` validates decoded lengths; `stringmanage.cc` consumes only
 available string bytes; `sleigh.hh` and `sleigh.cc` expose translation-cache invalidation without re-registering
-context variables; `funcdata.hh` synchronizes display names and `funcdata.cc` resets per-analysis recovery flags;
+context variables; `funcdata.hh` synchronizes display names and adds `clearTypeRecoveryExceeded` (the shim calls it before each
+analysis on Cortex-M handles, whose output must not depend on an earlier analysis of the same function), and
+`funcdata.cc` resets per-analysis recovery flags;
 `grammar.cc` and `type.cc` bound array layouts;
 `prettyprint.hh` and `printlanguage.hh` allow an address-aware token emitter. Default loader hooks preserve
 upstream behavior; `modelrules.hh` and `modelrules.cc` add optional aligned stack-slot assignment for Darwin.

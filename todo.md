@@ -258,8 +258,8 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
     locked when everything reached (analyst-locked functions excluded) is at most 64 functions, acyclic and
     derivable, and is then derived bottom-up once.
   - Which callees a decompilation sees locked (`calleeView`) is fixed by the function alone: its direct callees in
-    address order, each taken while the union of what they reach stays within 64 functions (this bounds a cold
-    request's derivations as before, without the old budget spent on subtrees that could never lock). Other derived
+    the order its flow finds the calls (Ghidra's call specs), each taken while the union of what they reach stays
+    within 64 functions (this bounds a cold request's derivations as before, without the old budget spent on subtrees that could never lock). Other derived
     locks among its direct callees, and its own, are set aside for that decompilation and put back before the next.
   - Every analysis on these handles starts without the globals earlier analyses discovered (Ghidra's `mapGlobals`
     adds typed symbols to the global scope) and without `typerecovery_exceeded`, which `Funcdata::clear` keeps
@@ -275,6 +275,15 @@ immediates in `inspect_raw_code`, one-line argument errors and unknown-argument 
   instead of `&ram_200009cc`); a program-wide global pass would name them deterministically. The same two leaks
   remain on every other architecture (kept so their output is unchanged). MCP requests run in a fresh worker each,
   so they gain the cheaper cold path but not the cache, unless a worker is kept per project.
+- [ ] The same two history leaks exist on every other architecture: a function analysed before (as a top-level
+  decompilation or a context) keeps Ghidra's `typerecovery_exceeded`, so it loses the "not settling" warning and
+  skips propagation passes the next time, and globals an earlier analysis discovered stay typed for the next one.
+  Fixable for all handles by masking the flag in `Funcdata::clear` (vendored) and dropping discovered globals
+  before each analysis as Cortex-M handles do, at the cost of output changes wherever a session decompiled
+  something before.
+- [ ] Return-type contexts can refuse a decompilation: on `embedded-libs-m0`, giving `0x8000058` the signature
+  `int4 sub_8000058(xunknown4 param_1)` makes its decompilation fail with "unlocked result type was not retained"
+  (its last call's context, `0x800150e`), on main too.
 
 ## Objective-C dispatch (2026-11-13)
 

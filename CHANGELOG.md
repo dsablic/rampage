@@ -26,8 +26,8 @@ see the [stability policy](docs/stability.md) for what the version promises.
   decompiles to no longer depends on what was decompiled before it. Every verdict is a property of the callee
   alone (what it reaches through direct calls, with fixed budgets: 64 functions for a prototype, 256 functions and
   16 calls deep for register effects); which derived callees a decompilation sees is fixed by the function itself
-  (its direct callees in address order while what they reach stays within 64 functions), and the rest are set aside
-  while it is decompiled. Callee facts come from one scratch flow per function, which skips the jump-table recovery
+  (its direct callees in the order its flow finds the calls, while what they reach stays within 64 functions), and
+  the rest are set aside while it is decompiled. Callee facts come from one scratch flow per function, which skips the jump-table recovery
   that following each registered callee paid. On these images every analysis also starts without the globals
   earlier analyses discovered and without Ghidra's memory of a previous analysis whose type propagation did not
   settle, two leaks that made output depend on history before this change too. On the stripped `embedded-libs-m0`
