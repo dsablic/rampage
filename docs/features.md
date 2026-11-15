@@ -30,7 +30,7 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 ## Formats and instruction decoding
 
 - `list_dir` lists a folder with each entry's kind, size and sniffed format, so work can start from a directory.
-  See [MCP](mcp.md). Limits: one directory per call, at most 100,000 entries; formats come from magic bytes only.
+  See [MCP](mcp.md). Limits: one directory per call, 1,000,000 entries read; formats come from magic bytes only.
 - [File layout](file-layout.md) maps any file or range of up to 64 MiB in one call: padding and occupied
   regions with hashes, block entropy, string clusters and labelled hints, including header-checked
   compressed-component candidates. Limits: statistics and heuristic
@@ -40,8 +40,8 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   only; no code detection, function discovery or execution.
 - [Native data inspection](data-inspection.md) links bounded stored words to metadata candidates, while
   [explicit decoding](decoding.md) provides LZSS (classic 4K and every explicit variant) and LZ4-block providers,
-  transient previews (or a written file on request) and a bounded probe that ranks parameter sets for an unknown
-  variant. Limits: pointer links are suppressed on loader warnings; decoding is not authentication or a load mapping.
+  transient previews (`write_decoded_range` writes a new file) and a bounded probe that ranks parameter sets for an
+  unknown variant. Limits: pointer links are suppressed on loader warnings; decoding is not authentication or a load mapping.
 - [Raw Projects](sleigh-decoding.md) open headerless images with an asserted profile and base address: sixteen
   Sleigh families, and the *experimental* Cortex-M profile (`ARM:LE:32:Cortex`), which decodes Thumb natively,
   decompiles, seeds from the vector table and optional code-pointer tables, maps up to 15 further code, data or

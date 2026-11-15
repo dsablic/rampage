@@ -1,6 +1,6 @@
-//! Files a tool writes at a caller-named absolute path: the path is checked once (absolute, an existing directory
-//! resolved to its canonical path, never a symlink as the file), an existing file is replaced only when the tool
-//! wrote it or the caller passes `overwrite`, and the bytes go to a temporary file renamed over the target.
+//! Files a tool writes at a caller-named absolute path. [`check_new_output`] and [`write_new`] create a new file
+//! only: a canonical directory, exclusive creation, no symlink, mode 0644. [`check_output`] and [`write_atomically`]
+//! replace a file the tool wrote (or any regular file with `overwrite`) through a temporary file renamed over it.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -72,6 +72,79 @@ pub(crate) fn check_output(
         Err(_) => {}
     }
     Ok(target)
+}
+
+/// Checks `output` (called `what` in refusals) for a file that must be new: absolute, in an existing directory named
+/// by its canonical path (so no symlink anywhere in it), and no entry of that name, not even a symlink.
+pub(crate) fn check_new_output(what: &str, output: &Path) -> Result<Target, String> {
+    if !output.is_absolute() {
+        return Err(format!("{what} must be an absolute path"));
+    }
+    let name = match output.components().next_back() {
+        Some(std::path::Component::Normal(name)) => name.to_owned(),
+        _ => return Err(format!("{what} must name a file")),
+    };
+    let parent =
+        output.parent().filter(|parent| !parent.as_os_str().is_empty()).ok_or(format!("{what} has no directory"))?;
+    let directory = parent
+        .canonicalize()
+        .ok()
+        .filter(|directory| directory.is_dir())
+        .ok_or_else(|| format!("{what}'s directory {} does not exist", parent.display()))?;
+    if directory != parent {
+        return Err(format!(
+            "{what}'s directory {} is reached through a symlink or `..`; name it by its canonical path {}",
+            parent.display(),
+            directory.display()
+        ));
+    }
+    let target = Target { directory, name, replaced_mode: None };
+    if std::fs::symlink_metadata(target.path()).is_ok() {
+        return Err(format!("{what} {} exists; this tool writes only new files", target.path().display()));
+    }
+    Ok(target)
+}
+
+/// Creates the target as a new file (mode 0644 before the umask, never executable) and writes `bytes` to it. The
+/// file is created exclusively, without following a symlink, through the opened directory; on failure it is
+/// removed again.
+#[cfg(unix)]
+pub(crate) fn write_new(target: &Target, bytes: &[u8]) -> Result<(), String> {
+    use rustix::fs::{AtFlags, CWD, Mode, OFlags, openat, unlinkat};
+    let failed = |error: &dyn std::fmt::Display| format!("write {}: {error}", target.path().display());
+    let directory = openat(
+        CWD,
+        &target.directory,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| failed(&error))?;
+    let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let file = openat(&directory, &target.name, flags, Mode::from_bits_truncate(0o644)).map_err(|error| {
+        if error == rustix::io::Errno::EXIST {
+            format!("{} exists; this tool writes only new files", target.path().display())
+        } else {
+            failed(&error)
+        }
+    })?;
+    let mut file = std::fs::File::from(file);
+    let written = file.write_all(bytes).and_then(|()| file.sync_all()).map_err(|error| failed(&error));
+    if written.is_err() {
+        let _ = unlinkat(&directory, &target.name, AtFlags::empty());
+    }
+    written
+}
+
+#[cfg(not(unix))]
+pub(crate) fn write_new(target: &Target, bytes: &[u8]) -> Result<(), String> {
+    let output = target.path();
+    let failed = |error: std::io::Error| format!("write {}: {error}", output.display());
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&output).map_err(failed)?;
+    let written = file.write_all(bytes).and_then(|()| file.sync_all()).map_err(failed);
+    if written.is_err() {
+        let _ = std::fs::remove_file(&output);
+    }
+    written
 }
 
 /// Writes `bytes` to a new temporary file in the target's directory and renames it over the target, checking right

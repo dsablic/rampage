@@ -2,8 +2,8 @@
 
 `binary decode` and MCP `decode_file_range` decode a selected regular-file range without requiring an
 executable header. The API returns an owned `DecodedContent` buffer and a separate bounded `DecodeReceipt`.
-CLI/MCP return the receipt and a requested preview; the full content stays transient unless MCP `output_path` names a
-file to write it to.
+CLI/MCP return the receipt and a requested preview; the full content stays transient. MCP `write_decoded_range`
+(group `carve`) writes it to a new file instead.
 
 When the variant is unknown, `binary probe-compression` and MCP `probe_compression` sweep the built-in families
 over the range and return ranked parameter sets that `decode_file_range` accepts unchanged
@@ -75,10 +75,13 @@ and `expected_output_size`, with `lzss` and underscore spellings for the optiona
 offsets and lengths may be nonnegative JSON integers or hexadecimal/decimal strings. Unknown selectors and missing
 codec selection refuse before source access.
 
-`output_path` (an absolute path in an existing directory) also writes the whole decoded output to that file, for
-tools that need one; the result's `written` gives its `path`, `bytes` and whether it `replaced` a file. An existing
-file is refused unless `overwrite` is true, the final name is never a symlink, and the bytes go to a temporary file
-renamed over the target. Nothing is written when the path or the decode is refused.
+`decode_file_range` writes no file. `write_decoded_range` (group `carve`, beside `fs_extract`) takes the same decode
+arguments without a preview, plus `output_path`, and writes the whole decoded output to that new file for tools
+that need one; the result is the receipt with `written` (`path`, `bytes`). The path must be absolute, its directory
+must exist and be named by its canonical path (a directory reached through a symlink or `..` is refused, naming
+the canonical one), and no entry of that name may exist: an existing file or symlink is never replaced. The file
+is created exclusively without following a symlink, with mode 0644 before the umask (never executable), and is
+removed again if writing fails. Nothing is written when the path or the decode is refused.
 
 Preview paging repeats the bounded decode rather than retaining a hidden payload cache. Compare source-range
 and output hashes across observations; matching hashes are content evidence, not authenticity or atomicity.

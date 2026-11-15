@@ -112,7 +112,7 @@ fn validate(request: &DecodeFileRequest) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// Explicit bounded file-range decoding. The returned content is memory-owned and is never published to disk.
+/// Explicit bounded file-range decoding. The returned content is memory-owned; this function writes no file.
 pub fn decode_file_range(path: &Path, request: &DecodeFileRequest) -> Result<DecodedContent, ApiError> {
     validate(request)?;
     let decoder = provider(request.codec, request.lzss, request.initial_write_offset, request.dictionary_fill)?;
@@ -191,8 +191,8 @@ pub fn decode_file_range(path: &Path, request: &DecodeFileRequest) -> Result<Dec
             "Expansion budgeting uses the entire selected input range, including any trailing bytes.",
             "Decoded offsets are not source-file offsets or load addresses. \
              No executable format or architecture is inferred.",
-            "Bytes are transient. No extraction, file publication, recursion, native loading, \
-             annotations or execution.",
+            "This decode writes no file (write_decoded_range writes its output to a new one on request). No \
+             extraction, recursion, native loading, annotations or execution.",
             "Decode deadline is cooperative; regular-file reads and hash computation are not forcibly interrupted.",
             "Descriptor/path metadata is revalidated; source reads are not atomic with concurrent file modification.",
         ],

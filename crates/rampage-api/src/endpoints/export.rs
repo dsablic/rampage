@@ -118,7 +118,8 @@ pub struct BlocklistQuery {
     pub allow: Vec<String>,
     pub deny: Vec<String>,
     pub include_local: bool,
-    /// Replace an existing file that is not a blocklist this tool wrote.
+    /// Replace an existing regular file that is not a file this tool wrote (a blocklist, starting with its header
+    /// line, is replaced without it).
     pub overwrite: bool,
     pub decode: bool,
     pub max_files: Option<usize>,

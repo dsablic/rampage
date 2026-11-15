@@ -1240,14 +1240,6 @@
           "type": "integer|string",
           "required": true
         },
-        "output_path": {
-          "type": "null|string",
-          "required": false
-        },
-        "overwrite": {
-          "type": "boolean|null",
-          "required": false
-        },
         "path": {
           "type": "string",
           "required": true
@@ -5146,6 +5138,51 @@
         "path": {
           "type": "string",
           "required": true
+        }
+      }
+    },
+    "write_decoded_range": {
+      "group": "carve",
+      "arguments": {
+        "codec": {
+          "type": "string",
+          "required": true
+        },
+        "dictionary_fill": {
+          "type": "integer|null",
+          "required": false
+        },
+        "expected_output_size": {
+          "type": "integer|string",
+          "required": true
+        },
+        "initial_write_offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "length": {
+          "type": "integer|string",
+          "required": true
+        },
+        "lzss": {
+          "type": "null|object",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|string",
+          "required": true
+        },
+        "output_path": {
+          "type": "string",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "timeout_ms": {
+          "type": "integer|null",
+          "required": false
         }
       }
     },

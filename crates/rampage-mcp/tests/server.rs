@@ -169,6 +169,7 @@ async fn lists_all_tools_with_instructions() {
         "triage_report",
         "undo",
         "wasm_module",
+        "write_decoded_range",
         "xrefs",
         "yara_scan",
     ];

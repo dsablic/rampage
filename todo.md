@@ -116,6 +116,13 @@ decoded code.
   discovery from the entry stops after one function (`pointer_tables` still recovers thousands). Recognise such
   copy-table calls from the entry, and let a region take its bytes from a slice of another region (the decoded
   primary) at its run address, reporting each copy as evidence in `binary_info`.
+- [ ] **Raw selectors with decode re-decode on every call**: the session's cache key hashes the decoded bytes, so
+  each call decodes again before it can find the project (key the cache on the selector and source metadata
+  first). `inspect_data` opens its Raw image outside `Session::open_raw` (a file tool has no session), so analyst
+  names do not resolve in `at` and its 16 KiB input budget refuses large selectors; route it through the session.
+- [ ] **Read-only annotations for file tools.** MCP lists read-only file tools (`list_dir`, `decode_file_range`,
+  `file_layout`, `carve`, ...) without annotations, which the MCP spec treats as possibly destructive; give them
+  `read_only(true)`.
 
 ### Other ideas (2026-11-14)
 

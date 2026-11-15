@@ -1024,7 +1024,9 @@ impl Project {
     /// The cached readable strings scanned at the default minimum length, shared by strings queries and
     /// capability detection.
     pub(crate) fn scanned_strings(&self) -> &[FoundString] {
-        self.strings.get_or_init(|| strings::scan(&self.binary, DEFAULT_STRING_LENGTH))
+        // Raw images drop runs inside discovered instructions, which runs the (cached) analysis; analysis never
+        // reads strings, so this cannot recurse.
+        self.strings.get_or_init(|| self.outside_instructions(strings::scan(&self.binary, DEFAULT_STRING_LENGTH)))
     }
 
     /// The static `{ptr, len}` string headers of a Go image, read once; `None` outside Go images.
@@ -1108,14 +1110,52 @@ impl Project {
             .map_err(String::as_str)
     }
 
+    /// In a Raw image, whose code regions also hold constants, the strings that overlap no instruction of a
+    /// discovered function: printable instruction bytes (Thumb `movs rN, #imm` reads as a character and a NUL) are
+    /// not text. Other images, and a Raw image whose analysis fails, keep every string.
+    fn outside_instructions(&self, found: Vec<FoundString>) -> Vec<FoundString> {
+        if self.binary.raw_code_image().is_none() {
+            return found;
+        }
+        let Ok(analysis) = self.analysis() else { return found };
+        let mut blocks: Vec<(u64, u64)> = analysis
+            .program
+            .functions
+            .iter()
+            .flat_map(|function| function.blocks.iter().map(|block| (block.start, block.end)))
+            .collect();
+        blocks.sort_unstable();
+        // Merged, so the block before a string's end is the only one that can overlap it.
+        let mut merged: Vec<(u64, u64)> = Vec::with_capacity(blocks.len());
+        for (start, end) in blocks {
+            match merged.last_mut() {
+                Some(last) if start <= last.1 => last.1 = last.1.max(end),
+                _ => merged.push((start, end)),
+            }
+        }
+        found
+            .into_iter()
+            .filter(|string| {
+                let unit = if string.encoding == strings::Encoding::Utf16Le { 2 } else { 1 };
+                let end = string.address + (string.text.chars().count() * unit) as u64;
+                let before = merged.partition_point(|&(start, _)| start < end);
+                before == 0 || merged[before - 1].1 <= string.address
+            })
+            .collect()
+    }
+
     pub fn strings(&self, query: &StringsQuery) -> Page<FoundString> {
         let min_len = query.min_len.unwrap_or(DEFAULT_STRING_LENGTH);
         let matcher = Matcher::new(query.contains.as_deref());
         if min_len < DEFAULT_STRING_LENGTH {
-            let found = strings::scan(&self.binary, min_len).into_iter().filter(|string| matcher.matches(&string.text));
+            let found = self
+                .outside_instructions(strings::scan(&self.binary, min_len))
+                .into_iter()
+                .filter(|string| matcher.matches(&string.text));
             return Page::of(found, query.offset, query.limit);
         }
-        let scanned = self.strings.get_or_init(|| strings::scan(&self.binary, DEFAULT_STRING_LENGTH));
+        let scanned =
+            self.strings.get_or_init(|| self.outside_instructions(strings::scan(&self.binary, DEFAULT_STRING_LENGTH)));
         let selected =
             scanned.iter().filter(|string| string.text.chars().count() >= min_len && matcher.matches(&string.text));
         Page::of(selected, query.offset, query.limit).map(FoundString::clone)

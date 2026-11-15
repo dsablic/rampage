@@ -611,15 +611,15 @@ pub fn file_tools() -> Vec<FileTool> {
             },
         },
         FileTool {
-            effect: Effect::FileWrite,
+            effect: Effect::None,
             group: Group::Core,
             name: "decode_file_range",
             description: "Decode an explicit regular-file range with a named built-in decoder, without requiring \
                 an executable header. Codecs: lzss-4k (LSB-first flags, 1=literal, 12-bit references, lengths \
                 nibble+3; ring start default 4078 and fill explicit), lzss (every variant parameter explicit in an \
                 lzss object, as probe_compression's decode_arguments give it) and lz4-block. Expected output size \
-                is supplied, not discovered: no end marker, auto-detection, recursion or \
-                execution. output_path (absolute, new unless overwrite) also writes the whole output to a file. \
+                is supplied, not discovered: no end marker, auto-detection, recursion, file writing or \
+                execution (write_decoded_range, in carve, writes the output to a new file). \
                 Return range/output hashes, consumed/trailing counts, a bounded decoded-offset preview, and \
                 open_as_raw: a `raw` selector that opens the decoded bytes as a Raw project's code (see next). \
                 Limits: 8 MiB input, 16 MiB output, 128:1 against selected input, cooperative decode deadline. \
@@ -631,61 +631,44 @@ pub fn file_tools() -> Vec<FileTool> {
                     return Err("decode arguments exceed the input budget".into());
                 }
                 let args: DecodeFileArgs = arguments(input)?;
-                let request = crate::DecodeFileRequest {
-                    codec: args.codec,
-                    lzss: args.lzss,
-                    offset: args.offset.0,
-                    length: usize::try_from(args.length.0).map_err(|_| "decode length exceeds host width")?,
-                    expected_output_size: usize::try_from(args.expected_output_size.0)
-                        .map_err(|_| "decoded length exceeds host width")?,
-                    initial_write_offset: args
-                        .initial_write_offset
-                        .unwrap_or_else(|| crate::default_initial_write_offset(args.codec)),
-                    dictionary_fill: args.dictionary_fill.unwrap_or(0),
-                    timeout_ms: args.timeout_ms.unwrap_or(3000),
-                    preview_offset: usize::try_from(args.preview_offset.unwrap_or(crate::FileOffset(0)).0)
-                        .map_err(|_| "preview offset exceeds host width")?,
-                    preview_size: args.preview_size.unwrap_or(256),
-                };
-                // The output path is checked before decoding, so a refused path costs no decode.
-                let target = args
-                    .output_path
-                    .as_deref()
-                    .map(|output| {
-                        crate::output_file::check_output("output_path", output, args.overwrite.unwrap_or(false), |_| {
-                            false
-                        })
-                    })
-                    .transpose()?;
+                let source = args.source();
+                let mut request = source.request()?;
+                request.preview_offset = usize::try_from(args.preview_offset.unwrap_or(crate::FileOffset(0)).0)
+                    .map_err(|_| "preview offset exceeds host width")?;
+                request.preview_size = args.preview_size.unwrap_or(256);
                 let decoded = crate::decode_file_range(&args.path, &request).map_err(|error| error_chain(&error))?;
-                let written = match &target {
-                    Some(target) => {
-                        crate::output_file::write_atomically(target, decoded.bytes())?;
-                        Some(serde_json::json!({
-                            "path": target.path(),
-                            "bytes": decoded.bytes().len(),
-                            "replaced": target.replaces(),
-                        }))
-                    }
-                    None => None,
-                };
-                let selector = crate::open_as_raw(&crate::DecodeArguments {
-                    codec: request.codec,
-                    offset: request.offset,
-                    length: request.length as u64,
-                    expected_output_size: request.expected_output_size,
-                    initial_write_offset: args.initial_write_offset,
-                    dictionary_fill: args.dictionary_fill,
-                    lzss: request.lzss,
-                });
                 let mut value = serde_json::to_value(decoded.receipt).map_err(|error| error.to_string())?;
-                if let Some(selector) = selector {
+                if let Some(selector) = crate::open_as_raw(&source.arguments(&request)) {
                     value["open_as_raw"] = selector;
                     value["next"] = Value::String(crate::OPEN_AS_RAW_NEXT.to_owned());
                 }
-                if let Some(written) = written {
-                    value["written"] = written;
+                Ok(value)
+            },
+        },
+        FileTool {
+            effect: Effect::FileWrite,
+            group: Group::Carve,
+            name: "write_decoded_range",
+            description: "Decode a file range as decode_file_range does (same arguments, no preview) and write the \
+                          whole output to a new file at the absolute output_path, for tools that need a file. Never \
+                          replaces a file, writes through a symlink or sets an executable mode.",
+            input_schema: schema::<WriteDecodedArgs>(),
+            handler: |_, input| {
+                if input.to_string().len() > 16_384 {
+                    return Err("decode arguments exceed the input budget".into());
                 }
+                let args: WriteDecodedArgs = arguments(input)?;
+                let request = args.source().request()?;
+                // The output path is checked before decoding, so a refused path costs no decode.
+                let target = crate::output_file::check_new_output("output_path", &args.output_path)?;
+                let decoded = crate::decode_file_range(&args.path, &request).map_err(|error| error_chain(&error))?;
+                crate::output_file::write_new(&target, decoded.bytes())?;
+                let bytes = decoded.bytes().len();
+                let mut value = serde_json::to_value(decoded.receipt).map_err(|error| error.to_string())?;
+                if let Some(object) = value.as_object_mut() {
+                    object.remove("preview");
+                }
+                value["written"] = serde_json::json!({ "path": target.path(), "bytes": bytes });
                 Ok(value)
             },
         },
@@ -1414,11 +1397,109 @@ struct DecodeFileArgs {
     preview_offset: Option<crate::FileOffset>,
     /// Preview bytes, 0..1024; default 256. Zero requests a hash/metadata-only receipt.
     preview_size: Option<usize>,
-    /// Absolute path of a file to write the whole decoded output to, in an existing directory; never through a
-    /// symlink. An existing file is refused unless overwrite is true.
-    output_path: Option<std::path::PathBuf>,
-    /// Replace an existing regular file at output_path.
-    overwrite: Option<bool>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WriteDecodedArgs {
+    /// Explicit regular source file. No executable header, sidecar or dependency is opened.
+    path: std::path::PathBuf,
+    /// Required decoder selection; no codec guessing.
+    codec: crate::ContentCodec,
+    /// Every variant parameter, required for codec lzss and refused for the others.
+    lzss: Option<crate::LzssParameters>,
+    /// Byte offset in the original file, not a native-image or decoded address.
+    offset: crate::FileOffset,
+    /// Encoded range length, 1..=8388608 bytes.
+    length: crate::FileOffset,
+    /// Analyst-supplied stopping size, 1..=16777216 bytes; does not prove a stream boundary.
+    expected_output_size: crate::FileOffset,
+    /// Initial ring write position below the window; default 4078 (0xfee) for lzss-4k, zero otherwise.
+    initial_write_offset: Option<u16>,
+    /// Dictionary initialization byte; default zero. Only ring offsets use it.
+    dictionary_fill: Option<u8>,
+    /// Cooperative decoder-phase timeout, default 3000 ms, at most 10000; excludes I/O/hash phases.
+    timeout_ms: Option<u64>,
+    /// Absolute path of the new file: its directory must exist and be named by its canonical path (no symlink in
+    /// it), and no file of that name may exist.
+    output_path: std::path::PathBuf,
+}
+
+/// The decode parameters decode_file_range and write_decoded_range share.
+struct DecodeSource {
+    codec: crate::ContentCodec,
+    lzss: Option<crate::LzssParameters>,
+    offset: crate::FileOffset,
+    length: crate::FileOffset,
+    expected_output_size: crate::FileOffset,
+    initial_write_offset: Option<u16>,
+    dictionary_fill: Option<u8>,
+    timeout_ms: Option<u64>,
+}
+
+impl DecodeSource {
+    /// The provider request, without a preview.
+    fn request(&self) -> Result<crate::DecodeFileRequest, String> {
+        Ok(crate::DecodeFileRequest {
+            codec: self.codec,
+            lzss: self.lzss,
+            offset: self.offset.0,
+            length: usize::try_from(self.length.0).map_err(|_| "decode length exceeds host width")?,
+            expected_output_size: usize::try_from(self.expected_output_size.0)
+                .map_err(|_| "decoded length exceeds host width")?,
+            initial_write_offset: self
+                .initial_write_offset
+                .unwrap_or_else(|| crate::default_initial_write_offset(self.codec)),
+            dictionary_fill: self.dictionary_fill.unwrap_or(0),
+            timeout_ms: self.timeout_ms.unwrap_or(3000),
+            preview_offset: 0,
+            preview_size: 0,
+        })
+    }
+
+    /// The arguments as a Raw selector's `decode` repeats them: the caller's optional ones only when given.
+    fn arguments(&self, request: &crate::DecodeFileRequest) -> crate::DecodeArguments {
+        crate::DecodeArguments {
+            codec: request.codec,
+            offset: request.offset,
+            length: request.length as u64,
+            expected_output_size: request.expected_output_size,
+            initial_write_offset: self.initial_write_offset,
+            dictionary_fill: self.dictionary_fill,
+            lzss: request.lzss,
+            timeout_ms: self.timeout_ms.filter(|&timeout| timeout != 3000),
+        }
+    }
+}
+
+impl DecodeFileArgs {
+    fn source(&self) -> DecodeSource {
+        DecodeSource {
+            codec: self.codec,
+            lzss: self.lzss,
+            offset: self.offset,
+            length: self.length,
+            expected_output_size: self.expected_output_size,
+            initial_write_offset: self.initial_write_offset,
+            dictionary_fill: self.dictionary_fill,
+            timeout_ms: self.timeout_ms,
+        }
+    }
+}
+
+impl WriteDecodedArgs {
+    fn source(&self) -> DecodeSource {
+        DecodeSource {
+            codec: self.codec,
+            lzss: self.lzss,
+            offset: self.offset,
+            length: self.length,
+            expected_output_size: self.expected_output_size,
+            initial_write_offset: self.initial_write_offset,
+            dictionary_fill: self.dictionary_fill,
+            timeout_ms: self.timeout_ms,
+        }
+    }
 }
 
 type DecompileView = ToolView;

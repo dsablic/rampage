@@ -60,6 +60,9 @@ pub struct DecodeArguments {
     pub dictionary_fill: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lzss: Option<LzssParameters>,
+    /// A decode deadline other than the default 3000 ms, repeated in a Raw selector.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -193,6 +196,7 @@ fn arguments(codec: &Codec, offset: u64, length: usize, output_size: usize) -> D
             initial_write_offset: Some(lzss.initial_write_offset),
             dictionary_fill: Some(lzss.dictionary_fill),
             lzss: Some(LzssParameters::from_provider(lzss)),
+            timeout_ms: None,
         },
         Codec::Lz4Block => DecodeArguments {
             codec: ContentCodec::Lz4Block,
@@ -202,6 +206,7 @@ fn arguments(codec: &Codec, offset: u64, length: usize, output_size: usize) -> D
             initial_write_offset: None,
             dictionary_fill: None,
             lzss: None,
+            timeout_ms: None,
         },
     }
 }
@@ -209,7 +214,8 @@ fn arguments(codec: &Codec, offset: u64, length: usize, output_size: usize) -> D
 /// What a result with an `open_as_raw` selector says to do with it.
 pub const OPEN_AS_RAW_NEXT: &str = "To analyse the decoded bytes as code, add profile (e.g. cortex-m) and \
     base_address (the load address) to open_as_raw and pass it as `raw`, with the same path, to binary_info, \
-    list_functions, list_strings or decompile; for Cortex-M also vector_table.";
+    list_functions, list_strings or decompile; for Cortex-M also vector_table. write_decoded_range (carve) writes \
+    them to a new file.";
 
 /// A Raw project selector that maps `arguments`' decoded output as the primary code region, without the profile
 /// and base address no decoder knows; `None` when the decoded size exceeds every Raw profile's cap.
@@ -229,6 +235,9 @@ pub fn open_as_raw(arguments: &DecodeArguments) -> Option<serde_json::Value> {
     }
     if let Some(fill) = arguments.dictionary_fill {
         decode["dictionary_fill"] = fill.into();
+    }
+    if let Some(timeout) = arguments.timeout_ms {
+        decode["timeout_ms"] = timeout.into();
     }
     Some(serde_json::json!({
         "offset": format!("{:#x}", arguments.offset),

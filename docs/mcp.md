@@ -120,8 +120,8 @@ A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling
   `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `entry_diagnostics`, `inspect_jump_table`.
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
-- `carve`: `carve`, `archive_inventory`, `fs_list`, `fs_extract`, `endpoint_inventory`, `endpoint_blocklist`,
-  `privacy_surface`.
+- `carve`: `carve`, `archive_inventory`, `fs_list`, `fs_extract`, `write_decoded_range`, `endpoint_inventory`,
+  `endpoint_blocklist`, `privacy_surface`.
 - `formats`: `build_info`, `pe_resources`, `pe_load_config`, `exception_handlers`, `pyinstaller_archive`,
   `wasm_module`, `integrity_checks`, `export_image`.
 - `debug`, only on a server started with a debug endpoint: `debug_connect`, `debug_bind`, `debug_status`,
@@ -143,7 +143,7 @@ improve group alone; see [the flywheel](#flywheel-improve).
 
 Workflow reports name the `group` of suggested next tools. The [desktop assistant](desktop-ui.md) uses the same
 tools without group gating, plus the interactive `show_address`, which is not an MCP tool because the server has
-no listing to navigate. It does not offer the file tools (`carve`, `archive_inventory`, `fs_list`, `fs_extract`,
+no listing to navigate. It does not offer the file tools (`carve`, `archive_inventory`, `fs_list`, `fs_extract`, `write_decoded_range`,
 `endpoint_inventory`, `endpoint_blocklist`,
 `list_packs`,
 `query_debugger`, `list_dir`, `inspect_data`, `decode_file_range`, `probe_compression`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`,
@@ -323,8 +323,11 @@ contracts; see [decoding](decoding.md) and [data inspection](data-inspection.md)
 files, a `format` sniffed from the first 1088 bytes (`elf`, `pe`, `macho`, `macho_universal`, `dex`, `wasm`,
 `squashfs`, `ext`, `cpio`, `tar`, `android_sparse`, `ota_payload`, `ubi`, `ubifs`, `ar`, `zip`, `gzip`, `xz`,
 `zstd`, `bzip2`, `lz4_frame`, `7z`, `ihex`, `srec`, `text` or `unknown`). Entries are sorted by name and paged by
-`cursor` (`limit` 1..=500, default 100); a directory of more than 100,000 entries is refused, as is a path that is
-a symlink or not a directory. Names that are not UTF-8 show other bytes as `\xHH`.
+`cursor` (`limit` 1..=500, default 100; a cursor not returned by list_dir is refused), in memory bounded by the page.
+A call reads at most 1,000,000 entries: past that, `truncated` says only those read were listed and counted. A path
+that is a symlink or not a directory is refused. Names that are not UTF-8 show other bytes as `\xHH`, and entries
+sort by that text (a backslash-led name before letters). A file is sniffed without blocking (a FIFO swapped in is
+not waited on); a FIFO, socket or device is `other` and never opened.
 
 `file_layout` maps any regular file, or an explicit range of at most 64 MiB, in one call and without a loader:
 fill (0xff, 0x00, other repeated byte) and occupied regions with per-region SHA-256 and entropy, block entropy
@@ -496,8 +499,9 @@ Raw-capable tools (`binary_info`, `list_functions`, `disassemble`, `function_gra
 `peripheral_access`, `list_patches`, `patch_bytes`, `revert_patch`, `integrity_checks`, `export_image`,
 `identify_functions`, `lock_mechanisms`, and the file tool `inspect_data`) take an optional `raw` object in place
 of a native image. `list_strings` lists every backed region's strings at their mapped addresses (decoded regions
-included); in a code region, where flash images keep constants among instructions, only runs a NUL ends are
-listed. `evaluate_function` runs a Raw
+included); in a code region, where flash images keep constants among instructions, only runs a NUL ends and no
+discovered instruction overlaps are listed. `inspect_data` gives `file_offset` only for bytes mapped from a
+file range (none for decoded, record or unbacked bytes). `evaluate_function` runs a Raw
 project's code when the interpreter supports its processor (the Cortex-M profiles among them); others, such as
 MSP430, are refused with the reason. Only the selected bytes are mapped (RAM and peripherals are not): `memory`
 changes image bytes, `mmio` maps a page for each value it sets, and imported SVD register names work in `mmio`:

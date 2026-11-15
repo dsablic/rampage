@@ -274,6 +274,22 @@ async fn a_cortex_m_image_opens_with_its_vector_table_in_one_call() {
     let (text, failed) =
         call(&client, "inspect_data", json!({ "path": path, "raw": selector, "at": "0x8000000", "size": 8 })).await;
     assert!(!failed && text.contains("0x20005000"), "{text}");
+    let report: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(report["spans"][0]["file_offset"], 0, "{report}");
+    // A range further into the file maps its bytes to their own file offsets, not to the project's buffer.
+    let prefixed = std::env::temp_dir().join(format!("rampage-mcp-raw-prefixed-{}.bin", std::process::id()));
+    let mut bytes = vec![0xa5; 0x40];
+    bytes.extend(std::fs::read(&path).unwrap());
+    std::fs::write(&prefixed, &bytes).unwrap();
+    let mut shifted = selector.clone();
+    shifted["offset"] = json!("0x40");
+    let (text, failed) =
+        call(&client, "inspect_data", json!({ "path": prefixed, "raw": shifted, "at": "0x8000004", "size": 4 })).await;
+    let _ = std::fs::remove_file(&prefixed);
+    assert!(!failed, "{text}");
+    let report: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(report["spans"][0]["file_offset"], 0x44, "{report}");
+    assert!(report["selected_image_file_offset"].is_null(), "{report}");
     let (text, failed) =
         call(&client, "inspect_data", json!({ "path": path, "raw": selector, "at": "0x8000000", "image_offset": 0 }))
             .await;

@@ -463,6 +463,15 @@ fn a_compressed_image_opens_as_the_primary_raw_region() {
     assert!(refusal(&path, long).contains("encoded bytes with decode"));
     let text = refusal(&path, selector(decoded + 64));
     assert!(text.contains("Raw decode:"), "{text}");
+    // The provider's budgets hold for the primary region: 128:1 expansion and a 10 s deadline at most.
+    let mut expansive = selector(4096);
+    expansive["length"] = json!(16);
+    let text = refusal(&path, expansive);
+    assert!(text.contains("Raw decode:") && text.contains("128"), "{text}");
+    let mut slow = selector(decoded);
+    slow["decode"]["timeout_ms"] = json!(10_001);
+    let text = refusal(&path, slow);
+    assert!(text.contains("timeout_ms must be 1..=10000"), "{text}");
     // Record input states no byte range to decode.
     let mut records = selector(decoded);
     records["format"] = json!("ihex");
@@ -634,6 +643,31 @@ fn cortex_m_requests_bound_size_and_refuse_vector_tables_elsewhere() {
         json!({ "profile": "msp430", "offset": 0, "length": MSP430.len(), "base_address": "0x4400", "pointer_tables": true }),
     );
     assert!(text.contains("pointer-table seeding is defined only for ARM:LE:32:Cortex"), "{text}");
+}
+
+/// Thumb `movs rN, #imm` reads as a character and a register byte, and `movs r0, #0` as a NUL: a function of such
+/// moves is a NUL-terminated printable run, which list_strings leaves out because discovered instructions cover it;
+/// the same text after the function's return is a string.
+#[test]
+fn cortex_m_instruction_bytes_are_not_strings() {
+    let mut bytes = vec![
+        0x41, 0x21, 0x42, 0x22, 0x43, 0x23, 0x44, 0x24, // movs r1..r4, #'A'..'D': "A!B\"C#D$"
+        0x00, 0x20, 0x70, 0x47, 0x00, 0x00, // movs r0, #0; bx lr; padding
+    ];
+    bytes.extend_from_slice(b"real text\0\0\0");
+    let owned = OwnedDirectory::new();
+    let path = owned.file("moves.bin", &bytes);
+    let mut project = Session::default()
+        .open_raw(
+            &path,
+            &request(
+                json!({ "profile": "cortex-m3", "offset": 0, "length": bytes.len(), "base_address": 0, "entry": 0 }),
+            ),
+        )
+        .unwrap();
+    let (text, failed) = call_shared(&tools(), &mut project, "list_strings", json!({}));
+    assert!(!failed, "{text}");
+    assert!(text.contains("\"real text\"") && !text.contains("A!B"), "{text}");
 }
 
 /// An M-profile processor has no A32 state: `blx 0x14` (00 f0 08 e8) at the entry is UNDEFINED, not a call into A32

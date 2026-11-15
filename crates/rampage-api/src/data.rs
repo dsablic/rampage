@@ -292,6 +292,19 @@ fn partial_pointer_metadata(binary: &Binary, address: u64, width: u8, pointer_si
     binary.import_slots.iter().any(|slot| overlaps(slot.address)) || rebases.iter().any(|&(slot, _)| overlaps(slot))
 }
 
+/// The source-file offset of a Raw project's owned byte at `offset`: the region's file-range offset plus the distance
+/// into the region; none for decoded, record and unbacked bytes, whose owned offsets name no file byte.
+fn raw_file_offset(raw: &rampage_loaders::RawCodeImage, offset: u64) -> Option<u64> {
+    let offset = usize::try_from(offset).ok()?;
+    let region = raw.regions().iter().find(|region| region.data_range().contains(&offset))?;
+    match region.source {
+        Some(rampage_loaders::RawRegionSource::FileRange { offset: start, .. }) => {
+            start.checked_add((offset - region.data_range().start) as u64)
+        }
+        _ => None,
+    }
+}
+
 fn invalid_range(what: &str) -> ApiError {
     ApiError::Invalid(format!("data inspection {what} overflows the address space"))
 }
@@ -386,7 +399,10 @@ fn inspect_static_data_with_widths(
                 size: 0,
                 status,
                 image_offset,
-                file_offset: image_offset.and_then(|offset| (image.start as u64).checked_add(offset)),
+                file_offset: image_offset.and_then(|offset| match binary.raw_code_image() {
+                    Some(raw) => raw_file_offset(raw, offset),
+                    None => (image.start as u64).checked_add(offset),
+                }),
                 permissions,
                 hex: byte.map(|_| String::new()),
                 ascii: byte.map(|_| String::new()),
@@ -521,6 +537,13 @@ fn inspect_static_data_with_widths(
     }
     if snapshot {
         report.limitations.push("Snapshot words remain raw and are never followed or treated as native relocations.");
+    }
+    if binary.raw_code_image().is_some() {
+        report.selected_image_file_offset = None;
+        report.limitations.push(
+            "Raw image: image_offset counts the project's owned bytes (its backed regions in order); file_offset is \
+             given only for a region mapped from a file range and is absent for decoded, record and unbacked bytes.",
+        );
     }
     if serde_json::to_vec(&report).map_err(|error| ApiError::Invalid(error.to_string()))?.len() > MAX_DATA_RESULT_BYTES
     {

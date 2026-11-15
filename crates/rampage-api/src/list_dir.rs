@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-/// Entries one call reads from a directory before refusing to list it whole.
-pub const MAX_DIR_ENTRIES: usize = 100_000;
+/// Entries one call reads from a directory; past it the listing covers those read and says so.
+pub const MAX_DIR_ENTRIES: usize = 1_000_000;
 pub const MAX_LIST_DIR_PAGE: usize = 500;
 const DEFAULT_LIST_DIR_PAGE: usize = 100;
 /// Bytes read from each regular file for the format sniff.
@@ -40,16 +40,42 @@ pub struct DirEntry {
 #[derive(Debug, Serialize)]
 pub struct DirListing {
     pub path: PathBuf,
-    /// Entries in the directory.
+    /// Entries in the directory (those read, when `truncated`).
     pub total: usize,
     pub entries: Vec<DirEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// Present when the directory held more than [`MAX_DIR_ENTRIES`] entries, saying what was listed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<String>,
     pub next: &'static str,
 }
 
+/// Whether `cursor` is a name as [`escape`] writes it: every backslash starts `\\` or `\xHH`.
+fn check_cursor(cursor: &str) -> Result<(), String> {
+    let bytes = cursor.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            match bytes.get(index + 1) {
+                Some(b'\\') => index += 2,
+                Some(b'x')
+                    if bytes.get(index + 2..index + 4).is_some_and(|hex| hex.iter().all(u8::is_ascii_hexdigit)) =>
+                {
+                    index += 4
+                }
+                _ => return Err("cursor is not a name list_dir returned; pass a previous page's next_cursor".into()),
+            }
+        } else {
+            index += 1;
+        }
+    }
+    Ok(())
+}
+
 /// A name's raw bytes as text: UTF-8 as is, a backslash doubled, any other byte as `\xHH`, so distinct names never
-/// share a text form and the order of texts is the order of names for the cursor.
+/// share a text form. Entries are sorted by this text, and the cursor compares against it, so paging is monotonic
+/// (the text order is not the raw byte order: `\xff` sorts with the backslash).
 fn escape(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len());
     for chunk in bytes.utf8_chunks() {
@@ -115,14 +141,15 @@ fn sniff(head: &[u8]) -> &'static str {
     "unknown"
 }
 
-/// Reads the first bytes of the regular file at `path` without following a symlink put in its place.
+/// Reads the first bytes of the regular file at `path` without following a symlink put in its place, and without
+/// blocking on a FIFO swapped in since it was listed.
 fn read_head(path: &Path) -> Option<Vec<u8>> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        options.custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32);
     }
     let file = options.open(path).ok()?;
     if !file.metadata().ok()?.is_file() {
@@ -147,25 +174,37 @@ pub fn list_dir(query: &ListDirQuery) -> Result<DirListing, String> {
     if !metadata.is_dir() {
         return Err(format!("{shown} is not a directory; open it by path with binary_info or file_layout"));
     }
-    let mut names = Vec::new();
+    if let Some(cursor) = &query.cursor {
+        check_cursor(cursor)?;
+    }
+    // Only the page and the entry after it are kept: the smallest keys at or after the cursor, so a directory of
+    // any size pages in memory bounded by the page size.
+    let mut total = 0;
+    let mut truncated = false;
+    let mut kept: std::collections::BinaryHeap<(String, std::ffi::OsString)> = std::collections::BinaryHeap::new();
     for entry in std::fs::read_dir(&query.path).map_err(|error| format!("{shown}: {error}"))? {
         let entry = entry.map_err(|error| format!("{shown}: {error}"))?;
-        if names.len() == MAX_DIR_ENTRIES {
-            return Err(format!("{shown} holds more than {MAX_DIR_ENTRIES} entries; list a subdirectory"));
+        if total == MAX_DIR_ENTRIES {
+            truncated = true;
+            break;
         }
-        names.push(entry.file_name());
+        total += 1;
+        let name = entry.file_name();
+        let key = escape(&name_bytes(&name));
+        if query.cursor.as_ref().is_some_and(|cursor| key.as_str() < cursor.as_str()) {
+            continue;
+        }
+        kept.push((key, name));
+        if kept.len() > limit + 1 {
+            kept.pop();
+        }
     }
-    let mut names: Vec<(Vec<u8>, std::ffi::OsString)> =
-        names.into_iter().map(|name| (name_bytes(&name), name)).collect();
-    names.sort_unstable();
-    let start = match &query.cursor {
-        Some(cursor) => names.partition_point(|(bytes, _)| escape(bytes).as_str() < cursor.as_str()),
-        None => 0,
-    };
-    let end = names.len().min(start + limit);
-    let entries = names[start..end]
+    let mut names = kept.into_sorted_vec();
+    let next_cursor = (names.len() > limit).then(|| names.remove(limit).0);
+    names.truncate(limit);
+    let entries = names
         .iter()
-        .map(|(bytes, name)| {
+        .map(|(key, name)| {
             let path = query.path.join(name);
             let metadata = std::fs::symlink_metadata(&path).ok();
             let file_type = metadata.as_ref().map(std::fs::Metadata::file_type);
@@ -181,14 +220,20 @@ pub fn list_dir(query: &ListDirQuery) -> Result<DirListing, String> {
                 .then(|| std::fs::read_link(&path).ok())
                 .flatten()
                 .map(|target| escape(&name_bytes(target.as_os_str())));
-            DirEntry { name: escape(bytes), kind, size, format, link }
+            DirEntry { name: key.clone(), kind, size, format, link }
         })
         .collect();
     Ok(DirListing {
         path: query.path.clone(),
-        total: names.len(),
+        total,
         entries,
-        next_cursor: names.get(end).map(|(bytes, _)| escape(bytes)),
+        next_cursor,
+        truncated: truncated.then(|| {
+            format!(
+                "the directory holds more than {MAX_DIR_ENTRIES} entries: only the first {MAX_DIR_ENTRIES} read (in \
+                 directory order) were listed and counted; list a subdirectory or narrow the tree"
+            )
+        }),
         next: "Open an executable by its path with binary_info or triage_report; a headerless image with \
                file_layout; a filesystem image (squashfs, ext, cpio, tar) with fs_list.",
     })
@@ -208,5 +253,33 @@ mod tests {
         assert_eq!(sniff(b"\x1f\x8b\x08"), "gzip");
         assert_eq!(sniff(b"hello\n"), "text");
         assert_eq!(sniff(b"\x00\x01\x02"), "unknown");
+    }
+
+    /// Sorting by the escaped key and partitioning on it at the next key always advances, even where the key order
+    /// differs from the byte order (0xff escapes to a backslash-led text).
+    #[test]
+    fn pages_by_escaped_key_always_advance() {
+        let mut keys: Vec<String> = [&b"a"[..], b"b", b"\xff", b"\\"].iter().map(|name| escape(name)).collect();
+        keys.sort();
+        assert_eq!(keys, ["\\\\", "\\xff", "a", "b"]);
+        let mut seen = Vec::new();
+        let mut cursor: Option<&str> = None;
+        loop {
+            let start = cursor.map_or(0, |cursor| keys.partition_point(|key| key.as_str() < cursor));
+            let page = &keys[start..keys.len().min(start + 1)];
+            seen.extend(page.iter().cloned());
+            match keys.get(start + 1) {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+            assert!(seen.len() <= keys.len(), "paging loops: {seen:?}");
+        }
+        assert_eq!(seen, keys);
+        for cursor in &keys {
+            check_cursor(cursor).unwrap();
+        }
+        for malformed in ["\\", "\\q", "a\\x4", "\\xzz"] {
+            assert!(check_cursor(malformed).is_err(), "{malformed}");
+        }
     }
 }

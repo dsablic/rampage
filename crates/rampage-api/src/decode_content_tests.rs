@@ -184,8 +184,8 @@ fn lzss_4k_receipt_is_identical_to_the_original_provider() {
             "Expansion budgeting uses the entire selected input range, including any trailing bytes.",
             "Decoded offsets are not source-file offsets or load addresses. \
              No executable format or architecture is inferred.",
-            "Bytes are transient. No extraction, file publication, recursion, native loading, \
-             annotations or execution.",
+            "This decode writes no file (write_decoded_range writes its output to a new one on request). No \
+             extraction, recursion, native loading, annotations or execution.",
             "Decode deadline is cooperative; regular-file reads and hash computation are not forcibly interrupted.",
             "Descriptor/path metadata is revalidated; source reads are not atomic with concurrent file modification.",
         ],

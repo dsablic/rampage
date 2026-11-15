@@ -426,6 +426,12 @@ async fn contract_mcp_carve_results() {
     exercise(c, o, "fs_list", json!({"path": payload, "inner": ["system.img"], "limit": 2})).await;
     exercise(c, o, "fs_extract", json!({"path": payload, "inner": ["system.img"], "output_dir": scratch.0.join("fs")}))
         .await;
+    let stream = scratch.0.join("stream.bin");
+    std::fs::write(&stream, [7, b'A', b'B', b'C']).unwrap();
+    let decoded = scratch.0.canonicalize().unwrap().join("decoded.bin");
+    let write = json!({"path": stream, "codec": "lzss-4k", "offset": 0, "length": 4, "expected_output_size": 3,
+        "output_path": decoded});
+    exercise(c, o, "write_decoded_range", write).await;
     let endpoints = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../rampage-api/tests/fixtures/endpoints-x64.elf");
     exercise(c, o, "endpoint_inventory", json!({"path": endpoints, "decode": true})).await;
     let list = scratch.0.join("blocklist.txt");

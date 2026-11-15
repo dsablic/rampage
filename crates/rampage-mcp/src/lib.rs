@@ -686,7 +686,14 @@ impl RampageServer {
             .into_iter()
             .find(|text| {
                 let path = base.join(text);
-                let resolved = path.canonicalize().unwrap_or(path);
+                // A path that does not exist yet (a file a tool would write) resolves through its parent, as
+                // the writers check it.
+                let resolved = path.canonicalize().unwrap_or_else(|_| {
+                    match (path.parent().and_then(|parent| parent.canonicalize().ok()), path.file_name()) {
+                        (Some(parent), Some(name)) => parent.join(name),
+                        _ => path.clone(),
+                    }
+                });
                 self.guarded.iter().any(|root| resolved.starts_with(root))
             })
             .map(str::to_owned)
@@ -1051,17 +1058,16 @@ impl ServerHandler for RampageServer {
             }
             let listed = rmcp::model::Tool::new(tool.name, tool.description, schema);
             match tool.effect {
-                // endpoint_blocklist and decode_file_range (with output_path) replace the regular file they name (never
-                // through a symlink) with the same content for the same arguments.
-                tools::Effect::FileWrite if matches!(tool.name, "endpoint_blocklist" | "decode_file_range") => listed
-                    .annotate(
-                        rmcp::model::ToolAnnotations::new()
-                            .read_only(false)
-                            .destructive(true)
-                            .idempotent(true)
-                            .open_world(false),
-                    ),
-                // New files under a directory the caller names, never over existing ones.
+                // endpoint_blocklist replaces the regular file it names (never through a symlink) with the same
+                // content for the same arguments.
+                tools::Effect::FileWrite if tool.name == "endpoint_blocklist" => listed.annotate(
+                    rmcp::model::ToolAnnotations::new()
+                        .read_only(false)
+                        .destructive(true)
+                        .idempotent(true)
+                        .open_world(false),
+                ),
+                // New files (fs_extract, write_decoded_range) where the caller names, never over existing ones.
                 tools::Effect::FileWrite => listed.annotate(
                     rmcp::model::ToolAnnotations::new()
                         .read_only(false)

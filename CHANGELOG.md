@@ -31,17 +31,19 @@ see the [stability policy](docs/stability.md) for what the version promises.
 - Decoders name the next step: `decode_file_range` and each reproduced `probe_compression` candidate return
   `open_as_raw`, a `raw` selector for the decoded bytes (offset, length and `decode`), with a one-line `next`
   saying to add a profile and load address and pass it to a Raw-capable tool.
-- `decode_file_range` writes the whole decoded output to a file on request: `output_path` (absolute, in an existing
-  directory, never through a symlink; an existing file only with `overwrite: true`), reported as `written`. The
-  tool is now annotated as writing files. See [decoding](docs/decoding.md#mcp).
+- Decoded bytes to a file: the new `write_decoded_range` file tool (group `carve`) decodes a range as
+  `decode_file_range` does and writes the whole output to a new file at an absolute `output_path`. It never
+  replaces a file, never writes through a symlinked directory or target, creates the file exclusively with mode
+  0644, and reports `written`. `decode_file_range` itself writes nothing. See [decoding](docs/decoding.md#mcp).
 - Folders: the new `list_dir` file tool (group `core`) lists a directory, each entry with its kind (symlinks shown,
   never followed), size and a format sniffed from its first bytes (executables, filesystem images, archives and
-  compressed streams, Intel HEX, S-records, text), sorted by name and paged by cursor, so an agent given only a
-  folder can start. `endpoint_inventory` names the first 20 files it ignored, with the reason, in
+  compressed streams, Intel HEX, S-records, text), sorted by name and paged by cursor in memory bounded by the page
+  (a directory past 1,000,000 entries is listed in part, saying so), so an agent given only a folder can start. `endpoint_inventory` names the first 20 files it ignored, with the reason, in
   `ignored_entries`. See [MCP](docs/mcp.md).
 - Raw projects: `list_strings` and `inspect_data` take the `raw` selector. Strings come from every backed region
-  at mapped addresses, decoded regions included; in a code region a run is listed when a NUL ends it, since flash
-  images keep constants among their code. See [MCP](docs/mcp.md#raw-projects).
+  at mapped addresses, decoded regions included; in a code region a run is listed when a NUL ends it and no
+  discovered instruction overlaps it, since flash images keep constants among their code. `inspect_data` gives a
+  file offset only for bytes mapped from a file range. See [MCP](docs/mcp.md#raw-projects).
 
 ## 1.5.0 (2026-11-15)
 
