@@ -1,0 +1,22 @@
+[package]
+name = "rampage-dex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+autotests = false
+
+[features]
+# Writers for synthetic DEX, binary XML and APK fixtures, for this crate's tests and its dependents'.
+testkit = []
+
+[dependencies]
+serde.workspace = true
+sha1.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rampage-dex = { path = ".", features = ["testkit"] }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
