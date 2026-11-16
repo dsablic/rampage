@@ -3471,7 +3471,9 @@ pub fn tools() -> Vec<Tool> {
             "Format, architecture, entry point and retained image metadata. view=full (default) preserves original \
              JSON; summary replaces segment/section/register/module rows with counts and explicit omission receipts \
              while retaining identity, source, warnings and other evidence. code is unsupported for metadata. \
-             Oversized views refuse with compact-view guidance, never plaintext truncation.",
+             Oversized views refuse with compact-view guidance, never plaintext truncation; a Raw project's `raw` \
+             lists keep their first rows with counts and receipts instead (3 in summary, 16 when full does not fit), \
+             and sections still too large keep only scalar fields and counts.",
             |project, args: ViewArgs| {
                 let value =
                     serde_json::to_value(project.summary()).map_err(|error| ApiError::Invalid(error.to_string()))?;

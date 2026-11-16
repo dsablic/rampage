@@ -6,6 +6,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- Raw `binary_info` fits the tool budget: on a Raw project the summary view keeps the first 3 rows of every list
+  under `raw` (decode receipts, vector and pointer tables, scatter-load copies, base evidence) with counts and
+  omission receipts, a full view too large for 60,000 bytes keeps 16, and sections that still do not fit are
+  reduced to their scalar fields and counts, so the call no longer fails over size. Native results are unchanged.
 - Sparse Raw discovery runs the pointer-table scan itself: a Cortex-M `raw` selector that leaves `pointer_tables`
   unset now scans for tables of code pointers when discovery from the entry, seeds, vector table and scatter-load
   jump finds fewer than one function per 16 KiB of code, instead of only suggesting it. `binary_info` reports why

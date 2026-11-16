@@ -31,8 +31,133 @@ pub enum ToolViewKind {
 /// Full preserves the original JSON value. Other views omit only named, known payloads and retain unknown fields.
 /// The complete serialized result, including omission receipts, must fit the byte budget or the call refuses.
 pub fn project_tool_view(value: Value, kind: ToolViewKind, view: ToolView) -> Result<Value, ApiError> {
+    if kind == ToolViewKind::BinaryInfo && value.get("raw").is_some_and(Value::is_object) {
+        return raw_binary_info(value, view);
+    }
     let value = project(value, kind, view)?;
     checked(value, kind, view)
+}
+
+/// Rows kept per list of a Raw project's `raw` section in a binary_info summary; lists of plain values keep more.
+const RAW_SUMMARY_ROWS: usize = 3;
+const RAW_SUMMARY_VALUES: usize = 8;
+/// Rows kept per `raw` list when a full view does not fit the budget.
+const RAW_FULL_ROWS: usize = 16;
+
+/// A Raw project's binary_info. The summary keeps the first few rows of every list under `raw` (decode receipts,
+/// vector and pointer tables, scatter-load copies, base evidence) with counts and receipts; a full view that does
+/// not fit keeps more rows the same way. Either then replaces whole `raw` sections, largest first, by their
+/// scalar fields and list counts until the result fits, so the call never fails over the size of `raw` alone.
+fn raw_binary_info(value: Value, view: ToolView) -> Result<Value, ApiError> {
+    let kind = ToolViewKind::BinaryInfo;
+    let mut value = match view {
+        ToolView::Full if fits(&value) => return Ok(value),
+        ToolView::Full => {
+            let mut value = value;
+            let mut projection = Projection::default();
+            shorten_raw(&mut value, RAW_FULL_ROWS, &mut projection)?;
+            let object = object(&mut value, "binary info")?;
+            if object.contains_key("view_projection") {
+                return Err(invalid("view_projection is reserved for the output projection receipt"));
+            }
+            object.insert(
+                "view_projection".into(),
+                json!({
+                    "kind": kind, "view": view, "omissions": projection.omissions, "code_kind": "not_code",
+                    "fitted": format!("the complete result exceeds {MAX_TOOL_VIEW_BYTES} bytes: lists under raw keep \
+                                       their first {RAW_FULL_ROWS} rows"),
+                }),
+            );
+            value
+        }
+        _ => project(value, kind, view)?,
+    };
+    let mut collapsed = Vec::new();
+    while !fits(&value) {
+        let Some(raw) = value.get_mut("raw").and_then(Value::as_object_mut) else { break };
+        let largest = raw
+            .iter()
+            .filter(|(key, section)| (section.is_object() || section.is_array()) && !collapsed.contains(*key))
+            .max_by_key(|(_, section)| json_bytes(section))
+            .map(|(key, _)| key.clone());
+        let Some(key) = largest else { break };
+        let section = raw.remove(&key).expect("listed above");
+        let receipt = json!({
+            "path": format!("/raw/{key}"), "json_bytes": json_bytes(&section),
+            "reason": "section reduced to its scalar fields and list counts to fit the budget",
+        });
+        let reduced = match &section {
+            Value::Array(items) => {
+                raw.insert(format!("{key}_count"), json!(items.len()));
+                None
+            }
+            Value::Object(fields) => Some(Value::Object(
+                fields
+                    .iter()
+                    .filter_map(|(field, value)| match value {
+                        Value::Array(items) => Some((format!("{field}_count"), json!(items.len()))),
+                        Value::Object(_) => None,
+                        scalar => Some((field.clone(), scalar.clone())),
+                    })
+                    .collect(),
+            )),
+            _ => unreachable!("only lists and objects are reduced"),
+        };
+        if let Some(reduced) = reduced {
+            raw.insert(key.clone(), reduced);
+        }
+        collapsed.push(key);
+        if let Some(omissions) = value.pointer_mut("/view_projection/omissions").and_then(Value::as_array_mut) {
+            omissions.push(receipt);
+        }
+    }
+    checked(value, kind, view)
+}
+
+/// Keeps the first `rows` rows of every list under `raw` (more for lists of plain values), recording each cut.
+fn shorten_raw(value: &mut Value, rows: usize, projection: &mut Projection) -> Result<(), ApiError> {
+    match value.get_mut("raw") {
+        Some(raw) => shorten_lists(raw, "/raw", rows, projection),
+        None => Ok(()),
+    }
+}
+
+fn shorten_lists(value: &mut Value, path: &str, rows: usize, projection: &mut Projection) -> Result<(), ApiError> {
+    match value {
+        Value::Object(object) => {
+            let keys: Vec<String> = object.keys().cloned().collect();
+            for key in keys {
+                let child = format!("{path}/{key}");
+                if let Some(items) = object.get_mut(&key).and_then(Value::as_array_mut) {
+                    let keep = if items.iter().any(|item| item.is_object() || item.is_array()) {
+                        rows
+                    } else {
+                        rows.max(RAW_SUMMARY_VALUES)
+                    };
+                    let total = items.len();
+                    if total > keep {
+                        let rest = Value::Array(items.split_off(keep));
+                        let reason = format!(
+                            "rows {keep}.. omitted: the first {keep} of {total} kept; view=full lists every row \
+                             when it fits {MAX_TOOL_VIEW_BYTES} bytes"
+                        );
+                        projection.record(&child, &rest, &reason)?;
+                        object.entry(format!("{key}_count")).or_insert(json!(total));
+                    }
+                }
+                if let Some(child_value) = object.get_mut(&key) {
+                    shorten_lists(child_value, &child, rows, projection)?;
+                }
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter_mut().enumerate() {
+                shorten_lists(item, &format!("{path}/{index}"), rows, projection)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// The view projection of `value` before its byte budget is checked.
@@ -1077,7 +1202,7 @@ fn binary_info(value: &mut Value, projection: &mut Projection) -> Result<(), Api
     for key in ["segments", "sections", "snapshot_modules", "snapshot_registers"] {
         projection.array(object, key, &format!("/{key}"))?;
     }
-    Ok(())
+    shorten_raw(value, RAW_SUMMARY_ROWS, projection)
 }
 
 fn inspect_data(value: &mut Value, projection: &mut Projection) -> Result<(), ApiError> {
@@ -1916,6 +2041,87 @@ mod tests {
         let result = project_tool_view(graph, ToolViewKind::FunctionGraph, ToolView::Summary).unwrap();
         assert_eq!(result["instructions_count"], 0);
         assert_eq!(result["blocks_count"], 0);
+    }
+
+    /// A Raw binary_info whose decode receipt, pointer tables, scatter-load copies and base evidence together exceed
+    /// the budget many times over (thousands of tables, as a large decoded image has).
+    fn oversized_raw_binary_info() -> Value {
+        let mut value = native_binary_info();
+        let entry = |index: usize| {
+            json!({ "index": index, "address": format!("{:#x}", 0x6000_0000 + 4 * index),
+                                           "status": "accepted", "evidence": ["push_lr", "call_target"] })
+        };
+        let tables: Vec<Value> = (0..2000)
+            .map(|table| {
+                json!({ "address": format!("{:#x}", 0x6010_0000 + 64 * table), "stride": 4,
+                                 "status": "accepted", "entries": (0..12).map(entry).collect::<Vec<_>>() })
+            })
+            .collect();
+        let copies: Vec<Value> = (0..400)
+            .map(|copy| {
+                json!({ "kind": "copy", "destination": format!("{:#x}", 0x2000_0000 + 0x100 * copy),
+                                "length": 256, "store_sites": ["0x60000100", "0x60000104"] })
+            })
+            .collect();
+        value["raw"] = json!({
+            "profile": "ARM:LE:32:Cortex", "base_address": "0x60000000", "length": 3_600_000, "seed_count": 4000,
+            "regions": [{ "name": "raw.code", "source": { "kind": "decoded",
+                          "receipt": { "steps": (0..3000).map(|step| json!({ "at": step })).collect::<Vec<_>>() } } }],
+            "pointer_tables": { "words_scanned": 900_000, "accepted_tables": 2000, "tables": tables, "note": "scan" },
+            "scatter_load": { "entry": "0x60000000", "copies": copies, "copies_not_listed": 0 },
+            "base_check": { "verdict": "fits", "candidates": (0..300).map(|n| json!({ "base_address": n })).collect::<Vec<_>>() },
+        });
+        value
+    }
+
+    #[test]
+    fn a_raw_summary_keeps_the_first_rows_of_each_list_and_always_fits() {
+        let original = oversized_raw_binary_info();
+        assert!(json_bytes(&original) > 10 * MAX_TOOL_VIEW_BYTES);
+        let summary = project_tool_view(original.clone(), ToolViewKind::BinaryInfo, ToolView::Summary).unwrap();
+        assert!(json_bytes(&summary) <= MAX_TOOL_VIEW_BYTES);
+        let raw = &summary["raw"];
+        assert_eq!(raw["pointer_tables"]["tables"].as_array().unwrap().len(), RAW_SUMMARY_ROWS);
+        assert_eq!(raw["pointer_tables"]["tables_count"], 2000);
+        assert_eq!(raw["pointer_tables"]["tables"][0]["entries_count"], 12);
+        assert_eq!(raw["pointer_tables"]["accepted_tables"], 2000);
+        assert_eq!(raw["scatter_load"]["copies_count"], 400);
+        assert_eq!(raw["base_check"]["candidates_count"], 300);
+        assert_eq!(raw["regions"][0]["source"]["receipt"]["steps_count"], 3000);
+        let omissions = summary["view_projection"]["omissions"].as_array().unwrap();
+        let tables = omissions.iter().find(|receipt| receipt["path"] == "/raw/pointer_tables/tables").unwrap();
+        assert_eq!(tables["items"], 2000 - RAW_SUMMARY_ROWS);
+        assert!(tables["reason"].as_str().unwrap().contains("view=full"));
+
+        // The full view keeps more rows when the whole result does not fit, and never refuses over `raw`.
+        let full = project_tool_view(original.clone(), ToolViewKind::BinaryInfo, ToolView::Full).unwrap();
+        assert!(json_bytes(&full) <= MAX_TOOL_VIEW_BYTES);
+        assert_eq!(full["view_projection"]["view"], "full");
+        assert!(full["view_projection"]["fitted"].as_str().unwrap().contains("first 16 rows"));
+        assert_eq!(full["segments"], original["segments"]);
+
+        // Sections still too large after shortening are reduced to their scalar fields, largest first.
+        let mut wide = original;
+        wide["raw"]["pointer_tables"]["tables"] =
+            json!((0..3).map(|_| json!({ "note": "x".repeat(MAX_TOOL_VIEW_BYTES) })).collect::<Vec<_>>());
+        let summary = project_tool_view(wide, ToolViewKind::BinaryInfo, ToolView::Summary).unwrap();
+        assert_eq!(
+            summary["raw"]["pointer_tables"],
+            json!({ "words_scanned": 900_000, "accepted_tables": 2000,
+                                                               "tables_count": 3, "note": "scan" })
+        );
+        let omissions = summary["view_projection"]["omissions"].as_array().unwrap();
+        assert!(omissions.iter().any(|receipt| receipt["path"] == "/raw/pointer_tables"
+            && receipt["reason"].as_str().unwrap().contains("scalar fields")));
+        assert!(summary["raw"]["scatter_load"]["copies"].is_array(), "smaller sections stay");
+    }
+
+    /// A native binary_info keeps its exact-or-refuse full view.
+    #[test]
+    fn a_native_full_view_still_refuses_when_oversized() {
+        let mut original = native_binary_info();
+        original["warnings"] = json!(["x".repeat(MAX_TOOL_VIEW_BYTES)]);
+        assert!(project_tool_view(original, ToolViewKind::BinaryInfo, ToolView::Full).is_err());
     }
 
     #[test]

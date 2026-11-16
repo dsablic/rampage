@@ -173,7 +173,8 @@ decoded code.
     automatic; a sparse discovery reopens the image with the scan and says so in `raw.pointer_tables.automatic`
     and a `list_functions` note;
   - one Raw `binary_info` summary exceeded the 60,000-byte tool budget and returned only an error (decode receipts,
-    pointer tables, scatter copies and base evidence together); trim or page the Raw sections;
+    pointer tables, scatter copies and base evidence together); trim or page the Raw sections. Done: `raw` lists
+    keep their first rows with counts and receipts, and oversized sections shrink to scalars;
   - `find_crypto`, `function_summary`, `triage` and `lock_mechanisms` still refuse or analyse nothing on Raw
     projects; `xrefs` and reference `search` found nothing because discovery was sparse;
   - `integrity_checks` over the whole 4 MiB container exhausted its budget; it needs a hint to run on the decoded

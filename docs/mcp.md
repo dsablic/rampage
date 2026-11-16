@@ -575,6 +575,13 @@ point into code, tables of leaf functions only).
 `tables`, each with `address`, `stride`, `status`, `refused_reason` and `entries` (`index`, `address`, `word`,
 `status` of `accepted`, `empty` or `refused`, `target`, `evidence`). Only accepted entries become seeds.
 
+`binary_info` on a Raw project never fails over the size of `raw`: `view: "summary"` keeps the first 3 rows of
+every list under `raw` (the decode receipt's, vector-table words, pointer tables and their entries, scatter-load
+copies, base candidates; lists of plain values keep 8) and adds `<list>_count` with an omission receipt per cut in
+`view_projection.omissions`. The default full view is returned unchanged when it fits 60,000 bytes; otherwise its
+`raw` lists keep their first 16 rows the same way and `view_projection.fitted` says so. Either view then reduces
+`raw` sections that still do not fit, largest first, to their scalar fields and list counts, with a receipt.
+
 `disassemble` with `count` up to 1000 pages through the whole image as text, data included.
 The session keeps at most 32 Raw interpretations and 64 MiB of their input bytes, evicting the least recently used.
 
