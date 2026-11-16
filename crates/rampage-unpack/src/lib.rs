@@ -1,5 +1,5 @@
 //! Lists and extracts firmware filesystem images: SquashFS 4.0, ext2/3/4, Android sparse images, Android OTA
-//! payloads (full payloads), cpio (newc) and tar, nested inside one another. Every image is treated as hostile:
+//! payloads (full payloads), cpio (newc), tar and ZIP (APK, AAB, JAR), nested inside one another. Every image is treated as hostile:
 //! see [`Limits`] and [`extract`] for what is enforced. Design: docs/plans/2026-11-15-firmware-unpacking.md.
 
 mod codec;
@@ -14,6 +14,7 @@ mod source;
 mod sparse;
 mod squashfs;
 mod tar;
+mod zip;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -95,6 +96,42 @@ pub fn extract(
     let opened = open_chain(file_source(path, at)?, inner, &mut budget)?;
     let report = extract::extract(&*opened.image, output_dir, selection, &mut budget)?;
     Ok(Extraction { layers: opened.layers, report })
+}
+
+/// What [`read_entries`] read: the layers, every entry, and the content of the selected ones by entry index.
+#[derive(Debug)]
+pub struct Selected {
+    pub layers: Vec<Layer>,
+    pub entries: Vec<Entry>,
+    pub contents: Vec<(usize, Vec<u8>)>,
+}
+
+/// Opens the image `at` selects in `path` (or the one `inner` names inside it) and reads the content of the file
+/// entries `select` picks into memory, under `limits`: per-file and total bytes, and the compression ratio.
+pub fn read_entries(
+    path: &Path,
+    at: At,
+    inner: &[String],
+    limits: Limits,
+    select: &mut dyn FnMut(&Entry) -> bool,
+) -> Result<Selected> {
+    let mut budget = Budget::new(limits);
+    let _meter = limits::MeterScope::new(budget.limits.max_ratio);
+    let opened = open_chain(file_source(path, at)?, inner, &mut budget)?;
+    let entries = opened.image.entries().to_vec();
+    let mut contents = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.kind != EntryKind::File || !select(entry) {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        opened.image.read(index, &mut budget, &mut |chunk| {
+            bytes.extend_from_slice(chunk);
+            Ok(())
+        })?;
+        contents.push((index, bytes));
+    }
+    Ok(Selected { layers: opened.layers, entries, contents })
 }
 
 /// The image format at the start of the file at `path`, if it is one this crate recognises.

@@ -169,6 +169,7 @@ pub fn filesystem_guidance(path: &Path) -> Option<String> {
         Format::OtaPayload => "an Android OTA payload",
         Format::Cpio => "a cpio archive",
         Format::Tar => "a tar archive",
+        Format::Zip => "a ZIP archive (APK, AAB and JAR files are ZIP)",
         Format::Ubi | Format::Ubifs => return None,
     };
     Some(format!(

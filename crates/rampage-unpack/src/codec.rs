@@ -12,6 +12,8 @@ const LZMA_MEMORY_KIB: u32 = 128 * 1024;
 pub enum Codec {
     /// zlib (SquashFS calls it gzip).
     Zlib,
+    /// Raw deflate without a zlib header, as ZIP members store it.
+    Deflate,
     Xz,
     /// The legacy `.lzma` ("LZMA alone") format with its 13-byte header.
     LzmaAlone,
@@ -27,6 +29,7 @@ impl Codec {
     pub fn name(self) -> &'static str {
         match self {
             Codec::Zlib => "zlib",
+            Codec::Deflate => "deflate",
             Codec::Xz => "xz",
             Codec::LzmaAlone => "lzma",
             Codec::Lz4Block => "lz4",
@@ -45,6 +48,7 @@ fn corrupt(codec: Codec, error: impl std::fmt::Display) -> UnpackError {
 fn stream<'a>(codec: Codec, input: Box<dyn Read + 'a>) -> Result<Box<dyn Read + 'a>> {
     Ok(match codec {
         Codec::Zlib => Box::new(flate2::read::ZlibDecoder::new(input)),
+        Codec::Deflate => Box::new(flate2::read::DeflateDecoder::new(input)),
         Codec::Xz => Box::new(lzma_rust2::XzReader::new_mem_limit(input, true, LZMA_MEMORY_KIB)),
         Codec::LzmaAlone => Box::new(
             lzma_rust2::LzmaReader::new_mem_limit(input, LZMA_MEMORY_KIB, None).map_err(|e| corrupt(codec, e))?,
@@ -119,8 +123,16 @@ mod tests {
     #[test]
     fn garbage_is_an_error_for_every_codec() {
         let mut state = 0x9e37_79b9_7f4a_7c15u64;
-        for codec in [Codec::Zlib, Codec::Xz, Codec::LzmaAlone, Codec::Lz4Block, Codec::Zstd, Codec::Lzo, Codec::Bzip2]
-        {
+        for codec in [
+            Codec::Zlib,
+            Codec::Deflate,
+            Codec::Xz,
+            Codec::LzmaAlone,
+            Codec::Lz4Block,
+            Codec::Zstd,
+            Codec::Lzo,
+            Codec::Bzip2,
+        ] {
             for len in [0usize, 1, 13, 64, 4096] {
                 let input: Vec<u8> = (0..len)
                     .map(|_| {

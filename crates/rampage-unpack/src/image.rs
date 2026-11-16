@@ -22,6 +22,8 @@ pub enum Format {
     Tar,
     Ubi,
     Ubifs,
+    /// A ZIP archive: also APK, AAB and JAR files.
+    Zip,
 }
 
 impl Format {
@@ -35,6 +37,7 @@ impl Format {
             Format::Tar => "tar",
             Format::Ubi => "ubi",
             Format::Ubifs => "ubifs",
+            Format::Zip => "zip",
         }
     }
 }
@@ -62,6 +65,9 @@ pub fn detect_bytes(head: &[u8]) -> Option<Format> {
     }
     if at(0, &0x0610_1831u32.to_le_bytes()) {
         return Some(Format::Ubifs);
+    }
+    if at(0, b"PK\x03\x04") || at(0, b"PK\x05\x06") {
+        return Some(Format::Zip);
     }
     if at(0, b"070701") || at(0, b"070702") {
         return Some(Format::Cpio);
@@ -174,7 +180,7 @@ pub fn open(source: Source, entry: Option<String>, limits: &Limits, depth: usize
     let size = source.size();
     let format = detect(&*source).ok_or_else(|| {
         UnpackError::Unsupported(
-            "no SquashFS, ext2/3/4, Android sparse, OTA payload, cpio or tar image starts here".to_owned(),
+            "no SquashFS, ext2/3/4, Android sparse, OTA payload, cpio, tar or ZIP image starts here".to_owned(),
         )
     })?;
     let image: Box<dyn Image> = match format {
@@ -183,6 +189,7 @@ pub fn open(source: Source, entry: Option<String>, limits: &Limits, depth: usize
         Format::OtaPayload => Box::new(crate::ota::Payload::open(source, limits)?),
         Format::Cpio => Box::new(crate::cpio::Cpio::open(source, limits)?),
         Format::Tar => Box::new(crate::tar::Tar::open(source, limits)?),
+        Format::Zip => Box::new(crate::zip::Zip::open(source, limits)?),
         Format::AndroidSparse => {
             let sparse = crate::sparse::SparseView::open(source)?;
             let notes = sparse.notes();

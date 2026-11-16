@@ -614,3 +614,368 @@ pub fn sample_classes() -> Vec<ClassSpec> {
     );
     vec![capture, receiver]
 }
+
+/// An attribute value for [`write_axml`].
+#[derive(Debug, Clone)]
+pub enum XmlValue {
+    Str(String),
+    Int(i64),
+    Bool(bool),
+}
+
+/// An element for [`write_axml`]: attributes are `(name, in the android namespace, value)`.
+#[derive(Debug, Clone, Default)]
+pub struct XmlNode {
+    pub name: String,
+    pub attrs: Vec<(String, bool, XmlValue)>,
+    pub children: Vec<XmlNode>,
+}
+
+impl XmlNode {
+    pub fn new(name: &str) -> Self {
+        Self { name: name.to_owned(), ..Self::default() }
+    }
+
+    pub fn android(mut self, name: &str, value: XmlValue) -> Self {
+        self.attrs.push((name.to_owned(), true, value));
+        self
+    }
+
+    pub fn plain(mut self, name: &str, value: XmlValue) -> Self {
+        self.attrs.push((name.to_owned(), false, value));
+        self
+    }
+
+    pub fn child(mut self, child: XmlNode) -> Self {
+        self.children.push(child);
+        self
+    }
+}
+
+/// The framework attribute id of an `android:` attribute name, for the resource map.
+fn attribute_id(name: &str) -> Option<u32> {
+    Some(match name {
+        "label" => 0x0101_0001,
+        "icon" => 0x0101_0002,
+        "name" => 0x0101_0003,
+        "permission" => 0x0101_0006,
+        "enabled" => 0x0101_000e,
+        "debuggable" => 0x0101_000f,
+        "exported" => 0x0101_0010,
+        "process" => 0x0101_0011,
+        "authorities" => 0x0101_0018,
+        "priority" => 0x0101_001c,
+        "minSdkVersion" => 0x0101_020c,
+        "versionCode" => 0x0101_021b,
+        "versionName" => 0x0101_021c,
+        "targetSdkVersion" => 0x0101_0270,
+        "maxSdkVersion" => 0x0101_0271,
+        _ => return None,
+    })
+}
+
+const ANDROID_URI: &str = "http://schemas.android.com/apk/res/android";
+
+/// Writes `root` as binary XML with a UTF-16 string pool (UTF-8 when `utf8`), a resource map for the `android:`
+/// attribute names it knows, and the android namespace declared on the root.
+pub fn write_axml(root: &XmlNode, utf8: bool) -> Vec<u8> {
+    fn collect(node: &XmlNode, mapped: &mut Vec<String>, other: &mut Vec<String>) {
+        let add = |list: &mut Vec<String>, text: &str| {
+            if !list.iter().any(|item| item == text) {
+                list.push(text.to_owned());
+            }
+        };
+        add(other, &node.name);
+        for (name, android, value) in &node.attrs {
+            if *android && attribute_id(name).is_some() {
+                add(mapped, name);
+            } else {
+                add(other, name);
+            }
+            if let XmlValue::Str(text) = value {
+                add(other, text);
+            }
+        }
+        for child in &node.children {
+            collect(child, mapped, other);
+        }
+    }
+    let mut mapped = Vec::new();
+    let mut other = vec!["android".to_owned(), ANDROID_URI.to_owned()];
+    collect(root, &mut mapped, &mut other);
+    other.retain(|text| !mapped.contains(text));
+    let strings: Vec<String> = mapped.iter().chain(&other).cloned().collect();
+    let index = |text: &str| strings.iter().position(|item| item == text).unwrap() as u32;
+
+    let mut pool_data = Vec::new();
+    let mut offsets = Vec::new();
+    for text in &strings {
+        offsets.push(pool_data.len() as u32);
+        if utf8 {
+            let units = text.encode_utf16().count();
+            pool_data.push(units as u8);
+            pool_data.push(text.len() as u8);
+            pool_data.extend_from_slice(text.as_bytes());
+            pool_data.push(0);
+        } else {
+            let units: Vec<u16> = text.encode_utf16().collect();
+            pool_data.extend_from_slice(&(units.len() as u16).to_le_bytes());
+            for unit in units {
+                pool_data.extend_from_slice(&unit.to_le_bytes());
+            }
+            pool_data.extend_from_slice(&[0, 0]);
+        }
+    }
+    align(&mut pool_data, 4);
+    let mut pool = Vec::new();
+    let strings_start = 28 + offsets.len() * 4;
+    pool.extend_from_slice(&0x0001u16.to_le_bytes());
+    pool.extend_from_slice(&28u16.to_le_bytes());
+    pool.extend_from_slice(&((strings_start + pool_data.len()) as u32).to_le_bytes());
+    pool.extend_from_slice(&(strings.len() as u32).to_le_bytes());
+    pool.extend_from_slice(&0u32.to_le_bytes());
+    pool.extend_from_slice(&(if utf8 { 0x100u32 } else { 0 }).to_le_bytes());
+    pool.extend_from_slice(&(strings_start as u32).to_le_bytes());
+    pool.extend_from_slice(&0u32.to_le_bytes());
+    for offset in offsets {
+        pool.extend_from_slice(&offset.to_le_bytes());
+    }
+    pool.extend_from_slice(&pool_data);
+
+    let mut map = Vec::new();
+    map.extend_from_slice(&0x0180u16.to_le_bytes());
+    map.extend_from_slice(&8u16.to_le_bytes());
+    map.extend_from_slice(&((8 + mapped.len() * 4) as u32).to_le_bytes());
+    for name in &mapped {
+        map.extend_from_slice(&attribute_id(name).unwrap().to_le_bytes());
+    }
+
+    let node_header = |out: &mut Vec<u8>, kind: u16, size: usize| {
+        out.extend_from_slice(&kind.to_le_bytes());
+        out.extend_from_slice(&16u16.to_le_bytes());
+        out.extend_from_slice(&(size as u32).to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&u32::MAX.to_le_bytes());
+    };
+    let mut body = Vec::new();
+    node_header(&mut body, 0x0100, 24);
+    body.extend_from_slice(&index("android").to_le_bytes());
+    body.extend_from_slice(&index(ANDROID_URI).to_le_bytes());
+    fn element(
+        node: &XmlNode,
+        out: &mut Vec<u8>,
+        index: &dyn Fn(&str) -> u32,
+        header: &dyn Fn(&mut Vec<u8>, u16, usize),
+    ) {
+        header(out, 0x0102, 36 + node.attrs.len() * 20);
+        out.extend_from_slice(&u32::MAX.to_le_bytes());
+        out.extend_from_slice(&index(&node.name).to_le_bytes());
+        for value in [20u16, 20, node.attrs.len() as u16, 0, 0, 0] {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for (name, android, value) in &node.attrs {
+            let namespace = if *android { index(ANDROID_URI) } else { u32::MAX };
+            out.extend_from_slice(&namespace.to_le_bytes());
+            out.extend_from_slice(&index(name).to_le_bytes());
+            let (raw, kind, data) = match value {
+                XmlValue::Str(text) => (index(text), 0x03u8, index(text)),
+                XmlValue::Int(number) => (u32::MAX, 0x10, *number as u32),
+                XmlValue::Bool(flag) => (u32::MAX, 0x12, if *flag { u32::MAX } else { 0 }),
+            };
+            out.extend_from_slice(&raw.to_le_bytes());
+            out.extend_from_slice(&8u16.to_le_bytes());
+            out.push(0);
+            out.push(kind);
+            out.extend_from_slice(&data.to_le_bytes());
+        }
+        for child in &node.children {
+            element(child, out, index, header);
+        }
+        header(out, 0x0103, 24);
+        out.extend_from_slice(&u32::MAX.to_le_bytes());
+        out.extend_from_slice(&index(&node.name).to_le_bytes());
+    }
+    element(root, &mut body, &index, &node_header);
+    node_header(&mut body, 0x0101, 24);
+    body.extend_from_slice(&index("android").to_le_bytes());
+    body.extend_from_slice(&index(ANDROID_URI).to_le_bytes());
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&0x0003u16.to_le_bytes());
+    out.extend_from_slice(&8u16.to_le_bytes());
+    out.extend_from_slice(&((8 + pool.len() + map.len() + body.len()) as u32).to_le_bytes());
+    out.extend_from_slice(&pool);
+    out.extend_from_slice(&map);
+    out.extend_from_slice(&body);
+    out
+}
+
+/// The sample manifest: package `com.example.recorder`, four permissions, a launcher activity, a boot receiver
+/// ([`BOOT_RECEIVER_CLASS`]), a microphone foreground service and a provider.
+pub fn sample_manifest() -> XmlNode {
+    use XmlValue::{Bool, Int, Str};
+    let permission = |name: &str| XmlNode::new("uses-permission").android("name", Str(name.to_owned()));
+    let action = |name: &str| XmlNode::new("action").android("name", Str(name.to_owned()));
+    let category = |name: &str| XmlNode::new("category").android("name", Str(name.to_owned()));
+    XmlNode::new("manifest")
+        .android("versionCode", Int(7))
+        .android("versionName", Str("1.2".to_owned()))
+        .plain("package", Str("com.example.recorder".to_owned()))
+        .plain("platformBuildVersionCode", Int(33))
+        .child(XmlNode::new("uses-sdk").android("minSdkVersion", Int(21)).android("targetSdkVersion", Int(33)))
+        .child(permission("android.permission.RECORD_AUDIO"))
+        .child(permission("android.permission.INTERNET"))
+        .child(permission("android.permission.RECEIVE_BOOT_COMPLETED"))
+        .child(permission("android.permission.ACCESS_FINE_LOCATION"))
+        .child(
+            XmlNode::new("application")
+                .android("label", Str("Recorder".to_owned()))
+                .android("usesCleartextTraffic", Bool(true))
+                .child(
+                    XmlNode::new("activity")
+                        .android("name", Str(".MainActivity".to_owned()))
+                        .android("exported", Bool(true))
+                        .child(
+                            XmlNode::new("intent-filter")
+                                .child(action("android.intent.action.MAIN"))
+                                .child(category("android.intent.category.LAUNCHER")),
+                        ),
+                )
+                .child(
+                    XmlNode::new("receiver")
+                        .android("name", Str(".BootReceiver".to_owned()))
+                        .android("exported", Bool(false))
+                        .child(XmlNode::new("intent-filter").child(action("android.intent.action.BOOT_COMPLETED"))),
+                )
+                .child(
+                    XmlNode::new("service")
+                        .android("name", Str("com.example.recorder.CaptureService".to_owned()))
+                        .android("foregroundServiceType", Int(0x80)),
+                )
+                .child(
+                    XmlNode::new("provider")
+                        .android("name", Str(".DataProvider".to_owned()))
+                        .android("authorities", Str("com.example.recorder.data".to_owned()))
+                        .android("exported", Bool(false)),
+                ),
+        )
+}
+
+const CRC_POLY: u32 = 0xedb8_8320;
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for &byte in data {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ CRC_POLY } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
+/// Writes a ZIP archive of `(name, content, deflate)` members, with fixed timestamps.
+pub fn write_zip(members: &[(&str, &[u8], bool)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut directory = Vec::new();
+    for (name, content, deflate) in members {
+        let data = if *deflate {
+            let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+            std::io::Write::write_all(&mut encoder, content).unwrap();
+            encoder.finish().unwrap()
+        } else {
+            content.to_vec()
+        };
+        let method: u16 = if *deflate { 8 } else { 0 };
+        let crc = crc32(content);
+        let offset = out.len() as u32;
+        let common = |out: &mut Vec<u8>| {
+            out.extend_from_slice(&20u16.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(&method.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(&0x0021u16.to_le_bytes());
+            out.extend_from_slice(&crc.to_le_bytes());
+            out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            out.extend_from_slice(&(content.len() as u32).to_le_bytes());
+            out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+        };
+        out.extend_from_slice(b"PK\x03\x04");
+        common(&mut out);
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(&data);
+        directory.extend_from_slice(b"PK\x01\x02");
+        directory.extend_from_slice(&20u16.to_le_bytes());
+        common(&mut directory);
+        directory.extend_from_slice(&[0; 6]);
+        directory.extend_from_slice(&0u32.to_le_bytes());
+        directory.extend_from_slice(&offset.to_le_bytes());
+        directory.extend_from_slice(name.as_bytes());
+    }
+    let directory_offset = out.len() as u32;
+    out.extend_from_slice(&directory);
+    out.extend_from_slice(b"PK\x05\x06");
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&(members.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(members.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(directory.len() as u32).to_le_bytes());
+    out.extend_from_slice(&directory_offset.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
+}
+
+/// A `resources.arsc` with one package and an empty global string pool.
+pub fn sample_resources() -> Vec<u8> {
+    let mut pool = Vec::new();
+    for value in [0x0001u16, 28] {
+        pool.extend_from_slice(&value.to_le_bytes());
+    }
+    for value in [28u32, 0, 0, 0x100, 28, 0] {
+        pool.extend_from_slice(&value.to_le_bytes());
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(&0x0002u16.to_le_bytes());
+    out.extend_from_slice(&12u16.to_le_bytes());
+    out.extend_from_slice(&((12 + pool.len()) as u32).to_le_bytes());
+    out.extend_from_slice(&1u32.to_le_bytes());
+    out.extend_from_slice(&pool);
+    out
+}
+
+/// The second DEX file of the sample APK: one class with a second URL.
+pub fn sample_secondary_classes() -> Vec<ClassSpec> {
+    let code = Code {
+        registers: 1,
+        ins: 0,
+        outs: 0,
+        units: vec![Unit::Raw(0x001a), Unit::String("http://10.0.0.1/metrics".to_owned()), Unit::Raw(0x000e)],
+        tries: Vec::new(),
+    };
+    vec![ClassSpec::new("Lcom/example/recorder/Metrics;", "Ljava/lang/Object;").method(
+        "report",
+        "V",
+        &[],
+        0x9,
+        Some(code),
+    )]
+}
+
+/// The sample APK: the manifest, two DEX files (multidex), `resources.arsc` and `native_lib` (when given) as
+/// `lib/arm64-v8a/libnative.so`.
+pub fn sample_apk(native_lib: Option<&[u8]>) -> Vec<u8> {
+    let manifest = write_axml(&sample_manifest(), false);
+    let classes = write_dex(&sample_classes(), 35);
+    let secondary = write_dex(&sample_secondary_classes(), 35);
+    let resources = sample_resources();
+    let mut members: Vec<(&str, &[u8], bool)> = vec![
+        ("AndroidManifest.xml", &manifest, true),
+        ("classes.dex", &classes, true),
+        ("classes2.dex", &secondary, false),
+        ("resources.arsc", &resources, false),
+    ];
+    if let Some(lib) = native_lib {
+        members.push(("lib/arm64-v8a/libnative.so", lib, false));
+    }
+    write_zip(&members)
+}

@@ -7,12 +7,14 @@ autotests = false
 
 [features]
 # Writers for synthetic DEX, binary XML and APK fixtures, for this crate's tests and its dependents'.
-testkit = []
+testkit = ["dep:flate2"]
 
 [dependencies]
+rampage-unpack.workspace = true
 serde.workspace = true
 sha1.workspace = true
 thiserror.workspace = true
+flate2 = { version = "1.1.10", optional = true }
 
 [dev-dependencies]
 rampage-dex = { path = ".", features = ["testkit"] }
