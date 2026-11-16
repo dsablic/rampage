@@ -35,7 +35,7 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   regions with hashes, block entropy, string clusters and labelled hints, including header-checked
   compressed-component candidates. Limits: statistics and heuristic
   candidates only; no format or architecture detection, and a compressed-component candidate names no codec.
-- Bounded [raw-code windows](raw-code.md) accept explicit ranges and asserted architecture/mode/order/base
+- Bounded [raw-code windows](raw-code.md#raw-code-windows) accept explicit ranges and asserted architecture/mode/order/base
   through MCP without a native executable header. Limits: little-endian x86/x64/ARM/AArch64, linear decoding
   only; no code detection, function discovery or execution.
 - [Native data inspection](data-inspection.md) links bounded stored words to metadata candidates, while
@@ -49,8 +49,9 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   region or zero fill), and reads Intel HEX and Motorola S-records. A compressed image opens with its decoded
   bytes as the code region, from the selector the decoders return. The reset code is followed by a bounded
   interpreter for the [scatter-load copies](mcp.md#scatter-load-copies) startup code makes, which are reported
-  and mapped at their run addresses so discovery continues into the copied code. See [Raw Projects in
-  MCP](mcp.md#multiple-regions-intel-hex-and-s-records). Limits: base addresses and regions are
+  and mapped at their run addresses so discovery continues into the copied code. See [Raw code](raw-code.md) for
+  the workflow, [Raw Projects in MCP](mcp.md#multiple-regions-intel-hex-and-s-records) for the fields and
+  [the firmware walkthrough](firmware-walkthrough.md) for a vendor update file end to end. Limits: base addresses and regions are
   the analyst's assertion; Sleigh profiles other than MSP430 and AVR8 do not decompile; the reset-code follow
   models the integer Thumb instructions startup code uses and skips calls it cannot follow.
 - [CMSIS-SVD peripheral maps](peripheral-maps.md) (`import_svd`, `peripheral_access`) name memory-mapped

@@ -118,10 +118,11 @@ stop-epoch guards, private publication rules, API and acceptance boundary.
 
 The Assistant tab talks to Claude about the open project. It reads functions, graphs, strings and references
 through rampage tools, can save names/comments and typed annotations, and can point the listing at what it
-discusses. It offers binary tools from every group, plus interactive `show_address`, but not the file tools (`carve`,
-`archive_inventory`, `fs_list`, `fs_extract`, `endpoint_inventory`, `endpoint_blocklist`, `list_packs`, `query_debugger`, `inspect_data`, `decode_file_range`, `inspect_raw_code`,
-`inspect_sleigh`, `pyinstaller_archive`, `wasm_module`) or the `debug` tools. See the [MCP tool groups](mcp.md#tool-groups)
-for shared tool names.
+discusses. It offers binary tools from every group, plus interactive `show_address`, but not the file tools
+(`list_dir`, `carve`, `archive_inventory`, `fs_list`, `fs_extract`, `endpoint_inventory`, `endpoint_blocklist`,
+`file_layout`, `decode_file_range`, `write_decoded_range`, `probe_compression`, `inspect_data`, `inspect_raw_code`,
+`inspect_sleigh`, `pyinstaller_archive`, `wasm_module`, `list_packs`, `query_debugger`), `report_observation` or
+the `debug` tools. See the [MCP tool groups](mcp.md#tool-groups) for shared tool names.
 
 Set `ANTHROPIC_API_KEY` through your environment to use the assistant; `RAMPAGE_MODEL` optionally selects the
 model. Keep API credentials out of command-line examples, source control and shared logs. Enter submits a

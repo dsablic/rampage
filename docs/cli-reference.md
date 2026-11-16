@@ -32,7 +32,7 @@ directory, and `ADDRESS` an address or supported name. Brackets describe optiona
 | `binary scan-capa FILE [--rules DIR]` | `capa` | Mandiant capa file-scope feature subset |
 | `binary inspect-data FILE --at ADDRESS [--size N]` | `inspect-data` | Bounded image bytes and pointer candidates ([data inspection](data-inspection.md)) |
 | `binary inspect-sleigh FILE [OPTIONS]` | `inspect-sleigh` | Raw byte windows through the bundled Sleigh IDs ([Sleigh decoding](sleigh-decoding.md)) |
-| `binary inspect-raw FILE --request JSON` | `inspect-raw` | An explicitly mapped raw-code window ([raw code](raw-code.md)) |
+| `binary inspect-raw FILE --request JSON` | `inspect-raw` | An explicitly mapped raw-code window ([raw code](raw-code.md#raw-code-windows)) |
 | `binary decode FILE --codec C --offset N --length N --expected-output-size N` | `decode-file` | Transient decoded bytes of a file range ([decoding](decoding.md)) |
 | `binary layout FILE [--offset N --length N --block-size N]` | — | Fill/occupied regions, block entropy, string clusters, hashes and hints of any file ([file layout](file-layout.md)) |
 | `binary probe-compression FILE --offset N --length N [--expected-output-size N]` | — | Ranked LZSS/LZ4-block decoder parameters for a compressed range ([decoding](decoding.md#probing-an-unknown-variant)) |
@@ -228,7 +228,7 @@ Both serving spellings take the same debug options, `--debug-endpoint`, `--debug
 their `RAMPAGE_DEBUG_*` variables; [debug control](debug-control.md#consent) lists what each allows.
 
 Registered workflows are `triage-report`, `find-main`, `network-surface`, `find-crypto`, `persistence-surface`,
-`string-decoding` and `diff-builds`. Reports retain evidence, confidence, limits and suggested next tools.
+`privacy-surface`, `string-decoding` and `diff-builds`. Reports retain evidence, confidence, limits and suggested next tools.
 `--limit N` caps findings per section (default 25, maximum 200); `--no-decompile` skips find-main's preview.
 `diff-builds` requires `--other FILE`; `--other-image-offset OFFSET` and `--other-image-length N` select an
 embedded second image. These second-input options are rejected for workflows that do not compare images.
@@ -255,13 +255,17 @@ use its `--other-image-*` options for the second. MCP tools take `image_offset`/
 `--raw-json JSON` or `--raw-request REQUEST` (a regular JSON file of at most 1 MiB) opens the positional file as
 an ordinary Raw Project instead of admitting a native header. The `RawProjectRequest` has `profile` (a closed Raw
 language ID),
-`offset` and `length` (original-file bytes, 1..=131072, or up to 4 MiB for `ARM:LE:32:Cortex`), `base_address`,
-optional `entry` and `seeds` (internal code-space BYTE addresses), and for Cortex-M an optional `vector_table`
-(`true` for one at `base_address`, or its address) and `pointer_tables` (`true` seeds functions from tables of
-Thumb code pointers, `false` never scans, unset scans when discovery finds under one function per 16 KiB), and `regions` (further code, data or RAM regions of the same file, optionally decoded
-in memory). `format` `ihex` or `srec` reads Intel HEX or S-records, whose records state every address (omit
-`offset`, `length` and `base_address`). Unknown fields are rejected. The mapping is an analyst
-assertion; see [Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects) for profiles and limits.
+`offset` and `length` (original-file bytes, 1..=131072, or up to 4 MiB for `ARM:LE:32:Cortex`), an optional
+`decode` (map a decoder's output over that range as the code region, so `length` counts encoded bytes, at most
+8 MiB), `base_address`, optional `entry` and `seeds` (internal code-space BYTE addresses), and for Cortex-M an
+optional `vector_table` (`true` for one at `base_address`, or its address), `pointer_tables` (`true` seeds
+functions from tables of Thumb code pointers, `false` never scans, unset scans when discovery finds under one
+function per 16 KiB), `scatter_load` (`false` reports the startup copies without mapping them) and `regions`
+(further code, data or RAM regions of the same file, from a file range, decoded in memory, or copied `from`
+another region). `format` `ihex` or `srec` reads Intel HEX or S-records, whose records state every address (omit
+`offset`, `length` and `base_address`). Unknown fields are rejected. The mapping is an analyst assertion; see
+[Raw code](raw-code.md) for the workflow and [Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects) for
+profiles and limits.
 
 ```sh
 raw='{"profile":"TI_MSP430:LE:16:default","offset":0,"length":30,"base_address":"0x4400","seeds":["0x4400","0x4410"]}'

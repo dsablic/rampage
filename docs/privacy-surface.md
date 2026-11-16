@@ -15,6 +15,9 @@ binary's `path` and the usual `max_per_section` (default 25, at most 200).
 
 ## The owner's flow
 
+[How to check what a device records and where it sends it](device-privacy-check.md) walks through this flow
+with the endpoint tools, from the update file to a router blocklist.
+
 1. `fs_extract` the firmware image (see [firmware filesystem images](firmware-images.md)) and pick the programs
    that link audio, video or input libraries.
 2. `privacy_surface` on each. Read `Capture triggers` first: a `no_user_trigger` finding says a capture is reached

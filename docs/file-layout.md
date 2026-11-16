@@ -73,7 +73,7 @@ Every `offset` and `length` in the result is an integer count of original-file b
   exception words inside the range, at least half of them zero or odd code-region addresses. Only region starts
   are checked, so a table that follows padding shorter than `min_fill_run`, or that sits inside occupied bytes,
   gets no hint; lower `min_fill_run`, or open the range as a Cortex-M Raw Project with `vector_table` set to its
-  address. A candidate establishes no architecture, load base or entry point; [raw-code windows](raw-code.md) and
+  address. A candidate establishes no architecture, load base or entry point; [raw-code windows](raw-code.md#raw-code-windows) and
   [Sleigh decoding](sleigh-decoding.md) take those as explicit analyst assertions.
 
   `compressed_component_candidate` is a header-checked compressed-component candidate: a small header whose

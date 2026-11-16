@@ -10,6 +10,9 @@ Both are file tools in the `carve` group. They take a path, open no project and 
 
 ## The owner's flow
 
+[How to check what a device records and where it sends it](device-privacy-check.md) walks through this flow
+with `privacy_surface`, from the update file to a router blocklist.
+
 1. `fs_extract` the firmware's filesystem image into a directory (see [firmware filesystem images](firmware-images.md)).
 2. `endpoint_inventory` with `path` set to that directory. Read `domains`: each registrable domain, the hosts under
    it and the files naming it, most files first, so "five programs and a boot script talk to `*.vendor-cloud.example`"

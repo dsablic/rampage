@@ -96,7 +96,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 that answer common first questions, such as `language_metadata` and `class_evidence` for class names and
 hierarchies, are in `core` so that a client deferring schemas still sees their names.
 
-A default session lists 45 tools: the 44 in `core` plus `enable_tools`. Enabling every group lists 93. The
+A default session lists 47 tools: the 46 in `core` plus `enable_tools`. Enabling every group lists 102. The
 `debug` group adds 14 tools (16 with `--debug-writes`), `--observations` adds `report_observation`, and a
 `--corpus` server lists `enable_tools` and the 4 `improve` tools only.
 
@@ -332,7 +332,7 @@ ARM, Thumb and AArch64 rows print decimal `#` immediates of 10 or more in hex to
 the decoder renders it (operand globs match it) and carry those hex values in `immediates_hex` (`"0x78e"`); the
 CLI listing prints them after the instruction as `; 0x78e`, before the comment column. A native binary tool on a file with no recognised header says how to read it as
 headerless code: `inspect_raw_code` for ARM/Thumb, AArch64 and x86, or the `raw` selector for the Raw profiles.
-See [raw-code windows](raw-code.md). `decode_file_range` and `inspect_data` have separate source/coordinate
+See [raw-code windows](raw-code.md#raw-code-windows). `decode_file_range` and `inspect_data` have separate source/coordinate
 contracts; see [decoding](decoding.md) and [data inspection](data-inspection.md).
 
 `list_dir` (core) lists one directory, so an agent given only a folder can start: each entry's `name`, `kind`
@@ -509,6 +509,9 @@ Errors start with a code: `unknown_session`, `endpoint_not_allowed`, `session_li
 [debug control](debug-control.md).
 
 ## Raw projects
+
+The workflow (choosing a base, compressed images, regions, scatter-load) is in [Raw code](raw-code.md); this
+section is the reference.
 
 Raw-capable tools (`binary_info`, `list_functions`, `disassemble`, `function_graph`, `xrefs`, `search`,
 `list_strings`, `analysis_diagnostics`, `entry_diagnostics`, `capabilities`, `rename`, `set_comment`,

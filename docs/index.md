@@ -10,6 +10,12 @@ is, then the [tutorial](getting-started.md).
 
 ## How-to guides
 
+- [Read the code in a firmware update file](firmware-walkthrough.md): from a vendor container to a compressed
+  Cortex-M image opened at its load address, with startup copies mapped, decompiled and its checksums checked.
+- [Analyse headerless code as a Raw project](raw-code.md): choose a base address, open a compressed image, map
+  further regions, scatter-load copies and pointer tables, and which tools take a `raw` selector.
+- [Check what a device records and where it sends it](device-privacy-check.md): unpack an update, list its
+  endpoints, write a router blocklist and find capture-to-send paths.
 - [Debug a live target](debug-control.md): allow a GDB remote stub, `debugserver` or a Windows stub, then inspect
   and control it through the `debug` tools. Also the reference for those tools.
 - [Analyse a captured runtime image](runtime-snapshots.md): export a snapshot from LLDB and open it in rampage.
@@ -63,9 +69,11 @@ Formats and raw code:
 - [File layout](file-layout.md): regions, padding, entropy, string clusters and hashes of any file.
 - [CMSIS-SVD peripheral maps](peripheral-maps.md): register names in decompiled C, disassembly, xrefs and
   evaluation of firmware.
-- [Raw-code windows](raw-code.md), [explicit Sleigh decoding and Raw Projects](sleigh-decoding.md),
-  [explicit content decoding](decoding.md), [native data inspection](data-inspection.md),
-  [ZIP32 inventory](archive-inventory.md).
+- [Raw projects in MCP](mcp.md#raw-projects): the `raw` selector, regions, decoded and copied regions,
+  scatter-load, pointer tables and load-address candidates.
+- [Raw-code windows](raw-code.md#raw-code-windows), [explicit Sleigh decoding and Raw Projects](sleigh-decoding.md),
+  [explicit content decoding](decoding.md) (including `write_decoded_range` and `probe_compression`),
+  [native data inspection](data-inspection.md), [ZIP32 inventory](archive-inventory.md).
 - [Firmware filesystem images](firmware-images.md): list and extract SquashFS, ext2/3/4, Android sparse and OTA
   payload, cpio and tar images safely.
 - [Endpoint inventory and blocklists](endpoint-inventory.md): the hosts, URLs, IPs, pins and certificates a binary or

@@ -1,7 +1,8 @@
 # Known limits
 
-What rampage 1.0 does not do, or does only partly. The [comparison with Ghidra, IDA and REA](comparison.md) sets
-these against other tools, and the [stability policy](stability.md) says which areas are *experimental*.
+What rampage does not do, or does only partly, as of 1.6.0. The
+[comparison with Ghidra, IDA and REA](comparison.md) sets these against other tools, and the
+[stability policy](stability.md) says which areas are *experimental*.
 
 ## Hosts
 
@@ -36,10 +37,25 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   wildcard byte patterns scan for their longest fixed run first, so both complete on a 26 MB stripped Go binary;
   a wildcard pattern whose fixed runs are short or common still covers less of a large image than an exact
   search, and a stopped search says so.
-- The Cortex-M Raw profile (`ARM:LE:32:Cortex`) is experimental. Its primary code region holds at most 4 MiB,
-  and up to 15 further regions (code, read-only data, RAM or MMIO) are mapped only when the analyst lists them;
-  base addresses are the analyst's assertion. A-profile ARM code has no Raw profile; `inspect_raw_code` reads
-  it, without functions, cross-references or decompilation.
+- The Cortex-M Raw profile (`ARM:LE:32:Cortex`) is experimental. Its backed regions hold at most 4 MiB in all
+  (a compressed primary region at most 8 MiB encoded), with up to 15 regions beside the primary one, listed by the
+  analyst or mapped from the startup copies the reset-code follow finds. The base address is the analyst's
+  assertion: `base_candidates` and `raw.base_check` suggest and check one, never set it. A-profile ARM code has no
+  Raw profile; `inspect_raw_code` reads it, without functions, cross-references or decompilation.
+- The reset-code follow on Cortex-M models the integer Thumb instructions startup code uses. A call through an
+  instruction it does not model (long multiplies, saturating and SIMD-within-register arithmetic, LDREX/STREX,
+  SVC) or a branch on a peripheral's value is skipped, and a copy that call made is not mapped. Other Raw profiles
+  have no reset-code follow.
+- On Raw projects `find_main` refuses, and `decompile` with `exact_entry` refuses ARM code (exact-entry analysis is
+  x86, x86-64 and AArch64 only). A CRC routine that `integrity_checks` infers from a polynomial literal outside
+  every discovered function is reported but not added to discovery, so `decompile` and `lock_mechanisms` do not
+  see it until you pass its address as a seed.
+- A Raw selector with `decode` decodes its input again on every call before the session finds the project, and
+  `inspect_data` opens Raw images outside the session, so analyst names do not resolve in its `at` and its 16 KiB
+  input budget refuses large selectors.
+- Container records (the words before a compressed stream naming its length, decoded size, checksum and address)
+  are reported by `probe_compression`, `decode_file_range` and `integrity_checks`, not by `carve` or `file_layout`;
+  their roles are inferred from values.
 - An odd address formed into a Cortex-M image that does not start a printable NUL-terminated run is still taken
   as a Thumb code pointer; odd-aligned binary constants can become false function starts.
 - Go string literal bounds come from code references and pointer-aligned static `{ptr, len}` headers in data
@@ -59,6 +75,12 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - The [persistent analysis store](mcp.md#persistent-analysis-store) (experimental) saves function discovery
   only (on by default in release builds): other derived results are recomputed on each open, runtime captures and
   byte-patched views are never stored, and an annotation edit does not trigger incremental re-analysis.
+- Firmware filesystem images: UBI and UBIFS are recognised but not read; vendor SquashFS variants, SquashFS 3.x,
+  delta OTA payloads (they need the previous build) and compressed tar are not read; `carve` finds SquashFS and cpio
+  images inside a container but not ext4, Android sparse or OTA payloads, whose offset you pass as `image_offset`.
+- `endpoint_inventory` matches endpoints lexically: addresses built at run time, encrypted or compressed data and
+  IPv4 addresses stored as integers in code are not found. `privacy_surface` analyses one binary at a time and
+  reads no Java/DEX code; see its [limits](privacy-surface.md#limits).
 - Not built yet: DEX/JVM, object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and
   vftable evidence, `__CxxFrameHandler4` and Itanium exception tables, and incremental re-analysis after edits.
 

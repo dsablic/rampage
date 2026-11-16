@@ -62,6 +62,14 @@ measured on the patched image (`valid`, `stored_hex`, `computed_hex`).
   chance match unless code references it or the image's routine computes it (emulation is tried on those too), so
   nested checks, such as a CRC-16 over a configuration block inside an image CRC-32, are both kept. `evidence` lists
   each reason.
+- **Raw firmware.** On a Raw project the code evidence comes from the discovered functions, pointer tables and
+  scatter-load copies included. On Cortex-M a polynomial literal that no discovered code references is followed to
+  the `ldr` that loads it, and the routine around it is listed with `inferred_range`; it is not added to discovery.
+- **Containers.** On a Raw project mapped over a whole update file, each compressed stream behind a record is
+  listed in `container_streams`; a record word holding the byte sum or CRC-32 of the compressed bytes becomes a
+  check, and `open_as_raw` and `next` give the decoded image's selector, whose own checks are found by running
+  `integrity_checks` again with it. See [MCP](mcp.md) for the bounds and the
+  [firmware walkthrough](firmware-walkthrough.md#6-read-the-code-and-check-the-sums).
 - **PE.** A PE's optional-header CheckSum is reported as a `file`-space check (zero means unset). Fix it with
   `export_image` and `pe_checksum: true`, not with a patch.
 

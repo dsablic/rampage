@@ -164,15 +164,27 @@ Areas marked *experimental* may change in any release; see the [stability policy
 - **Formats:** ELF, PE and Mach-O (including universal binaries and embedded images), .NET metadata and CIL, Go
   build info, cargo-auditable data, PE resources and load config, PyInstaller archives, WebAssembly module
   summaries, ZIP inventory, embedded-file carving, raw firmware windows, and a [file layout](docs/file-layout.md)
-  of any file (padding, entropy, string clusters, hashes and labelled hints).
+  of any file (padding, entropy, string clusters, hashes and labelled hints). `list_dir` lists a folder with each
+  file's sniffed format, so an agent given only a directory can start.
+- **Firmware filesystem images:** `fs_list` and `fs_extract` read SquashFS, ext2/3/4, Android sparse images, full
+  Android OTA payloads, cpio and tar in pure Rust, with hostile-input limits. See
+  [firmware filesystem images](docs/firmware-images.md).
 - **Processors:** x86 and x86-64; AArch64, ARM and Thumb from Arm's machine-readable specification; MIPS,
   PowerPC, RISC-V, SPARC, s390x and m68k through Capstone; sixteen more families (MSP430, AVR8, 8051, Z80,
   Xtensa, eBPF, LoongArch and others) as Raw Projects through Ghidra's Sleigh. Sleigh profiles other than MSP430 and AVR8
   are *experimental* and disassemble without decompiling.
 - **Firmware** (*experimental*): a Cortex-M Raw profile for headerless Thumb images that discovers, decompiles
-  and seeds from the vector table and from code-pointer tables; up to 15 further code, data or RAM regions, backed
-  by file ranges, decompressed bytes or nothing; Intel HEX and Motorola S-record input; and `probe_compression`
-  for unknown LZSS and LZ4 variants.
+  and seeds from the vector table and from code-pointer tables (scanned by itself when discovery is sparse); a
+  compressed image opened directly as the code region, with ranked load-address candidates and a check of the base
+  you chose; startup scatter-load copies followed and mapped at their run addresses; up to 15 further code, data or
+  RAM regions; Intel HEX and Motorola S-record input; `probe_compression` for unknown LZSS and LZ4 variants; and
+  integrity checks that find and fix an image's CRCs and checksums and verify those in a container's records.
+  Strings, triage, crypto and lock-mechanism tools work on Raw projects too. See
+  [how to read the code in a firmware update file](docs/firmware-walkthrough.md).
+- **Device privacy:** `endpoint_inventory` lists the hosts, URLs, IPs and certificates a binary or an extracted
+  firmware tree names, `endpoint_blocklist` writes them as a router blocklist, and `privacy_surface` maps what a
+  program can capture and where it can send it. See
+  [how to check what a device records and where it sends it](docs/device-privacy-check.md).
 - **Library identification and detection:** FLIRT/FunctionID-style signatures with bundled databases, user PAT
   and Ghidra FID input, fuzzy candidates, packer/compiler detection (including signatures converted from Detect It
   Easy), encrypted or packed code detection that keeps discovery out of it, YARA, a capa subset, capability tags
