@@ -12,6 +12,7 @@ pub mod build_match;
 mod capabilities;
 mod carve;
 mod compression_probe;
+mod container_record;
 mod correlation;
 mod cpp_exceptions;
 mod data;

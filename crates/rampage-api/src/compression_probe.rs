@@ -102,6 +102,10 @@ pub struct ProbeCandidate {
     /// present when decode_check reproduced the candidate and its size fits a Raw project.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub open_as_raw: Option<serde_json::Value>,
+    /// Little-endian words within 64 bytes before the stream that hold its compressed length and this candidate's
+    /// decoded size: their roles (checksum, address-like `base_hints` for the decoded image, ...) inferred by value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_record: Option<crate::container_record::ContainerRecord>,
     pub output_size: usize,
     pub output_sha256: String,
     pub input_consumed: usize,
@@ -291,6 +295,7 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
     source.revalidate()?;
 
     let found = report.candidates.len();
+    let window = crate::container_record::read_window(path, request.offset.0);
     // Reproductions share their own deadline, so a probe that used its whole deadline still checks candidates.
     let reproducing = Instant::now();
     let mut reproduce_cancelled = || reproducing.elapsed() >= REPRODUCE_TIMEOUT;
@@ -315,6 +320,16 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
                     .then(|| open_as_raw(&decode_arguments))
                     .flatten(),
                 decode_arguments,
+                container_record: window.as_ref().and_then(|(start, window)| {
+                    crate::container_record::find(
+                        *start,
+                        window,
+                        request.offset.0,
+                        &input,
+                        candidate.consumed,
+                        candidate.output_size,
+                    )
+                }),
                 output_size: candidate.output_size,
                 output_sha256: sha,
                 input_consumed: candidate.consumed,

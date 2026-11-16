@@ -120,3 +120,69 @@ fn probe_refuses_bad_requests_before_reading() {
         assert!(error.contains("probe"), "{error}");
     }
 }
+
+/// The classic LZSS variant: a 4 KiB ring written from 0xfee, zero fill, minimum match 3.
+fn classic_lzss() -> Lzss {
+    Lzss {
+        window_bits: 12,
+        min_match: 3,
+        flag_order: FlagOrder::LsbFirst,
+        literal_flag: true,
+        layout: ReferenceLayout::SplitByte,
+        offset_mode: OffsetMode::RingPosition,
+        initial_write_offset: 0xfee,
+        dictionary_fill: 0,
+    }
+}
+
+/// A Cortex-M image behind a six-word record: (address, offset, compressed length, byte sum, address, decoded
+/// size), the stream right after it.
+fn recorded_image(image: &[u8], base: u32) -> (Vec<u8>, u64, usize) {
+    let stream = encode::lzss(&classic_lzss(), image);
+    let sum = stream.iter().fold(0u32, |sum, &byte| sum.wrapping_add(u32::from(byte)));
+    let mut file = vec![0x5a; 0x28];
+    for word in [base, 0x40, stream.len() as u32, sum, base, image.len() as u32] {
+        file.extend(word.to_le_bytes());
+    }
+    let offset = file.len() as u64;
+    file.extend(&stream);
+    (file, offset, stream.len())
+}
+
+fn embedded_libs() -> Vec<u8> {
+    std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/embedded-libs-m0.bin")).unwrap()
+}
+
+#[test]
+fn a_record_before_the_stream_gives_a_base_hint_with_its_fields() {
+    let image = embedded_libs();
+    let (file, offset, length) = recorded_image(&image, 0x0800_0000);
+    let input = Input::new(&file);
+    let report = probe_compression(&input.0, &request(offset, length, Some(image.len()))).unwrap();
+    let best = &report.candidates[0];
+    assert_eq!(best.decode_check, "reproduced");
+    let record = best.container_record.as_ref().unwrap();
+    assert_eq!(record.base_hints.len(), 1, "{record:#?}");
+    assert_eq!(record.base_hints[0].base_address, 0x0800_0000);
+    assert_eq!(record.base_hints[0].field_offsets, [0x28, 0x38]);
+    let roles: Vec<_> = record.fields.iter().map(|field| (field.offset, field.role)).collect();
+    assert_eq!(
+        roles,
+        [
+            (0x20, "unknown"),
+            (0x24, "unknown"),
+            (0x28, "address"),
+            (0x2c, "payload_offset"),
+            (0x30, "compressed_length"),
+            (0x34, "byte_sum32"),
+            (0x38, "address"),
+            (0x3c, "decoded_size"),
+        ]
+    );
+    assert_eq!(record.checksum_over, Some([offset, offset + length as u64]));
+
+    // Without the record, nothing is reported.
+    let bare = Input::new(&file[offset as usize..]);
+    let report = probe_compression(&bare.0, &request(0, length, Some(image.len()))).unwrap();
+    assert!(report.candidates[0].container_record.is_none());
+}
