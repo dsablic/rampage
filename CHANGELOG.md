@@ -66,6 +66,8 @@ see the [stability policy](docs/stability.md) for what the version promises.
   last in `last_vtor_store`); the table at the last value is read when a mapped region holds it and its accepted
   handlers are seeded, or `vector_table_refused` says why. A copy the code then stores into is marked
   `written_after_jump` and maps as RAM, not code.
+- Thumb disassembly: a 16-bit `add`/`sub Rdn, #imm8` inside an IT block printed its immediate four times too large
+  (`subhs r1, #40` as `#160`); only the SP-relative, literal and `adr` forms count words.
 - Raw discovery that stops early says so: when a Raw project's discovery finds fewer than one function per 16 KiB
   of code, `list_functions` (and `binary_info` once discovery has run) return a one-line `next` naming
   `"pointer_tables": true` (Cortex-M, when off) and mapping the startup copies (when `"scatter_load": false` left

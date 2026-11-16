@@ -62,6 +62,21 @@ fn it_blocks_make_conditions_explicit() {
     assert_eq!(format(&decoded, 0, LabelStyle::Relative).as_deref(), Some("adds r0, r0, r1"));
 }
 
+/// `add/sub Rdn, #imm8` inside an IT block drops its S and shares the mnemonic of the SP-relative forms, whose
+/// offsets count words; its immediate is still bytes (`subhs r1, #40`, not `#160`).
+#[test]
+fn it_block_add_and_sub_immediates_are_not_scaled() {
+    let hs = ItState::new(0b0010, 0b1000);
+    let text = |word: u16, it| format(&decode_t32(word, None, it).unwrap(), 0, LabelStyle::Relative);
+    assert_eq!(text(0x3928, hs).as_deref(), Some("subhs r1, #40"));
+    assert_eq!(text(0x3128, hs).as_deref(), Some("addhs r1, #40"));
+    assert_eq!(text(0x3928, ItState::default()).as_deref(), Some("subs r1, #40"));
+    // The SP-relative and literal forms still count words.
+    assert_eq!(text(0xb082, hs).as_deref(), Some("subhs sp, #8"));
+    assert_eq!(text(0xa902, hs).as_deref(), Some("addhs r1, sp, #8"));
+    assert_eq!(text(0x9902, hs).as_deref(), Some("ldrhs r1, [sp, #8]"));
+}
+
 #[test]
 fn absolute_labels_resolve_against_pc() {
     // A32 bl #8 at 0x1000 targets 0x1000 + 8 + 8; Thumb b #4 at 0x2000 targets 0x2000 + 4 + 4.

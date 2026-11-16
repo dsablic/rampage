@@ -602,7 +602,16 @@ fn immediate(context: &Context, operand: &Operand) -> Option<Value> {
             "LDR" | "STR" => 4,
             _ => 1,
         },
-        (Set::T16, ["imm7" | "imm8"]) if matches!(mnemonic, "LDR" | "STR" | "ADD" | "SUB" | "ADR") => 4,
+        // Word-scaled 16-bit offsets, by encoding: `add/sub Rdn, #imm8` (ADD_i_T2, SUB_i_T2) is not scaled, though it
+        // shares the mnemonic once an IT block drops the S.
+        (Set::T16, ["imm7" | "imm8"])
+            if matches!(
+                context.decoded.encoding.name,
+                "LDR_l_T1" | "LDR_i_T2" | "STR_i_T2" | "ADR_T1" | "ADD_SP_i_T1" | "ADD_SP_i_T2" | "SUB_SP_i_T1"
+            ) =>
+        {
+            4
+        }
         (Set::T32, ["imm8"]) if matches!(mnemonic, "LDRD" | "STRD" | "LDREX" | "STREX" | "LDA" | "TT") => 4,
         (_, ["imm8"]) if matches!(mnemonic, "LDC" | "LDC2" | "STC" | "STC2" | "LDCL" | "STCL") => 4,
         // VLDR and VSTR count words, or halfwords for the 16-bit form.
