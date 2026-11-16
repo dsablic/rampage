@@ -621,7 +621,8 @@ pub fn file_tools() -> Vec<FileTool> {
                 is supplied, not discovered: no end marker, auto-detection, recursion, file writing or \
                 execution (write_decoded_range, in carve, writes the output to a new file). \
                 Return range/output hashes, consumed/trailing counts, a bounded decoded-offset preview, \
-                open_as_raw: a `raw` selector that opens the decoded bytes as a Raw project's code (see next), and \
+                open_as_raw: a `raw` selector that opens the decoded bytes as a Raw project's code (see next), \
+                base_candidates (load addresses for the decoded bytes as Cortex-M code, with evidence), and \
                 container_record when words just before the range hold its length and decoded size (field roles, \
                 checksum, base_hints: load addresses the record names). \
                 Limits: 8 MiB input, 16 MiB output, 128:1 against selected input, cooperative decode deadline. \
@@ -646,13 +647,20 @@ pub fn file_tools() -> Vec<FileTool> {
                     decoded.receipt.input_consumed,
                     decoded.receipt.output_size,
                 );
-                let mut value = serde_json::to_value(decoded.receipt).map_err(|error| error.to_string())?;
+                let mut value = serde_json::to_value(&decoded.receipt).map_err(|error| error.to_string())?;
+                let hints = record.as_ref().map_or_else(Vec::new, |record| record.hints());
                 if let Some(record) = record {
                     value["container_record"] = serde_json::to_value(record).map_err(|error| error.to_string())?;
                 }
                 if let Some(selector) = crate::open_as_raw(&source.arguments(&request)) {
+                    let bases = rampage_loaders::raw_base::base_candidates(decoded.bytes(), None, &hints).candidates;
+                    let next = crate::compression_probe::base_next(&bases).map_or_else(
+                        || crate::OPEN_AS_RAW_NEXT.to_owned(),
+                        |base| format!("{} {base}", crate::OPEN_AS_RAW_NEXT),
+                    );
                     value["open_as_raw"] = selector;
-                    value["next"] = Value::String(crate::OPEN_AS_RAW_NEXT.to_owned());
+                    value["base_candidates"] = serde_json::to_value(bases).map_err(|error| error.to_string())?;
+                    value["next"] = Value::String(next);
                 }
                 Ok(value)
             },
@@ -694,7 +702,8 @@ pub fn file_tools() -> Vec<FileTool> {
                 layouts, distance or ring offsets with ring start and fill) and the LZ4 block format, within a work \
                 budget and deadline. Supply expected_output_size when a header gives one: only then can the first \
                 candidate be confident. Each ranked candidate has decode_arguments to pass to decode_file_range \
-                unchanged, open_as_raw (a `raw` selector for its decoded bytes; see next), container_record (words \
+                unchanged, open_as_raw (a `raw` selector for its decoded bytes; see next) with base_candidates for \
+                them, container_record (words \
                 before the stream holding its length and decoded size: checksum and base_hints), the decoded size and \
                 SHA-256, consumed and trailing input, parse metrics, entropy drop, \
                 named checks, ambiguity counts and a short preview. The sweep summary and not_tried say what was \

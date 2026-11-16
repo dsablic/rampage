@@ -253,7 +253,8 @@ pub struct Summary<'a> {
     /// Code regions judged encrypted or packed (high entropy and a poor decode), which discovery does not explore.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub encrypted_or_packed_code: Vec<rampage_analysis::code_integrity::CodeRegion>,
-    /// Raw projects whose discovery found very few functions for their code: what to try next.
+    /// Raw projects whose base looks wrong (`raw.base_check`), or whose discovery found very few functions for
+    /// their code: what to try next.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
 }
@@ -304,6 +305,11 @@ pub struct RawSummary<'a> {
     /// Cortex-M: the copies and zero fills the reset code makes, and which were mapped at their run addresses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scatter_load: Option<&'a rampage_loaders::raw_scatter::ScatterLoad>,
+    /// Cortex-M, from a byte range: whether `base_address` fits the image (pointer words and reset-code constants
+    /// that land inside under it, compared with the best load-address candidates), and the better base when it
+    /// looks wrong.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_check: Option<&'a rampage_loaders::raw_base::BaseCheck>,
 }
 
 #[derive(Debug, Serialize)]

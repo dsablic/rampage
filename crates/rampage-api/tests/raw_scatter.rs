@@ -211,3 +211,71 @@ fn a_small_discovery_in_a_large_image_suggests_pointer_tables_and_mapping_the_co
     assert_eq!(next(&open("gcc", selector("gcc"))), None);
     std::fs::remove_dir_all(&directory).unwrap();
 }
+
+/// Opened at a wrong base (a copy destination, as an agent guessed) without reading the vector table, binary_info
+/// says the base looks wrong and names the linked base; at the linked base it is consistent.
+#[test]
+fn a_wrong_base_is_named_with_the_linked_one() {
+    for variant in ["gcc", "table"] {
+        let wrong = 0x0100_0000u64;
+        let entry = wrong + (truth(variant, "reset_handler") - 0x0800_0000);
+        let mut raw = selector(variant);
+        raw["base_address"] = json!(hex(wrong));
+        raw["entry"] = json!(hex(entry));
+        raw.as_object_mut().unwrap().remove("vector_table");
+        let project = open(variant, raw);
+        let summary = serde_json::to_value(project.summary()).unwrap();
+        let check = &summary["raw"]["base_check"];
+        assert_eq!(check["verdict"], "looks_wrong", "{variant}: {summary:#}");
+        assert_eq!(check["better_candidate"]["base_address"], "0x8000000", "{variant}: {check:#}");
+        let next = summary["next"].as_str().unwrap();
+        assert!(next.contains("base_address 0x8000000"), "{variant}: {next}");
+        if summary["raw"]["scatter_load"]["stop"] == "bad_fetch" {
+            assert_eq!(check["bad_fetch"]["candidate_base"], "0x8000000", "{variant}: {check:#}");
+        }
+
+        let right = open(variant, selector(variant));
+        let summary = serde_json::to_value(right.summary()).unwrap();
+        assert_eq!(summary["raw"]["base_check"]["verdict"], "consistent", "{variant}: {summary:#}");
+        assert!(summary["raw"]["base_check"].get("next").is_none());
+    }
+}
+
+/// Reset code that jumps through a literal to an absolute address: opened at a wrong base, the follow fetches
+/// outside every region, and the candidate base that maps that address is named.
+#[test]
+fn a_bad_fetch_inside_the_image_under_another_base_names_that_base() {
+    let mut image = vec![0u8; 0x400];
+    // ldr r0, [pc, #0]; bx r0; .word 0x08000101
+    image[..8].copy_from_slice(&[0x00, 0x48, 0x00, 0x47, 0x01, 0x01, 0x00, 0x08]);
+    for (index, function) in [0x100usize, 0x140, 0x180].into_iter().enumerate() {
+        // push {r7, lr}; pop {r7, pc}
+        image[function..function + 4].copy_from_slice(&[0x80, 0xb5, 0x80, 0xbd]);
+        let pointer = 0x0800_0001u32 + function as u32;
+        image[0x200 + index * 4..0x204 + index * 4].copy_from_slice(&pointer.to_le_bytes());
+    }
+    let path = std::env::temp_dir().join(format!("rampage-bad-fetch-{}.bin", std::process::id()));
+    std::fs::write(&path, &image).unwrap();
+    let open = |base: &str| {
+        let raw = json!({ "profile": "cortex-m4", "offset": 0, "length": image.len(), "base_address": base,
+            "entry": base });
+        let request: RawProjectRequest = serde_json::from_value(raw).unwrap();
+        let project = Session::default().open_raw(&path, &request).unwrap();
+        serde_json::to_value(project.summary()).unwrap()
+    };
+    let wrong = open("0x1000000");
+    let right = open("0x8000000");
+    std::fs::remove_file(&path).unwrap();
+
+    assert_eq!(wrong["raw"]["scatter_load"]["stop"], "bad_fetch", "{wrong:#}");
+    let check = &wrong["raw"]["base_check"];
+    assert_eq!(check["verdict"], "looks_wrong", "{check:#}");
+    assert_eq!(check["bad_fetch"]["target"], "0x8000100");
+    assert_eq!(check["bad_fetch"]["candidate_base"], "0x8000000");
+    assert_eq!(check["better_candidate"]["base_address"], "0x8000000");
+    let next = wrong["next"].as_str().unwrap();
+    assert!(next.contains("fetched an instruction at 0x8000100") && next.contains("base_address 0x8000000"), "{next}");
+
+    assert_eq!(right["raw"]["base_check"]["verdict"], "consistent", "{right:#}");
+    assert!(right["raw"]["base_check"].get("bad_fetch").is_none());
+}

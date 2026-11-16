@@ -104,6 +104,8 @@ pub struct Project {
     triage: OnceLock<Triage>,
     /// Code regions measured for encryption or packing, computed once with the project's decoder.
     code_regions: OnceLock<Vec<rampage_analysis::code_integrity::CodeRegion>>,
+    /// A Cortex-M Raw project's base checked against load-address candidates, computed once.
+    base_check: OnceLock<Option<rampage_loaders::raw_base::BaseCheck>>,
     /// Strings of at least `DEFAULT_STRING_LENGTH` characters, scanned once.
     strings: OnceLock<Vec<FoundString>>,
     /// The embedded decompiler, built once over the executable segments on first use. Behind a mutex because
@@ -381,6 +383,7 @@ impl Project {
             analysis_binding: OnceLock::new(),
             triage: OnceLock::new(),
             code_regions: OnceLock::new(),
+            base_check: OnceLock::new(),
             strings: OnceLock::new(),
             decompiler: std::sync::Mutex::new(crate::decompile::DecompilerState::default()),
             packs: RwLock::default(),
@@ -852,7 +855,12 @@ impl Project {
 
     pub fn summary(&self) -> Summary<'_> {
         // Only from an analysis that already ran: binary_info never starts discovery itself.
-        let next = self.raw_discovery_hint();
+        let base_check = self.base_check();
+        let wrong_base = base_check.and_then(|check| check.next.clone());
+        let next = match (wrong_base, self.raw_discovery_hint()) {
+            (Some(base), Some(discovery)) => Some(format!("{base} {discovery}")),
+            (base, discovery) => base.or(discovery),
+        };
         let binary = &self.binary;
         Summary {
             format: binary.format,
@@ -881,11 +889,39 @@ impl Project {
                 vector_table: raw.vector_table(),
                 pointer_tables: raw.pointer_tables(),
                 scatter_load: raw.scatter_load(),
+                base_check,
             }),
             analysis_store: self.analysis_store_status(),
             encrypted_or_packed_code: self.encrypted_regions().cloned().collect(),
             next,
         }
+    }
+
+    /// For a Cortex-M Raw project mapped from a byte range (not records, which state their addresses), its base
+    /// checked against load-address candidates for the primary region's bytes, once per project.
+    pub fn base_check(&self) -> Option<&rampage_loaders::raw_base::BaseCheck> {
+        self.base_check
+            .get_or_init(|| {
+                let raw = self.binary.raw_code_image()?;
+                if !raw.profile().m_profile() || raw.records().is_some() {
+                    return None;
+                }
+                let primary = raw.regions().first().filter(|region| region.backed())?;
+                let bytes = self.binary.image_bytes().get(primary.data_range())?;
+                let entry_offset = raw
+                    .entry()
+                    .filter(|entry| primary.range().contains(entry))
+                    .map(|entry| entry - primary.base_address);
+                let regions: Vec<std::ops::Range<u64>> = raw.regions().iter().map(|region| region.range()).collect();
+                Some(rampage_loaders::raw_base::check_base(
+                    bytes,
+                    primary.base_address,
+                    entry_offset,
+                    &regions,
+                    raw.scatter_load(),
+                ))
+            })
+            .as_ref()
     }
 
     /// The code regions judged encrypted or packed.

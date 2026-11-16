@@ -203,7 +203,9 @@ Given a folder, list_dir lists it (kind, size and sniffed format per entry). \
 file_layout maps any file or range (padding, entropy, string clusters, hashes, hints) as a first look at firmware; \
 its compressed_component_candidate hints give a payload range and decoded-size words for probe_compression, whose \
 ranked decode_arguments go to decode_file_range unchanged; both return open_as_raw, which with a profile and \
-base_address added is the `raw` selector for the decoded code. \
+base_address added is the `raw` selector for the decoded code, base_candidates (ranked load addresses for the \
+decoded bytes as Cortex-M code, with evidence; next names one only when it is clearly strongest) and, when words \
+just before the stream hold its length and decoded size, container_record (field roles, checksum, base_hints). \
 Its transient decoded preview uses decoded offsets, not source offsets or load addresses; supplied sizes and \
 successful decoding do not authenticate content or prove stream boundaries. Tools whose schema has a `raw` \
 object open that explicit file range as a headerless Raw project with a closed profile instead of a native image \
@@ -222,6 +224,9 @@ code copies to their run addresses and the RAM it zeroes: binary_info's raw.scat
 unmapped destination is mapped there (code when the copy ran and was not stored into afterwards, else RAM; zero \
 fill as unbacked RAM; a copy cut off by a skipped call or an unclean stop is reported only) and the jump into \
 the copied code is seeded; scatter_load false reports them only. \
+For Cortex-M, binary_info's raw.base_check judges base_address against load-address candidates (pointer words \
+landing on prologues and strings, literal constants, the vector table, a fetch outside every region by the reset \
+code) and, when it looks wrong, names the better base in next. \
 When discovery finds fewer than one function per 16 KiB of Raw code, list_functions (and binary_info \
 afterwards) return a one-line next naming the options to try (pointer_tables, mapping the startup copies). \
 Cortex-M only: regions (up to 15) maps more of the same file beside the primary code region, each {kind: code|data|\

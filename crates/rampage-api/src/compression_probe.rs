@@ -106,6 +106,11 @@ pub struct ProbeCandidate {
     /// decoded size: their roles (checksum, address-like `base_hints` for the decoded image, ...) inferred by value.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container_record: Option<crate::container_record::ContainerRecord>,
+    /// With open_as_raw (first three candidates): load-address candidates for the decoded bytes as Cortex-M code,
+    /// best first, with the record's base_hints validated among them. Suggestions; the report's `next` names one
+    /// only when it is clearly strongest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_candidates: Option<Vec<rampage_loaders::raw_base::BaseCandidate>>,
     pub output_size: usize,
     pub output_sha256: String,
     pub input_consumed: usize,
@@ -165,9 +170,10 @@ pub struct ProbeCompressionReport {
     pub candidates: Vec<ProbeCandidate>,
     /// Candidates found before `candidate_limit` cut the list.
     pub candidates_found: usize,
-    /// How to analyse a candidate's decoded bytes, when one has an `open_as_raw` selector.
+    /// How to analyse a candidate's decoded bytes, when one has an `open_as_raw` selector, and the base to open it
+    /// at when one base candidate is clearly strongest.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub next: Option<&'static str>,
+    pub next: Option<String>,
     pub sweep: ProbeSweep,
     pub not_tried: Vec<&'static str>,
     pub limitations: Vec<&'static str>,
@@ -220,6 +226,37 @@ pub const OPEN_AS_RAW_NEXT: &str = "To analyse the decoded bytes as code, add pr
     base_address (the load address) to open_as_raw and pass it as `raw`, with the same path, to binary_info, \
     list_functions, list_strings or decompile; for Cortex-M also vector_table. write_decoded_range (carve) writes \
     them to a new file.";
+
+/// Probe candidates whose decoded bytes get base candidates.
+const MAX_BASE_PROBED: usize = 3;
+
+/// The line naming a base to open decoded bytes at, when the first base candidate is clearly strongest: `strong`,
+/// or `plausible` with a container record's hint agreeing with the pointer vote.
+pub fn base_next(candidates: &[rampage_loaders::raw_base::BaseCandidate]) -> Option<String> {
+    use rampage_loaders::raw_base::{BaseConfidence, BaseMethod};
+    let first = candidates.first()?;
+    let agreed = first.methods.contains(&BaseMethod::Hint) && first.methods.contains(&BaseMethod::PointerVote);
+    let clear = first.confidence == BaseConfidence::Strong || (agreed && first.confidence == BaseConfidence::Plausible);
+    if !clear {
+        return None;
+    }
+    let evidence = &first.evidence;
+    let mut because = vec![format!(
+        "{} function pointers and {} string pointers land on starts in the image",
+        evidence.function_pointers, evidence.string_pointers
+    )];
+    if evidence.vector_table {
+        because.push("the vector table at offset 0 fits".to_owned());
+    }
+    because.extend(evidence.hints.iter().map(|hint| format!("{hint} name it")));
+    Some(format!(
+        "Base candidate {:#x} is clearly strongest ({}): add \"profile\": \"cortex-m\" and \
+         \"base_address\": \"{:#x}\" to open_as_raw.",
+        first.base_address,
+        because.join("; "),
+        first.base_address
+    ))
+}
 
 /// A Raw project selector that maps `arguments`' decoded output as the primary code region, without the profile
 /// and base address no decoder knows; `None` when the decoded size exceeds every Raw profile's cap.
@@ -305,9 +342,25 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
         .take(limit)
         .enumerate()
         .map(|(index, candidate)| {
-            let (decode_check, sha, preview) = reproduce(&input, candidate, preview_size, &mut reproduce_cancelled);
+            let (decode_check, sha, decoded) = reproduce(&input, candidate, &mut reproduce_cancelled);
+            let preview = &decoded[..decoded.len().min(preview_size)];
             let ring = matches!(candidate.codec, Codec::Lzss(lzss) if lzss.offset_mode == rampage_decode::OffsetMode::RingPosition);
             let decode_arguments = arguments(&candidate.codec, request.offset.0, length, candidate.output_size);
+            let container_record = window.as_ref().and_then(|(start, window)| {
+                crate::container_record::find(
+                    *start,
+                    window,
+                    request.offset.0,
+                    &input,
+                    candidate.consumed,
+                    candidate.output_size,
+                )
+            });
+            let opens = decode_check == "reproduced" && open_as_raw(&decode_arguments).is_some();
+            let base_candidates = (opens && index < MAX_BASE_PROBED).then(|| {
+                let hints = container_record.as_ref().map_or_else(Vec::new, |record| record.hints());
+                rampage_loaders::raw_base::base_candidates(&decoded, None, &hints).candidates
+            });
             ProbeCandidate {
                 rank: index + 1,
                 verdict: match candidate.verdict {
@@ -320,16 +373,8 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
                     .then(|| open_as_raw(&decode_arguments))
                     .flatten(),
                 decode_arguments,
-                container_record: window.as_ref().and_then(|(start, window)| {
-                    crate::container_record::find(
-                        *start,
-                        window,
-                        request.offset.0,
-                        &input,
-                        candidate.consumed,
-                        candidate.output_size,
-                    )
-                }),
+                container_record,
+                base_candidates,
                 output_size: candidate.output_size,
                 output_sha256: sha,
                 input_consumed: candidate.consumed,
@@ -353,7 +398,7 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
                 write_offset_alternatives: ring.then_some(candidate.write_offset_alternatives),
                 dictionary_fill_exercised: ring.then_some(candidate.fill_exercised),
                 decode_check,
-                preview_hex: rampage_arch::hex::bytes(&preview),
+                preview_hex: rampage_arch::hex::bytes(preview),
                 preview_ascii: preview
                     .iter()
                     .map(|&byte| if (0x20..=0x7e).contains(&byte) { char::from(byte) } else { '.' })
@@ -361,7 +406,10 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
             }
         })
         .collect::<Vec<ProbeCandidate>>();
-    let next = candidates.iter().any(|candidate| candidate.open_as_raw.is_some()).then_some(OPEN_AS_RAW_NEXT);
+    let next = candidates.iter().find(|candidate| candidate.open_as_raw.is_some()).map(|candidate| {
+        let base = candidate.base_candidates.as_deref().and_then(base_next);
+        base.map_or_else(|| OPEN_AS_RAW_NEXT.to_owned(), |base| format!("{OPEN_AS_RAW_NEXT} {base}"))
+    });
 
     let result = ProbeCompressionReport {
         file_path: path.to_owned(),
@@ -426,11 +474,11 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
     Ok(result)
 }
 
-/// Decodes a candidate again through the provider `decode_file_range` uses, with its budgets.
+/// Decodes a candidate again through the provider `decode_file_range` uses, with its budgets; the decoded bytes
+/// when it reproduced.
 fn reproduce(
     input: &[u8],
     candidate: &probe::Candidate,
-    preview_size: usize,
     cancelled: &mut dyn FnMut() -> bool,
 ) -> (String, String, Vec<u8>) {
     let options = DecodeOptions {
@@ -445,8 +493,7 @@ fn reproduce(
     };
     match result {
         Ok(decoded) if decoded.consumed == candidate.consumed => {
-            let preview = decoded.bytes[..decoded.bytes.len().min(preview_size)].to_vec();
-            ("reproduced".to_owned(), rampage_arch::hex::bytes(&Sha256::digest(&decoded.bytes)), preview)
+            ("reproduced".to_owned(), rampage_arch::hex::bytes(&Sha256::digest(&decoded.bytes)), decoded.bytes)
         }
         Ok(_) => ("consumed a different input length when decoded".to_owned(), String::new(), Vec::new()),
         Err(DecodeError::Cancelled) => {

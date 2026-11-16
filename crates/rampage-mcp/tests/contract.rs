@@ -268,7 +268,8 @@ async fn contract_mcp_core_results() {
         json!({"path": input, "codec": "lzss-4k", "offset": "0x0", "length": "0x4", "expected_output_size": 3});
     exercise(c, o, "decode_file_range", decode).await;
     // A ring-offset LZSS stream: the probe finds its parameters and decode_file_range takes them unchanged.
-    let original = rampage_decode::encode::synthetic_firmware(6000, 5);
+    // A Cortex-M image, so the decoded bytes get base_candidates.
+    let original = std::fs::read(fixtures.join("firmware/raw-cortex-m.bin")).unwrap();
     let stream = rampage_decode::encode::lzss(&rampage_decode::Lzss::classic_4k(4078, 0), &original);
     let packed = scratch.0.join("packed.bin");
     // Behind a record naming its address, offset, length, byte sum, address and decoded size: container_record.

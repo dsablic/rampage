@@ -701,7 +701,8 @@ pub fn base_candidates(bytes: &[u8], entry_offset: Option<u64>, hints: &[BaseHin
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BaseVerdict {
-    /// The asserted base is the best candidate, or close to it in pointer hits.
+    /// The vector table at offset 0 fits from it, it is the first candidate (`strong` or `plausible`), or it has at
+    /// least 3 pointer hits and three quarters of the best candidate's.
     Consistent,
     /// Another base explains the image far better, or the reset-code follow fetched outside every region at an
     /// address that another candidate places inside the image.
@@ -814,7 +815,10 @@ pub fn check_base(
         ));
         better = Some(top.clone());
         BaseVerdict::LooksWrong
-    } else if hits >= 3 && hits * 4 >= best_hits * 3 {
+    } else if (hits >= 3 && hits * 4 >= best_hits * 3)
+        || evidence.vector_table
+        || top.is_some_and(|top| top.base_address == base && top.confidence != BaseConfidence::Weak)
+    {
         BaseVerdict::Consistent
     } else {
         BaseVerdict::Unknown

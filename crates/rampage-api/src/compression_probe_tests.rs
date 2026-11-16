@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rampage_decode::encode::{self, Random};
 use rampage_decode::{FlagOrder, Lzss, OffsetMode, ReferenceLayout};
 
+use rampage_loaders::raw_base::BaseMethod;
+
 use super::*;
 use crate::{DecodeFileRequest, decode_file_range};
 
@@ -180,6 +182,13 @@ fn a_record_before_the_stream_gives_a_base_hint_with_its_fields() {
         ]
     );
     assert_eq!(record.checksum_over, Some([offset, offset + length as u64]));
+    // The decoded image's base candidates validate the hint; agreeing with the pointer vote, `next` names it.
+    let bases = best.base_candidates.as_ref().unwrap();
+    assert_eq!(bases[0].base_address, 0x0800_0000);
+    assert!(bases[0].methods.contains(&BaseMethod::Hint) && bases[0].methods.contains(&BaseMethod::PointerVote));
+    assert_eq!(bases[0].evidence.hints, ["container record fields at 0x28, 0x38"]);
+    let next = report.next.as_deref().unwrap();
+    assert!(next.contains("\"base_address\": \"0x8000000\""), "{next}");
 
     // Without the record, nothing is reported.
     let bare = Input::new(&file[offset as usize..]);
