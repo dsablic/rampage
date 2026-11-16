@@ -143,6 +143,19 @@ decoded code.
 - [ ] **Reset-code follow coverage.** The scatter-load interpreter skips calls through instructions it does not
   model: long multiplies (UMULL, SMULL, UMLAL), saturating and SIMD-within-register arithmetic, LDREX/STREX, and
   exception entry (SVC). Add them when a startup routine is seen to need them.
+- [ ] **Third Haiku run (2026-11-16, after 2badb62): load-address guessing defeats scatter-load.** Haiku wrote both
+  decoded images to files and opened them as Raw projects. The updater it opened at the right base, and decompiled
+  its entry, copy and zero helpers and peripheral setup. The application it opened at 0x01000000 (the copy
+  destination) instead of the record's base, so the reset-code follow stopped with `bad_fetch` and scatter-load
+  mapped nothing; it never used `pointer_tables` either (58 turns, $0.59). It also misread one record field.
+  - **Base inference.** Offer load-address candidates for a Raw image: absolute pointers in the reset code's
+    literal pool and in pointer tables that land inside the image under a given base (the classic self-pointer
+    vote), and container records that name a base next to the payload. `probe_compression`/`open_as_raw` and a
+    Raw `binary_info` should report the best candidates with evidence.
+  - **Say when the base looks wrong.** When the scatter-load follow ends in `bad_fetch` on a constant target that
+    would lie inside the image under another base, or most literal-pool pointers fall outside every region,
+    `binary_info` should say so and name the candidate base.
+  - `find_crypto` still refuses Raw projects; `integrity_checks` found no fields on the decoded image.
 - [ ] **Read-only annotations for file tools.** MCP lists read-only file tools (`list_dir`, `decode_file_range`,
   `file_layout`, `carve`, ...) without annotations, which the MCP spec treats as possibly destructive; give them
   `read_only(true)`.
