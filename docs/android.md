@@ -44,6 +44,7 @@ For one file the result holds:
   `mediaProjection`, ...), `bound_role` for services bound by the system for a powerful role
   (`accessibility_service`, `notification_listener`, `device_admin`, `input_method`, `voice_interaction`,
   `vpn_service`), and `in_dex`: whether a DEX file in the APK defines the class.
+- `jni`: the native methods linked to their libraries (see [JNI](#jni)).
 - `native_libs`: each `lib/<abi>/*.so` with its size, `jni_exports` (the `Java_*` symbols, the JNI names of
   `native` methods) and `jni_onload` (a library with `JNI_OnLoad` may register natives by table instead of by
   name).
@@ -57,6 +58,22 @@ For one file the result holds:
   (default 100, at most 500) and `next_offset` continues.
 
 A bare `.dex` file has the DEX fields only.
+
+## JNI
+
+`jni` links the `native` methods the DEX code declares to the native libraries:
+
+- `linked`: methods bound by name, each with the `library` and `symbol` (`Java_<class>_<method>`, or the long
+  form with `__<signature>` used for overloads), mangled as the JNI specification says (`_1` for `_`, `_2` for
+  `;`, `_3` for `[`, `_0xxxx` for other characters).
+- `unlinked`: native methods no export binds, with the `expected_symbol`. Libraries with `JNI_OnLoad` that hold the
+  method's name and signature as NUL-terminated strings are listed in `possibly_registered_in`: they likely
+  register it with `RegisterNatives`, which binds by table at run time; the table itself is not decoded.
+- `exports_without_native`: `Java_` exports no declared native method claims (code from another app, a removed
+  method or obfuscation).
+
+A bare DEX file lists its native methods as `unlinked`; a directory page keeps `native_methods`. Open a library
+with the binary tools (after `fs_extract` of the APK) to decompile the bound function.
 
 ## privacy
 

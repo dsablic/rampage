@@ -17,7 +17,9 @@ see the [stability policy](docs/stability.md) for what the version promises.
   `dex_metadata`'s `privacy` section lists the Android capture and personal-data APIs the DEX code invokes
   (`AudioRecord`, `MediaRecorder`, camera and camera2, `MediaProjection`, `SpeechRecognizer`, location,
   device identifiers) with their callers, whether the manifest requests the guarding permission, and the
-  start-at-boot receivers that reach them, plus `AccessibilityService` subclasses. See
+  start-at-boot receivers that reach them, plus `AccessibilityService` subclasses. Its `jni` section links each
+  declared `native` method to the `Java_` export that binds it (short or long mangled name), names the libraries
+  with `JNI_OnLoad` that likely register it by table, and lists exports no native method claims. See
   [Android APKs and DEX](docs/android.md).
 - `endpoint_inventory` reads APKs and DEX files: each DEX string pool with the methods that load every string and
   the networking calls they make (`dex_string` evidence), and each native library in the APK. See

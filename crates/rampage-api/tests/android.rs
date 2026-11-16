@@ -173,3 +173,17 @@ fn endpoint_inventory_reads_dex_strings_with_the_methods_that_load_them() {
     let dex = call("endpoint_inventory", json!({"path": android("recorder.dex")})).unwrap();
     assert!(dex.to_string().contains("telemetry.example.com"));
 }
+
+#[test]
+fn native_methods_link_to_their_jni_exports() {
+    let out = call("dex_metadata", json!({"path": android("recorder.apk"), "limit": 1})).unwrap();
+    let jni = &out["jni"];
+    assert_eq!(jni["native_methods"], 1);
+    assert_eq!(jni["linked"][0]["method"], "Lcom/example/recorder/Capture;->nativeEncode([B)I");
+    assert_eq!(jni["linked"][0]["bound_by_name"][0]["symbol"], "Java_com_example_recorder_Capture_nativeEncode");
+    assert_eq!(jni["linked"][0]["bound_by_name"][0]["library"], "lib/arm64-v8a/libnative.so");
+    assert_eq!(jni["unlinked"], json!([]));
+    assert_eq!(jni["exports_without_native"], json!([]));
+    let dex = call("dex_metadata", json!({"path": android("recorder.dex"), "limit": 1})).unwrap();
+    assert_eq!(dex["jni"]["unlinked"][0]["expected_symbol"], "Java_com_example_recorder_Capture_nativeEncode");
+}

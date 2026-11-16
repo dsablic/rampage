@@ -429,7 +429,8 @@ These read embedded metadata and containers without executing, extracting or dec
 - **Android APKs and DEX** (`dex_metadata`, `dex_code`, MCP `android` group): the manifest (package, SDK levels, permissions
   with protection level and privacy category, components with intent filters, exported state and start-at-boot
   receivers), native libraries with their JNI exports, DEX 035–041 classes and methods, and smali-style Dalvik
-  bytecode for one method with references resolved, in-house and without a Java toolchain. See [Android APKs and DEX](android.md).
+  bytecode for one method with references resolved; `native` methods linked to their JNI exports; the capture
+  APIs the code invokes, linked to permissions and boot receivers. In-house, without a Java toolchain. See [Android APKs and DEX](android.md).
 
 ## Debugging
 

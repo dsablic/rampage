@@ -84,7 +84,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - Android: DEX files are read and Dalvik bytecode is listed (`dex_metadata`, `dex_code`), but not decompiled to
   Java, and DEX code is not part of function discovery, xrefs or the guided reports (`privacy_surface` reads
   native code only; `dex_metadata` has the DEX-side capture APIs). Capture and network calls are matched by direct
-  invoke sites: reflection, interface dispatch and run-time loaded code are missed. Obfuscated names are shown as
+  invoke sites: reflection, interface dispatch and run-time loaded code are missed. JNI methods registered with
+  `RegisterNatives` are only suggested by the strings a library holds; the registration table is not decoded. Obfuscated names are shown as
   stored; `resources.arsc` is counted, not resolved, so `@0x7f...` manifest values stay resource ids; an AAB's
   protobuf manifest and APK signature blocks are not read. JVM class files are not read.
 - Not built yet: object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and

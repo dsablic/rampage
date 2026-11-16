@@ -77,9 +77,8 @@ device:
 
 - **Unpack device firmware.** Approved and moved to the
   [smart-device privacy track](#smart-device-privacy-track-approved-2026-11-15).
-- **Android/DEX support.** Many TVs run Android TV, so the interesting logic is in APKs: DEX bytecode, the manifest's
-  permissions and receivers, and native JNI libraries. A `dex_metadata`/`dex_code` pair, like the .NET tools, plus
-  linking JNI exports to their Java callers.
+- **Android/DEX support.** Approved and moved to the
+  [smart-device privacy track](#smart-device-privacy-track-approved-2026-11-15).
 - **A `privacy_surface` workflow,** a sibling of `network_surface` and `persistence_surface`:
   - Sources: microphone and camera capture (ALSA/tinyalsa, V4L2 ioctls, Android `AudioRecord`/`MediaRecorder`/
     camera APIs), screen or framebuffer capture, HDMI-CEC and input events.
@@ -271,12 +270,33 @@ above stay under review until each is approved.
 - [ ] `privacy_surface` follow-ups: directory mode over an extracted tree (cursor, `max_files`, `timeout_ms`) with
   boot triggers across files (init.d scripts, Android `.rc` services, systemd units starting a program with
   sources); HDMI-CEC (`CEC_RECEIVE`, libcec); MIPS argument reading (delay slots) and 32-bit x86 stack arguments;
-  arguments set in a predecessor block; DEX/APK sources once Android support lands.
+  arguments set in a predecessor block; APK input (see the Android follow-ups).
 - [ ] Endpoint follow-ups: IPv4 addresses stored as integers in code (immediates passed to `connect`/`sin_addr`);
   `network_code` through one call level (a string passed to a helper that calls `connect`); hex SHA-256 and
-  SHA-1 pins; DEX/APK strings once Android support lands; a CLI route; merging groups across directory pages; a
+  SHA-1 pins; a CLI route; merging groups across directory pages; a
   real-firmware precision check (local only).
 
+- [x] **Android APK and DEX, first slice (1.7.0)** ([plan](docs/plans/2026-11-16-android-dex.md),
+  [docs](docs/android.md)). New crate `rampage-dex`: DEX 035–041 (checksums reported, every table bounded),
+  Dalvik disassembly of all opcodes and payloads, binary XML and the manifest model, platform permission
+  protection levels (AOSP). ZIP/APK in `rampage-unpack` (`fs_list`/`fs_extract`). Group `android`:
+  `dex_metadata` (manifest, permissions, components, start-at-boot receivers, native libraries with JNI exports,
+  classes/methods pages, a `privacy` section of capture APIs invoked with callers, permissions and boot
+  reachability, `jni` links of native methods to exports) and `dex_code` (smali-style bytecode).
+  `endpoint_inventory` reads DEX string pools with the methods that load each string, and APK native libraries.
+- [ ] Android follow-ups (slice 2):
+  - `privacy_surface` on an APK: DEX capture sources and network sinks with call paths, merged with the native
+    libraries' report, and Android `.rc`/boot triggers.
+  - Dalvik to Java decompilation, or a structured pseudocode first (registers to locals, branches to blocks).
+  - String decryption: emulate small static decoder methods (`String` from a `byte[]`/`char[]` loop) and feed
+    `endpoint_inventory` and `privacy`.
+  - Obfuscation-aware naming: detect short renamed identifiers, keep stable aliases, use annotations for
+    rename/comment on DEX methods.
+  - `resources.arsc`: resolve `@0x7f...` manifest values and string resources (URLs often live there); scan
+    `res/xml` and `assets/` for endpoints.
+  - Decode `RegisterNatives` tables in `JNI_OnLoad` (method name, signature, function pointer) to link natives by
+    address; virtual and interface dispatch in the call graph; AAB protobuf manifests; APK signature blocks.
+  - A CLI route (`rampage android inspect|code`) and real-APK precision checks (local only, never named).
 - [ ] **Committed fixtures without local paths.** About 16 older fixtures embed the builder's home directory in
   debug info (e.g. `tests/fixtures/bin/debug-x64.elf`, `tests/fixtures/bench-v2/twins/widgets-x64.elf`,
   `tests/fixtures/firmware/locks-*-sym.elf`, `crates/rampage-api/tests/fixtures/decode-*.elf`). Rebuild them with

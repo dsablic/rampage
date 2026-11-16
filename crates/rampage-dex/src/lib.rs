@@ -8,6 +8,7 @@ pub mod axml;
 pub mod dex;
 mod error;
 pub mod insn;
+pub mod jni;
 pub mod manifest;
 pub mod permissions;
 mod read;

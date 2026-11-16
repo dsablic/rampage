@@ -295,11 +295,9 @@ pub(crate) fn jni_exports(lib: &NativeLib) -> JniExports {
     }
 }
 
-fn native_rows(apk: &Apk) -> Vec<Value> {
-    apk.native_libs
-        .iter()
-        .map(|lib| {
-            let exports = jni_exports(lib);
+fn native_rows(libs: &[(&NativeLib, JniExports)]) -> Vec<Value> {
+    libs.iter()
+        .map(|(lib, exports)| {
             let mut row = json!({
                 "path": lib.path,
                 "abi": lib.abi,
@@ -308,12 +306,89 @@ fn native_rows(apk: &Apk) -> Vec<Value> {
                 "jni_export_count": exports.java.len(),
                 "jni_onload": exports.on_load,
             });
-            if let Some(error) = exports.error {
+            if let Some(error) = &exports.error {
                 row["error"] = json!(error);
             }
             row
         })
         .collect()
+}
+
+/// JNI rows listed per kind.
+const MAX_JNI_ROWS: usize = 100;
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
+}
+
+/// Links each `native` method the DEX code declares to the `Java_` export that binds it by name (short or long
+/// form), or, failing that, to the libraries with `JNI_OnLoad` that hold its name and signature as strings (a
+/// `RegisterNatives` table, likely but unproven); and lists `Java_` exports no declared native method claims.
+fn jni_links(opened: &Opened, libs: &[(&NativeLib, JniExports)]) -> Value {
+    let mut linked = Vec::new();
+    let mut unlinked = Vec::new();
+    let mut claimed: HashSet<String> = HashSet::new();
+    let mut total = 0usize;
+    for (_, dex) in opened.parsed() {
+        let mut budget = dex.limits.max_members;
+        for index in 0..dex.class_count() {
+            let Ok(class) = dex.class_def(index) else { continue };
+            let Ok(data) = dex.class_data(&class, &mut budget) else { continue };
+            for method in data.methods().filter(|method| method.access & rampage_dex::dex::ACC_NATIVE != 0) {
+                let Ok(reference) = dex.method(method.method_idx) else { continue };
+                total += 1;
+                let (short, long) =
+                    rampage_dex::jni::symbols(&reference.class, &reference.name, &reference.proto.parameters);
+                let text = reference.text();
+                let bound: Vec<Value> = libs
+                    .iter()
+                    .filter_map(|(lib, exports)| {
+                        let symbol = [&long, &short].into_iter().find(|symbol| exports.java.contains(symbol))?;
+                        Some(json!({"library": lib.path, "symbol": symbol}))
+                    })
+                    .collect();
+                claimed.insert(short.clone());
+                claimed.insert(long);
+                if !bound.is_empty() {
+                    if linked.len() < MAX_JNI_ROWS {
+                        linked.push(json!({"method": text, "bound_by_name": bound}));
+                    }
+                    continue;
+                }
+                let name = format!("{}\0", reference.name);
+                let signature = format!("{}\0", reference.proto.descriptor());
+                let registered: Vec<&str> = libs
+                    .iter()
+                    .filter(|(lib, exports)| {
+                        exports.on_load
+                            && lib.bytes.as_deref().is_some_and(|bytes| {
+                                contains(bytes, name.as_bytes()) && contains(bytes, signature.as_bytes())
+                            })
+                    })
+                    .map(|(lib, _)| lib.path.as_str())
+                    .collect();
+                if unlinked.len() < MAX_JNI_ROWS {
+                    let mut row = json!({"method": text, "expected_symbol": short});
+                    if !registered.is_empty() {
+                        row["possibly_registered_in"] = json!(registered);
+                    }
+                    unlinked.push(row);
+                }
+            }
+        }
+    }
+    let orphans: Vec<&String> = libs
+        .iter()
+        .flat_map(|(_, exports)| exports.java.iter())
+        .filter(|symbol| !claimed.contains(*symbol))
+        .take(MAX_JNI_ROWS)
+        .collect();
+    json!({
+        "native_methods": total,
+        "linked": linked,
+        "unlinked": unlinked,
+        "exports_without_native": orphans,
+    })
 }
 
 fn dex_rows(opened: &Opened) -> Vec<Value> {
@@ -468,7 +543,9 @@ fn summary(path: &Path, opened: &Opened, components_limit: usize) -> Value {
             }
             None => out["manifest_error"] = json!(apk.manifest_error),
         }
-        out["native_libs"] = json!(native_rows(apk));
+        let libs: Vec<(&NativeLib, JniExports)> = apk.native_libs.iter().map(|lib| (lib, jni_exports(lib))).collect();
+        out["native_libs"] = json!(native_rows(&libs));
+        out["jni"] = jni_links(opened, &libs);
         if let Some(ResourceTable { size, packages, strings }) = &apk.resources {
             out["resources"] = json!({"size": size, "packages": packages, "strings": strings});
         }
@@ -477,6 +554,9 @@ fn summary(path: &Path, opened: &Opened, components_limit: usize) -> Value {
         }
     }
     out["dex"] = json!(dex_rows(opened));
+    if opened.apk.is_none() {
+        out["jni"] = jni_links(opened, &[]);
+    }
     out["privacy"] = privacy(opened);
     let totals = opened.parsed().fold((0u64, 0u64, 0u64), |(classes, methods, strings), (_, dex)| {
         (
@@ -583,6 +663,9 @@ fn directory(query: &DexMetadataQuery) -> Result<Value, String> {
                 if let Some(object) = row.as_object_mut() {
                     object.remove("components");
                     object.remove("application");
+                    if let Some(jni) = object.get_mut("jni").and_then(Value::as_object_mut) {
+                        jni.retain(|key, _| key == "native_methods");
+                    }
                     if let Some(privacy) = object.get_mut("privacy").and_then(Value::as_object_mut) {
                         privacy.retain(|key, _| key == "media" || key == "capture_apis_total");
                     }
@@ -646,4 +729,28 @@ pub fn dex_metadata(query: &DexMetadataQuery) -> Result<Value, String> {
     out["list"] = json!(list);
     out["page"] = page;
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_register_natives_table_is_suggested_by_name_and_signature_strings() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/android/recorder.dex");
+        let opened = open(&path, false).unwrap();
+        let table = NativeLib {
+            path: "lib/arm64-v8a/libtable.so".to_owned(),
+            abi: "arm64-v8a".to_owned(),
+            size: 0,
+            bytes: Some(b"\0nativeEncode\0([B)I\0".to_vec()),
+        };
+        let exports = JniExports { java: Vec::new(), on_load: true, error: None };
+        let links = jni_links(&opened, &[(&table, exports)]);
+        assert_eq!(links["unlinked"][0]["possibly_registered_in"], json!(["lib/arm64-v8a/libtable.so"]));
+        let exports = JniExports { java: vec!["Java_a_B_c".to_owned()], on_load: false, error: None };
+        let links = jni_links(&opened, &[(&table, exports)]);
+        assert!(links["unlinked"][0].get("possibly_registered_in").is_none());
+        assert_eq!(links["exports_without_native"], json!(["Java_a_B_c"]));
+    }
 }
