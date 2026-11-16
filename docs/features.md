@@ -21,7 +21,7 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 | Search | Bytes, text, regex, immediates, instructions, references | [Search](#search) |
 | Library identification | Bundled signatures, PAT and FunctionID inputs, fuzzy candidates | [Library identification](#library-identification) |
 | Guided reports | Triage, main, network, persistence, string decoding, build diffing, crypto | [Guided reports and batch analysis](#guided-reports-and-batch-analysis) |
-| File formats | ZIP inventory, Go and Rust build info, PyInstaller, WebAssembly, PE resources, .NET | [Archive metadata](#archive-metadata) and [File formats](#file-formats) |
+| File formats | ZIP inventory, Go and Rust build info, PyInstaller, WebAssembly, PE resources, .NET, Android APK/DEX | [Archive metadata](#archive-metadata) and [File formats](#file-formats) |
 | Debugging | GDB remote stubs; `debugserver` and Windows stubs are *experimental* | [Debugging](#debugging) |
 | Heuristic flywheel | Agent-proposed signatures gated on held-out truth (*experimental*) | [Heuristic flywheel](#heuristic-flywheel) |
 | Desktop UI | Listings, graphs, decompilation and shared annotations (*experimental*) | [Desktop UI](#desktop-ui) |
@@ -426,6 +426,10 @@ These read embedded metadata and containers without executing, extracting or dec
 - **Managed assemblies** (`dotnet_metadata`, `dotnet_il`): ECMA-335 metadata (types, P/Invokes, custom
   attributes, resources) and ILDasm-style CIL for one method. CIL is reported as managed code, never as native
   instructions. See [managed assemblies](file-formats.md#managed-assemblies).
+- **Android APKs and DEX** (`dex_metadata`, MCP `android` group): the manifest (package, SDK levels, permissions
+  with protection level and privacy category, components with intent filters, exported state and start-at-boot
+  receivers), native libraries with their JNI exports, and DEX 035–041 classes and methods, in-house and without a
+  Java toolchain. See [Android APKs and DEX](android.md).
 
 ## Debugging
 

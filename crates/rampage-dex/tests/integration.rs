@@ -2,4 +2,5 @@
 
 mod apk;
 mod dex;
+mod fixtures;
 mod hostile;

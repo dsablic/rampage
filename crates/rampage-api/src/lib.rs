@@ -1,6 +1,7 @@
 //! The single command and query surface shared by the CLI, the MCP server and the UI.
 
 mod analysis_cache;
+mod android;
 pub mod annotations;
 mod archive;
 mod assembly;
@@ -104,6 +105,7 @@ pub use analysis_cache::{
     ANALYSIS_CACHE_MAX_VARIABLE, ANALYSIS_CACHE_VARIABLE, ANALYSIS_VERSION, AnalysisStore, AnalysisStoreStatus,
     DEFAULT_MAX_BYTES, program_digest,
 };
+pub use android::{DexMetadataQuery, MAX_DEX_PAGE, dex_metadata};
 pub use annotations::{DataTypeAnnotation, DerivedTypeHint, TypeHintAnnotation, TypeHintEvidence, TypeHintTarget};
 pub use archive::{
     ArchiveMember, ArchiveMemberRef, ArchivePage, ArchiveQuery, ArchiveRef, MAX_ARCHIVE_PAGE, MAX_ARCHIVE_RESULT_BYTES,

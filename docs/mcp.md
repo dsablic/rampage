@@ -96,7 +96,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 that answer common first questions, such as `language_metadata` and `class_evidence` for class names and
 hierarchies, are in `core` so that a client deferring schemas still sees their names.
 
-A default session lists 47 tools: the 46 in `core` plus `enable_tools`. Enabling every group lists 102. The
+A default session lists 47 tools: the 46 in `core` plus `enable_tools`. Enabling every group lists 103. The
 `debug` group adds 14 tools (16 with `--debug-writes`), `--observations` adds `report_observation`, and a
 `--corpus` server lists `enable_tools` and the 4 `improve` tools only.
 
@@ -120,6 +120,7 @@ A default session lists 47 tools: the 46 in `core` plus `enable_tools`. Enabling
   `query_debugger`.
 - `diagnostics`: `analysis_diagnostics`, `entry_diagnostics`, `inspect_jump_table`.
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
+- `android`: `dex_metadata` ([Android APKs and DEX](android.md)).
 - `carve`: `carve`, `archive_inventory`, `fs_list`, `fs_extract`, `write_decoded_range`, `endpoint_inventory`,
   `endpoint_blocklist`, `privacy_surface`.
 - `formats`: `build_info`, `pe_resources`, `pe_load_config`, `exception_handlers`, `pyinstaller_archive`,

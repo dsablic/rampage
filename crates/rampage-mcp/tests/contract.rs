@@ -530,6 +530,22 @@ async fn contract_mcp_dotnet_results() {
     check_group(client, "dotnet", &observed, &[]).await;
 }
 
+/// The result fields of the `android` group on the committed APK, DEX and their directory.
+#[tokio::test]
+async fn contract_mcp_android_results() {
+    let android = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/android");
+    let apk = android.join("recorder.apk");
+    let client = connect(RampageServer::with_groups(Group::ALL)).await;
+    let mut observed = Observed::new();
+    let (c, o) = (&client, &mut observed);
+    exercise(c, o, "dex_metadata", json!({"path": apk, "limit": 2})).await;
+    exercise(c, o, "dex_metadata", json!({"path": apk, "list": "methods", "limit": 2})).await;
+    exercise(c, o, "dex_metadata", json!({"path": apk, "list": "components", "limit": 2})).await;
+    exercise(c, o, "dex_metadata", json!({"path": android.join("recorder.dex"), "limit": 1})).await;
+    exercise(c, o, "dex_metadata", json!({"path": android, "max_files": 1})).await;
+    check_group(client, "android", &observed, &[]).await;
+}
+
 /// The result fields of the `diagnostics` group.
 #[tokio::test]
 async fn contract_mcp_diagnostics_results() {

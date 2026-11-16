@@ -1419,6 +1419,43 @@
         }
       }
     },
+    "dex_metadata": {
+      "group": "android",
+      "arguments": {
+        "cursor": {
+          "type": "null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "list": {
+          "type": "null|string",
+          "required": false
+        },
+        "max_files": {
+          "type": "integer|null",
+          "required": false
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "package": {
+          "type": "null|string",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "prefix": {
+          "type": "null|string",
+          "required": false
+        }
+      }
+    },
     "diff_builds": {
       "group": "core",
       "arguments": {

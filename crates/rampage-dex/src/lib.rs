@@ -9,6 +9,7 @@ pub mod dex;
 mod error;
 pub mod insn;
 pub mod manifest;
+pub mod permissions;
 mod read;
 #[cfg(feature = "testkit")]
 pub mod testkit;

@@ -20,6 +20,7 @@ rampage-debug.workspace = true
 rampage-plugin.workspace = true
 rampage-plugin-contract.workspace = true
 rampage-unpack.workspace = true
+rampage-dex.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -40,6 +41,7 @@ idna = "1.1.0"
 rustix = { version = "1.1.5", features = ["fs"] }
 
 [dev-dependencies]
+rampage-dex = { workspace = true, features = ["testkit"] }
 rampage-debug = { workspace = true, features = ["fake-stub"] }
 rampage-decompiler.workspace = true
 rampage-signatures.workspace = true

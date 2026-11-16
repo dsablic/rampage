@@ -2,6 +2,7 @@
 //! relinks one executable instead of one per file. Select a file's tests with `--test integration <file>::`.
 
 mod analysis_cache;
+mod android;
 mod annotate_batch;
 mod annotation_log_format;
 mod api;

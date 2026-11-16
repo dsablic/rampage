@@ -6,6 +6,15 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## 1.6.0 (2026-11-16)
 
+- Android APKs and DEX files: the new `android` group's `dex_metadata` reads an APK, AAB, JAR or DEX file (or a
+  directory of them): package, versions and SDK levels, permissions with their platform protection level and a
+  privacy category, components with intent filters, exported state and start-at-boot receivers, native libraries
+  per ABI with their `Java_*` JNI exports, DEX 035–041 files with checksum and signature checks, and pages of
+  classes, methods or components. The DEX, binary XML and manifest readers are in-house (new crate
+  `rampage-dex`) and capped against hostile input. See [Android APKs and DEX](docs/android.md).
+- ZIP archives in `fs_list` and `fs_extract`: stored and deflated members (ZIP64 included) with the central
+  directory as the authority, inflation stopped at the declared size, the per-file limit and the ratio meter, so
+  an APK's native libraries can be extracted and opened by path. See [firmware images](docs/firmware-images.md).
 - `integrity_checks` on Raw firmware: on Cortex-M, a CRC polynomial literal that no discovered code references is
   followed to the `ldr` that loads it, and the routine around it is listed with `inferred_range`. On a Raw project
   over a container file, `container_streams` lists each compressed stream a record describes, with the record's

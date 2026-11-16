@@ -1012,6 +1012,13 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
 
+Android Open Source Project platform permission protection levels
+License: Apache-2.0
+Source: https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/res/AndroidManifest.xml
+The protection levels of platform permissions in crates/rampage-dex/src/permissions.rs are taken from the
+Android platform manifest (Copyright The Android Open Source Project), summarised as documented there.
+The Apache License 2.0 text is reproduced under the Ghidra decompiler above.
+
 ==============================================================================
 PART 2. RUST CRATES (595)
 ==============================================================================

@@ -16,6 +16,7 @@ path and open no project.
 | Android OTA `payload.bin` | major version 2, full payloads: REPLACE, REPLACE_BZ, REPLACE_XZ, ZERO, DISCARD. Partitions list as `<name>.img` |
 | cpio | newc (`070701`) and crc (`070702`) |
 | tar | ustar, GNU long names, pax `path`, `linkpath` and `size` |
+| ZIP (APK, AAB, JAR) | stored and deflate members, ZIP64; the central directory is authoritative; encrypted members and other methods are listed with a note and not read. [`dex_metadata`](android.md) reads an APK's manifest and DEX files |
 
 UBI and UBIFS images are recognised and refused as not read yet. A delta OTA payload lists its partitions, each
 noted with the first operation that needs the previous build (SOURCE_COPY, BSDIFF, PUFFDIFF, ...); rebuilding one

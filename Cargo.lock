@@ -4722,6 +4722,7 @@ dependencies = [
  "rampage-decode",
  "rampage-decompiler",
  "rampage-detect",
+ "rampage-dex",
  "rampage-loaders",
  "rampage-plugin",
  "rampage-plugin-contract",

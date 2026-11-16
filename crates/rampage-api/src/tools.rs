@@ -83,6 +83,7 @@ pub enum Group {
     Runtime,
     Diagnostics,
     DotNet,
+    Android,
     Carve,
     Formats,
     /// Read-only sessions with operator-started GDB remote stubs. Not in [`Group::ALL`]: only an MCP server started
@@ -94,13 +95,14 @@ pub enum Group {
 }
 
 impl Group {
-    pub const ALL: [Group; 8] = [
+    pub const ALL: [Group; 9] = [
         Group::Core,
         Group::Detection,
         Group::Types,
         Group::Runtime,
         Group::Diagnostics,
         Group::DotNet,
+        Group::Android,
         Group::Carve,
         Group::Formats,
     ];
@@ -113,6 +115,7 @@ impl Group {
             Group::Runtime => "runtime",
             Group::Diagnostics => "diagnostics",
             Group::DotNet => "dotnet",
+            Group::Android => "android",
             Group::Carve => "carve",
             Group::Formats => "formats",
             Group::Debug => "debug",
@@ -147,6 +150,11 @@ impl Group {
                 "Bounded entry/decode evidence and unreliable-code diagnostics, and explicit ARM64 jump-table checks."
             }
             Group::DotNet => "Managed (.NET) metadata (types, methods, properties, P/Invokes, attributes) and CIL.",
+            Group::Android => {
+                "Android APKs and DEX files: the manifest (package, SDK levels, permissions with protection levels, \
+                 components, intent filters, start-at-boot receivers), native libraries with JNI exports, DEX \
+                 classes and methods, and Dalvik bytecode."
+            }
             Group::Carve => concat!(
                 "Scan files for embedded executables/containers, inventory ",
                 "standalone ZIP32 metadata without extraction, and list and extract firmware filesystem images ",
@@ -483,6 +491,27 @@ struct EndpointInventoryArgs {
     kinds: Option<Vec<String>>,
     /// Endpoint rows returned (default 100, at most 500).
     limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DexMetadataArgs {
+    /// An .apk, .aab, .jar or .dex file, or a directory holding them (paged by cursor).
+    path: std::path::PathBuf,
+    /// The page to list for one file: classes (default), methods or components.
+    list: Option<String>,
+    /// Only classes whose Java name starts with this (com.example.net or Lcom/example/net/).
+    prefix: Option<String>,
+    /// Only classes in this package or its subpackages.
+    package: Option<String>,
+    /// Rows to skip, for paging one file.
+    offset: Option<usize>,
+    /// Rows per page (default 100, at most 500), also cut to fit the result.
+    limit: Option<usize>,
+    /// A directory's next_cursor from the previous page.
+    cursor: Option<String>,
+    /// Files per directory page (default 10, at most 50).
+    max_files: Option<usize>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -865,7 +894,7 @@ pub fn file_tools() -> Vec<FileTool> {
             group: Group::Carve,
             name: "fs_list",
             description: "List a firmware filesystem image (SquashFS, ext2/3/4, Android sparse, OTA payload.bin, cpio, \
-                          tar) in any file: path, type, size, mode, link per entry, paged. image_offset reads one \
+                          tar, ZIP/APK) in any file: path, type, size, mode, link per entry, paged. image_offset reads one \
                           embedded in a larger file; inner opens nested images (an OTA partition, an image file).",
             input_schema: schema::<FsListArgs>(),
             handler: |_, input| {
@@ -923,6 +952,30 @@ pub fn file_tools() -> Vec<FileTool> {
                     decode: args.decode.unwrap_or(false),
                     kinds: args.kinds,
                     limit: args.limit,
+                })
+            },
+        },
+        FileTool {
+            effect: Effect::None,
+            group: Group::Android,
+            name: "dex_metadata",
+            description: "An Android APK/AAB/JAR or DEX file, or a directory of them: package, versions and SDK levels; \
+                          permissions with protection level and privacy category; components with exported state, \
+                          intent filters and start_at_boot receivers; native libraries per ABI with Java_ exports; \
+                          DEX files (checksums verified, counts); one page of classes, methods or components \
+                          (prefix/package filters, offset/limit).",
+            input_schema: schema::<DexMetadataArgs>(),
+            handler: |_, input| {
+                let args: DexMetadataArgs = arguments(input)?;
+                crate::dex_metadata(&crate::DexMetadataQuery {
+                    path: args.path,
+                    list: args.list,
+                    prefix: args.prefix,
+                    package: args.package,
+                    offset: args.offset,
+                    limit: args.limit,
+                    cursor: args.cursor,
+                    max_files: args.max_files,
                 })
             },
         },

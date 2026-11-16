@@ -162,6 +162,13 @@ pub fn fs_extract(query: &FsExtractQuery) -> Result<Value, String> {
 /// A sentence for a file that is a filesystem image rather than an executable, naming the tools that read it.
 pub fn filesystem_guidance(path: &Path) -> Option<String> {
     let format = rampage_unpack::sniff(path)?;
+    if format == Format::Zip {
+        return Some(
+            "The file is a ZIP archive. An APK, AAB or JAR opens with dex_metadata (group `android`); fs_list and \
+             fs_extract (group `carve`) list and extract any ZIP, so its native libraries can be opened by path."
+                .to_owned(),
+        );
+    }
     let what = match format {
         Format::Squashfs => "a SquashFS filesystem image",
         Format::Ext => "an ext2/3/4 filesystem image",
@@ -169,7 +176,7 @@ pub fn filesystem_guidance(path: &Path) -> Option<String> {
         Format::OtaPayload => "an Android OTA payload",
         Format::Cpio => "a cpio archive",
         Format::Tar => "a tar archive",
-        Format::Zip => "a ZIP archive (APK, AAB and JAR files are ZIP)",
+        Format::Zip => return None,
         Format::Ubi | Format::Ubifs => return None,
     };
     Some(format!(
