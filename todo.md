@@ -184,6 +184,15 @@ decoded code.
     the decoded image's selector; on the decoded image the CRC-32 routine is found from its literal load.
   - [ ] Seed a routine `integrity_checks` infers from a literal load (outside every discovered function) into
     discovery, so `decompile` and `lock_mechanisms` see it.
+- [ ] **Fifth Haiku run (2026-11-16, after f8f318b).** 45 turns, $0.53. Reset path, copies, CRC-32 routine and
+  verified container sums all reported directly from tool output; no wrong base. Remaining gaps, in order of value:
+  - `xrefs` from code to strings loaded through Thumb literal pools returns nothing in Raw images, so the
+    updater's error strings can't be traced to the code that checks the sums;
+  - `find_main` refuses Raw projects;
+  - `decompile` with `exact_entry` refuses ARM;
+  - the vector-table parser reports implausible words as `stack_pointer` instead of rejecting the candidate;
+  - run-to-run variance is large (run 4 reached the RTOS startup, run 5 stopped at the jump fragment): consider
+    `binary_info` naming the scatter jump target's enclosing function and the first functions worth reading.
 - [ ] **Flaky UI test.** `rampage-ui` `debugger::tests::local_socket::genuine_save_refusal_remains_typed_until_resources_are_recorded_despite_obsolete_binding`
   fails intermittently: locally with BrokenPipe on its socket, and on CI Linux ARM64 (2badb62) with "Harness::run
   exceeded max_steps (4)" from a text-selection repaint in `inspection_harness`. Use `run_steps` or wait for the
