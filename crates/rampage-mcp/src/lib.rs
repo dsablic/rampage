@@ -219,10 +219,11 @@ show prologue or call evidence; binary_info reports each table, accepted or refu
 The reset code at the entry is followed (a bounded interpreter; nothing runs natively) for the sections startup \
 code copies to their run addresses and the RAM it zeroes: binary_info's raw.scatter_load lists each copy \
 (destination, length, source, store sites, routine) and, by default, a complete copy from mapped bytes to an \
-unmapped destination is mapped there (code where the copy runs or below 0x20000000, else RAM; zero fill as \
-unbacked RAM) and the jump into the copied code is seeded; scatter_load false reports them only. \
-When discovery finds fewer than one function per 64 KiB of Raw code, binary_info and list_functions return a \
-one-line next naming the options to try (pointer_tables, mapping the startup copies). \
+unmapped destination is mapped there (code when the copy ran and was not stored into afterwards, else RAM; zero \
+fill as unbacked RAM; a copy cut off by a skipped call or an unclean stop is reported only) and the jump into \
+the copied code is seeded; scatter_load false reports them only. \
+When discovery finds fewer than one function per 16 KiB of Raw code, list_functions (and binary_info \
+afterwards) return a one-line next naming the options to try (pointer_tables, mapping the startup copies). \
 Cortex-M only: regions (up to 15) maps more of the same file beside the primary code region, each {kind: code|data|\
 ram, base_address, offset, length, decode?, from?}: e.g. a second stage at its RAM base \
 {\"kind\":\"code\",\"base_address\":\"0x20000000\",\"offset\":\"0x400\",\"length\":128}; ram is writable (its bytes \

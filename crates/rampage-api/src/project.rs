@@ -21,7 +21,7 @@ const DEFAULT_STRING_LENGTH: usize = 4;
 /// A Raw project with fewer than one discovered function per this many bytes of code gets a `next` hint: firmware
 /// averages hundreds of bytes per function, so a handful in a large image means discovery stopped early (startup
 /// code, calls through pointers). A small image is held to at least one function.
-const RAW_BYTES_PER_FUNCTION: u64 = 64 * 1024;
+const RAW_BYTES_PER_FUNCTION: u64 = 16 * 1024;
 
 /// Initialized cache presence only; this is not a history or concurrent-activity attestation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
@@ -851,6 +851,8 @@ impl Project {
     }
 
     pub fn summary(&self) -> Summary<'_> {
+        // Only from an analysis that already ran: binary_info never starts discovery itself.
+        let next = self.raw_discovery_hint();
         let binary = &self.binary;
         Summary {
             format: binary.format,
@@ -882,7 +884,7 @@ impl Project {
             }),
             analysis_store: self.analysis_store_status(),
             encrypted_or_packed_code: self.encrypted_regions().cloned().collect(),
-            next: self.raw_discovery_hint(),
+            next,
         }
     }
 
@@ -916,10 +918,10 @@ impl Project {
         Ok(crate::rows::FunctionsPage { page, unexplored_code, next: self.raw_discovery_hint() })
     }
 
-    /// For a Raw project whose discovery found fewer than one function per 64 KiB of code (none at all in a smaller
-    /// image), the
-    /// selector options that would find more: pointer-table seeding on Cortex-M, and mapping the startup copies
-    /// when `scatter_load` false left them unmapped. None otherwise, or when no option applies.
+    /// For a Raw project whose discovery, already run, found fewer than one function per 16 KiB of code (none at all
+    /// in a smaller image), the selector options that would find more: pointer-table seeding on Cortex-M, and
+    /// mapping the startup copies when `scatter_load` false left them unmapped. None otherwise, when no option
+    /// applies, or before discovery has run.
     pub fn raw_discovery_hint(&self) -> Option<String> {
         let raw = self.binary.raw_code_image()?;
         let code: u64 = raw
@@ -928,7 +930,7 @@ impl Project {
             .filter(|region| region.kind == rampage_loaders::RawRegionKind::Code && region.backed())
             .map(|region| region.length)
             .sum();
-        let found = self.analysis().ok()?.program.functions.len() as u64;
+        let found = self.analysis.get()?.as_ref().ok()?.program.functions.len() as u64;
         if found * RAW_BYTES_PER_FUNCTION >= code.max(RAW_BYTES_PER_FUNCTION) {
             return None;
         }
@@ -958,7 +960,8 @@ impl Project {
         }
         (!steps.is_empty()).then(|| {
             format!(
-                "Discovery from the entry and seeds found {found} functions in {} KiB of code: {}.",
+                "Discovery from the entry and seeds found {found} function{} in {} KiB of code: {}.",
+                if found == 1 { "" } else { "s" },
                 code.div_ceil(1024),
                 steps.join("; ")
             )

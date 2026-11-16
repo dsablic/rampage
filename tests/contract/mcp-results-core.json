@@ -890,6 +890,7 @@
     "items[].instructions",
     "items[].name",
     "items[].size",
+    "next",
     "offset",
     "total"
   ],

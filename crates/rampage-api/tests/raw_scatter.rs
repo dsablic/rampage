@@ -125,6 +125,12 @@ fn startup_copies_are_found_from_the_entry_and_mapped_at_their_run_addresses() {
         }
         let (c, failed) = call(&mut project, "decompile", json!({ "at": hex(truth("ram_main")) }));
         assert!(!failed && c.contains(&format!("sub_{:x}(", truth("ram_mix"))), "{variant}: {c}");
+        // Patches go to the load image the copy was taken from.
+        let at = truth("ram_mix");
+        let original = project.binary.read(at, 2).unwrap().to_vec();
+        let error = project.patch_bytes(at, &original, &[0x00, 0xbf], false).err().unwrap().to_string();
+        let load = section(variant, ".ramfunc").2.unwrap() + (at - section(variant, ".ramfunc").0);
+        assert!(error.contains(&format!("copy of raw.code at {load:#x}; patch {load:#x} in raw.code")), "{error}");
     }
 }
 
@@ -186,9 +192,11 @@ fn a_small_discovery_in_a_large_image_suggests_pointer_tables_and_mapping_the_co
         Session::default().open_raw(&path, &request).unwrap()
     };
     let next = |project: &rampage_api::Project| {
-        let summary = serde_json::to_value(project.summary()).unwrap();
+        // binary_info never starts discovery: before list_functions it has no hint.
+        assert!(serde_json::to_value(project.summary()).unwrap().get("next").is_none());
         let query = rampage_api::FunctionsQuery::default();
         let page = serde_json::to_value(project.functions_page(&query).unwrap()).unwrap();
+        let summary = serde_json::to_value(project.summary()).unwrap();
         assert_eq!(summary["next"], page["next"]);
         summary["next"].as_str().map(str::to_owned)
     };

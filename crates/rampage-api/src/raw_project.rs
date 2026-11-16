@@ -156,12 +156,21 @@ pub struct RawRegionFrom {
     /// `decode`); n or its name `raw.<kind>.<n>` for regions[n-1], which must come earlier and have bytes.
     #[serde(deserialize_with = "region_reference")]
     #[schemars(schema_with = "region_reference_schema")]
-    pub region: usize,
+    pub region: RegionReference,
     /// BYTE offset into the source region's bytes (not an address) of the first copied byte.
     pub offset: FileOffset,
 }
 
-fn region_reference<'de, D: Deserializer<'de>>(deserializer: D) -> Result<usize, D::Error> {
+/// A region named by number, or by name, whose kind must then match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegionReference {
+    /// 0 for the primary region, n for regions[n-1].
+    pub index: usize,
+    /// The kind a `raw.<kind>.<n>` name states.
+    pub kind: Option<RawRegionKindRequest>,
+}
+
+fn region_reference<'de, D: Deserializer<'de>>(deserializer: D) -> Result<RegionReference, D::Error> {
     let refuse = |what: &dyn std::fmt::Display| {
         serde::de::Error::custom(format!(
             "from.region {what}: 0, \"primary\" or \"raw.code\" for the primary region, or n or \"raw.<kind>.<n>\" \
@@ -169,16 +178,27 @@ fn region_reference<'de, D: Deserializer<'de>>(deserializer: D) -> Result<usize,
         ))
     };
     match serde_json::Value::deserialize(deserializer)? {
-        serde_json::Value::Number(number) => {
-            number.as_u64().and_then(|index| usize::try_from(index).ok()).ok_or_else(|| refuse(&number))
+        serde_json::Value::Number(number) => number
+            .as_u64()
+            .and_then(|index| usize::try_from(index).ok())
+            .map(|index| RegionReference { index, kind: None })
+            .ok_or_else(|| refuse(&number)),
+        serde_json::Value::String(name) if name == "primary" || name == "raw.code" => {
+            Ok(RegionReference { index: 0, kind: None })
         }
-        serde_json::Value::String(name) if name == "primary" || name == "raw.code" => Ok(0),
         serde_json::Value::String(name) => name
             .strip_prefix("raw.")
             .and_then(|rest| rest.split_once('.'))
-            .filter(|(kind, _)| matches!(*kind, "code" | "data" | "ram"))
-            .and_then(|(_, index)| index.parse::<usize>().ok())
-            .filter(|&index| index >= 1)
+            .and_then(|(kind, index)| {
+                let kind = match kind {
+                    "code" => RawRegionKindRequest::Code,
+                    "data" => RawRegionKindRequest::Data,
+                    "ram" => RawRegionKindRequest::Ram,
+                    _ => return None,
+                };
+                let index = index.parse::<usize>().ok().filter(|&index| index >= 1)?;
+                Some(RegionReference { index, kind: Some(kind) })
+            })
             .ok_or_else(|| refuse(&format!("{name:?}"))),
         other => Err(refuse(&other)),
     }
@@ -193,7 +213,7 @@ fn region_reference_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schem
     })
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RawRegionKindRequest {
     Code,
@@ -236,8 +256,7 @@ fn pointer_tables_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema 
 
 fn scatter_load_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
-        "description": "ARM:LE:32:Cortex only: maps the copies the reset code makes at their run addresses (default \
-                        true); false reports them only.",
+        "description": "Cortex-M: map startup copies at run addresses (default true); false only reports them.",
         "type": ["boolean", "null"]
     })
 }
@@ -556,10 +575,24 @@ impl RawProjectRequest {
                 if region.offset.is_some() || region.decode.is_some() {
                     return Err(refuse("from copies another region's bytes: omit offset and decode".into()));
                 }
-                if from.region > index {
+                let reference = from.region;
+                if reference.index > index {
                     return Err(refuse(format!(
                         "from.region {} must name the primary region (0) or an earlier region (1..={index})",
-                        from.region
+                        reference.index
+                    )));
+                }
+                if let Some(named) = reference.kind
+                    && self.regions[reference.index - 1].kind != named
+                {
+                    let actual = region_kind_name(self.regions[reference.index - 1].kind);
+                    return Err(refuse(format!(
+                        "from.region raw.{}.{} names a {} region, but regions[{}] is {actual}: raw.{actual}.{}",
+                        region_kind_name(named),
+                        reference.index,
+                        region_kind_name(named),
+                        reference.index - 1,
+                        reference.index
                     )));
                 }
                 let length = region.length.0;
@@ -570,7 +603,7 @@ impl RawProjectRequest {
                     )));
                 }
                 budget -= length as usize;
-                let source = match from.region {
+                let source = match reference.index {
                     0 => "raw.code".to_owned(),
                     n => format!("raw.{}.{n}", region_kind_name(self.regions[n - 1].kind)),
                 };

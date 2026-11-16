@@ -211,6 +211,9 @@ fn a_region_copied_from_a_slice_of_another_maps_at_its_run_address_with_its_rece
     };
     let error = refused("/regions/0/from/offset", json!(2000));
     assert!(error.contains("is not inside the 0x808 bytes of raw.code"), "{error}");
+    // A name states the kind too; it must match the region it numbers.
+    let error = refused("/regions/1/from/region", json!("raw.ram.1"));
+    assert!(error.contains("from.region raw.ram.1 names a ram region, but regions[0] is code: raw.code.1"), "{error}");
     let error = refused("/regions/0/from/region", json!(2));
     assert!(
         error.contains("regions[0]: from.region 2 must name the primary region (0) or an earlier region"),

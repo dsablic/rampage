@@ -663,7 +663,7 @@ impl RawCodeImage {
                     options.seeds.push(target);
                 }
                 // The vector table the program installs last, once the memory holding it is mapped.
-                if let Some(store) = report.vtor_stores.last() {
+                if let Some(store) = report.last_vtor_store.clone() {
                     let holder = regions.iter().find(|region| region.backed() && region.range().contains(&store.value));
                     match holder {
                         None => {
@@ -978,11 +978,12 @@ fn scatter_regions(
             copy.not_mapped_reason = Some(reason);
             continue;
         }
-        // Copied code runs where it was copied to, or lies in the Cortex-M Code region and the program never stores
-        // into it; copied data is writable.
+        // Copied code ran where it was copied to and nothing stored into it afterwards; everything else is data the
+        // program may change, which the decompiler must not fold as constants.
         let kind = if copy.kind == CopyKind::Copy
             && copy.destination.is_multiple_of(2)
-            && (copy.executed || (copy.destination < 0x2000_0000 && !copy.written_after_jump))
+            && copy.executed
+            && !copy.written_after_jump
         {
             RawRegionKind::Code
         } else {

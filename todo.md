@@ -138,8 +138,11 @@ decoded code.
   - entry-only discovery found three functions and Haiku never tried `pointer_tables`: `binary_info` or
     `list_functions` should suggest it when discovery from the entry is that small; done: both return a one-line
     `next` naming `pointer_tables` (and mapping the startup copies when `scatter_load` false left them unmapped)
-    when discovery finds fewer than one function per 64 KiB of code;
+    when discovery finds fewer than one function per 16 KiB of code;
   - it never ran `integrity_checks` on the decoded code to find the routine that checks the sums.
+- [ ] **Reset-code follow coverage.** The scatter-load interpreter skips calls through instructions it does not
+  model: long multiplies (UMULL, SMULL, UMLAL), saturating and SIMD-within-register arithmetic, LDREX/STREX, and
+  exception entry (SVC). Add them when a startup routine is seen to need them.
 - [ ] **Read-only annotations for file tools.** MCP lists read-only file tools (`list_dir`, `decode_file_range`,
   `file_layout`, `carve`, ...) without annotations, which the MCP spec treats as possibly destructive; give them
   `read_only(true)`.

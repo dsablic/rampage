@@ -55,18 +55,21 @@ see the [stability policy](docs/stability.md) for what the version promises.
   addresses and zeroes: GCC-style loops over linker symbols, Arm-style region tables walked with copy and zero
   handlers, and routines called with constant triples alike. `binary_info` reports `raw.scatter_load` (why the
   follow stopped, the jump into copied code, and each copy's kind, destination, length, source, store sites and
-  calling routine); by default a complete copy from mapped bytes to an unmapped destination is mapped there (code
-  where it runs, RAM for data, zero fills as unbacked RAM) and the jump into the copied code is seeded, so
-  discovery and decompilation reach code that runs from TCM or RAM. `"scatter_load": false` reports without
-  mapping. Calls the follow cannot complete are skipped and listed. See [MCP](docs/mcp.md#scatter-load-copies).
+  calling routine); by default a copy from mapped bytes to an unmapped destination is mapped there (code when the
+  copied code ran and nothing stored into it, RAM otherwise, zero fills as unbacked RAM) unless a skipped call or
+  an unclean stop cut it off mid-routine, and the jump into the copied code is seeded, so discovery and
+  decompilation reach code that runs from TCM or RAM. `"scatter_load": false` reports without
+  mapping. Calls the follow cannot complete are skipped and listed. A patch inside a mapped copy is refused with
+  the load address to patch instead. See [MCP](docs/mcp.md#scatter-load-copies).
 - Relocated vector tables: after the jump into copied code the reset-code follow goes on (at most 200,000
-  instructions) and reports constant stores to VTOR in `raw.scatter_load.vtor_stores`; the table at the last value
-  is read when a mapped region holds it and its accepted handlers are seeded, or `vector_table_refused` says why. A
-  copy the code then stores into is marked `written_after_jump` and maps as RAM, not code.
-- Raw discovery that stops early says so: when a Raw project's discovery finds fewer than one function per 64 KiB
-  of code, `binary_info` and `list_functions` return a one-line `next` naming `"pointer_tables": true` (Cortex-M,
-  when off) and mapping the startup copies (when `"scatter_load": false` left them unmapped). See
-  [MCP](docs/mcp.md#scatter-load-copies).
+  instructions) and reports constant stores to VTOR in `raw.scatter_load` (the first eight in `vtor_stores`, the
+  last in `last_vtor_store`); the table at the last value is read when a mapped region holds it and its accepted
+  handlers are seeded, or `vector_table_refused` says why. A copy the code then stores into is marked
+  `written_after_jump` and maps as RAM, not code.
+- Raw discovery that stops early says so: when a Raw project's discovery finds fewer than one function per 16 KiB
+  of code, `list_functions` (and `binary_info` once discovery has run) return a one-line `next` naming
+  `"pointer_tables": true` (Cortex-M, when off) and mapping the startup copies (when `"scatter_load": false` left
+  them unmapped). See [MCP](docs/mcp.md#scatter-load-copies).
 
 ## 1.5.0 (2026-11-15)
 

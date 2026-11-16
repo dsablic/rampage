@@ -647,27 +647,34 @@ and listed in `skipped_calls`.
 and `copies`: every write of at least 8 bytes by more than one store, in the order they began, with `kind` (`copy`
 from mapped bytes, `zero`, or `computed` bytes such as a decompressor's output), `destination`, `length`, `source`
 with its `source_region` and `source_offset`, `stores`, `store_sites`, the entry-level `call_site` and `routine`
-that wrote it, `executed`, and `status`. By default each copy with strong evidence is mapped as a region
-(`raw.<kind>.<n>`, source `scatter_load` with the copy's index): the follow ended cleanly and the write was not
-interrupted or overwritten, a copy's source lies wholly in one backed region, the destination is unmapped, and the
-16-region and 4 MiB caps hold. Copied code (it ran, or it lies in the Code region below 0x20000000 and the
-program never stored into it) maps as `code`; other copies as writable `ram` with their initial bytes; a zero fill
-as unbacked `ram`. Otherwise
-`not_mapped_reason` says why: `not_requested`, `incomplete`, `overwritten`, `computed_bytes`, `source_not_mapped`,
-`destination_mapped`, `region_limit`, `byte_limit` or `out_of_range`. `"scatter_load": false` reports the copies
+that wrote it, `executed`, `written_after_jump` and `status`. A write is complete when the part of the follow
+that made it finished: the follow is cut into segments, each entry-level call one and the entry's own code between calls
+another; a segment that ends (its call returns, or the entry moves on to a call) leaves its writes complete, while
+the writes of a call that is skipped, or of the segment the follow stops in after an unclean stop (anything but
+`jumped_into_copied_code`, `returned` or `halted`), are `incomplete`. So a copy made by a routine that returned
+still maps when a later call polls a peripheral, and a copy cut off mid-routine never does. By default each
+complete copy is mapped as a region (`raw.<kind>.<n>`, source `scatter_load` with the copy's index) when it was
+not overwritten, a copy's source lies wholly in one backed region, the destination is unmapped, and the 16-region
+and 4 MiB caps hold. A copy maps as `code` when the copied code ran and nothing stored into it after the jump;
+every other copy is data and maps as writable `ram` with its initial bytes; a zero fill maps as unbacked `ram`.
+Otherwise `not_mapped_reason` says why: `not_requested`, `incomplete`, `overwritten`, `computed_bytes`,
+`source_not_mapped`, `destination_mapped`, `region_limit`, `byte_limit` or `out_of_range`. `"scatter_load": false` reports the copies
 without mapping them; a region you state yourself (for example with `from`) always wins, since a copy into it is
-`destination_mapped`. Other profiles have no reset-code follow.
+`destination_mapped`. A patch inside a mapped copy is refused with the load address to patch in its source region
+instead; the copy keeps the bytes it was admitted with, so patching the source does not refresh it. Other profiles have no reset-code follow.
 
 After the jump into copied code the follow goes on for at most 200,000 more instructions (`after_jump`: `steps`,
 `stop`, `stopped_at`); stores there no longer become copies, but a copy the code stores into is marked
 `written_after_jump` (data, so it maps as `ram`). Constant stores to the Vector Table Offset Register (0xE000ED08)
-anywhere in the follow are listed in `vtor_stores`; the table at the last value is read when a region with bytes
+anywhere in the follow are listed in `vtor_stores` (the first eight; `vtor_stores_not_listed` counts the rest)
+and the last one in `last_vtor_store`; the table at that value is read when a region with bytes
 holds it, reported as `vector_table` (each word with its verdict, as for `vector_table`), and its accepted handlers
 become seeds, so handlers that only the relocated table names are discovered. Otherwise `vector_table_refused` says
 why (for example, the table lies in memory nothing copied).
 
-When discovery from the entry and seeds finds fewer than one function per 64 KiB of a Raw project's code (none at all
-in a smaller image), `binary_info` and `list_functions` add a one-line `next` naming what to try: `"pointer_tables":
+When discovery from the entry and seeds finds fewer than one function per 16 KiB of a Raw project's code (none at all
+in a smaller image), `list_functions` adds a one-line `next` naming what to try, and so does `binary_info` once
+discovery has run (it never starts discovery itself): `"pointer_tables":
 true` on Cortex-M when it is off, and dropping `"scatter_load": false` when the startup copies it reported were
 left unmapped. Startup code and calls through function pointers are the usual reasons discovery stops early.
 

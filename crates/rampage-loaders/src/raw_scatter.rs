@@ -29,6 +29,8 @@ use sha2::{Digest, Sha256};
 pub const MAX_STEPS: u64 = 2_000_000;
 /// Instructions followed after the jump into copied code.
 pub const MAX_AFTER_JUMP_STEPS: u64 = 200_000;
+/// VTOR stores listed in the report; the last one is always kept.
+const MAX_LISTED_VTOR_STORES: usize = 8;
 /// Writes listed in the report; more are counted in `copies_not_listed`.
 pub const MAX_LISTED_COPIES: usize = 64;
 /// Separate writes tracked before the follow stops.
@@ -42,8 +44,6 @@ const MAX_LISTED_SKIPPED_CALLS: usize = 16;
 const MAX_DECODE_CACHE: usize = 1 << 16;
 /// A write smaller than this, or of a single store, is a variable's assignment, not a section copy.
 const MIN_WRITE_BYTES: u64 = 8;
-/// Instructions between a write's last store and an abnormal stop within which it counts as interrupted.
-const INTERRUPTED_WINDOW: u64 = 16;
 /// The value of `lr` at reset on Cortex-M: a return to it leaves the entry.
 const RESET_LR: u32 = 0xffff_ffff;
 /// The stack pointer the follow starts with. Its value only names stack slots: stores through any value derived
@@ -232,9 +232,14 @@ pub struct ScatterLoad {
     pub skipped_calls: Vec<SkippedCall>,
     #[serde(skip_serializing_if = "is_zero")]
     pub skipped_calls_not_listed: usize,
-    /// Constant VTOR stores, in order.
+    /// The first eight constant VTOR stores, in order; more are counted in `vtor_stores_not_listed`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub vtor_stores: Vec<VtorStore>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub vtor_stores_not_listed: usize,
+    /// The last constant VTOR store: the table the program installed last, which is read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_vtor_store: Option<VtorStore>,
     /// After the jump into copied code the follow goes on (at most 200,000 instructions) for VTOR stores and
     /// stores into the copies; this is how far it got.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -253,10 +258,13 @@ fn is_zero(value: &usize) -> bool {
 }
 
 const NOTE: &str = "the reset code is followed by a bounded Thumb interpreter over the mapped bytes until it jumps into \
-                    memory it wrote, returns or halts; contiguous stores of one origin are one write. A copy whose \
-                    source lies in one backed region and whose destination is unmapped is mapped at its run address \
-                    (code when it ran, or below 0x20000000 unless the copied code stores into it; writable RAM otherwise), a zero \
-                    fill as unbacked RAM. After the jump into copied code the follow goes on for VTOR stores";
+                    memory it wrote, returns or halts; contiguous stores of one origin are one write. Each entry-level \
+                    call, and the entry's own code between calls, is a segment: writes of a segment that ended (the \
+                    call returned, or the entry moved on to a call) are complete, those of a segment abandoned or still \
+                    open when the follow stopped are not. A complete copy whose source lies in one backed region and \
+                    whose destination is unmapped is mapped at its run address (code when the copied code ran and \
+                    nothing stored into it afterwards, writable RAM otherwise), a zero fill as unbacked RAM. After the \
+                    jump into copied code the follow goes on for VTOR stores";
 
 /// What [`follow`] returns besides the report: each listed write's internal facts.
 #[derive(Debug, Clone)]
@@ -431,6 +439,8 @@ struct Write {
     executed: bool,
     /// The code after the jump into copied code stored into it.
     written_later: bool,
+    /// The segment of the follow that last stored into it (see `Machine::segment`).
+    segment: u64,
 }
 
 impl Write {
@@ -473,7 +483,15 @@ struct Machine<'a> {
     skipped: Vec<SkippedCall>,
     skipped_total: usize,
     vtor: Vec<VtorStore>,
+    vtor_not_listed: usize,
+    vtor_last: Option<VtorStore>,
     continues_at: Option<u32>,
+    /// The follow in segments: each entry-level call is one, and so is the entry's own code between them. A
+    /// segment that ends by returning (or by the entry moving on to a call) completed its writes; one abandoned or
+    /// still open at an unclean stop did not.
+    segment: u64,
+    /// The writes stored into during the current segment.
+    touched: Vec<usize>,
     /// Following the copied code after the jump: stores change memory but no longer become writes.
     after_jump: bool,
 }
@@ -587,7 +605,11 @@ impl<'a> Machine<'a> {
             skipped: Vec::new(),
             skipped_total: 0,
             vtor: Vec::new(),
+            vtor_not_listed: 0,
+            vtor_last: None,
             continues_at: None,
+            segment: 0,
+            touched: Vec::new(),
             after_jump: false,
         }
     }
@@ -681,7 +703,7 @@ impl<'a> Machine<'a> {
         // Instructions decoded from these bytes (one may start two bytes earlier) decode again.
         if !self.cache.is_empty() {
             let first = base.wrapping_sub(2) & !1;
-            for offset in (0..u32::from(width) + 2).step_by(2) {
+            for offset in (0..=u32::from(width) + 1).step_by(2) {
                 self.cache.remove(&first.wrapping_add(offset));
             }
         }
@@ -693,38 +715,58 @@ impl<'a> Machine<'a> {
                 && width == 4
                 && let Some(value) = value.get()
             {
-                self.vtor.push(VtorStore { value: u64::from(value), site: u64::from(site) });
+                let store = VtorStore { value: u64::from(value), site: u64::from(site) };
+                if self.vtor.len() < MAX_LISTED_VTOR_STORES {
+                    self.vtor.push(store.clone());
+                } else {
+                    self.vtor_not_listed += 1;
+                }
+                self.vtor_last = Some(store);
             }
             return Ok(());
         }
         let end = u64::from(base) + u64::from(width);
         let last = base + u32::from(width) - 1;
-        let previous = self.starts.range(..=last).next_back().map(|(_, &index)| index);
+        // Every earlier write these bytes land in (an unaligned store may straddle two).
+        let inside: Vec<usize> = self
+            .starts
+            .range(..=last)
+            .rev()
+            .map(|(_, &index)| index)
+            .take_while(|&index| self.writes[index].end() > u64::from(base))
+            .collect();
         if self.after_jump {
-            // The program's own stores after startup: they mark the copy they land in as data.
-            if let Some(index) = previous.filter(|&index| self.writes[index].end() > u64::from(base)) {
+            // The program's own stores after startup: they mark the copies they land in as data.
+            for index in inside {
                 self.writes[index].written_later = true;
             }
             return self.scatter(base, &bytes);
         }
-        if let Some(index) = previous {
-            let write = &self.writes[index];
-            if write.end() > u64::from(base) {
-                // Inside an earlier write: the bytes change in place.
+        if !inside.is_empty() {
+            // Inside earlier writes: the bytes change in place.
+            for index in inside {
                 self.writes[index].overwritten = true;
-                return self.scatter(base, &bytes);
             }
-            if write.end() == u64::from(base) && self.extend(index, &bytes, site) {
-                self.clear_scattered(base, width);
-                return Ok(());
-            }
+            return self.scatter(base, &bytes);
+        }
+        let previous = self.starts.range(..=last).next_back().map(|(_, &index)| index);
+        if let Some(index) = previous
+            && self.writes[index].end() == u64::from(base)
+            && self.extend(index, &bytes, site)
+        {
+            self.touch(index);
+            self.clear_scattered(base, width);
+            return Ok(());
         }
         if self.writes.len() >= MAX_WRITES {
             return Err(stop(FollowStop::TooManyWrites));
         }
         let copy_from = match bytes[0].origin {
             Origin::From(from)
-                if bytes.iter().enumerate().all(|(index, byte)| byte.origin == Origin::From(from + index as u32)) =>
+                if bytes
+                    .iter()
+                    .enumerate()
+                    .all(|(index, byte)| byte.origin == Origin::From(from.wrapping_add(index as u32))) =>
             {
                 Some(from)
             }
@@ -751,7 +793,9 @@ impl<'a> Machine<'a> {
             interrupted: false,
             executed: false,
             written_later: false,
+            segment: u64::MAX,
         });
+        self.touch(self.writes.len() - 1);
         self.clear_scattered(base, width);
         Ok(())
     }
@@ -840,6 +884,10 @@ impl<'a> Machine<'a> {
         let target = target & !1;
         if let Some(depth) = self.frames.iter().rposition(|frame| frame.return_to == target) {
             self.frames.truncate(depth);
+            if depth == 0 {
+                // The entry-level call returned: its writes are complete.
+                self.new_segment();
+            }
         } else if self.frames.is_empty() && target == RESET_LR & !1 {
             return Err(stop(FollowStop::Returned));
         }
@@ -852,6 +900,10 @@ impl<'a> Machine<'a> {
             return Err(stop(FollowStop::CallDepth));
         }
         let saved = self.frames.is_empty().then_some((self.regs, self.flags));
+        if self.frames.is_empty() {
+            // The entry's own code moved on to a call: its writes so far are complete.
+            self.new_segment();
+        }
         self.frames.push(Frame { return_to, call_site: self.pc, target, saved });
         self.regs[14] = Val::plain(return_to | 1);
         *next = target;
@@ -882,16 +934,32 @@ impl<'a> Machine<'a> {
                 at: u64::from(self.pc),
             });
         }
-        // Writes the abandoned callee was still making are incomplete.
-        let steps = self.steps;
-        let after_jump = self.after_jump;
-        for write in
-            self.writes.iter_mut().filter(|write| !after_jump && steps - write.last_store <= INTERRUPTED_WINDOW)
-        {
-            write.interrupted = true;
-        }
+        // Writes the abandoned call was making are incomplete.
+        self.interrupt_open();
+        self.new_segment();
         self.pc = frame.return_to;
         Ok(())
+    }
+
+    /// Records that the current segment stored into write `index`.
+    fn touch(&mut self, index: usize) {
+        if !self.after_jump && self.writes[index].segment != self.segment {
+            self.writes[index].segment = self.segment;
+            self.touched.push(index);
+        }
+    }
+
+    /// Ends the current segment with its writes complete.
+    fn new_segment(&mut self) {
+        self.segment += 1;
+        self.touched.clear();
+    }
+
+    /// Marks the writes of the current segment interrupted: it was abandoned, or the follow stopped in it.
+    fn interrupt_open(&mut self) {
+        for index in self.touched.drain(..) {
+            self.writes[index].interrupted = true;
+        }
     }
 
     fn decode(&mut self, pc: u32) -> Result<Decoded, FollowStop> {
@@ -945,14 +1013,23 @@ impl<'a> Machine<'a> {
             }
         };
         let (steps, stopped_at) = (self.steps, self.pc);
+        if !reason.clean() {
+            // The segment the follow stopped in, an open call or the entry's own code, did not finish its writes.
+            self.interrupt_open();
+        }
         // The copied code goes on with the state the startup code left: follow it a little further for a VTOR
         // store and for stores into the copies, which make a copy data. Stores no longer become writes.
         let after_jump = (reason == FollowStop::JumpedIntoCopiedCode).then(|| {
             self.after_jump = true;
+            // Startup code is done: a call the copied code cannot complete must not unwind into it.
+            self.frames.clear();
             let start = self.steps;
             let stop = loop {
                 if self.steps - start >= MAX_AFTER_JUMP_STEPS.min(budget) {
                     break FollowStop::StepBudget;
+                }
+                if let Some(index) = self.copied(self.pc) {
+                    self.writes[index].executed = true;
                 }
                 if let Err(reason) = self.step_or_recover() {
                     break reason;
@@ -979,35 +1056,11 @@ impl<'a> Machine<'a> {
         stopped_at: u32,
         after_jump: Option<AfterJump>,
     ) -> Follow {
-        let interrupted = |write: &Write| match reason {
-            _ if reason.clean() => false,
-            FollowStop::StepBudget => write.last_store >= steps - steps / 4,
-            _ => steps - write.last_store <= INTERRUPTED_WINDOW,
-        };
-        let mut incomplete: Vec<bool> =
-            self.writes.iter().map(|write| write.interrupted || interrupted(write)).collect();
-        // A write that runs on into an interrupted one by the same stores (a copy that went past its source) is
-        // interrupted too.
-        let mut order: Vec<usize> = (0..self.writes.len()).collect();
-        order.sort_by_key(|&index| std::cmp::Reverse(self.writes[index].start));
-        for &index in &order {
-            if incomplete[index] {
-                continue;
-            }
-            let write = &self.writes[index];
-            let next = self.starts.get(&((write.end()) as u32)).copied().filter(|_| write.end() <= u64::from(u32::MAX));
-            if let Some(next) = next
-                && incomplete[next]
-                && self.writes[next].sites.iter().any(|site| write.sites.contains(site))
-            {
-                incomplete[index] = true;
-            }
-        }
         let mut copies = Vec::new();
         let mut complete = Vec::new();
         let mut overwritten = Vec::new();
         let mut not_listed = 0;
-        for (index, write) in self.writes.iter().enumerate() {
+        for write in &self.writes {
             if u64::from(write.length) < MIN_WRITE_BYTES || write.stores < 2 {
                 continue;
             }
@@ -1039,7 +1092,7 @@ impl<'a> Machine<'a> {
                 region: None,
                 not_mapped_reason: None,
             });
-            complete.push(!incomplete[index]);
+            complete.push(!write.interrupted);
             overwritten.push(write.overwritten);
         }
         Follow {
@@ -1054,6 +1107,8 @@ impl<'a> Machine<'a> {
                 skipped_calls: self.skipped,
                 skipped_calls_not_listed: self.skipped_total.saturating_sub(MAX_LISTED_SKIPPED_CALLS),
                 vtor_stores: self.vtor,
+                vtor_stores_not_listed: self.vtor_not_listed,
+                last_vtor_store: self.vtor_last,
                 after_jump,
                 vector_table: None,
                 vector_table_refused: None,
@@ -1166,7 +1221,9 @@ impl<'a> Machine<'a> {
             }
             "MRS_M_T1" => self.set(f("Rd"), Val::Unknown),
             // Moves.
-            "MOV_i_T1" => self.alu(Alu::Mov, Some(f("Rd")), Val::plain(0), Val::plain(f("imm8")), None, narrow_flags),
+            "MOV_i_T1" => {
+                self.alu(Alu::Mov, Some(f("Rd")), Val::plain(0), Val::plain(f("imm8")), self.flags.c, narrow_flags)
+            }
             "MOV_i_T2" | "MOVS_i_T2" | "MVN_i_T1" | "MVNS_i_T1" => {
                 let (value, carry) = expand_imm(f("i") << 11 | f("imm3") << 8 | f("imm8"), self.flags.c);
                 let op = if name.starts_with("MVN") { Alu::Mvn } else { Alu::Mov };
@@ -1310,6 +1367,82 @@ impl<'a> Machine<'a> {
                 self.alu(op, Some(rd), left, right, carry, narrow_flags);
             }
             "MUL_T2" => self.alu(Alu::Mul, Some(f("Rd")), self.reg(f("Rn")), self.reg(f("Rm")), None, false),
+            "TBB_T1" | "TBH_T1" => {
+                let halfword = name == "TBH_T1";
+                let entry = match (self.reg(f("Rn")).get(), self.reg(f("Rm")).get()) {
+                    (Some(base), Some(index)) => {
+                        let address = base.wrapping_add(if halfword { index.wrapping_shl(1) } else { index });
+                        self.load(Val::plain(address), if halfword { 2 } else { 1 }, false).get()
+                    }
+                    _ => None,
+                };
+                let Some(entry) = entry else {
+                    return Err(stop(FollowStop::UnknownBranch));
+                };
+                *next = pc.wrapping_add(4).wrapping_add(entry << 1);
+            }
+            "ADC_r_T1" | "SBC_r_T1" | "ADC_r_T2" | "ADCS_r_T2" | "SBC_r_T2" | "SBCS_r_T2" | "ADC_i_T1"
+            | "ADCS_i_T1" | "SBC_i_T1" | "SBCS_i_T1" => {
+                let subtract = name.starts_with("SBC");
+                let (rd, left, right, flags) = if !wide {
+                    (f("Rdn"), self.reg(f("Rdn")), self.reg(f("Rm")), narrow_flags)
+                } else if name.contains("_i_") {
+                    let (imm, _) = expand_imm(f("i") << 11 | f("imm3") << 8 | f("imm8"), None);
+                    (f("Rd"), self.reg(f("Rn")), Val::plain(imm), s)
+                } else {
+                    let (kind, amount) = imm_shift(f("stype"), f("imm3") << 2 | f("imm2"));
+                    (f("Rd"), self.reg(f("Rn")), self.shifted(self.reg(f("Rm")), kind, amount).0, s)
+                };
+                match (left.get(), right.get(), self.flags.c) {
+                    (Some(x), Some(y), Some(carry)) => {
+                        let (result, c, v) = add_with_carry(x, if subtract { !y } else { y }, carry);
+                        self.set(rd, Val::plain(result));
+                        if flags {
+                            self.flags =
+                                Flags { n: Some(result >> 31 == 1), z: Some(result == 0), c: Some(c), v: Some(v) };
+                        }
+                    }
+                    _ => {
+                        self.set(rd, Val::Unknown);
+                        if flags {
+                            self.flags = Flags::default();
+                        }
+                    }
+                }
+            }
+            "UBFX_T1" | "SBFX_T1" | "BFI_T1" | "BFC_T1" => {
+                let lsb = f("imm3") << 2 | f("imm2");
+                let (rd, rn) = (f("Rd"), f("Rn"));
+                let value = match name {
+                    "UBFX_T1" | "SBFX_T1" => {
+                        let width = f("widthm1") + 1;
+                        self.reg(rn).get().filter(|_| lsb + width <= 32).map(|value| {
+                            let shift = 32 - width;
+                            let field = value.wrapping_shr(lsb).wrapping_shl(shift);
+                            if name == "UBFX_T1" { field.wrapping_shr(shift) } else { ((field as i32) >> shift) as u32 }
+                        })
+                    }
+                    _ => {
+                        let msb = f("msb");
+                        let mask = if msb >= lsb { (u32::MAX >> (31 - msb)) & (u32::MAX << lsb) } else { 0 };
+                        let inserted = if name == "BFC_T1" { Some(0) } else { self.reg(rn).get() };
+                        match (self.reg(rd).get(), inserted) {
+                            (Some(old), Some(new)) => Some(old & !mask | new.wrapping_shl(lsb) & mask),
+                            _ => None,
+                        }
+                    }
+                };
+                self.set(rd, value.map_or(Val::Unknown, Val::plain));
+            }
+            "CLZ_T1" | "REV_T1" | "REV16_T1" | "REVSH_T1" | "REV_T2" | "REV16_T2" | "REVSH_T2" => {
+                let value = self.reg(f("Rm")).get().map(|value| match &name[..name.find('_').unwrap_or(name.len())] {
+                    "CLZ" => value.leading_zeros(),
+                    "REV" => value.swap_bytes(),
+                    "REV16" => (value & 0xff00_ff00) >> 8 | (value & 0x00ff_00ff) << 8,
+                    _ => (value as u16).swap_bytes() as i16 as i32 as u32,
+                });
+                self.set(f("Rd"), value.map_or(Val::Unknown, Val::plain));
+            }
             "UDIV_T1" | "SDIV_T1" | "MLA_T1" | "MLS_T1" => {
                 let (n, m, a) = (self.reg(f("Rn")).get(), self.reg(f("Rm")).get(), self.reg(f("Ra")).get());
                 let value = match (name, n, m, a) {
@@ -1838,8 +1971,13 @@ mod tests {
     /// Startup copies a function to 0x10000000 and data to 0x20000000 and jumps into the function, which stores into
     /// the data and sets VTOR; the follow goes on after the jump and sees both.
     fn relocating_image(vtor: u32) -> Vec<u8> {
+        relocating_image_with(vtor, 0x2000_0000, 0x2000_0000)
+    }
+
+    /// [`relocating_image`] with the function storing to `store_to` and the data copied to `data_at`.
+    fn relocating_image_with(vtor: u32, store_to: u32, data_at: u32) -> Vec<u8> {
         let mut function = Asm::at(0x1000_0000);
-        function.ldr(0, 0x2000_0000);
+        function.ldr(0, store_to);
         function.emit(0x6001); // str r1, [r0]
         function.ldr(0, VTOR as u32);
         function.ldr(1, vtor);
@@ -1847,7 +1985,7 @@ mod tests {
         function.emit(HALT);
         let function = function.finish();
         let mut asm = Asm::at(BASE);
-        for (destination, length, source) in [(0x1000_0000, 64, BASE + 0x100), (0x2000_0000, 64, BASE + 0x180)] {
+        for (destination, length, source) in [(0x1000_0000, 64, BASE + 0x100), (data_at, 64, BASE + 0x180)] {
             asm.ldr(0, destination);
             asm.ldr(1, length);
             asm.ldr(2, source);
@@ -1880,26 +2018,7 @@ mod tests {
         // Admitted, the function maps as code and the data it writes as RAM. The VTOR table at the copied
         // function is read (its words are code, so most are refused), and a VTOR value in unmapped memory is
         // reported.
-        let admit = |vtor: u32| {
-            let bytes = relocating_image(vtor);
-            let options = crate::RawCodeOptions {
-                profile: crate::RawProfile::CortexM,
-                base: u64::from(BASE),
-                entry: Some(u64::from(BASE)),
-                seeds: Vec::new(),
-                vector_table: None,
-                pointer_tables: false,
-            };
-            let image = crate::RawImage {
-                bytes,
-                options,
-                source: None,
-                regions: Vec::new(),
-                records: None,
-                scatter_load: Some(true),
-            };
-            crate::Binary::from_raw_image(image).unwrap()
-        };
+        let admit = |vtor: u32| admit(relocating_image(vtor), Vec::new()).unwrap();
         let binary = admit(0x3000_0000);
         let raw = binary.raw_code_image().unwrap();
         let kinds: Vec<_> = raw.regions().iter().map(|region| (region.name.as_str(), region.base_address)).collect();
@@ -1924,5 +2043,316 @@ mod tests {
                 .collect();
             assert!(run(&bytes, 5_000).report.steps <= 5_000);
         }
+    }
+
+    /// Admits `bytes` at `BASE` with the entry there, further `regions`, and scatter-load mapping on.
+    fn admit(bytes: Vec<u8>, regions: Vec<crate::RawRegion>) -> Result<crate::Binary, crate::LoadError> {
+        let options = crate::RawCodeOptions {
+            profile: crate::RawProfile::CortexM,
+            base: u64::from(BASE),
+            entry: Some(u64::from(BASE)),
+            seeds: Vec::new(),
+            vector_table: None,
+            pointer_tables: false,
+        };
+        let image = crate::RawImage { bytes, options, source: None, regions, records: None, scatter_load: Some(true) };
+        crate::Binary::from_raw_image(image)
+    }
+
+    fn copies(binary: &crate::Binary) -> Vec<(u64, Option<NotMappedReason>, Option<String>)> {
+        let report = binary.raw_code_image().unwrap().scatter_load().unwrap();
+        report.copies.iter().map(|copy| (copy.destination, copy.not_mapped_reason, copy.region.clone())).collect()
+    }
+
+    /// Startup code: each call is `copy` (`zero` false) or a zero fill (`zero` true) of (destination, length,
+    /// source), with r6 pointing at a peripheral, then `tail`; `poll` makes the copy routine wait on that
+    /// peripheral before it returns.
+    fn program(calls: &[(u32, u32, u32, bool)], poll: bool, tail: &dyn Fn(&mut Asm), size: usize) -> Vec<u8> {
+        let mut asm = Asm::at(BASE);
+        asm.ldr(6, 0x4000_0000);
+        for &(destination, length, source, zero) in calls {
+            asm.ldr(0, destination);
+            asm.ldr(1, length);
+            asm.ldr(2, source);
+            asm.ldr(4, u32::from(zero));
+            asm.emit(BLX_R4);
+        }
+        tail(&mut asm);
+        asm.emit(HALT);
+        let copy_at = asm.here();
+        asm.label("copy");
+        asm.label("loop");
+        asm.emit(0x6813); // ldr r3, [r2]
+        asm.emit(0x3204); // adds r2, #4
+        asm.emit(0x6003); // str r3, [r0]
+        asm.emit(0x3004); // adds r0, #4
+        asm.emit(0x3904); // subs r1, #4
+        asm.branch(BNE, "loop");
+        if poll {
+            asm.label("poll");
+            asm.emit(0x6835); // ldr r5, [r6]
+            asm.emit(0x2d00); // cmp r5, #0
+            asm.branch(BEQ, "poll");
+        }
+        asm.emit(0x4770); // bx lr
+        let zero_at = asm.here();
+        asm.emit(0x2300); // movs r3, #0
+        asm.label("zero");
+        asm.emit(0x6003); // str r3, [r0]
+        asm.emit(0x3004); // adds r0, #4
+        asm.emit(0x3904); // subs r1, #4
+        asm.branch(BNE, "zero");
+        asm.emit(0x4770); // bx lr
+        for literal in asm.literals.iter_mut() {
+            match literal.1 {
+                0 => literal.1 = copy_at | 1,
+                1 => literal.1 = zero_at | 1,
+                _ => {}
+            }
+        }
+        let mut bytes = asm.finish();
+        let code = bytes.len();
+        bytes.extend((code..size).map(|index| index as u8 ^ 0x5a));
+        bytes
+    }
+
+    fn halt(_: &mut Asm) {}
+
+    /// A store loop to VTOR lists eight stores, counts the rest and keeps the last; it never grows the report.
+    #[test]
+    fn vtor_stores_are_bounded() {
+        let mut asm = Asm::at(BASE);
+        asm.ldr(0, VTOR as u32);
+        asm.ldr(1, 0x2000_0000);
+        asm.label("again");
+        asm.emit(0x6001); // str r1, [r0]
+        asm.emit(0x3180); // adds r1, #128
+        asm.branch(B, "again");
+        let report = run(&asm.finish(), 30_000).report;
+        assert_eq!(report.vtor_stores.len(), MAX_LISTED_VTOR_STORES);
+        assert_eq!(report.vtor_stores_not_listed, 10_000 - MAX_LISTED_VTOR_STORES);
+        assert_eq!(report.last_vtor_store.as_ref().map(|store| store.value), Some(0x2000_0000 + 128 * 9_999));
+        assert!(serde_json::to_string(&report).unwrap().len() < 4096);
+    }
+
+    /// A byte loaded from the top of the address space and stored as a word must not overflow the origin check.
+    #[test]
+    fn loads_at_the_top_of_the_address_space_do_not_overflow() {
+        let mut asm = Asm::at(0xffff_ff00);
+        asm.ldr(0, 0xffff_ffff);
+        asm.emit(0x7801); // ldrb r1, [r0]
+        asm.ldr(2, 0x2000_0000);
+        asm.emit(0x6011); // str r1, [r2]
+        asm.emit(0x6051); // str r1, [r2, #4]
+        asm.emit(HALT);
+        let mut bytes = asm.finish();
+        bytes.resize(0x100, 0x7f);
+        let memory = [Mapped { range: 0xffff_ff00..0x1_0000_0000, bytes: Some(&bytes), code: true }];
+        let report = follow_with_budget(&memory, 0xffff_ff00, 1_000).report;
+        assert_eq!(report.stop, FollowStop::Halted, "{report:#?}");
+    }
+
+    /// Writes are complete when the call that made them returned, even if a later call is skipped or the follow
+    /// stops uncleanly; the writes of a call that is abandoned are not.
+    #[test]
+    fn writes_are_complete_when_their_call_returned_and_incomplete_when_it_was_abandoned() {
+        let poll_forever = |asm: &mut Asm| {
+            asm.label("wait");
+            asm.emit(0x6835); // ldr r5, [r6]
+            asm.emit(0x2d00); // cmp r5, #0
+            asm.branch(BEQ, "wait");
+        };
+        let returned = program(&[(0x2000_0000, 64, BASE + 0x100, false)], false, &poll_forever, 0x200);
+        let follow = run(&returned, 10_000);
+        assert_eq!(follow.report.stop, FollowStop::UnknownBranch);
+        assert_eq!(follow.complete, [true]);
+        let binary = admit(returned, Vec::new()).unwrap();
+        assert_eq!(copies(&binary), [(0x2000_0000, None, Some("raw.ram.1".to_owned()))]);
+
+        let abandoned = program(&[(0x2000_0000, 64, BASE + 0x100, false)], true, &halt, 0x200);
+        let follow = run(&abandoned, 10_000);
+        assert_eq!(follow.report.stop, FollowStop::Halted);
+        assert_eq!(follow.report.skipped_calls[0].reason, FollowStop::UnknownBranch);
+        assert_eq!(follow.complete, [false]);
+        let binary = admit(abandoned, Vec::new()).unwrap();
+        assert_eq!(copies(&binary), [(0x2000_0000, Some(NotMappedReason::Incomplete), None)]);
+
+        // A loop in the entry's own code cut off by the step budget is incomplete too.
+        let mut asm = Asm::at(BASE);
+        asm.ldr(0, 0x2000_0000);
+        asm.label("fill");
+        asm.emit(0x6000); // str r0, [r0]
+        asm.emit(0x3004); // adds r0, #4
+        asm.branch(B, "fill");
+        let follow = run(&asm.finish(), 1_000);
+        assert_eq!((follow.report.stop, follow.complete.as_slice()), (FollowStop::StepBudget, &[false][..]));
+    }
+
+    /// Only copied code that ran and was not written afterwards is code; a copy below 0x20000000 that never ran is
+    /// data, and so is code the program then stores into.
+    #[test]
+    fn code_is_what_ran_and_stayed_unwritten() {
+        let kinds = |bytes: Vec<u8>| {
+            let binary = admit(bytes, Vec::new()).unwrap();
+            let raw = binary.raw_code_image().unwrap();
+            raw.regions().iter().skip(1).map(|region| (region.base_address, region.kind)).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            kinds(relocating_image_with(0x3000_0000, 0x2000_0000, 0x1100_0000)),
+            [(0x1000_0000, crate::RawRegionKind::Code), (0x1100_0000, crate::RawRegionKind::Ram)]
+        );
+        assert_eq!(
+            kinds(relocating_image_with(0x3000_0000, 0x1000_0030, 0x2000_0000)),
+            [(0x1000_0000, crate::RawRegionKind::Ram), (0x2000_0000, crate::RawRegionKind::Ram)]
+        );
+    }
+
+    /// An unaligned store across two writes changes both.
+    #[test]
+    fn a_store_straddling_two_writes_overwrites_both() {
+        let straddle = |asm: &mut Asm| {
+            asm.ldr(0, 0x2000_000e);
+            asm.emit(0x6001); // str r1, [r0]
+        };
+        let calls = [(0x2000_0000, 16, BASE + 0x100, false), (0x2000_0010, 16, BASE + 0x180, false)];
+        let follow = run(&program(&calls, false, &straddle, 0x200), 10_000);
+        assert_eq!(follow.overwritten, [true, true], "{:#?}", follow.report);
+        let binary = admit(program(&calls, false, &straddle, 0x200), Vec::new()).unwrap();
+        let reasons: Vec<_> = copies(&binary).into_iter().map(|(_, reason, _)| reason).collect();
+        assert_eq!(reasons, [Some(NotMappedReason::Overwritten), Some(NotMappedReason::Overwritten)]);
+    }
+
+    /// Mapping refusals reach the report: a zero fill over the primary region, the region cap and the byte cap.
+    #[test]
+    fn destination_region_and_byte_limits_refuse_mapping() {
+        let over_primary = program(&[(BASE + 0x180, 64, 0, true)], false, &halt, 0x200);
+        let binary = admit(over_primary, Vec::new()).unwrap();
+        assert_eq!(copies(&binary), [(u64::from(BASE) + 0x180, Some(NotMappedReason::DestinationMapped), None)]);
+
+        let calls = [(0x2000_0000, 64, BASE + 0x100, false)];
+        let full: Vec<crate::RawRegion> = (0..15)
+            .map(|index| crate::RawRegion {
+                kind: crate::RawRegionKind::Ram,
+                base: 0x3000_0000 + 0x100 * index,
+                size: 0x100,
+                bytes: None,
+                source: crate::RawRegionSource::Unbacked,
+            })
+            .collect();
+        let binary = admit(program(&calls, false, &halt, 0x200), full).unwrap();
+        assert_eq!(copies(&binary), [(0x2000_0000, Some(NotMappedReason::RegionLimit), None)]);
+
+        let large = program(&calls, false, &halt, crate::MAX_RAW_NATIVE_BYTES - 32);
+        let binary = admit(large, Vec::new()).unwrap();
+        assert_eq!(copies(&binary), [(0x2000_0000, Some(NotMappedReason::ByteLimit), None)]);
+    }
+
+    /// Runs `code` at `BASE` with registers `setup`, one instruction per halfword pair until it halts.
+    fn execute(code: &[u16], setup: &[(usize, u32)], data: &[u8]) -> Machine<'static> {
+        let mut bytes: Vec<u8> = code.iter().flat_map(|half| half.to_le_bytes()).collect();
+        bytes.extend(HALT.to_le_bytes());
+        bytes.resize(0x100, 0);
+        bytes.extend(data);
+        let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        let range = u64::from(BASE)..u64::from(BASE) + bytes.len() as u64;
+        let memory: &'static [Mapped<'static>] =
+            Box::leak(Box::new([Mapped { range, bytes: Some(bytes), code: true }]));
+        let mut machine = Machine::new(memory, u64::from(BASE));
+        for &(register, value) in setup {
+            machine.regs[register] = Val::plain(value);
+        }
+        for _ in 0..64 {
+            machine.steps += 1;
+            if machine.step().is_err() {
+                break;
+            }
+        }
+        machine
+    }
+
+    fn flags(machine: &Machine<'_>) -> (Option<bool>, Option<bool>, Option<bool>, Option<bool>) {
+        (machine.flags.n, machine.flags.z, machine.flags.c, machine.flags.v)
+    }
+
+    #[test]
+    fn arithmetic_sets_carry_and_overflow_as_the_architecture_does() {
+        let t = Some(true);
+        let f = Some(false);
+        let adds = |a: u32, b: u32| execute(&[0x1888], &[(1, a), (2, b)], &[]); // adds r0, r1, r2
+        let machine = adds(0xffff_ffff, 1);
+        assert_eq!((machine.regs[0].get(), flags(&machine)), (Some(0), (f, t, t, f)));
+        let machine = adds(0x7fff_ffff, 1);
+        assert_eq!((machine.regs[0].get(), flags(&machine)), (Some(0x8000_0000), (t, f, f, t)));
+        let machine = execute(&[0x1a88], &[(1, 0), (2, 1)], &[]); // subs r0, r1, r2
+        assert_eq!((machine.regs[0].get(), flags(&machine)), (Some(0xffff_ffff), (t, f, f, f)));
+        let machine = execute(&[0x4291], &[(1, 5), (2, 5)], &[]); // cmp r1, r2
+        assert_eq!(flags(&machine), (f, t, t, f));
+        let machine = execute(&[0x4291], &[(1, 0x8000_0000), (2, 1)], &[]);
+        assert_eq!(flags(&machine), (f, f, t, t));
+        // movs rd, #imm8 leaves the carry as it was.
+        let machine = execute(&[0x4291, 0x2307], &[(1, 5), (2, 5)], &[]); // cmp r1, r2; movs r3, #7
+        assert_eq!(flags(&machine), (f, f, t, f));
+    }
+
+    #[test]
+    fn it_blocks_skip_instructions_whose_condition_fails() {
+        // cmp r0, #0; it eq; mov r1, #7; movs r2, #9
+        let machine = execute(&[0x2800, 0xbf08, 0x2107, 0x2209], &[(0, 1), (1, 0)], &[]);
+        assert_eq!((machine.regs[1].get(), machine.regs[2].get()), (Some(0), Some(9)));
+        let machine = execute(&[0x2800, 0xbf08, 0x2107, 0x2209], &[(0, 0), (1, 0)], &[]);
+        assert_eq!(machine.regs[1].get(), Some(7));
+    }
+
+    #[test]
+    fn loads_and_stores_write_back_their_base() {
+        let data = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+        let source = BASE + 0x100;
+        // ldr r3, [r2], #4; str r3, [r0, #4]!
+        let machine = execute(&[0xf852, 0x3b04, 0xf840, 0x3f04], &[(2, source), (0, 0x2000_0000)], &data);
+        assert_eq!(machine.regs[2].get(), Some(source + 4));
+        assert_eq!(machine.regs[3].get(), Some(0x4433_2211));
+        assert_eq!(machine.regs[0].get(), Some(0x2000_0004));
+        assert_eq!(machine.load(Val::plain(0x2000_0004), 4, false).get(), Some(0x4433_2211));
+        // ldm r0, {r0, r1}: the base is in the list, so no writeback; stm r2!, {r0, r1} writes back.
+        let machine = execute(&[0xc803, 0xc203], &[(0, source), (2, 0x2000_0100)], &data);
+        assert_eq!((machine.regs[0].get(), machine.regs[1].get()), (Some(0x4433_2211), Some(0x8877_6655)));
+        assert_eq!(machine.regs[2].get(), Some(0x2000_0108));
+    }
+
+    #[test]
+    fn division_follows_the_architecture_at_its_edges() {
+        let sdiv = |a: u32, b: u32| execute(&[0xfb91, 0xf0f2], &[(1, a), (2, b)], &[]).regs[0].get(); // sdiv r0, r1, r2
+        assert_eq!(sdiv(0x8000_0000, 0xffff_ffff), Some(0x8000_0000));
+        assert_eq!(sdiv(7, 0), Some(0));
+        assert_eq!(sdiv(-7i32 as u32, 2), Some(-3i32 as u32));
+    }
+
+    /// A reset loop that calls a faulting routine over and over costs time in proportion to its steps, not to the
+    /// writes made so far.
+    #[test]
+    fn skipped_calls_cost_no_more_than_the_writes_they_touched() {
+        let mut asm = Asm::at(BASE);
+        // Many separate writes first, then a loop of calls into a routine that faults at once.
+        asm.ldr(0, 0x2000_0000);
+        asm.ldr(1, 0x2000_8000);
+        asm.label("spread");
+        asm.emit(0x6000); // str r0, [r0]
+        asm.emit(0x6040); // str r0, [r0, #4]
+        asm.emit(0x3010); // adds r0, #16
+        asm.emit(0x4288); // cmp r0, r1
+        asm.branch(BNE, "spread");
+        asm.ldr(4, 0);
+        asm.label("again");
+        asm.emit(BLX_R4);
+        asm.branch(B, "again");
+        let fault = asm.here();
+        asm.emit(0xde00); // udf #0
+        asm.resolve_calls(fault);
+        let bytes = asm.finish();
+        let started = std::time::Instant::now();
+        let report = run(&bytes, 400_000).report;
+        assert_eq!(report.stop, FollowStop::StepBudget);
+        assert!(report.skipped_calls_not_listed > 100_000, "{}", report.skipped_calls_not_listed);
+        assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
     }
 }

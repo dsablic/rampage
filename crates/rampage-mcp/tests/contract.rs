@@ -153,8 +153,11 @@ async fn contract_mcp_core_results() {
         json!({"profile": "cortex-m3", "offset": 0, "length": 800, "base_address": "0x8000000", "vector_table": true});
     exercise(c, o, "binary_info", json!({"path": fixtures.join("firmware/raw-cortex-m.bin"), "raw": raw})).await;
     // A wrong base: refused vectors and the never-applied base-address suggestion.
+    // Discovery finds nothing there, so list_functions, and binary_info after it, suggest what to try next.
     let raw = json!({"profile": "cortex-m3", "offset": 0, "length": 800, "base_address": 0, "vector_table": true});
-    exercise(c, o, "binary_info", json!({"path": fixtures.join("firmware/raw-cortex-m.bin"), "raw": raw})).await;
+    let path = fixtures.join("firmware/raw-cortex-m.bin");
+    exercise(c, o, "list_functions", json!({"path": path, "raw": raw})).await;
+    exercise(c, o, "binary_info", json!({"path": path, "raw": raw})).await;
     // Multiple regions: an LZSS-decoded second stage at its RAM base with its receipt, RAM with and without bytes.
     let raw = json!({"profile": "cortex-m3", "offset": 0, "length": 1024, "base_address": "0x8000000",
         "vector_table": true, "regions": [

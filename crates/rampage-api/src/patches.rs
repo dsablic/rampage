@@ -898,6 +898,22 @@ fn raw_patch_offset(binary: &Binary, address: u64, length: usize, allow_data: bo
     if let Some(rampage_loaders::RawRegionSource::Slice { region: source, .. }) = &region.source {
         return Err(format!("Raw region {} is a copy of {source}'s bytes; patch {source} instead", region.name));
     }
+    if let Some(rampage_loaders::RawRegionSource::ScatterLoad { region: source, offset, .. }) = &region.source {
+        let origin = source.as_deref().zip(*offset).and_then(|(source, offset)| {
+            let holder = raw.regions().iter().find(|candidate| candidate.name == source)?;
+            Some((source, holder.base_address + offset + (address - region.base_address)))
+        });
+        return Err(match origin {
+            Some((source, at)) => format!(
+                "Raw region {} is the startup code's copy of {source} at {at:#x}; patch {at:#x} in {source} instead \
+                 (a patch there does not refresh this copy, which keeps the bytes it was admitted with)",
+                region.name
+            ),
+            None => {
+                format!("Raw region {} is a zero fill the startup code makes and has no bytes to patch", region.name)
+            }
+        });
+    }
     if region.kind != rampage_loaders::RawRegionKind::Code && !allow_data {
         return Err(format!("Raw region {} is not code; patching it requires allow_data", region.name));
     }
