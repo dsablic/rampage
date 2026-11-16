@@ -213,19 +213,85 @@ fn a_small_discovery_in_a_large_image_suggests_pointer_tables_and_mapping_the_co
     std::fs::remove_dir_all(&directory).unwrap();
 }
 
+/// A Cortex-M image at 0x8000000 whose only path from the entry (`bx lr`) finds one function, with `functions`
+/// further functions (`push {r4, lr}; pop {r4, pc}`) reached only through tables of four code pointers each,
+/// separated by a word that is no pointer, in at least 64 KiB.
+fn table_image(functions: usize) -> Vec<u8> {
+    let mut image = vec![0x70, 0x47];
+    image.resize(0x10, 0);
+    for _ in 0..functions {
+        image.extend([0x10, 0xb5, 0x10, 0xbd]);
+    }
+    for group in (0..functions).collect::<Vec<_>>().chunks(4) {
+        for &index in group {
+            image.extend((0x0800_0010 + 4 * index as u32 + 1).to_le_bytes());
+        }
+        image.extend(0x1234_5678u32.to_le_bytes());
+    }
+    // Erased flash after the tables, so one function is fewer than one per 16 KiB.
+    image.resize(image.len().max(64 * 1024), 0xff);
+    image
+}
+
+fn open_table_image(
+    session: &Session,
+    directory: &std::path::Path,
+    functions: usize,
+    pointer_tables: Value,
+) -> Arc<rampage_api::Project> {
+    let bytes = table_image(functions);
+    let path = directory.join(format!("tables-{functions}.bin"));
+    std::fs::write(&path, &bytes).unwrap();
+    let request: RawProjectRequest = serde_json::from_value(json!({
+        "profile": "cortex-m4", "offset": 0, "length": bytes.len(), "base_address": "0x8000000",
+        "entry": "0x8000000", "pointer_tables": pointer_tables,
+    }))
+    .unwrap();
+    session.open_raw(&path, &request).unwrap()
+}
+
+fn scratch(name: &str) -> PathBuf {
+    let directory = std::env::temp_dir().join(format!("rampage-raw-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    directory
+}
+
 /// With `pointer_tables` unset, a sparse discovery runs the pointer-table scan itself: binary_info's pointer-table
-/// section and list_functions say it ran automatically and why, and no hint asks for it. A discovery in proportion
-/// leaves the project exactly as `pointer_tables` false would.
+/// section and list_functions say it ran automatically and why, and no hint asks for it. The project then also
+/// answers an explicit `pointer_tables: true`, keeping its annotations. A discovery in proportion leaves the
+/// project exactly as `pointer_tables` false would.
 #[test]
 fn a_sparse_discovery_runs_the_pointer_table_scan_automatically() {
-    let directory = std::env::temp_dir().join(format!("rampage-raw-auto-tables-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
+    let directory = scratch("auto-tables");
+    let session = Session::default();
+    let project = open_table_image(&session, &directory, 400, Value::Null);
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    let automatic = &summary["raw"]["pointer_tables"]["automatic"];
+    assert_eq!(automatic["functions_before"], 1, "{automatic:#}");
+    assert_eq!(automatic["applied"], true, "{automatic:#}");
+    assert_eq!(automatic["outcome"], "applied", "{automatic:#}");
+    assert!(automatic["reason"].as_str().unwrap().contains("pointer_tables was unset"), "{automatic:#}");
+    assert_eq!(summary["raw"]["pointer_tables"]["accepted_tables"], 100);
+    let page = serde_json::to_value(project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap()).unwrap();
+    assert_eq!(page["total"], 401);
+    let note = page["note"].as_str().unwrap();
+    assert!(note.contains("found 1 function in") && note.contains("ran automatically"), "{note}");
+    assert!(page.get("next").is_none() && summary.get("next").is_none(), "{page:#}");
+    // The scan's interpretation is pointer_tables true's, and that request finds the same project.
+    project.rename(0x0800_0010, Some("first")).unwrap();
+    let explicit = open_table_image(&session, &directory, 400, json!(true));
+    assert!(Arc::ptr_eq(&project, &explicit));
+    assert!(Arc::ptr_eq(&project, &open_table_image(&session, &directory, 400, Value::Null)));
+    assert_eq!(explicit.function_name(0x0800_0010), "first");
+    let off = open_table_image(&session, &directory, 400, json!(false));
+    assert!(serde_json::to_value(off.summary()).unwrap()["raw"].get("pointer_tables").is_none());
+
+    // A scan that accepts no table keeps pointer_tables false's interpretation and says so.
     let mut bytes = std::fs::read(fixture("raw-cortex-m-scatter-gcc.bin")).unwrap();
     bytes.resize(1024 * 1024, 0xff);
     let path = directory.join("padded.bin");
     std::fs::write(&path, &bytes).unwrap();
-    let session = Session::default();
-    let open_padded = |pointer_tables: Value| {
+    let padded = |pointer_tables: Value| {
         let request: RawProjectRequest = serde_json::from_value(json!({
             "profile": "cortex-m4", "offset": 0, "length": bytes.len(), "base_address": "0x8000000",
             "vector_table": true, "pointer_tables": pointer_tables,
@@ -233,26 +299,16 @@ fn a_sparse_discovery_runs_the_pointer_table_scan_automatically() {
         .unwrap();
         session.open_raw(&path, &request).unwrap()
     };
-    let project = open_padded(Value::Null);
+    let project = padded(Value::Null);
+    let identity = |project: &rampage_api::Project| project.binary.raw_interpretation_identity().unwrap().unwrap();
+    assert_eq!(identity(&project), identity(&padded(json!(false))));
     let summary = serde_json::to_value(project.summary()).unwrap();
     let automatic = &summary["raw"]["pointer_tables"]["automatic"];
-    assert_eq!(automatic["functions_before"], 6, "{summary:#}");
-    assert_eq!(automatic["applied"], true, "{automatic:#}");
-    assert!(automatic["reason"].as_str().unwrap().contains("pointer_tables was unset"), "{automatic:#}");
-    assert!(summary["raw"]["pointer_tables"]["words_scanned"].as_u64().unwrap() > 0);
+    assert_eq!(automatic["outcome"], "found_none", "{summary:#}");
+    assert_eq!(automatic["applied"], false);
+    assert!(summary["raw"]["pointer_tables"].get("tables").is_none());
     let page = serde_json::to_value(project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap()).unwrap();
-    let note = page["note"].as_str().unwrap();
-    assert!(note.contains("found 6 functions") && note.contains("ran automatically"), "{note}");
-    assert!(page.get("next").is_none() && summary.get("next").is_none(), "{page:#}");
-    // The scan's interpretation is pointer_tables true's; the request is cached on its own.
-    let explicit = open_padded(json!(true));
-    let identity = |project: &rampage_api::Project| project.binary.raw_interpretation_identity().unwrap().unwrap();
-    assert_eq!(identity(&project), identity(&explicit));
-    assert!(!Arc::ptr_eq(&project, &explicit));
-    assert!(Arc::ptr_eq(&project, &open_padded(Value::Null)));
-    let explicit = serde_json::to_value(explicit.summary()).unwrap();
-    assert!(explicit["raw"]["pointer_tables"].get("automatic").is_none());
-    assert!(serde_json::to_value(open_padded(json!(false)).summary()).unwrap()["raw"].get("pointer_tables").is_none());
+    assert!(page["note"].as_str().unwrap().contains("accepted no table"), "{page:#}");
     std::fs::remove_dir_all(&directory).unwrap();
 
     // In proportion: no scan, the identity of pointer_tables false, no note.
@@ -263,6 +319,42 @@ fn a_sparse_discovery_runs_the_pointer_table_scan_automatically() {
     assert!(serde_json::to_value(project.summary()).unwrap()["raw"].get("pointer_tables").is_none());
     let page = serde_json::to_value(project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap()).unwrap();
     assert!(page.get("note").is_none(), "{page:#}");
+}
+
+/// An automatic scan whose seeds exceed the 8192-seed cap is refused: the sparse project stays, binary_info reports
+/// the refusal under raw.pointer_tables.automatic, and the hint says what to do instead.
+#[test]
+fn a_refused_automatic_scan_is_reported() {
+    let directory = scratch("auto-refused");
+    let session = Session::default();
+    let project = open_table_image(&session, &directory, 8300, Value::Null);
+    let page = serde_json::to_value(project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap()).unwrap();
+    assert_eq!(page["total"], 1);
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    let automatic = &summary["raw"]["pointer_tables"]["automatic"];
+    assert_eq!(automatic["outcome"], "refused", "{summary:#}");
+    assert!(automatic["refused"].as_str().unwrap().contains("8192"), "{automatic:#}");
+    assert!(page["note"].as_str().unwrap().contains("not applied"), "{page:#}");
+    let next = summary["next"].as_str().unwrap();
+    assert!(next.contains("automatic pointer-table scan was refused"), "{next}");
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// A Raw project with a thousand pointer tables: binary_info's summary and full views fit the tool budget, with
+/// every list under `raw` shortened and counted.
+#[test]
+fn binary_info_on_a_large_raw_project_fits_the_budget() {
+    let directory = scratch("large-info");
+    let mut project = open_table_image(&Session::default(), &directory, 4000, json!(true));
+    for view in ["summary", "full"] {
+        let (text, failed) = call(&mut project, "binary_info", json!({ "view": view }));
+        assert!(!failed, "{view}: {text}");
+        assert!(text.len() <= 60_000, "{view}: {}", text.len());
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["raw"]["pointer_tables"]["tables_count"], 1000, "{view}");
+        assert_eq!(value["raw"]["pointer_tables"]["accepted_tables"], 1000);
+    }
+    std::fs::remove_dir_all(&directory).unwrap();
 }
 
 /// Opened at a wrong base (a copy destination, as an agent guessed) without reading the vector table, binary_info
@@ -331,4 +423,65 @@ fn a_bad_fetch_inside_the_image_under_another_base_names_that_base() {
 
     assert_eq!(right["raw"]["base_check"]["verdict"], "consistent", "{right:#}");
     assert!(right["raw"]["base_check"].get("bad_fetch").is_none());
+}
+
+/// find_crypto and triage read every mapped region at its mapped address: a CRC-32 table that only exists after
+/// decoding, and its copy in another region, are both found; triage measures the startup copies scatter-load maps.
+#[test]
+fn find_crypto_and_triage_read_decoded_regions_and_copies() {
+    let table: Vec<u8> = (0..256u32)
+        .flat_map(|index| {
+            let mut crc = index;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { 0xedb8_8320 ^ (crc >> 1) } else { crc >> 1 };
+            }
+            crc.to_le_bytes()
+        })
+        .collect();
+    let packed = rampage_decode::encode::lzss(&rampage_decode::Lzss::classic_4k(4078, 0), &table);
+    let mut file = vec![0x70, 0x47];
+    file.resize(256, 0);
+    file.extend(&packed);
+    let directory = scratch("crypto-regions");
+    let path = directory.join("packed.bin");
+    std::fs::write(&path, &file).unwrap();
+    let request: RawProjectRequest = serde_json::from_value(json!({
+        "profile": "cortex-m4", "offset": 0, "length": 256, "base_address": "0x8000000", "entry": "0x8000000",
+        "pointer_tables": false,
+        "regions": [
+            { "kind": "data", "base_address": "0x20000000", "offset": 256, "length": packed.len(),
+              "decode": { "codec": "lzss-4k", "expected_output_size": 1024 } },
+            { "kind": "data", "base_address": "0x30000000", "length": 1024, "from": { "region": 1, "offset": 0 } },
+        ],
+    }))
+    .unwrap();
+    let mut project = Session::default().open_raw(&path, &request).unwrap();
+    let (text, failed) = call(&mut project, "find_crypto", json!({}));
+    assert!(!failed, "{text}");
+    for address in ["\"0x20000000\"", "\"0x30000000\""] {
+        assert!(text.contains(address), "{address}: {text}");
+    }
+    assert!(text.contains("CRC"), "{text}");
+    std::fs::remove_dir_all(&directory).unwrap();
+
+    // The GCC-style image: the startup copies scatter-load maps are triage sections, with their entropy.
+    let mut project = open("gcc", selector("gcc"));
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    let copies: Vec<String> = summary["raw"]["regions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|region| region["source"]["type"] == "scatter_load")
+        .map(|region| region["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(!copies.is_empty(), "{summary:#}");
+    let (text, failed) = call(&mut project, "triage", json!({}));
+    assert!(!failed, "{text}");
+    let triage: Value = serde_json::from_str(&text).unwrap();
+    let sections: Vec<&str> =
+        triage["sections"].as_array().unwrap().iter().map(|section| section["name"].as_str().unwrap()).collect();
+    for copy in &copies {
+        assert!(sections.contains(&copy.as_str()), "{copy}: {sections:?}");
+    }
+    assert!(triage["hints"].to_string().contains("Raw project (ARM:LE:32:Cortex)"), "{text}");
 }

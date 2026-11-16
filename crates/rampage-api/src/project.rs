@@ -121,6 +121,8 @@ pub struct Project {
     base_check: OnceLock<Option<rampage_loaders::raw_base::BaseCheck>>,
     /// A Cortex-M Raw project whose selector left `pointer_tables` unset: why the scan ran automatically.
     pub(crate) pointer_tables_auto: OnceLock<crate::rows::PointerTablesAuto>,
+    /// A Raw project's container streams, found once by integrity_checks.
+    pub(crate) container_scan: OnceLock<Arc<crate::integrity::ContainerScan>>,
     /// Strings of at least `DEFAULT_STRING_LENGTH` characters, scanned once.
     strings: OnceLock<Vec<FoundString>>,
     /// The embedded decompiler, built once over the executable segments on first use. Behind a mutex because
@@ -400,6 +402,7 @@ impl Project {
             code_regions: OnceLock::new(),
             base_check: OnceLock::new(),
             pointer_tables_auto: OnceLock::new(),
+            container_scan: OnceLock::new(),
             strings: OnceLock::new(),
             decompiler: std::sync::Mutex::new(crate::decompile::DecompilerState::default()),
             packs: RwLock::default(),
@@ -903,9 +906,10 @@ impl Project {
                 regions: raw.regions(),
                 records: raw.records(),
                 vector_table: raw.vector_table(),
-                pointer_tables: raw
-                    .pointer_tables()
-                    .map(|tables| crate::rows::RawPointerTables { tables, automatic: self.pointer_tables_auto.get() }),
+                pointer_tables: match (raw.pointer_tables(), self.pointer_tables_auto.get()) {
+                    (None, None) => None,
+                    (tables, automatic) => Some(crate::rows::RawPointerTables { tables, automatic }),
+                },
                 scatter_load: raw.scatter_load(),
                 base_check,
             }),
@@ -988,6 +992,10 @@ impl Project {
             auto.code_bytes.div_ceil(1024)
         );
         Some(match (self.binary.raw_code_image().and_then(|raw| raw.pointer_tables()), &auto.refused) {
+            _ if auto.outcome == "found_none" => format!(
+                "{before}, so the pointer-table scan ran automatically and accepted no table; the project is that of \
+                 \"pointer_tables\": false"
+            ),
             (Some(tables), _) if auto.applied => format!(
                 "{before}, so the pointer-table scan ran automatically: {} accepted table{} seeded {} function \
                  start{}; binary_info raw.pointer_tables lists each table with its evidence. Pass \
@@ -1026,7 +1034,14 @@ impl Project {
         let raw = self.binary.raw_code_image()?;
         let (found, code) = self.raw_discovery_sparse()?;
         let mut steps = Vec::new();
-        if raw.profile().m_profile() && raw.pointer_tables().is_none() && self.pointer_tables_auto.get().is_none() {
+        let automatic = self.pointer_tables_auto.get();
+        if let Some(auto) = automatic.filter(|auto| auto.outcome == "refused") {
+            steps.push(format!(
+                "the automatic pointer-table scan was refused ({}): map less (offset/length) or give seeds",
+                auto.refused.as_deref().unwrap_or("no reason given")
+            ));
+        }
+        if raw.profile().m_profile() && raw.pointer_tables().is_none() && automatic.is_none() {
             steps.push(
                 "add \"pointer_tables\": true to raw to seed functions from tables of code pointers (handler arrays, \
                  command tables); binary_info then reports each table with its evidence"

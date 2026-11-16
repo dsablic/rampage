@@ -23,6 +23,7 @@ mod container;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use container::ContainerScan;
 pub use container::ContainerStream;
 
 pub use algorithms::{ALL as ALGORITHMS, Algorithm};
@@ -690,7 +691,7 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
         if let Some(end) = inferred_end {
             let line = format!(
                 "not a discovered function: start inferred from the push {{..., lr}} prologue at {function:#x}, end \
-                 from the first return before {end:#x}"
+                 at the first return after the literal load, before {end:#x} (may end early)"
             );
             if !routine.evidence.contains(&line) {
                 routine.evidence.push(line);
@@ -1335,12 +1336,14 @@ fn thumb_literal_target(bytes: &[u8], at: usize, address: u64) -> Option<(u64, u
     None
 }
 
-/// Thumb instructions in the 4 KiB before `slot` that load it PC-relative; at most 8.
+/// Thumb instructions within 4 KiB of `slot` that load it PC-relative (`ldr.w rt, [pc, #-imm12]` may follow its
+/// literal); at most 8.
 fn thumb_literal_loads(blocks: &[Block], slot: u64) -> Vec<u64> {
     let Some(block) = blocks.iter().find(|block| block.start <= slot && slot < block.end()) else { return Vec::new() };
     let first = slot.saturating_sub(4096).max(block.start);
     let first = first + (first - block.start) % 2;
-    (first..slot)
+    let last = (slot + 4096).min(block.end());
+    (first..last)
         .step_by(2)
         .filter(|&address| {
             thumb_literal_target(block.bytes, (address - block.start) as usize, address)
@@ -1350,46 +1353,51 @@ fn thumb_literal_loads(blocks: &[Block], slot: u64) -> Vec<u64> {
         .collect()
 }
 
-/// The routine holding the Thumb instruction at `site`: from the nearest `push {..., lr}` before it (no return
-/// between) to just after the first return after it, within 1 KiB either way.
+/// The length of the Thumb instruction whose first halfword is `first`.
+fn thumb_length(first: u16) -> u64 {
+    if first >> 11 >= 0b11101 { 4 } else { 2 }
+}
+
+/// The routine holding the Thumb instruction at `site`: the nearest `push {..., lr}` within 1 KiB before it from
+/// which instructions, stepped by their lengths, land on `site` (early returns between are allowed), to just after
+/// the first return after `site`, within 1 KiB. The end may be early when the routine returns from several places.
 fn thumb_routine_around(blocks: &[Block], site: u64) -> Option<(u64, u64)> {
     let block = blocks.iter().find(|block| block.start <= site && site < block.end())?;
     let halfword = |address: u64| {
-        let at = (address - block.start) as usize;
+        let at = address.checked_sub(block.start)? as usize;
         block.bytes.get(at..at + 2).map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
     };
-    let returns = |address: u64| -> Option<u64> {
-        let first = halfword(address)?;
-        if first == 0x4770 || first & 0xff00 == 0xbd00 {
-            return Some(2);
-        }
-        (first == 0xe8bd && halfword(address + 2)? & 0x8000 != 0).then_some(4)
+    let returns = |address: u64| -> bool {
+        let Some(first) = halfword(address) else { return false };
+        first == 0x4770
+            || first & 0xff00 == 0xbd00
+            || (first == 0xe8bd && halfword(address + 2).is_some_and(|next| next & 0x8000 != 0))
     };
     let pushes = |address: u64| -> bool {
         let Some(first) = halfword(address) else { return false };
         first & 0xff00 == 0xb500 || (first == 0xe92d && halfword(address + 2).is_some_and(|next| next & 0x4000 != 0))
     };
+    // From `start`, stepping by instruction length, the instruction at `site` is reached.
+    let lands = |start: u64| {
+        let mut address = start;
+        while address < site {
+            let Some(first) = halfword(address) else { return false };
+            address += thumb_length(first);
+        }
+        address == site
+    };
     let lowest = site.saturating_sub(1024).max(block.start);
-    let mut start = None;
-    let mut address = site;
-    while address >= lowest + 2 {
-        address -= 2;
-        if pushes(address) {
-            start = Some(address);
-            break;
-        }
-        if returns(address).is_some() {
-            return None;
-        }
-    }
-    let start = start?;
+    let start =
+        (1..=(site - lowest) / 2).map(|step| site - 2 * step).find(|&address| pushes(address) && lands(address))?;
     let highest = (site + 1024).min(block.end());
     let mut address = site;
     while address + 2 <= highest {
-        if let Some(length) = returns(address) {
+        let first = halfword(address)?;
+        let length = thumb_length(first);
+        if returns(address) {
             return Some((start, address + length));
         }
-        address += 2;
+        address += length;
     }
     None
 }
@@ -1398,10 +1406,23 @@ fn thumb_routine_around(blocks: &[Block], site: u64) -> Option<(u64, u64)> {
 pub(crate) fn crc_routine_addresses(project: &Project) -> BTreeSet<u64> {
     let (blocks, _) = blocks(&project.binary);
     let mut notes = Vec::new();
-    code_evidence(project, &blocks, &mut notes).routines.iter().map(|routine| routine.address).collect()
+    // Only discovered functions: an inferred routine is no function lock_mechanisms can trace.
+    code_evidence(project, &blocks, &mut notes)
+        .routines
+        .iter()
+        .filter(|routine| routine.inferred_end.is_none())
+        .map(|routine| routine.address)
+        .collect()
 }
 
 impl Project {
+    /// The compressed streams container records describe in this Raw project's file-range regions, found once.
+    fn container_scan(&self) -> Arc<ContainerScan> {
+        Arc::clone(self.container_scan.get_or_init(|| {
+            Arc::new(container::scan(&self.binary, self.raw_source.get().map(std::path::PathBuf::as_path)))
+        }))
+    }
+
     /// Finds integrity checks in the original image, measures them on this (effective) image, and with
     /// `request.fix` writes corrected stored values as reviewed byte patches in dependency order.
     pub fn integrity_checks(self: &Arc<Self>, request: &IntegrityRequest) -> Result<IntegrityOutcome, ApiError> {
@@ -1449,8 +1470,9 @@ impl Project {
         }
         let stats = search.stats;
         let (mut found, mut suspects) = select(search.matches, &code);
-        let path = source.raw_source.get().or_else(|| self.raw_source.get()).cloned();
-        let streams = container::streams(&source.binary, path.as_deref());
+        let scan = source.container_scan();
+        notes.extend(scan.notes.iter().cloned());
+        let streams = scan.streams.clone();
         for stream in streams.iter().filter_map(|stream| stream.found.as_ref()) {
             found.retain(|check| check.field != stream.field);
             found.push(stream.clone());

@@ -91,6 +91,7 @@
     "raw.pointer_tables.automatic.applied",
     "raw.pointer_tables.automatic.code_bytes",
     "raw.pointer_tables.automatic.functions_before",
+    "raw.pointer_tables.automatic.outcome",
     "raw.pointer_tables.automatic.reason",
     "raw.pointer_tables.isolated_pointers",
     "raw.pointer_tables.note",

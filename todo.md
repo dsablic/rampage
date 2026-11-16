@@ -182,6 +182,8 @@ decoded code.
   - `integrity_checks` over the whole 4 MiB container exhausted its budget; it needs a hint to run on the decoded
     image's functions instead. Done: `container_streams` reports the record's byte sum as a check and `next` gives
     the decoded image's selector; on the decoded image the CRC-32 routine is found from its literal load.
+  - [ ] Seed a routine `integrity_checks` infers from a literal load (outside every discovered function) into
+    discovery, so `decompile` and `lock_mechanisms` see it.
 - [ ] **Flaky UI test.** `rampage-ui` `debugger::tests::local_socket::genuine_save_refusal_remains_typed_until_resources_are_recorded_despite_obsolete_binding`
   fails intermittently: locally with BrokenPipe on its socket, and on CI Linux ARM64 (2badb62) with "Harness::run
   exceeded max_steps (4)" from a text-selection repaint in `inspection_harness`. Use `run_steps` or wait for the

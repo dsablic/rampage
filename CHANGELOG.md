@@ -10,7 +10,7 @@ see the [stability policy](docs/stability.md) for what the version promises.
   followed to the `ldr` that loads it, and the routine around it is listed with `inferred_range`. On a Raw project
   over a container file, `container_streams` lists each compressed stream a record describes, with the record's
   byte sum or CRC-32 as a check over the stream (or a note that it does not verify), and `next` gives the decoded
-  image's `raw` selector. See [MCP](docs/mcp.md).
+  image's `raw` selector. The search is bounded (64 candidates, 64 MiB of CRC-32, 8 decodes within 6 s). See [MCP](docs/mcp.md).
 - More tools on Raw projects: `function_summary`, `find_crypto`, `triage` and `triage_report` take the `raw`
   selector and read the mapped regions, decoded ones included, at mapped addresses; on Raw input `triage` and
   `triage_report` say which file-format facts do not apply. See [MCP](docs/mcp.md#raw-projects).
@@ -21,8 +21,9 @@ see the [stability policy](docs/stability.md) for what the version promises.
 - Sparse Raw discovery runs the pointer-table scan itself: a Cortex-M `raw` selector that leaves `pointer_tables`
   unset now scans for tables of code pointers when discovery from the entry, seeds, vector table and scatter-load
   jump finds fewer than one function per 16 KiB of code, instead of only suggesting it. `binary_info` reports why
-  under `raw.pointer_tables.automatic` and `list_functions` adds a `note`; `true` and `false` keep their meaning,
-  and discovery in proportion leaves the project unchanged. See [MCP](docs/mcp.md#raw-projects).
+  and the `outcome` (`applied`, `found_none` or `refused`) under `raw.pointer_tables.automatic` and
+  `list_functions` adds a `note`; `true` and `false` keep their meaning, an explicit request for the resulting
+  interpretation shares the project, and discovery in proportion leaves the project unchanged. See [MCP](docs/mcp.md#raw-projects).
 - Privacy surface: the new `privacy_surface` report (group `carve`) maps what one binary can capture and where it
   can send it. Sources are microphone, camera, screen and input-device capture: ALSA, tinyalsa, PulseAudio,
   PortAudio and AAudio input, V4L2, framebuffer, DRM and evdev ioctls (matched by type and number at any ABI size),

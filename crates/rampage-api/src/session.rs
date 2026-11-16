@@ -47,6 +47,17 @@ struct State {
     stamps: HashMap<(PathBuf, Option<ImageAt>, Arch), FileStamp>,
     /// Raw projects by canonical path and raw interpretation SHA-256, least recently used first.
     raw: Vec<((PathBuf, String), Arc<Project>)>,
+    /// Raw projects being built for their first open, so concurrent opens of one key build it once.
+    raw_opening: HashMap<(PathBuf, String), Arc<std::sync::OnceLock<Arc<Project>>>>,
+}
+
+/// The cached Raw project for `key`, marked most recently used.
+fn cached_raw(state: &mut State, key: &(PathBuf, String)) -> Option<Arc<Project>> {
+    let index = state.raw.iter().position(|(cached, _)| cached == key)?;
+    let entry = state.raw.remove(index);
+    let project = Arc::clone(&entry.1);
+    state.raw.push(entry);
+    Some(project)
 }
 
 /// Raw interpretations retained per session; the least recently used is evicted beyond this.
@@ -180,12 +191,13 @@ impl Session {
     ///
     /// A Cortex-M request that leaves `pointer_tables` unset runs discovery when the project is first opened, and
     /// when it finds fewer than one function per 16 KiB of code, opens the same image with the pointer-table scan
-    /// instead and records why ([`Project::pointer_tables_note`]). Such requests are cached apart from explicit
-    /// ones, whose interpretation identity they share when the scan does not run.
+    /// instead and records why ([`Project::pointer_tables_note`]). Such a request is cached under its own key and
+    /// under the identity of the project it produced, so a later explicit `pointer_tables` request with that
+    /// interpretation (`true` when the scan was applied, `false` otherwise) shares its project and annotations.
+    /// Concurrent first opens of one request build it once.
     pub fn open_raw(&self, path: &Path, request: &crate::RawProjectRequest) -> Result<Arc<Project>, ApiError> {
         let image = crate::raw_project::raw_image(path, request)?;
         let automatic = request.pointer_tables.is_none() && image.options.profile.m_profile();
-        let rescan = automatic.then(|| image.clone());
         let load = |source| ApiError::Load { path: path.to_owned(), source };
         let binary = Binary::from_raw_image(image).map_err(load)?;
         let identity = binary
@@ -198,38 +210,54 @@ impl Session {
         })?;
         let sha256 = if automatic { format!("{}+pointer_tables:auto", identity.sha256) } else { identity.sha256 };
         let key = (canonical, sha256);
-        let cached = |state: &mut State| {
-            let index = state.raw.iter().position(|(cached, _)| *cached == key)?;
-            let entry = state.raw.remove(index);
-            let project = Arc::clone(&entry.1);
-            state.raw.push(entry);
-            Some(project)
+        let cell = {
+            let mut state = self.state.lock().expect("session lock");
+            if let Some(project) = cached_raw(&mut state, &key) {
+                drop(state);
+                return project.effective_snapshot();
+            }
+            Arc::clone(state.raw_opening.entry(key.clone()).or_default())
         };
-        let found = cached(&mut self.state.lock().expect("session lock"));
-        let project = match found {
-            Some(project) => project,
-            None => {
-                // Discovery runs outside the session lock; a concurrent open of the same request keeps the first
-                // project cached.
-                let mut project = self.new_raw_project(binary, &key.0);
-                if let Some(image) = rescan {
-                    project = self.with_automatic_pointer_tables(project, image, &key.0);
-                }
-                let mut state = self.state.lock().expect("session lock");
-                if let Some(project) = cached(&mut state) {
-                    return project.effective_snapshot();
-                }
-                let project = Arc::new(project);
-                state.raw.push((key, Arc::clone(&project)));
-                let bytes = |raw: &[(_, Arc<Project>)]| -> usize {
-                    raw.iter().map(|(_, project)| project.binary.image_bytes().len()).sum()
-                };
-                while state.raw.len() > MAX_RAW_PROJECTS
-                    || (state.raw.len() > 1 && bytes(&state.raw) > MAX_RAW_PROJECT_BYTES)
-                {
-                    state.raw.remove(0);
-                }
+        // Discovery runs outside the session lock; concurrent first opens of this key wait on one build.
+        let project = Arc::clone(cell.get_or_init(|| {
+            let project = self.new_raw_project(binary, &key.0);
+            Arc::new(if automatic {
+                self.with_automatic_pointer_tables(project, path, request, &key.0)
+            } else {
                 project
+            })
+        }));
+        let project = {
+            let mut state = self.state.lock().expect("session lock");
+            state.raw_opening.remove(&key);
+            match cached_raw(&mut state, &key) {
+                Some(project) => project,
+                None => {
+                    state.raw.push((key.clone(), Arc::clone(&project)));
+                    // The interpretation the automatic request produced answers explicit requests for it too.
+                    if automatic
+                        && let Ok(Some(own)) = project.binary.raw_interpretation_identity()
+                        && cached_raw(&mut state, &(key.0.clone(), own.sha256.clone())).is_none()
+                    {
+                        state.raw.push(((key.0.clone(), own.sha256), Arc::clone(&project)));
+                    }
+                    // A project cached under two keys (an automatic request and its interpretation) counts once.
+                    let bytes = |raw: &[(_, Arc<Project>)]| -> usize {
+                        raw.iter()
+                            .enumerate()
+                            .filter(|(index, (_, project))| {
+                                !raw[..*index].iter().any(|(_, earlier)| Arc::ptr_eq(earlier, project))
+                            })
+                            .map(|(_, (_, project))| project.binary.image_bytes().len())
+                            .sum()
+                    };
+                    while state.raw.len() > MAX_RAW_PROJECTS
+                        || (state.raw.len() > 1 && bytes(&state.raw) > MAX_RAW_PROJECT_BYTES)
+                    {
+                        state.raw.remove(0);
+                    }
+                    project
+                }
             }
         };
         project.effective_snapshot()
@@ -249,13 +277,14 @@ impl Session {
         project
     }
 
-    /// `project` (opened without pointer tables) after discovery, or, when that discovery is sparse, `image`
-    /// opened with the pointer-table scan, recording why. A scan whose seeds cannot be admitted keeps `project`
-    /// and records the refusal.
+    /// `project` (opened without pointer tables) after discovery, or, when that discovery is sparse, the image read
+    /// again with the pointer-table scan, recording why. A scan that accepts no table keeps `project` (the
+    /// interpretation of `false`); one whose seeds cannot be admitted keeps it too and records the refusal.
     fn with_automatic_pointer_tables(
         &self,
         project: Project,
-        mut image: rampage_loaders::RawImage,
+        path: &Path,
+        request: &crate::RawProjectRequest,
         source: &Path,
     ) -> Project {
         if project.analysis().is_err() {
@@ -270,15 +299,29 @@ impl Session {
             if functions_before == 1 { "" } else { "s" },
             code_bytes.div_ceil(1024)
         );
-        image.options.pointer_tables = true;
-        let (project, applied, refused) = match Binary::from_raw_image(image) {
-            Ok(binary) => (self.new_raw_project(binary, source), true, None),
-            Err(error) => (project, false, Some(error.to_string())),
+        let mut scanned = request.clone();
+        scanned.pointer_tables = Some(true);
+        let binary = crate::raw_project::raw_image(path, &scanned).and_then(|image| {
+            Binary::from_raw_image(image).map_err(|source| ApiError::Load { path: path.into(), source })
+        });
+        let (project, outcome, refused) = match binary {
+            Ok(binary)
+                if binary
+                    .raw_code_image()
+                    .and_then(|raw| raw.pointer_tables())
+                    .is_some_and(|t| t.accepted_tables > 0) =>
+            {
+                (self.new_raw_project(binary, source), "applied", None)
+            }
+            Ok(_) => (project, "found_none", None),
+            Err(ApiError::Load { source, .. }) => (project, "refused", Some(source.to_string())),
+            Err(error) => (project, "refused", Some(error.to_string())),
         };
         let _ = project.pointer_tables_auto.set(crate::rows::PointerTablesAuto {
             functions_before,
             code_bytes,
-            applied,
+            applied: outcome == "applied",
+            outcome,
             refused,
             reason,
         });

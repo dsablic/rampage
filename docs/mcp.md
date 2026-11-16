@@ -250,14 +250,20 @@ except `export_patched`. Limits: one contiguous range per check; 256 MiB of hash
 
 On a Raw project the CRC code evidence comes from the discovered functions (pointer tables and scatter-load copies
 included); on Cortex-M a polynomial literal that no discovered code references is followed to the PC-relative
-`ldr` that loads it, and the routine around it (from its `push {..., lr}` to its first return) is listed with
-`inferred_range`. On a Raw project mapped over a container file, a compressed stream behind a record (within 64 bytes before
+`ldr` that loads it (within 4 KiB, either side), and the routine around it is listed with `inferred_range`: from
+the nearest `push {..., lr}` whose instructions lead to the load to the first return after the load, which may end
+early when the routine returns from several places. Such a routine is not a discovered function, so
+`lock_mechanisms` and `decompile` do not see it. On a Raw project mapped over a container file, a compressed stream behind a record (within 64 bytes before
 it: its compressed length, its decoded size, and a byte sum of the compressed bytes or a word holding the stream's
 own file offset) is listed in `container_streams`: offsets, sizes, `checksum` (whether a record word is the byte sum or CRC-32 of the
 compressed bytes; that word is then the check `check`, with its range and stored value at mapped addresses),
 `decode_check` (the classic 4 KiB-ring LZSS or LZ4 block decoder reproducing the sizes) and `open_as_raw`, the
 decoded image's `raw` selector with the profile and best load address. `next` then says to run
-`integrity_checks` with that selector, since the checksum routines are in the decoded code.
+`integrity_checks` with that selector, since the checksum routines are in the decoded code. A record word that
+does not verify is reported as such (the record may use another algorithm or range, or the bytes changed); it is
+called changed only when a verified sibling record keeps its checksum at the same place. The search is bounded:
+at most 64 candidate streams, 64 MiB of CRC-32 and 8 decodes within 6 s per project (found once and kept), and
+`notes` says when a budget ran out.
 
 `lock_mechanisms` (group `detection`, experimental) explains mechanisms that can make a device refuse a repair:
 signature and MAC verification, challenge-response unlocks, binding to a unique chip ID, anti-rollback counters,
@@ -573,11 +579,14 @@ moves with the base.
 `"pointer_tables": true` (Cortex-M only) also seeds functions from tables of Thumb code pointers,
 such as handler arrays and command tables, so a raw image needs no hand-built symbol list. `false` never scans.
 Left unset, the scan runs automatically when discovery from the entry, seeds, vector table and scatter-load jump
-finds fewer than one function per 16 KiB of code (none at all in a smaller image): the project is then opened with
-the scan, `raw.pointer_tables.automatic` gives `functions_before`, `code_bytes`, `applied` and `reason`, and
-`list_functions` adds a one-line `note`. When the scan's seeds cannot be admitted (more than 8192 seeds),
-`applied` is false, `refused` says why and the sparse discovery stays. An automatic scan has the interpretation
-identity of `"pointer_tables": true`; with discovery in proportion the project is exactly that of `false`. A table is a run of at
+finds fewer than one function per 16 KiB of code (none at all in a smaller image), and `list_functions` adds a
+one-line `note`. `raw.pointer_tables.automatic` gives `functions_before`, `code_bytes`, `applied`, `reason` and
+`outcome`: `applied` (the project is opened with the scan, the interpretation of `"pointer_tables": true`),
+`found_none` (the scan accepted no table, so the project stays that of `false`) or `refused` (its seeds cannot be
+admitted, more than 8192; `refused` says why, the sparse discovery stays and `next` suggests mapping less or giving
+seeds). With discovery in proportion the project is exactly that of `false`. The project an unset request produced
+also answers an explicit request for the same interpretation (`true` when applied, `false` otherwise), keeping its
+annotations; its `binary_info` still shows the `automatic` record. A table is a run of at
 least three word-aligned code pointers at a stride of 4, 8, 12 or 16 bytes (zero or 0xFFFFFFFF slots allowed
 between them), where a code pointer is an odd word whose target lies in the image and decodes like code. Its
 `evidence` is `push_lr` (one of the first four instructions pushes `lr`), `call_target` (a decodable `bl` in the image
@@ -596,7 +605,8 @@ every list under `raw` (the decode receipt's, vector-table words, pointer tables
 copies, base candidates; lists of plain values keep 8) and adds `<list>_count` with an omission receipt per cut in
 `view_projection.omissions`. The default full view is returned unchanged when it fits 60,000 bytes; otherwise its
 `raw` lists keep their first 16 rows the same way and `view_projection.fitted` says so. Either view then reduces
-`raw` sections that still do not fit, largest first, to their scalar fields and list counts, with a receipt.
+`raw` sections that still do not fit, largest first, to their scalar fields and list counts, with a receipt;
+`base_check` (the better base and the bad fetch) is never reduced.
 
 `disassemble` with `count` up to 1000 pages through the whole image as text, data included.
 The session keeps at most 32 Raw interpretations and 64 MiB of their input bytes, evicting the least recently used.

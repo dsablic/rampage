@@ -319,8 +319,9 @@ pub struct RawSummary<'a> {
 /// A Raw project's pointer tables, with why they were scanned when the selector left `pointer_tables` unset.
 #[derive(Debug, Serialize)]
 pub struct RawPointerTables<'a> {
+    /// Absent when an automatic scan was refused or accepted no table (`automatic` says which).
     #[serde(flatten)]
-    pub tables: &'a rampage_loaders::raw_pointers::PointerTables,
+    pub tables: Option<&'a rampage_loaders::raw_pointers::PointerTables>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub automatic: Option<&'a PointerTablesAuto>,
 }
@@ -333,9 +334,11 @@ pub struct PointerTablesAuto {
     pub functions_before: usize,
     /// Bytes of code in backed code regions.
     pub code_bytes: u64,
-    /// Whether the scan's seeds were used; false when admitting them failed (`refused` says why) and the project
-    /// kept the sparse discovery.
+    /// Whether the scan's seeds were used: false when it accepted no table or admitting its seeds failed, and the
+    /// project kept the sparse discovery (the interpretation of `pointer_tables` false).
     pub applied: bool,
+    /// `applied`, `found_none` (the scan ran and accepted no table) or `refused` (`refused` says why).
+    pub outcome: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
     pub reason: String,

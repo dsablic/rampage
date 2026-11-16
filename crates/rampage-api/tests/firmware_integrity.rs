@@ -570,7 +570,7 @@ fn a_container_record_sum_is_a_check_and_next_opens_the_decoded_image() {
     let report = call(&mut open(&broken), "integrity_checks", json!({}));
     let found = &report["container_streams"][0];
     assert!(found.get("check").is_none(), "{report:#}");
-    assert!(found["checksum"].as_str().unwrap().contains("does not verify"), "{found}");
+    assert!(found["checksum"].as_str().unwrap().contains("may use another algorithm or range"), "{found}");
     assert_eq!(found["decode_check"], "reproduced");
 }
 
@@ -605,4 +605,114 @@ fn an_undiscovered_raw_crc_routine_is_found_from_its_literal_load() {
     assert_eq!(routine["inferred_range"], json!({ "start": "0x8000004", "end": "0x800000c" }));
     assert!(routine["algorithms"].as_array().unwrap().contains(&json!("crc32")), "{routine}");
     assert!(routine["evidence"].to_string().contains("not a discovered function"), "{routine}");
+
+    // A literal before its `ldr.w rt, [pc, #-imm]`, and an early return between the prologue and the load.
+    let mut image: Vec<u8> = vec![
+        0x70, 0x47, // 0x00 bx lr: the entry
+        0x00, 0xbf, // 0x02 nop
+        0x20, 0x83, 0xb8, 0xed, // 0x04 0xedb88320
+        0x10, 0xb5, // 0x08 push {r4, lr}
+        0x10, 0xbd, // 0x0a pop {r4, pc}: an early return
+        0x5f, 0xf8, 0x0c, 0x10, // 0x0c ldr.w r1, [pc, #-12]: the literal at 0x04
+        0x48, 0x40, // 0x10 eors r0, r1
+        0x10, 0xbd, // 0x12 pop {r4, pc}
+    ];
+    image.resize(64, 0);
+    std::fs::write(&path, &image).unwrap();
+    let mut project = Session::default().open_raw(&path, &request).unwrap();
+    let report = call(&mut project, "integrity_checks", json!({}));
+    let routine = &report["routines"][0];
+    assert_eq!(routine["inferred_range"], json!({ "start": "0x8000008", "end": "0x8000014" }), "{report:#}");
+}
+
+/// A hostile file where every word is its own file offset plus 8 looks like a payload-offset word everywhere: the
+/// container search examines at most 64 candidates within its CRC and decode budgets, says so, and returns quickly.
+#[test]
+fn the_container_search_is_bounded_on_self_referencing_words() {
+    let owned = Owned::new();
+    for size in [64 * 1024usize, 256 * 1024] {
+        let file: Vec<u8> = (0..size as u32 / 4).flat_map(|index| (4 * index + 8).to_le_bytes()).collect();
+        let path = owned.0.join(format!("self-{size}.bin"));
+        std::fs::write(&path, &file).unwrap();
+        let request: RawProjectRequest = serde_json::from_value(json!({
+            "profile": "cortex-m", "offset": 0, "length": size, "base_address": 0, "pointer_tables": false,
+        }))
+        .unwrap();
+        let mut project = Session::default().open_raw(&path, &request).unwrap();
+        let started = std::time::Instant::now();
+        let report = call(&mut project, "integrity_checks", json!({ "emulate": false }));
+        let elapsed = started.elapsed();
+        // Unbounded, 64 KiB took over 30 s in a release build; bounded, a debug build takes well under that.
+        assert!(elapsed < std::time::Duration::from_secs(20), "{size}: {elapsed:?}");
+        assert!(report.get("container_streams").is_none(), "{report:#}");
+        let notes = report["notes"].to_string();
+        assert!(notes.contains("container stream search budget exhausted") && notes.contains("candidates"), "{notes}");
+    }
+}
+
+/// Two records of one layout: the first verifies, the second's sum word was changed. The second is reported as
+/// changed, naming the word where its verified sibling keeps the sum.
+#[test]
+fn a_changed_sum_beside_a_verified_sibling_is_called_changed() {
+    let original =
+        std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/raw-cortex-m.bin")).unwrap();
+    let stream = rampage_decode::encode::lzss(&rampage_decode::Lzss::classic_4k(4078, 0), &original);
+    let sum = stream.iter().fold(0u32, |sum, &byte| sum.wrapping_add(u32::from(byte)));
+    let mut file = Vec::new();
+    for changed in [false, true] {
+        file.resize(file.len().next_multiple_of(0x100) + 0x28, 0x5a);
+        let payload = file.len() as u32 + 0x18;
+        let stored = if changed { sum ^ 0x10 } else { sum };
+        for value in [0x0800_0000, payload, stream.len() as u32, stored, 0x0800_0000, original.len() as u32] {
+            file.extend(value.to_le_bytes());
+        }
+        file.extend(&stream);
+    }
+    file.resize(file.len().next_multiple_of(4) + 64, 0xff);
+    let owned = Owned::new();
+    let path = owned.0.join("two.bin");
+    std::fs::write(&path, &file).unwrap();
+    let request: RawProjectRequest = serde_json::from_value(json!({
+        "profile": "cortex-m", "offset": 0, "length": file.len(), "base_address": 0, "pointer_tables": false,
+    }))
+    .unwrap();
+    let report = call(&mut Session::default().open_raw(&path, &request).unwrap(), "integrity_checks", json!({}));
+    let streams = report["container_streams"].as_array().unwrap();
+    assert_eq!(streams.len(), 2, "{report:#}");
+    assert!(streams[0]["checksum"].as_str().unwrap().contains("verifies"), "{}", streams[0]);
+    let changed = streams[1]["checksum"].as_str().unwrap();
+    assert!(
+        changed.contains("verified sibling record keeps its byte_sum32") && changed.contains("changed"),
+        "{changed}"
+    );
+}
+
+/// Noise that looks like payload-offset words before a real record does not spend the decodes the verified record
+/// needs: its stream is still decoded and offered as the next selector.
+#[test]
+fn noise_before_a_verified_record_leaves_its_decode() {
+    let original =
+        std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/raw-cortex-m.bin")).unwrap();
+    let stream = rampage_decode::encode::lzss(&rampage_decode::Lzss::classic_4k(4078, 0), &original);
+    let sum = stream.iter().fold(0u32, |sum, &byte| sum.wrapping_add(u32::from(byte)));
+    // 64 KiB of words that each name the offset just after them.
+    let mut file: Vec<u8> = (0..0x4000u32).flat_map(|index| (4 * index + 8).to_le_bytes()).collect();
+    let record = file.len() as u32;
+    for value in [0x0800_0000, 0x18, stream.len() as u32, sum, 0x0800_0000, original.len() as u32] {
+        file.extend(value.to_le_bytes());
+    }
+    file.extend(&stream);
+    file.resize(file.len().next_multiple_of(4) + 64, 0xff);
+    let owned = Owned::new();
+    let path = owned.0.join("noisy.bin");
+    std::fs::write(&path, &file).unwrap();
+    let request: RawProjectRequest = serde_json::from_value(json!({
+        "profile": "cortex-m", "offset": 0, "length": file.len(), "base_address": 0, "pointer_tables": false,
+    }))
+    .unwrap();
+    let report = call(&mut Session::default().open_raw(&path, &request).unwrap(), "integrity_checks", json!({}));
+    let streams = report["container_streams"].as_array().unwrap();
+    let found = streams.iter().find(|found| found["stream_offset"] == format!("{:#x}", record + 0x18)).unwrap();
+    assert_eq!(found["decode_check"], "reproduced", "{report:#}");
+    assert!(report["next"].as_str().unwrap().contains("integrity_checks"), "{report:#}");
 }

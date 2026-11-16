@@ -77,7 +77,10 @@ fn raw_binary_info(value: Value, view: ToolView) -> Result<Value, ApiError> {
         let Some(raw) = value.get_mut("raw").and_then(Value::as_object_mut) else { break };
         let largest = raw
             .iter()
-            .filter(|(key, section)| (section.is_object() || section.is_array()) && !collapsed.contains(*key))
+            // base_check names a better base and the bad fetch: what to do next, never reduced.
+            .filter(|(key, section)| {
+                (section.is_object() || section.is_array()) && *key != "base_check" && !collapsed.contains(*key)
+            })
             .max_by_key(|(_, section)| json_bytes(section))
             .map(|(key, _)| key.clone());
         let Some(key) = largest else { break };
@@ -2069,7 +2072,9 @@ mod tests {
                           "receipt": { "steps": (0..3000).map(|step| json!({ "at": step })).collect::<Vec<_>>() } } }],
             "pointer_tables": { "words_scanned": 900_000, "accepted_tables": 2000, "tables": tables, "note": "scan" },
             "scatter_load": { "entry": "0x60000000", "copies": copies, "copies_not_listed": 0 },
-            "base_check": { "verdict": "fits", "candidates": (0..300).map(|n| json!({ "base_address": n })).collect::<Vec<_>>() },
+            "base_check": { "verdict": "looks_wrong", "candidates": (0..300).map(|n| json!({ "base_address": n })).collect::<Vec<_>>(),
+                            "better_candidate": { "base_address": "0x60000000", "evidence": { "pointer_hits": 2103 } },
+                            "bad_fetch": { "address": "0x1000300", "inside_under": "0x60000000" } },
         });
         value
     }
@@ -2114,6 +2119,16 @@ mod tests {
         assert!(omissions.iter().any(|receipt| receipt["path"] == "/raw/pointer_tables"
             && receipt["reason"].as_str().unwrap().contains("scalar fields")));
         assert!(summary["raw"]["scatter_load"]["copies"].is_array(), "smaller sections stay");
+        // base_check is never reduced: its better base and bad fetch say what to do next.
+        let wider = {
+            let mut wider = oversized_raw_binary_info();
+            wider["raw"]["base_check"]["note"] = json!("x".repeat(MAX_TOOL_VIEW_BYTES / 2));
+            wider["raw"]["scatter_load"]["note"] = json!("y".repeat(MAX_TOOL_VIEW_BYTES / 3));
+            wider
+        };
+        let summary = project_tool_view(wider, ToolViewKind::BinaryInfo, ToolView::Summary).unwrap();
+        assert_eq!(summary["raw"]["base_check"]["better_candidate"]["base_address"], "0x60000000", "{summary:#}");
+        assert_eq!(summary["raw"]["base_check"]["bad_fetch"]["address"], "0x1000300");
     }
 
     /// A native binary_info keeps its exact-or-refuse full view.
