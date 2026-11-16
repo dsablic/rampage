@@ -92,6 +92,15 @@ loads at. Passed as `raw` with the same `path` to `binary_info`, `list_functions
 Raw-capable tools, it maps the decoded output as the project's code region
 ([details](mcp.md#a-compressed-image-as-the-code-region)). A decoded size above 4 MiB has no selector.
 
+The result also carries `base_candidates`, ranked load addresses for the decoded bytes as Cortex-M code with their
+evidence ([details](mcp.md#load-address-candidates-and-base_check)), and `next` names one when it is clearly the
+strongest. When little-endian words within 64 bytes before the range hold its compressed length and decoded size,
+`container_record` lists that record's words with inferred roles: `compressed_length`, `decoded_size`,
+`payload_offset`, `byte_sum32` or `crc32` of the compressed bytes (with `checksum_over`), `address` (nonzero and
+4 KiB aligned) or `unknown`. Address words are grouped as `base_hints` with their field offsets, and
+`base_candidates` validates them against the decoded bytes. Roles are inferred from values, never from a fixed
+layout.
+
 ## Receipts and limits
 
 Receipts retain the selected source range and file size, SHA-256 of selected bytes, their additive byte sum,
@@ -149,6 +158,9 @@ size and SHA-256, consumed and trailing input, `stream_end`, literal and referen
 `checks`, `parse_equivalents`, `same_output_variants` and a short preview. `decode_check` says whether
 `decode_file_range`'s provider, with its budgets, reproduced the bytes; a reproduced candidate also has
 `open_as_raw`, the Raw selector for its decoded bytes, and the report a `next` hint, as `decode_file_range` gives.
+Each candidate's `container_record` reads the words before the range against its consumed length and decoded size,
+and the first three candidates with `open_as_raw` carry `base_candidates` for their decoded bytes, with the
+record's `base_hints` among them.
 
 | Check | Passes when |
 | --- | --- |

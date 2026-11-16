@@ -701,6 +701,46 @@ with any `regions` sharing that cap. `decode` takes the same fields as a region'
 without `profile` and `base_address` as `open_as_raw`, with a one-line `next`: add the profile and load address and
 pass it as `raw` with the same path. A decoded size above 4 MiB has no selector.
 
+### Load-address candidates and `base_check`
+
+A decoder knows the decoded size but not the address the image loads at, and a wrong `base_address` quietly ruins a
+Cortex-M project: the vector table is refused, literal-pool pointers point nowhere, and the reset-code follow
+fetches outside every region. So `decode_file_range` and the first three reproduced `probe_compression` candidates
+also return `base_candidates`, and a Cortex-M Raw `binary_info` reports `raw.base_check`.
+
+`base_candidates` ranks at most five load addresses for the bytes as Thumb code, best first. Each has `base_address`,
+`alignment` (1 MiB, 64 KiB, 4 KiB or 4), `score`, `confidence` (`strong`, `plausible` or `weak`; only the first can
+be more than `weak`), `methods` and `evidence`:
+
+| Evidence | Counts |
+| --- | --- |
+| `function_pointers` | distinct odd words whose target, under this base, is a `push {..., lr}` prologue in the image |
+| `string_pointers` | distinct words pointing at the start of a NUL-terminated run of at least four printable bytes |
+| `code_pointers_inside` | distinct odd words inside the image, prologue or not |
+| `literal_pointers_inside` | literal-pool and `movw`/`movt` constants of at least 0x10000 inside the image |
+| `reset_constants_inside`, `reset_code_pointers` | constants the first 4 KiB of code from the entry loads that land inside, and odd ones landing on prologues |
+| `vector_table` | a vector table at offset 0 (initial SP in RAM, odd handlers) fits the image from this base |
+| `hints` | the container record fields that name this base |
+
+The pointer vote pairs aligned words with prologues and string starts at bases aligned to 4 KiB (a word and a
+target agree on `word - offset`), then counts hits exactly for the bases with the most votes. Only bases from
+which the image lies in memory a Cortex-M executes from (the code region, SRAM, external RAM) are candidates, and in
+SRAM literal constants count half. A base that is not 4 KiB aligned is found only from a vector table or a hint.
+Code the startup copies to another address votes for the base of its copy too, so a second candidate can be a
+copy's displacement. Work is bounded (1 Mi words read, 4 Mi votes) and memoized by the bytes' SHA-256: about 65 ms
+for 3.5 MiB in a release build. Candidates are suggestions; nothing is applied. When the first is `strong`, or
+`plausible` with a container record's hint agreeing with the pointer vote, `next` names it with the ready
+`profile` and `base_address` to add to `open_as_raw`.
+
+`raw.base_check` (Cortex-M, mapped from a byte range rather than records) judges the asserted base: `verdict`
+`consistent`, `looks_wrong` or `unknown`; `evidence` for the asserted base, counted like a candidate's;
+`pointer_share` (its pointer hits over the best candidate's); `reset_constants_in_regions` of `reset_constants`
+(constants of the reset code inside any mapped region); `candidates`; and, when the base looks wrong,
+`better_candidate` and a `next` line naming the base to reopen with, which `binary_info`'s own `next` repeats. It
+looks wrong when a `strong` or `plausible` candidate has more than four times its pointer hits, or when the
+scatter-load follow stopped with `bad_fetch` at an address outside every region that lies inside the image under
+another candidate (`bad_fetch.target` and `bad_fetch.candidate_base`).
+
 ## Edits and session state
 
 Analysis runs once per binary when first needed and is cached for the session, and across processes by the

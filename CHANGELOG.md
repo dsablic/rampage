@@ -23,6 +23,16 @@ see the [stability policy](docs/stability.md) for what the version promises.
   network commands and user input (also a sibling call that reads input); `no_user_trigger` says a capture with
   direction-specific evidence is reached from program start with no input or UI handling found among its callers,
   and is withheld when a caller is referenced from a data table or the walk was cut. Evidence, never intent. See [privacy surface](docs/privacy-surface.md).
+- Load-address inference for Raw Cortex-M code: `decode_file_range` and `probe_compression` return
+  `base_candidates` for decoded bytes (at most five bases with evidence: pointer words landing on `push {..., lr}`
+  prologues and string starts, literal-pool and `movw`/`movt` constants, reset-code constants, a vector table at
+  offset 0 and container-record hints), and `next` names the base when one is clearly strongest. Both also return
+  `container_record` when words just before the stream hold its compressed length and decoded size: each word's
+  inferred role (byte sum or CRC-32 of the compressed bytes, payload offset, address) and `base_hints`. A Cortex-M
+  Raw `binary_info` reports `raw.base_check`, whether `base_address` fits the image, and names the better base in
+  `next` when it does not, including when the reset-code follow fetched outside every region at an address another
+  candidate maps. Bounded (about 65 ms for 3.5 MiB) and memoized. See
+  [MCP](docs/mcp.md#load-address-candidates-and-base_check).
 - Compressed images as Raw code: the `raw` selector takes `decode` (a region's decoder parameters) on the primary
   region, so a compressed application maps its decoded bytes as the code region; `vector_table`, `pointer_tables`
   and seeds read them, `length` counts encoded bytes (at most 8 MiB) and the decoded size obeys the profile's cap.

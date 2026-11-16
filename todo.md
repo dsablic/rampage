@@ -107,7 +107,9 @@ decoded code.
   `fs_extract`), for tools that need a file.
 - [x] **String and data tools on Raw projects.** `list_strings` and `inspect_data` refuse them.
 - [ ] **Image records in containers.** Recognise records that name a payload's offset, compressed length, checksum and
-  decoded size, and report them from `carve`/`file_layout` with the matching `decode` arguments.
+  decoded size, and report them from `carve`/`file_layout` with the matching `decode` arguments. Started:
+  `probe_compression` and `decode_file_range` report a `container_record` before the stream (length and size words
+  found by value, byte-sum32/CRC-32 and address fields, `base_hints`); `carve`/`file_layout` do not yet.
 - [x] **Vector table placed at runtime.** When offset 0 is code that writes VTOR, follow the VTOR store to find the
   table. In the run's image the reset code does not store VTOR itself: it first copies sections (next item) and
   jumps into the copy, so the store is only reachable once copied code is mapped. Done: the reset-code follow
@@ -148,13 +150,18 @@ decoded code.
   its entry, copy and zero helpers and peripheral setup. The application it opened at 0x01000000 (the copy
   destination) instead of the record's base, so the reset-code follow stopped with `bad_fetch` and scatter-load
   mapped nothing; it never used `pointer_tables` either (58 turns, $0.59). It also misread one record field.
-  - **Base inference.** Offer load-address candidates for a Raw image: absolute pointers in the reset code's
+  - [x] **Base inference.** Offer load-address candidates for a Raw image: absolute pointers in the reset code's
     literal pool and in pointer tables that land inside the image under a given base (the classic self-pointer
     vote), and container records that name a base next to the payload. `probe_compression`/`open_as_raw` and a
-    Raw `binary_info` should report the best candidates with evidence.
-  - **Say when the base looks wrong.** When the scatter-load follow ends in `bad_fetch` on a constant target that
+    Raw `binary_info` should report the best candidates with evidence. Done: `raw_base` (pointer vote against
+    prologues and string starts, literal-pool coverage, reset-code constants, vector table, hints);
+    `base_candidates` in `decode_file_range`/`probe_compression` with `container_record.base_hints`. On the run's
+    file both images rank the record's base first (application: 2103 function pointers, about 65 ms).
+  - [x] **Say when the base looks wrong.** When the scatter-load follow ends in `bad_fetch` on a constant target that
     would lie inside the image under another base, or most literal-pool pointers fall outside every region,
-    `binary_info` should say so and name the candidate base.
+    `binary_info` should say so and name the candidate base. Done: `raw.base_check` and `next`. On the run's
+    application at 0x01000000 the follow's `bad_fetch` lies inside the (wrongly placed) image, so the pointer vote,
+    not the fetch, names 0x60000000.
   - `find_crypto` still refuses Raw projects; `integrity_checks` found no fields on the decoded image.
 - [ ] **Flaky UI test.** `rampage-ui` `debugger::tests::local_socket::genuine_save_refusal_remains_typed_until_resources_are_recorded_despite_obsolete_binding`
   fails intermittently: locally with BrokenPipe on its socket, and on CI Linux ARM64 (2badb62) with "Harness::run
