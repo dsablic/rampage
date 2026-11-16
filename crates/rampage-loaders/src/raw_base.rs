@@ -35,8 +35,9 @@ pub const MAX_WORDS: usize = 1 << 20;
 /// Function and string starts each used as vote targets; more are sampled at a fixed stride. Validation still
 /// counts against every start.
 const MAX_VOTE_TARGETS: usize = 1 << 16;
-/// Votes cast in one vote; beyond this, distinct words are sampled at a fixed stride.
-const MAX_VOTES: usize = 1 << 22;
+/// Word-target pairings cast as votes (4 bytes each); beyond this, pairings are sampled by cost, and casting stops
+/// at it.
+pub const MAX_VOTES: usize = 1 << 22;
 /// Vote winners validated exactly.
 const SHORTLIST: usize = 12;
 /// Candidates returned.
@@ -80,7 +81,9 @@ pub enum BaseConfidence {
     /// At least 8 pointer hits and three times the runner-up's, or an independent method (vector table, hint)
     /// that agrees with at least 4 hits and twice the runner-up's.
     Strong,
-    /// At least 3 pointer hits and twice the runner-up's, or an independent method with at least the runner-up's.
+    /// At least 3 pointer hits and twice the runner-up's, an independent method with at least the runner-up's,
+    /// or at least 8 literal constants inside and twice the runner-up's score; never without a pointer hit, and
+    /// never for a span that crosses 0x20000000.
     Plausible,
     Weak,
 }
@@ -92,6 +95,14 @@ pub struct BaseHint {
     pub base_address: u64,
     /// Where the hint came from, e.g. "container record words at 0x2028 and 0x2038".
     pub source: String,
+}
+
+/// A hint that is not a candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RejectedHint {
+    #[serde(flatten)]
+    pub hint: BaseHint,
+    pub reason: &'static str,
 }
 
 /// What supports one base. Pointer counts are distinct word values.
@@ -109,6 +120,9 @@ pub struct BaseEvidence {
     pub reset_constants_inside: usize,
     /// Of those, odd ones that land on a prologue: startup code's call and jump targets.
     pub reset_code_pointers: usize,
+    /// Reset-code pointers not already counted in `function_pointers` (built by `movw`/`movt`, not image words).
+    #[serde(skip)]
+    reset_only_pointers: usize,
     /// The vector table at offset 0 fits the image from this base.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub vector_table: bool,
@@ -120,12 +134,13 @@ pub struct BaseEvidence {
 impl BaseEvidence {
     /// Pointer hits: the vote's own measure.
     pub fn hits(&self) -> usize {
-        self.function_pointers + self.string_pointers + self.reset_code_pointers
+        self.function_pointers + self.string_pointers + self.reset_only_pointers
     }
 
-    /// Function and reset-code pointers: the hits least likely by chance, since prologues are sparse.
+    /// Function and reset-code pointers, each counted once: the hits least likely by chance, since prologues are
+    /// sparse.
     fn code_hits(&self) -> usize {
-        self.function_pointers + self.reset_code_pointers
+        self.function_pointers + self.reset_only_pointers
     }
 
     /// Literal constants count half in SRAM, where most of them are the addresses of variables.
@@ -133,7 +148,7 @@ impl BaseEvidence {
         let literals = self.literal_pointers_inside as u64;
         4 * self.function_pointers as u64
             + 2 * self.string_pointers as u64
-            + 4 * self.reset_code_pointers as u64
+            + 4 * self.reset_only_pointers as u64
             + if (0x2000_0000..0x4000_0000).contains(&base) { literals / 2 } else { literals }
             + if self.vector_table { 32 } else { 0 }
             + if self.hints.is_empty() { 0 } else { 16 }
@@ -151,7 +166,7 @@ pub struct BaseCandidate {
     pub base_address: u64,
     /// The largest of 1 MiB, 64 KiB, 4 KiB or 4 bytes that divides the base.
     pub alignment: u64,
-    /// 4 per function pointer and per reset-code pointer, 2 per string pointer, 1 per literal constant inside,
+    /// 4 per function pointer and per reset-code pointer not among them, 2 per string pointer, 1 per literal constant inside,
     /// 32 for a fitting vector table, 16 for a hint.
     pub score: u64,
     pub confidence: BaseConfidence,
@@ -183,6 +198,9 @@ pub struct BaseCandidates {
     pub reset_constants: usize,
     /// Distinct literal-pool constants of at least 0x10000 loaded anywhere in the image (decoded linearly).
     pub literal_constants: usize,
+    /// Hints that are not candidates, and why.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rejected_hints: Vec<RejectedHint>,
     pub note: &'static str,
 }
 
@@ -416,6 +434,7 @@ impl Scan {
                 reset_code_offset: reset_offset,
                 reset_constants: 0,
                 literal_constants: 0,
+                rejected_hints: Vec::new(),
                 note: NOTE,
             },
         };
@@ -442,49 +461,62 @@ impl Scan {
         };
         let functions = buckets(functions);
         let strings = buckets(strings);
+        // Each pairing of a word with a target is one vote entry; a pairing with a prologue weighs 2.
+        let pairings = |word: u32| {
+            let low = (word & 0xfff) as usize;
+            let code: &[u32] = if word & 1 == 1 { &functions[low & !1] } else { &[] };
+            (code, &strings[low][..])
+        };
         let cost: usize = self
             .words
             .iter()
             .map(|&word| {
-                let low = (word & 0xfff) as usize;
-                strings[low].len() + if word & 1 == 1 { functions[low & !1].len() } else { 0 }
+                let (code, text) = pairings(word);
+                code.len() + text.len()
             })
             .sum();
+        // Sampled by cost: of every `step` consecutive pairings (counted over all words in order) one is cast, so a
+        // few words with huge buckets cannot take the whole budget; the cap is also a hard stop.
         let step = cost.div_ceil(MAX_VOTES).max(1);
-        // Votes are bases shifted right by 12, weighted like the score: function hits twice string hits.
-        let mut votes: Vec<u32> = Vec::with_capacity(cost.min(MAX_VOTES * 2));
-        for &word in self.words.iter().step_by(step) {
-            let low = (word & 0xfff) as usize;
-            if word & 1 == 1 {
-                let target = word & !1;
-                for &start in &functions[low & !1] {
-                    if let Some(base) = target.checked_sub(start) {
-                        votes.extend([base >> VOTE_ALIGNMENT_BITS; 2]);
+        let mut votes: Vec<u32> = Vec::with_capacity(cost.min(MAX_VOTES));
+        let mut seen = 0usize;
+        let mut capped = false;
+        'words: for &word in &self.words {
+            let (code, text) = pairings(word);
+            for (targets, value, function) in [(code, word & !1, 1u32), (text, word, 0)] {
+                let first = (step - seen % step) % step;
+                for &start in targets.iter().skip(first).step_by(step) {
+                    if votes.len() >= MAX_VOTES {
+                        capped = true;
+                        break 'words;
+                    }
+                    if let Some(base) = value.checked_sub(start) {
+                        votes.push((base >> VOTE_ALIGNMENT_BITS) << 1 | function);
                     }
                 }
-            }
-            for &start in &strings[low] {
-                if let Some(base) = word.checked_sub(start) {
-                    votes.push(base >> VOTE_ALIGNMENT_BITS);
-                }
+                seen += targets.len();
             }
         }
         let cast = votes.len();
         votes.sort_unstable();
-        let mut counted: Vec<(usize, u32)> = Vec::new();
-        for run in votes.chunk_by(|left, right| left == right) {
-            counted.push((run.len(), run[0]));
+        // The SHORTLIST bases with the most weight, kept without materialising every distinct base: most weight
+        // first, lower base on ties, so the result is deterministic.
+        let mut best: Vec<(usize, u32)> = Vec::with_capacity(SHORTLIST + 1);
+        for run in votes.chunk_by(|left, right| left >> 1 == right >> 1) {
+            let weight: usize = run.iter().map(|&vote| 1 + (vote & 1) as usize).sum();
+            let base = run[0] >> 1;
+            if weight < 2 || !self.fits(u64::from(base) << VOTE_ALIGNMENT_BITS) {
+                continue;
+            }
+            if best.len() == SHORTLIST && best.last().is_some_and(|&(last, _)| last >= weight) {
+                continue;
+            }
+            let at = best.partition_point(|&(other, _)| other >= weight);
+            best.insert(at, (weight, base));
+            best.truncate(SHORTLIST);
         }
-        // Most votes first, lower base on ties: deterministic.
-        counted.sort_unstable_by(|left, right| right.0.cmp(&left.0).then(left.1.cmp(&right.1)));
-        let shortlist = counted
-            .iter()
-            .take(SHORTLIST)
-            .filter(|(count, _)| *count >= 2)
-            .map(|&(_, base)| u64::from(base) << VOTE_ALIGNMENT_BITS)
-            .filter(|&base| self.fits(base))
-            .collect();
-        (shortlist, cast, step > 1)
+        let shortlist = best.iter().map(|&(_, base)| u64::from(base) << VOTE_ALIGNMENT_BITS).collect();
+        (shortlist, cast, step > 1 || capped)
     }
 
     /// The 4 KiB-aligned bases that place the most literal constants inside the image: each constant `c` admits
@@ -528,6 +560,11 @@ impl Scan {
             .collect()
     }
 
+    /// Whether the image would span the start of SRAM, 0x20000000, from `base`.
+    fn crosses_sram(&self, base: u64) -> bool {
+        base < 0x2000_0000 && base + self.length > 0x2000_0000
+    }
+
     /// Whether the image fits from `base` inside memory a Cortex-M executes from.
     fn fits(&self, base: u64) -> bool {
         base.checked_add(self.length).is_some_and(|end| executable(base, end))
@@ -564,6 +601,9 @@ impl Scan {
                 evidence.reset_constants_inside += 1;
                 if constant & 1 == 1 && on_function(constant) {
                     evidence.reset_code_pointers += 1;
+                    if self.words.binary_search(&constant).is_err() {
+                        evidence.reset_only_pointers += 1;
+                    }
                 }
             }
         }
@@ -618,7 +658,14 @@ impl Scan {
                 evidence,
             });
         }
-        ranked.sort_by(|left, right| right.score.cmp(&left.score).then(left.base_address.cmp(&right.base_address)));
+        // A span that crosses from the code region into SRAM at 0x20000000 is no flash or RAM image: usually
+        // pointers to code copied to RAM, displaced. Such candidates rank after the others and stay weak.
+        ranked.sort_by(|left, right| {
+            self.crosses_sram(left.base_address)
+                .cmp(&self.crosses_sram(right.base_address))
+                .then(right.score.cmp(&left.score))
+                .then(left.base_address.cmp(&right.base_address))
+        });
         // A base a little off the best one still covers most of its pointers and literals: drop such shadows, whose
         // prologue hits collapse, unless a hint names them.
         let mut kept: Vec<BaseCandidate> = Vec::new();
@@ -639,7 +686,8 @@ impl Scan {
         let runner_up = others().map(|candidate| candidate.evidence.hits()).max().unwrap_or(0);
         let runner_up_code = others().map(|candidate| candidate.evidence.code_hits()).max().unwrap_or(0);
         let runner_up_score = ranked.get(1).map_or(0, |candidate| candidate.score);
-        if let Some(first) = ranked.first_mut() {
+        let first_crosses = ranked.first().is_some_and(|first| self.crosses_sram(first.base_address));
+        if let Some(first) = ranked.first_mut().filter(|first| first.evidence.hits() > 0 && !first_crosses) {
             let hits = first.evidence.hits();
             let code = first.evidence.code_hits();
             first.confidence = if (hits >= 8 && hits >= 3 * runner_up)
@@ -694,6 +742,22 @@ pub fn base_candidates(bytes: &[u8], entry_offset: Option<u64>, hints: &[BaseHin
     let shortlist = scan.candidates.candidates.iter().map(|candidate| candidate.base_address).collect();
     let mut candidates = scan.candidates.clone();
     candidates.candidates = scan.rank(shortlist, hints);
+    candidates.rejected_hints = hints
+        .iter()
+        .enumerate()
+        .filter_map(|(index, hint)| {
+            let reason = if index >= MAX_HINTS {
+                "more than eight hints"
+            } else if !scan.fits(hint.base_address) {
+                "the image would not lie in memory a Cortex-M executes from (code region, SRAM or external RAM)"
+            } else if !candidates.candidates.iter().any(|candidate| candidate.base_address == hint.base_address) {
+                "ranked below the five candidates listed"
+            } else {
+                return None;
+            };
+            Some(RejectedHint { hint: hint.clone(), reason })
+        })
+        .collect();
     candidates
 }
 
@@ -716,7 +780,8 @@ pub enum BaseVerdict {
 pub struct BadFetchCheck {
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub target: u64,
-    /// The best-ranked candidate under which the target lies inside the image, when one does.
+    /// The best-ranked candidate under which the target is a function start, when that candidate is `strong` or
+    /// `plausible`, has more pointer hits than the asserted base and is not a startup copy's displacement.
     #[serde(serialize_with = "rampage_arch::hex::optional_address", skip_serializing_if = "Option::is_none")]
     pub candidate_base: Option<u64>,
 }
@@ -742,6 +807,10 @@ pub struct BaseCheck {
     pub bad_fetch: Option<BadFetchCheck>,
     /// Every candidate, best first.
     pub candidates: Vec<BaseCandidate>,
+    /// Why a base with more pointer hits is not taken as better (a fitting vector table, a copy displacement), or
+    /// why a fetch outside every region names no base.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     /// What to do, when the base looks wrong.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
@@ -768,26 +837,68 @@ pub fn check_base(
     let best_hits = candidates.iter().map(|candidate| candidate.evidence.hits()).max().unwrap_or(0).max(hits);
     let pointer_share = if best_hits == 0 { 0.0 } else { (hits as f64 / best_hits as f64 * 1000.0).round() / 1000.0 };
 
+    // Code copied to a run address votes for the base that maps its run addresses onto the image: copy
+    // displacements are not the image's base.
+    let displacements: Vec<u64> = scatter
+        .map(|scatter| {
+            scatter
+                .copies
+                .iter()
+                .filter(|copy| copy.kind == crate::raw_scatter::CopyKind::Copy)
+                .filter_map(|copy| copy.destination.checked_sub(copy.source?.checked_sub(base)?))
+                .collect()
+        })
+        .unwrap_or_default();
+    let displacement = |candidate: u64| displacements.iter().any(|&shift| candidate.abs_diff(shift) < 0x1000);
+    let on_prologue = |candidate: u64, target: u64| {
+        target
+            .checked_sub(candidate)
+            .is_some_and(|offset| offset < scan.length && bit(&scan.function_starts, offset / 2))
+    };
+
     let bad_fetch = scatter
         .filter(|scatter| scatter.stop == crate::raw_scatter::FollowStop::BadFetch && !in_regions(scatter.stopped_at))
         .map(|scatter| {
             let target = scatter.stopped_at;
-            let candidate_base = candidates.iter().map(|candidate| candidate.base_address).find(|&candidate| {
-                candidate != base && (candidate..candidate.saturating_add(scan.length)).contains(&target)
-            });
+            let candidate_base = candidates
+                .iter()
+                .find(|candidate| {
+                    candidate.base_address != base
+                        && candidate.confidence != BaseConfidence::Weak
+                        && candidate.evidence.hits() > hits
+                        && on_prologue(candidate.base_address, target)
+                        && !displacement(candidate.base_address)
+                })
+                .map(|candidate| candidate.base_address);
             BadFetchCheck { target, candidate_base }
         });
 
     let top = candidates.first();
     let mut better = None;
     let mut next = None;
-    let verdict = if let Some(fetch) = &bad_fetch
+    let mut note = None;
+    let top_beats = |top: &BaseCandidate| {
+        top.base_address != base && top.confidence != BaseConfidence::Weak && hits * 4 < top.evidence.hits()
+    };
+    let verdict = if evidence.vector_table {
+        let most =
+            candidates.iter().filter(|other| other.base_address != base).max_by_key(|other| other.evidence.hits());
+        if let Some(top) = most.filter(|top| top.evidence.hits() > hits) {
+            note = Some(format!(
+                "the vector table at offset 0 fits this base; candidate base {:#x} has more pointer hits ({} vs \
+                 {hits}), most likely the displacement of code copied to another run address",
+                top.base_address,
+                top.evidence.hits()
+            ));
+        }
+        BaseVerdict::Consistent
+    } else if let Some(fetch) = &bad_fetch
         && let Some(candidate_base) = fetch.candidate_base
     {
         let candidate = candidates.iter().find(|candidate| candidate.base_address == candidate_base).cloned();
         next = Some(format!(
             "The base looks wrong: following the reset code fetched an instruction at {:#x}, outside every mapped \
-             region, which lies inside the image under candidate base {candidate_base:#x}{}. Reopen with \
+             region, which is a function start in the image under candidate base {candidate_base:#x}{}. Reopen with \
              base_address {candidate_base:#x}.",
             fetch.target,
             candidate.as_ref().map_or_else(String::new, |candidate| format!(
@@ -797,11 +908,14 @@ pub fn check_base(
         ));
         better = candidate;
         BaseVerdict::LooksWrong
-    } else if let Some(top) = top
-        && top.base_address != base
-        && top.confidence != BaseConfidence::Weak
-        && hits * 4 < top.evidence.hits()
-    {
+    } else if let Some(fetch) = &bad_fetch {
+        note = Some(format!(
+            "following the reset code fetched an instruction at {:#x}, outside every mapped region, and no candidate \
+             base with evidence places a function start there: a jump into another image, or a region not mapped",
+            fetch.target
+        ));
+        BaseVerdict::Unknown
+    } else if let Some(top) = top.filter(|top| top_beats(top) && !displacement(top.base_address)) {
         next = Some(format!(
             "The base looks wrong: under {base:#x}, {hits} words point at function or string starts in the image; \
              under candidate base {:#x}, {} do ({} function pointers, {} string pointers{}). Reopen with \
@@ -815,13 +929,22 @@ pub fn check_base(
         ));
         better = Some(top.clone());
         BaseVerdict::LooksWrong
-    } else if (hits >= 3 && hits * 4 >= best_hits * 3)
-        || evidence.vector_table
-        || top.is_some_and(|top| top.base_address == base && top.confidence != BaseConfidence::Weak)
-    {
-        BaseVerdict::Consistent
     } else {
-        BaseVerdict::Unknown
+        if let Some(top) = top.filter(|top| top_beats(top)) {
+            note = Some(format!(
+                "candidate base {:#x} has more pointer hits ({} vs {hits}) but is the displacement of a startup copy \
+                 (raw.scatter_load), not the image's base",
+                top.base_address,
+                top.evidence.hits()
+            ));
+        }
+        if (hits >= 3 && hits * 4 >= best_hits * 3)
+            || top.is_some_and(|top| top.base_address == base && top.confidence != BaseConfidence::Weak)
+        {
+            BaseVerdict::Consistent
+        } else {
+            BaseVerdict::Unknown
+        }
     };
     BaseCheck {
         base_address: base,
@@ -833,6 +956,7 @@ pub fn check_base(
         better_candidate: better,
         bad_fetch,
         candidates,
+        note,
         next,
     }
 }
@@ -917,10 +1041,152 @@ mod tests {
         for bytes in [vec![0xff; 1 << 20], random, [0x01, 0xb5, 0x01, 0xb5].repeat(1 << 18), Vec::new()] {
             let found = base_candidates(&bytes, None, &[]);
             assert!(found.strong().is_none(), "{:#?}", found.candidates.first());
-            assert!(found.votes <= MAX_VOTES * 2);
+            assert!(found.votes <= MAX_VOTES);
         }
         // Distinct odd words that are all push prologues: the most votes per word. The work stays bounded.
         let found = base_candidates(&pushes, None, &[]);
-        assert!(found.votes <= MAX_VOTES * 2 && found.votes_sampled, "{}", found.votes);
+        assert!(found.votes <= MAX_VOTES && found.votes_sampled, "{}", found.votes);
+    }
+
+    fn put(bytes: &mut [u8], at: usize, word: u32) {
+        bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
+    }
+
+    /// A 64 KiB flash image at 0x08000000: 3 flash pointers to prologues, and 20 functions copied from flash
+    /// offset 0x1000 that pointers name by their run addresses at `run`. With `vector_table`, a valid table at
+    /// offset 0.
+    fn copied_image(run: u32, vector_table: bool) -> Vec<u8> {
+        let mut bytes = vec![0u8; 0x1_0000];
+        for index in 0..23 {
+            let at = 0x1000 + index * 0x40;
+            bytes[at..at + 4].copy_from_slice(&[0x80, 0xb5, 0x80, 0xbd]);
+        }
+        for index in 0..20 {
+            put(&mut bytes, 0x8000 + index * 4, run + (index * 0x40) as u32 + 1);
+        }
+        for index in 0..3 {
+            put(&mut bytes, 0x9000 + index * 4, 0x0800_1000 + ((20 + index) * 0x40) as u32 + 1);
+        }
+        if vector_table {
+            put(&mut bytes, 0, 0x2001_0000);
+            for index in 1..4 {
+                put(&mut bytes, index * 4, 0x0800_1501);
+            }
+        }
+        bytes
+    }
+
+    fn scatter(
+        copies: Vec<crate::raw_scatter::ScatterCopy>,
+        stop: crate::raw_scatter::FollowStop,
+        at: u64,
+    ) -> crate::raw_scatter::ScatterLoad {
+        crate::raw_scatter::ScatterLoad {
+            entry: 0,
+            steps: 1,
+            stop,
+            stopped_at: at,
+            continues_at: None,
+            copies,
+            copies_not_listed: 0,
+            skipped_calls: Vec::new(),
+            skipped_calls_not_listed: 0,
+            vtor_stores: Vec::new(),
+            vtor_stores_not_listed: 0,
+            last_vtor_store: None,
+            after_jump: None,
+            vector_table: None,
+            vector_table_refused: None,
+            note: "",
+        }
+    }
+
+    fn copy(destination: u64, source: u64, length: u64) -> crate::raw_scatter::ScatterCopy {
+        crate::raw_scatter::ScatterCopy {
+            kind: crate::raw_scatter::CopyKind::Copy,
+            destination,
+            length,
+            source: Some(source),
+            source_region: None,
+            source_offset: None,
+            stores: 2,
+            store_sites: Vec::new(),
+            call_site: None,
+            routine: None,
+            executed: true,
+            written_after_jump: false,
+            status: crate::raw_scatter::CopyStatus::Mapped,
+            region: None,
+            not_mapped_reason: None,
+        }
+    }
+
+    /// Most pointers name code copied to RAM: the displaced base spans 0x20000000 and stays weak, and a fitting
+    /// vector table keeps the asserted base consistent with a note.
+    #[test]
+    fn pointers_to_a_ram_copy_do_not_overrule_a_fitting_vector_table() {
+        let bytes = copied_image(0x2000_0000, true);
+        let flash = 0x0800_0000..0x0801_0000;
+        let check = check_base(&bytes, 0x0800_0000, None, std::slice::from_ref(&flash), None);
+        assert_eq!(check.verdict, BaseVerdict::Consistent, "{check:#?}");
+        assert!(check.next.is_none() && check.better_candidate.is_none());
+        assert!(check.note.as_deref().unwrap().contains("vector table"), "{:?}", check.note);
+        let displaced = check.candidates.iter().find(|candidate| candidate.base_address == 0x1fff_f000).unwrap();
+        assert_eq!(displaced.confidence, BaseConfidence::Weak);
+        assert_eq!(check.candidates[0].base_address, 0x0800_0000, "{:#?}", check.candidates);
+    }
+
+    /// Without a vector table, a startup copy's displacement is not called the better base.
+    #[test]
+    fn a_copy_displacement_is_not_the_better_base() {
+        let bytes = copied_image(0x1000_0000, false);
+        let flash = 0x0800_0000..0x0801_0000;
+        let alone = check_base(&bytes, 0x0800_0000, None, std::slice::from_ref(&flash), None);
+        assert_eq!(alone.verdict, BaseVerdict::LooksWrong, "{alone:#?}");
+        assert_eq!(alone.better_candidate.unwrap().base_address, 0x0fff_f000);
+        let copies = scatter(
+            vec![copy(0x1000_0000, 0x0800_1000, 0x500)],
+            crate::raw_scatter::FollowStop::JumpedIntoCopiedCode,
+            0x1000_0000,
+        );
+        let check = check_base(&bytes, 0x0800_0000, None, &[flash, 0x1000_0000..0x1000_0500], Some(&copies));
+        assert_ne!(check.verdict, BaseVerdict::LooksWrong, "{check:#?}");
+        assert!(check.next.is_none());
+        assert!(check.note.as_deref().unwrap().contains("displacement"), "{:?}", check.note);
+    }
+
+    /// A bootloader jumping to an application outside its image: the fetch is reported, no base is named.
+    #[test]
+    fn a_bad_fetch_no_candidate_explains_names_no_base() {
+        let bytes = image(0x0800_0000, 12);
+        let flash = 0x0800_0000..0x0800_4000;
+        let fetch = scatter(Vec::new(), crate::raw_scatter::FollowStop::BadFetch, 0x0801_0000);
+        let check = check_base(&bytes, 0x0800_0000, None, std::slice::from_ref(&flash), Some(&fetch));
+        assert_eq!(check.verdict, BaseVerdict::Unknown, "{check:#?}");
+        assert_eq!(check.bad_fetch.as_ref().unwrap().candidate_base, None);
+        assert!(check.next.is_none() && check.better_candidate.is_none());
+        // A weak candidate covering the target, or one where it is no function start, is not enough either.
+        let fetch = scatter(Vec::new(), crate::raw_scatter::FollowStop::BadFetch, 0x0800_0102);
+        let check =
+            check_base(&bytes, 0x0100_0000, None, std::slice::from_ref(&(0x0100_0000..0x0100_4000)), Some(&fetch));
+        assert_eq!(check.bad_fetch.as_ref().unwrap().candidate_base, None);
+        assert_eq!(check.verdict, BaseVerdict::Unknown, "{check:#?}");
+        // On a prologue under a plausible candidate with more hits: named.
+        let fetch = scatter(Vec::new(), crate::raw_scatter::FollowStop::BadFetch, 0x0800_0100);
+        let check =
+            check_base(&bytes, 0x0100_0000, None, std::slice::from_ref(&(0x0100_0000..0x0100_4000)), Some(&fetch));
+        assert_eq!(check.bad_fetch.as_ref().unwrap().candidate_base, Some(0x0800_0000));
+        assert_eq!(check.verdict, BaseVerdict::LooksWrong);
+    }
+
+    #[test]
+    fn hints_outside_executable_memory_are_listed_as_rejected() {
+        let bytes = image(0x0800_0000, 12);
+        let hint = BaseHint { base_address: 0x4000_0000, source: "peripheral".into() };
+        let found = base_candidates(&bytes, None, std::slice::from_ref(&hint));
+        assert!(found.candidates.iter().all(|candidate| candidate.base_address != 0x4000_0000));
+        assert_eq!(found.rejected_hints.len(), 1);
+        assert_eq!(found.rejected_hints[0].hint, hint);
+        assert!(found.rejected_hints[0].reason.contains("executes"));
     }
 }

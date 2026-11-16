@@ -1196,6 +1196,8 @@
     "source_range_sha256",
     "source_size",
     "sweep",
+    "sweep.base_candidate_ms",
+    "sweep.base_candidate_scans",
     "sweep.families",
     "sweep.full_decodes",
     "sweep.lzss_space",

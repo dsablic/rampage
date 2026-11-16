@@ -94,10 +94,11 @@ Raw-capable tools, it maps the decoded output as the project's code region
 
 The result also carries `base_candidates`, ranked load addresses for the decoded bytes as Cortex-M code with their
 evidence ([details](mcp.md#load-address-candidates-and-base_check)), and `next` names one when it is clearly the
-strongest. When little-endian words within 64 bytes before the range hold its compressed length and decoded size,
-`container_record` lists that record's words with inferred roles: `compressed_length`, `decoded_size`,
-`payload_offset`, `byte_sum32` or `crc32` of the compressed bytes (with `checksum_over`), `address` (nonzero and
-4 KiB aligned) or `unknown`. Address words are grouped as `base_hints` with their field offsets, and
+strongest. When little-endian words within 64 bytes before the range hold its compressed length and decoded size
+(two different words, each value at least 16), `container_record` lists that record's words with inferred roles:
+`compressed_length`, `decoded_size`, `payload_offset`, `byte_sum32` or `crc32` of the compressed bytes (with
+`checksum_over`), `address` (4 KiB aligned, above the decoded size and not a power of two up to 8 MiB, which are
+sizes and flags more often) or `unknown`. Address words are grouped as `base_hints` with their field offsets, and
 `base_candidates` validates them against the decoded bytes. Roles are inferred from values, never from a fixed
 layout.
 

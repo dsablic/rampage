@@ -111,6 +111,9 @@ pub struct ProbeCandidate {
     /// only when it is clearly strongest.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_candidates: Option<Vec<rampage_loaders::raw_base::BaseCandidate>>,
+    /// Record base_hints that are not base candidates, and why.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rejected_base_hints: Vec<rampage_loaders::raw_base::RejectedHint>,
     pub output_size: usize,
     pub output_sha256: String,
     pub input_consumed: usize,
@@ -153,6 +156,12 @@ pub struct ProbeSweep {
     /// `work_budget`, `cancelled` (the deadline) or absent when everything in the space was tried.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stopped_early: Option<&'static str>,
+    /// Base-candidate scans of decoded bytes and the time they took. They run after reproduction, within its
+    /// 10-second deadline: candidates reached after it get none (`base_candidate_scans_skipped`).
+    pub base_candidate_scans: usize,
+    pub base_candidate_ms: u64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub base_candidate_scans_skipped: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -177,6 +186,10 @@ pub struct ProbeCompressionReport {
     pub sweep: ProbeSweep,
     pub not_tried: Vec<&'static str>,
     pub limitations: Vec<&'static str>,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 fn invalid(message: &str) -> ApiError {
@@ -231,11 +244,17 @@ pub const OPEN_AS_RAW_NEXT: &str = "To analyse the decoded bytes as code, add pr
 const MAX_BASE_PROBED: usize = 3;
 
 /// The line naming a base to open decoded bytes at, when the first base candidate is clearly strongest: `strong`,
-/// or `plausible` with a container record's hint agreeing with the pointer vote.
+/// or `plausible` with a container record's hint agreeing with a pointer vote of at least 3 hits, more than any
+/// other candidate's. (A candidate whose span crosses 0x20000000 is never more than `weak`.)
 pub fn base_next(candidates: &[rampage_loaders::raw_base::BaseCandidate]) -> Option<String> {
     use rampage_loaders::raw_base::{BaseConfidence, BaseMethod};
     let first = candidates.first()?;
-    let agreed = first.methods.contains(&BaseMethod::Hint) && first.methods.contains(&BaseMethod::PointerVote);
+    let hits = first.evidence.hits();
+    let runner_up = candidates.iter().skip(1).map(|candidate| candidate.evidence.hits()).max().unwrap_or(0);
+    let agreed = first.methods.contains(&BaseMethod::Hint)
+        && first.methods.contains(&BaseMethod::PointerVote)
+        && hits >= 3
+        && hits > runner_up;
     let clear = first.confidence == BaseConfidence::Strong || (agreed && first.confidence == BaseConfidence::Plausible);
     if !clear {
         return None;
@@ -335,6 +354,7 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
     let window = crate::container_record::read_window(path, request.offset.0);
     // Reproductions share their own deadline, so a probe that used its whole deadline still checks candidates.
     let reproducing = Instant::now();
+    let (mut base_scans, mut base_scans_skipped, mut base_scan_time) = (0, 0, Duration::ZERO);
     let mut reproduce_cancelled = || reproducing.elapsed() >= REPRODUCE_TIMEOUT;
     let candidates = report
         .candidates
@@ -357,10 +377,21 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
                 )
             });
             let opens = decode_check == "reproduced" && open_as_raw(&decode_arguments).is_some();
-            let base_candidates = (opens && index < MAX_BASE_PROBED).then(|| {
-                let hints = container_record.as_ref().map_or_else(Vec::new, |record| record.hints());
-                rampage_loaders::raw_base::base_candidates(&decoded, None, &hints).candidates
-            });
+            let mut rejected_base_hints = Vec::new();
+            let mut base_candidates = None;
+            if opens && index < MAX_BASE_PROBED {
+                if reproducing.elapsed() >= REPRODUCE_TIMEOUT {
+                    base_scans_skipped += 1;
+                } else {
+                    let scanning = Instant::now();
+                    let hints = container_record.as_ref().map_or_else(Vec::new, |record| record.hints());
+                    let found = rampage_loaders::raw_base::base_candidates(&decoded, None, &hints);
+                    base_scan_time += scanning.elapsed();
+                    base_scans += 1;
+                    rejected_base_hints = found.rejected_hints;
+                    base_candidates = Some(found.candidates);
+                }
+            }
             ProbeCandidate {
                 rank: index + 1,
                 verdict: match candidate.verdict {
@@ -375,6 +406,7 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
                 decode_arguments,
                 container_record,
                 base_candidates,
+                rejected_base_hints,
                 output_size: candidate.output_size,
                 output_sha256: sha,
                 input_consumed: candidate.consumed,
@@ -444,6 +476,9 @@ pub fn probe_compression(path: &Path, request: &ProbeCompressionRequest) -> Resu
             steps: report.steps,
             max_steps: MAX_PROBE_STEPS,
             stopped_early: report.stopped_early,
+            base_candidate_scans: base_scans,
+            base_candidate_ms: base_scan_time.as_millis() as u64,
+            base_candidate_scans_skipped: base_scans_skipped,
         },
         not_tried: vec![
             "LZSS with references other than two bytes, literals other than one byte, flags other than 8-bit bytes, \

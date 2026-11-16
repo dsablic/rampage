@@ -710,7 +710,7 @@ also return `base_candidates`, and a Cortex-M Raw `binary_info` reports `raw.bas
 
 `base_candidates` ranks at most five load addresses for the bytes as Thumb code, best first. Each has `base_address`,
 `alignment` (1 MiB, 64 KiB, 4 KiB or 4), `score`, `confidence` (`strong`, `plausible` or `weak`; only the first can
-be more than `weak`), `methods` and `evidence`:
+be more than `weak`, and only with at least one pointer hit), `methods` and `evidence`:
 
 | Evidence | Counts |
 | --- | --- |
@@ -718,7 +718,7 @@ be more than `weak`), `methods` and `evidence`:
 | `string_pointers` | distinct words pointing at the start of a NUL-terminated run of at least four printable bytes |
 | `code_pointers_inside` | distinct odd words inside the image, prologue or not |
 | `literal_pointers_inside` | literal-pool and `movw`/`movt` constants of at least 0x10000 inside the image |
-| `reset_constants_inside`, `reset_code_pointers` | constants the first 4 KiB of code from the entry loads that land inside, and odd ones landing on prologues |
+| `reset_constants_inside`, `reset_code_pointers` | constants the first 4 KiB of code from the entry loads that land inside, and odd ones landing on prologues (in the score and hits only when no image word already counts them, as for `movw`/`movt` pairs) |
 | `vector_table` | a vector table at offset 0 (initial SP in RAM, odd handlers) fits the image from this base |
 | `hints` | the container record fields that name this base |
 
@@ -726,20 +726,33 @@ The pointer vote pairs aligned words with prologues and string starts at bases a
 target agree on `word - offset`), then counts hits exactly for the bases with the most votes. Only bases from
 which the image lies in memory a Cortex-M executes from (the code region, SRAM, external RAM) are candidates, and in
 SRAM literal constants count half. A base that is not 4 KiB aligned is found only from a vector table or a hint.
-Code the startup copies to another address votes for the base of its copy too, so a second candidate can be a
-copy's displacement. Work is bounded (1 Mi words read, 4 Mi votes) and memoized by the bytes' SHA-256: about 65 ms
-for 3.5 MiB in a release build. Candidates are suggestions; nothing is applied. When the first is `strong`, or
-`plausible` with a container record's hint agreeing with the pointer vote, `next` names it with the ready
+Code the startup copies to another address votes for the base of its copy too, so a candidate can be a copy's
+displacement; one whose image would span 0x20000000 (code copied to SRAM, seen from flash) ranks after the others
+and stays `weak`. Hints that are not candidates are listed in `rejected_base_hints` with the reason (outside
+executable memory, more than eight, or ranked below the five listed). Work is bounded: 1 Mi words read, and at
+most 4 Mi word-target pairings cast as votes (a pairing with a prologue weighs 2), sampled by cost over all
+pairings when there are more and stopped at the cap, so about 16 MiB of votes; scans are memoized by the bytes'
+SHA-256. A release build takes about 65 ms for 3.5 MiB and under 100 ms and 30 MiB of heap for any 4 MiB image in
+the hostile tests. `probe_compression`'s `sweep` reports `base_candidate_scans` and `base_candidate_ms`; scans run
+within its 10-second reproduction deadline, and candidates reached after it get none. Candidates are
+suggestions; nothing is applied. When the first is `strong`, or `plausible` with a container record's hint
+agreeing with a pointer vote of at least 3 hits, more than any other candidate's, `next` names it with the ready
 `profile` and `base_address` to add to `open_as_raw`.
 
 `raw.base_check` (Cortex-M, mapped from a byte range rather than records) judges the asserted base: `verdict`
 `consistent`, `looks_wrong` or `unknown`; `evidence` for the asserted base, counted like a candidate's;
 `pointer_share` (its pointer hits over the best candidate's); `reset_constants_in_regions` of `reset_constants`
 (constants of the reset code inside any mapped region); `candidates`; and, when the base looks wrong,
-`better_candidate` and a `next` line naming the base to reopen with, which `binary_info`'s own `next` repeats. It
-looks wrong when a `strong` or `plausible` candidate has more than four times its pointer hits, or when the
-scatter-load follow stopped with `bad_fetch` at an address outside every region that lies inside the image under
-another candidate (`bad_fetch.target` and `bad_fetch.candidate_base`).
+`better_candidate` and a `next` line naming the base to reopen with, which `binary_info`'s own `next` repeats;
+`note` explains a verdict that sets another base aside. It looks wrong when a `strong` or `plausible` candidate has
+more than four times its pointer hits, or when the scatter-load follow stopped with `bad_fetch` at an address
+outside every region that is a function start under a `strong` or `plausible` candidate with more pointer hits
+(`bad_fetch.target` and `bad_fetch.candidate_base`). Copy displacements are never the better base: startup code
+that copies functions to a run address makes pointers to the copies vote for `run - load offset`, so a candidate
+equal to a copy's displacement in `raw.scatter_load` (destination minus the source's offset in the image) is set
+aside with a `note`, and a vector table at offset 0 that fits the asserted base keeps it `consistent` whatever
+another base's pointer count. A `bad_fetch` that no such candidate explains (a bootloader jumping to an application
+outside its image, a region left unmapped) is reported with `candidate_base` absent and the verdict `unknown`.
 
 ## Edits and session state
 

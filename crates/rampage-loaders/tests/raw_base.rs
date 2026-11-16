@@ -1,10 +1,69 @@
 //! Load-address candidates for Raw Cortex-M images, checked against the fixtures' ELFs.
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use rampage_loaders::Binary;
-use rampage_loaders::raw_base::{BaseConfidence, BaseHint, BaseMethod, BaseVerdict, base_candidates, check_base};
+use rampage_loaders::raw_base::{
+    BaseConfidence, BaseHint, BaseMethod, BaseVerdict, MAX_VOTES, base_candidates, check_base,
+};
+
+/// Counts this thread's live heap bytes and their peak, so a test can bound what one call allocates. Thread-local:
+/// other tests' threads do not disturb it.
+struct Counting;
+
+thread_local! {
+    static LIVE: Cell<usize> = const { Cell::new(0) };
+    static PEAK: Cell<usize> = const { Cell::new(0) };
+}
+
+fn track(grow: usize, shrink: usize) {
+    let _ = LIVE.try_with(|live| {
+        let now = (live.get() + grow).saturating_sub(shrink);
+        live.set(now);
+        let _ = PEAK.try_with(|peak| peak.set(peak.get().max(now)));
+    });
+}
+
+// SAFETY: every call forwards to the system allocator unchanged; only thread-local counters are updated.
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: the caller upholds `alloc`'s contract, forwarded as is.
+        let pointer = unsafe { System.alloc(layout) };
+        if !pointer.is_null() {
+            track(layout.size(), 0);
+        }
+        pointer
+    }
+
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        track(0, layout.size());
+        // SAFETY: as for `alloc`.
+        unsafe { System.dealloc(pointer, layout) }
+    }
+
+    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        // SAFETY: as for `alloc`.
+        let moved = unsafe { System.realloc(pointer, layout, size) };
+        if !moved.is_null() {
+            track(size, layout.size());
+        }
+        moved
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Counting = Counting;
+
+/// Runs `call` and returns its result with the peak heap bytes it held on this thread above what was live before.
+fn peak_allocation<T>(call: impl FnOnce() -> T) -> (T, usize) {
+    let before = LIVE.with(Cell::get);
+    PEAK.with(|peak| peak.set(before));
+    let result = call();
+    (result, PEAK.with(Cell::get) - before)
+}
 
 const FIRMWARE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/");
 
@@ -110,9 +169,22 @@ fn xorshift(length: usize) -> Vec<u8> {
         .collect()
 }
 
-/// 4 MiB of erased flash, noise, one repeated word, and distinct odd words that are all `push {…, lr}` prologues
-/// (the most votes per word): bounded work, and no candidate is strong except where the words really do point at
-/// prologues.
+/// A crafted image against cost sampling: one `push {r7, lr}` at page offset 0x20 of every 4 KiB page (1024
+/// prologues in one vote bucket), and sorted words `(i << 12) | 0x21` at every 16th position (each pairing with all
+/// 1024) and `(i << 12) | 2` elsewhere (no pairing), so a word stride would sample exactly the expensive words.
+fn crafted_votes(length: usize) -> Vec<u8> {
+    let mut bytes: Vec<u8> = (0..length as u32 / 4)
+        .flat_map(|index| ((index << 12) | if index % 16 == 0 { 0x21 } else { 2 }).to_le_bytes())
+        .collect();
+    for page in (0..length).step_by(0x1000) {
+        bytes[page + 0x20..page + 0x22].copy_from_slice(&[0x80, 0xb5]);
+    }
+    bytes
+}
+
+/// 4 MiB of erased flash, noise, one repeated word, distinct odd words that are all `push {…, lr}` prologues (the
+/// most votes per word), and the crafted cost-sampling image: bounded votes, time and memory, and no candidate is
+/// strong except where the words really do point at prologues.
 #[test]
 fn hostile_images_stay_bounded_and_give_no_strong_candidate() {
     const LENGTH: usize = 4 << 20;
@@ -123,13 +195,16 @@ fn hostile_images_stay_bounded_and_give_no_strong_candidate() {
         ("random", xorshift(LENGTH), false),
         ("one word", [0x01, 0xb5, 0x01, 0xb5].repeat(LENGTH / 4), false),
         ("prologue words", pushes, true),
+        ("crafted buckets", crafted_votes(LENGTH), true),
     ];
     for (name, bytes, structured) in cases {
         let start = Instant::now();
-        let found = base_candidates(&bytes, None, &[]);
+        let (found, peak) = peak_allocation(|| base_candidates(&bytes, None, &[]));
         let took = start.elapsed();
         assert!(took < budget, "{name}: {took:?}");
-        assert!(found.votes <= 1 << 23, "{name}: {}", found.votes);
+        assert!(found.votes <= MAX_VOTES, "{name}: {}", found.votes);
+        // Words, bitmaps, the capped votes (4 bytes each) and the memoized scan, for a 4 MiB image.
+        assert!(peak < 48 << 20, "{name}: {} MiB", peak >> 20);
         if !structured {
             assert!(found.strong().is_none(), "{name}: {:#?}", found.candidates.first());
         }

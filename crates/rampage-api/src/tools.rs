@@ -653,7 +653,12 @@ pub fn file_tools() -> Vec<FileTool> {
                     value["container_record"] = serde_json::to_value(record).map_err(|error| error.to_string())?;
                 }
                 if let Some(selector) = crate::open_as_raw(&source.arguments(&request)) {
-                    let bases = rampage_loaders::raw_base::base_candidates(decoded.bytes(), None, &hints).candidates;
+                    let found = rampage_loaders::raw_base::base_candidates(decoded.bytes(), None, &hints);
+                    let bases = found.candidates;
+                    if !found.rejected_hints.is_empty() {
+                        value["rejected_base_hints"] =
+                            serde_json::to_value(found.rejected_hints).map_err(|error| error.to_string())?;
+                    }
                     let next = crate::compression_probe::base_next(&bases).map_or_else(
                         || crate::OPEN_AS_RAW_NEXT.to_owned(),
                         |base| format!("{} {base}", crate::OPEN_AS_RAW_NEXT),
