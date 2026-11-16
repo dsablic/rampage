@@ -4,7 +4,7 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
-## Unreleased
+## 1.6.0 (2026-11-16)
 
 - `integrity_checks` on Raw firmware: on Cortex-M, a CRC polynomial literal that no discovered code references is
   followed to the `ldr` that loads it, and the routine around it is listed with `inferred_range`. On a Raw project

@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "armgen"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -4680,7 +4680,7 @@ checksum = "dc33ff2d4973d518d823d61aa239014831e521c75da58e3df4840d3f47749d09"
 
 [[package]]
 name = "rampage-agent"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "rampage-api",
  "rampage-loaders",
@@ -4690,7 +4690,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-analysis"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "cpp_demangle 0.5.1",
  "md-5 0.11.0",
@@ -4706,7 +4706,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-api"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "flate2",
  "idna",
@@ -4742,7 +4742,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-arch"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "capstone",
  "iced-x86",
@@ -4753,7 +4753,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-capabilities"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "serde",
  "serde_yaml_ng",
@@ -4761,7 +4761,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-cli"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -4780,14 +4780,14 @@ dependencies = [
 
 [[package]]
 name = "rampage-componentize"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "wit-component 0.248.0",
 ]
 
 [[package]]
 name = "rampage-constants"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "rampage-arch",
  "rampage-loaders",
@@ -4798,7 +4798,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-debug"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "quick-xml 0.42.0",
  "rampage-debug",
@@ -4809,11 +4809,11 @@ dependencies = [
 
 [[package]]
 name = "rampage-decode"
-version = "1.5.0"
+version = "1.6.0"
 
 [[package]]
 name = "rampage-decompiler"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "cc",
  "libc",
@@ -4824,7 +4824,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-detect"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "aho-corasick",
  "rampage-loaders",
@@ -4835,7 +4835,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-eval"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -4860,7 +4860,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-loaders"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "flate2",
  "gimli 0.34.0",
@@ -4880,7 +4880,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-mcp"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "rampage-api",
  "rampage-arch",
@@ -4894,7 +4894,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-plugin"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "rampage-decompiler",
  "rampage-plugin-contract",
@@ -4914,7 +4914,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-plugin-worker"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "rampage-decompiler",
  "rampage-plugin",
@@ -4922,7 +4922,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-signatures"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "flate2",
  "iced-x86",
@@ -4937,7 +4937,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-ui"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "clap",
  "eframe",
@@ -4955,7 +4955,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-unpack"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "backhand",
  "bzip2-rs",
@@ -4973,7 +4973,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-worker"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "rampage-api",
  "rampage-decompiler",
@@ -4984,7 +4984,7 @@ dependencies = [
 
 [[package]]
 name = "rampage-yara"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "rampage-loaders",
  "serde",
