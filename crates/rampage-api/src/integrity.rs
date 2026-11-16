@@ -19,8 +19,11 @@ use crate::evaluate::{EvaluateArgument, EvaluateRequest, IntegerText, MemoryWrit
 use crate::{ApiError, PatchReceipt, Project, XrefQuery};
 
 mod algorithms;
+mod container;
 #[cfg(test)]
 mod tests;
+
+pub use container::ContainerStream;
 
 pub use algorithms::{ALL as ALGORITHMS, Algorithm};
 
@@ -113,6 +116,10 @@ pub struct RoutineRow {
     pub evidence: Vec<String>,
     #[serde(serialize_with = "rampage_arch::hex::addresses")]
     pub callers: Vec<u64>,
+    /// A Raw Thumb routine discovery did not find, located from the code that loads its polynomial literal: the
+    /// range from its `push {..., lr}` prologue to its first return.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inferred_range: Option<CoveredRange>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -187,6 +194,13 @@ pub struct IntegrityReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receipt: Option<PatchReceipt>,
     pub notes: Vec<String>,
+    /// A Raw project mapped from a container file: the compressed streams its records describe, each record's
+    /// checksum a check in `checks`, with the decoded image's `raw` selector.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub container_streams: Vec<ContainerStream>,
+    /// What to run next: for a container, integrity_checks on the decoded image's functions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 /// The report, the effective project after any fix, and the annotation transition a fix made.
@@ -440,6 +454,8 @@ const POLYNOMIALS: [(u32, &str); 4] = [
 
 struct Routine {
     address: u64,
+    /// Set for a routine inferred from a literal load outside every discovered function.
+    inferred_end: Option<u64>,
     name: Option<String>,
     families: BTreeSet<&'static str>,
     evidence: Vec<String>,
@@ -629,14 +645,41 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
         }
     }
     sites.extend(narrow.into_iter().take(16));
+    // A Raw Cortex-M routine discovery did not reach (called only through code it did not find) still loads its
+    // polynomial with a PC-relative `ldr`: find those loads and the routine around them.
+    let raw_thumb = project.binary.raw_code_image().is_some() && project.binary.m_profile();
+    let mut inferred: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
+    if raw_thumb {
+        for (slot, family, what) in anchors.iter().filter(|(_, _, what)| what.starts_with("polynomial")) {
+            let referenced =
+                project.xrefs(XrefQuery::To(*slot), None, Some(1)).is_ok_and(|page| !page.items.is_empty());
+            if referenced {
+                continue;
+            }
+            for site in thumb_literal_loads(blocks, *slot) {
+                if matches!(project.function_containing(site), Ok(Some(_))) {
+                    continue;
+                }
+                if let Some(range) = thumb_routine_around(blocks, site) {
+                    inferred.insert(site, range);
+                    sites.push((site, family, format!("{what}, loaded by `ldr` outside every discovered function")));
+                }
+            }
+        }
+    }
     let mut routines: BTreeMap<u64, Routine> = BTreeMap::new();
     for (site, family, what) in sites {
-        let Ok(Some(function)) = project.function_containing(site) else { continue };
+        let (function, inferred_end) = match (project.function_containing(site), inferred.get(&site)) {
+            (Ok(Some(function)), _) => (function, None),
+            (_, Some(&(start, end))) => (start, Some(end)),
+            _ => continue,
+        };
         if routines.len() == MAX_ROUTINES && !routines.contains_key(&function) {
             continue;
         }
         let routine = routines.entry(function).or_insert_with(|| Routine {
             address: function,
+            inferred_end,
             name: Some(project.function_name(function)),
             families: BTreeSet::new(),
             evidence: Vec::new(),
@@ -644,6 +687,15 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
             constants: BTreeSet::new(),
         });
         routine.families.insert(family);
+        if let Some(end) = inferred_end {
+            let line = format!(
+                "not a discovered function: start inferred from the push {{..., lr}} prologue at {function:#x}, end \
+                 from the first return before {end:#x}"
+            );
+            if !routine.evidence.contains(&line) {
+                routine.evidence.push(line);
+            }
+        }
         let line = format!("{what} at {site:#x}");
         if routine.evidence.len() < 8 && !routine.evidence.contains(&line) {
             routine.evidence.push(line);
@@ -1266,6 +1318,82 @@ fn fix_order(checks: &[Found], chosen: &[bool]) -> Result<Vec<usize>, String> {
     Ok(order)
 }
 
+/// The target of a Thumb PC-relative `ldr` (T1 `ldr rt, [pc, #imm8*4]` or T2 `ldr.w rt, [pc, #+/-imm12]`) at
+/// `at` of `bytes` (mapped at `address`), with the instruction's length.
+fn thumb_literal_target(bytes: &[u8], at: usize, address: u64) -> Option<(u64, u64)> {
+    let halfword = |at: usize| bytes.get(at..at + 2).map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
+    let first = halfword(at)?;
+    let base = (address + 4) & !3;
+    if first & 0xf800 == 0x4800 {
+        return Some((base + u64::from(first & 0xff) * 4, 2));
+    }
+    if first == 0xf8df || first == 0xf85f {
+        let imm = u64::from(halfword(at + 2)? & 0xfff);
+        let target = if first == 0xf8df { base + imm } else { base.checked_sub(imm)? };
+        return Some((target, 4));
+    }
+    None
+}
+
+/// Thumb instructions in the 4 KiB before `slot` that load it PC-relative; at most 8.
+fn thumb_literal_loads(blocks: &[Block], slot: u64) -> Vec<u64> {
+    let Some(block) = blocks.iter().find(|block| block.start <= slot && slot < block.end()) else { return Vec::new() };
+    let first = slot.saturating_sub(4096).max(block.start);
+    let first = first + (first - block.start) % 2;
+    (first..slot)
+        .step_by(2)
+        .filter(|&address| {
+            thumb_literal_target(block.bytes, (address - block.start) as usize, address)
+                .is_some_and(|(target, _)| target == slot)
+        })
+        .take(8)
+        .collect()
+}
+
+/// The routine holding the Thumb instruction at `site`: from the nearest `push {..., lr}` before it (no return
+/// between) to just after the first return after it, within 1 KiB either way.
+fn thumb_routine_around(blocks: &[Block], site: u64) -> Option<(u64, u64)> {
+    let block = blocks.iter().find(|block| block.start <= site && site < block.end())?;
+    let halfword = |address: u64| {
+        let at = (address - block.start) as usize;
+        block.bytes.get(at..at + 2).map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+    };
+    let returns = |address: u64| -> Option<u64> {
+        let first = halfword(address)?;
+        if first == 0x4770 || first & 0xff00 == 0xbd00 {
+            return Some(2);
+        }
+        (first == 0xe8bd && halfword(address + 2)? & 0x8000 != 0).then_some(4)
+    };
+    let pushes = |address: u64| -> bool {
+        let Some(first) = halfword(address) else { return false };
+        first & 0xff00 == 0xb500 || (first == 0xe92d && halfword(address + 2).is_some_and(|next| next & 0x4000 != 0))
+    };
+    let lowest = site.saturating_sub(1024).max(block.start);
+    let mut start = None;
+    let mut address = site;
+    while address >= lowest + 2 {
+        address -= 2;
+        if pushes(address) {
+            start = Some(address);
+            break;
+        }
+        if returns(address).is_some() {
+            return None;
+        }
+    }
+    let start = start?;
+    let highest = (site + 1024).min(block.end());
+    let mut address = site;
+    while address + 2 <= highest {
+        if let Some(length) = returns(address) {
+            return Some((start, address + length));
+        }
+        address += 2;
+    }
+    None
+}
+
 /// The functions holding CRC code evidence (CRC tables, polynomial literals), as `integrity_checks` finds them.
 pub(crate) fn crc_routine_addresses(project: &Project) -> BTreeSet<u64> {
     let (blocks, _) = blocks(&project.binary);
@@ -1321,6 +1449,13 @@ impl Project {
         }
         let stats = search.stats;
         let (mut found, mut suspects) = select(search.matches, &code);
+        let path = source.raw_source.get().or_else(|| self.raw_source.get()).cloned();
+        let streams = container::streams(&source.binary, path.as_deref());
+        for stream in streams.iter().filter_map(|stream| stream.found.as_ref()) {
+            found.retain(|check| check.field != stream.field);
+            found.push(stream.clone());
+        }
+        found.sort_by(|a, b| b.score.total_cmp(&a.score).then(a.field.cmp(&b.field)));
         suspects.extend(found.split_off(found.len().min(MAX_CHECKS * 2)));
         if request.emulate {
             emulate(&source, &code, &original_blocks, &mut found, &mut notes);
@@ -1666,8 +1801,35 @@ impl Project {
                     .collect(),
                 evidence: routine.evidence.clone(),
                 callers: routine.callers.clone(),
+                inferred_range: routine.inferred_end.map(|end| CoveredRange { start: routine.address, end }),
             })
             .collect();
+        let container_streams: Vec<ContainerStream> = streams
+            .into_iter()
+            .map(|stream| {
+                let mut report = stream.report;
+                report.check = stream.found.and_then(|found| {
+                    checks.iter().find(|check| check.stored.address == found.field).map(|check| check.id)
+                });
+                report
+            })
+            .collect();
+        // The largest decoded image first: the application rather than an updater beside it.
+        let decodable: Vec<&ContainerStream> =
+            container_streams.iter().filter(|stream| stream.open_as_raw.is_some()).collect();
+        let next = decodable.iter().max_by_key(|stream| stream.decoded_size).and_then(|stream| {
+            let selector = stream.open_as_raw.as_ref()?;
+            let others = match decodable.len() - 1 {
+                0 => String::new(),
+                more => format!("; container_streams lists {more} more with their selectors"),
+            };
+            Some(format!(
+                "this file holds a compressed image ({} bytes at file offset {:#x}, {} decoded): its checksum routines \
+                 are in the decoded code, so run integrity_checks with \"raw\": {selector} (and the same selector for \
+                 list_functions, decompile, ...){others}",
+                stream.compressed_length, stream.stream_offset, stream.decoded_size
+            ))
+        });
         let applied = transition.is_some();
         let receipt = if applied { project.patch_receipt().ok() } else { receipt };
         Ok(IntegrityOutcome {
@@ -1680,6 +1842,8 @@ impl Project {
                 fix: FixReport { applied, writes },
                 receipt,
                 notes,
+                container_streams,
+                next,
             },
             project,
             transition,

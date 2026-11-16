@@ -163,7 +163,7 @@ decoded code.
     application at 0x01000000 the follow's `bad_fetch` lies inside the (wrongly placed) image, so the pointer vote,
     not the fetch, names 0x60000000.
   - `find_crypto` still refuses Raw projects; `integrity_checks` found no fields on the decoded image.
-- [ ] **Fourth Haiku run (2026-11-16, after 4e8de75).** With record base hints and base candidates, Haiku opened
+- [x] **Fourth Haiku run (2026-11-16, after 4e8de75).** With record base hints and base candidates, Haiku opened
   both images at the right base with in-selector `decode`. The scatter-load follow mapped the copies, and Haiku
   reached the application's RAM startup (`0x010010d2`), its init-hook table, the SVC and PendSV handlers, the VTOR
   stores and a CRC-32 polynomial literal (81 turns, $0.91). Still:
@@ -180,7 +180,8 @@ decoded code.
     (and `triage_report`) take `raw`, and `lock_mechanisms` sees the functions the automatic scan finds and says why none was analysed when no
     evidence selects one (the run's image has no crypto constants and no AIRCR/DHCSR writes without an SVD map);
   - `integrity_checks` over the whole 4 MiB container exhausted its budget; it needs a hint to run on the decoded
-    image's functions instead.
+    image's functions instead. Done: `container_streams` reports the record's byte sum as a check and `next` gives
+    the decoded image's selector; on the decoded image the CRC-32 routine is found from its literal load.
 - [ ] **Flaky UI test.** `rampage-ui` `debugger::tests::local_socket::genuine_save_refusal_remains_typed_until_resources_are_recorded_despite_obsolete_binding`
   fails intermittently: locally with BrokenPipe on its socket, and on CI Linux ARM64 (2badb62) with "Harness::run
   exceeded max_steps (4)" from a text-selection repaint in `inspection_harness`. Use `run_steps` or wait for the

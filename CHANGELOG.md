@@ -6,6 +6,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- `integrity_checks` on Raw firmware: on Cortex-M, a CRC polynomial literal that no discovered code references is
+  followed to the `ldr` that loads it, and the routine around it is listed with `inferred_range`. On a Raw project
+  over a container file, `container_streams` lists each compressed stream a record describes, with the record's
+  byte sum or CRC-32 as a check over the stream (or a note that it does not verify), and `next` gives the decoded
+  image's `raw` selector. See [MCP](docs/mcp.md).
 - More tools on Raw projects: `function_summary`, `find_crypto`, `triage` and `triage_report` take the `raw`
   selector and read the mapped regions, decoded ones included, at mapped addresses; on Raw input `triage` and
   `triage_report` say which file-format facts do not apply. See [MCP](docs/mcp.md#raw-projects).

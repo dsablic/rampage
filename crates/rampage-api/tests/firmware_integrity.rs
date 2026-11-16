@@ -499,3 +499,110 @@ fn a_crc16_polynomial_formed_by_an_immediate_is_recognised() {
     assert_eq!(stored, crc16_arc(&elf_bytes(&written, CONFIG, 66)));
     assert_eq!(elf_bytes(&written, CONFIG + 4, 4), 57_600u32.to_le_bytes());
 }
+
+/// A Raw project over a container file: the record before an LZSS-compressed Cortex-M image names its compressed
+/// length, decoded size and the byte sum of the compressed bytes. That sum is a check over the stream at mapped
+/// addresses, a broken one is reported invalid, and `next` hands over the decoded image's `raw` selector.
+#[test]
+fn a_container_record_sum_is_a_check_and_next_opens_the_decoded_image() {
+    let original =
+        std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/raw-cortex-m.bin")).unwrap();
+    let stream = rampage_decode::encode::lzss(&rampage_decode::Lzss::classic_4k(4078, 0), &original);
+    let sum = stream.iter().fold(0u32, |sum, &byte| sum.wrapping_add(u32::from(byte)));
+    // Header bytes, then the record: address, payload offset, compressed length, byte sum, address, decoded size.
+    // The payload offset counts from the header's start (0x28 into the file), as containers often do, so the stream
+    // is found from its byte sum.
+    let container = |payload: u32, sum: u32| {
+        let mut file: Vec<u8> = vec![0x5a; 0x28];
+        for value in [0x0800_0000, payload, stream.len() as u32, sum, 0x0800_0000, original.len() as u32] {
+            file.extend(value.to_le_bytes());
+        }
+        file.extend(&stream);
+        file.resize(file.len().next_multiple_of(4) + 64, 0xff);
+        file
+    };
+    let file = container(0x18, sum);
+    let owned = Owned::new();
+    let path = owned.0.join("container.bin");
+    let open = |file: &[u8]| {
+        std::fs::write(&path, file).unwrap();
+        let request: RawProjectRequest = serde_json::from_value(json!({
+            "profile": "cortex-m", "offset": 0, "length": file.len(), "base_address": "0x60000000",
+            "pointer_tables": false,
+        }))
+        .unwrap();
+        Session::default().open_raw(&path, &request).unwrap()
+    };
+    let report = call(&mut open(&file), "integrity_checks", json!({}));
+    let streams = report["container_streams"].as_array().unwrap();
+    assert_eq!(streams.len(), 1, "{report:#}");
+    let found = &streams[0];
+    assert_eq!(found["stream_offset"], "0x40");
+    assert_eq!(found["record_offset"], "0x28");
+    assert_eq!(found["compressed_length"], stream.len());
+    assert_eq!(found["decoded_size"], original.len());
+    assert_eq!(found["decode_check"], "reproduced");
+    let selector = &found["open_as_raw"];
+    assert_eq!(selector["profile"], "ARM:LE:32:Cortex");
+    assert_eq!(selector["base_address"], "0x8000000", "{selector}");
+    assert_eq!(selector["offset"], "0x40");
+    let id = found["check"].as_u64().unwrap() as usize;
+    let check = &report["checks"][id];
+    assert_eq!(check["algorithm"], "sum32");
+    assert_eq!(check["stored"]["address"], "0x60000034");
+    assert_eq!(check["ranges"][0]["start"], "0x60000040");
+    assert_eq!(check["ranges"][0]["end"], format!("{:#x}", 0x6000_0040 + stream.len()));
+    assert_eq!(check["valid"], true);
+    let stored: String = sum.to_le_bytes().iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(check["stored_hex"], stored);
+    let next = report["next"].as_str().unwrap();
+    assert!(next.contains("integrity_checks") && next.contains("\"base_address\":\"0x8000000\""), "{next}");
+    // The selector opens the decoded image, which is the original flash image.
+    let request: RawProjectRequest = serde_json::from_value(selector.clone()).unwrap();
+    let decoded = Session::default().open_raw(&path, &request).unwrap();
+    assert_eq!(decoded.binary.image_bytes(), original.as_slice());
+
+    assert!(found["checksum"].as_str().unwrap().contains("byte_sum32 at file offset 0x34 verifies"));
+
+    // A changed sum word, with the payload offset as a file offset: the stream is still found and decoded, and the
+    // record's checksum is reported as not verifying.
+    let broken = container(0x40, sum ^ 1);
+    let report = call(&mut open(&broken), "integrity_checks", json!({}));
+    let found = &report["container_streams"][0];
+    assert!(found.get("check").is_none(), "{report:#}");
+    assert!(found["checksum"].as_str().unwrap().contains("does not verify"), "{found}");
+    assert_eq!(found["decode_check"], "reproduced");
+}
+
+/// A Thumb CRC-32 routine that discovery does not reach (nothing found calls it) still loads its polynomial with a
+/// PC-relative `ldr`: on a Raw Cortex-M project integrity_checks names it with the range from its prologue to its
+/// return.
+#[test]
+fn an_undiscovered_raw_crc_routine_is_found_from_its_literal_load() {
+    let mut image: Vec<u8> = vec![
+        0x70, 0x47, // 0x00 bx lr: the entry
+        0x00, 0xbf, // 0x02 nop
+        0x10, 0xb5, // 0x04 push {r4, lr}
+        0x01, 0x49, // 0x06 ldr r1, [pc, #4]: the literal at 0x0c
+        0x48, 0x40, // 0x08 eors r0, r1
+        0x10, 0xbd, // 0x0a pop {r4, pc}
+        0x20, 0x83, 0xb8, 0xed, // 0x0c 0xedb88320
+    ];
+    image.resize(64, 0);
+    let owned = Owned::new();
+    let path = owned.0.join("crc.bin");
+    std::fs::write(&path, &image).unwrap();
+    let request: RawProjectRequest = serde_json::from_value(json!({
+        "profile": "cortex-m", "offset": 0, "length": image.len(), "base_address": "0x8000000", "entry": "0x8000000",
+        "pointer_tables": false,
+    }))
+    .unwrap();
+    let mut project = Session::default().open_raw(&path, &request).unwrap();
+    assert_eq!(project.function_containing(0x0800_0006).unwrap(), None);
+    let report = call(&mut project, "integrity_checks", json!({}));
+    let routine = &report["routines"][0];
+    assert_eq!(routine["address"], "0x8000004", "{report:#}");
+    assert_eq!(routine["inferred_range"], json!({ "start": "0x8000004", "end": "0x800000c" }));
+    assert!(routine["algorithms"].as_array().unwrap().contains(&json!("crc32")), "{routine}");
+    assert!(routine["evidence"].to_string().contains("not a discovered function"), "{routine}");
+}

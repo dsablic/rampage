@@ -248,6 +248,17 @@ file, the native file with an optional PE CheckSum) or as a flat binary. Both ta
 except `export_patched`. Limits: one contiguous range per check; 256 MiB of hashing per search. See
 [firmware patching](firmware-patching.md).
 
+On a Raw project the CRC code evidence comes from the discovered functions (pointer tables and scatter-load copies
+included); on Cortex-M a polynomial literal that no discovered code references is followed to the PC-relative
+`ldr` that loads it, and the routine around it (from its `push {..., lr}` to its first return) is listed with
+`inferred_range`. On a Raw project mapped over a container file, a compressed stream behind a record (within 64 bytes before
+it: its compressed length, its decoded size, and a byte sum of the compressed bytes or a word holding the stream's
+own file offset) is listed in `container_streams`: offsets, sizes, `checksum` (whether a record word is the byte sum or CRC-32 of the
+compressed bytes; that word is then the check `check`, with its range and stored value at mapped addresses),
+`decode_check` (the classic 4 KiB-ring LZSS or LZ4 block decoder reproducing the sizes) and `open_as_raw`, the
+decoded image's `raw` selector with the profile and best load address. `next` then says to run
+`integrity_checks` with that selector, since the checksum routines are in the decoded code.
+
 `lock_mechanisms` (group `detection`, experimental) explains mechanisms that can make a device refuse a repair:
 signature and MAC verification, challenge-response unlocks, binding to a unique chip ID, anti-rollback counters,
 debug and readout protection, and fuse feature locks. Each mechanism names what is checked, the data and registers
