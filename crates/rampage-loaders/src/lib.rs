@@ -10,6 +10,7 @@ mod macho;
 mod model;
 pub mod msvc;
 mod raw;
+pub mod raw_base;
 pub mod raw_pointers;
 pub mod raw_records;
 pub mod raw_scatter;

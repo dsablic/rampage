@@ -23,4 +23,5 @@ mod objc;
 mod pdb;
 mod pdb_types;
 mod raw;
+mod raw_base;
 mod snapshot;
