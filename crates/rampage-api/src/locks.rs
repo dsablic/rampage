@@ -1098,6 +1098,19 @@ impl Project {
         not_locks.truncate(MAX_NOT_LOCKS);
 
         coverage.functions_analyzed = context.flows.len();
+        if context.flows.is_empty() {
+            limitations.push(format!(
+                "No function was analyzed: of the {} functions discovery found, none references a crypto constant, a \
+                 CRC routine, a known verify, MAC or random API, or a register with a role{}. Functions are chosen \
+                 from that evidence and their callers, not traced exhaustively.",
+                program.functions.len(),
+                if peripherals.is_empty() {
+                    " (without an imported SVD map only DHCSR, DAUTHCTRL and AIRCR writes)"
+                } else {
+                    ""
+                }
+            ));
+        }
         if context.flows.values().any(|flow| flow.overflowed) {
             coverage.incomplete = true;
             limitations.push(

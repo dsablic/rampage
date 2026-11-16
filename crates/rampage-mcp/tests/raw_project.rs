@@ -219,7 +219,9 @@ async fn raw_projects_list_disassemble_annotate_and_refuse_explicitly() {
     assert!(failed && text.contains("`image_length`"), "{text}");
 
     let (text, failed) = call(&client, "triage", json!({ "path": path, "raw": seeded })).await;
-    assert!(failed && text.contains("tool triage does not accept Raw projects"), "{text}");
+    assert!(!failed && text.contains("Raw project (TI_MSP430"), "{text}");
+    let (text, failed) = call(&client, "find_main", json!({ "path": path, "raw": seeded })).await;
+    assert!(failed && text.contains("tool find_main does not accept Raw projects"), "{text}");
     let (text, failed) = call(&client, "inspect_sleigh", json!({ "path": path, "raw": seeded })).await;
     assert!(failed && text.contains("tool inspect_sleigh does not accept Raw projects"), "{text}");
 

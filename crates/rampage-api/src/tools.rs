@@ -1128,7 +1128,7 @@ fn sleigh_file_schema() -> Value {
 
 /// Project tools that serve a Raw Project opened with [`crate::Session::open_raw`]: each returns a result or an
 /// explicit typed refusal on Raw input. Clients offer the `raw` selector only on these.
-pub const RAW_CAPABLE_TOOLS: [&str; 27] = [
+pub const RAW_CAPABLE_TOOLS: [&str; 31] = [
     "binary_info",
     "list_functions",
     "disassemble",
@@ -1156,6 +1156,10 @@ pub const RAW_CAPABLE_TOOLS: [&str; 27] = [
     "export_image",
     "identify_functions",
     "lock_mechanisms",
+    "function_summary",
+    "find_crypto",
+    "triage",
+    "triage_report",
 ];
 
 /// File tools that take a `raw` selector in place of their native-image arguments, reading the Raw image without a

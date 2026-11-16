@@ -23,6 +23,19 @@ const DEFAULT_STRING_LENGTH: usize = 4;
 /// code, calls through pointers). A small image is held to at least one function.
 const RAW_BYTES_PER_FUNCTION: u64 = 16 * 1024;
 
+/// What triage measures on a Raw project, and which file-format facts do not apply to it.
+pub(crate) fn raw_triage_note(raw: &rampage_loaders::RawCodeImage) -> String {
+    let regions = raw.regions().iter().filter(|region| region.backed()).count();
+    format!(
+        "Raw project ({}): no file header, so build time, libraries, imports, exports, hardening, overlay and \
+         imphash do not apply; the hashes and entropy cover the {} mapped region{} with bytes (decoded bytes \
+         included) and the sections are the mapped regions, at their mapped addresses",
+        raw.profile().language_id(),
+        regions,
+        if regions == 1 { "" } else { "s" }
+    )
+}
+
 /// Initialized cache presence only; this is not a history or concurrent-activity attestation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 pub struct AnalysisCacheStatus {
@@ -1113,7 +1126,13 @@ impl Project {
 
     /// Hashes, entropy, format details and hints, computed once per project.
     pub fn triage(&self) -> &Triage {
-        self.triage.get_or_init(|| triage::triage_with_code(&self.binary, self.code_regions()))
+        self.triage.get_or_init(|| {
+            let mut triage = triage::triage_with_code(&self.binary, self.code_regions());
+            if let Some(raw) = self.binary.raw_code_image() {
+                triage.hints.push(raw_triage_note(raw));
+            }
+            triage
+        })
     }
 
     /// Every code region with its entropy and decode evidence, measured once with the decoder discovery uses, so

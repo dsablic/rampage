@@ -6,6 +6,9 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- More tools on Raw projects: `function_summary`, `find_crypto`, `triage` and `triage_report` take the `raw`
+  selector and read the mapped regions, decoded ones included, at mapped addresses; on Raw input `triage` and
+  `triage_report` say which file-format facts do not apply. See [MCP](docs/mcp.md#raw-projects).
 - Raw `binary_info` fits the tool budget: on a Raw project the summary view keeps the first 3 rows of every list
   under `raw` (decode receipts, vector and pointer tables, scatter-load copies, base evidence) with counts and
   omission receipts, a full view too large for 60,000 bytes keeps 16, and sections that still do not fit are

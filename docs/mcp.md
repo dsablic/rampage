@@ -497,8 +497,13 @@ Raw-capable tools (`binary_info`, `list_functions`, `disassemble`, `function_gra
 `list_strings`, `analysis_diagnostics`, `entry_diagnostics`, `capabilities`, `rename`, `set_comment`,
 `annotate_batch`, `list_annotations`, `undo`, `redo`, `decompile`, `evaluate_function`, `import_svd`,
 `peripheral_access`, `list_patches`, `patch_bytes`, `revert_patch`, `integrity_checks`, `export_image`,
-`identify_functions`, `lock_mechanisms`, and the file tool `inspect_data`) take an optional `raw` object in place
-of a native image. `list_strings` lists every backed region's strings at their mapped addresses (decoded regions
+`identify_functions`, `lock_mechanisms`, `function_summary`, `find_crypto`, `triage`, `triage_report`, and the
+file tool `inspect_data`) take an optional `raw` object in place of a native image. `find_crypto`, `triage` and
+`triage_report` read every backed region (decoded ones included) at mapped addresses; `triage` adds a hint and
+`triage_report` a limitation saying which file-format facts (build time, libraries, imports, hardening, overlay,
+imphash) do not apply. `function_summary` and `lock_mechanisms` work on the functions discovery found, pointer
+tables and scatter-load copies included; when no function qualifies, `lock_mechanisms` says why none was
+analysed. `list_strings` lists every backed region's strings at their mapped addresses (decoded regions
 included); in a code region, where flash images keep constants among instructions, only runs a NUL ends and no
 discovered instruction overlaps are listed. `inspect_data` gives `file_offset` only for bytes mapped from a
 file range (none for decoded, record or unbacked bytes). `evaluate_function` runs a Raw

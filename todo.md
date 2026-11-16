@@ -176,7 +176,9 @@ decoded code.
     pointer tables, scatter copies and base evidence together); trim or page the Raw sections. Done: `raw` lists
     keep their first rows with counts and receipts, and oversized sections shrink to scalars;
   - `find_crypto`, `function_summary`, `triage` and `lock_mechanisms` still refuse or analyse nothing on Raw
-    projects; `xrefs` and reference `search` found nothing because discovery was sparse;
+    projects; `xrefs` and reference `search` found nothing because discovery was sparse. Done: the first three
+    (and `triage_report`) take `raw`, and `lock_mechanisms` sees the functions the automatic scan finds and says why none was analysed when no
+    evidence selects one (the run's image has no crypto constants and no AIRCR/DHCSR writes without an SVD map);
   - `integrity_checks` over the whole 4 MiB container exhausted its budget; it needs a hint to run on the decoded
     image's functions instead.
 - [ ] **Flaky UI test.** `rampage-ui` `debugger::tests::local_socket::genuine_save_refusal_remains_typed_until_resources_are_recorded_despite_obsolete_binding`

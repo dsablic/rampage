@@ -155,7 +155,13 @@ impl Project {
             );
         }
         report.sections.push(imports);
-        if binary.imports.is_empty() {
+        if binary.raw_code_image().is_some() {
+            report.limitation(
+                "Raw project: no file header, so imports, libraries, hardening and other file-format facts do not \
+                 apply; the toolchain, capability, string and function sections read the mapped regions (decoded \
+                 bytes included) at their mapped addresses.",
+            );
+        } else if binary.imports.is_empty() {
             report.limitation(
                 "No dynamic imports: the binary is statically linked, or resolves its imports at run time. Library \
                  code then appears as functions, which only symbols or signature matches can name.",

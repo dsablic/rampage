@@ -273,6 +273,10 @@ fn every_raw_capable_tool_answers_on_a_reviewed_msp430_project() {
         ("export_image", Value::Null),
         ("identify_functions", json!({})),
         ("lock_mechanisms", json!({})),
+        ("function_summary", json!({ "at": "0x4400" })),
+        ("find_crypto", json!({})),
+        ("triage", json!({})),
+        ("triage_report", json!({})),
     ];
     assert_eq!(inputs.each_ref().map(|(name, _)| *name), RAW_CAPABLE_TOOLS);
     let export = owned.0.join("export.bin");
@@ -295,7 +299,9 @@ fn every_raw_capable_tool_answers_on_a_reviewed_msp430_project() {
     assert!(outcome("list_annotations").contains("callee"));
     // MSP430 has a reviewed C model, so Raw decompilation returns C that uses the analyst's name.
     assert!(outcome("decompile").contains("callee"), "{}", outcome("decompile"));
-    assert!(!raw_capable("triage") && !raw_capable("inspect_sleigh"));
+    assert!(outcome("triage").contains("Raw project (TI_MSP430"), "{}", outcome("triage"));
+    assert!(outcome("triage_report").contains("no file header"), "{}", outcome("triage_report"));
+    assert!(!raw_capable("find_main") && !raw_capable("inspect_sleigh"));
 
     assert!(outcome("patch_bytes").contains("\"active_ranges\":1"), "{}", outcome("patch_bytes"));
     // The patch was reverted, so the exported file is the input, byte for byte.
@@ -524,6 +530,10 @@ fn cortex_m_raw_projects_serve_every_raw_capable_tool_with_native_evidence() {
         ("export_image", Value::Null),
         ("identify_functions", json!({})),
         ("lock_mechanisms", json!({})),
+        ("function_summary", json!({ "at": reset })),
+        ("find_crypto", json!({})),
+        ("triage", json!({})),
+        ("triage_report", json!({})),
     ];
     assert_eq!(inputs.each_ref().map(|(name, _)| *name), RAW_CAPABLE_TOOLS);
     let export = owned.0.join("export.bin");
@@ -544,6 +554,10 @@ fn cortex_m_raw_projects_serve_every_raw_capable_tool_with_native_evidence() {
     // is partial, as for ARM ELF, and the result says so.
     assert!(outcome("search").contains("native operand evidence"), "{}", outcome("search"));
     assert!(outcome("binary_info").contains("\"vector_table\""), "{}", outcome("binary_info"));
+    // The Raw-only tools read the mapped regions at mapped addresses.
+    assert!(outcome("function_summary").contains(&reset), "{}", outcome("function_summary"));
+    assert!(outcome("triage").contains("Raw project (ARM:LE:32:Cortex)"), "{}", outcome("triage"));
+    assert!(outcome("triage_report").contains("functions discovered"), "{}", outcome("triage_report"));
     // Strings among the flash code are listed at their mapped addresses when a NUL ends them.
     let strings: Value = serde_json::from_str(outcome("list_strings")).unwrap();
     assert_eq!(strings["items"][0]["text"], "rampage cortex-m fixture v1", "{strings}");
