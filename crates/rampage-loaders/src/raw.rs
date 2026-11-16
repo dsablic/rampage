@@ -651,15 +651,42 @@ impl RawCodeImage {
         }
         let scatter_load = match (scatter_load_mode, options.entry) {
             (Some(map), Some(entry)) if options.profile.m_profile() => {
-                let report = scatter_regions(&mut regions, &mut data, entry, map, max);
+                let mut report = scatter_regions(&mut regions, &mut data, entry, map, max);
+                let in_code = |address: u64| {
+                    regions.iter().any(|region| region.kind == RawRegionKind::Code && region.range().contains(&address))
+                };
                 // The jump into copied code starts a function there, once that code is mapped.
                 if let Some(target) = report.continues_at
                     && target != entry
-                    && regions
-                        .iter()
-                        .any(|region| region.kind == RawRegionKind::Code && region.range().contains(&target))
+                    && in_code(target)
                 {
                     options.seeds.push(target);
+                }
+                // The vector table the program installs last, once the memory holding it is mapped.
+                if let Some(store) = report.vtor_stores.last() {
+                    let holder = regions.iter().find(|region| region.backed() && region.range().contains(&store.value));
+                    match holder {
+                        None => {
+                            report.vector_table_refused =
+                                Some(format!("VTOR value {:#x} lies in no region with bytes", store.value));
+                        }
+                        Some(region) => {
+                            match crate::raw_vectors::read_with(
+                                &data[region.data_range()],
+                                region.base_address,
+                                store.value,
+                                &in_code,
+                            ) {
+                                Ok(table) => {
+                                    options
+                                        .seeds
+                                        .extend(table.handlers().filter(|&handler| Some(handler) != options.entry));
+                                    report.vector_table = Some(table);
+                                }
+                                Err(error) => report.vector_table_refused = Some(error.to_string()),
+                            }
+                        }
+                    }
                 }
                 Some(report)
             }
@@ -951,10 +978,11 @@ fn scatter_regions(
             copy.not_mapped_reason = Some(reason);
             continue;
         }
-        // Copied code runs where it was copied to (or lies in the Cortex-M Code region); copied data is writable.
+        // Copied code runs where it was copied to, or lies in the Cortex-M Code region and the program never stores
+        // into it; copied data is writable.
         let kind = if copy.kind == CopyKind::Copy
             && copy.destination.is_multiple_of(2)
-            && (copy.executed || copy.destination < 0x2000_0000)
+            && (copy.executed || (copy.destination < 0x2000_0000 && !copy.written_after_jump))
         {
             RawRegionKind::Code
         } else {

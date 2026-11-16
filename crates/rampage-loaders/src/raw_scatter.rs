@@ -27,6 +27,8 @@ use sha2::{Digest, Sha256};
 
 /// Instructions followed from the entry.
 pub const MAX_STEPS: u64 = 2_000_000;
+/// Instructions followed after the jump into copied code.
+pub const MAX_AFTER_JUMP_STEPS: u64 = 200_000;
 /// Writes listed in the report; more are counted in `copies_not_listed`.
 pub const MAX_LISTED_COPIES: usize = 64;
 /// Separate writes tracked before the follow stops.
@@ -166,6 +168,9 @@ pub struct ScatterCopy {
     /// Instructions were fetched from it: the copied code ran.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub executed: bool,
+    /// The code it jumped to stored into it: data, not code.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub written_after_jump: bool,
     pub status: CopyStatus,
     /// The region it is mapped as.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -185,6 +190,15 @@ pub struct SkippedCall {
     /// The instruction where the callee could not continue.
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub at: u64,
+}
+
+/// How far the follow went after the jump into copied code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AfterJump {
+    pub steps: u64,
+    pub stop: FollowStop,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub stopped_at: u64,
 }
 
 /// A constant store to the Vector Table Offset Register the follow saw.
@@ -221,6 +235,16 @@ pub struct ScatterLoad {
     /// Constant VTOR stores, in order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub vtor_stores: Vec<VtorStore>,
+    /// After the jump into copied code the follow goes on (at most 200,000 instructions) for VTOR stores and
+    /// stores into the copies; this is how far it got.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after_jump: Option<AfterJump>,
+    /// The vector table at the last VTOR value, when that lies in a mapped region; its accepted handlers are seeds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_table: Option<crate::raw_vectors::VectorTable>,
+    /// Why the table at the last VTOR value was not read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_table_refused: Option<String>,
     pub note: &'static str,
 }
 
@@ -231,7 +255,8 @@ fn is_zero(value: &usize) -> bool {
 const NOTE: &str = "the reset code is followed by a bounded Thumb interpreter over the mapped bytes until it jumps into \
                     memory it wrote, returns or halts; contiguous stores of one origin are one write. A copy whose \
                     source lies in one backed region and whose destination is unmapped is mapped at its run address \
-                    (code below 0x20000000 or when it ran, writable RAM otherwise), a zero fill as unbacked RAM";
+                    (code when it ran, or below 0x20000000 unless the copied code stores into it; writable RAM otherwise), a zero \
+                    fill as unbacked RAM. After the jump into copied code the follow goes on for VTOR stores";
 
 /// What [`follow`] returns besides the report: each listed write's internal facts.
 #[derive(Debug, Clone)]
@@ -404,6 +429,8 @@ struct Write {
     /// A skipped call was still making it.
     interrupted: bool,
     executed: bool,
+    /// The code after the jump into copied code stored into it.
+    written_later: bool,
 }
 
 impl Write {
@@ -447,6 +474,8 @@ struct Machine<'a> {
     skipped_total: usize,
     vtor: Vec<VtorStore>,
     continues_at: Option<u32>,
+    /// Following the copied code after the jump: stores change memory but no longer become writes.
+    after_jump: bool,
 }
 
 fn unsupported() -> FollowStop {
@@ -559,6 +588,7 @@ impl<'a> Machine<'a> {
             skipped_total: 0,
             vtor: Vec::new(),
             continues_at: None,
+            after_jump: false,
         }
     }
 
@@ -670,6 +700,13 @@ impl<'a> Machine<'a> {
         let end = u64::from(base) + u64::from(width);
         let last = base + u32::from(width) - 1;
         let previous = self.starts.range(..=last).next_back().map(|(_, &index)| index);
+        if self.after_jump {
+            // The program's own stores after startup: they mark the copy they land in as data.
+            if let Some(index) = previous.filter(|&index| self.writes[index].end() > u64::from(base)) {
+                self.writes[index].written_later = true;
+            }
+            return self.scatter(base, &bytes);
+        }
         if let Some(index) = previous {
             let write = &self.writes[index];
             if write.end() > u64::from(base) {
@@ -713,6 +750,7 @@ impl<'a> Machine<'a> {
             overwritten: false,
             interrupted: false,
             executed: false,
+            written_later: false,
         });
         self.clear_scattered(base, width);
         Ok(())
@@ -846,7 +884,10 @@ impl<'a> Machine<'a> {
         }
         // Writes the abandoned callee was still making are incomplete.
         let steps = self.steps;
-        for write in self.writes.iter_mut().filter(|write| steps - write.last_store <= INTERRUPTED_WINDOW) {
+        let after_jump = self.after_jump;
+        for write in
+            self.writes.iter_mut().filter(|write| !after_jump && steps - write.last_store <= INTERRUPTED_WINDOW)
+        {
             write.interrupted = true;
         }
         self.pc = frame.return_to;
@@ -899,21 +940,45 @@ impl<'a> Machine<'a> {
                 self.continues_at = Some(self.pc);
                 break FollowStop::JumpedIntoCopiedCode;
             }
-            self.steps += 1;
-            match self.step() {
-                Ok(()) => {}
-                Err(reason) => {
-                    if let Err(reason) = self.recover(reason) {
-                        break reason;
-                    }
-                }
+            if let Err(reason) = self.step_or_recover() {
+                break reason;
             }
         };
-        self.finish(entry, reason)
+        let (steps, stopped_at) = (self.steps, self.pc);
+        // The copied code goes on with the state the startup code left: follow it a little further for a VTOR
+        // store and for stores into the copies, which make a copy data. Stores no longer become writes.
+        let after_jump = (reason == FollowStop::JumpedIntoCopiedCode).then(|| {
+            self.after_jump = true;
+            let start = self.steps;
+            let stop = loop {
+                if self.steps - start >= MAX_AFTER_JUMP_STEPS.min(budget) {
+                    break FollowStop::StepBudget;
+                }
+                if let Err(reason) = self.step_or_recover() {
+                    break reason;
+                }
+            };
+            AfterJump { steps: self.steps - start, stop, stopped_at: u64::from(self.pc) }
+        });
+        self.finish(entry, reason, steps, stopped_at, after_jump)
     }
 
-    fn finish(self, entry: u32, reason: FollowStop) -> Follow {
-        let steps = self.steps;
+    fn step_or_recover(&mut self) -> Result<(), FollowStop> {
+        self.steps += 1;
+        match self.step() {
+            Ok(()) => Ok(()),
+            Err(reason) => self.recover(reason),
+        }
+    }
+
+    fn finish(
+        self,
+        entry: u32,
+        reason: FollowStop,
+        steps: u64,
+        stopped_at: u32,
+        after_jump: Option<AfterJump>,
+    ) -> Follow {
         let interrupted = |write: &Write| match reason {
             _ if reason.clean() => false,
             FollowStop::StepBudget => write.last_store >= steps - steps / 4,
@@ -969,6 +1034,7 @@ impl<'a> Machine<'a> {
                 call_site: write.call.map(|(site, _)| u64::from(site)),
                 routine: write.call.map(|(_, target)| u64::from(target)),
                 executed: write.executed,
+                written_after_jump: write.written_later,
                 status: CopyStatus::NotMapped,
                 region: None,
                 not_mapped_reason: None,
@@ -981,13 +1047,16 @@ impl<'a> Machine<'a> {
                 entry: u64::from(entry),
                 steps,
                 stop: reason,
-                stopped_at: u64::from(self.pc),
+                stopped_at: u64::from(stopped_at),
                 continues_at: self.continues_at.map(u64::from),
                 copies,
                 copies_not_listed: not_listed,
                 skipped_calls: self.skipped,
                 skipped_calls_not_listed: self.skipped_total.saturating_sub(MAX_LISTED_SKIPPED_CALLS),
                 vtor_stores: self.vtor,
+                after_jump,
+                vector_table: None,
+                vector_table_refused: None,
                 note: NOTE,
             },
             complete,
@@ -1241,6 +1310,20 @@ impl<'a> Machine<'a> {
                 self.alu(op, Some(rd), left, right, carry, narrow_flags);
             }
             "MUL_T2" => self.alu(Alu::Mul, Some(f("Rd")), self.reg(f("Rn")), self.reg(f("Rm")), None, false),
+            "UDIV_T1" | "SDIV_T1" | "MLA_T1" | "MLS_T1" => {
+                let (n, m, a) = (self.reg(f("Rn")).get(), self.reg(f("Rm")).get(), self.reg(f("Ra")).get());
+                let value = match (name, n, m, a) {
+                    // Division by zero gives zero on ARMv7-M unless the DIV_0_TRP trap is enabled.
+                    ("UDIV_T1", Some(n), Some(m), _) => Some(n.checked_div(m).unwrap_or(0)),
+                    ("SDIV_T1", Some(n), Some(m), _) => {
+                        Some((n as i32).checked_div(m as i32).unwrap_or(if m == 0 { 0 } else { n as i32 }) as u32)
+                    }
+                    ("MLA_T1", Some(n), Some(m), Some(a)) => Some(a.wrapping_add(n.wrapping_mul(m))),
+                    ("MLS_T1", Some(n), Some(m), Some(a)) => Some(a.wrapping_sub(n.wrapping_mul(m))),
+                    _ => None,
+                };
+                self.set(f("Rd"), value.map_or(Val::Unknown, Val::plain));
+            }
             "ADD_r_T3" | "ADDS_r_T3" | "SUB_r_T2" | "SUBS_r_T2" | "ADD_SP_r_T3" | "ADDS_SP_r_T3" | "SUB_SP_r_T1"
             | "SUBS_SP_r_T1" | "CMP_r_T3" | "CMN_r_T2" | "RSB_r_T1" | "RSBS_r_T1" | "AND_r_T2" | "ANDS_r_T2"
             | "TST_r_T2" | "ORR_r_T2" | "ORRS_r_T2" | "ORN_r_T1" | "ORNS_r_T1" | "EOR_r_T2" | "EORS_r_T2"
@@ -1555,8 +1638,8 @@ mod tests {
     const BASE: u32 = 0x0800_0000;
 
     /// A tiny Thumb assembler for hand-built startup code: 16-bit encodings, a literal pool and label patches.
-    #[derive(Default)]
     struct Asm {
+        base: u32,
         code: Vec<u16>,
         literals: Vec<(usize, u32)>,
         patches: Vec<(usize, &'static str, u16)>,
@@ -1564,8 +1647,12 @@ mod tests {
     }
 
     impl Asm {
+        fn at(base: u32) -> Self {
+            Self { base, code: Vec::new(), literals: Vec::new(), patches: Vec::new(), labels: Vec::new() }
+        }
+
         fn here(&self) -> u32 {
-            BASE + 2 * self.code.len() as u32
+            self.base + 2 * self.code.len() as u32
         }
 
         fn label(&mut self, name: &'static str) {
@@ -1591,17 +1678,17 @@ mod tests {
         fn finish(mut self) -> Vec<u8> {
             for (index, label, opcode) in std::mem::take(&mut self.patches) {
                 let target = self.labels.iter().find(|(name, _)| *name == label).unwrap().1;
-                let offset = (i64::from(target) - (i64::from(BASE) + 2 * index as i64 + 4)) / 2;
+                let offset = (i64::from(target) - (i64::from(self.base) + 2 * index as i64 + 4)) / 2;
                 let mask = if opcode == B { 0x7ff } else { 0xff };
                 self.code[index] = opcode | (offset as u16 & mask);
             }
             if self.code.len() % 2 == 1 {
                 self.emit(0xbf00);
             }
-            let pool = BASE + 2 * self.code.len() as u32;
+            let pool = self.base + 2 * self.code.len() as u32;
             let mut bytes: Vec<u8> = self.code.iter().flat_map(|half| half.to_le_bytes()).collect();
             for (slot, &(index, _)) in self.literals.iter().enumerate() {
-                let pc = (BASE + 2 * index as u32 + 4) & !3;
+                let pc = (self.base + 2 * index as u32 + 4) & !3;
                 let offset = (pool + 4 * slot as u32 - pc) / 4;
                 let half = u16::from_le_bytes([bytes[2 * index], bytes[2 * index + 1]]) | offset as u16;
                 bytes[2 * index..2 * index + 2].copy_from_slice(&half.to_le_bytes());
@@ -1646,7 +1733,7 @@ mod tests {
     /// Startup code calling the copy routine once per (destination, length, source) triple, then halting; the
     /// image is padded to `size` bytes with copyable bytes.
     fn image(triples: &[(u32, u32, u32)], size: usize) -> (Vec<u8>, u32) {
-        let mut asm = Asm::default();
+        let mut asm = Asm::at(BASE);
         for &(destination, length, source) in triples {
             asm.ldr(0, destination);
             asm.ldr(1, length);
@@ -1714,7 +1801,7 @@ mod tests {
         assert_eq!(follow.overwritten, [true, false]);
 
         // The startup code repeats the same copy for ever (a table that leads back to its start).
-        let mut asm = Asm::default();
+        let mut asm = Asm::at(BASE);
         asm.label("again");
         asm.ldr(0, 0x2000_0000);
         asm.ldr(1, 64);
@@ -1732,7 +1819,7 @@ mod tests {
         assert_eq!(follow.overwritten, [true]);
 
         // A table walk whose bound is never reached reads garbage entries and calls through them.
-        let mut asm = Asm::default();
+        let mut asm = Asm::at(BASE);
         asm.ldr(5, BASE + 0x100);
         asm.ldr(4, 0xffff_fff0);
         asm.label("walk");
@@ -1746,6 +1833,83 @@ mod tests {
         let report = run(&walker, 50_000).report;
         assert!(report.steps <= 50_000 && report.copies.len() <= MAX_LISTED_COPIES, "{report:#?}");
         assert!(report.skipped_calls.len() <= MAX_LISTED_SKIPPED_CALLS);
+    }
+
+    /// Startup copies a function to 0x10000000 and data to 0x20000000 and jumps into the function, which stores into
+    /// the data and sets VTOR; the follow goes on after the jump and sees both.
+    fn relocating_image(vtor: u32) -> Vec<u8> {
+        let mut function = Asm::at(0x1000_0000);
+        function.ldr(0, 0x2000_0000);
+        function.emit(0x6001); // str r1, [r0]
+        function.ldr(0, VTOR as u32);
+        function.ldr(1, vtor);
+        function.emit(0x6001); // str r1, [r0]
+        function.emit(HALT);
+        let function = function.finish();
+        let mut asm = Asm::at(BASE);
+        for (destination, length, source) in [(0x1000_0000, 64, BASE + 0x100), (0x2000_0000, 64, BASE + 0x180)] {
+            asm.ldr(0, destination);
+            asm.ldr(1, length);
+            asm.ldr(2, source);
+            asm.ldr(4, 0);
+            asm.emit(BLX_R4);
+        }
+        asm.ldr(4, 0x1000_0001);
+        asm.emit(0x4720); // bx r4
+        let copy_at = asm.here();
+        copy_routine(&mut asm);
+        asm.resolve_calls(copy_at);
+        let mut bytes = asm.finish();
+        bytes.resize(0x100, 0);
+        bytes.extend(&function);
+        bytes.resize(0x200, 0x22);
+        bytes
+    }
+
+    #[test]
+    fn the_follow_goes_on_after_the_jump_for_vtor_and_stores_into_copies() {
+        let bytes = relocating_image(0x1000_0000);
+        let report = run(&bytes, 100_000).report;
+        assert_eq!(report.stop, FollowStop::JumpedIntoCopiedCode, "{report:#?}");
+        assert_eq!(report.continues_at, Some(0x1000_0000));
+        assert_eq!(report.after_jump.as_ref().map(|after| after.stop), Some(FollowStop::Halted));
+        assert_eq!(report.vtor_stores, [VtorStore { value: 0x1000_0000, site: report.vtor_stores[0].site }]);
+        let flags: Vec<_> = report.copies.iter().map(|copy| (copy.executed, copy.written_after_jump)).collect();
+        assert_eq!(flags, [(true, false), (false, true)]);
+
+        // Admitted, the function maps as code and the data it writes as RAM. The VTOR table at the copied
+        // function is read (its words are code, so most are refused), and a VTOR value in unmapped memory is
+        // reported.
+        let admit = |vtor: u32| {
+            let bytes = relocating_image(vtor);
+            let options = crate::RawCodeOptions {
+                profile: crate::RawProfile::CortexM,
+                base: u64::from(BASE),
+                entry: Some(u64::from(BASE)),
+                seeds: Vec::new(),
+                vector_table: None,
+                pointer_tables: false,
+            };
+            let image = crate::RawImage {
+                bytes,
+                options,
+                source: None,
+                regions: Vec::new(),
+                records: None,
+                scatter_load: Some(true),
+            };
+            crate::Binary::from_raw_image(image).unwrap()
+        };
+        let binary = admit(0x3000_0000);
+        let raw = binary.raw_code_image().unwrap();
+        let kinds: Vec<_> = raw.regions().iter().map(|region| (region.name.as_str(), region.base_address)).collect();
+        assert_eq!(kinds, [("raw.code", u64::from(BASE)), ("raw.code.1", 0x1000_0000), ("raw.ram.2", 0x2000_0000)]);
+        assert!(raw.seeds().contains(&0x1000_0000));
+        let report = raw.scatter_load().unwrap();
+        assert_eq!(report.vector_table_refused.as_deref(), Some("VTOR value 0x30000000 lies in no region with bytes"));
+        let binary = admit(0x1000_0000);
+        let report = binary.raw_code_image().unwrap().scatter_load().unwrap();
+        assert_eq!(report.vector_table.as_ref().map(|table| table.address), Some(0x1000_0000), "{report:#?}");
     }
 
     #[test]

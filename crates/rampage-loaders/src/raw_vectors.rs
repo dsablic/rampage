@@ -149,7 +149,12 @@ pub(crate) fn read(bytes: &[u8], base: u64, address: u64) -> Result<VectorTable,
 
 /// [`read`], with `in_image` deciding which handler targets lie inside the image (an ELF's code ranges, which can
 /// span other segments than the table's bytes).
-fn read_with(bytes: &[u8], base: u64, address: u64, in_image: &dyn Fn(u64) -> bool) -> Result<VectorTable, LoadError> {
+pub(crate) fn read_with(
+    bytes: &[u8],
+    base: u64,
+    address: u64,
+    in_image: &dyn Fn(u64) -> bool,
+) -> Result<VectorTable, LoadError> {
     let length = bytes.len() as u64;
     let end = base.saturating_add(length);
     let offset =

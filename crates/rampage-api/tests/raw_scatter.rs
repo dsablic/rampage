@@ -107,9 +107,20 @@ fn startup_copies_are_found_from_the_entry_and_mapped_at_their_run_addresses() {
         assert_eq!(regions[3]["source"], json!({ "type": "scatter_load", "copy": 2 }));
         assert!(regions[3].get("sha256").is_none());
 
+        // The copied code installs the vector table copied with it; its SysTick handler, referenced only from that
+        // table, is seeded.
+        assert_eq!(
+            scatter["vtor_stores"],
+            json!([{ "value": hex(truth("ram_vectors")), "site": scatter["vtor_stores"][0]["site"] }])
+        );
+        let table = &scatter["vector_table"];
+        assert_eq!(table["address"], hex(truth("ram_vectors")), "{variant}: {scatter:#}");
+        assert_eq!(table["vectors"][15]["target"], hex(truth("ram_systick_handler")));
+        assert_eq!(table["vectors"][15]["status"], "accepted");
+
         // Discovery continues into the copied code, which decompiles at its run address.
         let found = functions(&project);
-        for name in ["reset_handler", "ram_main", "ram_mix"] {
+        for name in ["reset_handler", "ram_main", "ram_mix", "ram_systick_handler"] {
             assert!(found.contains(&truth(name)), "{variant}: {name} missing from {found:x?}");
         }
         let (c, failed) = call(&mut project, "decompile", json!({ "at": hex(truth("ram_main")) }));

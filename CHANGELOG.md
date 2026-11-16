@@ -59,6 +59,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
   where it runs, RAM for data, zero fills as unbacked RAM) and the jump into the copied code is seeded, so
   discovery and decompilation reach code that runs from TCM or RAM. `"scatter_load": false` reports without
   mapping. Calls the follow cannot complete are skipped and listed. See [MCP](docs/mcp.md#scatter-load-copies).
+- Relocated vector tables: after the jump into copied code the reset-code follow goes on (at most 200,000
+  instructions) and reports constant stores to VTOR in `raw.scatter_load.vtor_stores`; the table at the last value
+  is read when a mapped region holds it and its accepted handlers are seeded, or `vector_table_refused` says why. A
+  copy the code then stores into is marked `written_after_jump` and maps as RAM, not code.
 
 ## 1.5.0 (2026-11-15)
 

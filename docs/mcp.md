@@ -650,12 +650,21 @@ with its `source_region` and `source_offset`, `stores`, `store_sites`, the entry
 that wrote it, `executed`, and `status`. By default each copy with strong evidence is mapped as a region
 (`raw.<kind>.<n>`, source `scatter_load` with the copy's index): the follow ended cleanly and the write was not
 interrupted or overwritten, a copy's source lies wholly in one backed region, the destination is unmapped, and the
-16-region and 4 MiB caps hold. Copied code (it ran, or it lies in the Code region below 0x20000000) maps as
-`code`; other copies as writable `ram` with their initial bytes; a zero fill as unbacked `ram`. Otherwise
+16-region and 4 MiB caps hold. Copied code (it ran, or it lies in the Code region below 0x20000000 and the
+program never stored into it) maps as `code`; other copies as writable `ram` with their initial bytes; a zero fill
+as unbacked `ram`. Otherwise
 `not_mapped_reason` says why: `not_requested`, `incomplete`, `overwritten`, `computed_bytes`, `source_not_mapped`,
 `destination_mapped`, `region_limit`, `byte_limit` or `out_of_range`. `"scatter_load": false` reports the copies
 without mapping them; a region you state yourself (for example with `from`) always wins, since a copy into it is
 `destination_mapped`. Other profiles have no reset-code follow.
+
+After the jump into copied code the follow goes on for at most 200,000 more instructions (`after_jump`: `steps`,
+`stop`, `stopped_at`); stores there no longer become copies, but a copy the code stores into is marked
+`written_after_jump` (data, so it maps as `ram`). Constant stores to the Vector Table Offset Register (0xE000ED08)
+anywhere in the follow are listed in `vtor_stores`; the table at the last value is read when a region with bytes
+holds it, reported as `vector_table` (each word with its verdict, as for `vector_table`), and its accepted handlers
+become seeds, so handlers that only the relocated table names are discovered. Otherwise `vector_table_refused` says
+why (for example, the table lies in memory nothing copied).
 
 ### A compressed image as the code region
 
