@@ -81,7 +81,11 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - `endpoint_inventory` matches endpoints lexically: addresses built at run time, encrypted or compressed data and
   IPv4 addresses stored as integers in code are not found. `privacy_surface` analyses one binary at a time and
   reads no Java/DEX code; see its [limits](privacy-surface.md#limits).
-- Not built yet: DEX/JVM, object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and
+- Android: DEX files are read and Dalvik bytecode is listed (`dex_metadata`, `dex_code`), but not decompiled to
+  Java, and DEX code is not part of function discovery, xrefs or the guided reports. Obfuscated names are shown as
+  stored; `resources.arsc` is counted, not resolved, so `@0x7f...` manifest values stay resource ids; an AAB's
+  protobuf manifest and APK signature blocks are not read. JVM class files are not read.
+- Not built yet: object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and
   vftable evidence, `__CxxFrameHandler4` and Itanium exception tables, and incremental re-analysis after edits.
 
 ## Library identification

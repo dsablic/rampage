@@ -75,11 +75,13 @@ Formats and raw code:
   [explicit content decoding](decoding.md) (including `write_decoded_range` and `probe_compression`),
   [native data inspection](data-inspection.md), [ZIP32 inventory](archive-inventory.md).
 - [Firmware filesystem images](firmware-images.md): list and extract SquashFS, ext2/3/4, Android sparse and OTA
-  payload, cpio and tar images safely.
+  payload, cpio, tar and ZIP (APK) images safely.
 - [Endpoint inventory and blocklists](endpoint-inventory.md): the hosts, URLs, IPs, pins and certificates a binary or
   firmware tree names, grouped by domain, and a router blocklist of them.
 - [Privacy surface](privacy-surface.md): what a program can capture (microphone, camera, screen, input), where it
   can send it, the call paths between, and whether capture starts without a user-facing trigger.
+- [Android APKs and DEX](android.md): an APK's manifest, permissions with protection levels, components and
+  start-at-boot receivers, native libraries with JNI exports, DEX classes and methods, and Dalvik bytecode.
 - [File formats](file-formats.md): Go and Rust build info, PyInstaller archives, WebAssembly modules, PE resources
   and load config, MSVC C++ metadata (vftables and exception tables), and .NET metadata.
 

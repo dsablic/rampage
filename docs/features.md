@@ -426,10 +426,10 @@ These read embedded metadata and containers without executing, extracting or dec
 - **Managed assemblies** (`dotnet_metadata`, `dotnet_il`): ECMA-335 metadata (types, P/Invokes, custom
   attributes, resources) and ILDasm-style CIL for one method. CIL is reported as managed code, never as native
   instructions. See [managed assemblies](file-formats.md#managed-assemblies).
-- **Android APKs and DEX** (`dex_metadata`, MCP `android` group): the manifest (package, SDK levels, permissions
+- **Android APKs and DEX** (`dex_metadata`, `dex_code`, MCP `android` group): the manifest (package, SDK levels, permissions
   with protection level and privacy category, components with intent filters, exported state and start-at-boot
-  receivers), native libraries with their JNI exports, and DEX 035–041 classes and methods, in-house and without a
-  Java toolchain. See [Android APKs and DEX](android.md).
+  receivers), native libraries with their JNI exports, DEX 035–041 classes and methods, and smali-style Dalvik
+  bytecode for one method with references resolved, in-house and without a Java toolchain. See [Android APKs and DEX](android.md).
 
 ## Debugging
 

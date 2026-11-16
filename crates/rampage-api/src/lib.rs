@@ -2,6 +2,7 @@
 
 mod analysis_cache;
 mod android;
+mod android_code;
 pub mod annotations;
 mod archive;
 mod assembly;
@@ -106,6 +107,7 @@ pub use analysis_cache::{
     DEFAULT_MAX_BYTES, program_digest,
 };
 pub use android::{DexMetadataQuery, MAX_DEX_PAGE, dex_metadata};
+pub use android_code::{DexCodeQuery, MAX_CODE_PAGE, dex_code};
 pub use annotations::{DataTypeAnnotation, DerivedTypeHint, TypeHintAnnotation, TypeHintEvidence, TypeHintTarget};
 pub use archive::{
     ArchiveMember, ArchiveMemberRef, ArchivePage, ArchiveQuery, ArchiveRef, MAX_ARCHIVE_PAGE, MAX_ARCHIVE_RESULT_BYTES,

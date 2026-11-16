@@ -93,6 +93,7 @@ async fn lists_all_tools_with_instructions() {
         "decompile",
         "delete_type",
         "detect_tools",
+        "dex_code",
         "dex_metadata",
         "diff_builds",
         "disassemble",

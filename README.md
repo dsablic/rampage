@@ -161,7 +161,8 @@ Areas marked *experimental* may change in any release; see the [stability policy
   Go runtime type descriptors of stripped Go binaries, by member path or byte offset.
 - **Search and patching:** byte, text, regex, immediate, instruction and reference search; an assembler for an
   x86/x64/AArch64 subset; checked byte patches kept in the annotation log and exported to a new file.
-- **Formats:** ELF, PE and Mach-O (including universal binaries and embedded images), .NET metadata and CIL, Go
+- **Formats:** ELF, PE and Mach-O (including universal binaries and embedded images), .NET metadata and CIL,
+  Android APKs and DEX (manifest, permissions, components, JNI libraries and Dalvik bytecode), Go
   build info, cargo-auditable data, PE resources and load config, PyInstaller archives, WebAssembly module
   summaries, ZIP inventory, embedded-file carving, raw firmware windows, and a [file layout](docs/file-layout.md)
   of any file (padding, entropy, string clusters, hashes and labelled hints). `list_dir` lists a folder with each

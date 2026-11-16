@@ -516,6 +516,21 @@ struct DexMetadataArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+struct DexCodeArgs {
+    /// An .apk, .aab, .jar or .dex file.
+    path: std::path::PathBuf,
+    /// Lpkg/Class;->name(params)ret, pkg.Class.name, a method index or classes2.dex:12.
+    method: String,
+    /// Instructions to skip.
+    offset: Option<usize>,
+    /// Instructions per page (default 200, at most 1000).
+    limit: Option<usize>,
+    /// Start at the instruction holding this code-unit address (:0012, 0x12 or 18).
+    at: Option<String>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct EndpointBlocklistArgs {
     /// File or directory to inventory; or give entries.
     path: Option<std::path::PathBuf>,
@@ -963,7 +978,7 @@ pub fn file_tools() -> Vec<FileTool> {
                           permissions with protection level and privacy category; components with exported state, \
                           intent filters and start_at_boot receivers; native libraries per ABI with Java_ exports; \
                           DEX files (checksums verified, counts); one page of classes, methods or components \
-                          (prefix/package filters, offset/limit).",
+                          (prefix/package filters, offset/limit). Bytecode: dex_code.",
             input_schema: schema::<DexMetadataArgs>(),
             handler: |_, input| {
                 let args: DexMetadataArgs = arguments(input)?;
@@ -976,6 +991,27 @@ pub fn file_tools() -> Vec<FileTool> {
                     limit: args.limit,
                     cursor: args.cursor,
                     max_files: args.max_files,
+                })
+            },
+        },
+        FileTool {
+            effect: Effect::None,
+            group: Group::Android,
+            name: "dex_code",
+            description: "Dalvik bytecode of one method in an APK or DEX file, smali style: strings, types, fields, \
+                          methods, protos, call sites and method handles resolved; branch targets as :xxxx code-unit \
+                          labels; switch and array payloads; try ranges with catch types. method: \
+                          Lpkg/Class;->name(params)ret, pkg.Class.name or an index (an overload is refused with \
+                          candidates). offset/limit or at page the instructions.",
+            input_schema: schema::<DexCodeArgs>(),
+            handler: |_, input| {
+                let args: DexCodeArgs = arguments(input)?;
+                crate::dex_code(&crate::DexCodeQuery {
+                    path: args.path,
+                    method: args.method,
+                    offset: args.offset,
+                    limit: args.limit,
+                    at: args.at,
                 })
             },
         },

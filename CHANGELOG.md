@@ -11,7 +11,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
   privacy category, components with intent filters, exported state and start-at-boot receivers, native libraries
   per ABI with their `Java_*` JNI exports, DEX 035–041 files with checksum and signature checks, and pages of
   classes, methods or components. The DEX, binary XML and manifest readers are in-house (new crate
-  `rampage-dex`) and capped against hostile input. See [Android APKs and DEX](docs/android.md).
+  `rampage-dex`) and capped against hostile input. `dex_code` lists one method's Dalvik bytecode, smali style:
+  all 256 opcodes and the switch and array payloads, with strings, types, fields, methods, protos, call sites and
+  method handles resolved, try ranges with catch types, paged by instruction or from a code address. See
+  [Android APKs and DEX](docs/android.md).
 - ZIP archives in `fs_list` and `fs_extract`: stored and deflated members (ZIP64 included) with the central
   directory as the authority, inflation stopped at the declared size, the per-file limit and the ratio meter, so
   an APK's native libraries can be extracted and opened by path. See [firmware images](docs/firmware-images.md).

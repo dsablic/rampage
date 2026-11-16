@@ -1419,6 +1419,31 @@
         }
       }
     },
+    "dex_code": {
+      "group": "android",
+      "arguments": {
+        "at": {
+          "type": "null|string",
+          "required": false
+        },
+        "limit": {
+          "type": "integer|null",
+          "required": false
+        },
+        "method": {
+          "type": "string",
+          "required": true
+        },
+        "offset": {
+          "type": "integer|null",
+          "required": false
+        },
+        "path": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
     "dex_metadata": {
       "group": "android",
       "arguments": {

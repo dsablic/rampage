@@ -101,3 +101,48 @@ fn hostile_and_foreign_inputs_are_refused_with_a_reason() {
     assert!(call("dex_metadata", json!({"path": android("recorder.apk"), "limit": 0})).is_err());
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dex_code_lists_a_method_with_references_payloads_and_tries() {
+    let apk = android("recorder.apk");
+    let start = call("dex_code", json!({"path": apk, "method": "com.example.recorder.Capture.start"})).unwrap();
+    let lines: Vec<String> = start["instructions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| format!("{} {}", row["op"].as_str().unwrap(), row["args"].as_str().unwrap()).trim_end().to_owned())
+        .collect();
+    assert_eq!(lines[1], "invoke-virtual {v0}, Landroid/media/AudioRecord;->startRecording()V");
+    assert_eq!(lines[2], "const-string v1, \"https://telemetry.example.com/upload\"");
+    assert_eq!(start["instructions"][2]["ref"]["kind"], "string");
+    assert_eq!(start["registers"], 3);
+    let dispatch =
+        call("dex_code", json!({"path": apk, "method": "Lcom/example/recorder/Capture;->dispatch(I)I", "at": ":0008"}))
+            .unwrap();
+    assert_eq!(dispatch["instructions"][0]["op"], "packed-switch-payload");
+    assert_eq!(dispatch["instructions"][0]["args"], "first_key=0x10, targets=[:0005]");
+    let guarded =
+        call("dex_code", json!({"path": apk, "method": "com.example.recorder.Capture.guarded", "limit": 1})).unwrap();
+    assert_eq!(guarded["tries"][0]["handlers"][0]["type"], "Ljava/io/IOException;");
+    assert_eq!(guarded["tries"][0]["end"], ":0003");
+    assert_eq!(guarded["next_offset"], 1);
+    let native = call("dex_code", json!({"path": apk, "method": "com.example.recorder.Capture.nativeEncode"})).unwrap();
+    assert!(native["body"].is_null());
+    let index = guarded["index"].as_u64().unwrap();
+    let by_index = call("dex_code", json!({"path": apk, "method": format!("classes.dex:{index}")})).unwrap();
+    assert_eq!(by_index["method"], guarded["method"]);
+    let dex = call("dex_code", json!({"path": android("recorder.dex"), "method": index.to_string()})).unwrap();
+    assert_eq!(dex["method"], guarded["method"]);
+}
+
+#[test]
+fn dex_code_refuses_unknown_methods_and_bad_addresses() {
+    let apk = android("recorder.apk");
+    assert!(
+        call("dex_code", json!({"path": apk, "method": "com.example.Nope.run"})).unwrap_err().contains("no method")
+    );
+    assert!(call("dex_code", json!({"path": apk, "method": "nonsense"})).is_err());
+    let past = json!({"path": apk, "method": "com.example.recorder.Capture.start", "at": "0x400"});
+    assert!(call("dex_code", past).unwrap_err().contains("past the end"));
+    assert!(call("dex_code", json!({"path": apk, "method": "classes9.dex:0"})).is_err());
+}

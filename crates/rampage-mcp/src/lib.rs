@@ -124,7 +124,7 @@ fn group_summary(group: Group) -> &'static str {
         }
         Group::Diagnostics => "decode trouble: analysis_diagnostics, entry_diagnostics, inspect_jump_table.",
         Group::DotNet => ".NET: dotnet_metadata (types, methods, P/Invokes), dotnet_il (CIL).",
-        Group::Android => "APK/DEX: dex_metadata (manifest, permissions, receivers, JNI, classes).",
+        Group::Android => "APK/DEX: dex_metadata (manifest, permissions, JNI), dex_code (Dalvik).",
         Group::Carve => {
             "files inside files: carve (embedded files), archive_inventory (ZIP), fs_list/fs_extract \
              (filesystems), privacy_surface."
@@ -1429,7 +1429,7 @@ mod tests {
         (Group::Runtime, &["observe_pointer", "compare_runtime_bytes", "query_debugger"]),
         (Group::Diagnostics, &["analysis_diagnostics", "entry_diagnostics", "inspect_jump_table"]),
         (Group::DotNet, &["dotnet_metadata", "dotnet_il"]),
-        (Group::Android, &["dex_metadata"]),
+        (Group::Android, &["dex_metadata", "dex_code"]),
         (Group::Carve, &["carve", "archive_inventory", "fs_list", "fs_extract"]),
         (Group::Formats, &["build_info", "pe_resources", "pe_load_config", "pyinstaller_archive", "wasm_module"]),
         (

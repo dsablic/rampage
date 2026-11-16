@@ -8,6 +8,7 @@ reading is capped (see [Limits](#limits)).
 | Tool | Answers |
 | --- | --- |
 | `dex_metadata` | What the app is and asks for: package, versions, SDK levels, permissions, components, boot receivers, native libraries with JNI exports, DEX files, one page of classes, methods or components. |
+| `dex_code` | What one method does: its Dalvik bytecode, smali style, with every reference resolved. |
 
 Enable the group with `enable_tools {"groups": ["android"]}`. Pull an APK off a firmware image with
 [`fs_extract`](firmware-images.md) first; `fs_list` and `fs_extract` also open any APK as a ZIP, so its native
@@ -55,6 +56,37 @@ For one file the result holds:
   (default 100, at most 500) and `next_offset` continues.
 
 A bare `.dex` file has the DEX fields only.
+
+## dex_code
+
+```json
+{"tool": "dex_code", "path": "Recorder.apk", "method": "Lcom/example/recorder/Capture;->start()V"}
+```
+
+`method` names one defined method: `Lpkg/Class;->name(params)ret` (the smali form, as `dex_metadata`'s method
+list prints it), `Lpkg/Class;->name` or `pkg.Class.name` when the name is not overloaded (an overloaded name is
+refused with each candidate), a method index into the first DEX file (`12`) or into a named one
+(`classes2.dex:12`).
+
+The result has the method's access flags, `registers`, `ins`, `outs`, `code_units`, `tries` (each with `start`
+and `end` labels and its handlers' catch `type` or `<any>`), and a page of `instructions`, each with its code-unit
+`address` (hex), `op`, `args` and, for an index operand, `ref` (`kind`: string, type, field, method, proto,
+call_site or method_handle, and `index`):
+
+```
+0000 new-instance v0, Landroid/media/AudioRecord;
+0002 invoke-virtual {v0}, Landroid/media/AudioRecord;->startRecording()V
+0005 const-string v1, "https://telemetry.example.com/upload"
+```
+
+Branch targets are `:xxxx` code-unit labels. All 256 opcode values decode (`unused` for unassigned ones), including
+`invoke-polymorphic` (with its prototype), `invoke-custom` (call site with its bootstrap method handle, name and
+type) and `const-method-handle`/`const-method-type`. The `packed-switch`, `sparse-switch` and `fill-array-data`
+payloads are listed as `*-payload` pseudo-instructions with their keys and absolute targets, or element width,
+count and data (the first 64 bytes). Bytes that decode to no complete instruction show as `.unit`. `offset` and
+`limit` (default 200, at most 1000) page by instruction, or `at` (`:0012`, `0x12`, `18`) starts at the instruction
+holding that address. A `native` method has `body: null` and points at the native libraries. There is no
+decompilation to Java yet.
 
 ## Limits
 

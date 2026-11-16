@@ -543,6 +543,9 @@ async fn contract_mcp_android_results() {
     exercise(c, o, "dex_metadata", json!({"path": apk, "list": "components", "limit": 2})).await;
     exercise(c, o, "dex_metadata", json!({"path": android.join("recorder.dex"), "limit": 1})).await;
     exercise(c, o, "dex_metadata", json!({"path": android, "max_files": 1})).await;
+    let method = "Lcom/example/recorder/Capture;->guarded()V";
+    exercise(c, o, "dex_code", json!({"path": apk, "method": method, "limit": 2})).await;
+    exercise(c, o, "dex_code", json!({"path": apk, "method": "com.example.recorder.Capture.nativeEncode"})).await;
     check_group(client, "android", &observed, &[]).await;
 }
 
