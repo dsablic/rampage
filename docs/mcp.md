@@ -554,8 +554,14 @@ words fall outside the asserted mapping, `base_address_suggestion` gives `base_a
 would hold them) within `lowest_base`..`highest_base`; it is never applied, and an explicit `vector_table` address
 moves with the base.
 
-`"pointer_tables": true` (Cortex-M only, off by default) also seeds functions from tables of Thumb code pointers,
-such as handler arrays and command tables, so a raw image needs no hand-built symbol list. A table is a run of at
+`"pointer_tables": true` (Cortex-M only) also seeds functions from tables of Thumb code pointers,
+such as handler arrays and command tables, so a raw image needs no hand-built symbol list. `false` never scans.
+Left unset, the scan runs automatically when discovery from the entry, seeds, vector table and scatter-load jump
+finds fewer than one function per 16 KiB of code (none at all in a smaller image): the project is then opened with
+the scan, `raw.pointer_tables.automatic` gives `functions_before`, `code_bytes`, `applied` and `reason`, and
+`list_functions` adds a one-line `note`. When the scan's seeds cannot be admitted (more than 8192 seeds),
+`applied` is false, `refused` says why and the sparse discovery stays. An automatic scan has the interpretation
+identity of `"pointer_tables": true`; with discovery in proportion the project is exactly that of `false`. A table is a run of at
 least three word-aligned code pointers at a stride of 4, 8, 12 or 16 bytes (zero or 0xFFFFFFFF slots allowed
 between them), where a code pointer is an odd word whose target lies in the image and decodes like code. Its
 `evidence` is `push_lr` (one of the first four instructions pushes `lr`), `call_target` (a decodable `bl` in the image
@@ -675,8 +681,8 @@ why (for example, the table lies in memory nothing copied).
 When discovery from the entry and seeds finds fewer than one function per 16 KiB of a Raw project's code (none at all
 in a smaller image), `list_functions` adds a one-line `next` naming what to try, and so does `binary_info` once
 discovery has run (it never starts discovery itself): `"pointer_tables":
-true` on Cortex-M when it is off, and dropping `"scatter_load": false` when the startup copies it reported were
-left unmapped. Startup code and calls through function pointers are the usual reasons discovery stops early.
+true` on Cortex-M when `false` turned it off, and dropping `"scatter_load": false` when the startup copies it
+reported were left unmapped. With `pointer_tables` unset, the scan runs by itself instead (above). Startup code and calls through function pointers are the usual reasons discovery stops early.
 
 ### A compressed image as the code region
 

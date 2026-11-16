@@ -636,7 +636,7 @@ fn cortex_m_requests_bound_size_and_refuse_vector_tables_elsewhere() {
             "profile": "cortex-m", "offset": 0, "length": 2, "base_address": 0, "pointer_tables": absent
         }))
         .unwrap();
-        assert!(!request.pointer_tables, "{absent}");
+        assert_ne!(request.pointer_tables, Some(true), "{absent}");
     }
     let text = refusal(
         &path,

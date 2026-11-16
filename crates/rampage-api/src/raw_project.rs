@@ -64,10 +64,12 @@ pub struct RawProjectRequest {
     pub vector_table: Option<RawVectorTable>,
     /// ARM:LE:32:Cortex only: `true` scans the image for tables of Thumb code pointers (handler arrays, command
     /// tables) and seeds the targets of the tables it accepts; every table found, accepted or refused, is reported
-    /// with the evidence per entry in binary_info. Off by default.
-    #[serde(default, deserialize_with = "pointer_tables")]
+    /// with the evidence per entry in binary_info. `false` never scans. Unset (automatic) scans only when discovery
+    /// from the entry, seeds, vector table and scatter-load jump finds fewer than one function per 16 KiB of code,
+    /// and binary_info and list_functions then say so.
+    #[serde(default)]
     #[schemars(schema_with = "pointer_tables_schema")]
-    pub pointer_tables: bool,
+    pub pointer_tables: Option<bool>,
     /// ARM:LE:32:Cortex only: the reset code at the entry is followed (a bounded interpreter, nothing runs) for the
     /// sections startup code copies to their run addresses and the RAM it zeroes; binary_info reports each with its
     /// evidence. By default each complete copy from mapped bytes to an unmapped destination is mapped there (code,
@@ -243,13 +245,10 @@ pub struct RawRegionDecode {
     pub timeout_ms: Option<u64>,
 }
 
-fn pointer_tables<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
-    Ok(Option::<bool>::deserialize(deserializer)?.unwrap_or(false))
-}
-
 fn pointer_tables_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
-        "description": "ARM:LE:32:Cortex only: true seeds functions from tables of Thumb code pointers it accepts.",
+        "description": "ARM:LE:32:Cortex only: true seeds functions from tables of Thumb code pointers it accepts; \
+                        false never scans; unset scans only when discovery is sparse (under one function per 16 KiB).",
         "type": ["boolean", "null"]
     })
 }
@@ -534,7 +533,7 @@ impl RawProjectRequest {
                 RawVectorTable::AtBase => base,
                 RawVectorTable::At(address) => address,
             }),
-            pointer_tables: self.pointer_tables,
+            pointer_tables: self.pointer_tables == Some(true),
         })
     }
 
@@ -797,13 +796,17 @@ impl RawProjectRequest {
 /// them as a Raw [`Binary`]. No native header admission, sidecar or annotation log is involved; decoded regions
 /// stay in memory.
 pub fn open_raw_binary(path: &Path, request: &RawProjectRequest) -> Result<Binary, ApiError> {
+    Binary::from_raw_image(raw_image(path, request)?).map_err(|source| ApiError::Load { path: path.to_owned(), source })
+}
+
+/// The Raw image `request` maps from `path`, read but not yet admitted.
+pub(crate) fn raw_image(path: &Path, request: &RawProjectRequest) -> Result<RawImage, ApiError> {
     let profile = resolve_raw_profile(&request.profile).map_err(ApiError::Invalid)?;
-    let image = match request.format {
-        RawInputFormat::Binary => request.binary_image(path, profile)?,
-        RawInputFormat::Ihex => request.record_image(path, profile, RawRecordFormat::Ihex)?,
-        RawInputFormat::Srec => request.record_image(path, profile, RawRecordFormat::Srec)?,
-    };
-    Binary::from_raw_image(image).map_err(|source| ApiError::Load { path: path.to_owned(), source })
+    match request.format {
+        RawInputFormat::Binary => request.binary_image(path, profile),
+        RawInputFormat::Ihex => request.record_image(path, profile, RawRecordFormat::Ihex),
+        RawInputFormat::Srec => request.record_image(path, profile, RawRecordFormat::Srec),
+    }
 }
 
 /// What to do with a file no native loader recognises: the Raw selectors that read headerless code, with examples.

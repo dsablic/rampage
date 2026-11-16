@@ -258,7 +258,7 @@ language ID),
 `offset` and `length` (original-file bytes, 1..=131072, or up to 4 MiB for `ARM:LE:32:Cortex`), `base_address`,
 optional `entry` and `seeds` (internal code-space BYTE addresses), and for Cortex-M an optional `vector_table`
 (`true` for one at `base_address`, or its address) and `pointer_tables` (`true` seeds functions from tables of
-Thumb code pointers), and `regions` (further code, data or RAM regions of the same file, optionally decoded
+Thumb code pointers, `false` never scans, unset scans when discovery finds under one function per 16 KiB), and `regions` (further code, data or RAM regions of the same file, optionally decoded
 in memory). `format` `ihex` or `srec` reads Intel HEX or S-records, whose records state every address (omit
 `offset`, `length` and `base_address`). Unknown fields are rejected. The mapping is an analyst
 assertion; see [Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects) for profiles and limits.

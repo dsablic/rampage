@@ -200,16 +200,69 @@ fn a_small_discovery_in_a_large_image_suggests_pointer_tables_and_mapping_the_co
         assert_eq!(summary["next"], page["next"]);
         summary["next"].as_str().map(str::to_owned)
     };
-    let hint = next(&open_padded(json!({ "scatter_load": false }))).expect("three functions in 1 MiB");
+    let hint = next(&open_padded(json!({ "scatter_load": false, "pointer_tables": false })))
+        .expect("three functions in 1 MiB");
     assert!(hint.starts_with("Discovery from the entry and seeds found 3 functions in 1024 KiB of code"), "{hint}");
     assert!(hint.contains("\"pointer_tables\": true") && hint.contains("3 startup copies"), "{hint}");
     // Mapped copies alone leave the pointer-table suggestion; with pointer tables too, nothing is suggested.
-    let hint = next(&open_padded(json!({}))).unwrap();
+    let hint = next(&open_padded(json!({ "pointer_tables": false }))).unwrap();
     assert!(hint.contains("pointer_tables") && !hint.contains("scatter_load"), "{hint}");
     assert_eq!(next(&open_padded(json!({ "pointer_tables": true }))), None);
     // A small image in proportion gets no hint.
     assert_eq!(next(&open("gcc", selector("gcc"))), None);
     std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// With `pointer_tables` unset, a sparse discovery runs the pointer-table scan itself: binary_info's pointer-table
+/// section and list_functions say it ran automatically and why, and no hint asks for it. A discovery in proportion
+/// leaves the project exactly as `pointer_tables` false would.
+#[test]
+fn a_sparse_discovery_runs_the_pointer_table_scan_automatically() {
+    let directory = std::env::temp_dir().join(format!("rampage-raw-auto-tables-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut bytes = std::fs::read(fixture("raw-cortex-m-scatter-gcc.bin")).unwrap();
+    bytes.resize(1024 * 1024, 0xff);
+    let path = directory.join("padded.bin");
+    std::fs::write(&path, &bytes).unwrap();
+    let session = Session::default();
+    let open_padded = |pointer_tables: Value| {
+        let request: RawProjectRequest = serde_json::from_value(json!({
+            "profile": "cortex-m4", "offset": 0, "length": bytes.len(), "base_address": "0x8000000",
+            "vector_table": true, "pointer_tables": pointer_tables,
+        }))
+        .unwrap();
+        session.open_raw(&path, &request).unwrap()
+    };
+    let project = open_padded(Value::Null);
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    let automatic = &summary["raw"]["pointer_tables"]["automatic"];
+    assert_eq!(automatic["functions_before"], 6, "{summary:#}");
+    assert_eq!(automatic["applied"], true, "{automatic:#}");
+    assert!(automatic["reason"].as_str().unwrap().contains("pointer_tables was unset"), "{automatic:#}");
+    assert!(summary["raw"]["pointer_tables"]["words_scanned"].as_u64().unwrap() > 0);
+    let page = serde_json::to_value(project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap()).unwrap();
+    let note = page["note"].as_str().unwrap();
+    assert!(note.contains("found 6 functions") && note.contains("ran automatically"), "{note}");
+    assert!(page.get("next").is_none() && summary.get("next").is_none(), "{page:#}");
+    // The scan's interpretation is pointer_tables true's; the request is cached on its own.
+    let explicit = open_padded(json!(true));
+    let identity = |project: &rampage_api::Project| project.binary.raw_interpretation_identity().unwrap().unwrap();
+    assert_eq!(identity(&project), identity(&explicit));
+    assert!(!Arc::ptr_eq(&project, &explicit));
+    assert!(Arc::ptr_eq(&project, &open_padded(Value::Null)));
+    let explicit = serde_json::to_value(explicit.summary()).unwrap();
+    assert!(explicit["raw"]["pointer_tables"].get("automatic").is_none());
+    assert!(serde_json::to_value(open_padded(json!(false)).summary()).unwrap()["raw"].get("pointer_tables").is_none());
+    std::fs::remove_dir_all(&directory).unwrap();
+
+    // In proportion: no scan, the identity of pointer_tables false, no note.
+    let project = open("gcc", selector("gcc"));
+    let mut off = selector("gcc");
+    off["pointer_tables"] = json!(false);
+    assert_eq!(identity(&project), identity(&open("gcc", off)));
+    assert!(serde_json::to_value(project.summary()).unwrap()["raw"].get("pointer_tables").is_none());
+    let page = serde_json::to_value(project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap()).unwrap();
+    assert!(page.get("note").is_none(), "{page:#}");
 }
 
 /// Opened at a wrong base (a copy destination, as an agent guessed) without reading the vector table, binary_info

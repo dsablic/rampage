@@ -6,6 +6,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- Sparse Raw discovery runs the pointer-table scan itself: a Cortex-M `raw` selector that leaves `pointer_tables`
+  unset now scans for tables of code pointers when discovery from the entry, seeds, vector table and scatter-load
+  jump finds fewer than one function per 16 KiB of code, instead of only suggesting it. `binary_info` reports why
+  under `raw.pointer_tables.automatic` and `list_functions` adds a `note`; `true` and `false` keep their meaning,
+  and discovery in proportion leaves the project unchanged. See [MCP](docs/mcp.md#raw-projects).
 - Privacy surface: the new `privacy_surface` report (group `carve`) maps what one binary can capture and where it
   can send it. Sources are microphone, camera, screen and input-device capture: ALSA, tinyalsa, PulseAudio,
   PortAudio and AAudio input, V4L2, framebuffer, DRM and evdev ioctls (matched by type and number at any ABI size),

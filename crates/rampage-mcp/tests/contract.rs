@@ -154,8 +154,13 @@ async fn contract_mcp_core_results() {
     exercise(c, o, "binary_info", json!({"path": fixtures.join("firmware/raw-cortex-m.bin"), "raw": raw})).await;
     // A wrong base: refused vectors and the never-applied base-address suggestion.
     // Discovery finds nothing there, so list_functions, and binary_info after it, suggest what to try next.
-    let raw = json!({"profile": "cortex-m3", "offset": 0, "length": 800, "base_address": 0, "vector_table": true});
+    let raw = json!({"profile": "cortex-m3", "offset": 0, "length": 800, "base_address": 0, "vector_table": true,
+        "pointer_tables": false});
     let path = fixtures.join("firmware/raw-cortex-m.bin");
+    exercise(c, o, "list_functions", json!({"path": path, "raw": raw})).await;
+    exercise(c, o, "binary_info", json!({"path": path, "raw": raw})).await;
+    // With pointer_tables unset, that sparse discovery runs the pointer-table scan itself and says so.
+    let raw = json!({"profile": "cortex-m3", "offset": 0, "length": 800, "base_address": 0, "vector_table": true});
     exercise(c, o, "list_functions", json!({"path": path, "raw": raw})).await;
     exercise(c, o, "binary_info", json!({"path": path, "raw": raw})).await;
     // Multiple regions: an LZSS-decoded second stage at its RAM base with its receipt, RAM with and without bytes.

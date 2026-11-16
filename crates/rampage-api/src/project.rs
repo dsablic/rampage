@@ -106,6 +106,8 @@ pub struct Project {
     code_regions: OnceLock<Vec<rampage_analysis::code_integrity::CodeRegion>>,
     /// A Cortex-M Raw project's base checked against load-address candidates, computed once.
     base_check: OnceLock<Option<rampage_loaders::raw_base::BaseCheck>>,
+    /// A Cortex-M Raw project whose selector left `pointer_tables` unset: why the scan ran automatically.
+    pub(crate) pointer_tables_auto: OnceLock<crate::rows::PointerTablesAuto>,
     /// Strings of at least `DEFAULT_STRING_LENGTH` characters, scanned once.
     strings: OnceLock<Vec<FoundString>>,
     /// The embedded decompiler, built once over the executable segments on first use. Behind a mutex because
@@ -384,6 +386,7 @@ impl Project {
             triage: OnceLock::new(),
             code_regions: OnceLock::new(),
             base_check: OnceLock::new(),
+            pointer_tables_auto: OnceLock::new(),
             strings: OnceLock::new(),
             decompiler: std::sync::Mutex::new(crate::decompile::DecompilerState::default()),
             packs: RwLock::default(),
@@ -887,7 +890,9 @@ impl Project {
                 regions: raw.regions(),
                 records: raw.records(),
                 vector_table: raw.vector_table(),
-                pointer_tables: raw.pointer_tables(),
+                pointer_tables: raw
+                    .pointer_tables()
+                    .map(|tables| crate::rows::RawPointerTables { tables, automatic: self.pointer_tables_auto.get() }),
                 scatter_load: raw.scatter_load(),
                 base_check,
             }),
@@ -951,7 +956,53 @@ impl Project {
                 ),
             })
             .collect();
-        Ok(crate::rows::FunctionsPage { page, unexplored_code, next: self.raw_discovery_hint() })
+        Ok(crate::rows::FunctionsPage {
+            page,
+            unexplored_code,
+            next: self.raw_discovery_hint(),
+            note: self.pointer_tables_note(),
+        })
+    }
+
+    /// For a Cortex-M Raw project whose pointer-table scan ran automatically, what ran and why.
+    pub fn pointer_tables_note(&self) -> Option<String> {
+        let auto = self.pointer_tables_auto.get()?;
+        let before = format!(
+            "Discovery from the entry, seeds, vector table and scatter-load jump found {} function{} in {} KiB of \
+             code (fewer than one per 16 KiB)",
+            auto.functions_before,
+            if auto.functions_before == 1 { "" } else { "s" },
+            auto.code_bytes.div_ceil(1024)
+        );
+        Some(match (self.binary.raw_code_image().and_then(|raw| raw.pointer_tables()), &auto.refused) {
+            (Some(tables), _) if auto.applied => format!(
+                "{before}, so the pointer-table scan ran automatically: {} accepted table{} seeded {} function \
+                 start{}; binary_info raw.pointer_tables lists each table with its evidence. Pass \
+                 \"pointer_tables\": false to turn the scan off",
+                tables.accepted_tables,
+                if tables.accepted_tables == 1 { "" } else { "s" },
+                tables.seeds,
+                if tables.seeds == 1 { "" } else { "s" },
+            ),
+            (_, refused) => format!(
+                "{before}; the automatic pointer-table scan was not applied: {}",
+                refused.as_deref().unwrap_or("no tables")
+            ),
+        })
+    }
+
+    /// For a Raw project whose discovery already ran: the functions found and the bytes of backed code, when that
+    /// is fewer than one function per 16 KiB of code (none at all in a smaller image).
+    pub(crate) fn raw_discovery_sparse(&self) -> Option<(usize, u64)> {
+        let raw = self.binary.raw_code_image()?;
+        let code: u64 = raw
+            .regions()
+            .iter()
+            .filter(|region| region.kind == rampage_loaders::RawRegionKind::Code && region.backed())
+            .map(|region| region.length)
+            .sum();
+        let found = self.analysis.get()?.as_ref().ok()?.program.functions.len();
+        (found as u64 * RAW_BYTES_PER_FUNCTION < code.max(RAW_BYTES_PER_FUNCTION)).then_some((found, code))
     }
 
     /// For a Raw project whose discovery, already run, found fewer than one function per 16 KiB of code (none at all
@@ -960,18 +1011,9 @@ impl Project {
     /// applies, or before discovery has run.
     pub fn raw_discovery_hint(&self) -> Option<String> {
         let raw = self.binary.raw_code_image()?;
-        let code: u64 = raw
-            .regions()
-            .iter()
-            .filter(|region| region.kind == rampage_loaders::RawRegionKind::Code && region.backed())
-            .map(|region| region.length)
-            .sum();
-        let found = self.analysis.get()?.as_ref().ok()?.program.functions.len() as u64;
-        if found * RAW_BYTES_PER_FUNCTION >= code.max(RAW_BYTES_PER_FUNCTION) {
-            return None;
-        }
+        let (found, code) = self.raw_discovery_sparse()?;
         let mut steps = Vec::new();
-        if raw.profile().m_profile() && raw.pointer_tables().is_none() {
+        if raw.profile().m_profile() && raw.pointer_tables().is_none() && self.pointer_tables_auto.get().is_none() {
             steps.push(
                 "add \"pointer_tables\": true to raw to seed functions from tables of code pointers (handler arrays, \
                  command tables); binary_info then reports each table with its evidence"

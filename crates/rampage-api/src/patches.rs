@@ -1211,6 +1211,9 @@ impl Project {
         project.byte_patches = snapshot.patches().clone();
         let _ = project.frozen_annotations.set(RwLock::new(snapshot.read_snapshot()));
         project.patch_origin = Some(Arc::clone(source));
+        if let Some(auto) = source.pointer_tables_auto.get() {
+            let _ = project.pointer_tables_auto.set(auto.clone());
+        }
         project.set_packs(self.packs());
         {
             let old = self.decompiler.lock().unwrap_or_else(|poison| poison.into_inner());

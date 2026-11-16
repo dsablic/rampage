@@ -270,6 +270,9 @@ pub struct FunctionsPage {
     /// Raw projects whose discovery found very few functions for their code: what to try next.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    /// Raw projects whose pointer-table scan ran automatically because discovery was sparse: what ran and why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// A code region judged encrypted or packed, and the metadata entry points (symbols, exports, the entry point,
@@ -300,8 +303,9 @@ pub struct RawSummary<'a> {
     pub records: Option<&'a rampage_loaders::RawRecordsEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_table: Option<&'a rampage_loaders::raw_vectors::VectorTable>,
+    /// Pointer tables found when seeding from them was requested, or ran automatically (`automatic`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pointer_tables: Option<&'a rampage_loaders::raw_pointers::PointerTables>,
+    pub pointer_tables: Option<RawPointerTables<'a>>,
     /// Cortex-M: the copies and zero fills the reset code makes, and which were mapped at their run addresses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scatter_load: Option<&'a rampage_loaders::raw_scatter::ScatterLoad>,
@@ -310,6 +314,31 @@ pub struct RawSummary<'a> {
     /// looks wrong.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_check: Option<&'a rampage_loaders::raw_base::BaseCheck>,
+}
+
+/// A Raw project's pointer tables, with why they were scanned when the selector left `pointer_tables` unset.
+#[derive(Debug, Serialize)]
+pub struct RawPointerTables<'a> {
+    #[serde(flatten)]
+    pub tables: &'a rampage_loaders::raw_pointers::PointerTables,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub automatic: Option<&'a PointerTablesAuto>,
+}
+
+/// Why a Cortex-M Raw project whose selector left `pointer_tables` unset scanned for pointer tables: discovery
+/// from the entry, seeds, vector table and scatter-load jump found fewer than one function per 16 KiB of code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PointerTablesAuto {
+    /// Functions discovery found before the scan.
+    pub functions_before: usize,
+    /// Bytes of code in backed code regions.
+    pub code_bytes: u64,
+    /// Whether the scan's seeds were used; false when admitting them failed (`refused` says why) and the project
+    /// kept the sparse discovery.
+    pub applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize)]

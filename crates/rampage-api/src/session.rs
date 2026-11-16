@@ -177,34 +177,47 @@ impl Session {
     /// cached by canonical path and the raw interpretation identity (bytes, profile, mapping, entry and seeds), so
     /// changed bytes or seeds give a fresh project while the same interpretation keeps its memory-only annotations.
     /// No sidecar or annotation log is read or written.
+    ///
+    /// A Cortex-M request that leaves `pointer_tables` unset runs discovery when the project is first opened, and
+    /// when it finds fewer than one function per 16 KiB of code, opens the same image with the pointer-table scan
+    /// instead and records why ([`Project::pointer_tables_note`]). Such requests are cached apart from explicit
+    /// ones, whose interpretation identity they share when the scan does not run.
     pub fn open_raw(&self, path: &Path, request: &crate::RawProjectRequest) -> Result<Arc<Project>, ApiError> {
-        let binary = crate::raw_project::open_raw_binary(path, request)?;
+        let image = crate::raw_project::raw_image(path, request)?;
+        let automatic = request.pointer_tables.is_none() && image.options.profile.m_profile();
+        let rescan = automatic.then(|| image.clone());
+        let load = |source| ApiError::Load { path: path.to_owned(), source };
+        let binary = Binary::from_raw_image(image).map_err(load)?;
         let identity = binary
             .raw_interpretation_identity()
-            .map_err(|source| ApiError::Load { path: path.to_owned(), source })?
+            .map_err(load)?
             .ok_or_else(|| ApiError::Invalid("Raw admission produced no interpretation identity".to_owned()))?;
         let canonical = path.canonicalize().map_err(|source| ApiError::Load {
             path: path.to_owned(),
             source: rampage_loaders::LoadError::Io { path: path.to_owned(), source },
         })?;
-        let key = (canonical, identity.sha256);
-        let project = {
-            let mut state = self.state.lock().expect("session lock");
-            if let Some(index) = state.raw.iter().position(|(cached, _)| *cached == key) {
-                let entry = state.raw.remove(index);
-                let project = Arc::clone(&entry.1);
-                state.raw.push(entry);
-                project
-            } else {
-                let project = Project::new(binary);
-                let _ = project.raw_source.set(key.0.clone());
-                project.set_packs(Arc::clone(&self.packs));
-                self.configure(&project);
-                if let Some(executable) = self.decompiler_worker() {
-                    project.set_decompiler_worker(Some(crate::DecompilerWorkerConfig {
-                        executable: Some(executable),
-                        ..Default::default()
-                    }));
+        let sha256 = if automatic { format!("{}+pointer_tables:auto", identity.sha256) } else { identity.sha256 };
+        let key = (canonical, sha256);
+        let cached = |state: &mut State| {
+            let index = state.raw.iter().position(|(cached, _)| *cached == key)?;
+            let entry = state.raw.remove(index);
+            let project = Arc::clone(&entry.1);
+            state.raw.push(entry);
+            Some(project)
+        };
+        let found = cached(&mut self.state.lock().expect("session lock"));
+        let project = match found {
+            Some(project) => project,
+            None => {
+                // Discovery runs outside the session lock; a concurrent open of the same request keeps the first
+                // project cached.
+                let mut project = self.new_raw_project(binary, &key.0);
+                if let Some(image) = rescan {
+                    project = self.with_automatic_pointer_tables(project, image, &key.0);
+                }
+                let mut state = self.state.lock().expect("session lock");
+                if let Some(project) = cached(&mut state) {
+                    return project.effective_snapshot();
                 }
                 let project = Arc::new(project);
                 state.raw.push((key, Arc::clone(&project)));
@@ -220,6 +233,56 @@ impl Session {
             }
         };
         project.effective_snapshot()
+    }
+
+    fn new_raw_project(&self, binary: Binary, source: &Path) -> Project {
+        let project = Project::new(binary);
+        let _ = project.raw_source.set(source.to_owned());
+        project.set_packs(Arc::clone(&self.packs));
+        self.configure(&project);
+        if let Some(executable) = self.decompiler_worker() {
+            project.set_decompiler_worker(Some(crate::DecompilerWorkerConfig {
+                executable: Some(executable),
+                ..Default::default()
+            }));
+        }
+        project
+    }
+
+    /// `project` (opened without pointer tables) after discovery, or, when that discovery is sparse, `image`
+    /// opened with the pointer-table scan, recording why. A scan whose seeds cannot be admitted keeps `project`
+    /// and records the refusal.
+    fn with_automatic_pointer_tables(
+        &self,
+        project: Project,
+        mut image: rampage_loaders::RawImage,
+        source: &Path,
+    ) -> Project {
+        if project.analysis().is_err() {
+            return project;
+        }
+        let Some((functions_before, code_bytes)) = project.raw_discovery_sparse() else {
+            return project;
+        };
+        let reason = format!(
+            "pointer_tables was unset and discovery found {functions_before} function{} in {} KiB of code, fewer \
+             than one per 16 KiB",
+            if functions_before == 1 { "" } else { "s" },
+            code_bytes.div_ceil(1024)
+        );
+        image.options.pointer_tables = true;
+        let (project, applied, refused) = match Binary::from_raw_image(image) {
+            Ok(binary) => (self.new_raw_project(binary, source), true, None),
+            Err(error) => (project, false, Some(error.to_string())),
+        };
+        let _ = project.pointer_tables_auto.set(crate::rows::PointerTablesAuto {
+            functions_before,
+            code_bytes,
+            applied,
+            refused,
+            reason,
+        });
+        project
     }
 
     fn open_at_policy(

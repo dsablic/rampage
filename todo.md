@@ -169,7 +169,9 @@ decoded code.
   stores and a CRC-32 polynomial literal (81 turns, $0.91). Still:
   - **it ignored `list_functions`' `next`** naming `pointer_tables` (26 functions in 3.5 MiB). Consider turning
     `pointer_tables` on by default for Cortex-M Raw images when entry discovery is that sparse, or have
-    `list_functions` run that pass itself and say so, rather than asking;
+    `list_functions` run that pass itself and say so, rather than asking. Done: unset `pointer_tables` now means
+    automatic; a sparse discovery reopens the image with the scan and says so in `raw.pointer_tables.automatic`
+    and a `list_functions` note;
   - one Raw `binary_info` summary exceeded the 60,000-byte tool budget and returned only an error (decode receipts,
     pointer tables, scatter copies and base evidence together); trim or page the Raw sections;
   - `find_crypto`, `function_summary`, `triage` and `lock_mechanisms` still refuse or analyse nothing on Raw
