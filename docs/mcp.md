@@ -666,6 +666,11 @@ holds it, reported as `vector_table` (each word with its verdict, as for `vector
 become seeds, so handlers that only the relocated table names are discovered. Otherwise `vector_table_refused` says
 why (for example, the table lies in memory nothing copied).
 
+When discovery from the entry and seeds finds fewer than one function per 64 KiB of a Raw project's code (none at all
+in a smaller image), `binary_info` and `list_functions` add a one-line `next` naming what to try: `"pointer_tables":
+true` on Cortex-M when it is off, and dropping `"scatter_load": false` when the startup copies it reported were
+left unmapped. Startup code and calls through function pointers are the usual reasons discovery stops early.
+
 ### A compressed image as the code region
 
 `decode` on the selector itself maps a decoder provider's output as the primary code region, so a compressed

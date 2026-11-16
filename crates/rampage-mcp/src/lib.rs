@@ -221,6 +221,8 @@ code copies to their run addresses and the RAM it zeroes: binary_info's raw.scat
 (destination, length, source, store sites, routine) and, by default, a complete copy from mapped bytes to an \
 unmapped destination is mapped there (code where the copy runs or below 0x20000000, else RAM; zero fill as \
 unbacked RAM) and the jump into the copied code is seeded; scatter_load false reports them only. \
+When discovery finds fewer than one function per 64 KiB of Raw code, binary_info and list_functions return a \
+one-line next naming the options to try (pointer_tables, mapping the startup copies). \
 Cortex-M only: regions (up to 15) maps more of the same file beside the primary code region, each {kind: code|data|\
 ram, base_address, offset, length, decode?, from?}: e.g. a second stage at its RAM base \
 {\"kind\":\"code\",\"base_address\":\"0x20000000\",\"offset\":\"0x400\",\"length\":128}; ram is writable (its bytes \

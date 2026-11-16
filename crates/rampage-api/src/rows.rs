@@ -253,6 +253,9 @@ pub struct Summary<'a> {
     /// Code regions judged encrypted or packed (high entropy and a poor decode), which discovery does not explore.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub encrypted_or_packed_code: Vec<rampage_analysis::code_integrity::CodeRegion>,
+    /// Raw projects whose discovery found very few functions for their code: what to try next.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 /// A page of [`FunctionRow`]s, with the code regions discovery did not explore because they are judged encrypted
@@ -263,6 +266,9 @@ pub struct FunctionsPage {
     pub page: Page<FunctionRow>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unexplored_code: Vec<UnexploredCode>,
+    /// Raw projects whose discovery found very few functions for their code: what to try next.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 /// A code region judged encrypted or packed, and the metadata entry points (symbols, exports, the entry point,

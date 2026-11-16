@@ -63,6 +63,10 @@ see the [stability policy](docs/stability.md) for what the version promises.
   instructions) and reports constant stores to VTOR in `raw.scatter_load.vtor_stores`; the table at the last value
   is read when a mapped region holds it and its accepted handlers are seeded, or `vector_table_refused` says why. A
   copy the code then stores into is marked `written_after_jump` and maps as RAM, not code.
+- Raw discovery that stops early says so: when a Raw project's discovery finds fewer than one function per 64 KiB
+  of code, `binary_info` and `list_functions` return a one-line `next` naming `"pointer_tables": true` (Cortex-M,
+  when off) and mapping the startup copies (when `"scatter_load": false` left them unmapped). See
+  [MCP](docs/mcp.md#scatter-load-copies).
 
 ## 1.5.0 (2026-11-15)
 

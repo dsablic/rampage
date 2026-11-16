@@ -18,6 +18,10 @@ use crate::{ApiError, DecoderInitializationError, Packs};
 
 /// The shortest string listed unless a query asks for shorter ones.
 const DEFAULT_STRING_LENGTH: usize = 4;
+/// A Raw project with fewer than one discovered function per this many bytes of code gets a `next` hint: firmware
+/// averages hundreds of bytes per function, so a handful in a large image means discovery stopped early (startup
+/// code, calls through pointers). A small image is held to at least one function.
+const RAW_BYTES_PER_FUNCTION: u64 = 64 * 1024;
 
 /// Initialized cache presence only; this is not a history or concurrent-activity attestation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
@@ -878,6 +882,7 @@ impl Project {
             }),
             analysis_store: self.analysis_store_status(),
             encrypted_or_packed_code: self.encrypted_regions().cloned().collect(),
+            next: self.raw_discovery_hint(),
         }
     }
 
@@ -908,7 +913,56 @@ impl Project {
                 ),
             })
             .collect();
-        Ok(crate::rows::FunctionsPage { page, unexplored_code })
+        Ok(crate::rows::FunctionsPage { page, unexplored_code, next: self.raw_discovery_hint() })
+    }
+
+    /// For a Raw project whose discovery found fewer than one function per 64 KiB of code (none at all in a smaller
+    /// image), the
+    /// selector options that would find more: pointer-table seeding on Cortex-M, and mapping the startup copies
+    /// when `scatter_load` false left them unmapped. None otherwise, or when no option applies.
+    pub fn raw_discovery_hint(&self) -> Option<String> {
+        let raw = self.binary.raw_code_image()?;
+        let code: u64 = raw
+            .regions()
+            .iter()
+            .filter(|region| region.kind == rampage_loaders::RawRegionKind::Code && region.backed())
+            .map(|region| region.length)
+            .sum();
+        let found = self.analysis().ok()?.program.functions.len() as u64;
+        if found * RAW_BYTES_PER_FUNCTION >= code.max(RAW_BYTES_PER_FUNCTION) {
+            return None;
+        }
+        let mut steps = Vec::new();
+        if raw.profile().m_profile() && raw.pointer_tables().is_none() {
+            steps.push(
+                "add \"pointer_tables\": true to raw to seed functions from tables of code pointers (handler arrays, \
+                 command tables); binary_info then reports each table with its evidence"
+                    .to_owned(),
+            );
+        }
+        let unmapped = raw.scatter_load().map_or(0, |scatter| {
+            scatter
+                .copies
+                .iter()
+                .filter(|copy| {
+                    copy.not_mapped_reason == Some(rampage_loaders::raw_scatter::NotMappedReason::NotRequested)
+                        && copy.kind != rampage_loaders::raw_scatter::CopyKind::Computed
+                })
+                .count()
+        });
+        if unmapped > 0 {
+            steps.push(format!(
+                "drop \"scatter_load\": false to map the {unmapped} startup copies raw.scatter_load lists at their run \
+                 addresses, so discovery continues into the copied code"
+            ));
+        }
+        (!steps.is_empty()).then(|| {
+            format!(
+                "Discovery from the entry and seeds found {found} functions in {} KiB of code: {}.",
+                code.div_ceil(1024),
+                steps.join("; ")
+            )
+        })
     }
 
     pub(crate) fn analysis(&self) -> Result<&Analysis, ApiError> {

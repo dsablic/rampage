@@ -38,6 +38,7 @@
     "format",
     "function_starts",
     "imports",
+    "next",
     "raw",
     "raw.base_address",
     "raw.length",

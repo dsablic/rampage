@@ -166,3 +166,40 @@ fn scatter_load_false_reports_the_copies_without_mapping_them() {
     let error = Session::default().open_raw(&msp430, &request).err().unwrap().to_string();
     assert!(error.contains("scatter_load is defined only for ARM:LE:32:Cortex"), "{error}");
 }
+
+/// Few functions for much code means discovery stopped early: binary_info and list_functions say what to try, and
+/// stay silent once the options are in use or discovery is in proportion.
+#[test]
+fn a_small_discovery_in_a_large_image_suggests_pointer_tables_and_mapping_the_copies() {
+    let directory = std::env::temp_dir().join(format!("rampage-raw-scatter-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    // The GCC-style image padded with erased flash to 1 MiB: three functions before the copies are mapped, seven after.
+    let mut bytes = std::fs::read(fixture("raw-cortex-m-scatter-gcc.bin")).unwrap();
+    bytes.resize(1024 * 1024, 0xff);
+    let path = directory.join("padded.bin");
+    std::fs::write(&path, &bytes).unwrap();
+    let open_padded = |changes: Value| {
+        let mut raw = json!({ "profile": "cortex-m4", "offset": 0, "length": bytes.len(),
+                              "base_address": "0x8000000", "vector_table": true });
+        raw.as_object_mut().unwrap().extend(changes.as_object().unwrap().clone());
+        let request: RawProjectRequest = serde_json::from_value(raw).unwrap();
+        Session::default().open_raw(&path, &request).unwrap()
+    };
+    let next = |project: &rampage_api::Project| {
+        let summary = serde_json::to_value(project.summary()).unwrap();
+        let query = rampage_api::FunctionsQuery::default();
+        let page = serde_json::to_value(project.functions_page(&query).unwrap()).unwrap();
+        assert_eq!(summary["next"], page["next"]);
+        summary["next"].as_str().map(str::to_owned)
+    };
+    let hint = next(&open_padded(json!({ "scatter_load": false }))).expect("three functions in 1 MiB");
+    assert!(hint.starts_with("Discovery from the entry and seeds found 3 functions in 1024 KiB of code"), "{hint}");
+    assert!(hint.contains("\"pointer_tables\": true") && hint.contains("3 startup copies"), "{hint}");
+    // Mapped copies alone leave the pointer-table suggestion; with pointer tables too, nothing is suggested.
+    let hint = next(&open_padded(json!({}))).unwrap();
+    assert!(hint.contains("pointer_tables") && !hint.contains("scatter_load"), "{hint}");
+    assert_eq!(next(&open_padded(json!({ "pointer_tables": true }))), None);
+    // A small image in proportion gets no hint.
+    assert_eq!(next(&open("gcc", selector("gcc"))), None);
+    std::fs::remove_dir_all(&directory).unwrap();
+}

@@ -1717,6 +1717,7 @@ mod tests {
             raw: None,
             analysis_store: crate::AnalysisStoreStatus::new("unsupported", None, None),
             encrypted_or_packed_code: Vec::new(),
+            next: None,
         };
         serde_json::to_value(summary).unwrap()
     }
