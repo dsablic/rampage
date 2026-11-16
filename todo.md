@@ -156,6 +156,10 @@ decoded code.
     would lie inside the image under another base, or most literal-pool pointers fall outside every region,
     `binary_info` should say so and name the candidate base.
   - `find_crypto` still refuses Raw projects; `integrity_checks` found no fields on the decoded image.
+- [ ] **Flaky UI test.** `rampage-ui` `debugger::tests::local_socket::genuine_save_refusal_remains_typed_until_resources_are_recorded_despite_obsolete_binding`
+  fails intermittently: locally with BrokenPipe on its socket, and on CI Linux ARM64 (2badb62) with "Harness::run
+  exceeded max_steps (4)" from a text-selection repaint in `inspection_harness`. Use `run_steps` or wait for the
+  socket explicitly.
 - [ ] **Read-only annotations for file tools.** MCP lists read-only file tools (`list_dir`, `decode_file_range`,
   `file_layout`, `carve`, ...) without annotations, which the MCP spec treats as possibly destructive; give them
   `read_only(true)`.
