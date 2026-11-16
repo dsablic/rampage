@@ -250,7 +250,7 @@ fn component_row(component: &Component, defined: &HashSet<String>) -> Value {
 }
 
 /// The ELF architecture of an ABI directory name.
-fn abi_arch(abi: &str) -> Option<rampage_arch::Arch> {
+pub(crate) fn abi_arch(abi: &str) -> Option<rampage_arch::Arch> {
     use rampage_arch::Arch;
     Some(match abi {
         "arm64-v8a" => Arch::Aarch64,
@@ -345,6 +345,87 @@ fn dex_rows(opened: &Opened) -> Vec<Value> {
         .collect()
 }
 
+/// Capture APIs listed at most, and methods a reachability walk visits.
+const MAX_CAPTURE_ROWS: usize = 50;
+const MAX_REACHED: usize = 200_000;
+const ACCESSIBILITY_SERVICE: &str = "Landroid/accessibilityservice/AccessibilityService;";
+
+/// The Android capture and personal-data APIs the code invokes, each with its callers, the permissions that guard
+/// it (and whether the manifest requests one), and the start-at-boot receivers whose code reaches a caller; plus
+/// the classes that extend `AccessibilityService` (which can read the screen's contents).
+fn privacy(opened: &Opened) -> Value {
+    let mut calls: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+    let mut class_methods: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut accessibility = Vec::new();
+    for (_, dex) in opened.parsed() {
+        let index = rampage_dex::scan::index(dex);
+        for (caller, callees) in index.calls {
+            calls.entry(caller).or_default().extend(callees);
+        }
+        for (class, methods) in index.class_methods {
+            class_methods.entry(class).or_default().extend(methods);
+        }
+        for class_index in 0..dex.class_count() {
+            if let Ok(class) = dex.class_def(class_index)
+                && dex.superclasses(&class).iter().any(|name| name == ACCESSIBILITY_SERVICE)
+            {
+                accessibility.push(class_name(&dex.type_text(class.class_idx)));
+            }
+        }
+    }
+    let manifest = opened.manifest();
+    let requested: HashSet<&str> = manifest
+        .map(|manifest| manifest.uses_permissions.iter().map(|permission| permission.name.as_str()).collect())
+        .unwrap_or_default();
+    let boot: Vec<String> = manifest
+        .map(|manifest| {
+            manifest
+                .components
+                .iter()
+                .filter(|component| component.start_at_boot)
+                .flat_map(|component| {
+                    class_methods.get(&rampage_dex::dex::descriptor_of(&component.name)).cloned().unwrap_or_default()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let reached = rampage_dex::scan::reachable(&calls, &boot, MAX_REACHED);
+    let uses = rampage_dex::scan::capture_uses(&calls);
+    let rows: Vec<Value> = uses
+        .iter()
+        .take(MAX_CAPTURE_ROWS)
+        .map(|capture| {
+            let mut receivers: Vec<String> = capture
+                .callers
+                .iter()
+                .filter_map(|caller| reached.get(caller))
+                .map(|entry| class_name(entry.split("->").next().unwrap_or(entry)))
+                .collect();
+            receivers.sort();
+            receivers.dedup();
+            let mut row = serde_json::to_value(capture).unwrap_or(Value::Null);
+            if manifest.is_some() && !capture.permissions.is_empty() {
+                row["permission_requested"] =
+                    json!(capture.permissions.iter().any(|permission| requested.contains(permission)));
+            }
+            if !receivers.is_empty() {
+                row["reached_from_boot"] = json!(receivers);
+            }
+            row
+        })
+        .collect();
+    let mut media: Vec<&str> = uses.iter().map(|capture| capture.medium).collect();
+    media.sort();
+    media.dedup();
+    json!({
+        "media": media,
+        "capture_apis": rows,
+        "capture_apis_total": uses.len(),
+        "accessibility_services": accessibility,
+        "note": "invoke sites in DEX code; reflection, native code and dynamically loaded code are not seen",
+    })
+}
+
 /// The summary of one opened file: manifest, permissions, components (capped), native libraries and DEX files.
 fn summary(path: &Path, opened: &Opened, components_limit: usize) -> Value {
     let mut out = json!({"path": path, "kind": opened.kind});
@@ -396,6 +477,7 @@ fn summary(path: &Path, opened: &Opened, components_limit: usize) -> Value {
         }
     }
     out["dex"] = json!(dex_rows(opened));
+    out["privacy"] = privacy(opened);
     let totals = opened.parsed().fold((0u64, 0u64, 0u64), |(classes, methods, strings), (_, dex)| {
         (
             classes + u64::from(dex.header.classes.count),
@@ -501,6 +583,9 @@ fn directory(query: &DexMetadataQuery) -> Result<Value, String> {
                 if let Some(object) = row.as_object_mut() {
                     object.remove("components");
                     object.remove("application");
+                    if let Some(privacy) = object.get_mut("privacy").and_then(Value::as_object_mut) {
+                        privacy.retain(|key, _| key == "media" || key == "capture_apis_total");
+                    }
                 }
                 row
             }

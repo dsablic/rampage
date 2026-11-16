@@ -30,7 +30,8 @@ with `privacy_surface`, from the update file to a router blocklist.
 ```
 
 - `path` is an executable or any other file, or a directory. A directory is walked without following symlinks; its
-  executables (ELF, PE, Mach-O, by their magic) and configuration-like text files (a `#!` line, or `.sh`, `.conf`,
+  executables (ELF, PE, Mach-O, by their magic), Android packages (DEX files by their magic; `.apk`, `.aab` and
+  `.jar` ZIP files) and configuration-like text files (a `#!` line, or `.sh`, `.conf`,
   `.cfg`, `.json`, `.xml`, `.prop`, `.properties`, `.ini`, `.yaml`, `.yml`, `.rc`, `.service`, `.env`, `.lua`) are
   scanned, in the byte order of their paths. Other files are counted as `ignored`, and the first 20 are named in
   `ignored_entries` with the reason (binary data under a text name, or neither kind). A path that is not UTF-8 is
@@ -79,9 +80,14 @@ Each row is one value in one file (`component`), with `occurrences` and up to fo
 
 - `origin`: `string` (a readable string in the image, with its `address` and `encoding`), `decoded` (emulated
   decoder output, with the blob's `address` and `decoded_by`), `text` (a `line` of a text file), `bytes` (an
-  `offset` in a file no loader opened) or `certificate`;
+  `offset` in a file no loader opened), `dex_string` (a DEX string pool entry) or `certificate`;
 - `functions`: the functions referencing the string (`name@0xaddress`), and `network_apis`: the networking APIs those
   functions call, from the list `network_surface` uses.
+
+An APK is scanned member by member: each DEX file's string pool is a component `<apk>!classes.dex`, with the
+methods whose code loads the string (`const-string`) as `functions` (`Lpkg/Class;->name(params)ret`) and the Java
+and Android networking calls those methods make (`java.net.URL`, `HttpURLConnection`, sockets, `WebView`,
+OkHttp) as `network_apis`; each native library is a component `<apk>!lib/<abi>/<name>.so`, analysed like any ELF.
 
 `signal` ranks the row: `network_code` (referenced from a function that calls a networking API), `referenced`,
 `unreferenced` (references were looked up and none found) or `not_traced`.
@@ -144,6 +150,9 @@ single-label, public-suffix, allowed and not-denied entries. Each file starts wi
 - Matching is lexical: addresses built at run time, encrypted or compressed data, and IPv4 addresses stored as
   integers in code are not found; strings decoded at run time are found only with `decode`, and only for decoders
   `string_decoding` recognises.
+- In DEX code, a string reaches the network only through calls in the same method that loads it: a URL kept in a
+  field or passed to another class reads as `referenced`. Strings an app builds, decrypts or loads from resources
+  at run time are not seen; the manifest and `resources.arsc` are not scanned.
 - `network_code` means a referencing function calls a networking API directly; a string passed to a helper that
   makes the call reads as `referenced`.
 - The Public Suffix List is the one compiled into the `psl` crate (MPL-2.0 data; see THIRD-PARTY-NOTICES), so

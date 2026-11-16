@@ -13,8 +13,15 @@ see the [stability policy](docs/stability.md) for what the version promises.
   classes, methods or components. The DEX, binary XML and manifest readers are in-house (new crate
   `rampage-dex`) and capped against hostile input. `dex_code` lists one method's Dalvik bytecode, smali style:
   all 256 opcodes and the switch and array payloads, with strings, types, fields, methods, protos, call sites and
-  method handles resolved, try ranges with catch types, paged by instruction or from a code address. See
+  method handles resolved, try ranges with catch types, paged by instruction or from a code address.
+  `dex_metadata`'s `privacy` section lists the Android capture and personal-data APIs the DEX code invokes
+  (`AudioRecord`, `MediaRecorder`, camera and camera2, `MediaProjection`, `SpeechRecognizer`, location,
+  device identifiers) with their callers, whether the manifest requests the guarding permission, and the
+  start-at-boot receivers that reach them, plus `AccessibilityService` subclasses. See
   [Android APKs and DEX](docs/android.md).
+- `endpoint_inventory` reads APKs and DEX files: each DEX string pool with the methods that load every string and
+  the networking calls they make (`dex_string` evidence), and each native library in the APK. See
+  [endpoint inventory](docs/endpoint-inventory.md).
 - ZIP archives in `fs_list` and `fs_extract`: stored and deflated members (ZIP64 included) with the central
   directory as the authority, inflation stopped at the declared size, the per-file limit and the ratio meter, so
   an APK's native libraries can be extracted and opened by path. See [firmware images](docs/firmware-images.md).

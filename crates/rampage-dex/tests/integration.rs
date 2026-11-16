@@ -4,3 +4,4 @@ mod apk;
 mod dex;
 mod fixtures;
 mod hostile;
+mod scan;

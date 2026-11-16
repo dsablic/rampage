@@ -146,3 +146,30 @@ fn dex_code_refuses_unknown_methods_and_bad_addresses() {
     assert!(call("dex_code", past).unwrap_err().contains("past the end"));
     assert!(call("dex_code", json!({"path": apk, "method": "classes9.dex:0"})).is_err());
 }
+
+#[test]
+fn the_privacy_section_links_capture_calls_to_permissions_and_boot() {
+    let out = call("dex_metadata", json!({"path": android("recorder.apk"), "limit": 1})).unwrap();
+    let privacy = &out["privacy"];
+    assert_eq!(privacy["media"], json!(["microphone"]));
+    let capture = &privacy["capture_apis"][0];
+    assert_eq!(capture["api"], "Landroid/media/AudioRecord;->startRecording()V");
+    assert_eq!(capture["callers"], json!(["Lcom/example/recorder/Capture;->start()V"]));
+    assert_eq!(capture["permission_requested"], true);
+    assert_eq!(capture["reached_from_boot"], json!(["com.example.recorder.BootReceiver"]));
+    let directory = call("dex_metadata", json!({"path": android("")})).unwrap();
+    assert_eq!(directory["files"][0]["privacy"]["capture_apis_total"], 1);
+}
+
+#[test]
+fn endpoint_inventory_reads_dex_strings_with_the_methods_that_load_them() {
+    let out = call("endpoint_inventory", json!({"path": android("recorder.apk")})).unwrap();
+    let text = out.to_string();
+    assert!(text.contains("telemetry.example.com"), "{text}");
+    assert!(text.contains("10.0.0.1"), "{text}");
+    assert!(text.contains("dex_string"));
+    assert!(text.contains("Lcom/example/recorder/Capture;->start()V"));
+    assert!(text.contains("recorder.apk!classes2.dex"));
+    let dex = call("endpoint_inventory", json!({"path": android("recorder.dex")})).unwrap();
+    assert!(dex.to_string().contains("telemetry.example.com"));
+}

@@ -460,6 +460,8 @@ async fn contract_mcp_carve_results() {
     .await;
     let privacy = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../rampage-api/tests/fixtures/privacy-x64.elf");
     exercise(c, o, "privacy_surface", json!({"path": privacy})).await;
+    let apk = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/android/recorder.apk");
+    exercise(c, o, "endpoint_inventory", json!({"path": apk})).await;
     check_group(client, "carve", &observed, &[]).await;
 }
 

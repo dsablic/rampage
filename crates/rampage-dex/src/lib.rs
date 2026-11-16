@@ -11,6 +11,7 @@ pub mod insn;
 pub mod manifest;
 pub mod permissions;
 mod read;
+pub mod scan;
 #[cfg(feature = "testkit")]
 pub mod testkit;
 mod value;

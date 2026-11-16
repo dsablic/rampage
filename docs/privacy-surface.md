@@ -127,8 +127,9 @@ program-start trigger says `no_user_trigger not stated` and why. It means none w
 - Constant arguments are read only from the instructions just before the call in the same basic block, on x86-64,
   AArch64 and 32-bit ARM. Values passed through variables, helpers or other blocks leave a source at `name` level
   (and an ioctl unread); on other architectures ioctl-based sources are missing entirely, and the report says so.
-- Virtual calls and other indirect calls are not followed, and nothing is executed. Java and DEX code are not read:
-  Android apps show only through class-name strings and native libraries.
+- Virtual calls and other indirect calls are not followed, and nothing is executed. DEX code is not read here: for
+  an APK, `dex_metadata`'s [`privacy` section](android.md#privacy) lists the Android capture APIs its code
+  invokes, linked to the manifest's permissions and start-at-boot receivers.
 - V4L2 also drives video output, decoders and HDMI input; framebuffer queries are also used to draw. A source shows
   the capability, not what is recorded.
 - One binary at a time; running it over an extracted tree, and boot triggers across files (init scripts, Android

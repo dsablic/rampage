@@ -515,7 +515,8 @@ pub const SAMPLE_URL: &str = "https://telemetry.example.com/upload";
 
 /// The sample classes: `Capture` (constructor; `start` creating an `AudioRecord`, calling `startRecording` and
 /// loading [`SAMPLE_URL`]; native `nativeEncode([B)I`; `dispatch(I)I` with a packed switch; `guarded()V` with a
-/// try/catch; `send(String)V`) and a `BootReceiver` whose `onReceive` calls `Capture.guarded`.
+/// try/catch; `send(String)V`) and a `BootReceiver` whose `onReceive` calls `new Capture().start()` and
+/// `Capture.guarded()`.
 pub fn sample_classes() -> Vec<ClassSpec> {
     let object = "Ljava/lang/Object;";
     let audio = "Landroid/media/AudioRecord;";
@@ -598,11 +599,25 @@ pub fn sample_classes() -> Vec<ClassSpec> {
         .field("label", "Ljava/lang/String;", 0x2)
         .field("COUNT", "I", 0x19);
     capture.source_file = Some("Capture.java".to_owned());
+    // onReceive: new Capture().start(); Capture.guarded();
     let on_receive = Code {
-        registers: 3,
+        registers: 4,
         ins: 3,
-        outs: 0,
-        units: vec![raw(0x0071), Unit::Method(MethodKey::new(CAPTURE_CLASS, "guarded", "V", &[])), raw(0), raw(0x000e)],
+        outs: 1,
+        units: vec![
+            raw(0x0022),
+            Unit::Type(CAPTURE_CLASS.to_owned()),
+            raw(0x1070),
+            Unit::Method(MethodKey::new(CAPTURE_CLASS, "<init>", "V", &[])),
+            raw(0x0000),
+            raw(0x106e),
+            Unit::Method(MethodKey::new(CAPTURE_CLASS, "start", "V", &[])),
+            raw(0x0000),
+            raw(0x0071),
+            Unit::Method(MethodKey::new(CAPTURE_CLASS, "guarded", "V", &[])),
+            raw(0),
+            raw(0x000e),
+        ],
         tries: Vec::new(),
     };
     let receiver = ClassSpec::new(BOOT_RECEIVER_CLASS, "Landroid/content/BroadcastReceiver;").method(

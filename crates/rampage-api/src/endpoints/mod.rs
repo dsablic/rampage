@@ -86,7 +86,8 @@ pub enum Signal {
 #[derive(Debug, Clone, Serialize)]
 pub struct Evidence {
     /// `string` (a readable string in the image), `decoded` (emulated decoder output), `text` (a line of a text
-    /// file), `bytes` (a string in a file no loader opened) or `certificate`.
+    /// file), `bytes` (a string in a file no loader opened), `dex_string` (a DEX string pool entry; `functions`
+    /// are the methods whose code loads it) or `certificate`.
     pub origin: &'static str,
     #[serde(skip_serializing_if = "Option::is_none", serialize_with = "rampage_arch::hex::optional_address")]
     pub address: Option<u64>,
@@ -444,18 +445,112 @@ fn scan_text(text: &str, component: &str, inventory: &mut Inventory) {
     }
 }
 
+/// Network APIs of the Android and Java class libraries: a method that invokes one is network code.
+const DEX_NETWORK_CLASSES: [&str; 12] = [
+    "Ljava/net/URL;",
+    "Ljava/net/HttpURLConnection;",
+    "Ljavax/net/ssl/HttpsURLConnection;",
+    "Ljava/net/Socket;",
+    "Ljava/net/DatagramSocket;",
+    "Ljava/net/InetSocketAddress;",
+    "Ljava/net/URI;",
+    "Landroid/webkit/WebView;",
+    "Landroid/net/Uri;",
+    "Lokhttp3/OkHttpClient;",
+    "Lokhttp3/Request$Builder;",
+    "Ljava/nio/channels/SocketChannel;",
+];
+
+/// Scans an APK (its DEX string pools, with the methods that load each string, and its native libraries) or a
+/// DEX file.
+fn scan_android(path: &Path, component: &str, xrefs: bool, decode: bool, inventory: &mut Inventory) {
+    let opened = match crate::android::open(path, true) {
+        Ok(opened) => opened,
+        Err(error) => return inventory.skip(component, error),
+    };
+    for (dex_path, dex) in opened.parsed() {
+        let member = if opened.kind == "apk" { format!("{component}!{dex_path}") } else { component.to_owned() };
+        inventory.components.insert(member.clone(), "dex".to_owned());
+        let index = rampage_dex::scan::index(dex);
+        let network: BTreeMap<&str, Vec<String>> = index
+            .calls
+            .iter()
+            .filter_map(|(caller, callees)| {
+                let apis: BTreeSet<String> = callees
+                    .iter()
+                    .filter(|callee| DEX_NETWORK_CLASSES.iter().any(|class| callee.starts_with(class)))
+                    .map(|callee| callee.split('(').next().unwrap_or(callee).to_owned())
+                    .collect();
+                (!apis.is_empty()).then(|| (caller.as_str(), apis.into_iter().collect()))
+            })
+            .collect();
+        for string in 0..dex.header.strings.count {
+            let Ok(text) = dex.string(string) else { continue };
+            let users = index.string_users.get(&string).cloned().unwrap_or_default();
+            let mut network_apis: Vec<String> =
+                users.iter().filter_map(|user| network.get(user.as_str())).flatten().cloned().collect();
+            network_apis.sort();
+            network_apis.dedup();
+            let signal = if !network_apis.is_empty() {
+                Signal::NetworkCode
+            } else if !users.is_empty() {
+                Signal::Referenced
+            } else if xrefs {
+                Signal::Unreferenced
+            } else {
+                Signal::NotTraced
+            };
+            let evidence = Evidence {
+                origin: "dex_string",
+                address: None,
+                offset: None,
+                line: None,
+                encoding: Some("mutf8"),
+                decoded_by: None,
+                functions: users,
+                network_apis,
+            };
+            inventory.add_text(&member, &text.text, &evidence, signal);
+        }
+    }
+    for (dex_path, _, _) in opened.dexes.iter().filter(|(_, dex, _)| dex.is_err()) {
+        inventory.skip(&format!("{component}!{dex_path}"), "DEX file did not parse");
+    }
+    let Some(apk) = &opened.apk else { return };
+    for lib in &apk.native_libs {
+        let member = format!("{component}!{}", lib.path);
+        let (Some(bytes), Some(arch)) = (lib.bytes.clone(), crate::android::abi_arch(&lib.abi)) else {
+            inventory.skip(&member, "native library not read (size limit or unknown ABI)");
+            continue;
+        };
+        match rampage_loaders::Binary::from_owned_native_bytes(bytes, arch) {
+            Ok(binary) => {
+                inventory.components.insert(member.clone(), "elf".to_owned());
+                scan_project(&Project::new(binary), &member, xrefs, decode, inventory);
+            }
+            Err(error) => inventory.skip(&member, format!("did not load: {error}")),
+        }
+    }
+}
+
 /// What a file is to the scan.
 enum FileKind {
+    /// An APK, AAB or JAR (by extension and ZIP magic) or a DEX file.
+    Android,
     Executable(&'static str),
     Text,
     Other,
 }
 
 fn file_kind(path: &Path, head: &[u8]) -> FileKind {
+    let extension = path.extension().and_then(|extension| extension.to_str()).map(str::to_ascii_lowercase);
+    let zip = head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06");
+    if rampage_dex::is_dex(head) || (zip && matches!(extension.as_deref(), Some("apk" | "aab" | "jar"))) {
+        return FileKind::Android;
+    }
     if let Some(format) = rampage_unpack::executable_format(head) {
         return FileKind::Executable(format);
     }
-    let extension = path.extension().and_then(|extension| extension.to_str()).map(str::to_ascii_lowercase);
     if head.starts_with(b"#!") || extension.is_some_and(|extension| TEXT_EXTENSIONS.contains(&extension.as_str())) {
         FileKind::Text
     } else {
@@ -481,6 +576,16 @@ fn scan_file(
     inventory: &mut Inventory,
 ) {
     match kind {
+        FileKind::Android => {
+            if size > MAX_EXECUTABLE_BYTES {
+                return inventory.skip(component, format!("APK or DEX over {} MiB", MAX_EXECUTABLE_BYTES >> 20));
+            }
+            inventory.files += 1;
+            inventory.executables += 1;
+            inventory.bytes += size;
+            inventory.components.insert(component.to_owned(), "android".to_owned());
+            scan_android(path, component, xrefs, decode, inventory);
+        }
         FileKind::Executable(format) => {
             if size > MAX_EXECUTABLE_BYTES {
                 return inventory.skip(component, format!("executable over {} MiB", MAX_EXECUTABLE_BYTES >> 20));

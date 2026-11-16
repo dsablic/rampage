@@ -9,6 +9,7 @@ reading is capped (see [Limits](#limits)).
 | --- | --- |
 | `dex_metadata` | What the app is and asks for: package, versions, SDK levels, permissions, components, boot receivers, native libraries with JNI exports, DEX files, one page of classes, methods or components. |
 | `dex_code` | What one method does: its Dalvik bytecode, smali style, with every reference resolved. |
+| `endpoint_inventory` (group `carve`) | The hosts and URLs in the app's DEX strings and native libraries, with the methods that load them. |
 
 Enable the group with `enable_tools {"groups": ["android"]}`. Pull an APK off a firmware image with
 [`fs_extract`](firmware-images.md) first; `fs_list` and `fs_extract` also open any APK as a ZIP, so its native
@@ -56,6 +57,38 @@ For one file the result holds:
   (default 100, at most 500) and `next_offset` continues.
 
 A bare `.dex` file has the DEX fields only.
+
+## privacy
+
+`dex_metadata` also reports what the app's DEX code can capture, read from the methods its code actually invokes
+(`invoke-*` instructions), not from strings:
+
+- `capture_apis`: each Android capture or personal-data API invoked, with its `medium` (`microphone`, `camera`,
+  `screen`, `location`, `identifiers`), its `callers` (the first 16, and `callers_total`), the `permissions` that
+  guard it and `permission_requested` (whether the manifest asks for one; screen capture asks the user at run time
+  instead), and `reached_from_boot`: the start-at-boot receivers from whose methods a caller is reachable through
+  direct calls. APIs: `AudioRecord`, `MediaRecorder` audio and video sources, `SpeechRecognizer`,
+  `AlwaysOnHotwordDetector`, `AudioPlaybackCaptureConfiguration`, `Camera`, camera2 `CameraManager.openCamera`
+  and `CameraDevice` sessions, `MediaProjection` and `MediaProjectionManager`, `PixelCopy`, accessibility window
+  reads, `LocationManager`, Wi-Fi scans, and `TelephonyManager`/`Build` device identifiers.
+- `accessibility_services`: classes extending `AccessibilityService`, which can read everything on screen once
+  enabled.
+- `media` sums them up; a directory page keeps `media` and `capture_apis_total` per file.
+
+```json
+{"api": "Landroid/media/AudioRecord;->startRecording()V", "medium": "microphone",
+ "callers": ["Lcom/example/recorder/Capture;->start()V"], "callers_total": 1,
+ "permissions": ["android.permission.RECORD_AUDIO"], "permission_requested": true,
+ "reached_from_boot": ["com.example.recorder.BootReceiver"]}
+```
+
+Calls through reflection, interfaces or superclass references, native code and code loaded at run time are not
+seen; a call reached from a boot receiver says the code path exists, not that it runs.
+
+## Endpoints
+
+[`endpoint_inventory`](endpoint-inventory.md) reads APKs and DEX files: every DEX string pool, with the methods
+that load each string and the networking calls they make, and every native library in the APK.
 
 ## dex_code
 
