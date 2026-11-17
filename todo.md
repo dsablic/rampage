@@ -31,6 +31,16 @@
 This file holds open items. Done sections, including every completed parity phase, are archived verbatim in
 [docs/plans/todo-archive.md](docs/plans/todo-archive.md); each section below that lost done items links to them.
 
+## Next up (agreed 2026-11-17)
+
+1. Finish 1.7.0: Android slice 1 review fixes and merge; Android slice 2 (`privacy_surface` on an APK, Dalvik
+   pseudocode, string decryption); the tool-description trim; docs audit; release.
+2. Firmware leftovers from the Haiku runs: `xrefs` through Thumb literal pools in Raw images, `find_main` on Raw,
+   ARM `exact_entry`, seeding inferred CRC routines into discovery, rejecting implausible vector-table candidates.
+3. Wider formats: binwalk v3 signature scanning for `carve`/`file_layout` (evaluate first), UBI/UBIFS, container
+   tagging for ext4/sparse/OTA, `privacy_surface` over an extracted tree with boot triggers.
+4. Housekeeping: the flaky debugger UI test; rebuilding fixtures that embed local paths, plus a CI check.
+
 ## Ideas to review (unprioritised, not approved)
 
 Ideas collected while working, to go through together before any becomes a track. The repo stays general: it
