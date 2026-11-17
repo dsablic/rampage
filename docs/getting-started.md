@@ -328,6 +328,7 @@ Now read [`vault.c`](../tests/fixtures/bench-v2/src/vault.c) and check the answe
 - [Search](search.md), [patching](patching.md) and [types](type-library.md) are the next tools most
   investigations need.
 - For firmware, [read the code in a firmware update file](firmware-walkthrough.md); for a smart device's update,
-  [check what it records and where it sends it](device-privacy-check.md).
+  [check what it records and where it sends it](device-privacy-check.md); for an Android app,
+  [Android APKs and DEX](android.md).
 - This fixture is one of the [suite v2 benchmark](benchmarks/agent-h2h-v2-2026-11-05.md) tasks; the others in
   [`tests/fixtures/bench-v2`](../tests/fixtures/bench-v2/) make good practice.

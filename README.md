@@ -162,13 +162,14 @@ Areas marked *experimental* may change in any release; see the [stability policy
 - **Search and patching:** byte, text, regex, immediate, instruction and reference search; an assembler for an
   x86/x64/AArch64 subset; checked byte patches kept in the annotation log and exported to a new file.
 - **Formats:** ELF, PE and Mach-O (including universal binaries and embedded images), .NET metadata and CIL,
-  Android APKs and DEX (manifest, permissions, components, JNI libraries, Dalvik bytecode and pseudocode, decoded
-  strings), Go build info, cargo-auditable data, PE resources and load config, PyInstaller archives, WebAssembly
-  module summaries, ZIP inventory, embedded-file carving, raw firmware windows, and a [file layout](docs/file-layout.md)
-  of any file (padding, entropy, string clusters, hashes and labelled hints). `list_dir` lists a folder with each
-  file's sniffed format, so an agent given only a directory can start.
+  [Android APKs and DEX](docs/android.md) (manifest, permissions, components, JNI libraries, Dalvik bytecode and
+  pseudocode, strings hidden behind decoder methods), Go build info, cargo-auditable data, PE resources and load
+  config, PyInstaller archives, WebAssembly module summaries, ZIP inventory, embedded-file carving, raw firmware
+  windows, and a [file layout](docs/file-layout.md) of any file (padding, entropy, string clusters, hashes and
+  labelled hints). `list_dir` lists a folder with each file's sniffed format, so an agent given only a directory can
+  start.
 - **Firmware filesystem images:** `fs_list` and `fs_extract` read SquashFS, ext2/3/4, Android sparse images, full
-  Android OTA payloads, cpio and tar in pure Rust, with hostile-input limits. See
+  Android OTA payloads, cpio, tar and ZIP (APKs included) in pure Rust, with hostile-input limits. See
   [firmware filesystem images](docs/firmware-images.md).
 - **Processors:** x86 and x86-64; AArch64, ARM and Thumb from Arm's machine-readable specification; MIPS,
   PowerPC, RISC-V, SPARC, s390x and m68k through Capstone; sixteen more families (MSP430, AVR8, 8051, Z80,
@@ -185,8 +186,7 @@ Areas marked *experimental* may change in any release; see the [stability policy
 - **Device privacy:** `endpoint_inventory` lists the hosts, URLs, IPs and certificates a binary or an extracted
   firmware tree names, `endpoint_blocklist` writes them as a router blocklist, and `privacy_surface` maps what a
   program, an Android app or a whole extracted tree can capture, where it can send it and what starts it at boot.
-  See
-  [how to check what a device records and where it sends it](docs/device-privacy-check.md).
+  See [how to check what a device records and where it sends it](docs/device-privacy-check.md).
 - **Library identification and detection:** FLIRT/FunctionID-style signatures with bundled databases, user PAT
   and Ghidra FID input, fuzzy candidates, packer/compiler detection (including signatures converted from Detect It
   Easy), encrypted or packed code detection that keeps discovery out of it, YARA, a capa subset, capability tags
@@ -235,7 +235,9 @@ targets debugged through an RSP stub, from a macOS or Linux host.
   [data disclosure](docs/mcp.md#authorization-and-data-disclosure).
 - Bundled library signatures match the library builds they were made from, not every version.
 - Encrypted or packed code is detected, not unpacked: discovery and decompilation stay out of it unless asked.
-- Not yet built: DEX/JVM, object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and vftable
+- Android DEX code is listed as Dalvik bytecode and structured pseudocode, not decompiled to Java; JVM class files
+  are not read.
+- Not yet built: object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and vftable
   evidence, decoding of `__CxxFrameHandler4` exception tables, and incremental re-analysis after edits.
 - The benchmarks above use one model and one client; they are not general accuracy guarantees.
 

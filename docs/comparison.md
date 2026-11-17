@@ -6,7 +6,7 @@ far more complete than rampage.
 
 Where rampage has measured the comparison, the numbers come from its published benchmarks. Elsewhere this page
 states plain facts about features, licences and architecture; it does not claim rampage is better at things
-nobody has measured. Feature statements describe rampage 1.6.0 (2026-11-16).
+nobody has measured. Feature statements describe rampage 1.7.0.
 
 ## Architecture at a glance
 
@@ -66,7 +66,7 @@ These are design facts, not measured advantages.
   REA waits for Ghidra's import and auto-analysis.
 - **Output shaped for context.** Every rampage tool has a size cap, pages large results with explicit cursors
   and totals, and declares a result size Claude Code will display whole. Tools are grouped, so a session lists
-  47 tools at first (102 with every group, in 1.6.0) and enables the rest on demand.
+  47 tools at first (104 with every group, in 1.7.0) and enables the rest on demand.
 - **One install.** rampage is two native executables (`rampage` and `rampage-worker`) with Ghidra's processor
   specifications bundled. Ghidra and REA need a JVM and a Ghidra install; REA also needs Node.
 - **Shared annotations.** Names, types, comments and findings go into a log beside the binary that the MCP
@@ -81,7 +81,8 @@ Compared with Ghidra and IDA, rampage does not have:
 
 - a scripting API (IDAPython, Ghidra scripts); new capabilities are added as MCP tools instead;
 - a mature interactive GUI: its desktop UI is experimental and has no type or struct editor;
-- DEX/APK or JVM class files, or relocation of object files and static archives;
+- Java decompilation of Android DEX code (rampage lists Dalvik bytecode and structured pseudocode), JVM class
+  files, or relocation of object files and static archives;
 - Swift metadata, C++ class-layout recovery beyond RTTI and vtable evidence, or exception-table recovery beyond
   MSVC `__CxxFrameHandler3` tables (experimental);
 - full version tracking: [annotation transfer](build-diffing.md) moves names, comments, signatures, types and

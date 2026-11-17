@@ -2,9 +2,9 @@
 
 Device firmware usually ships its programs and configuration inside filesystem images: SquashFS on routers and
 cameras, ext4 and Android sparse images on TVs and set-top boxes, an Android OTA `payload.bin` for system updates,
-cpio for an initramfs. `fs_list` lists such an image and `fs_extract` writes its files to a directory, so the
-binaries inside open as ordinary analysis targets. Both are file tools in the `carve` group: they take any file
-path and open no project.
+cpio for an initramfs, ZIP for an Android app (APK) or a packaged update. `fs_list` lists such an image and
+`fs_extract` writes its files to a directory, so the binaries inside open as ordinary analysis targets. Both are
+file tools in the `carve` group: they take any file path and open no project.
 
 ## Formats
 
@@ -16,7 +16,7 @@ path and open no project.
 | Android OTA `payload.bin` | major version 2, full payloads: REPLACE, REPLACE_BZ, REPLACE_XZ, ZERO, DISCARD. Partitions list as `<name>.img` |
 | cpio | newc (`070701`) and crc (`070702`) |
 | tar | ustar, GNU long names, pax `path`, `linkpath` and `size` |
-| ZIP (APK, AAB, JAR) | stored and deflate members, ZIP64; the central directory is authoritative; encrypted members and other methods are listed with a note and not read; members whose data overlap another's are noted. [`dex_metadata`](android.md) reads an APK's manifest and DEX files |
+| ZIP (APK, AAB, JAR) | stored and deflate members, ZIP64; the central directory is authoritative, and inflation stops at a member's declared size; encrypted members and other methods are listed with a note and not read; members whose data overlap another's are noted. [`dex_metadata`](android.md) reads an APK's manifest and DEX files |
 
 UBI and UBIFS images are recognised and refused as not read yet. A delta OTA payload lists its partitions, each
 noted with the first operation that needs the previous build (SOURCE_COPY, BSDIFF, PUFFDIFF, ...); rebuilding one
@@ -90,7 +90,8 @@ Every image is treated as hostile:
 
 `triage_report` or any binary tool given a filesystem image answers that the file is a SquashFS, ext, Android
 sparse, OTA payload, cpio or tar image and names `fs_list` and `fs_extract`, instead of the headerless-image
-guidance.
+guidance. Given a ZIP, it names `dex_metadata` for an APK, AAB or JAR, and `fs_list` and `fs_extract` for its
+members.
 
 ## Next: the endpoints inside
 

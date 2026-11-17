@@ -1,6 +1,6 @@
 # Known limits
 
-What rampage does not do, or does only partly, as of 1.6.0. The
+What rampage does not do, or does only partly, as of 1.7.0. The
 [comparison with Ghidra, IDA and REA](comparison.md) sets these against other tools, and the
 [stability policy](stability.md) says which areas are *experimental*.
 
@@ -76,23 +76,25 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   only (on by default in release builds): other derived results are recomputed on each open, runtime captures and
   byte-patched views are never stored, and an annotation edit does not trigger incremental re-analysis.
 - Firmware filesystem images: UBI and UBIFS are recognised but not read; vendor SquashFS variants, SquashFS 3.x,
-  delta OTA payloads (they need the previous build) and compressed tar are not read; `carve` finds SquashFS and cpio
-  images inside a container but not ext4, Android sparse or OTA payloads, whose offset you pass as `image_offset`.
+  delta OTA payloads (they need the previous build), compressed tar, and ZIP members that are encrypted or use a
+  method other than stored or deflate are not read; `carve` finds SquashFS and cpio images inside a container but
+  not ext4, Android sparse or OTA payloads, whose offset you pass as `image_offset`.
 - `endpoint_inventory` matches endpoints lexically: addresses built at run time, encrypted or compressed data and
   IPv4 addresses stored as integers in code are not found. `privacy_surface` on a directory analyses only programs
   that import a capture API or name a capture device, and matches init files to programs by path; see its
   [limits](privacy-surface.md#limits).
 - Android: DEX files are read and Dalvik bytecode is listed (`dex_metadata`, `dex_code`, with a structured
-  pseudocode view), but not decompiled to Java, and DEX code is not part of function discovery or xrefs. `privacy_surface` on an APK follows a call graph
-  of direct invokes, virtual and interface invokes resolved through the app's classes (by name to overrides, marked
-  `by_name`), callbacks and const-class component starts, within 6 levels and 2000 methods per walk: reflection,
-  method handles, framework code and run-time loaded code are not followed, and keep `no_user_trigger` from being
-  stated. Strings hidden behind decoders are recovered only for static decoder methods called with constants and
-  running within a small interpreter's model (no I/O, reflection, instance fields or app objects) and budgets. JNI methods registered with
-  `RegisterNatives` are only suggested by the strings a library holds; the registration table is not decoded. Obfuscated names are shown as
-  stored; `resources.arsc` is counted, not resolved, so `@0x7f...` manifest values stay resource ids; an AAB's
-  protobuf manifest and APK signature blocks are not read; a DEX 041 container with several DEX files has only
-  its first read (and says so). JVM class files are not read.
+  pseudocode view), but not decompiled to Java, and DEX code is not part of function discovery or xrefs.
+  `privacy_surface` on an APK follows a call graph of direct invokes, virtual and interface invokes resolved through
+  the app's classes (by name to overrides, marked `by_name`), callbacks and const-class component starts, within 6
+  levels and 2000 methods per walk: reflection, method handles, framework code and run-time loaded code are not
+  followed, and keep `no_user_trigger` from being stated. Strings hidden behind decoders are recovered only for
+  static decoder methods called with constants and running within a small interpreter's model (no I/O, reflection,
+  instance fields or app objects) and budgets. JNI methods registered with `RegisterNatives` are only suggested by
+  the strings a library holds; the registration table is not decoded. Obfuscated names are shown as stored;
+  `resources.arsc` is counted, not resolved, so `@0x7f...` manifest values stay resource ids; an AAB's protobuf
+  manifest and APK signature blocks are not read; a DEX 041 container with several DEX files has only its first read
+  (and says so). JVM class files are not read.
 - Not built yet: object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and
   vftable evidence, `__CxxFrameHandler4` and Itanium exception tables, and incremental re-analysis after edits.
 

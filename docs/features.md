@@ -380,29 +380,33 @@ decompression, automatic member opening or execution occurs. See [archive invent
 ## Firmware filesystem images
 
 `fs_list` and `fs_extract` (MCP `carve` group) list and extract SquashFS 4.0 (all six codecs), ext2/3/4, Android
-sparse images, full Android OTA payloads, cpio and tar, including images nested in one another or embedded at an
-offset. Extraction treats every image as hostile: no traversal, symlinks contained and never followed, no device
-nodes or setuid bits, and caps on size, file count, compression ratio and nesting. See
+sparse images, full Android OTA payloads, cpio, tar and ZIP (APK, AAB, JAR), including images nested in one another
+or embedded at an offset. Extraction treats every image as hostile: no traversal, symlinks contained and never
+followed, no device nodes or setuid bits, and caps on size, file count, compression ratio and nesting. See
 [firmware filesystem images](firmware-images.md).
 
 ## Endpoint inventory
 
-`endpoint_inventory` (MCP `carve` group) lists the network endpoints a binary or an extracted firmware tree names:
-URLs, host names checked against the Public Suffix List, IPv4 and IPv6 literals, certificate pins and embedded PEM or
-DER certificates. Look-alikes (version numbers, file names, XML namespaces, netmasks, package names) are counted as
-noise, and private, documentation and reserved names are labelled `local`. Findings are grouped by registrable
-domain and by file, with string addresses, referencing functions and the networking APIs they call; directory scans
-page under file and time budgets. `endpoint_blocklist` writes the chosen hosts as a hosts file, dnsmasq or unbound
-configuration, a domain list or an IP list. See [endpoint inventory and blocklists](endpoint-inventory.md).
+`endpoint_inventory` (MCP `carve` group) lists the network endpoints a binary, an APK or DEX file, or an extracted
+firmware tree names: URLs, host names checked against the Public Suffix List, IPv4 and IPv6 literals, certificate
+pins and embedded PEM or DER certificates. Look-alikes (version numbers, file names, XML namespaces, netmasks,
+package names) are counted as noise, and private, documentation and reserved names are labelled `local`. Findings
+are grouped by registrable domain and by file, with string addresses, referencing functions and the networking APIs
+they call; directory scans page under file and time budgets. `endpoint_blocklist` writes the chosen hosts as a hosts
+file, dnsmasq or unbound configuration, a domain list or an IP list. See
+[endpoint inventory and blocklists](endpoint-inventory.md).
 
 ## Privacy surface
 
-`privacy_surface` (MCP `carve` group) reports what one binary can capture and where it can send it: microphone,
-camera, screen and input-device sources (by API name, by a capture-selecting constant argument or ioctl request code
-at the call, and by device-path and Android class-name strings), network and file sinks with the endpoints they
-name, capture-to-send call paths ranked by evidence, and what reaches each capture: program start, a timer, a
-network command or user input, with `no_user_trigger` when no input or UI handling was found on the way. Evidence,
-not intent. See [privacy surface](privacy-surface.md).
+`privacy_surface` (MCP `carve` group) reports what one binary, APK or DEX file can capture and where it can send it:
+microphone, camera, screen and input-device sources (by API name, by a capture-selecting constant argument or ioctl
+request code at the call, and by device-path and Android class-name strings), network and file sinks with the
+endpoints they name, capture-to-send call paths ranked by evidence, and what reaches each capture: program start, a
+timer, a network command or user input, with `no_user_trigger` when no input or UI handling was found on the way. On
+an APK the sources and sinks are the Android APIs the DEX code invokes, merged with its JNI libraries' reports; on a
+directory such as an extracted firmware tree it reads one page of programs and APKs and ties a capture to the init
+service, systemd unit or init script that starts it at boot. Evidence, not intent. See
+[privacy surface](privacy-surface.md).
 
 ## File formats
 
@@ -426,11 +430,13 @@ These read embedded metadata and containers without executing, extracting or dec
 - **Managed assemblies** (`dotnet_metadata`, `dotnet_il`): ECMA-335 metadata (types, P/Invokes, custom
   attributes, resources) and ILDasm-style CIL for one method. CIL is reported as managed code, never as native
   instructions. See [managed assemblies](file-formats.md#managed-assemblies).
-- **Android APKs and DEX** (`dex_metadata`, `dex_code`, MCP `android` group): the manifest (package, SDK levels, permissions
-  with protection level and privacy category, components with intent filters, exported state and start-at-boot
-  receivers), native libraries with their JNI exports, DEX 035–041 classes and methods, and smali-style Dalvik
-  bytecode for one method with references resolved; `native` methods linked to their JNI exports; the capture
-  APIs the code invokes, linked to permissions and boot receivers. In-house, without a Java toolchain. See [Android APKs and DEX](android.md).
+- **Android APKs and DEX** (`dex_metadata`, `dex_code`, MCP `android` group): the manifest (package, SDK levels,
+  permissions with protection level and privacy category, components with intent filters, exported state and
+  start-at-boot receivers), native libraries with their JNI exports, DEX 035–041 classes and methods, and
+  smali-style Dalvik bytecode or structured pseudocode for one method with references resolved; `native` methods
+  linked to their JNI exports; the capture APIs the code invokes, linked to permissions and boot receivers; and
+  strings hidden behind static decoder methods, recovered by emulating the decoder at each call site. In-house,
+  without a Java toolchain. See [Android APKs and DEX](android.md).
 
 ## Debugging
 

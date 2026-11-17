@@ -21,7 +21,8 @@ file ([APKs and DEX files](#apks-and-dex-files)), or a directory such as an extr
 with the endpoint tools, from the update file to a router blocklist.
 
 1. `fs_extract` the firmware image (see [firmware filesystem images](firmware-images.md)) and pick the programs
-   that link audio, video or input libraries.
+   that link audio, video or input libraries and the APKs, or give the whole extracted directory to
+   `privacy_surface` ([Directories](#directories-extracted-trees)).
 2. `privacy_surface` on each. Read `Capture triggers` first: a `no_user_trigger` finding says a capture is reached
    from program start with no input or UI handling on the way.
 3. `Capture-to-send paths` ranks how closely each capture is tied to a network send or a file write; decompile the

@@ -93,7 +93,18 @@ OkHttp) as `network_apis`; each native library is a component `<apk>!lib/<abi>/<
 Strings an app hides behind a static decoder (`static String a(String)`, `a(int)` over a byte array) are recovered
 by emulating the decoder at each call site that passes it constants, with `decode` (see
 [decoded strings](android.md#decoded-strings)); they appear as `dex_decoded` evidence on the component of the DEX
-file holding the call.
+file holding the call. On the privacy APK fixture with `"decode": true`, the upload URL exists only as the output
+of a decoder:
+
+```json
+{"value": "https://upload.example.net/v2/audio", "form": "url", "component": "watch.apk!classes.dex",
+ "signal": "network_code",
+ "evidence": [{"origin": "dex_decoded",
+               "decoded_by": "Lcom/example/watch/Codec;->decode(Ljava/lang/String;)Ljava/lang/String;(\"2..*)`uu/...\") at 0x0002",
+               "functions": ["Lcom/example/watch/Uploader;->upload([B)V"],
+               "network_apis": ["Ljava/net/HttpURLConnection;->getOutputStream", "Ljava/net/URL;-><init>",
+                                "Ljava/net/URL;->openConnection"]}]}
+```
 
 `signal` ranks the row: `network_code` (referenced from a function that calls a networking API), `referenced`,
 `unreferenced` (references were looked up and none found) or `not_traced`.

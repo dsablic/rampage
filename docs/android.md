@@ -54,11 +54,11 @@ For one file the result holds:
   Adler-32 checksum and SHA-1 signature match (reported, never required), and its class, method, field, string and
   type counts; `totals` sums them.
 - `page`: one page of the `list` chosen: `classes` (default; name, superclass, the first 32 interfaces with
-  `interfaces_total`, access, field and method counts, `native_methods`, source file), `methods` (smali
-  signature, method index, access, code units and registers), `components`, `permissions`, `native_libs`,
-  `dex_files` or `decoded_strings` ([decoded strings](#decoded-strings)). `prefix` keeps classes whose Java name starts with it (`com.example.net`, or the descriptor form
-  `Lcom/example/net/`), `package` keeps a package and its subpackages; `offset`/`limit` page (default 100, at most
-  500) and `next_offset` continues.
+  `interfaces_total`, access, field and method counts, `native_methods`, source file), `methods` (smali signature,
+  method index, access, code units and registers), `components`, `permissions`, `native_libs`, `dex_files` or
+  `decoded_strings` ([decoded strings](#decoded-strings)). `prefix` keeps classes whose Java name starts with it
+  (`com.example.net`, or the descriptor form `Lcom/example/net/`), `package` keeps a package and its subpackages;
+  `offset`/`limit` page (default 100, at most 500) and `next_offset` continues.
 
 The summary beside the page stays within about 20,000 bytes: every list in it is cut (to 200 rows first, halved
 until it fits), each cut list keeps its full length as `<list>_total`, and `trimmed` says the lists are cut and
@@ -70,9 +70,9 @@ file has the DEX fields only. A DEX 041 container that holds several DEX files h
 
 `jni` links the `native` methods the DEX code declares to the native libraries:
 
-- `linked`: methods bound by name, each with the `library` and `symbol` (`Java_<class>_<method>`, or the long
-  form with `__<signature>` used for overloads), mangled as the JNI specification says (`_1` for `_`, `_2` for
-  `;`, `_3` for `[`, `_0xxxx` for other characters).
+- `linked`: methods bound by name, each with `bound_by_name`: the `library` and `symbol` of every export that binds
+  it (`Java_<class>_<method>`, or the long form with `__<signature>` used for overloads), mangled as the JNI
+  specification says (`_1` for `_`, `_2` for `;`, `_3` for `[`, `_0xxxx` for other characters).
 - `unlinked`: native methods no export binds, with the `expected_symbol`. Libraries with `JNI_OnLoad` that hold the
   method's name and signature as NUL-terminated strings are listed in `possibly_registered_in`: they likely
   register it with `RegisterNatives`, which binds by table at run time; the table itself is not decoded.
@@ -128,7 +128,7 @@ pages the results (`prefix`/`package` filter by the calling class):
 {"output": "collector.example.net",
  "decoder": "Lcom/example/watch/Strings;->get(I)Ljava/lang/String;",
  "caller": "Lcom/example/watch/Snapshot;->take()V", "address": "0x0004", "dex": "classes.dex",
- "inputs": ["0"], "steps": 160}
+ "inputs": ["0"], "steps": 425}
 ```
 
 The same strings feed [`endpoint_inventory`](endpoint-inventory.md) with `decode` (evidence `dex_decoded`) and

@@ -25,8 +25,9 @@ Run `list_dir` on the folder holding the update. It names each file's format fro
 {"name": "squashfs-xz.img", "kind": "file", "size": 4096, "format": "squashfs"}
 ```
 
-- If the format is `squashfs`, `ext`, `android_sparse`, `ota_payload`, `cpio` or `tar`, list it with `fs_list` and
-  extract it with `fs_extract` into a new, empty directory.
+- If the format is `squashfs`, `ext`, `android_sparse`, `ota_payload`, `cpio`, `tar` or `zip`, list it with
+  `fs_list` and extract it with `fs_extract` into a new, empty directory. An APK is a `zip` too: check it directly
+  with the tools below, or extract it to open its native libraries by path.
 - If the image sits inside a vendor container, find its offset with `carve` or `file_layout` and pass it as
   `image_offset`. Nested images (a partition inside an OTA payload) open with `inner`.
 - If the update is a microcontroller image rather than a filesystem, see
@@ -126,11 +127,6 @@ Then follow `next_steps`: they name the functions to `decompile` to read what is
 report is evidence of what the code can do and how it is reached, never of intent or that it runs; see
 [evidence levels](privacy-surface.md#evidence-levels) and [limits](privacy-surface.md#limits).
 
-To check a whole extracted tree at once, give `privacy_surface` the directory: it analyses the programs and APKs
-that may capture, one page at a time (`cursor`), and reads the tree's init `.rc` files, systemd units and init
-scripts, so a capture in a program that init starts at boot reads `no_user_trigger: system/bin/voiced is started at
-boot, ...` with the init file and line. See [directories](privacy-surface.md#directories-extracted-trees).
-
 ### Apps (APKs)
 
 On Android devices the recording code is often in an app. Run `privacy_surface` on each APK under `system/app`,
@@ -151,6 +147,40 @@ CaptureService.onStartCommand -> Recorder.record`), the Application schedules a 
 calls a native method whose library connects and sends, and a push-to-talk button records only on `onClick`. Read
 the methods `next_steps` names with `dex_code`, and the library functions with `decompile` after `fs_extract` of
 the APK. See [APKs and DEX files](privacy-surface.md#apks-and-dex-files).
+
+### A whole extracted tree
+
+To check every program and app at once, and to see which of them the device starts at boot, give `privacy_surface`
+the extracted directory:
+
+```json
+{"path": "/work/rootfs"}
+```
+
+It analyses one page of the programs and APKs that may capture (`max_files`, default 10; pass `input.next_cursor`
+back as `cursor` for the next page) and skips executables that import no capture API. On every page it reads the
+tree's Android init `.rc` files, systemd units, init.d scripts and inittab. On a tree holding the privacy fixture as
+`system/bin/voiced` with an init service for it, and the privacy APK fixture under `system/app`:
+
+```text
+2 programs and APKs analysed on this page (1 more programs import no capture API and name no capture device, and
+were not analysed); 2 init files name 1 programs started at boot and 0 started on a trigger; 1 analysed programs
+with capture sources are started at boot.
+```
+
+Each finding is labelled with its file. A program that init starts at boot, and whose capture has no user-facing
+trigger, gets a finding that names the init file and line:
+
+```text
+no_user_trigger: system/bin/voiced is started at boot, and its capture is reached from program start with no
+user-facing trigger found
+  init service voiced, class main started by `class_start main` on `boot` (init.rc:2) (system/etc/init/voiced.rc:1),
+  matched by path
+```
+
+The `Boot services` section lists every start the init files hold, and whether the program is in the tree. A
+program matched to an init file by file name alone is not said to lack a trigger, and programs started by other
+programs at run time are not traced. See [directories](privacy-surface.md#directories-extracted-trees).
 
 ## Where next
 

@@ -229,6 +229,9 @@ their `RAMPAGE_DEBUG_*` variables; [debug control](debug-control.md#consent) lis
 
 Registered workflows are `triage-report`, `find-main`, `network-surface`, `find-crypto`, `persistence-surface`,
 `privacy-surface`, `string-decoding` and `diff-builds`. Reports retain evidence, confidence, limits and suggested next tools.
+Workflows take a binary: `privacy-surface` on an APK, a DEX file or a directory is MCP-only, as are the `android`
+tools (`dex_metadata`, `dex_code`) and the file tools `list_dir`, `fs_list`, `fs_extract`, `endpoint_inventory` and
+`endpoint_blocklist`.
 `--limit N` caps findings per section (default 25, maximum 200); `--no-decompile` skips find-main's preview.
 `diff-builds` requires `--other FILE`; `--other-image-offset OFFSET` and `--other-image-length N` select an
 embedded second image. These second-input options are rejected for workflows that do not compare images.

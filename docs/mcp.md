@@ -144,11 +144,10 @@ improve group alone; see [the flywheel](#flywheel-improve).
 
 Workflow reports name the `group` of suggested next tools. The [desktop assistant](desktop-ui.md) uses the same
 tools without group gating, plus the interactive `show_address`, which is not an MCP tool because the server has
-no listing to navigate. It does not offer the file tools (`carve`, `archive_inventory`, `fs_list`, `fs_extract`, `write_decoded_range`,
-`endpoint_inventory`, `endpoint_blocklist`,
-`list_packs`,
-`query_debugger`, `list_dir`, `inspect_data`, `decode_file_range`, `probe_compression`, `file_layout`, `inspect_raw_code`, `inspect_sleigh`,
-`pyinstaller_archive`, `wasm_module`) or the `debug` tools.
+no listing to navigate. It does not offer the file tools (`carve`, `archive_inventory`, `fs_list`, `fs_extract`,
+`write_decoded_range`, `endpoint_inventory`, `endpoint_blocklist`, `dex_metadata`, `dex_code`, `list_packs`,
+`query_debugger`, `list_dir`, `inspect_data`, `decode_file_range`, `probe_compression`, `file_layout`,
+`inspect_raw_code`, `inspect_sleigh`, `pyinstaller_archive`, `wasm_module`) or the `debug` tools.
 
 ## Flywheel (improve)
 
@@ -453,7 +452,7 @@ not a total; scanning stops at the candidate after the page. It extracts/decompr
 metadata. Its member ordinals and metadata hashes are not payload validation or extraction-safe paths; whole-record
 JSON pages stay within 60,000 bytes and errors within 4,096 bytes. See [archive inventory](archive-inventory.md).
 `fs_list` and `fs_extract` list and extract firmware filesystem images (SquashFS, ext2/3/4, Android sparse, Android
-OTA payloads, cpio, tar) in any file, at an `image_offset` or nested through `inner`; `fs_extract` writes into a new
+OTA payloads, cpio, tar) and ZIP archives (APKs included) in any file, at an `image_offset` or nested through `inner`; `fs_extract` writes into a new
 or empty `output_dir` under traversal, symlink, special-file and size limits and returns the executables it wrote.
 See [firmware filesystem images](firmware-images.md).
 `endpoint_inventory` lists the URLs, hosts, IPs, pins and certificates of a file or a directory tree (paged by
