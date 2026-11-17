@@ -124,6 +124,8 @@ pub struct Project {
     base_check: OnceLock<Option<rampage_loaders::raw_base::BaseCheck>>,
     /// A Cortex-M Raw project whose selector left `pointer_tables` unset: why the scan ran automatically.
     pub(crate) pointer_tables_auto: OnceLock<crate::rows::PointerTablesAuto>,
+    /// A Cortex-M Raw project reopened with the CRC routines integrity_checks infers as further seeds.
+    pub(crate) inferred_seeds: OnceLock<Vec<crate::rows::InferredSeed>>,
     /// A Raw project's container streams, found once by integrity_checks.
     pub(crate) container_scan: OnceLock<Arc<crate::integrity::ContainerScan>>,
     /// Strings of at least `DEFAULT_STRING_LENGTH` characters, scanned once.
@@ -405,6 +407,7 @@ impl Project {
             code_regions: OnceLock::new(),
             base_check: OnceLock::new(),
             pointer_tables_auto: OnceLock::new(),
+            inferred_seeds: OnceLock::new(),
             container_scan: OnceLock::new(),
             strings: OnceLock::new(),
             decompiler: std::sync::Mutex::new(crate::decompile::DecompilerState::default()),
@@ -915,6 +918,7 @@ impl Project {
                 },
                 scatter_load: raw.scatter_load(),
                 base_check,
+                inferred_seeds: self.inferred_seeds.get().map_or(&[], Vec::as_slice),
             }),
             analysis_store: self.analysis_store_status(),
             encrypted_or_packed_code: self.encrypted_regions().cloned().collect(),
@@ -1095,6 +1099,11 @@ impl Project {
                 steps.join("; ")
             )
         })
+    }
+
+    /// Whether discovery has run (successfully or not) for this project.
+    pub(crate) fn analysis_ran(&self) -> bool {
+        self.analysis.get().is_some()
     }
 
     pub(crate) fn analysis(&self) -> Result<&Analysis, ApiError> {

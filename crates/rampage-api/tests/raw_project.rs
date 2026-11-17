@@ -1004,3 +1004,37 @@ fn cortex_m_exact_entry_decompiles_an_asserted_thumb_start() {
     );
     assert!(failed && text.contains("bit 0 clear"), "{text}");
 }
+
+/// Fifth Haiku run: integrity_checks inferred a CRC routine from its polynomial literal, but it was no function, so
+/// decompile and lock_mechanisms never saw it. The session now seeds such starts, with the evidence, and reports them.
+#[test]
+fn cortex_m_inferred_crc_routines_are_seeded_into_discovery() {
+    let owned = OwnedDirectory::new();
+    let path = owned.file("records.bin", CORTEX_M_RECORDS);
+    let session = Session::default();
+    let mut project = session.open_raw(&path, &records_request()).unwrap();
+    let crc = elf_symbol(CORTEX_M_RECORDS_ELF, "crc32_update");
+    let functions = project.functions(&rampage_api::FunctionsQuery::default()).unwrap();
+    assert!(functions.items.iter().any(|function| function.address == crc), "{:?}", functions.items);
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    let seeds = &summary["raw"]["inferred_seeds"];
+    assert_eq!(seeds[0]["address"], format!("{crc:#x}"), "{summary:#}");
+    assert!(seeds[0]["reason"].as_str().unwrap().contains("polynomial 0xedb88320"), "{seeds:#}");
+    // The same request finds the same seeded project.
+    assert!(Arc::ptr_eq(&project, &session.open_raw(&path, &records_request()).unwrap()));
+    let registry = tools();
+    let (text, failed) = call_shared(&registry, &mut project, "integrity_checks", json!({}));
+    assert!(!failed, "{text}");
+    let report: Value = serde_json::from_str(&text).unwrap();
+    let routine =
+        report["routines"].as_array().unwrap().iter().find(|routine| routine["address"] == format!("{crc:#x}"));
+    let routine = routine.unwrap_or_else(|| panic!("{report:#}"));
+    assert!(routine.get("inferred_range").is_none(), "a discovered function now: {routine:#}");
+    let decompiled = project.decompile(crc).unwrap();
+    assert!(decompiled.code.contains("0xedb88320"), "{}", decompiled.code);
+    let (text, failed) = call_shared(&registry, &mut project, "lock_mechanisms", json!({}));
+    assert!(!failed, "{text}");
+    // The seeded CRC routine is evidence that selects functions for analysis.
+    let report: Value = serde_json::from_str(&text).unwrap();
+    assert!(report["coverage"]["functions_analyzed"].as_u64().unwrap() > 0, "{report:#}");
+}

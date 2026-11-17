@@ -314,6 +314,18 @@ pub struct RawSummary<'a> {
     /// looks wrong.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_check: Option<&'a rampage_loaders::raw_base::BaseCheck>,
+    /// Cortex-M: CRC routines integrity_checks inferred from their polynomial literal loads outside every discovered
+    /// function, seeded into discovery so they are functions (decompile, lock_mechanisms); each with its evidence.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub inferred_seeds: &'a [InferredSeed],
+}
+
+/// A function start seeded from evidence in the code rather than from the selector.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InferredSeed {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub address: u64,
+    pub reason: String,
 }
 
 /// A Raw project's pointer tables, with why they were scanned when the selector left `pointer_tables` unset.

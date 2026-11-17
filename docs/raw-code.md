@@ -138,6 +138,14 @@ startup copies and your `regions`), each table's targets in the region holding i
 A table is accepted only when at least two distinct targets look like real functions; switch tables and stray
 constants are reported as refused. See [Raw projects](mcp.md#raw-projects) for the evidence rules.
 
+## CRC routines discovery missed
+
+When a Cortex-M project opens with `pointer_tables` unset (the default), a CRC routine that no discovered code reaches (called only through a computed
+pointer) is looked for the way `integrity_checks` infers it: a CRC-32 polynomial literal nothing references, the
+PC-relative `ldr` of it outside every function, and a `push {..., lr}` prologue before the load. Each such start is
+seeded into discovery, so `decompile`, `lock_mechanisms` and `integrity_checks` see the routine as a function, and
+`binary_info` lists it in `raw.inferred_seeds` with that evidence.
+
 ## Find main
 
 `find_main` on a Cortex-M project follows the reset handler: through scatter-load's jump into copied code, and a

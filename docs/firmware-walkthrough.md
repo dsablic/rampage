@@ -219,7 +219,8 @@ It finds the record's byte sum as a valid `sum32` check over the stream and list
 Its `next` says to run `integrity_checks` again with that selector, since the routines that check the image's own
 CRCs are in the decoded code. On an image with CRC routines it finds their tables and polynomial literals, and on
 Cortex-M names a routine around a polynomial literal even when discovery missed it (`inferred_range`); this sample
-has none. After patching, the same tool recomputes the checks; see
+has none. When the project opens with `pointer_tables` unset (the default), such a routine is also seeded into discovery (`raw.inferred_seeds` in
+`binary_info`, with the evidence), so `decompile`, `lock_mechanisms` and `integrity_checks` see it as a function. After patching, the same tool recomputes the checks; see
 [firmware patching](firmware-patching.md).
 
 If another tool needs the decoded bytes as a file, `write_decoded_range` writes them to a new file at an absolute

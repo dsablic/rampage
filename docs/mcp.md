@@ -257,8 +257,13 @@ On a Raw project the CRC code evidence comes from the discovered functions (poin
 included); on Cortex-M a polynomial literal that no discovered code references is followed to the PC-relative
 `ldr` that loads it (within 4 KiB, either side), and the routine around it is listed with `inferred_range`: from
 the nearest `push {..., lr}` whose instructions lead to the load to the first return after the load, which may end
-early when the routine returns from several places. Such a routine is not a discovered function, so
-`lock_mechanisms` and `decompile` do not see it. On a Raw project mapped over a container file, a compressed stream behind a record (within 64 bytes before
+early when the routine returns from several places. When a session opens a Cortex-M Raw project with `pointer_tables`
+unset (discovery then runs at open; an explicit `pointer_tables` keeps it lazy), it looks for such routines after
+discovery and, when it finds any, reopens the same interpretation with their starts as further
+seeds (at most 16), so they are functions that `lock_mechanisms`, `decompile` and `integrity_checks` see.
+`binary_info` lists them in `raw.inferred_seeds` (`address`, `reason` with the polynomial, literal slot, load
+and prologue); a reopen that is refused keeps the first project. The seeded project also answers a request that
+states those seeds. On a Raw project mapped over a container file, a compressed stream behind a record (within 64 bytes before
 it: its compressed length, its decoded size, and a byte sum of the compressed bytes or a word holding the stream's
 own file offset) is listed in `container_streams`: offsets, sizes, `checksum` (whether a record word is the byte sum or CRC-32 of the
 compressed bytes; that word is then the check `check`, with its range and stored value at mapped addresses),

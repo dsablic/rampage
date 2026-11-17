@@ -48,9 +48,7 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   have no reset-code follow.
 - On Raw projects `find_main` models Cortex-M reset code only, and finds a main that never returns. `decompile`
   with `exact_entry` takes Raw Cortex-M Thumb code but refuses other ARM code (A32, Thumb in ELF, PE or Mach-O);
-  plain `decompile` takes any code address there. A CRC routine that `integrity_checks` infers from a polynomial
-  literal outside every discovered function is reported but not added to discovery, so `decompile` and `lock_mechanisms` do not
-  see it until you pass its address as a seed.
+  plain `decompile` takes any code address there.
 - A Raw selector with `decode` decodes its input again on every call before the session finds the project, and
   `inspect_data` opens Raw images outside the session, so analyst names do not resolve in its `at` and its 16 KiB
   input budget refuses large selectors.

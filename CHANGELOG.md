@@ -6,6 +6,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- CRC routines `integrity_checks` infers on a Cortex-M Raw project (a polynomial literal loaded outside every
+  discovered function, after a `push {..., lr}` prologue) are seeded into discovery when the session opens the
+  project with `pointer_tables` unset, so `decompile`, `lock_mechanisms` and `integrity_checks` see them as functions; `binary_info` lists them
+  in `raw.inferred_seeds` with the evidence, at most 16, and the project is cached under both interpretations.
+
 - `decompile` with `exact_entry` takes Raw Cortex-M Thumb code: the plan has no imports to verify, the decompiler
   gets the discovered Thumb mode points and the same flash-constant folding and volatile device ranges as plain
   `decompile`, and an odd (Thumb-bit) address is refused. Other ARM code is still refused, and the refusal now

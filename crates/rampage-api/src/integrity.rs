@@ -1402,6 +1402,44 @@ fn thumb_routine_around(blocks: &[Block], site: u64) -> Option<(u64, u64)> {
     None
 }
 
+/// CRC routines a Raw Cortex-M image holds where discovery did not reach them, as `integrity_checks` infers them
+/// (`inferred_range`): a polynomial literal no discovered code references, a PC-relative `ldr` of it outside every
+/// discovered function, and a `push {..., lr}` prologue before the load from which the instructions land on it.
+/// Each start with that evidence, at most [`MAX_INFERRED_SEEDS`], by address.
+pub(crate) fn inferred_crc_starts(project: &Project) -> Vec<(u64, String)> {
+    let binary = &project.binary;
+    if binary.raw_code_image().is_none() || !binary.m_profile() || binary.big_endian || project.analysis().is_err() {
+        return Vec::new();
+    }
+    let (blocks, _) = blocks(binary);
+    let mut found: BTreeMap<u64, String> = BTreeMap::new();
+    for (value, family) in POLYNOMIALS {
+        for slot in slots_holding(&blocks, value, false, 8) {
+            let referenced = project.xrefs(XrefQuery::To(slot), None, Some(1)).is_ok_and(|page| !page.items.is_empty());
+            if referenced {
+                continue;
+            }
+            for site in thumb_literal_loads(&blocks, slot) {
+                if matches!(project.function_containing(site), Ok(Some(_))) {
+                    continue;
+                }
+                if let Some((start, _)) = thumb_routine_around(&blocks, site) {
+                    found.entry(start).or_insert_with(|| {
+                        format!(
+                            "{family} polynomial {value:#010x} literal at {slot:#x}, loaded by `ldr` at {site:#x} \
+                             after the push {{..., lr}} prologue at {start:#x}; no discovered code reached it"
+                        )
+                    });
+                }
+            }
+        }
+    }
+    found.into_iter().take(MAX_INFERRED_SEEDS).collect()
+}
+
+/// Inferred CRC routine starts seeded into one Raw project's discovery.
+pub(crate) const MAX_INFERRED_SEEDS: usize = 16;
+
 /// The functions holding CRC code evidence (CRC tables, polynomial literals), as `integrity_checks` finds them.
 pub(crate) fn crc_routine_addresses(project: &Project) -> BTreeSet<u64> {
     let (blocks, _) = blocks(&project.binary);

@@ -196,8 +196,9 @@ decoded code.
   - `integrity_checks` over the whole 4 MiB container exhausted its budget; it needs a hint to run on the decoded
     image's functions instead. Done: `container_streams` reports the record's byte sum as a check and `next` gives
     the decoded image's selector; on the decoded image the CRC-32 routine is found from its literal load.
-  - [ ] Seed a routine `integrity_checks` infers from a literal load (outside every discovered function) into
-    discovery, so `decompile` and `lock_mechanisms` see it.
+  - [x] Seed a routine `integrity_checks` infers from a literal load (outside every discovered function) into
+    discovery, so `decompile` and `lock_mechanisms` see it. Done: the session reopens the project with those starts
+    as seeds and `binary_info` lists them in `raw.inferred_seeds`.
 - [ ] **Fifth Haiku run (2026-11-16, after f8f318b).** 45 turns, $0.53. Reset path, copies, CRC-32 routine and
   verified container sums all reported directly from tool output; no wrong base. Remaining gaps, in order of value:
   - `xrefs` from code to strings loaded through Thumb literal pools returns nothing in Raw images, so the

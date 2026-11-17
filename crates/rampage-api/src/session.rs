@@ -221,11 +221,9 @@ impl Session {
         // Discovery runs outside the session lock; concurrent first opens of this key wait on one build.
         let project = Arc::clone(cell.get_or_init(|| {
             let project = self.new_raw_project(binary, &key.0);
-            Arc::new(if automatic {
-                self.with_automatic_pointer_tables(project, path, request, &key.0)
-            } else {
-                project
-            })
+            let project =
+                if automatic { self.with_automatic_pointer_tables(project, path, request, &key.0) } else { project };
+            Arc::new(self.with_inferred_crc_seeds(project, path, request, &key.0))
         }));
         let project = {
             let mut state = self.state.lock().expect("session lock");
@@ -234,9 +232,10 @@ impl Session {
                 Some(project) => project,
                 None => {
                     state.raw.push((key.clone(), Arc::clone(&project)));
-                    // The interpretation the automatic request produced answers explicit requests for it too.
-                    if automatic
-                        && let Ok(Some(own)) = project.binary.raw_interpretation_identity()
+                    // The interpretation an automatic or seeded request produced answers explicit requests for it
+                    // too.
+                    if let Ok(Some(own)) = project.binary.raw_interpretation_identity()
+                        && own.sha256 != key.1
                         && cached_raw(&mut state, &(key.0.clone(), own.sha256.clone())).is_none()
                     {
                         state.raw.push(((key.0.clone(), own.sha256), Arc::clone(&project)));
@@ -330,6 +329,45 @@ impl Session {
             reason,
         });
         project
+    }
+
+    /// A Cortex-M Raw `project` whose discovery already ran, or, when `integrity_checks` would infer CRC routines
+    /// outside every discovered function (see [`crate::integrity::inferred_crc_starts`]), the same interpretation
+    /// reopened with those starts as further seeds, recording each with its evidence. A reopen that is refused keeps
+    /// `project`.
+    fn with_inferred_crc_seeds(
+        &self,
+        project: Project,
+        path: &Path,
+        request: &crate::RawProjectRequest,
+        source: &Path,
+    ) -> Project {
+        // Only after a discovery the open already ran (pointer_tables unset): an explicit request stays lazy.
+        if !project.binary.m_profile() || !project.analysis_ran() {
+            return project;
+        }
+        let starts = crate::integrity::inferred_crc_starts(&project);
+        if starts.is_empty() {
+            return project;
+        }
+        let mut seeded = request.clone();
+        // The interpretation `project` has: an automatic scan's outcome is explicit from here on.
+        if let Some(auto) = project.pointer_tables_auto.get() {
+            seeded.pointer_tables = Some(auto.applied);
+        }
+        seeded.seeds.extend(starts.iter().map(|&(start, _)| crate::FileOffset(start)));
+        let binary = crate::raw_project::raw_image(path, &seeded).and_then(|image| {
+            Binary::from_raw_image(image).map_err(|source| ApiError::Load { path: path.into(), source })
+        });
+        let Ok(binary) = binary else { return project };
+        let reopened = self.new_raw_project(binary, source);
+        if let Some(auto) = project.pointer_tables_auto.get() {
+            let _ = reopened.pointer_tables_auto.set(auto.clone());
+        }
+        let _ = reopened
+            .inferred_seeds
+            .set(starts.into_iter().map(|(address, reason)| crate::rows::InferredSeed { address, reason }).collect());
+        reopened
     }
 
     fn open_at_policy(

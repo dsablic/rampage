@@ -64,7 +64,9 @@ measured on the patched image (`valid`, `stored_hex`, `computed_hex`).
   each reason.
 - **Raw firmware.** On a Raw project the code evidence comes from the discovered functions, pointer tables and
   scatter-load copies included. On Cortex-M a polynomial literal that no discovered code references is followed to
-  the `ldr` that loads it, and the routine around it is listed with `inferred_range`; it is not added to discovery.
+  the `ldr` that loads it, and the routine around it is listed with `inferred_range`. With `pointer_tables`
+  unset (the default) the session seeds such a routine into discovery when it opens the project
+  (`raw.inferred_seeds`), so it is then a function.
 - **Containers.** On a Raw project mapped over a whole update file, each compressed stream behind a record is
   listed in `container_streams`; a record word holding the byte sum or CRC-32 of the compressed bytes becomes a
   check, and `open_as_raw` and `next` give the decoded image's selector, whose own checks are found by running
