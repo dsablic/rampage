@@ -124,15 +124,13 @@ fn strings(project: &Project) -> BTreeMap<String, u64> {
 struct DiffBuildsArgs {
     /// File path of the other build to compare with (same architecture); "added" means only in that build.
     other: String,
-    /// Compare with the ELF, PE or Mach-O image embedded in `other` at this file offset (hex "0x..." or decimal),
-    /// as image_offset does for `path`; omitted, `other` is opened whole.
+    /// File offset of an embedded image in `other`, as image_offset is for `path`.
     #[serde(default)]
     other_image_offset: Option<FileOffset>,
     /// With other_image_offset, the embedded image's length in bytes; defaults to the extent its headers give.
     #[serde(default)]
     other_image_length: Option<FileOffset>,
-    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
-    /// reports are cut further to fit one tool result.
+    /// Findings per report section (default 25, at most 200); a cut section says so.
     max_per_section: Option<usize>,
 }
 

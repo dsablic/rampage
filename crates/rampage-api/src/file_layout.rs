@@ -42,13 +42,12 @@ const PREVIEW_CHARS: usize = 48;
 pub struct FileLayoutRequest {
     /// Original-file byte offset where the selection starts; default 0.
     pub offset: Option<FileOffset>,
-    /// Selected bytes, 1..=67108864 (64 MiB). Omitted: the rest of the file, at most 64 MiB; a continuation then
-    /// names the remainder.
+    /// Selected bytes, at most 64 MiB; default the rest of the file (a continuation names any remainder).
     pub length: Option<FileOffset>,
     /// Shortest run of one repeated byte reported as a fill region, 8..=16777216; default 64.
     #[schemars(range(min = 8, max = 16777216))]
     pub min_fill_run: Option<u64>,
-    /// Entropy block size in bytes, 512..=16777216; default 4096. Blocks start at the selection offset.
+    /// Entropy block size in bytes, 512..=16777216; default 4096.
     #[schemars(range(min = 512, max = 16777216))]
     pub block_size: Option<u64>,
     /// Shortest printable run counted as a string, 4..=64 characters; default 6.
@@ -62,7 +61,7 @@ pub struct FileLayoutRequest {
     pub cluster_min_strings: Option<usize>,
     /// Also cluster UTF-16LE strings of ASCII-range characters; default false.
     pub utf16: Option<bool>,
-    /// Report heuristic hints (Cortex-M vector-table candidates); default true. Hints are evidence, not mappings.
+    /// Report heuristic hints; default true.
     pub hints: Option<bool>,
     /// Regions returned, 1..=256; default 128.
     #[schemars(range(min = 1, max = 256))]

@@ -193,7 +193,12 @@ Errors from these tools are JSON objects: `{"error": kind, "message": text}`. `k
 ## Inputs, paging and decompiler tokens
 
 Binary tools take `path`, optional `arch`, and optional `image_offset`/`image_length` to open an embedded view.
-`image_offset` is not the paging `offset`. Native addresses are hexadecimal strings; most queries also accept
+`image_offset` is not the paging `offset`. `arch` picks a universal Mach-O's slice (default x86_64, then aarch64,
+then x86). `image_offset` (hex `"0x..."` or decimal) opens the ELF, PE or Mach-O image embedded there, such as a
+`carve` candidate, with its annotations kept apart from the outer file's; for a universal Mach-O embedded in a larger
+file give its fat header's offset with `arch` for the slice; offset 0 without `image_length` is the file itself.
+`image_length` defaults to the extent the image's header tables give, which leaves out any overlay after it.
+Native addresses are hexadecimal strings; most queries also accept
 symbols, exports, import-stub names and `sub_<hex>`. Runtime comparison slots/ranges and branch windows require
 explicit hexadecimal addresses. See [CLI global options](cli-reference.md#global-options-and-addresses).
 
@@ -511,6 +516,94 @@ Errors start with a code: `unknown_session`, `endpoint_not_allowed`, `session_li
 `slide_mismatch`, `slide_unverified`, `ambiguous_module`, `arch_mismatch`, `binding_limit`, `not_bound`,
 `ambiguous_name`, `not_code`, `step_out_refused`, `undecodable` and `shared_cache_image`. See
 [debug control](debug-control.md).
+
+## Tool details
+
+Tool descriptions say when to call a tool, what it needs and what it returns; the details below are what they leave
+out. The feature guide linked for each tool is the full reference.
+
+- `batch`: names resolve against the snapshot before the batch; duplicate targets, malformed declarations and
+  receipts over the 60,000-byte budget (which reserves room for refresh and cancellation evidence) write nothing.
+  A bound assistant may stop after a committed batch when it cannot attribute the transition to itself; the
+  outcome is kept and the batch is not retried.
+- `transfer_annotations`: methods and confidences are exact_bytes 1.0, symbol_name 0.95, masked_hash 0.9,
+  unique_string 0.8, call_graph 0.75 (propagation from matched callers), call_position 0.6 (a non-calling callee
+  placed by call position alone) and neighbourhood 0.6; derived matches build only on matches at least as
+  confident. Statuses are transfer, already_present, conflict, below_threshold and not_transferred (with a reason).
+  The first applied batch records the source SHA-256, threshold and methods in the findings ledger. See
+  [build diffing](build-diffing.md).
+- `assemble`: source is at most 16 KiB of literal assembly, never a file name; only the base address resolves
+  names. The proposal is encoding evidence, not execution or behaviour verification. See [assembly](assembly.md).
+- `search`: `include_context` defaults to true; a capture's `file_offset` is null; `budget` bounds scan work
+  separately from paging. See [search](search.md).
+- `decompile` with `exact_entry`: the entry is an analyst assertion; entry metadata and decoding are not proof of
+  boundaries or completeness, and output carries context counts, omissions and preparation timings. There is no
+  silent whole-program fallback. See [exact-entry decompilation](exact-entry-ui.md).
+- `record_finding`: the ledger holds at most 1024 entries and 2 MiB, and a write that would leave the shared
+  annotation log less than a quarter of its budget free is refused, so names and comments keep room.
+- `discard_undo`: the annotation log is not rewritten; the dropped step's edits stay.
+- `class_evidence`: RTTI pages are also bounded to 16,000 JSON bytes and vftable pages to 24,000; a vftable lists
+  at most 64 slot targets.
+- `patch_bytes`: `original_hex` must be the original file's bytes, not an existing patch's; headers, captured or
+  debugger memory and source files are never written. See [patching](patching.md).
+- `inspect_data`: image addresses, selected-image offsets and outer-file offsets are distinct; retained Mach-O
+  chained rebases and import identities are reported separately from raw words; partial encoded-pointer words are
+  not followed and other relocations are not applied. See [data inspection](data-inspection.md).
+- `inspect_sleigh`: the roster has 20 language IDs (16 reviewed processor profiles plus four x86/A64 variants);
+  widths are never inferred from CPU names. Native calls and discovery are not interruptible, so deadlines are
+  checked between operations. Gated flow (Hexagon packets, SuperH delay slots, user-defined operations) is
+  reported rather than followed, and entry retention is not proof of body coverage. Unix regular files only. See
+  [Sleigh decoding](sleigh-decoding.md).
+- `inspect_raw_code`: mapping assertions and decoding are not execution or boundary proof; invalid or incomplete
+  instructions stop decoding. See [raw code](raw-code.md).
+- `decode_file_range`: lzss-4k is LSB-first flags with 1 meaning a literal, 12-bit references and lengths of the
+  nibble plus 3, its ring starting at 4078 with an explicit fill. The decode deadline is cooperative; file I/O and
+  hashing are not timed out. See [decoding](decoding.md).
+- `probe_compression`: LZSS sweeps windows of 10..13 bits, minimum match 2 or 3, flag bit order and polarity, five
+  16-bit reference layouts, and distance or ring offsets with ring start and fill. See [decoding](decoding.md).
+- `file_layout`: high-entropy spans are at least 7.2 bits/byte and low ones at most 2.0. A vector-table candidate
+  has an initial SP in SRAM and an odd reset address; a compressed-component candidate has a header word equal to
+  the payload's length with a byte sum or CRC-32 of it, or a packed payload ending at a boundary. See
+  [file layout](file-layout.md).
+- `identify_functions`: `source` is "user database", the data pack's name, "rampage-builtin" or "rampage-builtin
+  embedded". Thunks too small for the confidence gate are never named. An oversized first row or header is refused
+  before any name is written. FID namespaces need the separately configured Ghidra import. Fuzzy loading,
+  querying and receipt checks finish before exact names are applied; fuzzy totals never count toward
+  matched/applied, and fuzzy requests cannot combine with `no_bundled`. See
+  [fuzzy signatures](fuzzy-signatures.md).
+- `import_debug_layouts`: review_sha256 binds every admitted layout, function, producer evidence, warning, the
+  image, options, specifications and annotation eligibility, not just the page. Opaque vptr projections describe
+  consumer storage, not producer types; exact method associations are checked source evidence, not object-vptr
+  proof or virtual-call targets. See [debug layout import](debug-layout-import.md).
+- `import_pdb_names`: user, symbol, export, entry and concurrently added labels are kept; there are no automatic
+  paths or downloads. See [PDB symbols](pdb-symbols.md).
+- `edit_variable`: selectors include inclusive definition/use points, not live ranges; dynamic, join, piece and
+  ambiguous storage is refused; an invalid or oversized refreshed result does not persist. See
+  [local variables](local-variables.md).
+- `function_frame`: native stack space is not equated with entry-SP tracker offsets, and paging does not imply a
+  complete frame. See [function frames](function-frame.md).
+- `dotnet_metadata`: attribute values cover primitives, strings, types, single-dimensional arrays, verified local
+  enums and boxed values in object[]; others report errors. Resource locations are not validated payload extents.
+- `pe_resources`: the tree walk has depth, table, entry and leaf limits with loop detection, and a directory size
+  overrunning its section is read from the RVA as Windows does. A page decodes its first payload always and later
+  ones until it has spent 24,000 payload bytes (decode_skipped counts the rest). The manifest scan is textual, not
+  an XML parse.
+- `pe_load_config`: fields past the directory's Size are listed in absent_fields; SafeSEH is read only for native
+  x86. Table contents beyond SafeSEH handlers, CHPE, hot-patch, enclave and volatile metadata are not decoded.
+- `build_info`: Go records come from .go.buildinfo, __go_buildinfo or a 16-byte aligned scan of writable data;
+  the Rust section is zlib JSON, capped at 8 MiB. Settings and roots are capped with totals. No vulnerability
+  lookup and no network access.
+- `exception_handlers`: x64 tables come through .pdata unwind info; x86 tables by a validated scan tied to the
+  function that registers the handler thunk. cl.exe x86 places catch blocks inline.
+- `pyinstaller_archive`: the cookie (magic MEI\x0c\x0b\x0a\x0b\x0e) is searched backwards through the last 8 MiB,
+  stepping over an appended signature, in both the 24-byte pre-2.1 and the 88-byte layout. Nothing is extracted,
+  decompressed, decrypted or decompiled.
+- `wasm_module`: at most 64 sections are listed and the first 32 errors kept (repeats counted).
+- `archive_inventory`: limits are a 65,557-byte tail, 8 MiB directory, 4096 records, 1 MiB of names (1024 bytes
+  each) and 24 MiB of reads; exhausting a budget rejects the whole inventory. Names keep raw hex and ordinal
+  identity. See [archive inventory](archive-inventory.md).
+- `query_debugger`: the socket must sit in a same-user 0700 directory; paths recorded in capture metadata are never
+  opened, and content hashes are not authenticity or atomicity proofs. See [LLDB queries](lldb-query.md).
 
 ## Raw projects
 

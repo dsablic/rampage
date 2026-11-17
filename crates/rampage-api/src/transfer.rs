@@ -60,11 +60,9 @@ impl TransferList {
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TransferRequest {
-    /// File path of the analyzed build (same architecture) whose saved annotations (its `.rampage` log) are carried
-    /// over to this build; that log is only read.
+    /// File path of the analyzed build (same architecture) whose saved annotations are carried over; only read.
     pub from: String,
-    /// Write every transferable annotation to this build's log as one undoable batch (several when more than 1000)
-    /// with a provenance entry in the findings ledger; omitted or false only previews.
+    /// Write the transfers as undoable batches; omitted or false only previews.
     #[serde(default)]
     pub apply: bool,
     /// Lowest match confidence whose annotations transfer, 0 to 1 (default 0.7). Methods: exact_bytes 1.0,

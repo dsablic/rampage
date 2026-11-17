@@ -421,8 +421,7 @@ impl Workflow for StringDecoding {
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct StringDecodingArgs {
-    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
-    /// reports are cut further to fit one tool result.
+    /// Findings per report section (default 25, at most 200); a cut section says so.
     max_per_section: Option<usize>,
     /// Run each candidate on its blobs with evaluate_function and report printable output (default false).
     evaluate: Option<bool>,

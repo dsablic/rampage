@@ -89,34 +89,33 @@ pub const INSTRUCTIONS_SHOWN_CHARS: usize = 4096;
 const INSTRUCTIONS_INTRO: &str = "\
 rampage reverse-engineers PE, ELF and Mach-O binaries (x86, x86-64, AArch64, ARM/Thumb, MIPS, PowerPC, RISC-V, \
 SPARC, s390x, m68k). Binary tools take the file's `path`. Addresses are hex strings like \"0x401000\"; most tools \
-also accept a symbol, export or import name (an import name finds its stub) or a sub_<hex> name.
+also accept a symbol, export or import name or sub_<hex>.
 
-Tools come in groups. Only core is listed at first, plus enable_tools: call it with {\"groups\": [\"types\"]} (or \
-[\"all\"]) to add groups (the tool list then changes), or without arguments for every group's full description and \
-tools. A tool of a group that is not enabled fails, naming the group, and runs nothing. Clients that do not refresh \
-their tool list can start `rampage mcp --all-tools` or set RAMPAGE_MCP_TOOLS (all, or a comma-separated list). \
-Groups and the tools that answer each question:";
+Only the core group is listed at first. enable_tools {\"groups\": [\"types\"]} (or [\"all\"]) adds groups to the \
+tool list; without arguments it describes every group. A tool of a group not enabled fails, naming the \
+group, and runs nothing. Clients that do not refresh their tool list: start `rampage mcp --all-tools` or set \
+RAMPAGE_MCP_TOOLS (all, or a comma-separated list). Groups and their key tools:";
 
 /// One line per group naming its key tools and the questions they answer, in the order of [`Group::ALL`]. The
 /// group's full description is in `enable_tools`' listing.
 fn group_summary(group: Group) -> &'static str {
     match group {
         Group::Core => {
-            "triage_report (start here), list_functions, decompile, evaluate_function (run a function on arguments \
-             instead of simulating it), disassemble, xrefs, search, list_strings, list_imports; classes: language_metadata (Objective-C classes, demangled names), \
-             objc_sends (objc_msgSend targets), class_evidence (C++ vtables/RTTI); notes: rename, annotate_batch, record_finding, undo; patch_bytes; \
-             workflows find_main, network_surface, persistence_surface, string_decoding, diff_builds."
+            "triage_report, list_functions, decompile, evaluate_function (run a function on arguments instead of \
+             simulating it), disassemble, xrefs, search, list_strings, list_imports; classes: language_metadata \
+             (Objective-C classes, demangled names), objc_sends (objc_msgSend targets), class_evidence (C++ \
+             vtables/RTTI); notes: rename, annotate_batch, record_finding, undo; patch_bytes; workflows find_main, \
+             network_surface, persistence_surface, string_decoding, diff_builds."
         }
         Group::Detection => {
             "packer/compiler and library code: detect_tools, identify_functions (signatures), capabilities, \
              find_crypto, yara_scan and capa_detect (your rules); lock_mechanisms (repair locks)."
         }
         Group::Types => {
-            "struct layouts by name, field path or offset: get_type and list_types read DWARF, PDB and Go runtime \
-             type data (stripped Go included; source \"go\"), so never decode type descriptors by hand; \
-             declare_types (C), set_signature, set_types, edit_variable and function_frame (locals), \
-             apply_data_type, import_debug_types (DWARF/PDB), import_pdb_names; firmware MMIO: import_svd \
-             (CMSIS-SVD register names everywhere) and peripheral_access."
+            "struct layouts by name, member path or offset: get_type and list_types read DWARF, PDB and Go runtime \
+             types (stripped Go too), so never decode type descriptors by hand; declare_types, set_signature, \
+             set_types, edit_variable and function_frame (locals), apply_data_type, import_debug_types, \
+             import_pdb_names; firmware: import_svd (CMSIS-SVD register names) and peripheral_access."
         }
         Group::Runtime => {
             "memory snapshots: observe_pointer, compare_runtime_bytes, observe_indirect_branch; query_debugger \
@@ -131,11 +130,11 @@ fn group_summary(group: Group) -> &'static str {
         }
         Group::Formats => {
             "build_info (Go modules, Rust dependencies), pe_resources, pe_load_config, exception_handlers (MSVC C++ \
-             try/catch tables), pyinstaller_archive, wasm_module; firmware: integrity_checks (CRC/checksum fields; fix \
+             try/catch), pyinstaller_archive, wasm_module; firmware: integrity_checks (CRC/checksum fields; fix \
              after patch_bytes), export_image (patched HEX/S-record/binary)."
         }
         Group::Debug => {
-            "a live target via GDB remote stub: debug_connect, debug_registers, debug_read_memory, \
+            "a live target: debug_connect, debug_registers, debug_read_memory, \
              debug_breakpoints, debug_continue, debug_step, debug_snapshot, debug_disconnect."
         }
         Group::Improve => {
@@ -146,14 +145,14 @@ fn group_summary(group: Group) -> &'static str {
 }
 
 const INSTRUCTIONS_START: &str = "\
-Start with triage_report: a bounded overview ending with next tool calls, each naming its `group` to enable \
-first. For one question: list_functions (name_contains), decompile (C), xrefs. Record findings with rename, \
-annotate_batch and record_finding; they persist beside the binary. Workflow findings are evidence, not verdicts.";
+Start with triage_report: an overview ending with next calls, each naming the `group` to enable. For one \
+question: list_functions (name_contains), decompile, xrefs. rename, annotate_batch and record_finding persist \
+beside the binary.";
 
 const INSTRUCTIONS_DEBUG_START: &str = "\
 Debug: the tools drive a live process through a GDB remote stub the operator started; rampage launches and \
-attaches to nothing. Breakpoints, continue and step change its state; debug_disconnect detaches and lets it run. \
-{consent} Endpoints: {endpoints}.";
+attaches to nothing. Breakpoints, continue and step change its state; debug_disconnect detaches. {consent} \
+Endpoints: {endpoints}.";
 
 const INSTRUCTIONS_OBSERVATIONS: &str = "\
 report_observation (core) records an evidence-backed weak label for the corpus; it changes nothing else.";
@@ -348,7 +347,7 @@ fn instructions(packs: &Packs, debug: Option<&DebugRegistry>, improve: bool, obs
     if packs.configured() {
         let problems = packs.problems().len();
         text.push_str(&format!(
-            "\n\nData packs: {} loaded, {problems} problems; list_packs (detection) shows each pack's status.",
+            "\n\nData packs: {} loaded, {problems} problems; list_packs (detection) shows each.",
             packs.loaded().iter().filter(|pack| pack.error.is_none()).count()
         ));
     }
@@ -502,27 +501,23 @@ fn with_binary_arguments(name: &str, schema: &Value) -> Map<String, Value> {
             "arch".to_owned(),
             json!({
                 "type": ["string", "null"],
-                "description": "Slice to load from a universal Mach-O (x86, x86_64, aarch64, arm, powerpc, ...). \
-                                Defaults to x86_64, then aarch64, then x86, when present."
+                "description": "Universal Mach-O slice (x86_64, aarch64, ...); default x86_64, then aarch64, then x86."
             }),
         );
-        // Not `offset`, which many tools already take for paging.
+        // Not `offset`, which many tools already take for paging. docs/mcp.md has the details.
         properties.insert(
             "image_offset".to_owned(),
             json!({
                 "type": ["string", "integer", "null"],
-                "description": "Open the ELF, PE or Mach-O image embedded at this file offset (hex \"0x...\" or \
-                                decimal), such as a carve candidate's offset; for a universal Mach-O, its fat \
-                                header's offset, with arch for the slice. Its annotations are kept apart from the \
-                                outer file's; offset 0 without image_length is the file itself."
+                "description": "Open the ELF, PE or Mach-O image embedded at this file offset instead (e.g. a \
+                                carve candidate's); its annotations are kept apart."
             }),
         );
         properties.insert(
             "image_length".to_owned(),
             json!({
                 "type": ["string", "integer", "null"],
-                "description": "With image_offset, the embedded image's length in bytes (hex or decimal). Defaults \
-                                to the extent its header tables give, which leaves out bytes after it (an overlay)."
+                "description": "With image_offset: the image's length; default from its headers."
             }),
         );
         if tools::raw_capable(name) {
@@ -583,6 +578,42 @@ fn compact_raw_selector() -> Value {
     raw["type"] = json!(["object", "null"]);
     raw["description"] = json!("Headerless Raw project of path's byte range; see the server instructions.");
     raw
+}
+
+/// Drops the `$defs` no longer referenced once a tool's own `raw` schema is replaced by the compact selector, so
+/// the full Raw request shape is not listed beside it.
+fn remove_unreferenced_definitions(schema: &mut Map<String, Value>) {
+    fn references(value: &Value, found: &mut BTreeSet<String>) {
+        match value {
+            Value::Object(object) => {
+                for (key, value) in object {
+                    match value {
+                        Value::String(target) if key == "$ref" => {
+                            found.insert(target.trim_start_matches("#/$defs/").to_owned());
+                        }
+                        _ => references(value, found),
+                    }
+                }
+            }
+            Value::Array(values) => values.iter().for_each(|value| references(value, found)),
+            _ => {}
+        }
+    }
+    let Some(Value::Object(mut definitions)) = schema.remove("$defs") else { return };
+    let mut live = BTreeSet::new();
+    schema.values().for_each(|value| references(value, &mut live));
+    let mut pending: Vec<String> = live.iter().cloned().collect();
+    while let Some(name) = pending.pop() {
+        let mut found = BTreeSet::new();
+        if let Some(definition) = definitions.get(&name) {
+            references(definition, &mut found);
+        }
+        pending.extend(found.into_iter().filter(|name| live.insert(name.clone())));
+    }
+    definitions.retain(|name, _| live.contains(name));
+    if !definitions.is_empty() {
+        schema.insert("$defs".to_owned(), Value::Object(definitions));
+    }
 }
 
 /// The explicit refusal of a `raw` selector on a tool that cannot serve Raw Projects.
@@ -1084,6 +1115,7 @@ impl ServerHandler for RampageServer {
                 && let Some(Value::Object(properties)) = schema.get_mut("properties")
             {
                 properties.insert(RAW.to_owned(), compact_raw_selector());
+                remove_unreferenced_definitions(&mut schema);
             }
             let listed = rmcp::model::Tool::new(tool.name, tool.description, schema);
             match tool.effect {

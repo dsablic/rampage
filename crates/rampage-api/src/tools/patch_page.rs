@@ -123,11 +123,11 @@ pub(super) fn tools() -> Vec<Tool> {
     vec![
         shared(
             "patch_bytes",
-            "Persist a bounded equal-length byte patch in the existing annotation history and return an effective \
-             revision receipt. Requires explicit original-source preimage, source hash, reviewed revision and \
-             allow_data consent. Only static little-endian ELF64 x86-64/AArch64 or ELF32 ARM payloads and Raw project \
-             regions; no headers, captured/debugger memory writes, execution, assembly or source-file \
-             modification. Read list_patches first.",
+            "Patch bytes: an undoable equal-length patch kept in the annotation history; the file itself is written \
+             only by export_patched or export_image. Call list_patches first for the source_sha256 and \
+             expected_revision this needs; original_hex is the original file's bytes there. allow_data true also \
+             permits data, not only code. Static little-endian ELF64 x86-64/AArch64, ELF32 ARM and Raw project regions \
+             only. Returns a revision receipt.",
             Effect::Annotations,
             |project, args: PatchArgs| {
                 let original = hex_bytes(&args.original_hex)?;
@@ -150,8 +150,8 @@ pub(super) fn tools() -> Vec<Tool> {
         ),
         shared(
             "revert_patch",
-            "Remove one exact-start active byte patch through annotation history. Requires explicit source and \
-             reviewed revision. Returns an effective revision receipt; does not write the original file.",
+            "Remove the active byte patch starting at `at` through the annotation history; needs source_sha256 and \
+             expected_revision from list_patches. The original file is not written.",
             Effect::Annotations,
             |project, args: RevertArgs| {
                 let address = project.resolve(&args.at)?;
@@ -165,8 +165,8 @@ pub(super) fn tools() -> Vec<Tool> {
         ),
         shared(
             "list_patches",
-            "Page active original-image-bound byte patches and obtain a source/effective/revision hash receipt for \
-             explicit patch or export review. Whole records and valid JSON only; follow next_offset for more.",
+            "Page the active byte patches and get the receipt (source_sha256, expected_revision) that patch_bytes, \
+             revert_patch, export_patched and export_image need. Follow next_offset for more.",
             Effect::None,
             |project, args: ListArgs| {
                 let limit = args.limit.unwrap_or(100);
@@ -195,9 +195,9 @@ pub(super) fn tools() -> Vec<Tool> {
         ),
         shared(
             "export_patched",
-            "Create a new file containing the reviewed effective bytes, without overwriting any file or copying \
-             annotations. Requires explicit destination, original source SHA-256 and expected revision from \
-             list_patches. No execution or in-place source mutation; stale revision refuses before file creation.",
+            "Write the patched bytes to a new file (never overwriting one; annotations are not copied). Needs \
+             destination plus source_sha256 and expected_revision from list_patches; a stale revision refuses before \
+             anything is written.",
             Effect::FileWrite,
             |project, args: ExportArgs| {
                 let receipt = reviewed(project, &args.source_sha256, &args.expected_revision)?;

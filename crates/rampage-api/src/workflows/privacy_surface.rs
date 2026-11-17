@@ -494,8 +494,7 @@ pub struct PrivacySurface;
 // The arguments of privacy_surface. Not a doc comment: the schema would carry it.
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct PrivacyArgs {
-    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
-    /// reports are cut further to fit one tool result.
+    /// Findings per report section (default 25, at most 200); a cut section says so.
     max_per_section: Option<usize>,
     /// Directory: the input.next_cursor of the previous page.
     cursor: Option<String>,

@@ -33,40 +33,40 @@ pub const MAX_SLEIGH_WINDOW_REPORT_BYTES: usize = 60_000;
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SleighWindowRequest {
-    /// Closed bundled language ID, not a path, architecture alias, compiler or ABI selection.
+    /// Bundled Sleigh language ID, not an alias, path or compiler.
     pub profile: String,
     pub offset: FileOffset,
-    /// Explicit original-file window: 1..=65536 bytes for listing, 1..=4096 for discovery.
+    /// Window bytes: 1..=65536 for listing, 1..=4096 for discovery.
     pub length: FileOffset,
-    /// Internal code-space BYTE offset of the first selected byte, including word-addressed processors.
+    /// Internal code-space BYTE address of the window's first byte.
     pub base_address: FileOffset,
-    /// Opt in to the existing recursive-descent discovery engine, restricted to this single window.
+    /// Discover functions from seeds by recursive descent within this window.
     #[serde(default)]
     pub discover: bool,
-    /// Required only for discovery: 1..=32 explicit internal code-space byte addresses in the window.
+    /// With discover: 1..=32 internal code-space byte addresses in the window.
     #[serde(default)]
     pub seeds: Vec<FileOffset>,
-    /// 1..=1000 distinct decode addresses; default 256. Discovery exceeding this fails, not partial success.
+    /// Distinct decode addresses, 1..=1000 (default 256); discovery needing more fails.
     #[serde(default = "default_count")]
     pub instruction_limit: usize,
-    /// Total decoder requests, including repeated discovery passes and cache hits; 1..=4096.
+    /// Decoder requests in all, 1..=4096.
     #[serde(default = "default_decode_attempts")]
     pub decode_attempt_limit: usize,
-    /// Native handle initialization attempts, including the initial profile validation; 1..=128.
+    /// Native handle opens, 1..=128.
     #[serde(default = "default_handle_opens")]
     pub handle_open_limit: usize,
-    /// Address-sorted stop diagnostics, 1..=256; default 64, with explicit omission counts.
+    /// Stop diagnostics returned, 1..=256 (default 64).
     #[serde(default = "default_stop_limit")]
     pub stop_limit: usize,
-    /// Address-sorted listing page offset. Does not change discovery or reset the instruction budget.
+    /// Listing rows to skip; discovery is unchanged.
     #[serde(default)]
     pub listing_offset: usize,
-    /// 1..=1000 rows, default 256. P-code may require a much smaller page to fit the JSON budget.
+    /// Listing rows, 1..=1000 (default 256); use fewer with include_pcode.
     #[serde(default = "default_count")]
     pub listing_limit: usize,
     #[serde(default)]
     pub include_pcode: bool,
-    /// Cooperative checks between decodes; the discovery engine and native calls are not interruptible.
+    /// Deadline in ms (default 10000), checked between decodes.
     #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
 }

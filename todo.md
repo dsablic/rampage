@@ -232,8 +232,10 @@ OTA, UBI or vendor headers) and `fs_list` refusing UBI/UBIFS, SquashFS 3.x and v
   - move `get_type`/`list_types` into `core` (agents missed them, see the suite v3 Go task);
   - promote proven experimental tools (`evaluate_function`, the analysis store);
   - drop argument aliases.
-- **Shorter tool descriptions.** The full catalog is close to the agent-bench harness budget, and every agent
-  session pays for it in tokens.
+- [x] **Shorter tool descriptions.** The full catalog is close to the agent-bench harness budget, and every agent
+  session pays for it in tokens. Done (1.7.0): the default `tools/list` went from 134,699 to 99,455 bytes (26% less),
+  all groups from 262,002 to 199,966, and the shown instructions have 358 characters spare; detail moved to
+  docs/mcp.md "Tool details", and `catalog_size` fails if the default list passes 104,400 bytes.
 - **`evaluate_function` follow-ups:** SSE/SIMD user-ops, x87 floats, float return values, and a step trace on request
   for explaining a result.
 

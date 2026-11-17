@@ -579,30 +579,12 @@ pub fn file_tools() -> Vec<FileTool> {
             effect: Effect::None,
             group: Group::Core,
             name: "inspect_sleigh",
-            description: "Inspect an explicit regular-file raw code window using a closed bundled Sleigh profile; \
-                no native executable admission or Project is required. The closed runtime roster has 20 language \
-                IDs: 16 reviewed processor profiles plus four x86/A64 variants. This is explicit raw-window \
-                decoding/discovery, not ordinary Project, native-format, C ABI or packet support. No arbitrary \
-                architecture aliases, spec paths or compiler specs. Native profile metadata supplies alignment, \
-                spaces and helper requirements; widths are not inferred from CPU names. \
-                path is the only common selector. profile/offset/length/base_address and optional discover/seeds, \
-                instruction_limit/decode_attempt_limit/handle_open_limit/stop_limit, listing_offset/listing_limit, \
-                include_pcode and timeout_ms are flattened request fields. All source offsets, bases, seeds and \
-                targets use internal BYTE coordinates, even AVR code space word_size=2: never multiply again or \
-                resolve names. The mapping is an analyst assertion; hashes/revalidation are observations, not \
-                authentication or a proven executable mapping. Listing is capped at 64 KiB; discovery at 4 KiB \
-                with explicit seeds and bounded work. Native calls/discovery are noninterruptible; deadlines are \
-                cooperative between operations. Preserve complete spaces/program/stops, including valid instructions \
-                gated for unknown flow (not invalid-opcode verdicts), including explicitly seeded unknown entries \
-                and their bounded instruction extents. Unresolved gates forbid successor following and false \
-                noreturn inference. Hexagon processor-helper requirements do not establish packet CFG support; \
-                SuperH delay aggregation and user-defined/context-mediated operations remain explicit gates. \
-                Entry retention is not exact body coverage or complete transitive call discovery. \
-                P-code may require smaller listing pages. \
-                Complete JSON is capped at 60000 bytes or explicitly refused, never string-cut. A C ABI/compiler \
-                specification is not selected or attested by this workflow; C decompilation is unsupported. \
-                Unix checked regular-file sources only; no fallback, execution, \
-                sidecars, annotations, extraction, source publication or arbitrary metadata/spec-path following.",
+            description: "Disassemble an explicit file window with a bundled Sleigh processor profile, for code no \
+                loader opens, and optionally discover functions in it (discover with 1..32 seeds, window at most 4 \
+                KiB; listing at most 64 KiB). To analyse such code with every tool instead, open it as a Raw project \
+                with `raw`. offset, length and base_address map the window: addresses, bases and seeds are internal \
+                BYTE coordinates even for word-addressed processors, so never multiply them. Unknown or gated flow is \
+                reported, not followed. include_pcode adds p-code (use smaller listing pages). No C decompilation.",
             input_schema: sleigh_file_schema(),
             handler: |_, mut input| {
                 check_sleigh_input_budget(&input)?;
@@ -621,13 +603,10 @@ pub fn file_tools() -> Vec<FileTool> {
             effect: Effect::None,
             group: Group::Core,
             name: "inspect_raw_code",
-            description: "Linearly disassemble an explicit 1..4096-byte original-file window with analyst-supplied \
-                base VA, architecture, mode and instruction/data byte orders. No executable header or guessing. \
-                x86/x64/ARM/AArch64, little endian only; ARM requires arm/thumb, others native. No target following, \
-                discovery, annotations, sidecars, extraction or execution. Return addressed decoder observations, \
-                selected-range hash, source offsets and explicit stop/remaining information. Invalid/incomplete \
-                instructions stop unconsumed. Mapping assertions and decoding are not execution or boundary proof. \
-                Narrow length/count if output is oversized; repeat using continuation range/base when supplied.",
+            description: "Linearly disassemble an explicit 1..4096-byte file window at a base address, architecture \
+                and mode you assert (x86/x64/ARM/AArch64, little-endian; ARM needs arm or thumb, others native), \
+                without a header, discovery or target following. Returns decoded instructions with source offsets and \
+                where decoding stopped; repeat with the continuation range when given.",
             input_schema: raw_file_schema(),
             handler: |_, mut input| {
                 if input.to_string().len() > 16_384 {
@@ -663,20 +642,14 @@ pub fn file_tools() -> Vec<FileTool> {
             effect: Effect::None,
             group: Group::Core,
             name: "decode_file_range",
-            description: "Decode an explicit regular-file range with a named built-in decoder, without requiring \
-                an executable header. Codecs: lzss-4k (LSB-first flags, 1=literal, 12-bit references, lengths \
-                nibble+3; ring start default 4078 and fill explicit), lzss (every variant parameter explicit in an \
-                lzss object, as probe_compression's decode_arguments give it) and lz4-block. Expected output size \
-                is supplied, not discovered: no end marker, auto-detection, recursion, file writing or \
-                execution (write_decoded_range, in carve, writes the output to a new file). \
-                Return range/output hashes, consumed/trailing counts, a bounded decoded-offset preview, \
-                open_as_raw: a `raw` selector that opens the decoded bytes as a Raw project's code (see next), \
-                base_candidates (load addresses for the decoded bytes as Cortex-M code, with evidence), and \
-                container_record when words just before the range hold its length and decoded size (field roles, \
-                checksum, base_hints: load addresses the record names). \
-                Limits: 8 MiB input, 16 MiB output, 128:1 against selected input, cooperative decode deadline. \
-                File I/O/hash phases are not forcibly timed out. Unix regular-file checks only. \
-                Other native-image selectors are rejected; decoded offsets are not source offsets or load addresses.",
+            description: "Decode an explicit file range with a named codec, no executable header needed: lzss-4k, lzss \
+                (every variant parameter in `lzss`, as probe_compression's decode_arguments give them) or lz4-block. \
+                expected_output_size is required: there is no end marker or auto-detection (probe_compression finds \
+                the parameters; write_decoded_range writes the output to a file). Returns hashes, consumed/trailing \
+                counts, a preview at decoded offsets (not source offsets or load addresses), open_as_raw (a `raw` \
+                selector for the decoded bytes as code; see next), base_candidates (Cortex-M load addresses with \
+                evidence) and, when words before the range hold its length and decoded size, container_record. Limits: \
+                8 MiB in, 16 MiB out, 128:1.",
             input_schema: schema::<DecodeFileArgs>(),
             handler: |_, input| {
                 if input.to_string().len() > 16_384 {
@@ -750,18 +723,13 @@ pub fn file_tools() -> Vec<FileTool> {
             effect: Effect::None,
             group: Group::Core,
             name: "probe_compression",
-            description: "Find decoder parameters for a compressed stream of unknown variant in an explicit \
-                regular-file range (at most 8 MiB), such as a file_layout compressed_component_candidate's payload. \
-                Sweeps LZSS (window 10..13 bits, min match 2/3, flag bit order and polarity, five 16-bit reference \
-                layouts, distance or ring offsets with ring start and fill) and the LZ4 block format, within a work \
-                budget and deadline. Supply expected_output_size when a header gives one: only then can the first \
+            description: "Find decoder parameters for a compressed stream of unknown variant in an explicit file range \
+                (at most 8 MiB), such as a file_layout compressed_component_candidate's payload: sweeps LZSS variants \
+                and LZ4 block within a work budget. Give expected_output_size when a header states it; only then can a \
                 candidate be confident. Each ranked candidate has decode_arguments to pass to decode_file_range \
-                unchanged, open_as_raw (a `raw` selector for its decoded bytes; see next) with base_candidates for \
-                them, container_record (words \
-                before the stream holding its length and decoded size: checksum and base_hints), the decoded size and \
-                SHA-256, consumed and trailing input, parse metrics, entropy drop, \
-                named checks, ambiguity counts and a short preview. The sweep summary and not_tried say what was \
-                and was not attempted. Evidence, not identification; nothing is extracted, published or executed.",
+                unchanged, open_as_raw (a `raw` selector for its decoded bytes; see next), base_candidates, \
+                container_record, decoded size and SHA-256, metrics and a short preview; not_tried says what was not \
+                attempted. Evidence, not identification.",
             input_schema: probe_compression_schema(),
             handler: |_, mut input| {
                 if input.to_string().len() > 16_384 {
@@ -781,18 +749,12 @@ pub fn file_tools() -> Vec<FileTool> {
             effect: Effect::None,
             group: Group::Core,
             name: "file_layout",
-            description: "Map any regular file, such as headerless firmware, without a loader: in one call, regions \
-                (runs of 0xff, 0x00 or another repeated byte of at least min_fill_run bytes, default 64, versus \
-                occupied bytes) with a SHA-256 and entropy per occupied region; Shannon entropy per block \
-                (block_size, default 4096) with high (>=7.2 bits/byte) and low (<=2.0) spans; dense clusters of \
-                printable ASCII (and with utf16, UTF-16LE) strings with a few previews; the whole range's SHA-256; \
-                and labelled hints such as Cortex-M vector-table candidates (initial SP in SRAM, odd reset address) \
-                and header-checked compressed-component candidates (a header word equal to the following payload's \
-                length, and a byte sum or CRC-32 of it, or a packed payload ending at a boundary, with decoded-size \
-                words for probe_compression), which are evidence, not a mapping. Whole file or offset/length, at most 64 MiB per call. Lists are \
-                capped (region_limit, block_limit, cluster_limit); bounds give totals and the first omitted offset, \
-                continuation gives the offset/length of a follow-up call, and entropy.suggested_block_size a \
-                coarser block size. Offsets are original-file offsets. Use list_strings for every string, \
+            description: "Map any file, such as headerless firmware, without a loader, as a first look: fill and \
+                occupied regions (SHA-256 and entropy each), per-block entropy with high and low spans, printable \
+                string clusters, the whole SHA-256, and hints such as Cortex-M vector-table candidates and \
+                compressed_component_candidate (a header-checked payload with decoded-size words for \
+                probe_compression). Hints are evidence, not a mapping. At most 64 MiB per call (offset/length); capped \
+                lists give totals and `continuation` the next call. Use list_strings for every string, \
                 inspect_raw_code or inspect_sleigh to decode a region, decode_file_range to decompress one.",
             input_schema: file_layout_schema(),
             handler: |_, mut input| {
@@ -813,15 +775,10 @@ pub fn file_tools() -> Vec<FileTool> {
             effect: Effect::None,
             group: Group::Core,
             name: "inspect_data",
-            description: "Inspect 1..=1024 native-image (or `raw` Raw-image) bytes and 4/8-byte words without discovery, naming scans or \
-                sidecars. Image VAs, selected-image and outer-file offsets are distinct. Gaps, zero-fill, unreadable \
-                and unavailable bytes stay explicit. Raw words remain candidates; retained Mach-O chained rebases \
-                and import identities are separate. Partial encoded-pointer words are not followed. Metadata links \
-                and bounded ASCII previews are not proven functions, layouts or execution. Other relocations are \
-                 not applied. view=full (default) retains the original JSON; summary omits hex/ASCII previews with \
-                 explicit counts/omission receipts while retaining word interpretations and source/status evidence. \
-                 code is unsupported for metadata. Whole JSON or explicit refusal; reduce size on output-budget errors. \
-                 No captures.",
+            description: "Inspect 1..1024 image bytes at an address or name (or in a `raw` project) as hex, ASCII and \
+                4/8-byte words with what each word may point to, without discovery. Gaps and unreadable bytes stay \
+                explicit; words are candidates, not proven pointers. view summary omits the hex/ASCII previews; lower \
+                size if the output is too large. read_data (types) renders typed fields.",
             input_schema: schema::<InspectDataArgs>(),
             handler: |_, input| {
                 if input.to_string().len() > 16_384 {
@@ -865,21 +822,10 @@ pub fn file_tools() -> Vec<FileTool> {
             effect: Effect::None,
             group: Group::Carve,
             name: "archive_inventory",
-            description: "Inventory central-directory metadata in an explicit standalone single-disk ZIP32 file, \
-                          without opening it as a binary or opening any member. Bounded prefix, tail and directory \
-                          reads only; the tail can overlap member data. No member/local-header seeks, decompression, \
-                          extraction, CRC verification, format probing, nesting or execution. ZIP64, multi-disk, SFX \
-                          and directory gaps are unsupported. Limits: 65557-byte tail, 8 MiB directory, 4096 records, \
-                          1 MiB retained name budget, 1024 bytes per name, 64 warnings, 24 MiB cumulative reads. \
-                          Work is capped at 4096 EOCD candidates and 65536 extra fields; raw-name filtering is linear \
-                          and bounded. \
-                          Budget exhaustion rejects the whole inventory. Names preserve raw hex and ordinal identity, \
-                          not filesystem paths or extraction safety. Metadata digest plus size/directory offsets is \
-                          evidence only, not whole-payload hashing, authentication or an atomic snapshot. \
-                          Full raw-name contains filtering precedes truncation. Exact metadata counts, \
-                          byte-bounded JSON pages and next_offset allow progress even for maximum-size names. \
-                          No annotations, packs or discovery. Native-image arch/image_offset/image_length arguments \
-                          are rejected.",
+            description: "List a standalone ZIP file's central directory (names, sizes, offsets) without opening any \
+                member: nothing is decompressed, extracted or verified. ZIP64, multi-disk and SFX archives are \
+                unsupported, and an archive past the size limits is refused whole. Filter with contains \
+                (case-sensitive), page with offset/limit. fs_list and fs_extract read ZIP/APK members.",
             input_schema: schema::<ArchiveInventoryArgs>(),
             handler: |_, input| {
                 (|| -> Result<Value, String> {
@@ -1055,15 +1001,11 @@ pub fn file_tools() -> Vec<FileTool> {
             effect: Effect::None,
             group: Group::Runtime,
             name: "query_debugger",
-            description: "Read an existing authorized stopped LLDB session through an explicitly supplied local Unix \
-                          socket. The operator must start rampage-query-serve first. Only describe_session, \
-                          list_modules, list_threads, read_registers, read_memory and resolve_module_address \
-                          (explicit module UUID plus file address) are permitted; no attach, launch, \
-                          resume, expressions, writes or process commands. Requires socket and a version 1 request; \
-                          all but initial describe_session require expected_token from a prior response. No binary \
-                          path, discovery, environment fallback or sidecar access. Responses preserve stop evidence \
-                          and revalidated-non-atomic observations; content hashes are not authenticity or atomicity \
-                          proofs. Reduce page size or memory size if a response exceeds the tool's 60000-byte budget.",
+            description: "Read a stopped LLDB session through the Unix socket of an operator-started \
+                rampage-query-serve: describe_session, list_modules, list_threads, read_registers, read_memory or \
+                resolve_module_address. Read-only: nothing attaches, resumes or writes. Start with describe_session; \
+                every later request needs expected_token from a previous response. Lower the page or memory size if a \
+                response passes 60000 bytes.",
             input_schema: schema::<QueryDebuggerArgs>(),
             handler: |_, input| {
                 let started = std::time::Instant::now();
@@ -1091,14 +1033,12 @@ pub fn file_tools() -> Vec<FileTool> {
             effect: Effect::None,
             group: Group::Carve,
             name: "carve",
-            description: "Scan any file (firmware, installer, dump, archive) for embedded executables and containers: \
-                      ELF, PE, Mach-O (thin and universal), zip, gzip, xz, zstd, LZMA, squashfs, cpio, uImage and \
-                      Android boot images. Each candidate has its offset, kind, validated header facts (arch, bits, \
-                      endianness, declared size) and an extent estimated from headers, with confidence validated or \
-                      magic_only. Read-only and bounded: nothing is extracted, decompressed or executed, and the \
-                      scan stops at 4096 candidates, saying so. Paginated with offset/limit: each page scans only \
-                      as far as the candidate after it and reports `more` (whether another page follows) rather \
-                      than a total.",
+            description: "Scan any file (firmware, installer, dump, archive) for embedded executables and containers \
+                (ELF, PE, Mach-O, zip, gzip, xz, zstd, LZMA, squashfs, cpio, uImage, Android boot images): each \
+                candidate's offset, kind, header facts and estimated extent, with confidence validated or magic_only. \
+                Pass an executable's offset as image_offset to analyze it in place. Nothing is extracted or \
+                decompressed. Paged with offset/limit; `more` says whether another page follows; the scan stops at \
+                4096 candidates.",
             input_schema: schema::<CarveArgs>(),
             handler: |_, input| {
                 let args: CarveArgs =
@@ -1113,21 +1053,10 @@ pub fn file_tools() -> Vec<FileTool> {
             group: Group::Formats,
             name: "pyinstaller_archive",
             description: "Inspect the PyInstaller CArchive appended to any file (a PyInstaller-built ELF, PE or \
-                          Mach-O), without opening it as a project. Finds the cookie (magic MEI\\x0c\\x0b\\x0a\\x0b\\x0e) \
-                          by searching backwards through the file's last 8 MiB, so a signature appended after the \
-                          archive is stepped over, and accepts both the 24-byte pre-2.1 and the 88-byte cookie. \
-                          Reports cookie_offset, cookie_layout, package_offset/length, toc_offset/length, Python \
-                          version (312 -> 3.12) and library name, typecode counts, and the PYZ entry's header (pyc \
-                          magic and its Python version) when that entry is stored uncompressed. Pages TOC entries \
-                          (offset/limit, at most 100 and 60000 JSON bytes; next_offset, and byte_capped when the \
-                          byte budget ended the page): each has its record and data file offsets, compressed and \
-                          uncompressed sizes, compression flag, typecode with its meaning (s script, m module, M \
-                          package, z PYZ, Z zipfile, b binary, x data, o runtime option, d dependency, a nested \
-                          package, l splash, n symlink) and name. Returns null when there is no cookie magic; when \
-                          magic matches (a bootloader holds it as a constant) but none validates as a cookie, \
-                          returns {file_path, archive: null, rejected_candidates} with why each was rejected. \
-                          Read-only: no extraction, decompression, decryption or pyc decompilation; use the file \
-                          offsets with decode_file_range or carve.",
+                Mach-O): cookie, Python version and library, package and TOC offsets, typecode counts and the PYZ \
+                header; pages TOC entries (offset/limit) with file offsets, sizes, compression and typecode meaning. \
+                Returns null without the cookie magic, or archive null with rejected_candidates when none validates. \
+                Read-only: use the file offsets with decode_file_range or carve.",
             input_schema: schema::<PyInstallerArchiveArgs>(),
             handler: |_, input| {
                 let args: PyInstallerArchiveArgs = arguments(input)?;
@@ -1140,20 +1069,11 @@ pub fn file_tools() -> Vec<FileTool> {
             effect: Effect::None,
             group: Group::Formats,
             name: "wasm_module",
-            description: "Summarise a core WebAssembly module in any file, without opening it as a project (the \
-                          project loaders take native executables only). The summary has the version and layer \
-                          fields, the section list (id, name, contents offset and size; at most 64 listed), counts \
-                          of types, imports, functions, tables, memories, globals, tags, exports and data/elem \
-                          segments, the start function, custom-section names, the name section's module name and \
-                          the producers section (language, processed-by, sdk). list pages one list (offset/limit, \
-                          at most 100 and 60000 JSON bytes; total, next_offset, and byte_capped when the byte \
-                          budget ended the page): imports (module, name, kind, type), exports (name, \
-                          kind, index) or functions (index, imported first; type signature; body offset and size; \
-                          name-section name). A component-model binary (layer 1) is reported as unsupported, with \
-                          no sections read. Malformed input returns what parsed before the error with complete \
-                          false and the error in limitations (the first of each kind, at most 32, repeats counted). \
-                          Returns null when the file has no \\0asm magic. Not \
-                          validated, compiled, executed or disassembled.",
+            description: "Summarise a core WebAssembly module in any file (project loaders take native executables \
+                only): sections, counts, start function, names and producers. `list` pages imports, exports or \
+                functions (signature, body offset, name). A component-model binary is reported unsupported; malformed \
+                input returns what parsed with complete false. Returns null without the \\0asm magic. Not validated or \
+                disassembled.",
             input_schema: schema::<WasmModuleArgs>(),
             handler: |_, input| {
                 let args: WasmModuleArgs = arguments(input)?;
@@ -1356,7 +1276,7 @@ fn check_sleigh_input_budget(input: &impl Serialize) -> Result<(), String> {
     serde_json::to_writer(Counter::default(), input).map_err(|_| "Sleigh request exceeds 1 MiB".to_owned())
 }
 
-/// No arguments.
+// No arguments; a plain comment so the schema carries no description.
 #[derive(serde::Deserialize, JsonSchema)]
 pub struct Nothing {}
 
@@ -1369,8 +1289,7 @@ pub struct At {
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ViewArgs {
-    /// full (default) preserves original JSON; summary omits named payloads with counts/receipts.
-    /// code keeps code/control evidence but is unsupported for binary_info and inspect_data metadata.
+    /// full (default) or summary (row lists as counts); code is unsupported here.
     #[serde(default)]
     view: ToolView,
 }
@@ -1471,8 +1390,7 @@ struct DecompileToolArgs {
     /// Decompile even inside code judged encrypted or packed (refused by default); the result carries a warning.
     #[serde(default)]
     explore_encrypted: bool,
-    /// full (default) preserves original JSON; code retains complete native C and essential evidence;
-    /// summary omits C text too, with exact counts/omission receipts. Oversized views refuse, never truncate.
+    /// full (default), code (C and diagnostics) or summary (no C text).
     #[serde(default)]
     view: DecompileView,
 }
@@ -1504,51 +1422,50 @@ struct InspectDataArgs {
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct DecodeFileArgs {
-    /// Explicit regular source file. No executable header, sidecar or dependency is opened.
+    /// Regular source file; no executable header is needed.
     path: std::path::PathBuf,
-    /// Required decoder selection; no codec guessing.
+    /// Decoder to use; nothing is guessed.
     codec: crate::ContentCodec,
-    /// Every variant parameter, required for codec lzss and refused for the others.
+    /// Every variant parameter: required for codec lzss, refused for the others.
     lzss: Option<crate::LzssParameters>,
-    /// Byte offset in the original file, not a native-image or decoded address.
+    /// Original-file byte offset of the encoded stream.
     offset: crate::FileOffset,
-    /// Encoded range length, 1..=8388608 bytes.
+    /// Encoded bytes, 1..=8388608.
     length: crate::FileOffset,
-    /// Analyst-supplied stopping size, 1..=16777216 bytes; does not prove a stream boundary.
+    /// Decoded size to stop at, 1..=16777216 bytes.
     expected_output_size: crate::FileOffset,
-    /// Initial ring write position below the window; default 4078 (0xfee) for lzss-4k, zero otherwise.
-    /// Only ring_position offsets use it.
+    /// Ring write start for ring_position offsets; default 4078 (0xfee) for lzss-4k, else 0.
     initial_write_offset: Option<u16>,
-    /// Dictionary initialization byte; default zero. Only ring offsets use it.
+    /// Ring fill byte; default 0.
     dictionary_fill: Option<u8>,
-    /// Cooperative decoder-phase timeout, default 3000 ms, at most 10000; excludes I/O/hash phases.
+    /// Decode deadline in ms (default 3000, at most 10000).
     timeout_ms: Option<u64>,
-    /// Preview byte offset within decoded output; default zero.
+    /// Preview start in the decoded output; default 0.
     preview_offset: Option<crate::FileOffset>,
-    /// Preview bytes, 0..1024; default 256. Zero requests a hash/metadata-only receipt.
+    /// Preview bytes, 0..1024 (default 256; 0 for hashes only).
     preview_size: Option<usize>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct WriteDecodedArgs {
-    /// Explicit regular source file. No executable header, sidecar or dependency is opened.
+    /// Regular source file; no executable header is needed.
     path: std::path::PathBuf,
-    /// Required decoder selection; no codec guessing.
+    /// Decoder to use; nothing is guessed.
     codec: crate::ContentCodec,
-    /// Every variant parameter, required for codec lzss and refused for the others.
+    /// Every variant parameter: required for codec lzss, refused for the others.
     lzss: Option<crate::LzssParameters>,
-    /// Byte offset in the original file, not a native-image or decoded address.
+    /// Original-file byte offset of the encoded stream.
     offset: crate::FileOffset,
-    /// Encoded range length, 1..=8388608 bytes.
+    /// Encoded bytes, 1..=8388608.
     length: crate::FileOffset,
-    /// Analyst-supplied stopping size, 1..=16777216 bytes; does not prove a stream boundary.
+    /// Decoded size to stop at, 1..=16777216 bytes.
     expected_output_size: crate::FileOffset,
-    /// Initial ring write position below the window; default 4078 (0xfee) for lzss-4k, zero otherwise.
+    /// Ring write start for ring_position offsets; default 4078 (0xfee) for lzss-4k, else 0.
     initial_write_offset: Option<u16>,
-    /// Dictionary initialization byte; default zero. Only ring offsets use it.
+    /// Ring fill byte; default 0.
     dictionary_fill: Option<u8>,
-    /// Cooperative decoder-phase timeout, default 3000 ms, at most 10000; excludes I/O/hash phases.
+    /// Decode deadline in ms (default 3000, at most 10000).
     timeout_ms: Option<u64>,
     /// Absolute path of the new file: its directory must exist and be named by its canonical path (no symlink in
     /// it), and no file of that name may exist.
@@ -2947,11 +2864,11 @@ pub struct RenameArgs {
 
 #[derive(serde::Deserialize, JsonSchema)]
 pub struct CommentArgs {
-    /// The address or name to comment.
+    /// The address or name.
     pub at: String,
-    /// The comment. Required unless `clear` is set.
+    /// The comment or C declaration. Required unless `clear` is set.
     pub text: Option<String>,
-    /// Remove the comment instead of setting one.
+    /// Remove it instead of setting one.
     #[serde(default)]
     pub clear: bool,
 }
@@ -2996,15 +2913,11 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "batch",
-            "Atomically apply heterogeneous checked annotations: entries use operation=rename/comment/signature/\
-             types/global, at as an existing name or numeric address STRING, and a REQUIRED value string or null \
-             (clear). All names resolve against the pre-batch snapshot. One checked transaction and one undo step; \
-             invalid operations, duplicate field/address targets, malformed declarations, conflicts or oversized \
-             complete receipts write nothing. At most 1000 entries; split batches whose full receipt cannot fit \
-             the 60000-byte JSON budget including reserved refresh/cancellation evidence. No patch, raw-field, \
-             export or SSA bypass. annotate_batch retains its separate legacy name/comment shape. A bound \
-             assistant may stop conservatively after a committed batch when exclusive transition attribution is \
-             unavailable; its full outcome is retained and must not be automatically retried.",
+            "Apply many checked annotations atomically, as one undo step. Each entry has operation (rename, comment, \
+             signature, types or global), `at` (a name or numeric address string, resolved against the names before \
+             the batch) and a required `value` (null clears). Anything invalid, conflicting or oversized writes \
+             nothing. At most 1000 entries; split a batch whose receipt would pass 60000 JSON bytes. annotate_batch is \
+             the simpler names-and-comments form. Never retry a committed batch automatically.",
             |project, args: AnnotationBatchArgs| annotation_batch_page(project, &args.entries),
         )
         .annotates(),
@@ -3012,52 +2925,36 @@ pub fn tools() -> Vec<Tool> {
             Group::Core,
             "transfer_annotations",
             "Carry the saved annotations (names, comments, signatures, types, globals) of an analyzed build `from` \
-             over to this build. Functions are matched one-to-one with a method and confidence each: exact_bytes \
-             1.0, symbol_name 0.95, masked_hash 0.9, unique_string 0.8, call_graph 0.75 (propagation from matched \
-             callers), call_position 0.6 (a non-calling callee placed by call position alone), neighbourhood 0.6; \
-             derived matches build only on matches at least as confident; evidence that fits several \
-             counterparts is reported as ambiguous, never guessed. Preview by default: per annotation its old -> \
-             new address, method, confidence and status (transfer, already_present, conflict with this build's \
-             annotations or symbols, below_threshold, not_transferred with a reason). apply=true writes the \
-             transfers as undoable batches of at most 1000 (each one undo step; the first also records a \
-             provenance entry in the findings ledger: source SHA-256, threshold, methods), refusing a batch whose \
-             targets changed since matching. min_confidence (default 0.7) picks the methods. list pages transfers, \
-             matches, changed (matched but different), added, removed or ambiguous functions. Analysis and \
-             matching are reused while the source file and this build stay the same, so paging is cheap.",
+             over to this build. Functions are matched one-to-one, each with a method and confidence (see \
+             min_confidence); evidence fitting several counterparts is reported as ambiguous, never guessed. Previews \
+             by default: each annotation's old -> new address, method, confidence and status. apply=true writes the \
+             transfers as undoable batches of at most 1000 with a provenance entry in the findings ledger, refusing a \
+             batch whose targets changed since matching. `list` pages transfers, matches, changed, added, removed or \
+             ambiguous functions; paging reuses the matching.",
             |project, request: crate::TransferRequest| project.transfer_annotations(&request),
         )
         .annotates(),
         tool(
             Group::Core,
             "assemble",
-            "Assemble literal source into a read-only byte proposal for this binary's current target. \
-             at is a numeric address string or resolvable name; only the base address resolves names. \
-             source is literal assembly, never a filename or shell command: one instruction per nonempty line, \
-             at most 16 KiB, 64 instructions and 4096 output bytes. Supported core subset: x86/x64 register \
-             MOV/CMP, NOP/RET and numeric branches; little-endian AArch64 MOV/MOVZ/CMP, NOP/RET and numeric \
-             branches. Other architectures/modes, labels, comments, directives, memory operands, macros and \
-             symbolic branch targets are refused with line errors. Returns actual target/base, bytes_hex, \
-             original byte array, canonical_disassembly, instruction_count and evidence_profile within 60000 \
-             JSON bytes. Encoding/decoding evidence is NOT execution or behavior verification. No external \
-             assembler, execution, image patches, annotation writes, exports or implicit application.",
+            "Assemble literal assembly at `at` into a byte proposal for this binary's target; nothing is patched or \
+             written. One instruction per line, at most 64 instructions and 4096 output bytes. Supported: x86/x64 \
+             register MOV/CMP, NOP/RET and numeric branches; little-endian AArch64 MOV/MOVZ/CMP, NOP/RET and numeric \
+             branches. Labels, directives, memory operands, symbolic targets and other architectures are refused per \
+             line. Returns bytes_hex and canonical_disassembly.",
             |project, request: crate::AssemblyRequest| project.assemble(&request),
         ),
         tool(
             Group::Core,
             "search",
-            "Read-only unified native search. mode.kind selects bytes (hex/nibble wildcards), text \
-             (ascii, utf16_le or utf16_be; literal or Unicode regex), immediate (signed/unsigned numeric value, \
-             optional width_bits/include_displacements/include_addresses), instruction (mnemonic/operand globs), \
-             references (exact target) or functions_referencing (address/string/import/constant reference). \
-             Address targets and half-open range endpoints accept numbers, address strings or resolvable names; \
-             immediate values never resolve names. Example: {\"mode\":{\"kind\":\"functions_referencing\",\"reference\":\
-             {\"kind\":\"string\",\"text\":\"hello\",\"encoding\":\"utf8\"}}}. Context defaults true. \
-             offset/limit (1..1000) page hits, never restrict scan work. total_is_exact distinguishes exact totals \
-             from observed lower bounds; stop_reason/budget explain incomplete scans. more/next_offset page \
-             observed rows even after incomplete scans; a stopped byte/text scan gives resume_at and \
-             unscanned_ranges to continue from. Complete JSON stays within 60000 \
-             bytes with whole hit rows and no wrapper string cutting. Native context truncation/provenance and \
-             retained source paths are preserved. Capture file_offset is null. No annotations or source writes.",
+            "Search the image. mode.kind: bytes (hex with nibble wildcards), text (ascii, utf16_le or utf16_be; \
+             literal or regex), immediate (numeric operand value), instruction (mnemonic/operand globs), references \
+             (exact target) or functions_referencing (an address, string, import or constant). Example: \
+             {\"mode\":{\"kind\":\"functions_referencing\",\"reference\":\
+             {\"kind\":\"string\",\"text\":\"hello\",\"encoding\":\"utf8\"}}}. \
+             Addresses and range endpoints accept names; immediate values do not. offset/limit (1..1000) page hits; \
+             total_is_exact says whether the total is exact, and a scan that stopped early gives stop_reason and, for \
+             bytes/text, resume_at and unscanned_ranges to continue from.",
             |project, request: crate::SearchRequest| project.search_page(&request),
         ),
         tool(
@@ -3076,14 +2973,10 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "function_summary",
-            "Structural function summary, not native recovered C. view=full (default) preserves original JSON and \
-             refuses when oversized; summary omits instruction/IR rendering with exact counts and omission receipts; \
-             code retains native instructions and labels partial structural pseudocode explicitly. summary and code \
-             add `callees` (distinct call targets with names and call counts, from all references) and refuse \
-             for size only when one graph block alone exceeds the budget: a large function's graph blocks, \
-             references and callees are paged as whole rows (block_offset, \
-             reference_offset, callee_offset; *_next_offset says where the next page starts), and a `fitted` \
-             receipt names any optional analysis omitted to fit 60000 bytes.",
+            "Structural summary of a function (blocks, references, calls), not C: decompile gives C. view summary or \
+             code adds `callees` (call targets with counts) and pages a large function as whole rows (block_offset, \
+             reference_offset, callee_offset; follow *_next_offset); code adds instructions and partial structural \
+             pseudocode. full (default) refuses when oversized.",
             |project, arguments: FunctionSummaryArgs| {
                 let summary = project.function_summary(project.resolve(&arguments.at)?)?;
                 let entry = summary.graph.address;
@@ -3106,28 +2999,23 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "decompile",
-            "Decompile C with embedded Ghidra and retain native recovery diagnostics. Default behavior uses the \
-             containing function and whole-program context. exact_entry=true treats at as an analyst-asserted \
-             exact entry with bounded local context and the full mapped image (little-endian x86/x64/AArch64). \
-              Entry metadata and successful decoding are not boundary or completeness proof; exact output includes \
-               context counts, omissions and preparation timings. No silent whole-program fallback. view=full \
-               (default) preserves original JSON; code omits token/structure payloads while retaining complete native \
-               C, native diagnostics, recovery/context/specification evidence. summary also omits C text with exact \
-               counts and omission receipts. Oversized views refuse, never truncate strings. `decompiler` says where \
-               native code ran: supervised (worker process) or in-process (no worker found).",
+            "Decompile the function containing `at` to C with the embedded Ghidra decompiler, with its recovery \
+             diagnostics. exact_entry=true decompiles from exactly `at` with local context only (little-endian \
+             x86/x64/AArch64). view: full (default), code (C and diagnostics without token/structure payloads) or \
+             summary (no C text). An oversized view refuses rather than truncating. `decompiler` says whether it ran \
+             in the supervised worker or in-process.",
             decompile_tool,
         ),
         tool(
             Group::Core,
             "evaluate_function",
             "Experimental. Run a function on arguments and return its integer result instead of simulating code by \
-             hand: a p-code interpreter over the bundled Sleigh specifications (x86, x86-64, AArch64, ARM/Thumb, \
-             MIPS, PowerPC, RISC-V); nothing runs natively. Arguments follow the binary's calling convention (64-bit \
-             values on 32-bit targets as register pairs or stack slots); buffers are passed by pointer and returned. \
-             Calls inside the image are followed; common C library imports run as built-in models. `stop` says \
-             why a run ended: returned (with result), step_limit, timeout, external_call, user_op (syscalls, SIMD \
-             helpers), unmapped_read, memory_limit, ..., each named. For a C int or bool result on a 64-bit target \
-             read `low_32` or pass return_bits 32.",
+             hand: a p-code interpreter over the bundled Sleigh specifications (x86, x86-64, AArch64, ARM/Thumb, MIPS, \
+             PowerPC, RISC-V); nothing runs natively. Arguments follow the binary's calling convention; buffers are \
+             passed by pointer and returned. Calls inside the image are followed and common C library imports are \
+             modelled. `stop` says why the run ended (returned with result, step_limit, timeout, external_call, \
+             user_op, unmapped_read, ...). For a C int or bool on a 64-bit target read `low_32` or pass return_bits \
+             32.",
             |project, request: crate::evaluate::EvaluateRequest| project.evaluate_function(&request),
         ),
         tool(
@@ -3140,13 +3028,11 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "objc_sends",
-            "Objective-C message sends (objc_msgSend and variants, arm64 objc_msgSend$selector stubs, objc_alloc/\
-             objc_alloc_init/objc_opt_new) resolved on arm64 and x86-64 Mach-O: selector, receiver class where \
-             statically evident (class refs, self, super, +alloc/-init results) and the implementations reached, \
-             with confidence resolved | ambiguous (subclass override/categories) | framework (inherited from \
-             outside the binary) | candidates (unknown receiver: the selector's implementations here, up to 8) | \
-             unknown_receiver | unknown_selector. summary counts every selected send; PAGED (offset, limit \
-             1..=500, default 100). The same edges appear in xrefs/function_summary with an `objc` field.",
+            "Objective-C message sends (objc_msgSend variants and stubs, objc_alloc/objc_opt_new) resolved on arm64 \
+             and x86-64 Mach-O: selector, receiver class where statically evident and the implementations reached, \
+             with confidence resolved, ambiguous, framework, candidates (unknown receiver: up to 8 implementations of \
+             the selector), unknown_receiver or unknown_selector. Paged with offset/limit; summary counts every \
+             selected send. xrefs and function_summary show the same edges with an `objc` field.",
             |project, arguments: ObjcSendsArgs| {
                 if arguments.limit.is_some_and(|limit| !(1..=500).contains(&limit)) {
                     return Err(ApiError::Invalid("objc_sends limit must be 1..=500".to_owned()));
@@ -3158,13 +3044,11 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "class_evidence",
-            "Bounded named Itanium vtable/RTTI evidence with validated code slots; RTTI classes with direct base \
-             edges (Itanium/MSVC; MSVC classes seen only as bases have rows with source rtti_base), PAGED: the \
-             first 50 by default, rtti_classes_total counts all, page with rtti_class_offset/rtti_class_limit \
-             (1..=200, also bounded to 16000 JSON bytes) following rtti_classes_next_offset; and one page of MSVC \
-             vftables of x86/x64 PEs (16 by default; class, subobject offset, up \
-             to 64 slot targets; vftables_total, vftable_offset/vftable_limit paging, also bounded to 24000 JSON \
-             bytes, vftables_next_offset); not inferred C++ layouts.",
+            "C++ class evidence: named Itanium vtables/RTTI with validated code slots, RTTI classes with their direct \
+             bases (Itanium and MSVC), and MSVC vftables of x86/x64 PEs (class, subobject offset, slot targets); not \
+             inferred layouts. RTTI classes page with rtti_class_offset/rtti_class_limit (default 50, follow \
+             rtti_classes_next_offset), vftables with vftable_offset/vftable_limit (default 16, follow \
+             vftables_next_offset).",
             |project, arguments: ClassEvidenceArgs| {
                 use crate::cpp_exceptions::ClassPage;
                 project.class_evidence(
@@ -3189,45 +3073,31 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Types,
             "import_debug_layouts",
-            "Review bounded embedded-DWARF checked plain layouts and function signatures (x86_64 ELF/GCC only). \
-             Preview is read-only. Apply requires apply=true plus the exact lowercase review_sha256 from a fresh \
-             preview, binding ALL admitted layouts, functions, producer evidence, warnings and current image/options/\
-             specifications and annotation eligibility, not just the page. Changed content requires re-review; \
-             the hash is not authentication or rebinding of an old process-local receipt. The core applies the whole \
-             dependency batch atomically, preserving analyst signatures. offset/limit page whole evidence rows only; \
-             they never select writes. Receipts retain hashes, exact counts and whole_apply_succeeded within 60000 \
-             JSON bytes; more/next_offset continue evidence. Fetch later pages with apply=false and no review_sha256. \
-             Opaque vptr projections describe consumer storage, not exact producer void pointers or callback types. \
-             Read-only named vtable rows retain raw header confidence and candidate slots. Exact method associations \
-             are native-checked source evidence, not current/applied analyst types, table ownership, object-vptr proof \
-             or virtual-call targets. Producer evidence alone is not native layout proof. \
-             Undo is same-process only, not recovered after CLI exit.",
+            "Review the struct layouts and function signatures in embedded DWARF of an x86_64 GCC ELF, checked against \
+             native layouts. The preview is read-only and returns review_sha256; apply=true with that exact hash from \
+             a fresh preview applies the whole batch atomically, keeping analyst signatures (any change needs a new \
+             preview). offset/limit page evidence only, never what is written: read later pages with apply=false and \
+             no review_sha256. Producer evidence is not native layout proof. Undo works only in the same process.",
             import_debug_layout_page,
         )
         .annotates(),
         tool(
             Group::Types,
             "import_pdb_names",
-            "Preview function names from an explicit `pdb` path matching this PE image's RSDS GUID and age. \
-             Only apply=true persists names, atomically as one undo batch, for preexisting unnamed function entries; \
-             user, symbol, export, entry and concurrent labels are preserved. No types, layouts, signatures, new \
-             functions, automatic paths, symbol servers or downloads. `offset`/`limit` page details only: every apply \
-             acts on the WHOLE import, not the page. Bounded JSON always retains identity, full preview/applied/\
-             preserved totals and whole_apply_succeeded; more/next_offset continue byte-capped details. To inspect \
-             later pages without another apply, omit apply or use false; eligibility reflects current annotations.",
+            "Preview function names from an explicit `pdb` matching this PE's RSDS GUID and age; apply=true saves them \
+             as one undo batch for unnamed functions only, keeping existing names. Names only: no types, signatures or \
+             symbol servers. offset/limit page details; apply always acts on the whole import, so read later pages \
+             without apply.",
             import_pdb_page,
         )
         .annotates(),
         tool(
             Group::Detection,
             "build_signatures",
-            "Build a native library-function signature database from this binary's named \
-             functions and write it to the output path. Each function is hashed over its symbol size and over the \
-             extent discovery finds for it; functions whose masked bodies collide also get callee keys (the \
-             optional calls/ambiguous_calls fields). Reports function signatures and callee keys separately. Use it \
-              on a binary with symbols, then identify_functions on a stripped one. Optional fuzzy_request is an \
-              explicit source-name/provenance JSON request; it builds a SEPARATE secondary fuzzy database, not \
-              exact identity evidence. Query it with identify_functions fuzzy_database and fuzzy_request.",
+            "Build a library-function signature database from this binary's named functions and write it to `output`: \
+             run it on a binary with symbols, then identify_functions on a stripped one. Functions whose masked bodies \
+             collide also get callee keys. fuzzy_request builds a separate fuzzy database instead, for \
+             identify_functions' fuzzy_database.",
             |project, arguments: SignatureBuildArgs| {
                 if let Some(request) = &arguments.fuzzy_request {
                     let report = project.build_fuzzy_signature_file(std::path::Path::new(request))?;
@@ -3259,27 +3129,14 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Detection,
             "identify_functions",
-            "Identify library functions using native databases or user-supplied PAT patterns. Statically linked \
-             library code in a stripped binary gets recognized. Applies, first match winning: an optional \
-             database path, then loaded data packs' databases in pack order, then the bundled corpus for the \
-             architecture and, for firmware (Cortex-M Raw, static ELF executables), the embedded firmware set \
-             (both left out with no_bundled=true, which works with a database path, a data pack's database for the \
-             architecture, or both, and is refused with neither). Each match's `source` names the database that \
-             named it: \"user database\", the data pack's name, \"rampage-builtin\" or \"rampage-builtin embedded\". \
-             A function whose masked body collides with another's is named by the names of the functions it \
-             calls, once those are named; thunks too small for the confidence gate are never named. apply=true \
-             saves names for unnamed functions. `warnings` names data packs or pack signature databases that did \
-             not load. offset/limit page details only (default 100, 1..=256): address-sorted matches first, then \
-             warnings using the same offset. matches retains its original row shape. matched/applied are WHOLE \
-             result totals; apply=true considers ALL matches regardless of the page, preserving existing names \
-             and skipping rename collisions. Read later pages with apply=false. Complete rows and the full receipt \
-             fit within 60000 JSON bytes; more/next_offset continue details, omission counts include prior pages. \
-              An oversized first row or header is refused before any names are written; strings are never cut. \
-              database accepts explicit .pat, .json, native .gz or extensionless JSON; FID requires separate \
-              explicitly configured Ghidra import. Optional fuzzy_database plus fuzzy_request produces separate \
-              read-only fuzzy suggestions after exact/warning rows. Fuzzy totals never increase matched/applied; \
-              all fuzzy loading, querying and receipt validation finish BEFORE exact apply writes. Fuzzy requests \
-              currently cannot combine with no_bundled. Exact and existing analyst names retain priority.",
+            "Name library functions in a stripped binary by signature. Databases apply first match winning: `database` \
+             (.pat, .json or native .gz), then loaded data packs, then the bundled corpus for the architecture and, \
+             for firmware (Cortex-M Raw, static ELF executables), the embedded firmware set; no_bundled=true leaves \
+             out the bundled ones (needs a database or a pack). Each match's `source` names its database. Bodies that \
+             collide are told apart by the names of their callees. apply=true saves names for still-unnamed functions \
+             from ALL matches, whatever the page: offset/limit page details only (default 100, 1..256) and \
+             matched/applied are whole totals, so read later pages with apply=false. `warnings` names packs that did \
+             not load. fuzzy_database with fuzzy_request adds separate read-only fuzzy suggestions.",
             identify_page,
         )
         .annotates(),
@@ -3290,11 +3147,9 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Diagnostics,
             "entry_diagnostics",
-            "Sample one exact at address/name, or at most 64 metadata-declared entries when omitted. Returns \
-             origins, bounded local decode evidence, limits and truncation without whole-program discovery. \
-             Metadata and decode success do not verify a function; suspicious bytes do not prove encryption. \
-             offset/limit page whole entry rows within 60000 JSON bytes. Oversized display aliases may be omitted \
-             explicitly without changing sample evidence or declaration counts; more/next_offset continue pages.",
+            "Sample one entry at `at`, or up to 64 entries that metadata declares, with origins and bounded local \
+             decode evidence, without whole-program discovery. Decoding does not prove a function. offset/limit page \
+             the entries.",
             |project, args: EntryDiagnosticsArgs| {
                 let limit = args.limit.unwrap_or(64);
                 if !(1..=64).contains(&limit) {
@@ -3339,19 +3194,11 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::DotNet,
             "dotnet_metadata",
-            "Managed assembly identity and a bounded page chosen by `list`: types with method/property signatures \
-             and event types, pinvokes with DLL/exports, attributes with fixed/named values, or resources with \
-             metadata-only offset/reference evidence. Resource locations are not validated payload extents; no \
-             payload or external resource is read. Supported attribute values include primitives, \
-             strings, types, single-dimensional arrays, verified local enums and boxed values/vectors in object[]; \
-             unsupported values report errors. \
-             Type fields can retain verified local enum constants as exact numeric strings; attribute numeric \
-             values are not replaced by symbolic names. \
-             Serialized local enum identities accept canonical reflection escapes, not assembly qualification \
-             or external enum loading. \
-             Property/event accessor tokens are metadata bindings, not inferred behavior. Filter with contains; \
-             offset/limit page the list and parent_token selects an attribute target. Bodies are CIL, listed by \
-             dotnet_il, not native code for decompile/disassemble. Returns null for a native image.",
+            "A .NET assembly's identity and one page chosen by `list`: types (methods, properties and events with \
+             signatures), pinvokes (DLL and export), attributes (decoded values; parent_token selects a target) or \
+             resources (metadata and offsets; payloads are not read). Filter with contains; page with offset/limit. \
+             Method bodies are CIL: read them with dotnet_il, not decompile or disassemble. Returns null for a native \
+             image.",
             |project, args: DotNetArgs| {
                 let query = crate::DotNetQuery {
                     list: args.list,
@@ -3387,19 +3234,11 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Formats,
             "build_info",
-            "Toolchain build metadata embedded in the image. go: Go build info (the `go version -m` record) from \
-             .go.buildinfo, __go_buildinfo or a 16-byte aligned scan of writable data sections (a magic in \
-             read-only data is a constant, not a record; the first record that decodes wins), with go_version, main \
-             package path, main module, dependency modules with their => replacements, build settings (-compiler, \
-             CGO_ENABLED, GOOS/GOARCH, vcs.revision, vcs.time...) and a cross-check of the version against the \
-             pclntab layout; go1.18+ inline strings and older pointer layouts are both read. rust: the \
-             cargo-auditable .dep-v0 section (zlib JSON, 8 MiB cap) with root package(s) and every package's \
-             name, version, source, kind and dependency indices. Each is null when not present, or has status \
-             present/unreadable (with a reason) when found. offset/limit page go.deps and rust.packages \
-             independently (default 100, at most 1000), each page also cut to fit 60000 JSON bytes (next_offset, \
-             byte_capped); build settings are listed up to a byte share (settings_total, settings_byte_capped) and \
-             roots up to 16 (roots_total). compressed_bytes is the zlib stream's length. Self-reported build data, \
-             not verified against code; no vulnerability lookup, no network access.",
+            "Build metadata the toolchain embedded. go: the `go version -m` record (Go version, main module, \
+             dependencies with replacements, build settings such as GOOS/GOARCH and vcs.revision), checked against the \
+             pclntab. rust: the cargo-auditable dependency list (packages with versions and sources). Each is null \
+             when absent, else present or unreadable with a reason. offset/limit page go.deps and rust.packages \
+             independently. Self-reported by the build, not verified against the code.",
             |project, args: BuildInfoArgs| {
                 let query = crate::BuildInfoQuery { offset: args.offset, limit: page_limit(args.limit) };
                 project.build_info(&query)
@@ -3408,19 +3247,11 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Formats,
             "pe_resources",
-            "PE resource directory leaves: type (RT_* name, #id or string name), name/id, language, data RVA, size, \
-             code page, offset within the image and whether the bytes are in the file. The type/name/language tree \
-             is walked with depth, table, entry and leaf limits and loop detection; irregular trees and unreadable \
-             entries become warnings, and a directory size overrunning its section is read from the RVA as Windows \
-             does. types counts leaves per type (type: id or string name; at most 256 rows, types_total, \
-             types_truncated). RT_VERSION is decoded (VS_FIXEDFILEINFO versions, flags, OS and type; \
-             StringFileInfo key/value pairs per language/code page; VarFileInfo translations) and RT_MANIFEST \
-             returns capped UTF-8 text with requestedExecutionLevel and dependentAssembly names from a bounded \
-             textual scan, not an XML parse. A page's first payload is always decoded; later ones stop once the \
-             page spends 24000 payload bytes (decode_skipped counts the rest). Other payloads (icons, dialogs, \
-             string tables, RCDATA) are located, never interpreted or extracted. Filter with type (RT_VERSION, \
-             VERSION, 16, #16 or a string type name); offset/limit page the matching leaves, each page also cut to \
-             fit 60000 JSON bytes (resources.next_offset, resources.byte_capped). Returns null for a non-PE image.",
+            "PE resource leaves (type, name, language, RVA, size, code page, file offset) with counts per type. \
+             RT_VERSION is decoded (fixed file info, StringFileInfo pairs) and RT_MANIFEST returned as text with \
+             requestedExecutionLevel; other payloads (icons, dialogs, string tables, RCDATA) are located, not \
+             interpreted. Filter with type (RT_VERSION, 16, or a string name); offset/limit page the leaves. Returns \
+             null for a non-PE image.",
             |project, args: PeResourcesArgs| {
                 let query = crate::PeResourcesQuery {
                     type_filter: args.r#type,
@@ -3433,17 +3264,11 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Formats,
             "exception_handlers",
-            "Experimental. MSVC C++ exception handling of an x86/x64 PE, from its __CxxFrameHandler3 FuncInfo tables \
-             (x64 via .pdata unwind info, x86 by validated table scan tied to the function that registers the \
-             handler thunk) and __C_specific_handler scope tables: per function, try blocks (state ranges and, on \
-             x64, covered code ranges) with each catch's demangled type, by-reference/const and catch funclet, \
-             cleanup (destructor) funclets by state, and SEH scopes. list=throws pages _ThrowInfo records instead. \
-             Validated on clang-cl output only: cl.exe x64 since VS2019 16.3 emits __CxxFrameHandler4 tables, which \
-             are not decoded (counted in undecoded_handlers), and cl.exe x86 places catch blocks inline. Rows cap \
-             their lists with exact totals and `truncated`; `function` (address or name) keeps the tables of the \
-             function containing it, and with it `detail_offset` pages that function's try blocks, cleanups and \
-             scopes. offset/limit page rows (limit 1..=100, default 50, also bounded to 60000 JSON bytes; \
-             more/next_offset).",
+            "Experimental. MSVC C++ exception handling of an x86/x64 PE (__CxxFrameHandler3 FuncInfo and \
+             __C_specific_handler scope tables): per function, try blocks with each catch's type and funclet, cleanup \
+             funclets and SEH scopes; list=throws pages _ThrowInfo records. Validated on clang-cl output; \
+             __CxxFrameHandler4 tables (cl.exe x64 since VS2019 16.3) are counted in undecoded_handlers, not decoded. \
+             `function` keeps one function's tables, paged by detail_offset; offset/limit page rows (default 50).",
             |project, arguments: ExceptionHandlerArgs| {
                 let function = arguments.function.as_deref().map(|text| project.resolve(text)).transpose()?;
                 project.exception_handlers(
@@ -3458,30 +3283,19 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Formats,
             "pe_load_config",
-            "PE IMAGE_LOAD_CONFIG_DIRECTORY (32- and 64-bit), honouring its own Size: fields past it are listed in \
-             absent_fields and never read. Reports the security cookie VA; SafeSEH handler table count and up to \
-             256 handler RVAs (x86); CFG GuardFlags names, check/dispatch function pointers and function table \
-             count, entry size and whether it lies inside the image; address-taken IAT, long-jump and EH \
-             continuation table counts; and dynamic value relocation table presence. Also the CET flags of the \
-             IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS debug entry, the DllCharacteristics mitigations triage reports, \
-             and findings where the two disagree (CFG declared but not instrumented or the reverse, x86 images \
-             without SafeSEH or NO_SEH; SafeSEH is read only for native x86, not ARM32 or IL-only .NET). Table \
-             contents beyond SafeSEH handlers, CHPE, hot-patch, enclave and volatile metadata are not decoded. \
-             Returns null for a non-PE image.",
+            "PE load config directory (32/64-bit, read within its own Size): security cookie, SafeSEH handlers (x86), \
+             CFG flags, check/dispatch pointers and table counts, other guard tables, CET flags from the debug \
+             directory, and findings where DllCharacteristics and the load config disagree (CFG declared but not \
+             instrumented, x86 without SafeSEH). Returns null for a non-PE image.",
             |project, _: Nothing| project.pe_load_config(),
         ),
         tool(
             Group::Detection,
             "detect_tools",
-            "Identify the tools that likely produced the binary (packer, compiler, protector, cryptor, installer, \
-             SFX, joiner, linker, runtime: the C runtime linked in) from a bundled heuristic database of \
-             entry-point, section, import, symbol, Mach-O build-version, overlay and entropy signatures: rampage's \
-             own plus rules converted from Detect It Easy (MIT). Each detection lists its sources (rampage, \
-             detect_it_easy) and any versions the matching rules name. Optionally overlay a user-supplied PeID \
-             userdb.txt; loaded data packs' PeID signatures are always overlaid. Returns \
-             {detections, warnings}: warnings name the PeID entries and lines skipped as malformed (the first 20, \
-             then a count), then data packs or pack PeID files that did not load. Confidence is a signal, not \
-             proof.",
+            "Identify the packer, compiler, protector, cryptor, installer, linker or runtime that produced the binary, \
+             from bundled heuristic signatures (rampage's and converted Detect It Easy rules), loaded data packs' PeID \
+             signatures and an optional user `peid` database. Each detection lists its sources and any versions. \
+             Returns {detections, warnings}; confidence is a signal, not proof.",
             |project, args: DetectToolsArgs| {
                 let peid = match &args.peid {
                     Some(path) => {
@@ -3571,12 +3385,10 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "binary_info",
-            "Format, architecture, entry point and retained image metadata. view=full (default) preserves original \
-             JSON; summary replaces segment/section/register/module rows with counts and explicit omission receipts \
-             while retaining identity, source, warnings and other evidence. code is unsupported for metadata. \
-             Oversized views refuse with compact-view guidance, never plaintext truncation; a Raw project's `raw` \
-             lists keep their first rows with counts and receipts instead (3 in summary, 16 when full does not fit), \
-             and sections still too large keep only scalar fields and counts.",
+            "Format, architecture, entry point, segments, sections and other image metadata. view summary gives row \
+             lists as counts; full (default) refuses when oversized. On a Raw project `raw` reports the mapping \
+             evidence (regions, vector table, pointer tables, scatter-load copies, base_check), long lists cut to \
+             their first rows with counts.",
             |project, args: ViewArgs| {
                 let value =
                     serde_json::to_value(project.summary()).map_err(|error| ApiError::Invalid(error.to_string()))?;
@@ -3603,11 +3415,9 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "disassemble",
-            "Disassemble instructions from an address/name with native bytes, control flow and annotations. \
-             view=full (default) and code preserve the original complete listing; summary omits text/bytes with \
-             bounds/counts and explicit omission receipts, retaining non-rendering control/annotation evidence. \
-             ARM and AArch64 rows also give decimal immediates in hex, in immediates_hex. Oversized views refuse; \
-             reduce count or choose summary. No string truncation.",
+            "Disassemble `count` instructions from an address or name (default the entry point), with bytes, control \
+             flow and annotations; ARM and AArch64 rows add immediates_hex. view summary omits text and bytes. An \
+             oversized listing refuses: lower count.",
             |project, arguments: ViewedDisassembleArgs| {
                 let count = arguments.listing.count.unwrap_or(crate::DEFAULT_INSTRUCTIONS).min(1000);
                 let value = serde_json::to_value(project.disassemble(arguments.listing.at.as_deref(), count)?)
@@ -3618,15 +3428,10 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "function_graph",
-            "The control-flow graph of the function containing an address or name: its basic blocks with \
-             disassembly, and edges (unconditional, taken, not_taken, or switch from a register jump to each case \
-             of a bounded switch table) indexing into the blocks. A call that never returns ends its block with no \
-             fall-through edge; its line says why in `noreturn`: `listed` (the callee is documented never to \
-              return) or `inferred` (no path through the callee returns). view=full (default) preserves original JSON; \
-              code keeps instructions/bytes/labels and control evidence; summary omits line rendering with counts \
-              and explicit omission receipts. view=full refuses when oversized; summary and code page a large \
-              graph as whole blocks with the edges leaving them (block_offset; blocks_next_offset says where the \
-              next page starts; edges keep whole-function block indices) and never truncate strings.",
+            "Control-flow graph of the function containing an address or name: basic blocks with disassembly, and \
+             edges (unconditional, taken, not_taken, switch) indexing into them. A call that never returns ends its \
+             block, with `noreturn` listed or inferred. full (default) refuses when oversized; summary and code page \
+             whole blocks with their edges (block_offset; follow blocks_next_offset).",
             |project, arguments: FunctionGraphArgs| {
                 let value = serde_json::to_value(project.function_graph(project.resolve(&arguments.at)?)?)
                     .map_err(|error| ApiError::Invalid(error.to_string()))?;
@@ -3650,11 +3455,9 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "list_strings",
-            "Printable strings with their addresses. Filter with `contains`; paginated. With `contains`, \
-             match_address is where the text matches inside each string. Go string data is not NUL-terminated, so \
-             in a Go image a run that code or static string headers reference at several addresses carries a \
-             note, and a match its go_literal bounds from those references (exact when header_length is set); never count offsets into a run by hand. In a Go image the \
-             listing runs the (cached) whole-program analysis.",
+            "Printable strings with their addresses. Filter with `contains` (match_address is where the text matches); \
+             paginated. Go string data is not NUL-terminated: a Go run referenced at several addresses carries a note, \
+             and a match its go_literal bounds; use those, never count offsets into a run by hand.",
             |project, mut query: StringsQuery| {
                 query.limit = page_limit(query.limit);
                 Ok(project.string_rows(&query))
@@ -3692,13 +3495,10 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Types,
             "import_debug_types",
-            "Preview checked project-library types and scalar/pointer function signatures from embedded DWARF \
-             or an explicit identity-matched PDB. Independently compares retained producer facts with native \
-             target layouts; unknown producer alignment stays unknown. Apply requires the whole-plan review \
-             hash and commits the complete library/proof/signature batch atomically. Unsupported bitfields, \
-             dependencies and ABI shapes remain explicit; no partial record is presented as complete. No \
-             implicit debug paths, downloads, host preprocessor or executable-byte changes. Paging is read-only \
-             detail selection, never a write subset. Identity linkage is not source authentication.",
+            "Preview checked project-library types and scalar/pointer function signatures from embedded DWARF or an \
+             explicit identity-matched `pdb`, compared with native target layouts; unknown and unsupported parts stay \
+             explicit. apply=true with the whole-plan review_sha256 from a fresh preview commits the batch atomically; \
+             paging never selects what is written.",
             |project, args: ImportDebugTypesArgs| {
                 let request = crate::DebugTypesRequest {
                     pdb: args.pdb.map(std::path::PathBuf::from),
@@ -3741,10 +3541,9 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Types,
             "propagate_types",
-            "Preview or apply bounded provenance-bearing type candidates across proven direct calls. Explicit \
-             analyst signatures/variables/globals take priority; incompatible candidates and unsupported ABI \
-             shapes remain conflicts or unknowns. Applied hints are separate lower-priority annotations, with \
-             source fingerprints, checked undo/replay and no binary patching. Preview is read-only.",
+            "Preview, or apply, type candidates carried across direct calls with their provenance. Analyst signatures, \
+             variables and globals win and conflicts stay explicit; applied hints are separate lower-priority, \
+             undoable annotations.",
             |project, args: PropagateTypesArgs| {
                 let request = crate::PropagationRequest {
                     address: project.resolve(&args.at)?,
@@ -3761,10 +3560,9 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Types,
             "function_frame",
-            "Inspect one function's native locals/parameters with current user names/types and complete storage, \
-             plus available static stack-access/register-preservation candidates. Coordinate origins and unknown \
-             widths remain explicit; native stack space is not silently equated with entry-SP tracker offsets. \
-             Bounded paging, diagnostics and omissions do not imply a complete frame or producer ABI proof.",
+            "One function's locals and parameters with current names, types and complete storage, plus static \
+             stack-access and register-preservation candidates (include_tracker). Paged. edit_variable renames or \
+             retypes one.",
             |project, args: FunctionFrameArgs| {
                 data_typing_view(&project.function_frame(
                     project.resolve(&args.at)?,
@@ -3779,10 +3577,9 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Types,
             "apply_data_type",
-            "Annotate a mapped data range with a complete native element type and optional array count, or an \
-             explicit byte-length/string encoding. Native globals feed decompilation; read_data renders typed \
-             fields without patching bytes. Checked undo/replay preserves bindings. Conflicting globals, invalid \
-             ranges and unsupported layouts refuse atomically; missing bytes remain explicit.",
+            "Type a data range: a native element type with optional array count, or a string encoding with byte \
+             length. Typed globals feed decompilation and read_data renders the fields; bytes are not changed. \
+             Undoable; conflicts refuse.",
             |project, args: ApplyDataTypeArgs| {
                 let request = crate::ApplyDataTypeRequest {
                     type_name: args.type_name,
@@ -3802,9 +3599,8 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Types,
             "apply_enum",
-            "Apply a named enum to one native-decoded immediate operand. Uses decoded logical width and raw \
-             value, not formatted-text matching. Disassembly keeps raw bytes/text and exposes analyst-symbolic \
-             annotations. Unsupported forms, missing types and stale instruction bytes are refused; no patches.",
+            "Show one decoded immediate operand as a named enum value in disassembly; raw bytes and text are kept. \
+             Unsupported operands, missing types and changed bytes refuse. Undoable.",
             |project, args: ApplyOperandTypeArgs| {
                 let request = crate::ApplyOperandTypeRequest {
                     operand: args.operand,
@@ -3821,9 +3617,8 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Types,
             "apply_offset",
-            "Display a decoded base-register memory displacement as a named struct field under an explicit \
-             analyst type assertion. Rejects PC-relative, indexed, negative or unsupported selectors rather than \
-             guessing an object base. Persists exact instruction-byte selectors with checked undo/replay.",
+            "Show a base-register displacement operand as a named struct field, asserting the base's type (type_name). \
+             PC-relative, indexed and negative operands refuse. Undoable.",
             |project, args: ApplyOperandTypeArgs| {
                 let request = crate::ApplyOperandTypeRequest {
                     operand: args.operand,
@@ -3840,9 +3635,8 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Types,
             "read_data",
-            "Read a bounded image or immutable-snapshot data window with persistent typed fields, array elements and \
-             explicit string encodings. Retains raw bytes, backing status, byte order and loader limitations. \
-             Integers remain exact, pointer words are not followed, and invalid/partial text stays visible.",
+            "Read a bounded data window of the image or a snapshot with its typed fields, array elements and strings \
+             (from apply_data_type), keeping raw bytes, backing status and byte order. Pointers are not followed.",
             |project, args: ReadDataArgs| {
                 data_typing_view(
                     &project
@@ -3853,11 +3647,9 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Types,
             "declare_types",
-            "Declare named project struct/union/enum/typedef/function-pointer types, or import a bounded inline C \
-             header with bundled profiles. Reports native target layouts and persists dependency-ordered units \
-             with undo/redo/replay. Optional packing is explicit; profiles assert an ABI rather than detect one. \
-             No filesystem includes, host preprocessor, function bodies or binary patches. Invalid dependencies \
-             and oversized edit receipts do not persist. Existing set_types annotations remain compatible.",
+            "Declare named struct/union/enum/typedef/function-pointer types in the project library, from declarations \
+             or an inline C header with bundled profiles (c, posix-linux, win32), and report their native layouts. No \
+             file includes or host preprocessor. Undoable; replace swaps existing units.",
             |project, args: DeclareTypesArgs| {
                 let request = crate::DeclareTypesRequest {
                     declarations: args.declarations,
@@ -3875,32 +3667,26 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Types,
             "list_types",
-            "List the selected project's named type library with bounded paging. Use get_type for native field \
-             offsets and alias/enum/callback detail. This does not infer producer layout from analyst declarations. \
-             On a Go binary whose library is empty (or source=go), lists the named Go types recovered from runtime \
-             type metadata instead (source: go_runtime), which survives stripping.",
+            "List the project library's named types, paged; get_type gives one type's fields and offsets. On a Go \
+             binary whose library is empty (or source=go), lists the Go types recovered from runtime type metadata \
+             (source go_runtime), stripped binaries included.",
             list_types,
         ),
         tool(
             Group::Types,
             "get_type",
-            "Inspect one named type: target size/alignment, packing, fields and offsets, aliases, enum values and \
-             function-pointer detail where present. Library declarations are analyst interpretation, not \
-             evidence of the producer's ABI. When the library lacks the name (or source=dwarf), reads the \
-             producer layout from embedded DWARF without importing anything: size, members with offsets/sizes/\
-             types, typedef chain, distinct definitions across units (ambiguous=true), paged members. On a Go \
-             binary without DWARF (stripped), falls back to Go runtime type metadata (source: go_runtime): struct \
-             fields with offsets, embedded and unexported fields, interface and named-type methods. Answer \
-             'which member is at offset X' with byte_offset and 'where is a.b' with member, in one call.",
+            "One named type: size, alignment, fields with offsets, aliases, enum values and function-pointer detail. \
+             Without a library entry (or source=dwarf) it reads the producer layout from embedded DWARF, importing \
+             nothing (distinct definitions give ambiguous=true); on a stripped Go binary, from Go runtime type \
+             metadata (source go_runtime). Answer 'which member is at offset X' with byte_offset and 'where is a.b' \
+             with member, in one call.",
             |project, args: TypeNameArgs| get_type(project, args),
         ),
         tool(
             Group::Types,
             "delete_type",
-            "Delete a project type declaration without cascading. Refuses deletion when retained declarations, \
-             globals, signatures or locals depend on it. Native checked undo/redo and replay preserve the library; \
-             builtin and legacy address-bound types are not silently removed. Multi-name groups require \
-             definition_group=true and report every removed name.",
+            "Delete a project type declaration; refuses while declarations, globals, signatures or locals depend on \
+             it. A multi-name group needs definition_group=true. Undoable.",
             |project, args: DeleteTypeArgs| {
                 let check = |result: &crate::TypeLibraryEdit| type_library_view(result).map(|_| ());
                 let result = if args.definition_group {
@@ -3915,12 +3701,10 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Types,
             "edit_variable",
-            "Rename/retype one decompiler local or parameter by its current display name OR complete returned \
-             storage identity, including inclusive definition/use ranges. Returns refreshed complete C, diagnostics \
-             and variable descriptors in this call. Persists storage-keyed annotations with atomic undo/redo/replay. \
-             Named structs use existing set_types declarations. Initially supports single whole processor/stack \
-             mappings and same-size scalar/pointer types; dynamic/join/piece/ambiguous selectors are refused. \
-             Set name/data_type or clear_name/clear_type. Invalid or oversized refreshed results do not persist.",
+            "Rename or retype one decompiler local or parameter, chosen by its current display name or its returned \
+             storage; returns the refreshed C in the same call. Persists by storage, undoable. Single register or \
+             stack storage and same-size scalar or pointer types only; declare named structs with set_types first. Set \
+             name/data_type or clear_name/clear_type.",
             |project, args: EditVariableArgs| {
                 let request = crate::VariableEditRequest {
                     variable: args.variable,
@@ -3998,12 +3782,10 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "record_finding",
-            "Record what you established, still don't know, or want answered (kind finding/unknown/question), with \
-             the tool calls that support it, in a ledger saved beside the binary for later sessions and other \
-             agents. Without id it creates an entry and returns its stable id; with id it updates only the fields \
-             given (status, resolution, ...). One undo step per call. The ledger holds at most 1024 entries and 2 MiB; \
-             a write that would leave the shared annotation log under a quarter of its budget free is refused, so \
-             names and comments keep room. There is no delete: reject an entry instead.",
+            "Record what you established, still don't know, or want answered (kind finding, unknown or question), with \
+             the tool calls that support it, in a ledger saved beside the binary for later sessions and other agents \
+             (list_findings reads it). Without `id` it creates an entry and returns its id; with `id` it updates only \
+             the fields given. There is no delete: set status rejected. One undo step per call; at most 1024 entries.",
             |project, arguments: crate::LedgerRequest| project.record_finding(&arguments),
         )
         .annotates(),
@@ -4034,10 +3816,9 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "discard_undo",
-            "Drop the last edit or batch from this session's undo history without reverting it, when another \
-             client's edits block undoing it (which blocks every earlier step too). Its edits stay in effect; the \
-             annotation log is not rewritten. Refuses a step undo could still revert unless force is true. Returns \
-             the dropped edits; empty if there was none.",
+            "Drop the last step from this session's undo history without reverting it, when another client's edit \
+             blocks undoing it (and so every earlier step). Its edits stay in effect. Refuses a step undo could still \
+             revert unless force is true. Returns the dropped edits.",
             |project, arguments: DiscardUndoArgs| project.discard_undo_step(arguments.force),
         ),
         tool(

@@ -6,6 +6,13 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- Shorter tool descriptions: an agent session's default `tools/list` is 26% smaller (134,699 to 99,455 bytes, about
+  8,800 fewer tokens; 24% smaller with every group), and the server instructions leave 358 characters spare before
+  Claude Code's cut. Descriptions keep when to use each tool, required arguments, side effects and key outputs; the
+  caveats and limits they dropped are in the [MCP reference](docs/mcp.md#tool-details). `inspect_data` no longer
+  lists the full Raw request schema beside its compact `raw` selector. Field names, types and required arguments are
+  unchanged; description text is outside the stable surface (docs/stability.md). A new test fails if the default
+  list grows past its budget.
 - Android APKs and DEX files: the new `android` group's `dex_metadata` reads an APK, AAB, JAR or DEX file (or a
   directory of them): package, versions and SDK levels, permissions with their platform protection level and a
   privacy category, components with intent filters, exported state and start-at-boot receivers, native libraries

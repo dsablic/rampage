@@ -65,8 +65,7 @@ pub fn workflow(name: &str) -> Option<&'static dyn Workflow> {
 // The arguments of a workflow that takes only the per-section cap. Not a doc comment: the schema would carry it.
 #[derive(serde::Deserialize, JsonSchema)]
 pub(super) struct ReportArgs {
-    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
-    /// reports are cut further to fit one tool result.
+    /// Findings per report section (default 25, at most 200); a cut section says so.
     max_per_section: Option<usize>,
 }
 

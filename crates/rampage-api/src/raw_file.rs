@@ -17,21 +17,21 @@ pub enum RawByteOrder {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RawFileRequest {
-    /// Original-file byte offset, not a native-image or decoded address.
+    /// Original-file byte offset of the window.
     pub offset: FileOffset,
-    /// Window length, 1..4096 bytes. No decoder reads outside this supplied range.
+    /// Window bytes, 1..4096; nothing outside it is read.
     pub length: FileOffset,
-    /// Required architecture: x86, x86_64, arm or aarch64. No format/architecture guessing.
+    /// x86, x86_64, arm or aarch64.
     pub arch: String,
-    /// ARM requires arm or thumb; other architectures require native.
+    /// arm or thumb for ARM; native for the others.
     pub mode: RawCodeMode,
-    /// Explicit instruction order; initially only little is supported.
+    /// Instruction byte order; only little is supported.
     pub code_byte_order: RawByteOrder,
-    /// Explicit data order; initially only little is supported.
+    /// Data byte order; only little is supported.
     pub data_byte_order: RawByteOrder,
-    /// Analyst-asserted VA of the first selected byte, not of the whole file.
+    /// Address you assert for the window's first byte.
     pub base_address: FileOffset,
-    /// Linear instruction count, 1..256; default 64. No targets are followed.
+    /// Instructions to decode, 1..256 (default 64).
     #[serde(default = "default_count")]
     pub instruction_limit: usize,
 }
