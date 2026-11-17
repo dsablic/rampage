@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use crate::dex::{Dex, escape};
+use crate::dex::{Dex, cut, escape};
 
 /// An instruction format, named as in the Dalvik bytecode documentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -483,9 +483,9 @@ fn decode_raw(format: Format, unit: &[u16]) -> Option<Raw> {
 
 fn resolve(dex: &Dex, kind: RefKind, index: u32) -> Reference {
     let text = match kind {
-        RefKind::String => {
-            dex.string(index).map_or_else(|_| format!("<bad string {index}>"), |s| format!("\"{}\"", escape(&s.text)))
-        }
+        RefKind::String => dex
+            .string(index)
+            .map_or_else(|_| format!("<bad string {index}>"), |s| format!("\"{}\"", escape(&cut(&s.text)))),
         RefKind::Type => dex.type_text(index),
         RefKind::Field => dex.field_text(index),
         RefKind::Method => dex.method_text(index),
@@ -514,107 +514,134 @@ fn payload_units(units: &[u16]) -> Option<u64> {
 /// Bytes of fill-array-data shown as hex before the text is cut.
 const MAX_ARRAY_HEX_BYTES: usize = 64;
 
-/// Decodes the whole body `insns` linearly. Payloads are recognised by their identifiers and rendered with their
-/// targets relative to the switch that refers to them; bytes that decode to nothing show as `.unit`.
-pub fn disassemble(dex: &Dex, insns: &[u16]) -> Vec<Insn> {
-    // Switch payload address -> the switch instruction's address, for payload-relative targets.
-    let mut switches: HashMap<u32, u32> = HashMap::new();
-    let mut out = Vec::new();
+/// What occupies one slot of a method body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    Instruction,
+    Payload,
+    /// A code unit that starts no complete instruction (`.unit`).
+    Unit,
+}
+
+/// Where each instruction of a body starts and how long it is, and which switch each payload belongs to: one pass
+/// that resolves nothing, so a page of a long body can be rendered without rendering the rest.
+pub struct Layout {
+    /// `(address, units, slot)` in order.
+    pub slots: Vec<(u32, u32, Slot)>,
+    /// Switch payload address -> the switch instruction's address, for payload-relative targets.
+    switches: HashMap<u32, u32>,
+}
+
+/// Lays out the body `insns` linearly. Payloads are recognised by their identifiers.
+pub fn layout(insns: &[u16]) -> Layout {
+    let mut slots = Vec::new();
+    let mut switches = HashMap::new();
     let mut address = 0usize;
-    let mut pending: Vec<(usize, i64)> = Vec::new();
     while address < insns.len() {
-        let unit = insns[address];
-        if let Some(size) = payload_units(&insns[address..]) {
-            let fits = address as u64 + size <= insns.len() as u64;
-            if fits {
-                out.push(payload(dex, &insns[address..address + size as usize], address as u32, &switches));
-                address += size as usize;
-                continue;
-            }
+        if let Some(size) = payload_units(&insns[address..])
+            && address as u64 + size <= insns.len() as u64
+        {
+            slots.push((address as u32, size as u32, Slot::Payload));
+            address += size as usize;
+            continue;
         }
+        let unit = insns[address];
         let op = opcode(unit as u8);
         let units = op.format.units() as usize;
         let decoded =
             (address + units <= insns.len()).then(|| decode_raw(op.format, &insns[address..address + units])).flatten();
         let Some(raw) = decoded else {
-            out.push(Insn {
-                address: address as u32,
-                units: 1,
-                mnemonic: ".unit",
-                operands: format!("{unit:#06x}"),
-                reference: None,
-                proto: None,
-                targets: Vec::new(),
-            });
+            slots.push((address as u32, 1, Slot::Unit));
             address += 1;
             continue;
         };
-        let mut parts: Vec<String> = Vec::new();
-        if raw.range {
-            parts.push(match raw.regs.as_slice() {
-                [] => "{}".to_owned(),
-                [first, last] if first == last => format!("{{v{first}}}"),
-                [first, last] => format!("{{v{first} .. v{last}}}"),
-                _ => "{}".to_owned(),
-            });
-        } else if matches!(op.format, Format::F35c | Format::F45cc) {
-            let regs: Vec<String> = raw.regs.iter().map(|reg| format!("v{reg}")).collect();
-            parts.push(format!("{{{}}}", regs.join(", ")));
-        } else {
-            parts.extend(raw.regs.iter().map(|reg| format!("v{reg}")));
-        }
-        if op.name == "unused" {
-            parts.push(format!("{:#04x}", unit as u8));
-        }
-        if let Some(literal) = raw.literal {
-            let value = match (op.format, unit as u8) {
-                (Format::F21h, 0x15) => literal << 16,
-                (Format::F21h, _) => literal << 48,
-                _ => literal,
-            };
-            parts.push(hex(value));
-        }
-        let reference = op.reference.zip(raw.index).map(|(kind, index)| resolve(dex, kind, index));
-        if let Some(reference) = &reference {
-            parts.push(reference.text.clone());
-        }
-        let proto = raw.proto.map(|index| resolve(dex, RefKind::Proto, index));
-        if let Some(proto) = &proto {
-            parts.push(proto.text.clone());
-        }
-        let mut targets = Vec::new();
-        if let Some(branch) = raw.branch {
+        if matches!(unit as u8, 0x2b | 0x2c)
+            && let Some(branch) = raw.branch
+        {
             let target = address as i64 + branch;
-            parts.push(label(target));
             if (0..insns.len() as i64).contains(&target) {
-                targets.push(target as u32);
-                if matches!(unit as u8, 0x2b | 0x2c) {
-                    switches.entry(target as u32).or_insert(address as u32);
-                    pending.push((address, target));
-                }
+                switches.entry(target as u32).or_insert(address as u32);
             }
         }
-        out.push(Insn {
-            address: address as u32,
-            units: units as u32,
-            mnemonic: op.name,
-            operands: parts.join(", "),
-            reference,
-            proto,
-            targets,
-        });
+        slots.push((address as u32, units as u32, Slot::Instruction));
         address += units;
     }
-    // A payload decoded before the switch that names it (a backward reference) is rendered again with its base.
-    if pending.iter().any(|&(switch, payload)| payload < switch as i64) {
-        for insn in out.iter_mut() {
-            if insn.mnemonic.ends_with("-payload") && switches.contains_key(&insn.address) {
-                let start = insn.address as usize;
-                *insn = payload(dex, &insns[start..start + insn.units as usize], insn.address, &switches);
-            }
+    Layout { slots, switches }
+}
+
+/// Renders slot `index` of `layout`, resolving its references through `dex`.
+pub fn render(dex: &Dex, insns: &[u16], layout: &Layout, index: usize) -> Option<Insn> {
+    let &(address, units, slot) = layout.slots.get(index)?;
+    let start = address as usize;
+    let body = &insns[start..start + units as usize];
+    Some(match slot {
+        Slot::Payload => payload(dex, body, address, &layout.switches),
+        Slot::Unit => Insn {
+            address,
+            units: 1,
+            mnemonic: ".unit",
+            operands: format!("{:#06x}", body[0]),
+            reference: None,
+            proto: None,
+            targets: Vec::new(),
+        },
+        Slot::Instruction => instruction(dex, body, address, insns.len()),
+    })
+}
+
+/// Decodes the whole body `insns`: [`layout`], then [`render`] of every slot. Payloads are rendered with their
+/// targets relative to the switch that refers to them; units that decode to nothing show as `.unit`.
+pub fn disassemble(dex: &Dex, insns: &[u16]) -> Vec<Insn> {
+    let layout = layout(insns);
+    (0..layout.slots.len()).filter_map(|index| render(dex, insns, &layout, index)).collect()
+}
+
+fn instruction(dex: &Dex, body: &[u16], address: u32, len: usize) -> Insn {
+    let unit = body[0];
+    let op = opcode(unit as u8);
+    let raw = decode_raw(op.format, body).expect("laid out as a decodable instruction");
+    let mut parts: Vec<String> = Vec::new();
+    if raw.range {
+        parts.push(match raw.regs.as_slice() {
+            [] => "{}".to_owned(),
+            [first, last] if first == last => format!("{{v{first}}}"),
+            [first, last] => format!("{{v{first} .. v{last}}}"),
+            _ => "{}".to_owned(),
+        });
+    } else if matches!(op.format, Format::F35c | Format::F45cc) {
+        let regs: Vec<String> = raw.regs.iter().map(|reg| format!("v{reg}")).collect();
+        parts.push(format!("{{{}}}", regs.join(", ")));
+    } else {
+        parts.extend(raw.regs.iter().map(|reg| format!("v{reg}")));
+    }
+    if op.name == "unused" {
+        parts.push(format!("{:#04x}", unit as u8));
+    }
+    if let Some(literal) = raw.literal {
+        let value = match (op.format, unit as u8) {
+            (Format::F21h, 0x15) => literal << 16,
+            (Format::F21h, _) => literal << 48,
+            _ => literal,
+        };
+        parts.push(hex(value));
+    }
+    let reference = op.reference.zip(raw.index).map(|(kind, index)| resolve(dex, kind, index));
+    if let Some(reference) = &reference {
+        parts.push(reference.text.clone());
+    }
+    let proto = raw.proto.map(|index| resolve(dex, RefKind::Proto, index));
+    if let Some(proto) = &proto {
+        parts.push(proto.text.clone());
+    }
+    let mut targets = Vec::new();
+    if let Some(branch) = raw.branch {
+        let target = i64::from(address) + branch;
+        parts.push(label(target));
+        if (0..len as i64).contains(&target) {
+            targets.push(target as u32);
         }
     }
-    out
+    Insn { address, units: body.len() as u32, mnemonic: op.name, operands: parts.join(", "), reference, proto, targets }
 }
 
 fn payload(_dex: &Dex, units: &[u16], address: u32, switches: &HashMap<u32, u32>) -> Insn {

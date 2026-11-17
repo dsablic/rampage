@@ -31,7 +31,8 @@ fn the_apk_summary_has_manifest_permissions_components_and_jni() {
     assert_eq!(out["sdk"]["target"], 33);
     let permissions = out["permissions"].as_array().unwrap();
     let audio = permissions.iter().find(|row| row["name"] == "android.permission.RECORD_AUDIO").unwrap();
-    assert_eq!(audio["protection_level"], "dangerous");
+    assert_eq!(audio["protection_level"], "dangerous|instant");
+    assert_eq!(audio["base_level"], "dangerous");
     assert_eq!(audio["category"], "microphone");
     assert_eq!(audio["privacy"], true);
     let internet = permissions.iter().find(|row| row["name"] == "android.permission.INTERNET").unwrap();
@@ -186,4 +187,82 @@ fn native_methods_link_to_their_jni_exports() {
     assert_eq!(jni["exports_without_native"], json!([]));
     let dex = call("dex_metadata", json!({"path": android("recorder.dex"), "limit": 1})).unwrap();
     assert_eq!(dex["jni"]["unlinked"][0]["expected_symbol"], "Java_com_example_recorder_Capture_nativeEncode");
+}
+
+/// Runs `tool` on `input`, asserting it finishes within `seconds` and returns at most 60,000 JSON bytes.
+fn bounded(tool: &str, input: Value, seconds: u64) -> Value {
+    let started = std::time::Instant::now();
+    let out = call(tool, input).unwrap();
+    let elapsed = started.elapsed();
+    assert!(elapsed < std::time::Duration::from_secs(seconds), "{tool} took {elapsed:?}");
+    let size = out.to_string().len();
+    assert!(size <= 60_000, "{tool} returned {size} bytes");
+    out
+}
+
+#[test]
+fn tries_sharing_one_huge_handler_stay_bounded() {
+    let dir = scratch("tries");
+    let path = dir.join("tries.dex");
+    std::fs::write(&path, rampage_dex::testkit::shared_handler(65_535, 60_000)).unwrap();
+    let method = "Lcom/example/recorder/Capture;-><init>()V";
+    let out = bounded("dex_code", json!({"path": path, "method": method}), 20);
+    assert_eq!(out["tries_total"], 65_535);
+    assert!(out["tries"].as_array().unwrap().len() <= 64);
+    assert_eq!(out["tries"][0]["handlers_total"], 60_000);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn one_long_string_shared_by_every_id_stays_bounded() {
+    let dir = scratch("strings");
+    let path = dir.join("strings.dex");
+    std::fs::write(&path, rampage_dex::testkit::shared_string(1 << 20)).unwrap();
+    bounded("endpoint_inventory", json!({"path": path}), 20);
+    bounded("dex_metadata", json!({"path": path, "list": "methods"}), 20);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn classes_sharing_a_huge_interface_list_stay_bounded() {
+    let dir = scratch("interfaces");
+    let path = dir.join("interfaces.dex");
+    let classes = rampage_dex::testkit::shared_interfaces(100, 60_000);
+    std::fs::write(&path, rampage_dex::testkit::write_dex(&classes, 35)).unwrap();
+    let out = bounded("dex_metadata", json!({"path": path, "limit": 500}), 30);
+    let row = &out["page"]["items"][0];
+    assert_eq!(row["interfaces_total"], 60_000);
+    assert_eq!(row["interfaces"].as_array().unwrap().len(), 32);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_manifest_with_huge_lists_stays_bounded_and_pages() {
+    use rampage_dex::testkit::{XmlNode, XmlValue, sample_classes, write_axml, write_dex, write_zip};
+    let mut manifest = XmlNode::new("manifest").plain("package", XmlValue::Str("com.example.big".to_owned()));
+    for index in 0..20_000 {
+        manifest = manifest
+            .child(XmlNode::new("uses-permission").android("name", XmlValue::Str(format!("com.example.P{index}"))));
+    }
+    let manifest = write_axml(&manifest, false);
+    let dex = write_dex(&sample_classes(), 35);
+    let mut members: Vec<(String, Vec<u8>)> = vec![("AndroidManifest.xml".to_owned(), manifest)];
+    for index in 0..40 {
+        let name = if index == 0 { "classes.dex".to_owned() } else { format!("classes{}.dex", index + 1) };
+        members.push((name, dex.clone()));
+    }
+    let borrowed: Vec<(&str, &[u8], bool)> =
+        members.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice(), true)).collect();
+    let dir = scratch("big-manifest");
+    let path = dir.join("big.apk");
+    std::fs::write(&path, write_zip(&borrowed)).unwrap();
+    let out = bounded("dex_metadata", json!({"path": path, "limit": 1}), 30);
+    assert_eq!(out["permissions_total"], 20_000);
+    assert!(out["permissions"].as_array().unwrap().len() < 20_000);
+    assert_eq!(out["dex_total"], 40);
+    let page = bounded("dex_metadata", json!({"path": path, "list": "permissions", "offset": 19_999}), 30);
+    assert_eq!(page["page"]["items"][0]["name"], "com.example.P19999");
+    let files = bounded("dex_metadata", json!({"path": path, "list": "dex_files", "limit": 5}), 30);
+    assert_eq!(files["page"]["total"], 40);
+    std::fs::remove_dir_all(dir).unwrap();
 }

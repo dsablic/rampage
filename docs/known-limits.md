@@ -87,7 +87,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   invoke sites: reflection, interface dispatch and run-time loaded code are missed. JNI methods registered with
   `RegisterNatives` are only suggested by the strings a library holds; the registration table is not decoded. Obfuscated names are shown as
   stored; `resources.arsc` is counted, not resolved, so `@0x7f...` manifest values stay resource ids; an AAB's
-  protobuf manifest and APK signature blocks are not read. JVM class files are not read.
+  protobuf manifest and APK signature blocks are not read; a DEX 041 container with several DEX files has only
+  its first read (and says so). JVM class files are not read.
 - Not built yet: object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and
   vftable evidence, `__CxxFrameHandler4` and Itanium exception tables, and incremental re-analysis after edits.
 

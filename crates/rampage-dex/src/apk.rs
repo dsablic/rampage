@@ -32,7 +32,7 @@ impl Default for Limits {
             max_dex_files: 16,
             dex: DexLimits::default(),
             max_native_bytes: 64 << 20,
-            max_total_bytes: 1 << 30,
+            max_total_bytes: 384 << 20,
             read_native: true,
         }
     }
@@ -94,8 +94,9 @@ fn native_lib(path: &str) -> Option<(&str, &str)> {
     (name.ends_with(".so") && !name.contains('/')).then_some((abi, name))
 }
 
+/// The manifest of an APK, or of an AAB's base module (stored as protobuf there).
 fn manifest_path(path: &str) -> bool {
-    path == "AndroidManifest.xml"
+    path == "AndroidManifest.xml" || path == "base/manifest/AndroidManifest.xml"
 }
 
 /// The package count and global string count of a `resources.arsc`, from its first chunks only.
@@ -116,22 +117,34 @@ impl Apk {
             max_file_bytes: (limits.dex.max_file_bytes as u64).max(limits.max_native_bytes).max(MAX_ARSC_BYTES),
             ..rampage_unpack::Limits::default()
         };
-        let mut dex_seen = 0usize;
-        let mut select = |entry: &rampage_unpack::Entry| {
-            if dex_number(&entry.path).is_some() {
-                let wanted = entry.size <= limits.dex.max_file_bytes as u64 && dex_seen < limits.max_dex_files;
-                dex_seen += usize::from(wanted);
-                return wanted;
+        // DEX files in multidex order (classes.dex, classes2.dex, ...), then the first manifest, the resource
+        // table and the native libraries.
+        let mut choose = |entries: &[rampage_unpack::Entry]| -> Vec<usize> {
+            let mut dex: Vec<(u32, usize)> = entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| entry.size <= limits.dex.max_file_bytes as u64)
+                .filter_map(|(index, entry)| dex_number(&entry.path).map(|number| (number, index)))
+                .collect();
+            dex.sort();
+            let mut chosen: Vec<usize> = dex.into_iter().take(limits.max_dex_files).map(|(_, index)| index).collect();
+            chosen.extend(
+                entries
+                    .iter()
+                    .position(|entry| manifest_path(&entry.path))
+                    .filter(|&index| entries[index].size <= MAX_MANIFEST_BYTES),
+            );
+            chosen.extend(
+                entries.iter().position(|entry| entry.path == "resources.arsc" && entry.size <= MAX_ARSC_BYTES),
+            );
+            if limits.read_native {
+                chosen.extend(entries.iter().enumerate().filter_map(|(index, entry)| {
+                    (native_lib(&entry.path).is_some() && entry.size <= limits.max_native_bytes).then_some(index)
+                }));
             }
-            if manifest_path(&entry.path) {
-                return entry.size <= MAX_MANIFEST_BYTES;
-            }
-            if entry.path == "resources.arsc" {
-                return entry.size <= MAX_ARSC_BYTES;
-            }
-            limits.read_native && native_lib(&entry.path).is_some() && entry.size <= limits.max_native_bytes
+            chosen
         };
-        let selected = rampage_unpack::read_entries(path, rampage_unpack::At::default(), &[], unpack, &mut select)
+        let selected = rampage_unpack::read_chosen(path, rampage_unpack::At::default(), &[], unpack, &mut choose)
             .map_err(|error| match error {
                 rampage_unpack::UnpackError::Limit(text) => DexError::Limit(text),
                 rampage_unpack::UnpackError::Unsupported(text) => DexError::Unsupported(text),
@@ -167,18 +180,28 @@ impl Apk {
             };
             apk.dex.push(DexEntry { path: entry.path.clone(), size: entry.size, dex });
         }
+        let mut manifests = 0usize;
         for (index, entry) in selected.entries.iter().enumerate() {
             if manifest_path(&entry.path) {
+                manifests += 1;
+                if manifests > 1 {
+                    continue;
+                }
+                let aab = entry.path.starts_with("base/");
                 match contents.remove(&index) {
                     Some(bytes) if axml::is_axml(&bytes) => match axml::parse(&bytes) {
                         Ok(document) => apk.manifest = Some(Manifest::from_document(&document)),
                         Err(error) => apk.manifest_error = Some(error.to_string()),
                     },
-                    Some(_) => {
-                        apk.manifest_error =
-                            Some("AndroidManifest.xml is not binary XML (an AAB stores it as protobuf)".to_owned())
+                    Some(_) if aab => {
+                        apk.manifest_error = Some(
+                            "base/manifest/AndroidManifest.xml is an AAB manifest in protobuf (aapt2 proto) form, \
+                             which is not read yet; dex_metadata still reads the DEX files and native libraries"
+                                .to_owned(),
+                        )
                     }
-                    None => apk.manifest_error = Some(format!("AndroidManifest.xml of {} bytes not read", entry.size)),
+                    Some(_) => apk.manifest_error = Some(format!("{} is not binary XML", entry.path)),
+                    None => apk.manifest_error = Some(format!("{} of {} bytes not read", entry.path, entry.size)),
                 }
             } else if entry.path == "resources.arsc" {
                 apk.resources = contents.remove(&index).as_deref().and_then(resource_table);
@@ -190,6 +213,12 @@ impl Apk {
                     bytes: contents.remove(&index),
                 });
             }
+        }
+        if manifests > 1 {
+            apk.warnings.push(format!(
+                "{manifests} AndroidManifest.xml entries: the first is read, as the platform's installer reads one; \
+                 the others may hide components or permissions from tools"
+            ));
         }
         if apk.manifest.is_none() && apk.manifest_error.is_none() {
             apk.manifest_error = Some("no AndroidManifest.xml".to_owned());

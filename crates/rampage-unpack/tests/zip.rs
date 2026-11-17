@@ -95,6 +95,21 @@ fn a_zip_bomb_is_refused_by_the_ratio_meter() {
 }
 
 #[test]
+fn overlapping_members_are_noted() {
+    let scratch = Scratch::new("zip-overlap");
+    let path = scratch.join("overlap.zip");
+    let mut bytes = zip(&[("a", b"abcdef", false), ("b", b"ghijkl", false)], None);
+    // Point the second directory record at the first local header.
+    let directory = u32::from_le_bytes(bytes[bytes.len() - 6..bytes.len() - 2].try_into().unwrap()) as usize;
+    let second = directory + 46 + 1;
+    bytes[second + 42..second + 46].copy_from_slice(&0u32.to_le_bytes());
+    std::fs::write(&path, &bytes).unwrap();
+    let listing = list(&path, At::default(), &[], Limits::default()).unwrap();
+    assert!(listing.layers[0].notes.iter().any(|note| note.contains("overlaps")), "{:?}", listing.layers[0].notes);
+    assert!(listing.entries.iter().any(|entry| entry.note.as_deref() == Some("data overlaps another entry")));
+}
+
+#[test]
 fn lying_directories_are_refused_without_panicking() {
     let good = zip(&[("a", b"abc", false), ("b", b"defg", true)], None);
     let scratch = Scratch::new("zip-fuzz");

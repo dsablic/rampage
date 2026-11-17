@@ -20,6 +20,13 @@ pub const MAX_DEX_PAGE: usize = 500;
 const SUMMARY_COMPONENTS: usize = 60;
 /// Java_ exports listed per native library.
 const MAX_JNI_EXPORTS: usize = 100;
+/// Interfaces listed per class row.
+const MAX_INTERFACES: usize = 32;
+/// JSON bytes the summary beside a page may take, and one directory entry.
+const SUMMARY_BYTES: usize = 20_000;
+const DIRECTORY_ENTRY_BYTES: usize = 8_000;
+/// Rows any summary list starts with before [`fit`] shrinks them.
+const SUMMARY_ROWS: usize = 200;
 /// Files a directory page holds at most, and the files a directory walk visits.
 const DEFAULT_FILES: usize = 10;
 const MAX_FILES: usize = 50;
@@ -164,10 +171,16 @@ fn class_row(dex_path: &str, dex: &Dex, class: &ClassDef, budget: &mut usize) ->
     if class.superclass_idx != rampage_dex::dex::NO_INDEX {
         row["superclass"] = json!(class_name(&dex.type_text(class.superclass_idx)));
     }
-    if !class.interfaces.is_empty() {
-        row["interfaces"] = json!(
-            class.interfaces.iter().map(|index| class_name(&dex.type_text(u32::from(*index)))).collect::<Vec<_>>()
-        );
+    match dex.interfaces(class, MAX_INTERFACES) {
+        Ok((interfaces, total)) if total > 0 => {
+            row["interfaces"] =
+                json!(interfaces.iter().map(|index| class_name(&dex.type_text(u32::from(*index)))).collect::<Vec<_>>());
+            if total > interfaces.len() {
+                row["interfaces_total"] = json!(total);
+            }
+        }
+        Ok(_) => {}
+        Err(error) => row["interfaces_error"] = json!(error.to_string()),
     }
     if native > 0 {
         row["native_methods"] = json!(native);
@@ -224,6 +237,7 @@ fn permission_rows(manifest: &Manifest) -> Vec<Value> {
             let mut row = json!({"name": uses.name});
             if let Some(platform) = rampage_dex::permissions::lookup(&uses.name) {
                 row["protection_level"] = json!(platform.protection_level);
+                row["base_level"] = json!(rampage_dex::permissions::base_level(platform.protection_level));
                 row["category"] = json!(platform.category);
                 row["privacy"] = json!(platform.privacy);
             } else if let Some(level) = declared.get(uses.name.as_str()) {
@@ -267,32 +281,38 @@ pub(crate) fn abi_arch(abi: &str) -> Option<rampage_arch::Arch> {
 /// A native library's JNI surface: its `Java_*` exports and whether it has `JNI_OnLoad` (which may register
 /// natives by table instead of by name).
 pub(crate) struct JniExports {
-    pub(crate) java: Vec<String>,
+    pub(crate) java: std::collections::BTreeSet<String>,
     pub(crate) on_load: bool,
     pub(crate) error: Option<String>,
 }
 
 pub(crate) fn jni_exports(lib: &NativeLib) -> JniExports {
-    let Some(bytes) = lib.bytes.clone() else {
-        return JniExports { java: Vec::new(), on_load: false, error: Some("not read (size limit)".to_owned()) };
+    use object::read::Object;
+    let failed = |error: String| JniExports { java: Default::default(), on_load: false, error: Some(error) };
+    let Some(bytes) = lib.bytes.as_deref() else {
+        return failed("not read (size limit)".to_owned());
     };
-    let Some(arch) = abi_arch(&lib.abi) else {
-        return JniExports { java: Vec::new(), on_load: false, error: Some(format!("unknown ABI `{}`", lib.abi)) };
+    let file = match object::File::parse(bytes) {
+        Ok(file) => file,
+        Err(error) => return failed(error.to_string()),
     };
-    match rampage_loaders::Binary::from_owned_native_bytes(bytes, arch) {
-        Ok(binary) => {
-            let mut java: Vec<String> = binary
-                .exports
-                .iter()
-                .filter(|export| export.name.starts_with("Java_"))
-                .map(|export| export.name.clone())
-                .collect();
-            java.sort();
-            java.dedup();
-            JniExports { java, on_load: binary.exports.iter().any(|export| export.name == "JNI_OnLoad"), error: None }
+    let exports = match file.exports() {
+        Ok(exports) => exports,
+        Err(error) => return failed(error.to_string()),
+    };
+    let names = exports.filter_map(|export| match export.ok()?.name() {
+        object::read::NameOrOrdinal::Name(name) => Some(String::from_utf8_lossy(name).into_owned()),
+        object::read::NameOrOrdinal::Ordinal(_) => None,
+    });
+    let mut java = std::collections::BTreeSet::new();
+    let mut on_load = false;
+    for name in names {
+        on_load |= name == "JNI_OnLoad";
+        if name.starts_with("Java_") {
+            java.insert(name);
         }
-        Err(error) => JniExports { java: Vec::new(), on_load: false, error: Some(error.to_string()) },
     }
+    JniExports { java, on_load, error: None }
 }
 
 fn native_rows(libs: &[(&NativeLib, JniExports)]) -> Vec<Value> {
@@ -318,7 +338,7 @@ fn native_rows(libs: &[(&NativeLib, JniExports)]) -> Vec<Value> {
 const MAX_JNI_ROWS: usize = 100;
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
+    !needle.is_empty() && memchr::memmem::find(haystack, needle).is_some()
 }
 
 /// Links each `native` method the DEX code declares to the `Java_` export that binds it by name (short or long
@@ -329,6 +349,8 @@ fn jni_links(opened: &Opened, libs: &[(&NativeLib, JniExports)]) -> Value {
     let mut unlinked = Vec::new();
     let mut claimed: HashSet<String> = HashSet::new();
     let mut total = 0usize;
+    let mut linked_total = 0usize;
+    let mut unlinked_total = 0usize;
     for (_, dex) in opened.parsed() {
         let mut budget = dex.limits.max_members;
         for index in 0..dex.class_count() {
@@ -343,31 +365,34 @@ fn jni_links(opened: &Opened, libs: &[(&NativeLib, JniExports)]) -> Value {
                 let bound: Vec<Value> = libs
                     .iter()
                     .filter_map(|(lib, exports)| {
-                        let symbol = [&long, &short].into_iter().find(|symbol| exports.java.contains(symbol))?;
+                        let symbol =
+                            [&long, &short].into_iter().find(|symbol| exports.java.contains(symbol.as_str()))?;
                         Some(json!({"library": lib.path, "symbol": symbol}))
                     })
                     .collect();
                 claimed.insert(short.clone());
                 claimed.insert(long);
                 if !bound.is_empty() {
+                    linked_total += 1;
                     if linked.len() < MAX_JNI_ROWS {
                         linked.push(json!({"method": text, "bound_by_name": bound}));
                     }
                     continue;
                 }
-                let name = format!("{}\0", reference.name);
-                let signature = format!("{}\0", reference.proto.descriptor());
-                let registered: Vec<&str> = libs
-                    .iter()
-                    .filter(|(lib, exports)| {
-                        exports.on_load
-                            && lib.bytes.as_deref().is_some_and(|bytes| {
-                                contains(bytes, name.as_bytes()) && contains(bytes, signature.as_bytes())
-                            })
-                    })
-                    .map(|(lib, _)| lib.path.as_str())
-                    .collect();
+                unlinked_total += 1;
                 if unlinked.len() < MAX_JNI_ROWS {
+                    let name = format!("{}\0", reference.name);
+                    let signature = format!("{}\0", reference.proto.descriptor());
+                    let registered: Vec<&str> = libs
+                        .iter()
+                        .filter(|(lib, exports)| {
+                            exports.on_load
+                                && lib.bytes.as_deref().is_some_and(|bytes| {
+                                    contains(bytes, name.as_bytes()) && contains(bytes, signature.as_bytes())
+                                })
+                        })
+                        .map(|(lib, _)| lib.path.as_str())
+                        .collect();
                     let mut row = json!({"method": text, "expected_symbol": short});
                     if !registered.is_empty() {
                         row["possibly_registered_in"] = json!(registered);
@@ -377,17 +402,22 @@ fn jni_links(opened: &Opened, libs: &[(&NativeLib, JniExports)]) -> Value {
             }
         }
     }
-    let orphans: Vec<&String> = libs
-        .iter()
-        .flat_map(|(_, exports)| exports.java.iter())
-        .filter(|symbol| !claimed.contains(*symbol))
-        .take(MAX_JNI_ROWS)
-        .collect();
+    let mut orphans_total = 0usize;
+    let mut orphans: Vec<&String> = Vec::new();
+    for symbol in libs.iter().flat_map(|(_, exports)| exports.java.iter()).filter(|symbol| !claimed.contains(*symbol)) {
+        orphans_total += 1;
+        if orphans.len() < MAX_JNI_ROWS {
+            orphans.push(symbol);
+        }
+    }
     json!({
         "native_methods": total,
         "linked": linked,
+        "linked_total": linked_total,
         "unlinked": unlinked,
+        "unlinked_total": unlinked_total,
         "exports_without_native": orphans,
+        "exports_without_native_total": orphans_total,
     })
 }
 
@@ -502,6 +532,42 @@ fn privacy(opened: &Opened) -> Value {
 }
 
 /// The summary of one opened file: manifest, permissions, components (capped), native libraries and DEX files.
+/// Cuts every list in `value` to at most `rows` entries, recording each cut list's full length as `<key>_total`
+/// (unless a total is already there).
+fn cap_lists(value: &mut Value, rows: usize) {
+    if let Value::Object(object) = value {
+        let mut totals = Vec::new();
+        for (key, item) in object.iter_mut() {
+            if let Value::Array(items) = item
+                && items.len() > rows
+            {
+                totals.push((format!("{key}_total"), items.len()));
+                items.truncate(rows);
+            }
+            cap_lists(item, rows);
+        }
+        for (key, total) in totals {
+            object.entry(key).or_insert(json!(total));
+        }
+    } else if let Value::Array(items) = value {
+        for item in items {
+            cap_lists(item, rows);
+        }
+    }
+}
+
+/// Shrinks the lists of `value` until its JSON fits `budget` bytes, saying so with `trimmed` and how to page.
+fn fit(value: &mut Value, budget: usize) {
+    let mut rows = SUMMARY_ROWS;
+    cap_lists(value, rows);
+    while value.to_string().len() > budget && rows > 1 {
+        rows /= 2;
+        cap_lists(value, rows);
+        value["trimmed"] =
+            json!("lists cut to fit the result; list: permissions, components, native_libs or dex_files pages them");
+    }
+}
+
 fn summary(path: &Path, opened: &Opened, components_limit: usize) -> Value {
     let mut out = json!({"path": path, "kind": opened.kind});
     let defined = defined_classes(opened);
@@ -515,6 +581,7 @@ fn summary(path: &Path, opened: &Opened, components_limit: usize) -> Value {
                 out["sdk"] = json!(manifest.sdk);
                 out["application"] = json!(manifest.application);
                 out["permissions"] = json!(permission_rows(manifest));
+                out["permissions_total"] = json!(manifest.uses_permissions.len());
                 if !manifest.declared_permissions.is_empty() {
                     out["declared_permissions"] = json!(manifest.declared_permissions);
                 }
@@ -527,6 +594,7 @@ fn summary(path: &Path, opened: &Opened, components_limit: usize) -> Value {
                     .filter(|component| component.start_at_boot)
                     .map(|component| component.name.as_str())
                     .collect();
+                let boot_total = boot.len();
                 out["start_at_boot"] = json!(boot);
                 out["components_total"] = json!(manifest.components.len());
                 out["components"] = json!(
@@ -537,6 +605,7 @@ fn summary(path: &Path, opened: &Opened, components_limit: usize) -> Value {
                         .map(|component| component_row(component, &defined))
                         .collect::<Vec<_>>()
                 );
+                out["start_at_boot_total"] = json!(boot_total);
                 if !manifest.warnings.is_empty() {
                     out["manifest_warnings"] = json!(manifest.warnings.iter().take(16).collect::<Vec<_>>());
                 }
@@ -545,6 +614,7 @@ fn summary(path: &Path, opened: &Opened, components_limit: usize) -> Value {
         }
         let libs: Vec<(&NativeLib, JniExports)> = apk.native_libs.iter().map(|lib| (lib, jni_exports(lib))).collect();
         out["native_libs"] = json!(native_rows(&libs));
+        out["native_libs_total"] = json!(libs.len());
         out["jni"] = jni_links(opened, &libs);
         if let Some(ResourceTable { size, packages, strings }) = &apk.resources {
             out["resources"] = json!({"size": size, "packages": packages, "strings": strings});
@@ -554,6 +624,7 @@ fn summary(path: &Path, opened: &Opened, components_limit: usize) -> Value {
         }
     }
     out["dex"] = json!(dex_rows(opened));
+    out["dex_total"] = json!(opened.dexes.len());
     if opened.apk.is_none() {
         out["jni"] = jni_links(opened, &[]);
     }
@@ -659,7 +730,7 @@ fn directory(query: &DexMetadataQuery) -> Result<Value, String> {
     for path in files.iter().skip(start).take(max_files) {
         let row = match open(path, true) {
             Ok(opened) => {
-                let mut row = summary(path, &opened, 0);
+                let mut row = summary(path, &opened, SUMMARY_COMPONENTS);
                 if let Some(object) = row.as_object_mut() {
                     object.remove("components");
                     object.remove("application");
@@ -670,6 +741,7 @@ fn directory(query: &DexMetadataQuery) -> Result<Value, String> {
                         privacy.retain(|key, _| key == "media" || key == "capture_apis_total");
                     }
                 }
+                fit(&mut row, DIRECTORY_ENTRY_BYTES);
                 row
             }
             Err(error) => json!({"path": path, "error": error}),
@@ -706,26 +778,31 @@ pub fn dex_metadata(query: &DexMetadataQuery) -> Result<Value, String> {
     let list = query.list.as_deref().unwrap_or("classes");
     let offset = query.offset.unwrap_or(0);
     let (prefix, package) = (query.prefix.as_deref(), query.package.as_deref());
-    let mut out = summary(&query.path, &opened, if list == "components" { 0 } else { SUMMARY_COMPONENTS });
+    let mut out = summary(&query.path, &opened, usize::MAX);
+    let list_of = |out: &Value, key: &str| -> Vec<Value> { out[key].as_array().cloned().unwrap_or_default() };
     let page = match list {
         "classes" => page(class_rows(&opened, prefix, package), offset, limit),
         "methods" => page(method_rows(&opened, prefix, package), offset, limit),
-        "components" => {
-            let defined = defined_classes(&opened);
-            let components = opened.manifest().map(|manifest| manifest.components.clone()).unwrap_or_default();
-            page(
-                components
-                    .iter()
-                    .filter(|component| class_matches(&component.name, prefix, package))
-                    .map(|component| component_row(component, &defined))
-                    .collect::<Vec<_>>()
-                    .into_iter(),
-                offset,
-                limit,
-            )
+        "components" => page(
+            list_of(&out, "components")
+                .into_iter()
+                .filter(|row| class_matches(row["name"].as_str().unwrap_or_default(), prefix, package)),
+            offset,
+            limit,
+        ),
+        "permissions" => page(list_of(&out, "permissions").into_iter(), offset, limit),
+        "native_libs" => page(list_of(&out, "native_libs").into_iter(), offset, limit),
+        "dex_files" => page(list_of(&out, "dex").into_iter(), offset, limit),
+        other => {
+            return Err(format!(
+                "unknown list `{other}` (expected classes, methods, components, permissions, native_libs or dex_files)"
+            ));
         }
-        other => return Err(format!("unknown list `{other}` (expected classes, methods or components)")),
     };
+    if let Some(components) = out["components"].as_array_mut() {
+        components.truncate(SUMMARY_COMPONENTS);
+    }
+    fit(&mut out, SUMMARY_BYTES);
     out["list"] = json!(list);
     out["page"] = page;
     Ok(out)
@@ -745,12 +822,36 @@ mod tests {
             size: 0,
             bytes: Some(b"\0nativeEncode\0([B)I\0".to_vec()),
         };
-        let exports = JniExports { java: Vec::new(), on_load: true, error: None };
+        let exports = JniExports { java: Default::default(), on_load: true, error: None };
         let links = jni_links(&opened, &[(&table, exports)]);
         assert_eq!(links["unlinked"][0]["possibly_registered_in"], json!(["lib/arm64-v8a/libtable.so"]));
-        let exports = JniExports { java: vec!["Java_a_B_c".to_owned()], on_load: false, error: None };
+        let exports = JniExports { java: ["Java_a_B_c".to_owned()].into(), on_load: false, error: None };
         let links = jni_links(&opened, &[(&table, exports)]);
         assert!(links["unlinked"][0].get("possibly_registered_in").is_none());
         assert_eq!(links["exports_without_native"], json!(["Java_a_B_c"]));
+    }
+
+    #[test]
+    fn unlinked_natives_scan_libraries_only_for_the_rows_they_list() {
+        let dir = std::env::temp_dir().join(format!("rampage-jni-scan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("natives.dex");
+        let classes = rampage_dex::testkit::native_methods(5000);
+        std::fs::write(&path, rampage_dex::testkit::write_dex(&classes, 35)).unwrap();
+        let opened = open(&path, false).unwrap();
+        let table = NativeLib {
+            path: "lib/arm64-v8a/libbig.so".to_owned(),
+            abi: "arm64-v8a".to_owned(),
+            size: 0,
+            bytes: Some(vec![0x41; 32 << 20]),
+        };
+        let exports = JniExports { java: Default::default(), on_load: true, error: None };
+        let started = std::time::Instant::now();
+        let links = jni_links(&opened, &[(&table, exports)]);
+        // 5000 scans of 32 MiB would take minutes; 100 take well under a few seconds.
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+        assert_eq!(links["unlinked_total"], 5000);
+        assert_eq!(links["unlinked"].as_array().unwrap().len(), MAX_JNI_ROWS);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

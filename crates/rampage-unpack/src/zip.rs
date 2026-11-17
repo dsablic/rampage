@@ -207,6 +207,36 @@ impl Zip {
             });
             members.push(Member { local_header, method, compressed, size: file_size, encrypted });
         }
+        // Members whose data overlap (two entries at one local header, or one inside another): a ZIP bomb or a
+        // polyglot trick. Each range here is no longer than the member's real one, so an overlap is real.
+        let mut ranges: Vec<(u64, u64, usize)> = members
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| entries[*index].kind == EntryKind::File)
+            .map(|(index, member)| {
+                (member.local_header, member.local_header.saturating_add(30).saturating_add(member.compressed), index)
+            })
+            .collect();
+        ranges.sort_unstable();
+        let mut overlapping = 0usize;
+        let mut reach: Option<(u64, usize)> = None;
+        for &(start, end, index) in &ranges {
+            if let Some((furthest, previous)) = reach
+                && start < furthest
+            {
+                overlapping += 1;
+                if overlapping <= 8 {
+                    notes.push(format!("`{}` overlaps the data of `{}`", entries[index].path, entries[previous].path));
+                }
+                entries[index].note.get_or_insert_with(|| "data overlaps another entry".to_owned());
+            }
+            if reach.is_none_or(|(furthest, _)| end > furthest) {
+                reach = Some((end, index));
+            }
+        }
+        if overlapping > 8 {
+            notes.push(format!("{overlapping} entries overlap the data of another entry"));
+        }
         Ok(Self { source, entries, members, notes })
     }
 }

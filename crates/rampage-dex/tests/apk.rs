@@ -125,3 +125,58 @@ fn truncated_and_damaged_documents_never_panic() {
     }
     assert_eq!(Value::Int(3).text(), "3");
 }
+
+#[test]
+fn dex_files_are_read_in_multidex_order_and_the_first_manifest_wins() {
+    use rampage_dex::testkit::{sample_classes, sample_secondary_classes, write_dex, write_zip};
+    let manifest = write_axml(&sample_manifest(), false);
+    let other =
+        write_axml(&XmlNode::new("manifest").plain("package", XmlValue::Str("com.example.other".to_owned())), false);
+    let first = write_dex(&sample_classes(), 35);
+    let second = write_dex(&sample_secondary_classes(), 35);
+    let bytes = write_zip(&[
+        ("classes2.dex", &second, false),
+        ("AndroidManifest.xml", &manifest, false),
+        ("classes.dex", &first, false),
+        ("AndroidManifest.xml", &other, false),
+    ]);
+    let path = scratch("order", &bytes);
+    let limits = Limits { max_dex_files: 1, ..Limits::default() };
+    let apk = Apk::open(&path, limits).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(apk.dex[0].path, "classes.dex");
+    assert!(apk.dex[0].dex.is_ok(), "the first multidex file is read first");
+    assert!(apk.dex[1].dex.is_err());
+    assert_eq!(apk.manifest.unwrap().package, "com.example.recorder");
+    assert!(apk.warnings.iter().any(|warning| warning.contains("2 AndroidManifest.xml entries")), "{:?}", apk.warnings);
+}
+
+#[test]
+fn an_aab_protobuf_manifest_is_named_as_such() {
+    use rampage_dex::testkit::{sample_classes, write_dex, write_zip};
+    let dex = write_dex(&sample_classes(), 35);
+    let bytes = write_zip(&[
+        ("base/manifest/AndroidManifest.xml", b"\x0a\x05proto", false),
+        ("base/dex/classes.dex", &dex, false),
+    ]);
+    let path = scratch("aab", &bytes);
+    let apk = Apk::open(&path, Limits::default()).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert!(apk.manifest_error.unwrap().contains("protobuf"));
+    assert_eq!(apk.dex.len(), 1);
+}
+
+#[test]
+fn axml_warnings_are_capped() {
+    let mut bytes = write_axml(&sample_manifest(), false);
+    // Many trailing nested-document chunks each add a warning.
+    for _ in 0..1000 {
+        bytes.extend_from_slice(&0x0003u16.to_le_bytes());
+        bytes.extend_from_slice(&8u16.to_le_bytes());
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+    }
+    let len = bytes.len() as u32;
+    bytes[4..8].copy_from_slice(&len.to_le_bytes());
+    let document = axml::parse(&bytes).unwrap();
+    assert!(document.warnings.len() <= 17, "{}", document.warnings.len());
+}

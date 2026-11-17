@@ -297,6 +297,12 @@ above stay under review until each is approved.
   - Decode `RegisterNatives` tables in `JNI_OnLoad` (method name, signature, function pointer) to link natives by
     address; virtual and interface dispatch in the call graph; AAB protobuf manifests; APK signature blocks.
   - A CLI route (`rampage android inspect|code`) and real-APK precision checks (local only, never named).
+  - Read every DEX file of a DEX 041 container (only the first is read; the others are counted in a warning).
+  - A cross-DEX superclass map, so `AccessibilityService` subclasses and hierarchies resolve across multidex files.
+  - `scan::index` stops collecting callees at 4096 per method without saying so: report it. Map
+    `READ_PHONE_NUMBERS` to the identifiers APIs it guards (`getLine1Number`).
+  - Attribute `static_values` (field initial values, often URLs and keys) to their fields and scan them in
+    `endpoint_inventory`.
 - [ ] **Committed fixtures without local paths.** About 16 older fixtures embed the builder's home directory in
   debug info (e.g. `tests/fixtures/bin/debug-x64.elf`, `tests/fixtures/bench-v2/twins/widgets-x64.elf`,
   `tests/fixtures/firmware/locks-*-sym.elf`, `crates/rampage-api/tests/fixtures/decode-*.elf`). Rebuild them with

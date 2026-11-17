@@ -29,12 +29,13 @@ For one file the result holds:
 
 - `package`, `version_code`, `version_name`, `sdk` (`min`, `target`, `max`, `compile`) and `application`
   (`debuggable`, `allow_backup`, `uses_cleartext_traffic`, `network_security_config`, `shared_user_id`).
-- `permissions`: every `uses-permission` with its `protection_level` (`dangerous` is a runtime prompt,
-  `normal` is granted at install, `signature`/`signature|privileged` only for the platform's own or preinstalled
-  system apps), a `category` (`microphone`, `camera`, `screen`, `location`, `contacts`, `phone`, `sms`,
-  `storage`, `network`, `boot`, ...) and `privacy: true` when it reaches personal data or capture hardware.
-  Platform levels come from the AOSP platform manifest (Android 14); a permission the app declares itself shows
-  its declared level and `declared_here`; any other is `unknown`.
+- `permissions`: every `uses-permission` with its `protection_level` as the platform declares it, flags included
+  (`dangerous|instant`, `signature|privileged|role`, `signature|appop`, `internal|role`), its `base_level`
+  (`dangerous` is a runtime prompt, `normal` is granted at install, `signature` and `internal` only for the
+  platform's own or preinstalled system apps), a `category` (`microphone`, `camera`, `screen`, `location`,
+  `contacts`, `phone`, `sms`, `storage`, `network`, `boot`, ...) and `privacy: true` when it reaches personal data
+  or capture hardware. Platform levels come from the AOSP platform manifest at the `android14-release` tag; a
+  permission the app declares itself shows its declared level and `declared_here`; any other is `unknown`.
 - `start_at_boot`: receivers of `BOOT_COMPLETED`, `LOCKED_BOOT_COMPLETED` or `QUICKBOOT_POWERON`, code that runs
   when the device starts with no user action.
 - `components` (the first 60; `components_total` counts all): activities, activity aliases, services, receivers
@@ -51,13 +52,18 @@ For one file the result holds:
 - `dex`: each DEX file in multidex order (`classes.dex`, `classes2.dex`, ...) with its version, whether the
   Adler-32 checksum and SHA-1 signature match (reported, never required), and its class, method, field, string and
   type counts; `totals` sums them.
-- `page`: one page of the `list` chosen: `classes` (default; name, superclass, interfaces, access, field and method
-  counts, `native_methods`, source file), `methods` (smali signature, method index, access, code units and
-  registers) or `components`. `prefix` keeps classes whose Java name starts with it (`com.example.net`, or the
-  descriptor form `Lcom/example/net/`), `package` keeps a package and its subpackages; `offset`/`limit` page
-  (default 100, at most 500) and `next_offset` continues.
+- `page`: one page of the `list` chosen: `classes` (default; name, superclass, the first 32 interfaces with
+  `interfaces_total`, access, field and method counts, `native_methods`, source file), `methods` (smali
+  signature, method index, access, code units and registers), `components`, `permissions`, `native_libs` or
+  `dex_files`. `prefix` keeps classes whose Java name starts with it (`com.example.net`, or the descriptor form
+  `Lcom/example/net/`), `package` keeps a package and its subpackages; `offset`/`limit` page (default 100, at most
+  500) and `next_offset` continues.
 
-A bare `.dex` file has the DEX fields only.
+The summary beside the page stays within about 20,000 bytes: every list in it is cut (to 200 rows first, halved
+until it fits), each cut list keeps its full length as `<list>_total`, and `trimmed` says the lists are cut and
+which `list` pages them. Names longer than 1 KiB (types, members, manifest values) are cut with `…`. A bare `.dex`
+file has the DEX fields only. A DEX 041 container that holds several DEX files has only its first read; the
+`dex` row's warnings say how many more it holds.
 
 ## JNI
 
@@ -118,7 +124,8 @@ list prints it), `Lpkg/Class;->name` or `pkg.Class.name` when the name is not ov
 refused with each candidate), a method index into the first DEX file (`12`) or into a named one
 (`classes2.dex:12`).
 
-The result has the method's access flags, `registers`, `ins`, `outs`, `code_units`, `tries` (each with `start`
+The result has the method's access flags, `registers`, `ins`, `outs`, `code_units`, `tries` (the try ranges
+overlapping the returned instructions, at most 64, with `tries_total` and `tries_on_page`; each with `start`
 and `end` labels and its handlers' catch `type` or `<any>`), and a page of `instructions`, each with its code-unit
 `address` (hex), `op`, `args` and, for an index operand, `ref` (`kind`: string, type, field, method, proto,
 call_site or method_handle, and `index`):
@@ -149,6 +156,13 @@ decompilation to Java yet.
 | String | 1 MiB of modified UTF-8 |
 | Superclass walk | 64 levels; cycles end the walk |
 | Binary XML | 16 MiB, 64 levels of nesting, 200,000 nodes, 32 Mi characters of decoded text |
-| APK members | 1 GiB read in total; native libraries over 64 MiB are listed without exports; ZIP inflation stops at the declared size and at a 1000:1 ratio past 64 MiB |
+| Catch clauses | 65,536 per method body, each distinct handler decoded once however many tries share it; 16 listed per try |
+| Type lists | 65,535 entries; 32 interfaces listed per class |
+| Names in reference text | 1 KiB; a long string many ids share is decoded once |
+| APK members | 384 MiB read in total; native libraries over 64 MiB are listed without exports; ZIP inflation stops at the declared size and at a 1000:1 ratio past 64 MiB |
 
-Signed APK blocks are not verified, and an AAB's protobuf manifest is reported as unreadable.
+DEX files are read in multidex order (`classes.dex`, `classes2.dex`, ...) whatever their order in the archive.
+When an APK holds several `AndroidManifest.xml` entries, the first is read, as the installer does, and a warning
+says how many there are. ZIP members whose data overlap another's (a ZIP-bomb or polyglot trick) are noted on the
+listing. Signed APK blocks are not verified. An AAB's `base/manifest/AndroidManifest.xml` is protobuf and is
+reported as not read yet; its `base/dex/` files and native libraries are read.

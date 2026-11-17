@@ -994,3 +994,114 @@ pub fn sample_apk(native_lib: Option<&[u8]>) -> Vec<u8> {
     }
     write_zip(&members)
 }
+
+/// The sample DEX with its first method body replaced by `tries` try ranges all sharing one handler of
+/// `clauses` typed clauses (a negative count adds a catch-all).
+pub fn shared_handler(tries: u16, clauses: i32) -> Vec<u8> {
+    let mut bytes = write_dex(&sample_classes(), 35);
+    let dex = crate::Dex::parse(bytes.clone()).unwrap();
+    let mut budget = usize::MAX;
+    let data = dex.class_data(&dex.class_def(0).unwrap(), &mut budget).unwrap();
+    // Point the first method with code at a new code item appended to the file.
+    let method = data.methods().find(|method| method.code_off != 0).unwrap();
+    let old = method.code_off;
+    while !bytes.len().is_multiple_of(4) {
+        bytes.push(0);
+    }
+    let at = bytes.len() as u32;
+    let mut item = Vec::new();
+    for value in [1u16, 0, 0, tries] {
+        item.extend_from_slice(&value.to_le_bytes());
+    }
+    item.extend_from_slice(&0u32.to_le_bytes());
+    item.extend_from_slice(&2u32.to_le_bytes());
+    item.extend_from_slice(&[0x0e, 0, 0, 0]);
+    for _ in 0..tries {
+        item.extend_from_slice(&0u32.to_le_bytes());
+        item.extend_from_slice(&1u16.to_le_bytes());
+        item.extend_from_slice(&1u16.to_le_bytes());
+    }
+    item.push(1);
+    let mut value = clauses;
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if (value == 0 && byte & 0x40 == 0) || (value == -1 && byte & 0x40 != 0) {
+            item.push(byte);
+            break;
+        }
+        item.push(byte | 0x80);
+    }
+    for _ in 0..clauses.unsigned_abs() {
+        item.extend_from_slice(&[0, 0]);
+    }
+    bytes.extend_from_slice(&item);
+    let len = bytes.len() as u32;
+    put32(&mut bytes, 0x20, len);
+    // Rewrite the code offset in place: find its uleb128 in the class data and patch a same-length encoding.
+    let mut encoded = Vec::new();
+    let mut value = old;
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value == 0 {
+            encoded.push(byte);
+            break;
+        }
+        encoded.push(byte | 0x80);
+    }
+    let class_data = dex.class_def(0).unwrap().class_data_off as usize;
+    let position =
+        bytes[class_data..].windows(encoded.len()).position(|window| window == encoded).unwrap() + class_data;
+    let mut replacement = Vec::new();
+    let mut value = at;
+    for index in 0..encoded.len() {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+        replacement.push(if index + 1 < encoded.len() { byte | 0x80 } else { byte });
+    }
+    assert_eq!(value, 0, "the new offset needs a longer encoding");
+    bytes[position..position + encoded.len()].copy_from_slice(&replacement);
+    fix_checksums(&mut bytes);
+    bytes
+}
+
+/// The sample DEX with every string id pointing at one appended string of `len` ASCII characters.
+pub fn shared_string(len: usize) -> Vec<u8> {
+    let mut bytes = write_dex(&sample_classes(), 35);
+    let word = |bytes: &[u8], at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let strings = word(&bytes, 0x38);
+    let table = word(&bytes, 0x3c);
+    let at = bytes.len() as u32;
+    uleb(&mut bytes, len as u32);
+    bytes.resize(bytes.len() + len, b'A');
+    bytes.push(0);
+    for index in 0..strings {
+        put32(&mut bytes, table + index * 4, at);
+    }
+    let len = bytes.len() as u32;
+    put32(&mut bytes, 0x20, len);
+    fix_checksums(&mut bytes);
+    bytes
+}
+
+/// `count` classes that each implement the same `interfaces` interfaces (one shared type_list).
+pub fn shared_interfaces(count: usize, interfaces: usize) -> Vec<ClassSpec> {
+    let list: Vec<String> = (0..interfaces).map(|index| format!("Lcom/example/i/I{index};")).collect();
+    (0..count)
+        .map(|index| {
+            let mut class = ClassSpec::new(&format!("Lcom/example/C{index};"), "Ljava/lang/Object;");
+            class.interfaces = list.clone();
+            class
+        })
+        .collect()
+}
+
+/// One class declaring `count` native methods `n0()V`, `n1()V`, ...
+pub fn native_methods(count: usize) -> Vec<ClassSpec> {
+    let mut class = ClassSpec::new("Lcom/example/Natives;", "Ljava/lang/Object;");
+    for index in 0..count {
+        class = class.method(&format!("n{index}"), "V", &[], 0x101, None);
+    }
+    vec![class]
+}

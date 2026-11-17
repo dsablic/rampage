@@ -102,8 +102,8 @@ Groups and the tools that answer each question:";
 fn group_summary(group: Group) -> &'static str {
     match group {
         Group::Core => {
-            "triage_report (start here), list_functions, decompile, evaluate_function (runs a \
-             function), disassemble, xrefs, search, list_strings, list_imports; classes: language_metadata (Objective-C classes, demangled names), \
+            "triage_report (start here), list_functions, decompile, evaluate_function (run a function on arguments \
+             instead of simulating it), disassemble, xrefs, search, list_strings, list_imports; classes: language_metadata (Objective-C classes, demangled names), \
              objc_sends (objc_msgSend targets), class_evidence (C++ vtables/RTTI); notes: rename, annotate_batch, record_finding, undo; patch_bytes; \
              workflows find_main, network_surface, persistence_surface, string_decoding, diff_builds."
         }
@@ -120,11 +120,11 @@ fn group_summary(group: Group) -> &'static str {
         }
         Group::Runtime => {
             "memory snapshots: observe_pointer, compare_runtime_bytes, observe_indirect_branch; query_debugger \
-             (an LLDB session)."
+             (an existing LLDB session)."
         }
         Group::Diagnostics => "decode trouble: analysis_diagnostics, entry_diagnostics, inspect_jump_table.",
         Group::DotNet => ".NET: dotnet_metadata (types, methods, P/Invokes), dotnet_il (CIL).",
-        Group::Android => "APK/DEX: dex_metadata (manifest, permissions, JNI), dex_code (Dalvik).",
+        Group::Android => "APK/DEX: dex_metadata, dex_code.",
         Group::Carve => {
             "files inside files: carve (embedded files), archive_inventory (ZIP), fs_list/fs_extract \
              (filesystems), privacy_surface."

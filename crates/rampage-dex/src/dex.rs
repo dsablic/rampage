@@ -14,6 +14,14 @@ use crate::read::{Cursor, Mutf8, adler32, mutf8, u16_at, u32_at};
 pub const NO_INDEX: u32 = u32::MAX;
 /// Warnings one file keeps.
 pub const MAX_WARNINGS: usize = 64;
+/// Bytes of a name (a type, member or proto component) in reference text; longer ones are cut with `…`.
+pub const MAX_NAME_BYTES: usize = 1024;
+/// Catch clauses decoded per method body, across its distinct handlers.
+pub const MAX_CLAUSES: usize = 65_536;
+/// Entries of one type_list: 16-bit type indexes cannot address more.
+pub const MAX_TYPE_LIST: u32 = 65_535;
+/// Decoded strings longer than this are kept, by data offset, so a string many ids share is decoded once.
+const CACHED_STRING_BYTES: usize = 256;
 
 /// Caps on the work one DEX file may cause. Every DEX file is treated as hostile.
 #[derive(Debug, Clone, Copy)]
@@ -134,7 +142,8 @@ pub struct ClassDef {
     pub class_idx: u32,
     pub access: u32,
     pub superclass_idx: u32,
-    pub interfaces: Vec<u16>,
+    /// The interface type_list's offset; read it with [`Dex::interfaces`].
+    pub interfaces_off: u32,
     pub source_file_idx: u32,
     pub annotations_off: u32,
     pub class_data_off: u32,
@@ -176,12 +185,13 @@ pub struct Catch {
     pub address: u32,
 }
 
-/// A try range: `start` and `count` in code units, and its handlers in order.
+/// A try range: `start` and `count` in code units, and the index of its handler in [`CodeItem::handlers`]. Tries
+/// that share a handler share one decoded copy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Try {
     pub start: u32,
     pub count: u16,
-    pub handlers: Vec<Catch>,
+    pub handler: usize,
 }
 
 /// A method body.
@@ -194,6 +204,15 @@ pub struct CodeItem {
     pub debug_info_off: u32,
     pub insns: Vec<u16>,
     pub tries: Vec<Try>,
+    /// Each distinct encoded catch handler once: its clauses in order.
+    pub handlers: Vec<Vec<Catch>>,
+}
+
+impl CodeItem {
+    /// The catch clauses of `range`.
+    pub fn catches(&self, range: &Try) -> &[Catch] {
+        self.handlers.get(range.handler).map_or(&[], Vec::as_slice)
+    }
 }
 
 /// A method handle: its kind and the field or method it names.
@@ -236,6 +255,9 @@ pub struct Dex {
     pub warnings: Vec<String>,
     /// Warnings beyond [`MAX_WARNINGS`], counted but not kept.
     pub warnings_dropped: usize,
+    /// Further DEX headers a version 041 container holds after this one (not read).
+    pub container_extra: usize,
+    strings_cache: std::sync::Mutex<HashMap<usize, std::sync::Arc<Mutf8>>>,
     classes_by_type: HashMap<u32, u32>,
 }
 
@@ -319,11 +341,29 @@ impl Dex {
         if header_size < 0x70 || header_size as usize > data.len() {
             return Err(malformed(format!("header size {header_size:#x}")));
         }
+        if file_size < header_size {
+            return Err(malformed(format!("file size {file_size} is smaller than the {header_size}-byte header")));
+        }
         if (file_size as usize) > data.len() {
             return Err(malformed(format!("header says {file_size} bytes but the file has {}: truncated", data.len())));
         }
+        let mut container_extra = 0usize;
         if (file_size as usize) < data.len() {
-            if version < 41 {
+            // A version 041 container holds several DEX files, each starting with its own header.
+            let mut at = file_size as usize;
+            while version >= 41 && container_extra < 4096 && data.get(at..at + 8).is_some_and(is_dex) {
+                container_extra += 1;
+                match u32_at(&data, at + 0x20) {
+                    Some(size) if size >= 0x70 => at += size as usize,
+                    _ => break,
+                }
+            }
+            if container_extra > 0 {
+                warnings.push(format!(
+                    "this DEX 041 container holds {container_extra} more DEX file(s) after the first; only the first \
+                     is read"
+                ));
+            } else {
                 warnings.push(format!(
                     "{} bytes after the declared file size {file_size} are ignored",
                     data.len() - file_size as usize
@@ -370,6 +410,8 @@ impl Dex {
             limits,
             warnings,
             warnings_dropped: 0,
+            container_extra,
+            strings_cache: std::sync::Mutex::new(HashMap::new()),
             classes_by_type: HashMap::new(),
         };
         let header = dex.header.clone();
@@ -520,27 +562,49 @@ impl Dex {
         Ok((table.offset + index * size) as usize)
     }
 
-    /// The string with index `index`.
-    pub fn string(&self, index: u32) -> Result<Mutf8> {
+    /// The data offset of string `index`, which several ids may share.
+    pub fn string_offset(&self, index: u32) -> Result<u32> {
         let at = self.id(self.header.strings, 4, index, "string")?;
-        let offset = u32_at(&self.data, at).unwrap_or(0) as usize;
+        Ok(u32_at(&self.data, at).unwrap_or(0))
+    }
+
+    /// The string with index `index`. The scan for its terminator is bounded by its declared length, and a long
+    /// string is decoded once however many ids share it.
+    pub fn string(&self, index: u32) -> Result<std::sync::Arc<Mutf8>> {
+        let offset = self.string_offset(index)? as usize;
         if offset < 0x70 {
             return Err(malformed(format!("string {index} data offset {offset:#x} is inside the header")));
         }
+        if let Some(cached) = self.strings_cache.lock().ok().and_then(|cache| cache.get(&offset).cloned()) {
+            return Ok(cached);
+        }
         let mut cursor = Cursor::new(&self.data, offset);
         let length = cursor.uleb128()?;
-        mutf8(&self.data, cursor.pos, length, self.limits.max_string_bytes)
+        // Each UTF-16 unit takes at most three bytes of modified UTF-8.
+        let window = self.limits.max_string_bytes.min((length as usize).saturating_mul(3));
+        let decoded = std::sync::Arc::new(mutf8(&self.data, cursor.pos, length, window)?);
+        if decoded.text.len() > CACHED_STRING_BYTES
+            && let Ok(mut cache) = self.strings_cache.lock()
+        {
+            cache.insert(offset, decoded.clone());
+        }
+        Ok(decoded)
     }
 
-    /// The string `index` as text, or a placeholder naming the problem.
+    /// String `index` as a name for reference text: cut to [`MAX_NAME_BYTES`].
+    fn name(&self, index: u32) -> Result<String> {
+        Ok(cut(&self.string(index)?.text))
+    }
+
+    /// The string `index` as text (cut to [`MAX_NAME_BYTES`]), or a placeholder naming the problem.
     pub fn string_text(&self, index: u32) -> String {
-        self.string(index).map_or_else(|_| format!("<bad string {index}>"), |string| string.text)
+        self.name(index).unwrap_or_else(|_| format!("<bad string {index}>"))
     }
 
-    /// The descriptor of type `index` (`Ljava/lang/String;`, `I`, `[B`).
+    /// The descriptor of type `index` (`Ljava/lang/String;`, `I`, `[B`), cut to [`MAX_NAME_BYTES`].
     pub fn type_descriptor(&self, index: u32) -> Result<String> {
         let at = self.id(self.header.types, 4, index, "type")?;
-        Ok(self.string(u32_at(&self.data, at).unwrap_or(NO_INDEX))?.text)
+        self.name(u32_at(&self.data, at).unwrap_or(NO_INDEX))
     }
 
     pub fn type_text(&self, index: u32) -> String {
@@ -553,6 +617,9 @@ impl Dex {
         }
         let mut cursor = Cursor::new(&self.data, offset as usize);
         let count = cursor.u32()?;
+        if count > MAX_TYPE_LIST {
+            return Err(malformed(format!("type_list at {offset:#x} declares {count} entries")));
+        }
         let bytes = cursor
             .bytes(count as usize * 2)
             .map_err(|_| malformed(format!("type_list at {offset:#x} declares {count} entries, more than fit")))?;
@@ -561,7 +628,7 @@ impl Dex {
 
     pub fn proto(&self, index: u32) -> Result<Proto> {
         let at = self.id(self.header.protos, 12, index, "proto")?;
-        let shorty = self.string(u32_at(&self.data, at).unwrap_or(NO_INDEX))?.text;
+        let shorty = self.name(u32_at(&self.data, at).unwrap_or(NO_INDEX))?;
         let return_type = self.type_descriptor(u32_at(&self.data, at + 4).unwrap_or(NO_INDEX))?;
         let parameters = self
             .type_list(u32_at(&self.data, at + 8).unwrap_or(0))?
@@ -576,7 +643,7 @@ impl Dex {
         Ok(FieldRef {
             class: self.type_descriptor(u32::from(u16_at(&self.data, at).unwrap_or(0)))?,
             kind: self.type_descriptor(u32::from(u16_at(&self.data, at + 2).unwrap_or(0)))?,
-            name: self.string(u32_at(&self.data, at + 4).unwrap_or(NO_INDEX))?.text,
+            name: self.name(u32_at(&self.data, at + 4).unwrap_or(NO_INDEX))?,
         })
     }
 
@@ -601,7 +668,7 @@ impl Dex {
         Ok(MethodRef {
             class: self.type_descriptor(u32::from(u16_at(&self.data, at).unwrap_or(0)))?,
             proto: self.proto(u32::from(u16_at(&self.data, at + 2).unwrap_or(0)))?,
-            name: self.string(u32_at(&self.data, at + 4).unwrap_or(NO_INDEX))?.text,
+            name: self.name(u32_at(&self.data, at + 4).unwrap_or(NO_INDEX))?,
         })
     }
 
@@ -655,18 +722,39 @@ impl Dex {
     pub fn class_def(&self, index: u32) -> Result<ClassDef> {
         let at = self.id(self.header.classes, 32, index, "class_def")?;
         let word = |offset| u32_at(&self.data, at + offset).unwrap_or(0);
-        let interfaces_off = word(12);
         Ok(ClassDef {
             index,
             class_idx: word(0),
             access: word(4),
             superclass_idx: word(8),
-            interfaces: self.type_list(interfaces_off)?,
+            interfaces_off: word(12),
             source_file_idx: word(16),
             annotations_off: word(20),
             class_data_off: word(24),
             static_values_off: word(28),
         })
+    }
+
+    /// The first `max` interfaces `class` implements, and how many it declares.
+    /// Only those `max` entries are read.
+    pub fn interfaces(&self, class: &ClassDef, max: usize) -> Result<(Vec<u16>, usize)> {
+        let offset = class.interfaces_off;
+        if offset == 0 {
+            return Ok((Vec::new(), 0));
+        }
+        let mut cursor = Cursor::new(&self.data, offset as usize);
+        let count = cursor.u32()?;
+        if count > MAX_TYPE_LIST || (offset as usize + 4).saturating_add(count as usize * 2) > self.data.len() {
+            return Err(malformed(format!("type_list at {offset:#x} declares {count} entries")));
+        }
+        let first = (0..(count as usize).min(max)).map(|_| cursor.u16()).collect::<Result<_>>()?;
+        Ok((first, count as usize))
+    }
+
+    /// The superclass type of class_def `index`, read without the rest of the definition.
+    fn superclass_of(&self, index: u32) -> Option<u32> {
+        let at = self.id(self.header.classes, 32, index, "class_def").ok()?;
+        u32_at(&self.data, at + 8)
     }
 
     /// The class_def defining type `type_idx`, when this file defines it.
@@ -686,8 +774,8 @@ impl Dex {
             }
             seen.push(next);
             chain.push(self.type_text(next));
-            next = match self.class_def_for_type(next).and_then(|index| self.class_def(index).ok()) {
-                Some(def) => def.superclass_idx,
+            next = match self.class_def_for_type(next).and_then(|index| self.superclass_of(index)) {
+                Some(superclass) => superclass,
                 None => break,
             };
         }
@@ -765,6 +853,7 @@ impl Dex {
             .map_err(|_| malformed(format!("code_item at {offset:#x}: {units} code units run past the end")))?;
         let insns: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
         let mut tries = Vec::new();
+        let mut handlers: Vec<Vec<Catch>> = Vec::new();
         if tries_size > 0 {
             if units % 2 == 1 {
                 cursor.u16()?;
@@ -779,27 +868,51 @@ impl Dex {
             if u64::from(list_size) > (self.data.len() - handlers_at) as u64 {
                 return Err(malformed(format!("code_item at {offset:#x}: {list_size} handler lists do not fit")));
             }
+            let mut by_offset: HashMap<u16, usize> = HashMap::new();
+            let mut clauses = 0usize;
             for (start, count, handler_off) in raw {
                 if u64::from(start) + u64::from(count) > u64::from(units) {
                     return Err(malformed(format!("try range {start:#x}+{count} runs past the {units}-unit body")));
                 }
+                if let Some(&index) = by_offset.get(&handler_off) {
+                    tries.push(Try { start, count, handler: index });
+                    continue;
+                }
                 let mut handler = Cursor::new(&self.data, handlers_at + usize::from(handler_off));
                 let size = handler.sleb128()?;
-                if size.unsigned_abs() > 65_536 {
-                    return Err(malformed(format!("catch handler with {size} clauses")));
+                let typed = size.unsigned_abs() as usize;
+                clauses = clauses.saturating_add(typed + usize::from(size <= 0));
+                if clauses > MAX_CLAUSES {
+                    return Err(DexError::Limit(format!(
+                        "code_item at {offset:#x}: more than {MAX_CLAUSES} catch clauses"
+                    )));
                 }
-                let mut handlers = Vec::new();
-                for _ in 0..size.unsigned_abs() {
-                    handlers.push(Catch { type_idx: Some(handler.uleb128()?), address: handler.uleb128()? });
+                let mut catches = Vec::with_capacity(typed.min(1024));
+                for _ in 0..typed {
+                    catches.push(Catch { type_idx: Some(handler.uleb128()?), address: handler.uleb128()? });
                 }
                 if size <= 0 {
-                    handlers.push(Catch { type_idx: None, address: handler.uleb128()? });
+                    catches.push(Catch { type_idx: None, address: handler.uleb128()? });
                 }
-                tries.push(Try { start, count, handlers });
+                by_offset.insert(handler_off, handlers.len());
+                tries.push(Try { start, count, handler: handlers.len() });
+                handlers.push(catches);
             }
         }
-        Ok(CodeItem { offset, registers, ins, outs, debug_info_off, insns, tries })
+        Ok(CodeItem { offset, registers, ins, outs, debug_info_off, insns, tries, handlers })
     }
+}
+
+/// `text` cut to at most [`MAX_NAME_BYTES`] at a character boundary, marked with `…` when cut.
+pub fn cut(text: &str) -> String {
+    if text.len() <= MAX_NAME_BYTES {
+        return text.to_owned();
+    }
+    let mut end = MAX_NAME_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
 }
 
 /// Escapes a string for display in quotes: backslash, quote and control characters.

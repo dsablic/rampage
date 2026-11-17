@@ -115,8 +115,9 @@ impl Element {
             .map(|attribute| &attribute.value)
     }
 
+    /// The value of attribute `name` as text, cut to [`crate::dex::MAX_NAME_BYTES`].
     pub fn attr_text(&self, name: &str) -> Option<String> {
-        self.attr(name).map(Value::text)
+        self.attr(name).map(|value| crate::dex::cut(&value.text()))
     }
 
     pub fn children_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Element> + 'a {
@@ -223,6 +224,32 @@ impl Pool<'_> {
     }
 }
 
+/// Warnings one document keeps; the rest are counted.
+const MAX_WARNINGS: usize = 16;
+
+#[derive(Default)]
+struct Warnings {
+    kept: Vec<String>,
+    dropped: usize,
+}
+
+impl Warnings {
+    fn add(&mut self, text: String) {
+        if self.kept.len() < MAX_WARNINGS {
+            self.kept.push(text);
+        } else {
+            self.dropped += 1;
+        }
+    }
+
+    fn finish(mut self) -> Vec<String> {
+        if self.dropped > 0 {
+            self.kept.push(format!("{} more warnings", self.dropped));
+        }
+        self.kept
+    }
+}
+
 /// A string that could not be read reads as empty, unless a limit refused it.
 fn lenient(error: DexError) -> Result<String> {
     match error {
@@ -249,9 +276,9 @@ pub fn parse_with(data: &[u8], limits: Limits) -> Result<Document> {
         return Err(malformed("no binary XML header"));
     }
     let declared = u32_at(data, 4).unwrap_or(0) as usize;
-    let mut warnings = Vec::new();
+    let mut warnings = Warnings::default();
     let end = if declared > data.len() || declared < 8 {
-        warnings.push(format!("header declares {declared} bytes; the file has {}", data.len()));
+        warnings.add(format!("header declares {declared} bytes; the file has {}", data.len()));
         data.len()
     } else {
         declared
@@ -268,14 +295,14 @@ pub fn parse_with(data: &[u8], limits: Limits) -> Result<Document> {
         let header_size = usize::from(u16_at(data, at + 2).unwrap_or(0));
         let size = u32_at(data, at + 4).unwrap_or(0) as usize;
         if size < 8 || header_size < 8 || header_size > size || at + size > end {
-            warnings.push(format!("chunk {kind:#06x} at {at:#x} declares {size} bytes; reading stops"));
+            warnings.add(format!("chunk {kind:#06x} at {at:#x} declares {size} bytes; reading stops"));
             break;
         }
         let chunk = &data[at..at + size];
         match kind {
             0x0001 => {
                 if pool.is_some() {
-                    warnings.push("a second string pool is ignored".to_owned());
+                    warnings.add("a second string pool is ignored".to_owned());
                 } else {
                     if size < 28 {
                         return Err(malformed("string pool header is truncated"));
@@ -371,23 +398,21 @@ pub fn parse_with(data: &[u8], limits: Limits) -> Result<Document> {
                             let element = stack.pop().unwrap();
                             stack.last_mut().unwrap().children.push(element);
                         } else {
-                            warnings.push(format!("unbalanced end element at {at:#x}"));
+                            warnings.add(format!("unbalanced end element at {at:#x}"));
                         }
                     }
                     _ => {}
                 }
             }
-            0x0003 => warnings.push("nested binary XML document is ignored".to_owned()),
+            0x0003 => warnings.add("nested binary XML document is ignored".to_owned()),
             _ => {}
         }
         at += size;
     }
     while stack.len() > 1 {
         let element = stack.pop().unwrap();
+        warnings.add(format!("element `{}` is never closed", element.name));
         stack.last_mut().unwrap().children.push(element);
-        if warnings.len() < 16 {
-            warnings.push(format!("element `{}` is never closed", stack.last().map_or("", |e| e.name.as_str())));
-        }
     }
     let mut document = stack.pop().unwrap();
     let root = if document.children.len() == 1 {
@@ -395,5 +420,5 @@ pub fn parse_with(data: &[u8], limits: Limits) -> Result<Document> {
     } else {
         return Err(malformed(format!("{} root elements", document.children.len())));
     };
-    Ok(Document { root, warnings })
+    Ok(Document { root, warnings: warnings.finish() })
 }

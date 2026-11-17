@@ -152,7 +152,8 @@ impl Group {
             Group::DotNet => "Managed (.NET) metadata (types, methods, properties, P/Invokes, attributes) and CIL.",
             Group::Android => {
                 "Android APKs and DEX files: the manifest (package, SDK levels, permissions with protection levels, \
-                 components, intent filters, start-at-boot receivers), native libraries with JNI exports, DEX \
+                 components, intent filters, start-at-boot receivers), native libraries with JNI exports linked to \
+                 native methods, the capture APIs the code invokes (with permissions and boot reachability), DEX \
                  classes and methods, and Dalvik bytecode."
             }
             Group::Carve => concat!(
@@ -498,7 +499,8 @@ struct EndpointInventoryArgs {
 struct DexMetadataArgs {
     /// An .apk, .aab, .jar or .dex file, or a directory holding them (paged by cursor).
     path: std::path::PathBuf,
-    /// The page to list for one file: classes (default), methods or components.
+    /// The page to list for one file: classes (default), methods, components, permissions, native_libs or
+    /// dex_files.
     list: Option<String>,
     /// Only classes whose Java name starts with this (com.example.net or Lcom/example/net/).
     prefix: Option<String>,
@@ -977,8 +979,10 @@ pub fn file_tools() -> Vec<FileTool> {
             description: "An Android APK/AAB/JAR or DEX file, or a directory of them: package, versions and SDK levels; \
                           permissions with protection level and privacy category; components with exported state, \
                           intent filters and start_at_boot receivers; native libraries per ABI with Java_ exports; \
-                          DEX files (checksums verified, counts); one page of classes, methods or components \
-                          (prefix/package filters, offset/limit). Bytecode: dex_code.",
+                          DEX files (checksums verified, counts); privacy: capture APIs invoked (microphone, camera, \
+                          screen, location) with callers, permission and reached_from_boot; jni: native methods \
+                          linked to exports. One page of list: classes, methods, components, permissions, \
+                          native_libs or dex_files (prefix/package filters, offset/limit). Bytecode: dex_code.",
             input_schema: schema::<DexMetadataArgs>(),
             handler: |_, input| {
                 let args: DexMetadataArgs = arguments(input)?;

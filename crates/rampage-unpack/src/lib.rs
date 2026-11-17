@@ -115,13 +115,28 @@ pub fn read_entries(
     limits: Limits,
     select: &mut dyn FnMut(&Entry) -> bool,
 ) -> Result<Selected> {
+    read_chosen(path, at, inner, limits, &mut |entries| {
+        entries.iter().enumerate().filter(|(_, entry)| select(entry)).map(|(index, _)| index).collect()
+    })
+}
+
+/// As [`read_entries`], with `choose` seeing every entry at once and returning the indexes to read, in the order
+/// to read them (the budget is charged in that order).
+pub fn read_chosen(
+    path: &Path,
+    at: At,
+    inner: &[String],
+    limits: Limits,
+    choose: &mut dyn FnMut(&[Entry]) -> Vec<usize>,
+) -> Result<Selected> {
     let mut budget = Budget::new(limits);
     let _meter = limits::MeterScope::new(budget.limits.max_ratio);
     let opened = open_chain(file_source(path, at)?, inner, &mut budget)?;
     let entries = opened.image.entries().to_vec();
     let mut contents = Vec::new();
-    for (index, entry) in entries.iter().enumerate() {
-        if entry.kind != EntryKind::File || !select(entry) {
+    for index in choose(&entries) {
+        let Some(entry) = entries.get(index) else { continue };
+        if entry.kind != EntryKind::File {
             continue;
         }
         let mut bytes = Vec::new();

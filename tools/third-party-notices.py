@@ -101,9 +101,9 @@ VENDORED = [
     (
         "Android Open Source Project platform permission protection levels",
         "Apache-2.0",
-        "https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/res/AndroidManifest.xml",
+        "https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android14-release/core/res/AndroidManifest.xml",
         "The protection levels of platform permissions in crates/rampage-dex/src/permissions.rs are taken from the\n"
-        "Android platform manifest (Copyright The Android Open Source Project), summarised as documented there.\n"
+        "Android platform manifest at the android14-release tag (Copyright The Android Open Source Project).\n"
         "The Apache License 2.0 text is reproduced under the Ghidra decompiler above.",
         [],
     ),

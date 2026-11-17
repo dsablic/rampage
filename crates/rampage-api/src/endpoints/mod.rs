@@ -446,7 +446,7 @@ fn scan_text(text: &str, component: &str, inventory: &mut Inventory) {
 }
 
 /// Network APIs of the Android and Java class libraries: a method that invokes one is network code.
-const DEX_NETWORK_CLASSES: [&str; 12] = [
+const DEX_NETWORK_CLASSES: [&str; 11] = [
     "Ljava/net/URL;",
     "Ljava/net/HttpURLConnection;",
     "Ljavax/net/ssl/HttpsURLConnection;",
@@ -455,7 +455,6 @@ const DEX_NETWORK_CLASSES: [&str; 12] = [
     "Ljava/net/InetSocketAddress;",
     "Ljava/net/URI;",
     "Landroid/webkit/WebView;",
-    "Landroid/net/Uri;",
     "Lokhttp3/OkHttpClient;",
     "Lokhttp3/Request$Builder;",
     "Ljava/nio/channels/SocketChannel;",
@@ -464,7 +463,7 @@ const DEX_NETWORK_CLASSES: [&str; 12] = [
 /// Scans an APK (its DEX string pools, with the methods that load each string, and its native libraries) or a
 /// DEX file.
 fn scan_android(path: &Path, component: &str, xrefs: bool, decode: bool, inventory: &mut Inventory) {
-    let opened = match crate::android::open(path, true) {
+    let mut opened = match crate::android::open(path, true) {
         Ok(opened) => opened,
         Err(error) => return inventory.skip(component, error),
     };
@@ -484,9 +483,23 @@ fn scan_android(path: &Path, component: &str, xrefs: bool, decode: bool, invento
                 (!apis.is_empty()).then(|| (caller.as_str(), apis.into_iter().collect()))
             })
             .collect();
+        // Ids that share string data are one string: read it once, with every id's users.
+        let mut by_offset: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         for string in 0..dex.header.strings.count {
-            let Ok(text) = dex.string(string) else { continue };
-            let users = index.string_users.get(&string).cloned().unwrap_or_default();
+            if let Ok(offset) = dex.string_offset(string) {
+                by_offset.entry(offset).or_default().push(string);
+            }
+        }
+        for ids in by_offset.values() {
+            let Ok(text) = dex.string(ids[0]) else { continue };
+            let mut users: Vec<String> = Vec::new();
+            for id in ids {
+                for user in index.string_users.get(id).into_iter().flatten() {
+                    if users.len() < MAX_ROW_EVIDENCE * 2 && !users.contains(user) {
+                        users.push(user.clone());
+                    }
+                }
+            }
             let mut network_apis: Vec<String> =
                 users.iter().filter_map(|user| network.get(user.as_str())).flatten().cloned().collect();
             network_apis.sort();
@@ -516,10 +529,10 @@ fn scan_android(path: &Path, component: &str, xrefs: bool, decode: bool, invento
     for (dex_path, _, _) in opened.dexes.iter().filter(|(_, dex, _)| dex.is_err()) {
         inventory.skip(&format!("{component}!{dex_path}"), "DEX file did not parse");
     }
-    let Some(apk) = &opened.apk else { return };
-    for lib in &apk.native_libs {
+    let Some(apk) = &mut opened.apk else { return };
+    for lib in &mut apk.native_libs {
         let member = format!("{component}!{}", lib.path);
-        let (Some(bytes), Some(arch)) = (lib.bytes.clone(), crate::android::abi_arch(&lib.abi)) else {
+        let (Some(bytes), Some(arch)) = (lib.bytes.take(), crate::android::abi_arch(&lib.abi)) else {
             inventory.skip(&member, "native library not read (size limit or unknown ABI)");
             continue;
         };

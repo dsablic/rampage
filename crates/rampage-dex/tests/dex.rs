@@ -107,7 +107,7 @@ fn switch_payloads_and_tries_decode() {
     assert_eq!(payload.targets, [5]);
     let guarded = method_body(&dex, "guarded");
     assert_eq!(guarded.tries.len(), 1);
-    let handler = &guarded.tries[0].handlers[0];
+    let handler = &guarded.catches(&guarded.tries[0])[0];
     assert_eq!(dex.type_text(handler.type_idx.unwrap()), "Ljava/io/IOException;");
     assert_eq!(handler.address, 4);
 }
