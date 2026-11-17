@@ -360,7 +360,7 @@ rename functions. Exact signatures and existing analyst names retain priority.
 
 ## Guided reports and batch analysis
 
-`triage_report`, `find_main`, `network_surface`, `persistence_surface`, `string_decoding` and `diff_builds` (in
+`triage_report`, `find_main` (a Cortex-M Raw project too), `network_surface`, `persistence_surface`, `string_decoding` and `diff_builds` (in
 `core`), `find_crypto` (in the `detection` group) and `privacy_surface` (in `carve`) compose primitives into bounded reports. Each finding
 retains evidence, source tool and confidence; reports state limitations and end with concrete next tool calls.
 These are MCP tools or CLI workflows.

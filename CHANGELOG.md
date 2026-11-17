@@ -6,6 +6,12 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- `find_main` takes a Raw project. On Cortex-M it follows the reset handler, through scatter-load's jump into copied
+  code and a trampoline that loads the next code address, to the first call that never returns (an infinite loop,
+  `svc`, PendSV pended through ICSR); after the C runtime init (copies, zero fills, an init-table walk) that callee
+  is the candidate at medium confidence, and copied code that itself calls the scheduler start is main. Every
+  candidate lists its instructions; a reset handler with no runtime init gets none.
+
 - Raw Cortex-M discovery reaches code named only in data, so `xrefs` finds the code that loads a string (fifth
   Haiku run: the updater's sum-error strings had no references). After discovery, the words after each address the
   code references are read, and odd words pointing at code that decodes like a function become seeds, for up to

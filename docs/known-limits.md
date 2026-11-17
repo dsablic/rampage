@@ -46,8 +46,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   instruction it does not model (long multiplies, saturating and SIMD-within-register arithmetic, LDREX/STREX,
   SVC) or a branch on a peripheral's value is skipped, and a copy that call made is not mapped. Other Raw profiles
   have no reset-code follow.
-- On Raw projects `find_main` refuses, and `decompile` with `exact_entry` refuses ARM code (exact-entry analysis is
-  x86, x86-64 and AArch64 only). A CRC routine that `integrity_checks` infers from a polynomial literal outside
+- On Raw projects `find_main` models Cortex-M reset code only, and finds a main that never returns; `decompile`
+  with `exact_entry` refuses ARM code (exact-entry analysis is x86, x86-64 and AArch64 only). A CRC routine that `integrity_checks` infers from a polynomial literal outside
   every discovered function is reported but not added to discovery, so `decompile` and `lock_mechanisms` do not
   see it until you pass its address as a seed.
 - A Raw selector with `decode` decodes its input again on every call before the session finds the project, and

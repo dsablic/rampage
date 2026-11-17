@@ -277,6 +277,7 @@ fn every_raw_capable_tool_answers_on_a_reviewed_msp430_project() {
         ("find_crypto", json!({})),
         ("triage", json!({})),
         ("triage_report", json!({})),
+        ("find_main", json!({})),
     ];
     assert_eq!(inputs.each_ref().map(|(name, _)| *name), RAW_CAPABLE_TOOLS);
     let export = owned.0.join("export.bin");
@@ -301,7 +302,7 @@ fn every_raw_capable_tool_answers_on_a_reviewed_msp430_project() {
     assert!(outcome("decompile").contains("callee"), "{}", outcome("decompile"));
     assert!(outcome("triage").contains("Raw project (TI_MSP430"), "{}", outcome("triage"));
     assert!(outcome("triage_report").contains("no file header"), "{}", outcome("triage_report"));
-    assert!(!raw_capable("find_main") && !raw_capable("inspect_sleigh"));
+    assert!(raw_capable("find_main") && !raw_capable("inspect_sleigh"));
 
     assert!(outcome("patch_bytes").contains("\"active_ranges\":1"), "{}", outcome("patch_bytes"));
     // The patch was reverted, so the exported file is the input, byte for byte.
@@ -534,6 +535,7 @@ fn cortex_m_raw_projects_serve_every_raw_capable_tool_with_native_evidence() {
         ("find_crypto", json!({})),
         ("triage", json!({})),
         ("triage_report", json!({})),
+        ("find_main", json!({})),
     ];
     assert_eq!(inputs.each_ref().map(|(name, _)| *name), RAW_CAPABLE_TOOLS);
     let export = owned.0.join("export.bin");
@@ -918,4 +920,61 @@ fn cortex_m_strings_loaded_from_record_reached_code_have_xrefs() {
         );
         assert!(!failed && referencing.contains(&format!("\"address\":\"{loader:#x}\"")), "{text}: {referencing}");
     }
+}
+
+fn find_main(project: &mut Arc<rampage_api::Project>) -> Value {
+    let (text, failed) = call_shared(&tools(), project, "find_main", json!({ "decompile": false }));
+    assert!(!failed, "{text}");
+    serde_json::from_str(&text).unwrap()
+}
+
+/// Fifth Haiku run: find_main refused Raw projects. On Cortex-M the reset handler is followed past the C runtime
+/// init (copy and zero loops, the init-hook walk) to the first call that never returns: main, which starts the
+/// scheduler.
+#[test]
+fn cortex_m_find_main_follows_the_reset_handler_past_the_runtime_init() {
+    let owned = OwnedDirectory::new();
+    let path = owned.file("records.bin", CORTEX_M_RECORDS);
+    let mut project = Session::default().open_raw(&path, &records_request()).unwrap();
+    let report = find_main(&mut project);
+    let candidate = &report["sections"][0]["findings"][0];
+    let main = elf_symbol(CORTEX_M_RECORDS_ELF, "main");
+    assert_eq!(candidate["address"], format!("{main:#x}"), "{report:#}");
+    assert_eq!(candidate["confidence"], "medium", "{report:#}");
+    let evidence = candidate["evidence"].to_string();
+    assert!(evidence.contains("calls through a table in a loop") && evidence.contains("ICSR"), "{evidence}");
+    assert!(report["limitations"].to_string().contains("Raw Cortex-M"), "{report:#}");
+}
+
+/// After scatter-load's jump into copied code, the copied function that loops forever is main.
+#[test]
+fn cortex_m_find_main_takes_the_code_scatter_load_jumps_into() {
+    let owned = OwnedDirectory::new();
+    let bytes = include_bytes!("../../../tests/fixtures/firmware/raw-cortex-m-scatter-gcc.bin");
+    let path = owned.file("scatter.bin", bytes);
+    let request = request(json!({
+        "profile": "cortex-m4", "offset": 0, "length": bytes.len(), "base_address": "0x8000000", "vector_table": true,
+    }));
+    let mut project = Session::default().open_raw(&path, &request).unwrap();
+    let report = find_main(&mut project);
+    let candidate = &report["sections"][0]["findings"][0];
+    let elf = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/raw-cortex-m-scatter-gcc.elf");
+    assert_eq!(candidate["address"], format!("{:#x}", elf_symbol(elf, "ram_main")), "{report:#}");
+    assert_eq!(candidate["confidence"], "medium", "{report:#}");
+    assert!(candidate["evidence"].to_string().contains("scatter-load follows the reset code"), "{report:#}");
+}
+
+/// A reset handler that calls a few functions and then loops itself, with no runtime init, has no main to claim.
+#[test]
+fn cortex_m_find_main_claims_nothing_without_startup_evidence() {
+    let owned = OwnedDirectory::new();
+    let path = owned.file("strings.bin", CORTEX_M_STRINGS);
+    let request = request(json!({
+        "profile": "cortex-m3", "offset": 0, "length": CORTEX_M_STRINGS.len(), "base_address": "0x8000000",
+        "vector_table": true,
+    }));
+    let mut project = Session::default().open_raw(&path, &request).unwrap();
+    let report = find_main(&mut project);
+    assert_eq!(report["sections"][0]["total"], 0, "{report:#}");
+    assert!(report["summary"][0].as_str().unwrap().starts_with("No main candidate found"), "{report:#}");
 }

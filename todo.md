@@ -206,7 +206,8 @@ decoded code.
     Discovery now follows code pointers in records the code addresses, the pointer-table scan covers every code
     region and also runs when functions cover under an eighth of the code, and M-profile `adr rN, #0` is a data
     reference; on the updater 37 functions became 910 and each sum-error string has its function;
-  - `find_main` refuses Raw projects;
+  - `find_main` refuses Raw projects; done: Cortex-M reset handlers are followed to the first call that never
+    returns or the copied code that starts the scheduler;
   - `decompile` with `exact_entry` refuses ARM;
   - the vector-table parser reports implausible words as `stack_pointer` instead of rejecting the candidate;
   - run-to-run variance is large (run 4 reached the RTOS startup, run 5 stopped at the jump fragment): consider

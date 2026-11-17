@@ -136,13 +136,23 @@ startup copies and your `regions`), each table's targets in the region holding i
 A table is accepted only when at least two distinct targets look like real functions; switch tables and stray
 constants are reported as refused. See [Raw projects](mcp.md#raw-projects) for the evidence rules.
 
+## Find main
+
+`find_main` on a Cortex-M project follows the reset handler: through scatter-load's jump into copied code, and a
+short trampoline that only loads the next code address and jumps there, to the first call that never returns (an
+infinite loop, a scheduler start by `svc` or by pending PendSV through ICSR, or a call to such a function). After
+the C runtime init (copies and zero fills, a loop of indirect calls over an init table) that call is the candidate
+at medium confidence. When the startup jumps into copied code that itself calls the scheduler start, that copied
+function is main. Each candidate lists the instructions it rests on; a reset handler that only calls a few
+functions and loops gets no candidate. A main that returns, or a scheduler started another way, is not found.
+
 ## Raw-capable tools
 
 These tools take the `raw` selector:
 
 | Area | Tools |
 | --- | --- |
-| Overview and triage | `binary_info`, `triage`, `triage_report`, `function_summary`, `capabilities` |
+| Overview and triage | `binary_info`, `triage`, `triage_report`, `find_main`, `function_summary`, `capabilities` |
 | Functions and code | `list_functions`, `disassemble`, `function_graph`, `decompile`, `xrefs`, `search`, `analysis_diagnostics`, `entry_diagnostics` |
 | Data | `list_strings`, `inspect_data` (a file tool) |
 | Annotations | `rename`, `set_comment`, `annotate_batch`, `list_annotations`, `undo`, `redo` |

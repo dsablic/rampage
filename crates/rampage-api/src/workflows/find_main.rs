@@ -34,12 +34,12 @@ const PREVIEW_LINES: usize = 60;
 /// References read from the candidate when profiling it.
 const PROFILE_REFERENCES: usize = 1000;
 
-struct Candidate {
-    address: u64,
-    confidence: Confidence,
-    source: &'static str,
-    observation: String,
-    evidence: Vec<String>,
+pub(super) struct Candidate {
+    pub(super) address: u64,
+    pub(super) confidence: Confidence,
+    pub(super) source: &'static str,
+    pub(super) observation: String,
+    pub(super) evidence: Vec<String>,
 }
 
 fn is_libc_start_main(name: &str) -> bool {
@@ -97,7 +97,8 @@ impl Workflow for FindMain {
     fn description(&self) -> &'static str {
         "Locate the program's own entry logic past the runtime startup: entry symbols (main, WinMain, \
          main.main) when present, else stated heuristics (the __libc_start_main first argument, the MinGW CRT \
-         call before exit, the Mach-O LC_MAIN entry) with confidence and the instructions they rest on. \
+         call before exit, the Mach-O LC_MAIN entry, a Cortex-M reset handler's first call that never \
+         returns) with confidence and the instructions they rest on. \
          Profiles the best candidate's calls and strings with a bounded decompilation preview."
     }
 
@@ -150,6 +151,10 @@ impl Project {
             }
         }
         candidates.extend(self.macho_entry_candidate());
+        let cortex_m = self.binary.raw_code_image().is_some() && self.binary.m_profile();
+        if cortex_m {
+            candidates.extend(self.cortex_m_candidates()?);
+        }
         let candidates = merge(candidates);
 
         let mut found = Section::new("Candidates", limits);
@@ -200,6 +205,16 @@ impl Project {
             }
         }
 
+        if cortex_m {
+            report.limitation(
+                "Raw Cortex-M: the reset handler is followed (through scatter-load's jump into copied code and a \
+                 trampoline that loads the next address) to the first call that never returns, or to the code that \
+                 starts the scheduler (svc, PendSV through ICSR). A main that returns, startup code reached only \
+                 through registers, or a scheduler started another way is not found.",
+            );
+        } else if self.binary.raw_code_image().is_some() {
+            report.limitation("Raw projects: the startup heuristics model Cortex-M reset code only.");
+        }
         report.limitation("Symbol names are taken at face value; a binary can give any function the name main.");
         report.limitation(
             "Startup heuristics cover the ELF __libc_start_main first argument (x86-64, AArch64), the MinGW-w64 CRT \

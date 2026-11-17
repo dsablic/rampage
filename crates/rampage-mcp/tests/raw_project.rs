@@ -220,8 +220,9 @@ async fn raw_projects_list_disassemble_annotate_and_refuse_explicitly() {
 
     let (text, failed) = call(&client, "triage", json!({ "path": path, "raw": seeded })).await;
     assert!(!failed && text.contains("Raw project (TI_MSP430"), "{text}");
+    // find_main models Cortex-M reset code only; on MSP430 it answers with a limitation and no candidate.
     let (text, failed) = call(&client, "find_main", json!({ "path": path, "raw": seeded })).await;
-    assert!(failed && text.contains("tool find_main does not accept Raw projects"), "{text}");
+    assert!(!failed && text.contains("model Cortex-M reset code only"), "{text}");
     let (text, failed) = call(&client, "inspect_sleigh", json!({ "path": path, "raw": seeded })).await;
     assert!(failed && text.contains("tool inspect_sleigh does not accept Raw projects"), "{text}");
 

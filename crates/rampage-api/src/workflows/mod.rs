@@ -5,6 +5,7 @@
 mod diff_builds;
 mod find_crypto;
 mod find_main;
+mod find_main_cortex_m;
 mod indicators;
 mod network_surface;
 mod persistence_surface;
