@@ -42,7 +42,7 @@ When all you have is a folder, `list_dir` shows what is in it, with a format sni
 
 ```json
 {"total": 1, "entries": [{"name": "update.bin", "kind": "file", "size": 673, "format": "unknown"}],
- "next": "Open an executable by its path with binary_info or triage_report; a headerless image with file_layout; a filesystem image (squashfs, ext, cpio, tar) with fs_list."}
+ "next": "Open an executable by its path with binary_info or triage_report; a headerless image with file_layout; a filesystem image (squashfs, ext, cpio, tar) or a ZIP with fs_list; an APK, AAB, JAR or DEX with dex_metadata (group `android`)."}
 ```
 
 An executable opens directly by its path, and a filesystem image with `fs_list`. A file with no recognised format,

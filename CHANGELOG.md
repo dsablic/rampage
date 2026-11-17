@@ -4,6 +4,11 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
+## Unreleased
+
+- Hints: `list_dir`'s `next` names `fs_list` for ZIP archives and `dex_metadata` for APK, AAB, JAR and DEX files,
+  and opening a bare DEX file as a binary points at `dex_metadata` instead of the headerless-image selectors.
+
 ## 1.7.0 (2026-11-17)
 
 - Shorter tool descriptions: an agent session's default `tools/list` is 26% smaller (134,699 to 99,455 bytes, about

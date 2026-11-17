@@ -235,7 +235,8 @@ pub fn list_dir(query: &ListDirQuery) -> Result<DirListing, String> {
             )
         }),
         next: "Open an executable by its path with binary_info or triage_report; a headerless image with \
-               file_layout; a filesystem image (squashfs, ext, cpio, tar) with fs_list.",
+               file_layout; a filesystem image (squashfs, ext, cpio, tar) or a ZIP with fs_list; an APK, AAB, JAR \
+               or DEX with dex_metadata (group `android`).",
     })
 }
 

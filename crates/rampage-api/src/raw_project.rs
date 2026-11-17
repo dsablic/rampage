@@ -847,11 +847,24 @@ pub fn sniff_record_format(path: &Path) -> Option<&'static str> {
     None
 }
 
+/// Whether the file starts with the DEX magic (`dex\n`).
+fn is_dex(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 4];
+    std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut head)).is_ok()
+        && rampage_unpack::executable_format(&head) == Some("dex")
+}
+
 /// [`headerless_guidance`], led by the record format when the file looks like Intel HEX or S-records. A filesystem
-/// image gets the filesystem tools instead.
+/// image gets the filesystem tools instead, and a DEX file `dex_metadata`.
 pub fn headerless_guidance_for(path: &Path) -> String {
     if let Some(guidance) = crate::filesystem_guidance(path) {
         return guidance;
+    }
+    if is_dex(path) {
+        return "The file is Dalvik bytecode (DEX), not a native executable: read it with dex_metadata, and its \
+                classes and methods with the other `android` group tools."
+            .to_owned();
     }
     match sniff_record_format(path) {
         Some(format) => {
@@ -900,6 +913,9 @@ mod tests {
             assert_eq!(headerless_guidance_for(&path), headerless_guidance(), "{name}");
         }
         assert!(headerless_guidance().contains("\"format\":\"ihex\""));
+        // 1.7.0 docs audit: a bare DEX file got the headerless-image hint.
+        let dex = write("classes.dex", b"dex\n035\0\0\0\0\0");
+        assert!(headerless_guidance_for(&dex).contains("dex_metadata"));
         std::fs::remove_dir_all(&directory).unwrap();
     }
 

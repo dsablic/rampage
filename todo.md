@@ -43,8 +43,8 @@ This file holds open items. Done sections, including every completed parity phas
 
 ## Small hints (from the 1.7.0 docs audit)
 
-- [ ] `list_dir`'s `next` hint doesn't mention ZIP/APK (`fs_list`, `dex_metadata`).
-- [ ] `binary_info` on a bare `.dex` gives the headerless-image hint instead of pointing at `dex_metadata`.
+- [x] `list_dir`'s `next` hint doesn't mention ZIP/APK (`fs_list`, `dex_metadata`).
+- [x] `binary_info` on a bare `.dex` gives the headerless-image hint instead of pointing at `dex_metadata`.
 
 ## Ideas to review (unprioritised, not approved)
 
