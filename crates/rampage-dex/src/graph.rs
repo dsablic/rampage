@@ -104,6 +104,8 @@ pub struct Class {
     pub interfaces: Vec<String>,
     pub methods: Vec<u32>,
     pub dex: usize,
+    /// Its class_def index in that DEX file.
+    pub index: u32,
 }
 
 /// APIs whose use means some calls are not seen: reflection and code loaded at run time.
@@ -283,9 +285,10 @@ impl AppGraph {
                         }
                     }
                 }
-                graph
-                    .classes
-                    .insert(descriptor.clone(), Class { descriptor, superclass, interfaces, methods, dex: dex_index });
+                graph.classes.insert(
+                    descriptor.clone(),
+                    Class { descriptor, superclass, interfaces, methods, dex: dex_index, index: class_index },
+                );
             }
         }
         let mut sites: Vec<(u32, u32)> = Vec::new();

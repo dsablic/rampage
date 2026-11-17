@@ -643,6 +643,34 @@ fn summary(path: &Path, opened: &Opened, components_limit: usize) -> Value {
     out
 }
 
+/// The strings static decoder methods produce at their constant-argument call sites, emulated, one row per call
+/// site whose caller's class passes the filters.
+fn decoded_rows(opened: &Opened, prefix: Option<&str>, package: Option<&str>) -> Vec<Value> {
+    let dexes: Vec<&Dex> = opened.parsed().map(|(_, dex)| dex).collect();
+    let paths: Vec<&str> = opened.parsed().map(|(path, _)| path).collect();
+    let graph = rampage_dex::graph::AppGraph::build(&dexes, rampage_dex::graph::GraphLimits::default());
+    let decoded = rampage_dex::emulate::decode_strings(&dexes, &graph, rampage_dex::emulate::DecodeLimits::default());
+    decoded
+        .strings
+        .iter()
+        .filter(|found| {
+            let class = found.caller.split("->").next().unwrap_or(&found.caller);
+            class_matches(&class_name(class), prefix, package)
+        })
+        .map(|found| {
+            json!({
+                "output": found.output,
+                "decoder": found.decoder,
+                "caller": found.caller,
+                "address": format!("{:#06x}", found.address),
+                "dex": paths.get(found.dex).copied().unwrap_or("classes.dex"),
+                "inputs": found.inputs,
+                "steps": found.steps,
+            })
+        })
+        .collect()
+}
+
 fn class_rows<'a>(
     opened: &'a Opened,
     prefix: Option<&'a str>,
@@ -796,9 +824,11 @@ pub fn dex_metadata(query: &DexMetadataQuery) -> Result<Value, String> {
         "permissions" => page(list_of(&out, "permissions").into_iter(), offset, limit),
         "native_libs" => page(list_of(&out, "native_libs").into_iter(), offset, limit),
         "dex_files" => page(list_of(&out, "dex").into_iter(), offset, limit),
+        "decoded_strings" => page(decoded_rows(&opened, prefix, package).into_iter(), offset, limit),
         other => {
             return Err(format!(
-                "unknown list `{other}` (expected classes, methods, components, permissions, native_libs or dex_files)"
+                "unknown list `{other}` (expected classes, methods, components, permissions, native_libs, dex_files \
+                 or decoded_strings)"
             ));
         }
     };

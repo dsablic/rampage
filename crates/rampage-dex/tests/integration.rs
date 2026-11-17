@@ -2,6 +2,7 @@
 
 mod apk;
 mod dex;
+mod emulate;
 mod fixtures;
 mod graph;
 mod hostile;

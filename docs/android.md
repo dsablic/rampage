@@ -7,7 +7,7 @@ reading is capped (see [Limits](#limits)).
 
 | Tool | Answers |
 | --- | --- |
-| `dex_metadata` | What the app is and asks for: package, versions, SDK levels, permissions, components, boot receivers, native libraries with JNI exports, DEX files, one page of classes, methods or components. |
+| `dex_metadata` | What the app is and asks for: package, versions, SDK levels, permissions, components, boot receivers, native libraries with JNI exports, DEX files, one page of classes, methods or components, or the strings static decoder methods produce (`decoded_strings`). |
 | `dex_code` | What one method does: its Dalvik bytecode, smali style, with every reference resolved. |
 | `endpoint_inventory` (group `carve`) | The hosts and URLs in the app's DEX strings and native libraries, with the methods that load them. |
 | `privacy_surface` (group `carve`) | What the app can capture and send, the call paths between, and what starts each capture (boot, app start, push, jobs, UI), merged with its native libraries' report. |
@@ -55,8 +55,8 @@ For one file the result holds:
   type counts; `totals` sums them.
 - `page`: one page of the `list` chosen: `classes` (default; name, superclass, the first 32 interfaces with
   `interfaces_total`, access, field and method counts, `native_methods`, source file), `methods` (smali
-  signature, method index, access, code units and registers), `components`, `permissions`, `native_libs` or
-  `dex_files`. `prefix` keeps classes whose Java name starts with it (`com.example.net`, or the descriptor form
+  signature, method index, access, code units and registers), `components`, `permissions`, `native_libs`,
+  `dex_files` or `decoded_strings` ([decoded strings](#decoded-strings)). `prefix` keeps classes whose Java name starts with it (`com.example.net`, or the descriptor form
   `Lcom/example/net/`), `package` keeps a package and its subpackages; `offset`/`limit` page (default 100, at most
   500) and `next_offset` continues.
 
@@ -116,6 +116,37 @@ each capture, run [`privacy_surface`](privacy-surface.md#apks-and-dex-files) on 
 [`endpoint_inventory`](endpoint-inventory.md) reads APKs and DEX files: every DEX string pool, with the methods
 that load each string and the networking calls they make, and every native library in the APK.
 
+## Decoded strings
+
+Apps often hide URLs and keys behind a static decoder method: `static String a(String)` that XORs each character,
+`a(int)` that reads from a byte array filled in the class's static initializer, a Base64 step. rampage finds every
+call site where constants (`const-string`, `const` ints) go straight into a static app method returning `String`,
+and runs that method on those inputs in a small Dalvik interpreter. `dex_metadata` with `list: "decoded_strings"`
+pages the results (`prefix`/`package` filter by the calling class):
+
+```json
+{"output": "collector.example.net",
+ "decoder": "Lcom/example/watch/Strings;->get(I)Ljava/lang/String;",
+ "caller": "Lcom/example/watch/Snapshot;->take()V", "address": "0x0004", "dex": "classes.dex",
+ "inputs": ["0"], "steps": 160}
+```
+
+The same strings feed [`endpoint_inventory`](endpoint-inventory.md) (evidence `dex_decoded`) and
+[`privacy_surface`](privacy-surface.md#apks-and-dex-files), which names them as the endpoints of the sinks in the
+calling method or its callers and lists them in a `Decoded strings` section.
+
+The interpreter models integer and long arithmetic, branches and switches, arrays (`new-array`,
+`fill-array-data`, `aget`/`aput`, `filled-new-array` of ints, `System.arraycopy`), `String` (constructors from
+`char[]` and `byte[]` with UTF-8, ISO-8859-1 or US-ASCII, `charAt`, `toCharArray`, `getBytes`, `substring`,
+`concat`, `valueOf`, ...), `StringBuilder`/`StringBuffer`, `android.util.Base64` and `java.util.Base64` decoders,
+`Integer.parseInt`, and the static fields of app classes (initial `static_values`, then the class's `<clinit>`,
+run once under the same budget). Calls into other static app methods nest up to 16 deep. There is no I/O, no
+reflection, no instance field and no object of an app class: any other instruction or call stops that emulation,
+as do 100,000 instructions, 64 Ki elements per array, 4 Mi array elements and string characters allocated, or a
+string past 64 Ki characters. Each distinct decoder and input is emulated once (shared by every call site
+passing the same); an app is decoded at up to 4096 call sites, 2048 emulations and 8 million instructions in all.
+Only printable results of two or more characters that differ from the input are kept.
+
 ## dex_code
 
 ```json
@@ -162,6 +193,8 @@ decompilation to Java yet.
 | Catch clauses | 65,536 per method body, each distinct handler decoded once however many tries share it; 16 listed per try |
 | Type lists | 65,535 entries; 32 interfaces listed per class |
 | Names in reference text | 1 KiB; a long string many ids share is decoded once |
+| Call graph (`privacy_surface`) | 2 Mi methods, 8 Mi edges, 64 Mi code units; 32 by-name targets per call and 4096 candidates checked; walks of 6 levels and 2000 methods |
+| String decoding | 100,000 instructions, depth 16, 64 Ki elements per array, 4 Mi elements and characters per emulation; 4096 call sites, 2048 emulations, 8 M instructions per app |
 | APK members | 384 MiB read in total; native libraries over 64 MiB are listed without exports; ZIP inflation stops at the declared size and at a 1000:1 ratio past 64 MiB |
 
 DEX files are read in multidex order (`classes.dex`, `classes2.dex`, ...) whatever their order in the archive.

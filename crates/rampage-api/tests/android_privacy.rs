@@ -92,6 +92,55 @@ fn the_apk_report_has_dex_and_native_sources_sinks_paths_and_triggers() {
     assert!(find(&out, "Capture triggers", &["Snapshot;->take()V", "scheduled job"]).is_some());
     assert!(find(&out, "Capture triggers", &["TalkActivity;->onClick", "follows user input"]).is_some());
     assert!(find(&out, "Capture triggers", &["no_user_trigger", "onClick"]).is_none());
+
+    // Decoded strings: the XOR-hidden upload URL names the upload sink's endpoint; the byte-array host is named
+    // beside the JNI sink by its caller.
+    let decoded = find(&out, "Decoded strings", &["Codec;->decode", "https://upload.example.net/v2/audio"]).unwrap();
+    let lines = evidence(decoded);
+    assert!(lines.contains("call site: `Lcom/example/watch/Uploader;->upload([B)V`"), "{lines}");
+    assert!(lines.contains("inputs: \""), "{lines}");
+    let upload = find(&out, "Send and write sinks", &["Uploader;->upload([B)V", "URL.openConnection"]).unwrap();
+    assert!(evidence(upload).contains("names endpoint \"https://upload.example.net/v2/audio\""), "{upload:#}");
+    assert!(evidence(upload).contains("decoded by `Lcom/example/watch/Codec;"), "{upload:#}");
+    let host = "names endpoint \"collector.example.net\" (local: documentation name (RFC 2606)), decoded by \
+                `Lcom/example/watch/Strings;->get(I)Ljava/lang/String;` from 0 by its caller \
+                `Lcom/example/watch/Snapshot;->take()V`";
+    assert!(evidence(native).contains(host), "{native:#}");
+    let path = find(&out, "Capture-to-send paths", &["Recorder;->record()[B", "Uploader;->upload([B)V"]).unwrap();
+    assert!(evidence(path).contains("upload.example.net"), "{path:#}");
+    assert!(
+        out["summary"].to_string().contains("2 strings decoded by emulating static decoder methods at 2 call sites")
+    );
+}
+
+#[test]
+fn decoded_strings_reach_endpoint_inventory_and_dex_metadata() {
+    let tool = |name: &str| rampage_api::tools::file_tools().into_iter().find(|tool| tool.name == name).unwrap();
+    let packs = rampage_api::Packs::default();
+    let out = tool("endpoint_inventory").call(&packs, json!({"path": android("watch.apk"), "limit": 500})).unwrap();
+    let rows = out["endpoints"].as_array().unwrap();
+    let url = rows.iter().find(|row| row["value"] == "https://upload.example.net/v2/audio").expect("the decoded URL");
+    let evidence = &url["evidence"][0];
+    assert_eq!(evidence["origin"], "dex_decoded");
+    assert!(evidence["decoded_by"].as_str().unwrap().starts_with("Lcom/example/watch/Codec;->decode"));
+    assert_eq!(evidence["functions"], json!(["Lcom/example/watch/Uploader;->upload([B)V"]));
+    assert_eq!(url["signal"], "network_code");
+    assert!(rows.iter().any(|row| row["value"] == "collector.example.net"));
+
+    let page =
+        tool("dex_metadata").call(&packs, json!({"path": android("watch.apk"), "list": "decoded_strings"})).unwrap();
+    assert_eq!(page["page"]["total"], 2);
+    let host =
+        page["page"]["items"].as_array().unwrap().iter().find(|row| row["output"] == "collector.example.net").unwrap();
+    assert_eq!(host["decoder"], "Lcom/example/watch/Strings;->get(I)Ljava/lang/String;");
+    assert_eq!(host["inputs"], json!(["0"]));
+    let filtered = tool("dex_metadata")
+        .call(
+            &packs,
+            json!({"path": android("watch.apk"), "list": "decoded_strings", "prefix": "com.example.watch.Snapshot"}),
+        )
+        .unwrap();
+    assert_eq!(filtered["page"]["total"], 1);
 }
 
 #[test]

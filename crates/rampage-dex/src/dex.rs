@@ -150,6 +150,16 @@ pub struct ClassDef {
     pub static_values_off: u32,
 }
 
+/// A static field's initial value (`static_values`): integers, booleans and chars as `Int`, strings, null.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InitialValue {
+    Int(i64),
+    String(String),
+    Null,
+    /// A float, type, method, enum, array or annotation value.
+    Other,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct EncodedField {
     pub field_idx: u32,
@@ -825,6 +835,36 @@ impl Dex {
             if slot == 2 { data.direct_methods = methods } else { data.virtual_methods = methods }
         }
         Ok(data)
+    }
+
+    /// The initial values of `class`'s static fields (`fields`, its class data's static fields in order) from its
+    /// `static_values`, at most `max`: `(field_idx, value)`. Reading stops at an array or annotation value.
+    pub fn static_values(&self, class: &ClassDef, fields: &[EncodedField], max: usize) -> Vec<(u32, InitialValue)> {
+        if class.static_values_off == 0 {
+            return Vec::new();
+        }
+        let mut cursor = Cursor::new(&self.data, class.static_values_off as usize);
+        let Ok(size) = cursor.uleb128() else { return Vec::new() };
+        let mut out = Vec::new();
+        for field in fields.iter().take((size as usize).min(max)) {
+            let Ok(value) = crate::value::read(&mut cursor) else { break };
+            let value = match value {
+                crate::value::Value::Int(value) => InitialValue::Int(value),
+                crate::value::Value::Bool(value) => InitialValue::Int(i64::from(value)),
+                crate::value::Value::String(index) => match self.string(index) {
+                    Ok(text) => InitialValue::String(text.text.clone()),
+                    Err(_) => InitialValue::Other,
+                },
+                crate::value::Value::Null => InitialValue::Null,
+                crate::value::Value::Array | crate::value::Value::Annotation => {
+                    out.push((field.field_idx, InitialValue::Other));
+                    break;
+                }
+                _ => InitialValue::Other,
+            };
+            out.push((field.field_idx, value));
+        }
+        out
     }
 
     /// The method body at `offset`, with its try ranges and handlers.

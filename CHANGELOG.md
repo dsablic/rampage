@@ -37,6 +37,13 @@ see the [stability policy](docs/stability.md) for what the version promises.
   services, systemd units, init.d scripts and inittab, so a capture in a program init starts at boot is tied to
   the init file and line (`no_user_trigger: <program> is started at boot, ...`) and a `Boot services` section
   lists every start read. See [directories](docs/privacy-surface.md#directories-extracted-trees).
+- String decryption for DEX code: call sites where constants go into a static app method returning `String` are
+  emulated by a bounded Dalvik interpreter (arithmetic, arrays, `String`/`StringBuilder`, chars, Base64, the
+  decoder class's statics; no I/O or reflection; any unmodelled instruction or call, and the step, depth,
+  allocation and string-length budgets, stop it). `dex_metadata` pages the results with `list:
+  "decoded_strings"` (decoder, call site, inputs), `endpoint_inventory` reports them as `dex_decoded` evidence,
+  and `privacy_surface` names them as sink endpoints and lists them in a `Decoded strings` section. See
+  [decoded strings](docs/android.md#decoded-strings).
 - `dex_metadata`'s `accessibility_services` follows the class hierarchy across every DEX file of an APK.
 - `endpoint_inventory` reads APKs and DEX files: each DEX string pool with the methods that load every string and
   the networking calls they make (`dex_string` evidence), and each native library in the APK. See

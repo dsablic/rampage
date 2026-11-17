@@ -87,7 +87,9 @@ pub enum Signal {
 pub struct Evidence {
     /// `string` (a readable string in the image), `decoded` (emulated decoder output), `text` (a line of a text
     /// file), `bytes` (a string in a file no loader opened), `dex_string` (a DEX string pool entry; `functions`
-    /// are the methods whose code loads it) or `certificate`.
+    /// are the methods whose code loads it), `dex_decoded` (a static DEX decoder method's emulated output at a call
+    /// site; `decoded_by` names the decoder, its constant inputs and the call's address, `functions` the caller) or
+    /// `certificate`.
     pub origin: &'static str,
     #[serde(skip_serializing_if = "Option::is_none", serialize_with = "rampage_arch::hex::optional_address")]
     pub address: Option<u64>,
@@ -525,6 +527,44 @@ fn scan_android(path: &Path, component: &str, xrefs: bool, decode: bool, invento
             };
             inventory.add_text(&member, &text.text, &evidence, signal);
         }
+    }
+    // Strings hidden behind static decoder methods, emulated at their call sites.
+    let dexes: Vec<&rampage_dex::Dex> = opened.parsed().map(|(_, dex)| dex).collect();
+    let paths: Vec<&str> = opened.parsed().map(|(path, _)| path).collect();
+    let graph = rampage_dex::graph::AppGraph::build(&dexes, rampage_dex::graph::GraphLimits::default());
+    let decoded = rampage_dex::emulate::decode_strings(&dexes, &graph, rampage_dex::emulate::DecodeLimits::default());
+    for found in &decoded.strings {
+        let dex_path = paths.get(found.dex).copied().unwrap_or("classes.dex");
+        let member = if opened.kind == "apk" { format!("{component}!{dex_path}") } else { component.to_owned() };
+        let network_apis: Vec<String> = graph
+            .id(&found.caller)
+            .map(|caller| {
+                let mut apis: Vec<String> = graph.callees[caller as usize]
+                    .iter()
+                    .map(|(callee, _)| &graph.method(*callee).text)
+                    .filter(|callee| DEX_NETWORK_CLASSES.iter().any(|class| callee.starts_with(class)))
+                    .map(|callee| callee.split('(').next().unwrap_or(callee).to_owned())
+                    .collect();
+                apis.sort();
+                apis.dedup();
+                apis
+            })
+            .unwrap_or_default();
+        let signal = if network_apis.is_empty() { Signal::Referenced } else { Signal::NetworkCode };
+        let evidence = Evidence {
+            origin: "dex_decoded",
+            address: None,
+            offset: None,
+            line: None,
+            encoding: None,
+            decoded_by: Some(format!("{}({}) at {:#06x}", found.decoder, found.inputs.join(", "), found.address)),
+            functions: vec![found.caller.clone()],
+            network_apis,
+        };
+        inventory.add_text(&member, &found.output, &evidence, signal);
+    }
+    for note in &decoded.notes {
+        inventory.limitations.insert(format!("{component}: DEX string decoding: {note}."));
     }
     for (dex_path, _, _) in opened.dexes.iter().filter(|(_, dex, _)| dex.is_err()) {
         inventory.skip(&format!("{component}!{dex_path}"), "DEX file did not parse");

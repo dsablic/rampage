@@ -499,8 +499,8 @@ struct EndpointInventoryArgs {
 struct DexMetadataArgs {
     /// An .apk, .aab, .jar or .dex file, or a directory holding them (paged by cursor).
     path: std::path::PathBuf,
-    /// The page to list for one file: classes (default), methods, components, permissions, native_libs or
-    /// dex_files.
+    /// The page to list for one file: classes (default), methods, components, permissions, native_libs,
+    /// dex_files or decoded_strings (static decoder methods emulated at constant-argument call sites).
     list: Option<String>,
     /// Only classes whose Java name starts with this (com.example.net or Lcom/example/net/).
     prefix: Option<String>,
@@ -982,7 +982,8 @@ pub fn file_tools() -> Vec<FileTool> {
                           DEX files (checksums verified, counts); privacy: capture APIs invoked (microphone, camera, \
                           screen, location) with callers, permission and reached_from_boot; jni: native methods \
                           linked to exports. One page of list: classes, methods, components, permissions, \
-                          native_libs or dex_files (prefix/package filters, offset/limit). Bytecode: dex_code.",
+                          native_libs, dex_files or decoded_strings (emulated decoder output with decoder, call site \
+                          and inputs; prefix/package filters, offset/limit). Bytecode: dex_code.",
             input_schema: schema::<DexMetadataArgs>(),
             handler: |_, input| {
                 let args: DexMetadataArgs = arguments(input)?;

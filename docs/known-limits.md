@@ -87,7 +87,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   of direct invokes, virtual and interface invokes resolved through the app's classes (by name to overrides, marked
   `by_name`), callbacks and const-class component starts, within 6 levels and 2000 methods per walk: reflection,
   method handles, framework code and run-time loaded code are not followed, and keep `no_user_trigger` from being
-  stated. JNI methods registered with
+  stated. Strings hidden behind decoders are recovered only for static decoder methods called with constants and
+  running within a small interpreter's model (no I/O, reflection, instance fields or app objects) and budgets. JNI methods registered with
   `RegisterNatives` are only suggested by the strings a library holds; the registration table is not decoded. Obfuscated names are shown as
   stored; `resources.arsc` is counted, not resolved, so `@0x7f...` manifest values stay resource ids; an AAB's
   protobuf manifest and APK signature blocks are not read; a DEX 041 container with several DEX files has only

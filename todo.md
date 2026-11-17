@@ -288,10 +288,14 @@ above stay under review until each is approved.
   callbacks, const-class component starts), Android triggers (boot, app start, push, jobs, exported components,
   UI) with `no_user_trigger` under the native evidence discipline, native libraries merged through JNI; directory
   mode with init `.rc`/systemd/init.d boot starts across files.
+- [x] **Android slice 2: string decryption (1.7.0).** Static decoder methods emulated at constant-argument call
+  sites by a bounded Dalvik interpreter; results in `dex_metadata` (`decoded_strings`), `endpoint_inventory`
+  (`dex_decoded`) and `privacy_surface`.
 - [ ] Android follow-ups (slice 2):
   - Dalvik to Java decompilation, or a structured pseudocode first (registers to locals, branches to blocks).
-  - String decryption: emulate small static decoder methods (`String` from a `byte[]`/`char[]` loop) and feed
-    `endpoint_inventory` and `privacy`.
+  - String decryption follow-ups: decoders taking a `byte[]`/`char[]` built at the call site (`new-array` +
+    `fill-array-data` arguments), instance decoders, decoders whose input comes from a static field of another
+    class, and float arithmetic.
   - Obfuscation-aware naming: detect short renamed identifiers, keep stable aliases, use annotations for
     rename/comment on DEX methods.
   - `resources.arsc`: resolve `@0x7f...` manifest values and string resources (URLs often live there); scan

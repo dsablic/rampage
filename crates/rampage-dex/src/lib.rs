@@ -6,6 +6,7 @@
 pub mod apk;
 pub mod axml;
 pub mod dex;
+pub mod emulate;
 mod error;
 pub mod graph;
 pub mod insn;

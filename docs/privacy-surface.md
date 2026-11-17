@@ -147,8 +147,11 @@ finding's observation (`lib/arm64-v8a/libnet.so: ...`).
   calls, Cronet requests, Apache `HttpClient.execute`), `LocalSocket` (local), and file writes, weaker
   (`FileOutputStream`, `FileWriter`, `RandomAccessFile`, `Files.write`, `ContentResolver.insert` and
   `openOutputStream`, `openFileOutput`). Each network sink lists up to four endpoints from the const-strings of
-  the method or a method calling it directly, classified as `endpoint_inventory` does. A `native` method is a sink
-  when its export reaches `connect`, `send` or another native sink.
+  the method or a method calling it directly, classified as `endpoint_inventory` does, including strings
+  [decoded](android.md#decoded-strings) by emulating a static decoder method at a call site there (`decoded by
+  ... from ...`). A `native` method is a sink when its export reaches `connect`, `send` or another native sink.
+- **Decoded strings:** a section of its own lists each decoded string with the decoder, the call site, the
+  constant inputs and the instructions emulated.
 - **Paths:** a call graph across every DEX file of the APK: direct, static and super invokes; virtual and
   interface invokes resolved through the app's class hierarchy (across DEX files) to the method the receiver's
   class defines, and by name and prototype to the overriding methods of app subclasses and implementers (at most

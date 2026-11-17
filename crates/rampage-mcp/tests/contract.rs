@@ -464,6 +464,7 @@ async fn contract_mcp_carve_results() {
     exercise(c, o, "endpoint_inventory", json!({"path": apk})).await;
     let watch = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/android/watch.apk");
     exercise(c, o, "privacy_surface", json!({"path": watch})).await;
+    exercise(c, o, "endpoint_inventory", json!({"path": watch})).await;
     let tree = scratch.0.join("tree");
     std::fs::create_dir_all(tree.join("system/bin")).unwrap();
     std::fs::create_dir_all(tree.join("system/etc/init")).unwrap();
@@ -554,6 +555,7 @@ async fn contract_mcp_android_results() {
     exercise(c, o, "dex_metadata", json!({"path": apk, "list": "methods", "limit": 2})).await;
     exercise(c, o, "dex_metadata", json!({"path": apk, "list": "components", "limit": 2})).await;
     exercise(c, o, "dex_metadata", json!({"path": android.join("recorder.dex"), "limit": 1})).await;
+    exercise(c, o, "dex_metadata", json!({"path": android.join("watch.apk"), "list": "decoded_strings"})).await;
     exercise(c, o, "dex_metadata", json!({"path": android, "max_files": 1})).await;
     let method = "Lcom/example/recorder/Capture;->guarded()V";
     exercise(c, o, "dex_code", json!({"path": apk, "method": method, "limit": 2})).await;

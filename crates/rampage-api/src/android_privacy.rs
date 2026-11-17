@@ -900,6 +900,7 @@ pub(crate) fn report(path: &Path, limits: ReportLimits) -> Result<WorkflowReport
         report.limitation(format!("{dex_path} did not parse and was not read."));
     }
     let graph = AppGraph::build(&dexes, GraphLimits::default());
+    let decoded = rampage_dex::emulate::decode_strings(&dexes, &graph, rampage_dex::emulate::DecodeLimits::default());
     let manifest = opened.manifest();
     let components: HashMap<String, &Component> = manifest
         .map(|manifest| {
@@ -921,6 +922,14 @@ pub(crate) fn report(path: &Path, limits: ReportLimits) -> Result<WorkflowReport
         loads_code: None,
     };
     survey.scan();
+    for found in &decoded.strings {
+        if let Some(caller) = survey.graph.id(&found.caller) {
+            survey.named.entry(caller).or_default().push((
+                found.output.clone(),
+                format!("decoded by `{}` from {}", found.decoder, found.inputs.join(", ")),
+            ));
+        }
+    }
 
     // Native libraries: each one's own report, and what its JNI exports reach.
     let (picked, libraries_total) = pick_libraries(&libs);
@@ -1000,6 +1009,7 @@ pub(crate) fn report(path: &Path, limits: ReportLimits) -> Result<WorkflowReport
     let mut triggers = Section::new("Capture triggers", limits);
     let mut excluded = Section::new("Excluded: not capture", limits);
     let mut unreferenced = Section::new("Capture strings not referenced from code", limits);
+    let mut decoded_section = Section::new("Decoded strings", limits);
 
     found.sort_by_key(|finding| std::cmp::Reverse(finding.confidence));
     let dex_sources = found.len();
@@ -1082,6 +1092,22 @@ pub(crate) fn report(path: &Path, limits: ReportLimits) -> Result<WorkflowReport
     }
     excluded.extend(take("Excluded: not capture"));
     unreferenced.extend(take("Capture strings not referenced from code"));
+    for found in &decoded.strings {
+        let dex = survey.dex_paths.get(found.dex).map_or("classes.dex", String::as_str);
+        decoded_section.push(
+            Finding::new(
+                "dex_code",
+                Confidence::Medium,
+                format!("`{}` decodes {}", found.decoder, quote(&found.output)),
+            )
+            .evidence([
+                format!("origin: dex {dex}"),
+                format!("call site: `{}` at {:#06x}", found.caller, found.address),
+                format!("inputs: {}", found.inputs.join(", ")),
+                format!("{} instructions emulated", found.steps),
+            ]),
+        );
+    }
 
     let mediums: BTreeSet<&str> = survey.sources.values().flatten().map(|hit| hit.medium).collect();
     let senders = survey.sinks.values().filter(|hits| hits.iter().any(|hit| hit.kind != SinkKind::File)).count();
@@ -1102,6 +1128,14 @@ pub(crate) fn report(path: &Path, limits: ReportLimits) -> Result<WorkflowReport
         if let Some(line) = native.summary.first() {
             report.summary.push(format!("{library}: {line}"));
         }
+    }
+    if !decoded.strings.is_empty() {
+        report.summary.push(format!(
+            "{} strings decoded by emulating static decoder methods at {} call sites; endpoints among them are named \
+             beside the sinks.",
+            decoded.strings.iter().map(|found| &found.output).collect::<BTreeSet<_>>().len(),
+            decoded.strings.len()
+        ));
     }
     report.summary.push(
         "This is evidence of what the code can do and how it is reached, not of intent or that it runs.".to_owned(),
@@ -1130,8 +1164,10 @@ pub(crate) fn report(path: &Path, limits: ReportLimits) -> Result<WorkflowReport
     }
     report.step("dex_metadata", json!({}), "Read the manifest, permissions, components and JNI links.");
 
-    report.sections.extend([sources, paths, triggers, sinks, excluded, unreferenced]);
-    for note in survey.graph.notes.clone() {
+    report.sections.extend([sources, paths, triggers, sinks, excluded, unreferenced, decoded_section]);
+    let mut notes: Vec<String> = survey.graph.notes.iter().cloned().collect();
+    notes.extend(decoded.notes.iter().cloned());
+    for note in notes {
         report.limitation(format!("DEX graph bound: {note}."));
     }
     report.limitation(
@@ -1141,6 +1177,15 @@ pub(crate) fn report(path: &Path, limits: ReportLimits) -> Result<WorkflowReport
          method names with const-class beside a call that starts them. Reflection, method handles, code loaded at run \
          time and framework code are not followed; such uses keep no_user_trigger from being stated.",
     );
+    let stops: Vec<String> = decoded.stops.iter().map(|(why, count)| format!("{count} {why}")).collect();
+    report.limitation(format!(
+        "Strings are decoded only where constants go straight into a static app method returning String, emulated \
+         with arithmetic, arrays, String/StringBuilder, Base64 and the decoder's own statics, without I/O or \
+         reflection, within 100,000 instructions each; {} of {} emulations produced no printable text{}.",
+        decoded.stops.values().sum::<usize>(),
+        decoded.emulations,
+        if stops.is_empty() { String::new() } else { format!(" ({})", stops.join(", ")) }
+    ));
     report.limitation(
         "A Java caller of a native method reaches what the bound Java_ export reaches through direct calls in its \
          library; natives registered with RegisterNatives are not linked.",

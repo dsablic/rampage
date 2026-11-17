@@ -80,7 +80,9 @@ Each row is one value in one file (`component`), with `occurrences` and up to fo
 
 - `origin`: `string` (a readable string in the image, with its `address` and `encoding`), `decoded` (emulated
   decoder output, with the blob's `address` and `decoded_by`), `text` (a `line` of a text file), `bytes` (an
-  `offset` in a file no loader opened), `dex_string` (a DEX string pool entry) or `certificate`;
+  `offset` in a file no loader opened), `dex_string` (a DEX string pool entry), `dex_decoded` (the output of a
+  static DEX decoder method emulated at a call site, with `decoded_by` naming the decoder, its constant inputs and
+  the call's code address, and the calling method as `functions`) or `certificate`;
 - `functions`: the functions referencing the string (`name@0xaddress`), and `network_apis`: the networking APIs those
   functions call, from the list `network_surface` uses.
 
@@ -88,6 +90,10 @@ An APK is scanned member by member: each DEX file's string pool is a component `
 methods whose code loads the string (`const-string`) as `functions` (`Lpkg/Class;->name(params)ret`) and the Java
 and Android networking calls those methods make (`java.net.URL`, `HttpURLConnection`, sockets, `WebView`,
 OkHttp) as `network_apis`; each native library is a component `<apk>!lib/<abi>/<name>.so`, analysed like any ELF.
+Strings an app hides behind a static decoder (`static String a(String)`, `a(int)` over a byte array) are recovered
+by emulating the decoder at each call site that passes it constants, always for APK and DEX input (see
+[decoded strings](android.md#decoded-strings)); they appear as `dex_decoded` evidence on the component of the DEX
+file holding the call.
 
 `signal` ranks the row: `network_code` (referenced from a function that calls a networking API), `referenced`,
 `unreferenced` (references were looked up and none found) or `not_traced`.
@@ -151,8 +157,10 @@ single-label, public-suffix, allowed and not-denied entries. Each file starts wi
   integers in code are not found; strings decoded at run time are found only with `decode`, and only for decoders
   `string_decoding` recognises.
 - In DEX code, a string reaches the network only through calls in the same method that loads it: a URL kept in a
-  field or passed to another class reads as `referenced`. Strings an app builds, decrypts or loads from resources
-  at run time are not seen; the manifest and `resources.arsc` are not scanned.
+  field or passed to another class reads as `referenced`. Strings an app decrypts are found only when a static
+  decoder takes constants at its call site and runs within the interpreter's model and budgets; strings built
+  across methods or loaded from resources at run time are not seen; the manifest and `resources.arsc` are not
+  scanned.
 - `network_code` means a referencing function calls a networking API directly; a string passed to a helper that
   makes the call reads as `referenced`.
 - The Public Suffix List is the one compiled into the `psl` crate (MPL-2.0 data; see THIRD-PARTY-NOTICES), so
