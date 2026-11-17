@@ -221,9 +221,12 @@ impl Session {
         // Discovery runs outside the session lock; concurrent first opens of this key wait on one build.
         let project = Arc::clone(cell.get_or_init(|| {
             let project = self.new_raw_project(binary, &key.0);
-            let project =
-                if automatic { self.with_automatic_pointer_tables(project, path, request, &key.0) } else { project };
-            Arc::new(self.with_inferred_crc_seeds(project, path, request, &key.0))
+            Arc::new(if automatic {
+                let project = self.with_automatic_pointer_tables(project, path, request, &key.0);
+                self.with_inferred_crc_seeds(project, path, request, &key.0)
+            } else {
+                project
+            })
         }));
         let project = {
             let mut state = self.state.lock().expect("session lock");
@@ -331,10 +334,10 @@ impl Session {
         project
     }
 
-    /// A Cortex-M Raw `project` whose discovery already ran, or, when `integrity_checks` would infer CRC routines
-    /// outside every discovered function (see [`crate::integrity::inferred_crc_starts`]), the same interpretation
-    /// reopened with those starts as further seeds, recording each with its evidence. A reopen that is refused keeps
-    /// `project`.
+    /// For a request that left `pointer_tables` unset (discovery runs at open; an explicit request stays lazy): a
+    /// Cortex-M Raw `project`, or, when `integrity_checks` would infer CRC routines outside every discovered function
+    /// (see [`crate::integrity::inferred_crc_starts`]), the same interpretation reopened with those starts as further
+    /// seeds, recording each with its evidence. A reopen that is refused keeps `project`.
     fn with_inferred_crc_seeds(
         &self,
         project: Project,
@@ -342,8 +345,7 @@ impl Session {
         request: &crate::RawProjectRequest,
         source: &Path,
     ) -> Project {
-        // Only after a discovery the open already ran (pointer_tables unset): an explicit request stays lazy.
-        if !project.binary.m_profile() || !project.analysis_ran() {
+        if !project.binary.m_profile() {
             return project;
         }
         let starts = crate::integrity::inferred_crc_starts(&project);
@@ -367,6 +369,8 @@ impl Session {
         let _ = reopened
             .inferred_seeds
             .set(starts.into_iter().map(|(address, reason)| crate::rows::InferredSeed { address, reason }).collect());
+        // Discovery runs at open for an automatic request, so binary_info can name the starting points.
+        let _ = reopened.analysis();
         reopened
     }
 

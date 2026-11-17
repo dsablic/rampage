@@ -318,6 +318,19 @@ pub struct RawSummary<'a> {
     /// function, seeded into discovery so they are functions (decompile, lock_mechanisms); each with its evidence.
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     pub inferred_seeds: &'a [InferredSeed],
+    /// Cortex-M, once discovery has run: the first functions worth reading, each with why (the reset handler, the
+    /// copied code scatter-load jumps into, find_main's candidate, the largest init routines, inferred CRC routines).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub starting_points: Vec<StartingPoint>,
+}
+
+/// A function worth reading first, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StartingPoint {
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub address: u64,
+    pub name: String,
+    pub reasons: Vec<String>,
 }
 
 /// A function start seeded from evidence in the code rather than from the selector.

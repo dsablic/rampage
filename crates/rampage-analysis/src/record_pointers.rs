@@ -4,9 +4,9 @@
 //! a driver or init descriptor, a callback registration. The code forms or loads the record's address and passes it
 //! on, so neither a call nor a literal-pool word names the function, and a table scan misses it because the record
 //! holds one code pointer among other fields. After discovery, the words just past each data reference are read;
-//! an odd word that does not point at text and is no part of an array (three code pointers in a row), whose target
-//! is executable, outside every discovered function, and decodes like code (a `push {..., lr}` first, or a
-//! straight-line run that reaches a return or branch) becomes a seed for another round.
+//! an odd word that does not point at text, whose target is executable, outside every discovered function, and
+//! decodes like code (a `push {..., lr}` first, or a straight-line run that reaches a return or branch) becomes a
+//! seed for another round. A word in an array (three code pointers in a row) needs the `push {..., lr}`.
 
 use std::collections::BTreeSet;
 
@@ -63,8 +63,8 @@ pub(crate) fn seeds(binary: &Binary, program: &Program, decoder: &mut dyn Disass
     'records: for record in records {
         let words: Vec<u64> = (0..RECORD_WORDS).map_while(|index| word_at(record.checked_add(4 * index)?)).collect();
         // A word in a run of three code pointers (the two words before the record and two after the window count)
-        // belongs to an array (a switch's case labels, a handler table), not a record: the pointer-table scan
-        // judges those with its own evidence.
+        // belongs to an array: a switch's case labels and constants that point into code fill those too, so an
+        // array entry counts only when its target opens with `push {..., lr}` (an init or handler table).
         let around = |back: u64| record.checked_sub(back).and_then(word_at).is_some_and(code_pointer);
         let after = |index: u64| record.checked_add(4 * index).and_then(word_at).is_some_and(code_pointer);
         let end = words.len() as u64;
@@ -75,10 +75,11 @@ pub(crate) fn seeds(binary: &Binary, program: &Program, decoder: &mut dyn Disass
             .collect();
         for (index, &word) in words.iter().enumerate() {
             let at = index + 2;
-            if (at - 2..=at).any(|first| flags[first..first + 3].iter().all(|&flag| flag)) {
+            let in_array = (at - 2..=at).any(|first| flags[first..first + 3].iter().all(|&flag| flag));
+            let target = word & !1;
+            if in_array && !pushes_lr(binary, target) {
                 continue;
             }
-            let target = word & !1;
             // An odd pointer at text (a record's name) is a string, not Thumb code.
             if word & 1 == 0
                 || !Memory::may_point_to_code(binary, word)
@@ -102,13 +103,18 @@ pub(crate) fn seeds(binary: &Binary, program: &Program, decoder: &mut dyn Disass
 
 /// A `push {..., lr}` first, or a straight-line decode that reaches an unconditional return, branch or halt before
 /// any undecodable bytes.
-fn decodes_like_code(binary: &Binary, decoder: &mut dyn Disassembler, target: u64) -> bool {
+/// Whether the instruction at `target` is `push {..., lr}` (T1) or `push.w {..., lr}` (T2).
+fn pushes_lr(binary: &Binary, target: u64) -> bool {
     let halfword = |address: u64| binary.read(address, 2).map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]));
-    let pushes_lr = match halfword(target) {
+    match halfword(target) {
         Some(first) if first & 0xff00 == 0xb500 => true,
         Some(0xe92d) => halfword(target + 2).is_some_and(|second| second & 0x4000 != 0),
         _ => false,
-    };
+    }
+}
+
+fn decodes_like_code(binary: &Binary, decoder: &mut dyn Disassembler, target: u64) -> bool {
+    let pushes_lr = pushes_lr(binary, target);
     decoder.begin_run();
     let mut address = target;
     for step in 0..MAX_WALK {

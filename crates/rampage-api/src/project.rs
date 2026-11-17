@@ -919,11 +919,29 @@ impl Project {
                 scatter_load: raw.scatter_load(),
                 base_check,
                 inferred_seeds: self.inferred_seeds.get().map_or(&[], Vec::as_slice),
+                starting_points: self.starting_points(),
             }),
             analysis_store: self.analysis_store_status(),
             encrypted_or_packed_code: self.encrypted_regions().cloned().collect(),
             next,
         }
+    }
+
+    /// A Cortex-M Raw project's first functions worth reading, once discovery has run (binary_info never starts it).
+    fn starting_points(&self) -> Vec<crate::rows::StartingPoint> {
+        if !self.binary.m_profile() || !self.analysis.get().is_some_and(Result::is_ok) {
+            return Vec::new();
+        }
+        let mut points = self.cortex_m_starting_points().unwrap_or_default();
+        for seed in self.inferred_seeds.get().into_iter().flatten() {
+            crate::workflows::add_starting_point(
+                self,
+                &mut points,
+                seed.address,
+                "a CRC routine integrity_checks infers from its polynomial literal (raw.inferred_seeds)".to_owned(),
+            );
+        }
+        points
     }
 
     /// For a Cortex-M Raw project mapped from a byte range (not records, which state their addresses), its base
@@ -1099,11 +1117,6 @@ impl Project {
                 steps.join("; ")
             )
         })
-    }
-
-    /// Whether discovery has run (successfully or not) for this project.
-    pub(crate) fn analysis_ran(&self) -> bool {
-        self.analysis.get().is_some()
     }
 
     pub(crate) fn analysis(&self) -> Result<&Analysis, ApiError> {

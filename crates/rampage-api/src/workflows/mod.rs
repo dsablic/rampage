@@ -6,6 +6,7 @@ mod diff_builds;
 mod find_crypto;
 mod find_main;
 mod find_main_cortex_m;
+pub(crate) use find_main_cortex_m::add_starting_point;
 mod indicators;
 mod network_surface;
 mod persistence_surface;

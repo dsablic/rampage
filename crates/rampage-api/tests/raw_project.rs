@@ -747,8 +747,8 @@ const CORTEX_M_TABLES_ELF: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/raw-cortex-m-tables.elf");
 
 /// Precision and recall of discovery against the ELF's function symbols on an image whose handlers are reached
-/// only through tables: with `pointer_tables` every function is found and nothing else; without it the
-/// table-only handlers are missed.
+/// only through tables: with `pointer_tables` every function is found and nothing else; without it the record pass
+/// finds the same handlers from the tables Reset addresses, and still nothing else.
 #[test]
 fn cortex_m_pointer_tables_recover_table_only_functions() {
     let owned = OwnedDirectory::new();
@@ -781,10 +781,10 @@ fn cortex_m_pointer_tables_recover_table_only_functions() {
     let (again, _, _) = discover(true);
     assert!(Arc::ptr_eq(&project, &again));
     assert_eq!(rampage_loaders::raw_pointers::scans_run(), scans + 1);
-    // Without tables: Reset, the two other vector-table handlers and classify, which Reset calls, and from the
-    // {name, handler} records of COMMANDS the handlers they hold and the UART helpers those call; the switch's case
-    // labels and MAGIC's odd constants are arrays the record pass leaves to the scan: precision 8/8, recall 8/18.
-    assert_eq!((without_found, without_hits), (8, 8));
+    // Without tables: Reset, the two other vector-table handlers and classify, which Reset calls, and every table
+    // handler, from the records Reset addresses (each handler opens with push {..., lr}); the switch's case labels
+    // and MAGIC's odd constants, which do not, are left out: precision 17/17, recall 17/18.
+    assert_eq!((without_found, without_hits), (17, 17));
     // With them: precision 17/17, recall 17/18. The miss is run_command, which clang inlined into reset_handler and
     // nothing references; no seed can reach dead code.
     assert_eq!((found, hits), (17, 17));
@@ -1064,4 +1064,57 @@ fn cortex_m_code_read_as_a_vector_table_is_refused() {
     let summary = serde_json::to_value(project.summary()).unwrap();
     assert!(summary["raw"]["vector_table"].get("refused_reason").is_none(), "{summary:#}");
     assert_eq!(summary["entry"], format!("{:#x}", elf_symbol(CORTEX_M_RECORDS_ELF, "reset_handler")));
+}
+
+/// The starting points binary_info lists, as (address, reasons joined).
+fn starting_points(project: &rampage_api::Project) -> Vec<(u64, String)> {
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    summary["raw"]["starting_points"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{summary:#}"))
+        .iter()
+        .map(|point| {
+            let address = u64::from_str_radix(point["address"].as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+            (address, point["reasons"].to_string())
+        })
+        .collect()
+}
+
+/// Run-to-run variance in the Haiku runs came from where each run started reading. binary_info now names the first
+/// functions worth reading: the reset handler, find_main's candidate, the init routines the startup calls through
+/// its table, and the CRC routine integrity_checks infers.
+#[test]
+fn cortex_m_binary_info_names_the_starting_points() {
+    let owned = OwnedDirectory::new();
+    let path = owned.file("records.bin", CORTEX_M_RECORDS);
+    let project = Session::default().open_raw(&path, &records_request()).unwrap();
+    let points = starting_points(&project);
+    let reason = |name: &str| {
+        let address = elf_symbol(CORTEX_M_RECORDS_ELF, name);
+        points.iter().find(|(at, _)| *at == address).map(|(_, reasons)| reasons.clone())
+    };
+    assert!(reason("reset_handler").unwrap().contains("reset handler"), "{points:?}");
+    assert!(reason("main").unwrap().contains("find_main (medium confidence)"), "{points:?}");
+    for init in ["init_uart", "init_timer"] {
+        assert!(reason(init).unwrap().contains("init routines the startup calls through the table"), "{points:?}");
+    }
+    assert!(reason("crc32_update").unwrap().contains("raw.inferred_seeds"), "{points:?}");
+    assert!(points.len() <= 8);
+}
+
+/// After scatter-load's jump, the copied function it lands in is named, with why.
+#[test]
+fn cortex_m_binary_info_names_the_scatter_jump_target() {
+    let owned = OwnedDirectory::new();
+    let bytes = include_bytes!("../../../tests/fixtures/firmware/raw-cortex-m-scatter-gcc.bin");
+    let path = owned.file("scatter.bin", bytes);
+    let request = request(json!({
+        "profile": "cortex-m4", "offset": 0, "length": bytes.len(), "base_address": "0x8000000", "vector_table": true,
+    }));
+    let project = Session::default().open_raw(&path, &request).unwrap();
+    let points = starting_points(&project);
+    let elf = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/raw-cortex-m-scatter-gcc.elf");
+    let ram_main = elf_symbol(elf, "ram_main");
+    let (_, reasons) = points.iter().find(|(at, _)| *at == ram_main).unwrap_or_else(|| panic!("{points:?}"));
+    assert!(reasons.contains("scatter-load's jump") && reasons.contains("find_main"), "{reasons}");
 }

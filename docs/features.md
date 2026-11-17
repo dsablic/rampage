@@ -49,7 +49,8 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   region or zero fill), and reads Intel HEX and Motorola S-records. A compressed image opens with its decoded
   bytes as the code region, from the selector the decoders return. The reset code is followed by a bounded
   interpreter for the [scatter-load copies](mcp.md#scatter-load-copies) startup code makes, which are reported
-  and mapped at their run addresses so discovery continues into the copied code. See [Raw code](raw-code.md) for
+  and mapped at their run addresses so discovery continues into the copied code, and `binary_info` names the
+  functions to start reading (`raw.starting_points`). See [Raw code](raw-code.md) for
   the workflow, [Raw Projects in MCP](mcp.md#multiple-regions-intel-hex-and-s-records) for the fields and
   [the firmware walkthrough](firmware-walkthrough.md) for a vendor update file end to end. Limits: base addresses and regions are
   the analyst's assertion; Sleigh profiles other than MSP430 and AVR8 do not decompile; the reset-code follow

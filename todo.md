@@ -206,7 +206,7 @@ decoded code.
     discovered (a task named only by an RTOS thread-definition record, an init-hook table in code copied to TCM).
     Discovery now follows code pointers in records the code addresses, the pointer-table scan covers every code
     region and also runs when functions cover under an eighth of the code, and M-profile `adr rN, #0` is a data
-    reference; on the updater 37 functions became 910 and each sum-error string has its function;
+    reference; on the updater 37 functions became 997 and each sum-error string has its function;
   - `find_main` refuses Raw projects; done: Cortex-M reset handlers are followed to the first call that never
     returns or the copied code that starts the scheduler;
   - `decompile` with `exact_entry` refuses ARM; done for Raw Cortex-M Thumb (mode points, flash folding). ARM ELF,
@@ -215,7 +215,8 @@ decoded code.
   - the vector-table parser reports implausible words as `stack_pointer` instead of rejecting the candidate;
     done: `raw.vector_table.refused_reason`;
   - run-to-run variance is large (run 4 reached the RTOS startup, run 5 stopped at the jump fragment): consider
-    `binary_info` naming the scatter jump target's enclosing function and the first functions worth reading.
+    `binary_info` naming the scatter jump target's enclosing function and the first functions worth reading;
+    done: `raw.starting_points`.
 - [ ] **Flaky UI test.** `rampage-ui` `debugger::tests::local_socket::genuine_save_refusal_remains_typed_until_resources_are_recorded_despite_obsolete_binding`
   fails intermittently: locally with BrokenPipe on its socket, and on CI Linux ARM64 (2badb62) with "Harness::run
   exceeded max_steps (4)" from a text-selection repaint in `inspection_harness`. Use `run_steps` or wait for the

@@ -28,6 +28,31 @@ enum Ends {
 
 /// Instructions a trampoline (code that only loads the next address and jumps there) may have.
 const TRAMPOLINE_INSTRUCTIONS: usize = 16;
+/// Words read from a candidate init table, and init routines listed as starting points.
+const INIT_TABLE_WORDS: u64 = 64;
+const INIT_ROUTINES_LISTED: usize = 3;
+/// Starting points listed in binary_info.
+const MAX_STARTING_POINTS: usize = 8;
+
+/// Adds `reason` to the starting point at `address`, or a new point when there is room.
+pub(crate) fn add_starting_point(
+    project: &Project,
+    points: &mut Vec<crate::rows::StartingPoint>,
+    address: u64,
+    reason: String,
+) {
+    if let Some(point) = points.iter_mut().find(|point| point.address == address) {
+        if !point.reasons.contains(&reason) {
+            point.reasons.push(reason);
+        }
+    } else if points.len() < MAX_STARTING_POINTS {
+        points.push(crate::rows::StartingPoint {
+            address,
+            name: project.function_name(address),
+            reasons: vec![reason],
+        });
+    }
+}
 
 fn describe(line: &DisassemblyLine) -> String {
     format!("{:#x}: {}", line.address, line.text)
@@ -119,6 +144,90 @@ impl Project {
             }
         }
         Ok(None)
+    }
+
+    /// The table of init routines the startup function `function` walks: a run of at least two Thumb code pointers,
+    /// ended by zero, at an address the function loads or one word of a record there points at.
+    fn init_table(&self, function: u64) -> Result<Option<(u64, Vec<u64>)>, ApiError> {
+        let word = |address: u64| {
+            self.binary.read(address, 4).map(|bytes| u64::from(u32::from_le_bytes(bytes.try_into().expect("word"))))
+        };
+        let run = |address: u64| -> Vec<u64> {
+            let mut targets = Vec::new();
+            for index in 0..INIT_TABLE_WORDS {
+                match word(address + 4 * index) {
+                    Some(value) if value & 1 == 1 && self.binary.is_code(value & !1) => targets.push(value & !1),
+                    _ => break,
+                }
+            }
+            targets
+        };
+        let mut best: Option<(u64, Vec<u64>)> = None;
+        for line in self.ordered_lines(function) {
+            let Some(value) = line.immediate.or(line.data_ref.filter(|_| !line.accesses)) else { continue };
+            if value & 3 != 0 || self.binary.read(value, 4).is_none() {
+                continue;
+            }
+            let mut tables = vec![value];
+            tables.extend((0..8).filter_map(|index| word(value + 4 * index)).filter(|pointer| pointer & 3 == 0));
+            for table in tables {
+                let targets = run(table);
+                if targets.len() >= 2 && best.as_ref().is_none_or(|(_, best)| targets.len() > best.len()) {
+                    best = Some((table, targets));
+                }
+            }
+        }
+        Ok(best)
+    }
+
+    /// The functions worth reading first in a Raw Cortex-M image, each with why: the reset handler, the function
+    /// scatter-load jumps into and a trampoline's target, find_main's candidate and the largest init routines.
+    pub(crate) fn cortex_m_starting_points(&self) -> Result<Vec<crate::rows::StartingPoint>, ApiError> {
+        let mut points = Vec::new();
+        let Some(entry) = self.binary.entry else { return Ok(points) };
+        let Some(raw) = self.binary.raw_code_image() else { return Ok(points) };
+        add_starting_point(self, &mut points, entry, "the reset handler (the entry)".to_owned());
+        let mut startup = entry;
+        if let Some(scatter) = raw.scatter_load()
+            && let Some(target) = scatter.continues_at
+            && let Some(function) = self.function_containing(target)?
+        {
+            let reason = if function == target {
+                "scatter-load's jump from the reset code into copied code lands here".to_owned()
+            } else {
+                format!("holds {target:#x}, where scatter-load's jump from the reset code into copied code lands")
+            };
+            add_starting_point(self, &mut points, function, reason);
+            startup = function;
+            if let Some((next, load)) = self.trampoline_target(function)? {
+                add_starting_point(self, &mut points, next, format!("the copied code jumps here: {load}"));
+                startup = next;
+            }
+        }
+        for candidate in self.cortex_m_candidates()? {
+            let reason = format!("find_main ({} confidence): {}", candidate.confidence.as_str(), candidate.observation);
+            add_starting_point(self, &mut points, candidate.address, reason);
+        }
+        if let Some((table, targets)) = self.init_table(startup)? {
+            let analysis = self.analysis()?;
+            let size =
+                |address: u64| analysis.program.function_at(address).map_or(0, |function| function.end() - address);
+            let mut ranked: Vec<u64> = targets.clone();
+            ranked.sort_by_key(|&address| std::cmp::Reverse(size(address)));
+            ranked.dedup();
+            for address in ranked.into_iter().take(INIT_ROUTINES_LISTED) {
+                let size = match size(address) {
+                    0 => "not a discovered function start".to_owned(),
+                    bytes => format!("{bytes} bytes"),
+                };
+                let reason = format!(
+                    "one of the {} init routines the startup calls through the table at {table:#x}, {size}",
+                    targets.len()
+                );
+                add_starting_point(self, &mut points, address, reason);
+            }
+        }
+        Ok(points)
     }
 
     /// Candidates for the program's own entry logic in a Raw Cortex-M image, from its reset handler.

@@ -167,8 +167,9 @@ With the same `raw` selector, `list_functions` lists the startup code and the co
   {"address": "0x10000060", "name": "sub_10000060"}, {"address": "0x100000e0", "name": "sub_100000e0"}]}
 ```
 
-`find_main` follows the reset code the same way and names the copied function at 0x100000e0 at medium
-confidence: the startup jumps into it and it never returns. `decompile` at `entry` shows the startup code walking
+`binary_info` names where to start in `raw.starting_points`: the reset handler, the copied function at
+0x100000e0 that scatter-load's jump lands in, and `find_main`'s candidate. `find_main` follows the reset code the
+same way and names that copied function at medium confidence: the startup jumps into it and it never returns. `decompile` at `entry` shows the startup code walking
 its region table and calling each entry's handler:
 
 ```c

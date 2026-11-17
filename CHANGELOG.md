@@ -6,6 +6,12 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- A Cortex-M Raw `binary_info` names where to start reading: `raw.starting_points` lists at most eight functions,
+  each with its reasons (the reset handler, the function scatter-load's jump lands in and a trampoline's target,
+  `find_main`'s candidate, the largest routines of the init table the startup walks, inferred CRC routines), and
+  the summary view keeps the whole list. A request with `pointer_tables` unset now also seeds inferred CRC routines
+  when the automatic pointer-table scan was applied.
+
 - A Cortex-M Raw project's reset-time vector table is refused as a whole unless its initial SP lies in RAM
   (0x10000000 to 0x40000000, or a mapped `ram` region) and Reset is a Thumb handler in the code:
   `raw.vector_table.refused_reason` says why and to open the image with `entry` instead, and nothing of it is
@@ -30,11 +36,12 @@ see the [stability policy](docs/stability.md) for what the version promises.
 - Raw Cortex-M discovery reaches code named only in data, so `xrefs` finds the code that loads a string (fifth
   Haiku run: the updater's sum-error strings had no references). After discovery, the words after each address the
   code references are read, and odd words pointing at code that decodes like a function become seeds, for up to
-  three more rounds: RTOS thread definitions and descriptors passed by address. The pointer-table scan covers every
+  three more rounds: RTOS thread definitions, descriptors and init tables passed by address (an entry of an array
+  only when its target opens with `push {..., lr}`, so case-label tables do not count). The pointer-table scan covers every
   code region (an init-hook array in code copied to TCM), and the automatic scan also runs when discovered functions
   cover less than an eighth of the code (`raw.pointer_tables.automatic.covered_bytes`). In M-profile Thumb code,
   `adr rN, #0` (a string placed right after it) is a data reference. On the run's updater, discovery goes from 37 to
-  910 functions and each sum-error string has its referencing function.
+  997 functions and each sum-error string has its referencing function.
 
 - Hints: `list_dir`'s `next` names `fs_list` for ZIP archives and `dex_metadata` for APK, AAB, JAR and DEX files,
   and opening a bare DEX file as a binary points at `dex_metadata` instead of the headerless-image selectors.

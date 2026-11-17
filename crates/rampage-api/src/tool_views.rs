@@ -132,7 +132,10 @@ fn shorten_lists(value: &mut Value, path: &str, rows: usize, projection: &mut Pr
             for key in keys {
                 let child = format!("{path}/{key}");
                 if let Some(items) = object.get_mut(&key).and_then(Value::as_array_mut) {
-                    let keep = if items.iter().any(|item| item.is_object() || item.is_array()) {
+                    // The starting points are few (at most 8) and the reason to read the summary.
+                    let keep = if key == "starting_points" {
+                        items.len()
+                    } else if items.iter().any(|item| item.is_object() || item.is_array()) {
                         rows
                     } else {
                         rows.max(RAW_SUMMARY_VALUES)

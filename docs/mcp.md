@@ -831,10 +831,18 @@ discovery has run (it never starts discovery itself): `"pointer_tables":
 true` on Cortex-M when `false` turned it off, and dropping `"scatter_load": false` when the startup copies it
 reported were left unmapped. With `pointer_tables` unset, the scan runs by itself instead (above). Startup code and calls through function pointers are the usual reasons discovery stops early.
 
+Once discovery has run, a Cortex-M `binary_info` lists `raw.starting_points` (at most 8, never cut by the summary
+view): `address`, `name` and `reasons`, for the reset handler, the function holding scatter-load's jump target and
+the target of a trampoline there, `find_main`'s candidate with its confidence and observation, the three largest
+routines of the init table the startup function walks (the longest run of at least two Thumb code pointers at an
+address that function loads, or one word of a record there points at), and the CRC routines in `inferred_seeds`.
+
 On Cortex-M, discovery also follows code pointers held in data: after it runs, the 16 words from each address the
 code references (a record such as an RTOS thread definition passed by address) are read, and an odd word that
 points at code outside every discovered function, not at text, and decodes like code (`push {..., lr}` first, or
-a straight-line decode up to 128 instructions reaching an unconditional return, branch or halt) becomes a seed;
+a straight-line decode up to 128 instructions reaching an unconditional return, branch or halt) becomes a seed; a
+word in a run of three code pointers (an array, the two words before the record included) also needs that
+`push {..., lr}`, which a switch's case labels and constants pointing into code lack;
 up to three more rounds run while each finds new starts, at most 4096 per round. In M-profile Thumb code,
 `adr rN, #0` forms the address of the word after it (a string placed in the code), and is a data reference.
 

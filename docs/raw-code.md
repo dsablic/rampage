@@ -123,7 +123,9 @@ an RTOS thread definition (`{name, entry, stack size, priority}`) passed by addr
 of init routines. On Cortex-M, after discovery the words just past each address the code references are read;
 an odd word that points at code outside every discovered function and decodes like code (a `push {..., lr}`
 first, or a straight run that reaches a return or branch), and not at text, becomes a function start, for up to
-three more rounds. So a task's code, and the strings it loads, are found although nothing calls the task.
+three more rounds. A word among three or more code pointers in a row (an array) counts only when its target opens
+with `push {..., lr}`, so an init or handler table counts and a switch's case labels do not. So a task's code, and
+the strings it loads, are found although nothing calls the task.
 
 ## Pointer tables
 
@@ -148,6 +150,14 @@ pointer) is looked for the way `integrity_checks` infers it: a CRC-32 polynomial
 PC-relative `ldr` of it outside every function, and a `push {..., lr}` prologue before the load. Each such start is
 seeded into discovery, so `decompile`, `lock_mechanisms` and `integrity_checks` see the routine as a function, and
 `binary_info` lists it in `raw.inferred_seeds` with that evidence.
+
+## Where to start reading
+
+Once discovery has run (a Cortex-M request with `pointer_tables` unset runs it at open), `binary_info` lists
+`raw.starting_points`: at most eight functions worth reading first, each with its reasons. They are the reset
+handler, the function scatter-load's jump lands in and a trampoline's target, `find_main`'s candidate, the
+largest init routines the startup calls through its table, and the CRC routines in `raw.inferred_seeds`. The
+summary view keeps the whole list.
 
 ## Find main
 
