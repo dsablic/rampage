@@ -27,6 +27,10 @@ pub struct DecodeLimits {
     pub max_alloc: usize,
     /// UTF-16 units per string or builder.
     pub max_string: usize,
+    /// Code units of decoder bodies kept decoded at once (a larger body is not emulated), and code units the call
+    /// site scan reads for the whole app.
+    pub max_code_units: usize,
+    pub max_scan_units: usize,
     /// Call sites considered, distinct emulations run and instructions run for the whole app.
     pub max_sites: usize,
     pub max_emulations: usize,
@@ -41,6 +45,8 @@ impl Default for DecodeLimits {
             max_array: 1 << 16,
             max_alloc: 1 << 20,
             max_string: 1 << 16,
+            max_code_units: 1 << 20,
+            max_scan_units: 64 << 20,
             max_sites: 4096,
             max_emulations: 2048,
             max_total_steps: 8_000_000,
@@ -61,6 +67,8 @@ pub enum Value {
     Base64Decoder(bool),
     /// The second half of a long, or a register never written.
     Unset,
+    /// A static field whose initial value was not read (a type, enum, method or array constant).
+    Unknown,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +135,33 @@ fn fault<T>(what: impl Into<String>) -> Step<T> {
     Err(Stop::Fault(what.into()))
 }
 
+/// A switch table, built once per payload: packed by arithmetic, sparse by binary search.
+enum Switch {
+    Packed { first: i32, targets: Vec<u32> },
+    Sparse { cases: Vec<(i32, u32)> },
+}
+
+impl Switch {
+    fn target(&self, key: i32) -> Option<u32> {
+        match self {
+            Switch::Packed { first, targets } => {
+                let at = i64::from(key) - i64::from(*first);
+                usize::try_from(at).ok().and_then(|at| targets.get(at).copied())
+            }
+            Switch::Sparse { cases } => cases.binary_search_by_key(&key, |&(case, _)| case).ok().map(|at| cases[at].1),
+        }
+    }
+}
+
+/// A decoded method body with its address index and the switch tables built so far.
+struct Body {
+    code: CodeItem,
+    decoded: Vec<Decoded>,
+    index: HashMap<u32, usize>,
+    dex: usize,
+    switches: RefCell<HashMap<u32, Rc<Switch>>>,
+}
+
 /// The interpreter's state across one emulation: the app, the statics of initialized classes, the budgets used.
 pub struct Emulator<'a> {
     dexes: &'a [&'a Dex],
@@ -136,7 +171,9 @@ pub struct Emulator<'a> {
     initialized: HashSet<String>,
     /// Classes whose `<clinit>` stopped: their statics are unknown.
     failed: HashSet<String>,
-    bodies: HashMap<u32, Rc<(CodeItem, Vec<Decoded>)>>,
+    /// Decoded bodies by DEX file and code offset, and the code units they hold.
+    bodies: HashMap<(usize, u32), Rc<Body>>,
+    body_units: usize,
     pub steps: u64,
     alloc: usize,
     depth: usize,
@@ -185,17 +222,28 @@ impl<'a> Emulator<'a> {
             initialized: HashSet::new(),
             failed: HashSet::new(),
             bodies: HashMap::new(),
+            body_units: 0,
             steps: 0,
             alloc: 0,
             depth: 0,
         }
     }
 
-    /// Starts a new emulation: budgets reset, statics kept (they are what `<clinit>` computed).
+    /// Starts a new emulation: budgets reset, and statics forgotten (each emulation runs the `<clinit>`s it needs
+    /// itself), so no emulation sees another's writes and memory never accumulates across emulations.
     pub fn reset(&mut self) {
         self.steps = 0;
         self.alloc = 0;
         self.depth = 0;
+        self.statics.clear();
+        self.initialized.clear();
+        self.failed.clear();
+    }
+
+    /// Charges `units` of work (a loop over a string or array inside one instruction) to the step budget.
+    fn work(&mut self, units: usize) -> Step<()> {
+        self.steps = self.steps.saturating_add(units as u64);
+        if self.steps > self.limits.max_steps { Err(Stop::Budget("steps")) } else { Ok(()) }
     }
 
     fn charge(&mut self, elements: usize) -> Step<()> {
@@ -211,20 +259,52 @@ impl<'a> Emulator<'a> {
         Ok(Value::Str(Rc::new(units)))
     }
 
-    fn body(&mut self, method: u32) -> Step<Rc<(CodeItem, Vec<Decoded>)>> {
-        if let Some(body) = self.bodies.get(&method) {
-            return Ok(Rc::clone(body));
-        }
+    fn body(&mut self, method: u32) -> Step<Rc<Body>> {
         let info = self.graph.method(method);
         if !info.defined || info.code_off == 0 {
             return unmodelled(format!("{} has no body", info.text));
         }
+        let key = (info.dex, info.code_off);
+        if let Some(body) = self.bodies.get(&key) {
+            return Ok(Rc::clone(body));
+        }
         let dex = self.dexes.get(info.dex).ok_or_else(|| Stop::Fault("no such DEX file".to_owned()))?;
         let code = dex.code_item(info.code_off).map_err(|error| Stop::Fault(error.to_string()))?;
+        let units = code.insns.len();
+        if units > self.limits.max_code_units {
+            return Err(Stop::Budget("code size"));
+        }
+        if self.body_units + units > self.limits.max_code_units {
+            self.bodies.clear();
+            self.body_units = 0;
+        }
+        self.body_units += units;
+        self.work(units / 4)?;
         let decoded = decode_all(&code.insns);
-        let body = Rc::new((code, decoded));
-        self.bodies.insert(method, Rc::clone(&body));
+        let index = decoded.iter().enumerate().map(|(index, insn)| (insn.address, index)).collect();
+        let body = Rc::new(Body { code, decoded, index, dex: info.dex, switches: RefCell::new(HashMap::new()) });
+        self.bodies.insert(key, Rc::clone(&body));
         Ok(body)
+    }
+
+    /// The switch table of the switch at `address` (payload `payload`) of `body`, built once and charged.
+    fn switch(&mut self, body: &Body, address: u32, payload: u32, packed: bool) -> Step<Rc<Switch>> {
+        if let Some(table) = body.switches.borrow().get(&address) {
+            return Ok(Rc::clone(table));
+        }
+        let mut cases = switch_cases(&body.code.insns, address, payload, usize::MAX)
+            .ok_or_else(|| Stop::Fault("bad switch payload".to_owned()))?;
+        self.work(cases.len())?;
+        let table = if packed {
+            let first = cases.first().map_or(0, |&(key, _)| key);
+            Switch::Packed { first, targets: cases.into_iter().map(|(_, target)| target).collect() }
+        } else {
+            cases.sort_by_key(|&(key, _)| key);
+            Switch::Sparse { cases }
+        };
+        let table = Rc::new(table);
+        body.switches.borrow_mut().insert(address, Rc::clone(&table));
+        Ok(table)
     }
 
     /// Sets `class`'s statics to their `static_values` and runs its `<clinit>`, once, when the app defines it.
@@ -248,7 +328,7 @@ impl<'a> Emulator<'a> {
                         InitialValue::Int(value) => Value::Int(value as i32),
                         InitialValue::String(text) => self.string(units(&text))?,
                         InitialValue::Null => Value::Null,
-                        InitialValue::Other => continue,
+                        InitialValue::Other => Value::Unknown,
                     };
                     self.statics.insert(field.text(), value);
                 }
@@ -284,7 +364,7 @@ impl<'a> Emulator<'a> {
         }
         let (params, _) = parse_proto(&info.proto).ok_or_else(|| Stop::Fault("bad prototype".to_owned()))?;
         let body = self.body(method)?;
-        let (code, decoded) = (&body.0, &body.1);
+        let code = &body.code;
         let registers = usize::from(code.registers);
         let ins = usize::from(code.ins);
         let width: usize = params.iter().map(|param| if wide(param) { 2 } else { 1 }).sum();
@@ -297,24 +377,16 @@ impl<'a> Emulator<'a> {
             regs[at] = arg;
             at += if wide(param) { 2 } else { 1 };
         }
-        let index: HashMap<u32, usize> =
-            decoded.iter().enumerate().map(|(index, insn)| (insn.address, index)).collect();
-        let dex: &'a Dex =
-            self.dexes.get(info.dex).copied().ok_or_else(|| Stop::Fault("no such DEX file".to_owned()))?;
         self.depth += 1;
-        let result = self.run(dex, &code.insns, decoded, &index, &mut regs);
+        let result = self.run(&body, &mut regs);
         self.depth -= 1;
         result
     }
 
-    fn run(
-        &mut self,
-        dex: &'a Dex,
-        insns: &[u16],
-        decoded: &[Decoded],
-        index: &HashMap<u32, usize>,
-        regs: &mut [Value],
-    ) -> Step<Value> {
+    fn run(&mut self, body: &Body, regs: &mut [Value]) -> Step<Value> {
+        let dex: &'a Dex =
+            self.dexes.get(body.dex).copied().ok_or_else(|| Stop::Fault("no such DEX file".to_owned()))?;
+        let (insns, decoded, index) = (&body.code.insns[..], &body.decoded[..], &body.index);
         let mut pc = 0usize;
         let mut result = Value::Unset;
         loop {
@@ -350,6 +422,9 @@ impl<'a> Emulator<'a> {
                 0x0a..=0x0c => {
                     let a = r(0)?;
                     regs[a] = std::mem::replace(&mut result, Value::Unset);
+                    if insn.opcode == 0x0b && a + 1 < regs.len() {
+                        regs[a + 1] = Value::Unset;
+                    }
                 }
                 0x0e => return Ok(Value::Null),
                 0x0f..=0x11 => return Ok(regs[r(0)?].clone()),
@@ -411,7 +486,7 @@ impl<'a> Emulator<'a> {
                         return unmodelled(format!("filled-new-array {kind}"));
                     }
                     let mut items = Vec::new();
-                    for &reg in &insn.regs {
+                    for reg in insn.registers() {
                         match regs.get(reg as usize) {
                             Some(Value::Int(value)) => items.push(*value),
                             _ => return fault("filled-new-array of a non-int"),
@@ -422,16 +497,25 @@ impl<'a> Emulator<'a> {
                 }
                 0x26 => {
                     let a = r(0)?;
+                    // The header first: the element count is checked before the data is copied.
+                    let header = insn
+                        .target
+                        .and_then(|target| insns.get(target as usize..target as usize + 4))
+                        .filter(|header| header[0] == 0x0300)
+                        .ok_or_else(|| Stop::Fault("bad fill-array-data payload".to_owned()))?;
+                    let declared = (u32::from(header[2]) | (u32::from(header[3]) << 16)) as usize;
+                    let Value::Array(array) = &regs[a] else { return fault("fill-array-data of a non-array") };
+                    if declared > array.borrow().len() {
+                        return fault("fill-array-data past the array's end");
+                    }
+                    let array = Rc::clone(array);
+                    self.work(declared)?;
                     let (width, data) = insn
                         .target
                         .and_then(|target| array_data(insns, target))
                         .ok_or_else(|| Stop::Fault("bad fill-array-data payload".to_owned()))?;
-                    let Value::Array(array) = &regs[a] else { return fault("fill-array-data of a non-array") };
                     let mut array = array.borrow_mut();
                     let count = data.len() / width.max(1);
-                    if count > array.len() {
-                        return fault("fill-array-data past the array's end");
-                    }
                     let word = |i: usize| -> i64 {
                         let mut bytes = [0u8; 8];
                         bytes[..width].copy_from_slice(&data[i * width..(i + 1) * width]);
@@ -455,9 +539,8 @@ impl<'a> Emulator<'a> {
                     let a = r(0)?;
                     let Value::Int(key) = regs[a] else { return fault("switch on a non-int") };
                     let payload = insn.target.ok_or_else(|| Stop::Fault("bad switch payload".to_owned()))?;
-                    let cases = switch_cases(insns, insn.address, payload, 1 << 16)
-                        .ok_or_else(|| Stop::Fault("bad switch payload".to_owned()))?;
-                    if let Some(&(_, target)) = cases.iter().find(|(case, _)| *case == key) {
+                    let table = self.switch(body, insn.address, payload, insn.opcode == 0x2b)?;
+                    if let Some(target) = table.target(key) {
                         next = jump(Some(target))?;
                     }
                 }
@@ -561,7 +644,7 @@ impl<'a> Emulator<'a> {
                     let mut at = 0usize;
                     let mut take = |wide_value: bool| -> Step<Value> {
                         let reg =
-                            *insn.regs.get(at).ok_or_else(|| Stop::Fault("too few argument registers".to_owned()))?
+                            insn.register(at).ok_or_else(|| Stop::Fault("too few argument registers".to_owned()))?
                                 as usize;
                         at += if wide_value { 2 } else { 1 };
                         regs.get(reg).cloned().ok_or_else(|| Stop::Fault("register out of range".to_owned()))
@@ -676,6 +759,9 @@ impl<'a> Emulator<'a> {
         }
         self.initialize(class)?;
         let key = format!("{class}->{name}:{kind}");
+        if matches!(self.statics.get(&key), Some(Value::Unknown)) {
+            return unmodelled(format!("sget {key}: its initial value was not read"));
+        }
         Ok(self.statics.get(&key).cloned().unwrap_or(match kind {
             "J" => Value::Long(0),
             "I" | "S" | "B" | "C" | "Z" => Value::Int(0),
@@ -701,6 +787,17 @@ impl<'a> Emulator<'a> {
             self.initialize(&class)?;
             return Ok((self.invoke(id, args)?, None));
         }
+        // A library call loops over its string and array arguments: charge that work to the step budget.
+        let work: usize = args
+            .iter()
+            .map(|value| match value {
+                Value::Str(text) => text.len(),
+                Value::Builder(builder) => builder.borrow().len(),
+                Value::Array(array) => array.borrow().len(),
+                _ => 0,
+            })
+            .sum();
+        self.work(work)?;
         let arg = |index: usize| args.get(index).cloned().unwrap_or(Value::Unset);
         let none = |value: Value| Ok((value, None));
         match (class, name) {
@@ -751,7 +848,7 @@ impl<'a> Emulator<'a> {
             ("Landroid/util/Base64;", "decode") => {
                 let flags = int(&arg(1))?;
                 let input = match arg(0) {
-                    Value::Str(text) => text.iter().map(|&unit| unit as u8).collect::<Vec<u8>>(),
+                    Value::Str(text) => ascii(&text)?,
                     Value::Array(array) => {
                         array.borrow().bytes().ok_or_else(|| Stop::Fault("Base64 of another array".to_owned()))?
                     }
@@ -765,7 +862,7 @@ impl<'a> Emulator<'a> {
             ("Ljava/util/Base64$Decoder;", "decode") => {
                 let Value::Base64Decoder(url) = arg(0) else { return fault("decode on a non-decoder") };
                 let input = match arg(1) {
-                    Value::Str(text) => text.iter().map(|&unit| unit as u8).collect::<Vec<u8>>(),
+                    Value::Str(text) => ascii(&text)?,
                     Value::Array(array) => {
                         array.borrow().bytes().ok_or_else(|| Stop::Fault("Base64 of another array".to_owned()))?
                     }
@@ -778,7 +875,11 @@ impl<'a> Emulator<'a> {
             ("Ljava/lang/Integer;", "parseInt") => {
                 let Value::Str(text) = arg(0) else { return fault("parseInt of a non-string") };
                 let radix = if proto.contains("I)") { int(&arg(1))? } else { 10 };
-                let parsed = i32::from_str_radix(text_of(&text).trim(), radix.clamp(2, 36) as u32)
+                if !(2..=36).contains(&radix) {
+                    return fault("NumberFormatException (radix)");
+                }
+                // Java neither trims nor accepts an empty sign; from_str_radix agrees on both.
+                let parsed = i32::from_str_radix(&text_of(&text), radix as u32)
                     .map_err(|_| Stop::Fault("NumberFormatException".to_owned()))?;
                 none(Value::Int(parsed))
             }
@@ -792,8 +893,6 @@ impl<'a> Emulator<'a> {
                     return fault("arraycopy out of bounds");
                 }
                 let (start, at, count) = (start as usize, at as usize, count as usize);
-                let source = from.borrow().clone();
-                let mut target = to.borrow_mut();
                 macro_rules! copy {
                     ($a:expr, $b:expr) => {{
                         if start + count > $a.len() || at + count > $b.len() {
@@ -802,7 +901,28 @@ impl<'a> Emulator<'a> {
                         $b[at..at + count].clone_from_slice(&$a[start..start + count]);
                     }};
                 }
-                match (&source, &mut *target) {
+                macro_rules! within {
+                    ($a:expr) => {{
+                        if start + count > $a.len() || at + count > $a.len() {
+                            return fault("arraycopy out of bounds");
+                        }
+                        $a.copy_within(start..start + count, at);
+                    }};
+                }
+                if Rc::ptr_eq(&from, &to) {
+                    match &mut *to.borrow_mut() {
+                        Array::Byte(a) => within!(a),
+                        Array::Char(a) => within!(a),
+                        Array::Int(a) => within!(a),
+                        Array::Short(a) => within!(a),
+                        Array::Long(a) => within!(a),
+                        _ => return unmodelled("arraycopy within this array"),
+                    }
+                    return none(Value::Unset);
+                }
+                let source = from.borrow();
+                let mut target = to.borrow_mut();
+                match (&*source, &mut *target) {
                     (Array::Byte(a), Array::Byte(b)) => copy!(a, b),
                     (Array::Char(a), Array::Char(b)) => copy!(a, b),
                     (Array::Int(a), Array::Int(b)) => copy!(a, b),
@@ -862,7 +982,10 @@ impl<'a> Emulator<'a> {
                     _ => "UTF-8".to_owned(),
                 };
                 let bytes = match charset.to_ascii_uppercase().as_str() {
-                    "UTF-8" | "UTF8" => text_of(&this).into_bytes(),
+                    // A lone surrogate encodes as `?` in Java and as U+FFFD here: stop rather than differ.
+                    "UTF-8" | "UTF8" => String::from_utf16(&this)
+                        .map_err(|_| Stop::Unmodelled("getBytes of a lone surrogate".to_owned()))?
+                        .into_bytes(),
                     "ISO-8859-1" | "US-ASCII" | "ASCII" | "LATIN1" => {
                         this.iter().map(|&unit| if unit < 0x100 { unit as u8 } else { b'?' }).collect()
                     }
@@ -871,12 +994,16 @@ impl<'a> Emulator<'a> {
                 self.byte_array(bytes)?
             }
             ("substring", "(I)Ljava/lang/String;") => {
-                let made = slice(&this, int(&arg(1))?, this.len() as i32 - int(&arg(1))?)?.to_vec();
+                let start = int(&arg(1))?;
+                let count =
+                    (this.len() as i32).checked_sub(start).ok_or_else(|| Stop::Fault("substring".to_owned()))?;
+                let made = slice(&this, start, count)?.to_vec();
                 self.string(made)?
             }
             ("substring", "(II)Ljava/lang/String;") => {
                 let (start, end) = (int(&arg(1))?, int(&arg(2))?);
-                let made = slice(&this, start, end - start)?.to_vec();
+                let count = end.checked_sub(start).ok_or_else(|| Stop::Fault("substring".to_owned()))?;
+                let made = slice(&this, start, count)?.to_vec();
                 self.string(made)?
             }
             ("concat", _) => {
@@ -899,6 +1026,10 @@ impl<'a> Emulator<'a> {
                 self.string(this[start..end].to_vec())?
             }
             ("intern" | "toString", _) => Value::Str(this),
+            // Java's case mapping is locale- and Unicode-aware; only ASCII text is modelled.
+            ("toLowerCase" | "toUpperCase", _) if this.iter().any(|&unit| unit >= 0x80) => {
+                return unmodelled("case conversion of non-ASCII text");
+            }
             ("toLowerCase", "()Ljava/lang/String;") => self.string(
                 this.iter().map(|&unit| if (0x41..=0x5a).contains(&unit) { unit + 0x20 } else { unit }).collect(),
             )?,
@@ -1072,6 +1203,14 @@ fn slice<T>(items: &[T], start: i32, count: i32) -> Step<&[T]> {
     Ok(&items[start as usize..start as usize + count as usize])
 }
 
+/// A Base64 input string's bytes; Java refuses a non-ASCII character, so it is a fault here.
+fn ascii(text: &[u16]) -> Step<Vec<u8>> {
+    text.iter()
+        .map(|&unit| u8::try_from(unit).ok().filter(u8::is_ascii))
+        .collect::<Option<_>>()
+        .ok_or_else(|| Stop::Fault("Base64 input is not ASCII".to_owned()))
+}
+
 fn text_of(units: &[u16]) -> String {
     text(units)
 }
@@ -1177,6 +1316,35 @@ fn printable(text: &str) -> bool {
     count >= 2 && text.chars().all(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r')) && !text.contains('\u{fffd}')
 }
 
+/// The addresses that start a basic block: the entry, branch and case targets, exception handlers, and every
+/// instruction after a branch, switch, return or throw.
+fn leaders(code: &CodeItem, decoded: &[Decoded]) -> HashSet<u32> {
+    let mut leaders = HashSet::from([0]);
+    for (index, insn) in decoded.iter().enumerate() {
+        let transfers = matches!(insn.opcode, 0x0e..=0x11 | 0x27..=0x2c | 0x32..=0x3d);
+        if !transfers {
+            continue;
+        }
+        if let Some(next) = decoded.get(index + 1) {
+            leaders.insert(next.address);
+        }
+        match insn.opcode {
+            0x2b | 0x2c => {
+                if let Some(cases) =
+                    insn.target.and_then(|payload| switch_cases(&code.insns, insn.address, payload, usize::MAX))
+                {
+                    leaders.extend(cases.into_iter().map(|(_, target)| target));
+                }
+            }
+            _ => leaders.extend(insn.target),
+        }
+    }
+    for range in &code.tries {
+        leaders.extend(code.catches(range).iter().map(|catch| catch.address));
+    }
+    leaders
+}
+
 /// The call sites where constants go into a static app method returning `String`, each emulated once per distinct
 /// input (results are shared between sites).
 pub fn decode_strings(dexes: &[&Dex], graph: &AppGraph, limits: DecodeLimits) -> Decoding {
@@ -1184,17 +1352,26 @@ pub fn decode_strings(dexes: &[&Dex], graph: &AppGraph, limits: DecodeLimits) ->
     let mut emulator = Emulator::new(dexes, graph, limits);
     let mut cache: HashMap<Emulation, Option<(String, u64)>> = HashMap::new();
     let mut total_steps = 0u64;
+    let mut scanned: HashSet<(usize, u32)> = HashSet::new();
+    let mut units_left = limits.max_scan_units;
     'methods: for (caller, method) in graph.methods.iter().enumerate() {
-        if !method.defined || method.code_off == 0 {
+        if !method.defined || method.code_off == 0 || !scanned.insert((method.dex, method.code_off)) {
             continue;
         }
         let Some(dex) = dexes.get(method.dex) else { continue };
         let Ok(code) = dex.code_item(method.code_off) else { continue };
+        if code.insns.len() > units_left {
+            out.notes
+                .push(format!("only the first {} code units were scanned for decoder calls", limits.max_scan_units));
+            break;
+        }
+        units_left -= code.insns.len();
         let decoded = decode_all(&code.insns);
-        let targets: HashSet<u32> = decoded.iter().filter_map(|insn| insn.target).collect();
+        let leaders = leaders(&code, &decoded);
+        // Constants are tracked within a basic block only: every leader starts with nothing known.
         let mut known: HashMap<u32, Constant> = HashMap::new();
         for insn in &decoded {
-            if targets.contains(&insn.address) {
+            if leaders.contains(&insn.address) {
                 known.clear();
             }
             match insn.opcode {
@@ -1237,7 +1414,7 @@ pub fn decode_strings(dexes: &[&Dex], graph: &AppGraph, limits: DecodeLimits) ->
             }
             let Some(index) = insn.index else { continue };
             let Ok(callee) = dex.method(index) else { continue };
-            let Some(id) = graph.id(&callee.text()) else { continue };
+            let Some(id) = graph.id(&callee.text()).and_then(|id| graph.defined_target(id)) else { continue };
             let target = graph.method(id);
             if !target.defined
                 || target.code_off == 0
@@ -1250,7 +1427,7 @@ pub fn decode_strings(dexes: &[&Dex], graph: &AppGraph, limits: DecodeLimits) ->
             {
                 continue;
             }
-            let inputs: Option<Vec<Constant>> = insn.regs.iter().map(|reg| known.get(reg).cloned()).collect();
+            let inputs: Option<Vec<Constant>> = insn.registers().map(|reg| known.get(&reg).cloned()).collect();
             let Some(inputs) = inputs.filter(|inputs| inputs.len() == callee.proto.parameters.len()) else { continue };
             let typed = callee
                 .proto

@@ -41,14 +41,17 @@ see the [stability policy](docs/stability.md) for what the version promises.
   emulated by a bounded Dalvik interpreter (arithmetic, arrays, `String`/`StringBuilder`, chars, Base64, the
   decoder class's statics; no I/O or reflection; any unmodelled instruction or call, and the step, depth,
   allocation and string-length budgets, stop it). `dex_metadata` pages the results with `list:
-  "decoded_strings"` (decoder, call site, inputs), `endpoint_inventory` reports them as `dex_decoded` evidence,
-  and `privacy_surface` names them as sink endpoints and lists them in a `Decoded strings` section. See
+  "decoded_strings"` (decoder, call site, inputs), `endpoint_inventory` with `decode` reports them as
+  `dex_decoded` evidence, and `privacy_surface` names them as sink endpoints and lists them in a `Decoded strings`
+  section. See
   [decoded strings](docs/android.md#decoded-strings).
 - `dex_code` `view: "pseudo"`: structured pseudocode of one method, paged by line: parameters named `this`, `p1`,
   ..., locals declared with the type their writes give them, `while (true)` loops with `break`/`continue` and
   `if`/`else` read from the control flow, Java-like calls with results and constructors folded, const-strings
   inline, and `goto` labels for jumps that fit no structure. Not Java decompilation; bounded by instructions,
   nesting and lines. See [pseudocode](docs/android.md#pseudocode).
+- Rust API: `WorkflowReport::target` is now an `Option<ReportTarget>` (a report on an APK, DEX file or directory has
+  an `input` instead); the JSON of binary reports is unchanged.
 - `dex_metadata`'s `accessibility_services` follows the class hierarchy across every DEX file of an APK.
 - `endpoint_inventory` reads APKs and DEX files: each DEX string pool with the methods that load every string and
   the networking calls they make (`dex_string` evidence), and each native library in the APK. See

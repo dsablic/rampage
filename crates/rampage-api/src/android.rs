@@ -49,6 +49,7 @@ pub struct DexMetadataQuery {
 
 /// One opened APK or DEX file.
 pub(crate) struct Opened {
+    pub(crate) path: PathBuf,
     pub(crate) kind: &'static str,
     pub(crate) apk: Option<Apk>,
     /// `(entry path, parsed file or error, size)` in multidex order; one entry for a bare DEX file.
@@ -102,14 +103,14 @@ pub(crate) fn open(path: &Path, read_native: bool) -> Result<Opened, String> {
             if let Err(error) = &dex {
                 return Err(format!("{}: {error}", path.display()));
             }
-            Ok(Opened { kind: "dex", apk: None, dexes: vec![(name, dex, metadata.len())] })
+            Ok(Opened { path: path.to_owned(), kind: "dex", apk: None, dexes: vec![(name, dex, metadata.len())] })
         }
         Some(_) => {
             let mut apk = Apk::open(path, ApkLimits { read_native, ..ApkLimits::default() })
                 .map_err(|error| format!("{}: {error}", path.display()))?;
             let dexes =
                 std::mem::take(&mut apk.dex).into_iter().map(|entry| (entry.path, entry.dex, entry.size)).collect();
-            Ok(Opened { kind: "apk", apk: Some(apk), dexes })
+            Ok(Opened { path: path.to_owned(), kind: "apk", apk: Some(apk), dexes })
         }
         None => Err(format!(
             "{} is not an APK, AAB, JAR or DEX file (no ZIP or DEX magic); for a native library use the binary tools",
@@ -261,6 +262,50 @@ fn component_row(component: &Component, defined: &HashSet<String>) -> Value {
         row["in_dex"] = json!(defined.contains(&descriptor));
     }
     row
+}
+
+/// The call graph of one APK or DEX file and, computed on first use, its decoded strings.
+pub(crate) struct AppFacts {
+    pub(crate) graph: rampage_dex::graph::AppGraph,
+    decoded: std::sync::OnceLock<rampage_dex::emulate::Decoding>,
+}
+
+impl AppFacts {
+    /// The strings static decoder methods produce, emulated once per input.
+    pub(crate) fn decoded(&self, opened: &Opened) -> &rampage_dex::emulate::Decoding {
+        self.decoded.get_or_init(|| {
+            let dexes: Vec<&Dex> = opened.parsed().map(|(_, dex)| dex).collect();
+            rampage_dex::emulate::decode_strings(&dexes, &self.graph, rampage_dex::emulate::DecodeLimits::default())
+        })
+    }
+}
+
+/// The input a cached [`AppFacts`] was built from: its path, size and modification time.
+type FactsKey = (PathBuf, u64, Option<std::time::SystemTime>);
+
+/// The facts of the last input read, so the pages of one APK (summary, decoded strings, the privacy report) do not
+/// rebuild its graph and re-run its decoders.
+static FACTS: std::sync::Mutex<Option<(FactsKey, std::sync::Arc<AppFacts>)>> = std::sync::Mutex::new(None);
+
+/// The call graph (and lazily the decoded strings) of `opened`, cached for the last input.
+pub(crate) fn app_facts(opened: &Opened) -> std::sync::Arc<AppFacts> {
+    let metadata = std::fs::metadata(&opened.path).ok();
+    let key = (
+        opened.path.canonicalize().unwrap_or_else(|_| opened.path.clone()),
+        metadata.as_ref().map_or(0, std::fs::Metadata::len),
+        metadata.and_then(|metadata| metadata.modified().ok()),
+    );
+    let mut cache = FACTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((cached, facts)) = cache.as_ref()
+        && *cached == key
+    {
+        return std::sync::Arc::clone(facts);
+    }
+    let dexes: Vec<&Dex> = opened.parsed().map(|(_, dex)| dex).collect();
+    let graph = rampage_dex::graph::AppGraph::build(&dexes, rampage_dex::graph::GraphLimits::default());
+    let facts = std::sync::Arc::new(AppFacts { graph, decoded: std::sync::OnceLock::new() });
+    *cache = Some((key, std::sync::Arc::clone(&facts)));
+    facts
 }
 
 /// The ELF architecture of an ABI directory name.
@@ -472,15 +517,8 @@ fn privacy(opened: &Opened) -> Value {
         }
     }
     // The class hierarchy across every DEX file: a subclass in classes2.dex of a class in classes.dex counts.
-    let dexes: Vec<&Dex> = opened.parsed().map(|(_, dex)| dex).collect();
-    let mut graph = rampage_dex::graph::AppGraph::build(&dexes, rampage_dex::graph::GraphLimits::default());
-    let mut classes: Vec<String> = graph.classes.keys().cloned().collect();
-    classes.sort();
-    for class in classes {
-        if graph.ancestors(&class).contains(ACCESSIBILITY_SERVICE) {
-            accessibility.push(class_name(&class));
-        }
-    }
+    let facts = app_facts(opened);
+    accessibility.extend(facts.graph.subclasses(ACCESSIBILITY_SERVICE).iter().map(|class| class_name(class)));
     let manifest = opened.manifest();
     let requested: HashSet<&str> = manifest
         .map(|manifest| manifest.uses_permissions.iter().map(|permission| permission.name.as_str()).collect())
@@ -646,11 +684,10 @@ fn summary(path: &Path, opened: &Opened, components_limit: usize) -> Value {
 /// The strings static decoder methods produce at their constant-argument call sites, emulated, one row per call
 /// site whose caller's class passes the filters.
 fn decoded_rows(opened: &Opened, prefix: Option<&str>, package: Option<&str>) -> Vec<Value> {
-    let dexes: Vec<&Dex> = opened.parsed().map(|(_, dex)| dex).collect();
     let paths: Vec<&str> = opened.parsed().map(|(path, _)| path).collect();
-    let graph = rampage_dex::graph::AppGraph::build(&dexes, rampage_dex::graph::GraphLimits::default());
-    let decoded = rampage_dex::emulate::decode_strings(&dexes, &graph, rampage_dex::emulate::DecodeLimits::default());
-    decoded
+    let facts = app_facts(opened);
+    facts
+        .decoded(opened)
         .strings
         .iter()
         .filter(|found| {

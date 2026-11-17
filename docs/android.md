@@ -131,7 +131,7 @@ pages the results (`prefix`/`package` filter by the calling class):
  "inputs": ["0"], "steps": 160}
 ```
 
-The same strings feed [`endpoint_inventory`](endpoint-inventory.md) (evidence `dex_decoded`) and
+The same strings feed [`endpoint_inventory`](endpoint-inventory.md) with `decode` (evidence `dex_decoded`) and
 [`privacy_surface`](privacy-surface.md#apks-and-dex-files), which names them as the endpoints of the sinks in the
 calling method or its callers and lists them in a `Decoded strings` section.
 
@@ -140,12 +140,18 @@ The interpreter models integer and long arithmetic, branches and switches, array
 `char[]` and `byte[]` with UTF-8, ISO-8859-1 or US-ASCII, `charAt`, `toCharArray`, `getBytes`, `substring`,
 `concat`, `valueOf`, ...), `StringBuilder`/`StringBuffer`, `android.util.Base64` and `java.util.Base64` decoders,
 `Integer.parseInt`, and the static fields of app classes (initial `static_values`, then the class's `<clinit>`,
-run once under the same budget). Calls into other static app methods nest up to 16 deep. There is no I/O, no
-reflection, no instance field and no object of an app class: any other instruction or call stops that emulation,
-as do 100,000 instructions, 64 Ki elements per array, 1 Mi array elements and string characters allocated, or a
-string past 64 Ki characters. Each distinct decoder and input is emulated once (shared by every call site
-passing the same); an app is decoded at up to 4096 call sites, 2048 emulations and 8 million instructions in all.
-Only printable results of two or more characters that differ from the input are kept.
+run within each emulation under its budget, so no emulation sees another's static writes; a static whose initial
+value is a type, enum, method or array constant stops the emulation). Calls into other static app methods nest up
+to 16 deep. There is no I/O, no reflection, no instance field and no object of an app class: any other instruction
+or call stops that emulation, as does Java behaviour not modelled exactly (case conversion of non-ASCII text, a
+lone surrogate in `getBytes`, non-ASCII Base64 input), as do 100,000 instructions (a library call charges one per
+character or element it handles, and a switch table is built once per body), 64 Ki elements per array, 1 Mi array
+elements and string characters allocated, a string past 64 Ki characters, or a decoder body over 1 Mi code
+units. Constants are read within a call site's basic block only (not across switch cases, handlers or jumps).
+Each distinct decoder and input is emulated once (shared by every call site passing the same); an app is decoded
+at up to 4096 call sites, 2048 emulations and 8 million instructions in all, with 64 Mi code units scanned for
+call sites (each body once). The graph and decoded strings of the last APK read are kept, so further pages and
+reports on it do not rebuild them. Only printable results of two or more characters that differ from the input are kept.
 
 ## dex_code
 

@@ -115,3 +115,35 @@ fn deep_nesting_falls_back_to_gotos_within_bounds() {
     assert!(text.contains("goto L_"), "deep levels fall back to gotos");
     assert!(lines.iter().all(|line| line.len() < 400));
 }
+
+#[test]
+fn every_switch_case_is_a_label() {
+    // packed-switch over 300 cases, each `const/4 v0, k; return v0`.
+    let n: u16 = 300;
+    let mut units = vec![0x002b, 0, 0];
+    for k in 0..n {
+        units.extend([((k & 0xf) << 12) | 0x0012, 0x000f]);
+    }
+    units.push(0x000e);
+    if units.len() % 2 == 1 {
+        units.push(0);
+    }
+    units[1] = units.len() as u16;
+    units.extend([0x0100, n, 0, 0]);
+    for k in 0..u32::from(n) {
+        let relative = 3 + 2 * k;
+        units.extend([relative as u16, (relative >> 16) as u16]);
+    }
+    let class = ClassSpec::new("Lcom/example/p/S;", "Ljava/lang/Object;").method(
+        "m",
+        "I",
+        &["I"],
+        0x9,
+        Some(Asm::new().raw(&units).code(1, 1, 0)),
+    );
+    let dex = Dex::parse(write_dex(&[class], 35)).unwrap();
+    let lines = method(&dex, "Lcom/example/p/S;->m(I)I");
+    let cases = lines.iter().filter(|line| line.trim_start().starts_with("case ")).count();
+    let labels = lines.iter().filter(|line| line.trim_start().starts_with("L_")).count();
+    assert_eq!((cases, labels), (300, 300));
+}

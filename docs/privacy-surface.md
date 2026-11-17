@@ -176,9 +176,12 @@ finding's observation (`lib/arm64-v8a/libnet.so: ...`).
 
 `no_user_trigger` is stated for a microphone, camera or screen capture reached from boot or app start only when no
 caller within the bounds is an activity, a UI callback or registers an input listener; the walk was not cut; no
-`by_name` edge is among the callers; no caller uses reflection, method handles or `invoke-custom`; the app loads
-no code at run time (`DexClassLoader`, `PathClassLoader`, `InMemoryDexClassLoader`); and every caller without
-callers of its own is a known entry point. Otherwise the start trigger says `no_user_trigger not stated` and why.
+`by_name` edge is among the callers; nothing in the app uses reflection (`Method.invoke`, `Class.forName`, ...),
+method handles, `invoke-custom` or run-time code loading (`DexClassLoader`, `PathClassLoader`,
+`InMemoryDexClassLoader`); the call graph hit none of its bounds and every DEX file was read; and every caller
+without callers of its own is a known entry point. Otherwise the start trigger says `no_user_trigger not stated`
+and why. A native library's own program-start claims are not stated in an APK report: the library starts when
+Java code loads it with `System.loadLibrary`, whose callers are not checked.
 
 ## Directories (extracted trees)
 
@@ -191,19 +194,22 @@ are labelled with its path in the tree.
 Every page also reads the tree's init files, so a program defined in one file and started from another is linked:
 
 - Android init `.rc` files: `service <name> <path>` with its `class`, `oneshot` and `disabled`; a service not
-  marked `disabled` starts with its class at boot (named with the `class_start` action when one is found); `start`,
-  `restart`, `exec_start` and `enable` in `on <trigger>` actions, at boot for `early-init` through `boot`,
-  `property:sys.boot_completed=1` and similar, otherwise on that trigger; and `exec -- <path>` commands.
+  marked `disabled` starts at boot only when a boot-time action runs `class_start` for its class (otherwise it reads
+  `no boot-time class_start found`); `start`, `restart`, `exec_start` and `enable` in `on <trigger>` actions, at
+  boot when every part of the trigger is `early-init` through `boot`, `property:sys.boot_completed=1` or similar,
+  otherwise on that trigger; and `exec -- <path>` commands. Recovery and charger `.rc` files are not boot.
 - systemd units (`ExecStart=`, at boot when `[Install] WantedBy=` names `multi-user.target`, `default.target`,
-  `graphical.target`, `sysinit.target`, `basic.target` or `network.target`), SysV init scripts (`etc/init.d`,
-  `rc.d`, `rcS`, `rc.local`: absolute paths under a `bin` or `sbin` directory) and `inittab` entries.
+  `graphical.target`, `sysinit.target`, `basic.target` or `network.target` and the target's `.wants` directory
+  under `etc`, `lib` or `usr/lib` `systemd/system` links the unit), SysV init scripts (`etc/init.d`, `rc.d`, `rcS`,
+  `rc.local`: absolute paths under a `bin` or `sbin` directory, only in the `start)` branch of a `case`) and
+  `inittab` entries.
 
 A program is matched to an init file by its device path (`/system/bin/voiced` is `system/bin/voiced` in the tree,
-or `bin/voiced` in an extracted partition), or by file name alone when the path does not match (marked so, one
-confidence step lower). An analysed program with capture sources that is started at boot gets a `Capture triggers`
-finding naming the init file and line; when its own report has a `no_user_trigger` finding, it reads
-`no_user_trigger: <program> is started at boot, and its capture is reached from program start with no user-facing
-trigger found`. A `Boot services` section lists every start read, with the file and line and whether the program is
+`bin/voiced` in an extracted partition, or `img.extracted/system/bin/voiced` deeper down), or by file name alone
+when the path does not match (marked so, one confidence step lower, and never with `no_user_trigger`). An analysed
+program with capture sources that is started at boot gets a `Capture triggers` finding naming the init file and
+line; when its own report has a `no_user_trigger` finding, it reads `no_user_trigger: <program> is started at
+boot, and its capture is reached from program start with no user-facing trigger found`. A `Boot services` section lists every start read, with the file and line and whether the program is
 in the tree. Init files are read up to 2000 files, 1 MiB each and 16 MiB in all, 100,000 lines per file and 4096
 characters per line, and 10,000 services and actions; a bound hit is a limitation.
 
@@ -219,4 +225,4 @@ characters per line, and 10,000 services and actions; a bound hit is a limitatio
 - V4L2 also drives video output, decoders and HDMI input; framebuffer queries are also used to draw. A source shows
   the capability, not what is recorded.
 - On a directory, programs started by other programs at run time (a shell script run by a service, a `fork` and
-  `exec`) are not traced, and an enabled systemd unit is read from the unit file, not from `.wants` links.
+  `exec`) are not traced.

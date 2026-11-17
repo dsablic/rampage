@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use rampage_dex::apk::NativeLib;
-use rampage_dex::graph::{AppGraph, EdgeKind, GraphLimits, Walk, loads_code};
+use rampage_dex::graph::{AppGraph, EdgeKind, Walk};
 use rampage_dex::manifest::Component;
 use serde_json::json;
 
@@ -230,7 +230,7 @@ struct SinkHit {
 }
 
 struct Survey<'a> {
-    graph: AppGraph,
+    graph: &'a AppGraph,
     dex_paths: Vec<String>,
     sources: BTreeMap<u32, Vec<SourceHit>>,
     sinks: BTreeMap<u32, Vec<SinkHit>>,
@@ -239,7 +239,11 @@ struct Survey<'a> {
     named: BTreeMap<u32, Vec<(String, String)>>,
     /// Component class descriptor to its manifest entry.
     components: HashMap<String, &'a Component>,
-    loads_code: Option<(u32, &'static str)>,
+    /// A method using reflection, method handles or run-time code loading anywhere in the app: calls through it
+    /// are not seen, so no capture is said to lack a user-facing trigger.
+    indirect: Option<(u32, &'static str)>,
+    /// Why the graph is incomplete (a bound hit, a DEX file not read), when it is.
+    incomplete_graph: Option<String>,
 }
 
 /// One scored capture-to-sink pair.
@@ -320,7 +324,10 @@ impl Survey<'_> {
         for (&id, strings) in &self.graph.strings {
             self.named.entry(id).or_default().extend(strings.iter().map(|text| (text.clone(), String::new())));
         }
-        self.loads_code = self.graph.indirect.iter().find(|(_, what)| loads_code(what)).map(|(&id, &what)| (id, what));
+        self.indirect = self.graph.indirect.iter().next().map(|(&id, &what)| (id, what));
+        if let Some(note) = self.graph.notes.iter().next() {
+            self.incomplete_graph.get_or_insert_with(|| format!("the call graph is incomplete ({note})"));
+        }
     }
 
     /// Adds what the native libraries' JNI exports reach as sources and sinks of the `native` methods bound to
@@ -790,8 +797,10 @@ impl Survey<'_> {
                 )
             } else if let Some(reason) = &incomplete {
                 Some(reason.clone())
-            } else if let Some((id, what)) = self.loads_code {
-                Some(format!("the app loads code at run time (`{}` uses {what})", self.name(id)))
+            } else if let Some(reason) = &self.incomplete_graph {
+                Some(reason.clone())
+            } else if let Some((id, what)) = self.indirect {
+                Some(format!("the app's calls are not all seen (`{}` uses {what})", self.name(id)))
             } else if !self.specific(source) {
                 Some("the capture evidence does not show direction".to_owned())
             } else {
@@ -889,7 +898,7 @@ fn from_library(mut finding: Finding, library: &str) -> Finding {
 pub(crate) fn report(path: &Path, limits: ReportLimits) -> Result<WorkflowReport, String> {
     let mut opened = open(path, true)?;
     let mut libs = opened.apk.as_mut().map(|apk| std::mem::take(&mut apk.native_libs)).unwrap_or_default();
-    let sha256 = std::fs::read(path).ok().map(|bytes| rampage_arch::hex::bytes(&sha2_digest(&bytes)));
+    let sha256 = sha256_file(path).map(|digest| rampage_arch::hex::bytes(&digest));
     let mut report = WorkflowReport::for_input(
         "privacy_surface",
         ReportInput { kind: opened.kind, path: path.display().to_string(), sha256, files: None, next_cursor: None },
@@ -899,8 +908,9 @@ pub(crate) fn report(path: &Path, limits: ReportLimits) -> Result<WorkflowReport
     for (dex_path, _, _) in opened.dexes.iter().filter(|(_, dex, _)| dex.is_err()) {
         report.limitation(format!("{dex_path} did not parse and was not read."));
     }
-    let graph = AppGraph::build(&dexes, GraphLimits::default());
-    let decoded = rampage_dex::emulate::decode_strings(&dexes, &graph, rampage_dex::emulate::DecodeLimits::default());
+    let facts = crate::android::app_facts(&opened);
+    let graph = &facts.graph;
+    let decoded = facts.decoded(&opened);
     let manifest = opened.manifest();
     let components: HashMap<String, &Component> = manifest
         .map(|manifest| {
@@ -919,7 +929,12 @@ pub(crate) fn report(path: &Path, limits: ReportLimits) -> Result<WorkflowReport
         markers: BTreeMap::new(),
         named: BTreeMap::new(),
         components,
-        loads_code: None,
+        indirect: None,
+        incomplete_graph: opened
+            .dexes
+            .iter()
+            .find(|(_, dex, _)| dex.is_err())
+            .map(|(path, _, _)| format!("{path} was not read, so callers in it are not seen")),
     };
     survey.scan();
     for found in &decoded.strings {
@@ -1079,10 +1094,24 @@ pub(crate) fn report(path: &Path, limits: ReportLimits) -> Result<WorkflowReport
         ));
     }
     let (mut found, unprompted, trigger_cut) = survey.triggers(&cones);
+    // A native library in an APK starts when Java code loads it (System.loadLibrary), whose callers were not
+    // checked: its own program-start claims are not stated here.
+    for mut finding in take("Capture triggers") {
+        if let Some((library, rest)) = finding.observation.split_once(": no_user_trigger: ") {
+            finding.observation = format!("{library}: {rest}");
+            finding.confidence = Confidence::Low;
+            finding.evidence.push(
+                "no_user_trigger not stated: in an APK the library's start runs when Java code loads it \
+                 (System.loadLibrary), and those callers were not checked"
+                    .to_owned(),
+            );
+        }
+        found.push(finding);
+    }
     found.sort_by_key(|finding| {
         (!finding.observation.starts_with("no_user_trigger:"), std::cmp::Reverse(finding.confidence))
     });
-    triggers.extend(found.into_iter().chain(take("Capture triggers")));
+    triggers.extend(found);
     if trigger_cut {
         report.limitation(format!(
             "The trigger search walks at most {MAX_DEPTH} call levels and {MAX_VISITED} methods up from each capture \
@@ -1200,9 +1229,20 @@ pub(crate) fn report(path: &Path, limits: ReportLimits) -> Result<WorkflowReport
     Ok(report)
 }
 
-fn sha2_digest(bytes: &[u8]) -> Vec<u8> {
+/// The SHA-256 of the file at `path`, read in chunks.
+fn sha256_file(path: &Path) -> Option<Vec<u8>> {
     use sha2::Digest;
-    sha2::Sha256::digest(bytes).to_vec()
+    let mut hasher = sha2::Sha256::new();
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buffer = vec![0u8; 1 << 16];
+    loop {
+        let read = std::io::Read::read(&mut file, &mut buffer).ok()?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Some(hasher.finalize().to_vec())
 }
 
 /// `privacy_surface` on a path no loader opens as one binary: an APK, AAB, JAR or DEX file, or a directory (an

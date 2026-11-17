@@ -19,7 +19,7 @@ fn edge(graph: &AppGraph, from: &str, to: &str) -> Option<EdgeKind> {
 #[test]
 fn edges_resolve_direct_virtual_by_name_callbacks_and_component_starts() {
     let dex = Dex::parse(write_dex(&watch_classes(), 35)).unwrap();
-    let mut graph = AppGraph::build(&[&dex], GraphLimits::default());
+    let graph = AppGraph::build(&[&dex], GraphLimits::default());
     let on_start = format!("{}->onStartCommand(Landroid/content/Intent;II)I", watch("CaptureService"));
     let on_receive =
         format!("{}->onReceive(Landroid/content/Context;Landroid/content/Intent;)V", watch("BootReceiver"));
@@ -58,7 +58,7 @@ fn the_class_hierarchy_spans_dex_files() {
     let leaf = ClassSpec::new("Lcom/example/b/Leaf;", "Lcom/example/b/Mid;");
     let first = Dex::parse(write_dex(&[base, caller], 35)).unwrap();
     let second = Dex::parse(write_dex(&[mid, leaf], 35)).unwrap();
-    let mut graph = AppGraph::build(&[&first, &second], GraphLimits::default());
+    let graph = AppGraph::build(&[&first, &second], GraphLimits::default());
     assert_eq!(
         graph.framework_ancestors("Lcom/example/b/Leaf;"),
         ["Landroid/accessibilityservice/AccessibilityService;"]
@@ -116,4 +116,21 @@ fn fan_in_and_fan_out_stay_within_their_bounds() {
     let graph = AppGraph::build(&[&dex], tight);
     assert_eq!(graph.edges, 1000);
     assert!(graph.notes.iter().any(|note| note.contains("call edges")));
+}
+
+#[test]
+fn static_calls_through_a_subclass_reach_the_inherited_method() {
+    // javac writes `Sub.helper()` for a static helper Base defines as invoke-static Lsub;->helper()V.
+    let object = "Ljava/lang/Object;";
+    let helper = Asm::new().return_void().code(0, 0, 0);
+    let base = ClassSpec::new("Lcom/example/s/Base;", object).method("helper", "V", &[], 0x9, Some(helper));
+    let sub = ClassSpec::new("Lcom/example/s/Sub;", "Lcom/example/s/Base;");
+    let call = Asm::new().invoke(STATIC, &[], "Lcom/example/s/Sub;->helper()V").return_void().code(1, 1, 0);
+    let caller = ClassSpec::new("Lcom/example/s/C;", object).method("go", "V", &[], 0x1, Some(call));
+    let dex = Dex::parse(write_dex(&[base, sub, caller], 35)).unwrap();
+    let graph = AppGraph::build(&[&dex], GraphLimits::default());
+    assert_eq!(edge(&graph, "Lcom/example/s/C;->go()V", "Lcom/example/s/Base;->helper()V"), Some(EdgeKind::Direct));
+    let phantom = graph.id("Lcom/example/s/Sub;->helper()V").unwrap();
+    assert_eq!(graph.defined_target(phantom), graph.id("Lcom/example/s/Base;->helper()V"));
+    assert!(graph.callers[phantom as usize].is_empty());
 }

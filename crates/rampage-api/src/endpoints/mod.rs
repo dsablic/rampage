@@ -528,12 +528,14 @@ fn scan_android(path: &Path, component: &str, xrefs: bool, decode: bool, invento
             inventory.add_text(&member, &text.text, &evidence, signal);
         }
     }
-    // Strings hidden behind static decoder methods, emulated at their call sites.
-    let dexes: Vec<&rampage_dex::Dex> = opened.parsed().map(|(_, dex)| dex).collect();
+    // Strings hidden behind static decoder methods, emulated at their call sites (with `decode`).
+    let facts = decode.then(|| crate::android::app_facts(&opened));
     let paths: Vec<&str> = opened.parsed().map(|(path, _)| path).collect();
-    let graph = rampage_dex::graph::AppGraph::build(&dexes, rampage_dex::graph::GraphLimits::default());
-    let decoded = rampage_dex::emulate::decode_strings(&dexes, &graph, rampage_dex::emulate::DecodeLimits::default());
+    let empty = rampage_dex::emulate::Decoding::default();
+    let decoded = facts.as_ref().map_or(&empty, |facts| facts.decoded(&opened));
+    let graph = facts.as_ref().map(|facts| &facts.graph);
     for found in &decoded.strings {
+        let Some(graph) = graph else { break };
         let dex_path = paths.get(found.dex).copied().unwrap_or("classes.dex");
         let member = if opened.kind == "apk" { format!("{component}!{dex_path}") } else { component.to_owned() };
         let network_apis: Vec<String> = graph

@@ -727,13 +727,36 @@ pub struct Decoded {
     pub address: u32,
     pub units: u32,
     pub opcode: u8,
-    /// Registers as the format lists them; for a range format every register of the range (at most 255).
+    /// Registers as the format lists them; for a range format only the first (see [`Decoded::register`]), so a
+    /// body of range invokes stays small.
     pub regs: Vec<u32>,
+    /// For a range format, how many registers the range holds.
+    pub range: Option<u32>,
     /// The literal, already shifted for `const/high16` and `const-wide/high16`.
     pub literal: Option<i64>,
     pub index: Option<u32>,
     /// Absolute branch target (or payload address for switches and fill-array-data), when it lies in the body.
     pub target: Option<u32>,
+}
+
+impl Decoded {
+    /// Argument register `at` (counting every register of a range).
+    pub fn register(&self, at: usize) -> Option<u32> {
+        match self.range {
+            Some(count) => (at < count as usize).then(|| self.regs[0] + at as u32),
+            None => self.regs.get(at).copied(),
+        }
+    }
+
+    /// How many argument registers it lists (every register of a range).
+    pub fn register_count(&self) -> usize {
+        self.range.map_or(self.regs.len(), |count| count as usize)
+    }
+
+    /// Every argument register, a range expanded.
+    pub fn registers(&self) -> impl Iterator<Item = u32> + '_ {
+        (0..self.register_count()).filter_map(|at| self.register(at))
+    }
 }
 
 /// Decodes the instruction at `address` of `insns`; `None` for a payload, a unit that starts no complete
@@ -747,13 +770,13 @@ pub fn decode_at(insns: &[u16], address: u32) -> Option<Decoded> {
     let op = opcode(unit as u8);
     let units = op.format.units() as usize;
     let raw = decode_raw(op.format, rest.get(..units)?)?;
-    let regs = if raw.range {
+    let (regs, range) = if raw.range {
         match raw.regs.as_slice() {
-            [first, last] => (*first..=*last).collect(),
-            _ => Vec::new(),
+            [first, last] => (vec![*first], Some(last - first + 1)),
+            _ => (Vec::new(), Some(0)),
         }
     } else {
-        raw.regs
+        (raw.regs, None)
     };
     let literal = raw.literal.map(|literal| match (op.format, unit as u8) {
         (Format::F21h, 0x15) => literal << 16,
@@ -770,6 +793,7 @@ pub fn decode_at(insns: &[u16], address: u32) -> Option<Decoded> {
         units: units as u32,
         opcode: unit as u8,
         regs,
+        range,
         literal,
         index: op.reference.and(raw.index),
         target,

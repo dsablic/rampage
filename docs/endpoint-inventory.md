@@ -91,7 +91,7 @@ methods whose code loads the string (`const-string`) as `functions` (`Lpkg/Class
 and Android networking calls those methods make (`java.net.URL`, `HttpURLConnection`, sockets, `WebView`,
 OkHttp) as `network_apis`; each native library is a component `<apk>!lib/<abi>/<name>.so`, analysed like any ELF.
 Strings an app hides behind a static decoder (`static String a(String)`, `a(int)` over a byte array) are recovered
-by emulating the decoder at each call site that passes it constants, always for APK and DEX input (see
+by emulating the decoder at each call site that passes it constants, with `decode` (see
 [decoded strings](android.md#decoded-strings)); they appear as `dex_decoded` evidence on the component of the DEX
 file holding the call.
 

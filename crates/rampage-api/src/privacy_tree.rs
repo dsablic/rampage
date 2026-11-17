@@ -3,7 +3,7 @@
 //! files start each program (Android init `.rc` services, systemd units, init scripts), so a capture reached from
 //! a program's start is tied to the device's boot across files. Paged by cursor like `endpoint_inventory`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -79,7 +79,17 @@ pub(crate) fn report(root: &Path, input: &Value) -> Result<WorkflowReport, Strin
     let args = arguments(input)?;
     let deadline = Instant::now() + args.timeout;
     let (files, symlinks) = walk(root, deadline)?;
-    let starts = scan(files.iter().map(|(_, relative, path, size)| (relative.as_str(), path.as_path(), *size)));
+    let starts = scan(root, files.iter().map(|(_, relative, path, size)| (relative.as_str(), path.as_path(), *size)));
+    // Starts and tree files by file name, so matching is not starts x files.
+    let base = |path: &str| path.rsplit('/').next().unwrap_or(path).to_owned();
+    let mut starts_by_name: HashMap<String, Vec<&Start>> = HashMap::new();
+    for start in &starts.starts {
+        starts_by_name.entry(base(&start.program)).or_default().push(start);
+    }
+    let mut files_by_name: HashMap<String, Vec<&str>> = HashMap::new();
+    for (_, relative, ..) in &files {
+        files_by_name.entry(base(relative)).or_default().push(relative.as_str());
+    }
     let start = match &args.cursor {
         Some(cursor) => {
             let cursor = unescape_path(cursor)?;
@@ -160,18 +170,27 @@ pub(crate) fn report(root: &Path, input: &Value) -> Result<WorkflowReport, Strin
                 continue;
             }
         };
-        let program_start: Vec<&Start> = starts
-            .starts
+        let named: &[&Start] = starts_by_name.get(&base(relative)).map_or(&[], Vec::as_slice);
+        let program_start: Vec<&Start> = named
             .iter()
+            .copied()
             .filter(|start| names(&start.program, relative).is_some_and(|how| how != "file name only"))
             .collect();
         let by_name: Vec<&Start> = if program_start.is_empty() {
-            starts.starts.iter().filter(|start| names(&start.program, relative).is_some()).collect()
+            named.iter().copied().filter(|start| names(&start.program, relative).is_some()).collect()
         } else {
             Vec::new()
         };
         let captures = report.sections.first().is_some_and(|section| section.total > 0);
-        for (section, found) in sections.iter_mut().zip(&report.sections) {
+        for found in &report.sections {
+            let at = match sections.iter().position(|section| section.title == found.title) {
+                Some(at) => at,
+                None => {
+                    sections.push(Section::new(found.title.clone(), limits));
+                    sections.len() - 1
+                }
+            };
+            let section = &mut sections[at];
             section.extend(found.findings.iter().cloned().map(|finding| labelled(finding, relative)));
             section.total += found.total - found.findings.len().min(found.total);
         }
@@ -202,6 +221,12 @@ pub(crate) fn report(root: &Path, input: &Value) -> Result<WorkflowReport, Strin
             );
             let (observation, confidence) = if at_start.is_empty() {
                 (format!("{relative}: a program with capture sources is started at boot"), Confidence::Medium)
+            } else if matched == "file name only" {
+                evidence.push(
+                    "no_user_trigger not stated: the init file names a program with this file name at another path"
+                        .to_owned(),
+                );
+                (format!("{relative}: a program with capture sources may be started at boot"), Confidence::Low)
             } else {
                 evidence.extend(at_start.iter().map(|finding| format!("in the program: {}", finding.observation)));
                 (
@@ -209,7 +234,7 @@ pub(crate) fn report(root: &Path, input: &Value) -> Result<WorkflowReport, Strin
                         "no_user_trigger: {relative} is started at boot, and its capture is reached from program start \
                          with no user-facing trigger found"
                     ),
-                    if matched == "file name only" { Confidence::Low } else { Confidence::Medium },
+                    Confidence::Medium,
                 )
             };
             let triggers = &mut sections[2];
@@ -222,9 +247,11 @@ pub(crate) fn report(root: &Path, input: &Value) -> Result<WorkflowReport, Strin
         }
     }
     for start in &starts.starts {
-        let found = files
-            .iter()
-            .find(|(_, relative, ..)| names(&start.program, relative).is_some_and(|how| how != "file name only"));
+        let found = files_by_name.get(&base(&start.program)).and_then(|candidates| {
+            candidates
+                .iter()
+                .find(|relative| names(&start.program, relative).is_some_and(|how| how != "file name only"))
+        });
         let observation = format!(
             "{} {} {}",
             start.program,
@@ -233,7 +260,7 @@ pub(crate) fn report(root: &Path, input: &Value) -> Result<WorkflowReport, Strin
         );
         let mut evidence = vec![format!("{}:{}", start.file, start.line)];
         evidence.push(match found {
-            Some((_, relative, ..)) => format!("in the tree as {relative}"),
+            Some(relative) => format!("in the tree as {relative}"),
             None => "not found in the tree".to_owned(),
         });
         boot_section.push(Finding::new("privacy_surface", Confidence::Observed, observation).evidence(evidence));

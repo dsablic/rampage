@@ -117,7 +117,9 @@ fn the_apk_report_has_dex_and_native_sources_sinks_paths_and_triggers() {
 fn decoded_strings_reach_endpoint_inventory_and_dex_metadata() {
     let tool = |name: &str| rampage_api::tools::file_tools().into_iter().find(|tool| tool.name == name).unwrap();
     let packs = rampage_api::Packs::default();
-    let out = tool("endpoint_inventory").call(&packs, json!({"path": android("watch.apk"), "limit": 500})).unwrap();
+    let out = tool("endpoint_inventory")
+        .call(&packs, json!({"path": android("watch.apk"), "limit": 500, "decode": true}))
+        .unwrap();
     let rows = out["endpoints"].as_array().unwrap();
     let url = rows.iter().find(|row| row["value"] == "https://upload.example.net/v2/audio").expect("the decoded URL");
     let evidence = &url["evidence"][0];
@@ -172,6 +174,8 @@ fn tree() -> PathBuf {
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     place(&root, "system/bin/voiced", &std::fs::read(fixtures.join("privacy-arm64.elf")).unwrap());
     place(&root, "system/etc/init/voiced.rc", b"service voiced /system/bin/voiced\n    class main\n    user audio\n");
+    place(&root, "init.rc", b"on boot\n    class_start main\n");
+    place(&root, "init.rc", b"on boot\n    class_start main\n");
     place(&root, "system/app/Watch/Watch.apk", &std::fs::read(android("watch.apk")).unwrap());
     let hello = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/hello-arm64.elf");
     place(&root, "system/bin/hello", &std::fs::read(hello).unwrap());
@@ -274,5 +278,129 @@ fn reflection_dynamic_loading_and_cut_walks_withhold_no_user_trigger() {
     assert!(find(&out, "Capture triggers", &[quiet]).is_none());
     let limits = out["limitations"].to_string();
     assert!(limits.contains("hit that bound"), "{limits}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// `App.onCreate` calls `Port.run` on an interface; `Impl.run` (found only by name) records. `extra` more
+/// implementers of an unrelated interface `Many` are called from `App.other`.
+fn interface_dex(extra: usize) -> Vec<u8> {
+    use rampage_dex::testkit::{Asm, ClassSpec, INTERFACE, VIRTUAL, write_dex};
+    let object = "Ljava/lang/Object;";
+    let create = Asm::new()
+        .new_instance(0, "Lcom/example/q/Impl;")
+        .invoke(INTERFACE, &[0], "Lcom/example/q/Port;->run()V")
+        .return_void()
+        .code(2, 1, 1);
+    let other = Asm::new().invoke(INTERFACE, &[0], "Lcom/example/q/Many;->tick()V").return_void().code(1, 1, 1);
+    let app = ClassSpec::new("Lcom/example/q/App;", "Landroid/app/Application;")
+        .method("onCreate", "V", &[], 0x1, Some(create))
+        .method("other", "V", &[], 0x1, Some(other));
+    let mut port = ClassSpec::new("Lcom/example/q/Port;", object).method("run", "V", &[], 0x401, None);
+    port.access = 0x601;
+    let record = Asm::new()
+        .new_instance(0, "Landroid/media/AudioRecord;")
+        .invoke(VIRTUAL, &[0], "Landroid/media/AudioRecord;->startRecording()V")
+        .return_void()
+        .code(2, 1, 1);
+    let mut implementer = ClassSpec::new("Lcom/example/q/Impl;", object).method("run", "V", &[], 0x1, Some(record));
+    implementer.interfaces = vec!["Lcom/example/q/Port;".to_owned()];
+    let mut many = ClassSpec::new("Lcom/example/q/Many;", object).method("tick", "V", &[], 0x401, None);
+    many.access = 0x601;
+    let mut classes = vec![app, port, implementer, many];
+    for index in 0..extra {
+        let mut class = ClassSpec::new(&format!("Lcom/example/q/M{index};"), object).method(
+            "tick",
+            "V",
+            &[],
+            0x1,
+            Some(Asm::new().return_void().code(1, 1, 0)),
+        );
+        class.interfaces = vec!["Lcom/example/q/Many;".to_owned()];
+        classes.push(class);
+    }
+    write_dex(&classes, 35)
+}
+
+/// A static capture `Rec.go` called directly from `App.onCreate`, and `App.other` calling an interface `Many`
+/// that `extra` classes implement.
+fn cut_dex(extra: usize) -> Vec<u8> {
+    use rampage_dex::testkit::{Asm, ClassSpec, INTERFACE, STATIC, VIRTUAL, write_dex};
+    let object = "Ljava/lang/Object;";
+    let create = Asm::new().invoke(STATIC, &[], "Lcom/example/q/Rec;->go()V").return_void().code(1, 1, 0);
+    let other = Asm::new().invoke(INTERFACE, &[0], "Lcom/example/q/Many;->tick()V").return_void().code(1, 1, 1);
+    let app = ClassSpec::new("Lcom/example/q/App;", "Landroid/app/Application;")
+        .method("onCreate", "V", &[], 0x1, Some(create))
+        .method("other", "V", &[], 0x1, Some(other));
+    let go = Asm::new()
+        .new_instance(0, "Landroid/media/AudioRecord;")
+        .invoke(VIRTUAL, &[0], "Landroid/media/AudioRecord;->startRecording()V")
+        .return_void()
+        .code(1, 0, 1);
+    let rec = ClassSpec::new("Lcom/example/q/Rec;", object).method("go", "V", &[], 0x9, Some(go));
+    let mut many = ClassSpec::new("Lcom/example/q/Many;", object).method("tick", "V", &[], 0x401, None);
+    many.access = 0x601;
+    let mut classes = vec![app, rec, many];
+    for index in 0..extra {
+        let mut class = ClassSpec::new(&format!("Lcom/example/q/M{index};"), object).method(
+            "tick",
+            "V",
+            &[],
+            0x1,
+            Some(Asm::new().return_void().code(1, 1, 0)),
+        );
+        class.interfaces = vec!["Lcom/example/q/Many;".to_owned()];
+        classes.push(class);
+    }
+    write_dex(&classes, 35)
+}
+
+#[test]
+fn by_name_callers_graph_bounds_and_unread_dex_files_withhold_no_user_trigger() {
+    let root = scratch("incomplete");
+    let quiet = "no_user_trigger: microphone capture";
+    // A caller linked by name.
+    let path = root.join("byname.dex");
+    std::fs::write(&path, interface_dex(0)).unwrap();
+    let out = report(&path, json!({}));
+    assert!(find(&out, "Capture triggers", &[quiet]).is_none());
+    let start = find(&out, "Capture triggers", &["Impl;->run()V` is reached from app start"]).unwrap();
+    assert!(evidence(start).contains("linked by name"), "{start:#}");
+
+    // A by-name call with more than 32 targets elsewhere: the graph is cut, so nothing is stated.
+    let plain = root.join("plain.dex");
+    std::fs::write(&plain, app_dex(&[], 0)).unwrap();
+    assert!(find(&report(&plain, json!({})), "Capture triggers", &[quiet]).is_some());
+    let cut = root.join("cut.dex");
+    std::fs::write(&cut, cut_dex(40)).unwrap();
+    let out = report(&cut, json!({}));
+    let limits = out["limitations"].to_string();
+    assert!(limits.contains("possible targets"), "{limits}");
+    let start = find(&out, "Capture triggers", &["is reached from app start"]).unwrap();
+    assert!(evidence(start).contains("no_user_trigger not stated"), "{start:#}");
+
+    // An APK whose second DEX file does not parse.
+    let garbage = [b"dex\n035\0".as_slice(), &[0xffu8; 200]].concat();
+    let apk =
+        rampage_dex::testkit::write_zip(&[("classes.dex", &app_dex(&[], 0), false), ("classes2.dex", &garbage, false)]);
+    let path = root.join("broken.apk");
+    std::fs::write(&path, apk).unwrap();
+    let out = report(&path, json!({}));
+    assert!(find(&out, "Capture triggers", &[quiet]).is_none());
+    let start = find(&out, "Capture triggers", &["Rec;->go()V` is reached from app start"]).unwrap();
+    assert!(evidence(start).contains("classes2.dex was not read"), "{start:#}");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_program_matched_by_file_name_only_is_not_said_to_lack_a_trigger() {
+    let root = scratch("basename");
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    place(&root, "system/bin/voiced", &std::fs::read(fixtures.join("privacy-arm64.elf")).unwrap());
+    place(&root, "vendor/etc/init/voiced.rc", b"service voiced /vendor/bin/voiced\n    class main\n");
+    place(&root, "init.rc", b"on boot\n    class_start main\n");
+    let out = report(&root, json!({}));
+    assert!(find(&out, "Capture triggers", &["no_user_trigger: system/bin/voiced"]).is_none());
+    let maybe = find(&out, "Capture triggers", &["system/bin/voiced: a program with capture sources may be started"]);
+    assert!(evidence(maybe.unwrap()).contains("matched by file name only"));
     std::fs::remove_dir_all(root).unwrap();
 }

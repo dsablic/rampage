@@ -6,7 +6,7 @@
 //! is noted, so a report can say its evidence is incomplete.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::dex::{Dex, NO_INDEX, cut};
 use crate::insn::decode_all;
@@ -20,8 +20,9 @@ pub struct GraphLimits {
     pub max_edges: usize,
     /// By-name targets per resolved method reference.
     pub max_targets: usize,
-    /// Candidates checked per by-name resolution.
+    /// Candidates checked per by-name resolution, and in all.
     pub max_candidates: usize,
+    pub max_total_candidates: usize,
     /// Const-strings kept per method.
     pub max_strings: usize,
     /// Code units decoded in all.
@@ -35,6 +36,7 @@ impl Default for GraphLimits {
             max_edges: 8_000_000,
             max_targets: 32,
             max_candidates: 4096,
+            max_total_candidates: 4 << 20,
             max_strings: 64,
             max_code_units: 64 << 20,
         }
@@ -196,7 +198,10 @@ pub struct AppGraph {
     /// Bounds hit while building, as sentences.
     pub notes: BTreeSet<String>,
     pub edges: usize,
-    ancestry: HashMap<String, Rc<HashSet<String>>>,
+    ancestry: HashMap<String, Arc<HashSet<String>>>,
+    /// Type to the app classes that extend or implement it (sorted), built for by-name resolution.
+    subclasses: HashMap<String, Vec<String>>,
+    candidates_checked: usize,
     limits: GraphLimits,
 }
 
@@ -292,6 +297,7 @@ impl AppGraph {
             }
         }
         let mut sites: Vec<(u32, u32)> = Vec::new();
+        let mut direct: Vec<(u32, u32)> = Vec::new();
         let mut facts: BTreeMap<u32, Facts> = BTreeMap::new();
         let mut callee_cache: HashMap<(usize, u32), Option<u32>> = HashMap::new();
         let mut units_left = limits.max_code_units;
@@ -335,7 +341,7 @@ impl AppGraph {
                         if matches!(insn.opcode, 0x6e | 0x72 | 0x74 | 0x78) {
                             sites.push((caller, callee));
                         } else {
-                            graph.edge(caller, callee, EdgeKind::Direct);
+                            direct.push((caller, callee));
                         }
                     }
                     0xfa..=0xfd => {
@@ -348,6 +354,7 @@ impl AppGraph {
                 facts.insert(caller, fact);
             }
         }
+        graph.resolve_direct(direct);
         graph.resolve_sites(sites);
         graph.link_facts(&facts);
         for list in graph.callees.iter_mut().chain(graph.callers.iter_mut()) {
@@ -405,10 +412,24 @@ impl AppGraph {
 
     /// The types `class` extends or implements, transitively through the app's classes (framework types are
     /// included but not walked: their own supertypes are not in the app), `class` itself excluded.
-    pub fn ancestors(&mut self, class: &str) -> Rc<HashSet<String>> {
-        if let Some(found) = self.ancestry.get(class) {
-            return Rc::clone(found);
+    pub fn ancestors(&self, class: &str) -> Arc<HashSet<String>> {
+        match self.ancestry.get(class) {
+            Some(found) => Arc::clone(found),
+            None => Arc::new(self.walk_ancestors(class)),
         }
+    }
+
+    /// [`AppGraph::ancestors`], remembered.
+    fn ancestors_memo(&mut self, class: &str) -> Arc<HashSet<String>> {
+        if let Some(found) = self.ancestry.get(class) {
+            return Arc::clone(found);
+        }
+        let found = Arc::new(self.walk_ancestors(class));
+        self.ancestry.insert(class.to_owned(), Arc::clone(&found));
+        found
+    }
+
+    fn walk_ancestors(&self, class: &str) -> HashSet<String> {
         let mut found = HashSet::new();
         let mut queue: VecDeque<(String, usize)> = VecDeque::from([(class.to_owned(), 0)]);
         while let Some((at, level)) = queue.pop_front() {
@@ -425,13 +446,16 @@ impl AppGraph {
                 }
             }
         }
-        let found = Rc::new(found);
-        self.ancestry.insert(class.to_owned(), Rc::clone(&found));
         found
     }
 
+    /// The app classes that extend or implement `ty`, transitively, sorted.
+    pub fn subclasses(&self, ty: &str) -> &[String] {
+        self.subclasses.get(ty).map_or(&[], Vec::as_slice)
+    }
+
     /// The framework (non-app) types among `class`'s ancestors, `java.lang.Object` excluded.
-    pub fn framework_ancestors(&mut self, class: &str) -> Vec<String> {
+    pub fn framework_ancestors(&self, class: &str) -> Vec<String> {
         let ancestors = self.ancestors(class);
         let mut found: Vec<String> = ancestors
             .iter()
@@ -461,10 +485,9 @@ impl AppGraph {
         let mut at = class.to_owned();
         for _ in 0..MAX_LEVELS {
             let defined = self.classes.get(&at)?;
-            if let Some(&id) = defined.methods.iter().find(|&&id| {
-                let method = &self.methods[id as usize];
-                method.name == name && method.proto == proto
-            }) {
+            if let Some(&id) = self.ids.get(&format!("{at}->{name}{proto}"))
+                && self.methods[id as usize].defined
+            {
                 return Some(id);
             }
             at = defined.superclass.clone()?;
@@ -472,20 +495,63 @@ impl AppGraph {
         None
     }
 
+    /// The defined method a reference names: itself when defined, else the one up its class's app superclass
+    /// chain (a static or direct call through a subclass, as javac writes `Sub.helper()`).
+    pub fn defined_target(&self, id: u32) -> Option<u32> {
+        let method = self.methods.get(id as usize)?;
+        if method.defined {
+            return Some(id);
+        }
+        self.lookup(&method.class, &method.name, &method.proto)
+    }
+
+    /// Links direct, static and super invokes, resolving a reference to an app class that does not define the
+    /// method through its superclass chain (or to the framework class it inherits from).
+    fn resolve_direct(&mut self, sites: Vec<(u32, u32)>) {
+        let mut resolved: HashMap<u32, u32> = HashMap::new();
+        for (caller, callee) in sites {
+            let target = match resolved.get(&callee) {
+                Some(&target) => target,
+                None => {
+                    let method = &self.methods[callee as usize];
+                    let target = if method.defined || !self.classes.contains_key(&method.class) {
+                        callee
+                    } else if let Some(found) = self.lookup(&method.class, &method.name, &method.proto) {
+                        found
+                    } else {
+                        let (class, name, proto) = (method.class.clone(), method.name.clone(), method.proto.clone());
+                        match self.framework_base(&class) {
+                            Some(base) => self.intern(&format!("{base}->{name}{proto}")).unwrap_or(callee),
+                            None => callee,
+                        }
+                    };
+                    resolved.insert(callee, target);
+                    target
+                }
+            };
+            self.edge(caller, target, EdgeKind::Direct);
+        }
+    }
+
     /// Resolves every virtual and interface invoke, once per distinct method reference.
     fn resolve_sites(&mut self, sites: Vec<(u32, u32)>) {
-        let mut by_key: HashMap<(String, String), Vec<u32>> = HashMap::new();
-        for (id, method) in self.methods.iter().enumerate() {
-            if method.defined && !method.is_static() && !method.name.starts_with('<') {
-                by_key.entry((method.name.clone(), method.proto.clone())).or_default().push(id as u32);
+        // Every type's app subclasses and implementers, once.
+        let mut classes: Vec<String> = self.classes.keys().cloned().collect();
+        classes.sort();
+        for class in classes {
+            for ancestor in self.ancestors_memo(&class).iter() {
+                self.subclasses.entry(ancestor.clone()).or_default().push(class.clone());
             }
+        }
+        for list in self.subclasses.values_mut() {
+            list.sort();
         }
         let mut resolved: HashMap<u32, Vec<(u32, EdgeKind)>> = HashMap::new();
         for (caller, callee) in sites {
             let targets = match resolved.get(&callee) {
                 Some(targets) => targets.clone(),
                 None => {
-                    let targets = self.resolve(callee, &by_key);
+                    let targets = self.resolve(callee);
                     resolved.insert(callee, targets.clone());
                     targets
                 }
@@ -496,7 +562,7 @@ impl AppGraph {
         }
     }
 
-    fn resolve(&mut self, callee: u32, by_key: &HashMap<(String, String), Vec<u32>>) -> Vec<(u32, EdgeKind)> {
+    fn resolve(&mut self, callee: u32) -> Vec<(u32, EdgeKind)> {
         let (class, name, proto) = {
             let method = &self.methods[callee as usize];
             (method.class.clone(), method.name.clone(), method.proto.clone())
@@ -517,20 +583,17 @@ impl AppGraph {
         if class == "Ljava/lang/Object;" {
             return targets;
         }
-        let Some(candidates) = by_key.get(&(name, proto)) else { return targets };
-        let mut checked = 0usize;
+        let Some(subclasses) = self.subclasses.get(&class) else { return targets };
         let mut cut = false;
-        for &candidate in candidates {
-            if Some(candidate) == primary {
-                continue;
-            }
-            checked += 1;
-            if checked > self.limits.max_candidates {
+        for (checked, sub) in subclasses.iter().enumerate() {
+            if checked >= self.limits.max_candidates || self.candidates_checked >= self.limits.max_total_candidates {
                 cut = true;
                 break;
             }
-            let owner = self.methods[candidate as usize].class.clone();
-            if owner == class || !self.ancestors(&owner).contains(&class) {
+            self.candidates_checked += 1;
+            let Some(&candidate) = self.ids.get(&format!("{sub}->{name}{proto}")) else { continue };
+            let method = &self.methods[candidate as usize];
+            if !method.defined || method.is_static() || Some(candidate) == primary {
                 continue;
             }
             if targets.len() > self.limits.max_targets {
@@ -541,9 +604,9 @@ impl AppGraph {
         }
         if cut {
             self.notes.insert(format!(
-                "a virtual or interface call had more than {} possible targets by name (or {} candidates); the rest \
-                 are not linked",
-                self.limits.max_targets, self.limits.max_candidates
+                "a virtual or interface call had more than {} possible targets by name (or more than {} candidates \
+                 for one call, or {} in all); the rest are not linked",
+                self.limits.max_targets, self.limits.max_candidates, self.limits.max_total_candidates
             ));
         }
         targets
@@ -551,22 +614,29 @@ impl AppGraph {
 
     /// Links callbacks (app classes with a framework supertype instantiated by a method) and component starts.
     fn link_facts(&mut self, facts: &BTreeMap<u32, Facts>) {
+        let mut callbacks: HashMap<String, Vec<u32>> = HashMap::new();
+        let mut entries_of: HashMap<String, Vec<u32>> = HashMap::new();
         for (&caller, fact) in facts {
             for class in &fact.instances {
-                if !self.classes.contains_key(class) || self.framework_ancestors(class).is_empty() {
-                    continue;
+                if !callbacks.contains_key(class) {
+                    let methods: Vec<u32> =
+                        if !self.classes.contains_key(class) || self.framework_ancestors(class).is_empty() {
+                            Vec::new()
+                        } else {
+                            self.classes[class]
+                                .methods
+                                .iter()
+                                .copied()
+                                .filter(|&id| {
+                                    let method = &self.methods[id as usize];
+                                    !method.is_static() && !method.name.starts_with('<')
+                                })
+                                .take(MAX_CALLBACKS)
+                                .collect()
+                        };
+                    callbacks.insert(class.clone(), methods);
                 }
-                let methods: Vec<u32> = self.classes[class]
-                    .methods
-                    .iter()
-                    .copied()
-                    .filter(|&id| {
-                        let method = &self.methods[id as usize];
-                        !method.is_static() && !method.name.starts_with('<')
-                    })
-                    .take(MAX_CALLBACKS)
-                    .collect();
-                for method in methods {
+                for method in callbacks[class].clone() {
                     self.edge(caller, method, EdgeKind::Callback);
                 }
             }
@@ -583,12 +653,17 @@ impl AppGraph {
             }
             for class in &fact.classes {
                 let Some(defined) = self.classes.get(class) else { continue };
-                let entries: Vec<u32> = defined
-                    .methods
-                    .iter()
-                    .copied()
-                    .filter(|&id| ENTRY_NAMES.contains(&self.methods[id as usize].name.as_str()))
-                    .collect();
+                let entries = entries_of
+                    .entry(class.clone())
+                    .or_insert_with(|| {
+                        defined
+                            .methods
+                            .iter()
+                            .copied()
+                            .filter(|&id| ENTRY_NAMES.contains(&self.methods[id as usize].name.as_str()))
+                            .collect()
+                    })
+                    .clone();
                 for entry in entries {
                     self.edge(caller, entry, EdgeKind::Intent);
                 }

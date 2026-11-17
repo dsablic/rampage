@@ -99,6 +99,9 @@ fn simple(descriptor: &str) -> String {
     format!("{}{dims}", base.rsplit(['.', '$']).next().unwrap_or(base))
 }
 
+/// Instructions after a `new-instance` searched for its constructor call.
+const INIT_WINDOW: usize = 32;
+
 const BINARY: [&str; 11] = ["+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>", ">>>"];
 const CONDITIONS: [&str; 6] = ["==", "!=", "<", ">=", ">", "<="];
 const NEGATED: [&str; 6] = ["!=", "==", ">=", "<", "<=", ">"];
@@ -144,7 +147,7 @@ impl Writer<'_> {
         let mut args: Vec<String> = Vec::new();
         let mut at = usize::from(!is_static);
         for param in &method.proto.parameters {
-            if let Some(&reg) = insn.regs.get(at) {
+            if let Some(reg) = insn.register(at) {
                 args.push(self.reg(reg));
             }
             at += if matches!(param.as_str(), "J" | "D") { 2 } else { 1 };
@@ -200,15 +203,24 @@ impl Writer<'_> {
                 let reg = insn.regs[0];
                 let at = self.blocks.partition_point(|block| block.first <= index).saturating_sub(1);
                 let block = self.blocks.get(at).copied().filter(|block| (block.first..block.end).contains(&index));
+                // Look ahead a few instructions in the block, stopping where the register is written again.
                 let initialized = block.is_some_and(|block| {
-                    self.decoded[index + 1..block.end].iter().any(|later| {
-                        matches!(later.opcode, 0x70 | 0x76)
+                    for later in self.decoded[index + 1..block.end].iter().take(INIT_WINDOW) {
+                        let constructs = matches!(later.opcode, 0x70 | 0x76)
                             && later.regs.first() == Some(&reg)
                             && later
                                 .index
                                 .and_then(|method| self.dex.method(method).ok())
-                                .is_some_and(|method| method.name == "<init>")
-                    })
+                                .is_some_and(|method| method.name == "<init>");
+                        if constructs {
+                            return true;
+                        }
+                        let invoke = matches!(later.opcode, 0x6e..=0x72 | 0x74..=0x78);
+                        if !invoke && later.regs.first() == Some(&reg) {
+                            return false;
+                        }
+                    }
+                    false
                 });
                 if initialized {
                     return None;
@@ -221,7 +233,7 @@ impl Writer<'_> {
                 format!("{} = new {element}[{}];", r(0), r(1))
             }
             0x24 | 0x25 => {
-                let items: Vec<String> = insn.regs.iter().map(|&reg| self.reg(reg)).collect();
+                let items: Vec<String> = insn.registers().map(|reg| self.reg(reg)).collect();
                 format!("<result> = new {} {{{}}};", type_text(self), items.join(", "))
             }
             0x26 => {
@@ -317,6 +329,9 @@ impl Writer<'_> {
     }
 
     fn render_block(&mut self, block: usize, depth: usize, loops: &[Loop]) -> bool {
+        if self.truncated {
+            return true;
+        }
         let Block { first, end } = self.blocks[block];
         let address = self.decoded[first].address;
         self.starts.push((self.lines.len(), address));
@@ -327,6 +342,9 @@ impl Writer<'_> {
             let insn = &self.decoded[index];
             if index + 1 == end && (is_goto(insn.opcode) || is_if(insn.opcode) || is_switch(insn.opcode)) {
                 break;
+            }
+            if self.truncated {
+                return true;
             }
             if let Some(text) = self.statement(index) {
                 self.line(depth, text);
@@ -348,7 +366,7 @@ impl Writer<'_> {
         } else if is_switch(last.opcode) {
             let cases = last
                 .target
-                .and_then(|payload| switch_cases(self.insns, last.address, payload, 256))
+                .and_then(|payload| switch_cases(self.insns, last.address, payload, usize::MAX))
                 .unwrap_or_default();
             let reg = self.reg(last.regs[0]);
             self.line(depth, format!("switch ({reg}) {{"));
@@ -471,6 +489,9 @@ impl Writer<'_> {
         let Block { first, end } = self.blocks[block];
         self.starts.push((self.lines.len(), self.decoded[first].address));
         for index in first..end - 1 {
+            if self.truncated {
+                return;
+            }
             if self.folded.contains(&index) {
                 continue;
             }
@@ -501,7 +522,7 @@ pub fn pseudocode(dex: &Dex, signature: &str, access: u32, code: &CodeItem, limi
             if !is_switch(insn.opcode) {
                 leaders.extend(insn.target);
             } else if let Some(cases) =
-                insn.target.and_then(|payload| switch_cases(&code.insns, insn.address, payload, 256))
+                insn.target.and_then(|payload| switch_cases(&code.insns, insn.address, payload, usize::MAX))
             {
                 leaders.extend(cases.into_iter().map(|(_, target)| target));
             }

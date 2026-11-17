@@ -1148,10 +1148,10 @@ impl Survey<'_> {
     /// The sinks and sources each export in `exports` reaches through direct calls, within the walk's bounds.
     fn reach(&self, graph: &Graph, exports: &[String]) -> BTreeMap<String, JniReach> {
         let mut found = BTreeMap::new();
+        let by_name: HashMap<&str, &rampage_loaders::Export> =
+            self.project.binary.exports.iter().map(|export| (export.name.as_str(), export)).collect();
         for name in exports {
-            let Some(export) = self.project.binary.exports.iter().find(|export| export.name == *name) else {
-                continue;
-            };
+            let Some(export) = by_name.get(name.as_str()) else { continue };
             let mut reached = BTreeMap::from([(export.address, 0usize)]);
             let mut queue = VecDeque::from([export.address]);
             let mut entry = JniReach::default();

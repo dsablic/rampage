@@ -85,8 +85,9 @@ fn kind(relative: &str) -> Option<&'static str> {
     }
 }
 
+/// Whether every part of an action's trigger fires while the device boots.
 fn boot_trigger(trigger: &str) -> bool {
-    trigger.split("&&").any(|part| {
+    trigger.split("&&").all(|part| {
         let part = part.trim();
         BOOT_TRIGGERS.contains(&part)
             || part == "property:sys.boot_completed=1"
@@ -95,8 +96,14 @@ fn boot_trigger(trigger: &str) -> bool {
     })
 }
 
-/// Reads the init files among `files` (`(relative path, full path, size)`).
-pub(crate) fn scan<'a>(files: impl Iterator<Item = (&'a str, &'a Path, u64)>) -> Starts {
+/// Init files of the recovery and charger modes, whose actions do not run on a normal boot.
+fn other_mode(file: &str) -> bool {
+    let name = file.rsplit('/').next().unwrap_or(file);
+    name.contains("recovery") || name.contains("charger") || file.contains("/recovery/")
+}
+
+/// Reads the init files among `files` (`(relative path, full path, size)`) of the tree at `root`.
+pub(crate) fn scan<'a>(root: &Path, files: impl Iterator<Item = (&'a str, &'a Path, u64)>) -> Starts {
     let mut out = Starts::default();
     let mut services: BTreeMap<String, Service> = BTreeMap::new();
     // (trigger, command words, file, line)
@@ -118,7 +125,7 @@ pub(crate) fn scan<'a>(files: impl Iterator<Item = (&'a str, &'a Path, u64)>) ->
         let lines = numbered_lines(&text, relative, &mut out.notes);
         match kind {
             "rc" => parse_rc(&lines, relative, &mut services, &mut actions),
-            "systemd" => out.starts.extend(parse_systemd(&lines, relative)),
+            "systemd" => out.starts.extend(parse_systemd(&lines, relative, root)),
             "inittab" => out.starts.extend(parse_inittab(&lines, relative)),
             _ => out.starts.extend(parse_sysv(&lines, relative)),
         }
@@ -131,7 +138,7 @@ pub(crate) fn scan<'a>(files: impl Iterator<Item = (&'a str, &'a Path, u64)>) ->
     // Classes the boot actions start, and services they start by name.
     let mut class_starts: BTreeMap<&str, (&str, &str, usize)> = BTreeMap::new();
     for (trigger, words, file, line) in &actions {
-        let boot = boot_trigger(trigger);
+        let boot = boot_trigger(trigger) && !other_mode(file);
         match words.first().map(String::as_str) {
             Some("class_start" | "class_restart") if boot => {
                 for class in &words[1..] {
@@ -170,23 +177,21 @@ pub(crate) fn scan<'a>(files: impl Iterator<Item = (&'a str, &'a Path, u64)>) ->
             continue;
         }
         let classes = if service.class.is_empty() { vec!["default".to_owned()] } else { service.class.clone() };
-        let how = match classes.iter().find_map(|class| class_starts.get(class.as_str()).map(|found| (class, found))) {
+        let started = classes.iter().find_map(|class| class_starts.get(class.as_str()).map(|found| (class, found)));
+        let boot = started.is_some();
+        let how = match started {
             Some((class, (trigger, file, line))) => {
                 format!(
                     "init service {name}, class {class} started by `class_start {class}` on `{trigger}` ({file}:{line})"
                 )
             }
-            None => format!(
-                "init service {name}, class {} (init starts every service of its class at boot unless the service \
-                 is disabled)",
-                classes.join(" ")
-            ),
+            None => format!("init service {name}, class {}; no boot-time class_start found", classes.join(" ")),
         };
         let oneshot = if service.oneshot { ", oneshot" } else { "" };
         out.starts.push(Start {
             program: service.program.clone(),
             how: format!("{how}{oneshot}"),
-            boot: true,
+            boot,
             file: service.file.clone(),
             line: service.line,
         });
@@ -304,8 +309,9 @@ fn parse_rc(
     }
 }
 
-/// `ExecStart=` programs, at boot when `[Install] WantedBy=` names a boot target.
-fn parse_systemd(lines: &[(usize, String)], file: &str) -> Vec<Start> {
+/// `ExecStart=` programs, at boot when `[Install] WantedBy=` names a boot target and the unit is enabled for it (a
+/// link in that target's `.wants` directory under `etc`, `lib` or `usr/lib` `systemd/system`).
+fn parse_systemd(lines: &[(usize, String)], file: &str, root: &Path) -> Vec<Start> {
     let unit = file.rsplit('/').next().unwrap_or(file);
     let mut programs = Vec::new();
     let mut wanted: Vec<String> = Vec::new();
@@ -322,14 +328,24 @@ fn parse_systemd(lines: &[(usize, String)], file: &str) -> Vec<Start> {
             _ => {}
         }
     }
-    let boot = wanted.iter().find(|target| BOOT_TARGETS.contains(&target.as_str()));
+    let enabled = |target: &str| {
+        ["etc", "lib", "usr/lib"].iter().any(|base| {
+            std::fs::symlink_metadata(root.join(base).join("systemd/system").join(format!("{target}.wants")).join(unit))
+                .is_ok()
+        })
+    };
+    let declared = wanted.iter().find(|target| BOOT_TARGETS.contains(&target.as_str()));
+    let boot = declared.filter(|target| enabled(target));
     programs
         .into_iter()
         .map(|(program, key, line)| Start {
             program,
-            how: match boot {
-                Some(target) => format!("systemd unit {unit} ({key}, WantedBy={target})"),
-                None => format!("systemd unit {unit} ({key}; no boot target in [Install])"),
+            how: match (boot, declared) {
+                (Some(target), _) => format!("systemd unit {unit} ({key}, WantedBy={target}, enabled)"),
+                (None, Some(target)) => {
+                    format!("systemd unit {unit} ({key}, WantedBy={target}, but no {target}.wants link: not enabled)")
+                }
+                (None, None) => format!("systemd unit {unit} ({key}; no boot target in [Install])"),
             },
             boot: boot.is_some(),
             file: file.to_owned(),
@@ -358,11 +374,37 @@ fn parse_inittab(lines: &[(usize, String)], file: &str) -> Vec<Start> {
     found
 }
 
-/// Programs an init script runs: absolute paths in a `bin` or `sbin` directory.
+/// Programs an init script runs: absolute paths in a `bin` or `sbin` directory; in a script with a `case` on its
+/// argument, only those in the `start)` branch.
 fn parse_sysv(lines: &[(usize, String)], file: &str) -> Vec<Start> {
     let script = file.rsplit('/').next().unwrap_or(file);
     let mut found = Vec::new();
+    let arm = |line: &str| {
+        let line = line.trim();
+        line.ends_with(')') && !line.starts_with('(') && !line.contains(' ')
+    };
+    let starts_arm = |line: &str| {
+        arm(line) && line.trim().trim_end_matches(')').split('|').any(|word| word.trim_matches(['"', '\'']) == "start")
+    };
+    let branched = lines.iter().any(|(_, line)| starts_arm(line));
+    let mut in_start = !branched;
     for (number, line) in lines {
+        if branched {
+            if starts_arm(line) {
+                in_start = true;
+                continue;
+            }
+            if arm(line) || line.trim() == "esac" {
+                in_start = false;
+            }
+            if line.trim().starts_with(";;") {
+                in_start = false;
+                continue;
+            }
+            if !in_start {
+                continue;
+            }
+        }
         for word in line.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ';' | '=' | '`' | '(' | ')')) {
             if word.starts_with('/') && (word.contains("/bin/") || word.contains("/sbin/")) && !word.ends_with('/') {
                 found.push(Start {
@@ -379,8 +421,8 @@ fn parse_sysv(lines: &[(usize, String)], file: &str) -> Vec<Start> {
 }
 
 /// Whether the device path `program` names the tree file at `relative`, and how sure that is: the whole path
-/// (`/system/bin/x` is `system/bin/x`), the tree being a partition (`/system/bin/x` ends with `bin/x`), or the file
-/// name alone (`None` otherwise).
+/// (`/system/bin/x` is `system/bin/x`), the tree being a partition (`/system/bin/x` ends with `bin/x`), the tree
+/// holding the root deeper (`img.extracted/system/bin/x`), or the file name alone (`None` otherwise).
 pub(crate) fn names(program: &str, relative: &str) -> Option<&'static str> {
     let program = program.trim_start_matches('/');
     if program == relative {
@@ -388,6 +430,9 @@ pub(crate) fn names(program: &str, relative: &str) -> Option<&'static str> {
     }
     if relative.contains('/') && program.ends_with(&format!("/{relative}")) {
         return Some("path within the partition");
+    }
+    if program.contains('/') && relative.ends_with(&format!("/{program}")) {
+        return Some("path below the tree's top");
     }
     let name = relative.rsplit('/').next()?;
     (program.rsplit('/').next() == Some(name)).then_some("file name only")
@@ -407,7 +452,12 @@ mod tests {
             std::fs::write(&path, text).unwrap();
             paths.push((relative.to_string(), path, text.len() as u64));
         }
-        let found = scan(paths.iter().map(|(relative, path, size)| (relative.as_str(), path.as_path(), *size)));
+        if let Some((relative, _)) = files.iter().find(|(relative, _)| relative.ends_with("cam.service")) {
+            let wants = dir.join("etc/systemd/system/multi-user.target.wants");
+            std::fs::create_dir_all(&wants).unwrap();
+            std::os::unix::fs::symlink(dir.join(relative), wants.join("cam.service")).unwrap();
+        }
+        let found = scan(&dir, paths.iter().map(|(relative, path, size)| (relative.as_str(), path.as_path(), *size)));
         std::fs::remove_dir_all(&dir).unwrap();
         found
     }
@@ -426,7 +476,21 @@ mod tests {
                 "lib/systemd/system/cam.service",
                 "[Service]\nExecStart=-/usr/bin/camd -f\n[Install]\nWantedBy=multi-user.target\n",
             ),
-            ("etc/init.d/S50mic", "#!/bin/sh\nstart-stop-daemon -S -x /usr/sbin/micd -- -d\n"),
+            (
+                "etc/init.d/S50mic",
+                "#!/bin/sh\ncase \"$1\" in\n  start)\n    start-stop-daemon -S -x /usr/sbin/micd -- -d\n    ;;\n  \
+                 stop)\n    /usr/sbin/stopper\n    ;;\nesac\n",
+            ),
+            (
+                "lib/systemd/system/idle.service",
+                "[Service]\nExecStart=/usr/bin/idled\n[Install]\nWantedBy=multi-user.target\n",
+            ),
+            ("vendor/etc/init/nostart.rc", "service quiet /vendor/bin/quiet\n    class late_other\n"),
+            (
+                "vendor/etc/init/both.rc",
+                "on boot && property:debug.x=1\n    start later2\nservice later2 /vendor/bin/later2\n    disabled\n",
+            ),
+            ("etc/init/recovery.rc", "on boot\n    class_start recovery\nservice rec /sbin/rec\n    class recovery\n"),
             ("etc/inittab", "::respawn:/sbin/getty -L ttyS0\n"),
         ]);
         let find = |program: &str| found.starts.iter().filter(|start| start.program == program).collect::<Vec<_>>();
@@ -441,6 +505,15 @@ mod tests {
         assert!(debug.len() == 1 && !debug[0].boot);
         assert!(find("/usr/bin/camd")[0].boot);
         assert!(find("/usr/sbin/micd")[0].how.contains("S50mic"));
+        // Only the start branch of an init script counts; a unit without its .wants link is not enabled.
+        assert!(find("/usr/sbin/stopper").is_empty());
+        assert!(!find("/usr/bin/idled")[0].boot && find("/usr/bin/idled")[0].how.contains("not enabled"));
+        // A class no boot action starts, a trigger only partly at boot, and recovery mode are not boot.
+        let quiet = find("/vendor/bin/quiet");
+        assert!(!quiet[0].boot && quiet[0].how.contains("no boot-time class_start found"), "{quiet:?}");
+        assert!(find("/vendor/bin/later2").iter().all(|start| !start.boot));
+        assert!(find("/sbin/rec").iter().all(|start| !start.boot));
+        assert_eq!(names("/system/bin/voiced", "img.extracted/system/bin/voiced"), Some("path below the tree's top"));
         assert!(find("/sbin/getty")[0].how.contains("respawn"));
         assert_eq!(names("/system/bin/voiced", "system/bin/voiced"), Some("path"));
         assert_eq!(names("/system/bin/voiced", "bin/voiced"), Some("path within the partition"));
