@@ -41,6 +41,11 @@ This file holds open items. Done sections, including every completed parity phas
    tagging for ext4/sparse/OTA, `privacy_surface` over an extracted tree with boot triggers.
 4. Housekeeping: the flaky debugger UI test; rebuilding fixtures that embed local paths, plus a CI check.
 
+## Small hints (from the 1.7.0 docs audit)
+
+- [ ] `list_dir`'s `next` hint doesn't mention ZIP/APK (`fs_list`, `dex_metadata`).
+- [ ] `binary_info` on a bare `.dex` gives the headerless-image hint instead of pointing at `dex_metadata`.
+
 ## Ideas to review (unprioritised, not approved)
 
 Ideas collected while working, to go through together before any becomes a track. The repo stays general: it
