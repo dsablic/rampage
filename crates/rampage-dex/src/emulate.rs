@@ -39,7 +39,7 @@ impl Default for DecodeLimits {
             max_steps: 100_000,
             max_depth: 16,
             max_array: 1 << 16,
-            max_alloc: 4 << 20,
+            max_alloc: 1 << 20,
             max_string: 1 << 16,
             max_sites: 4096,
             max_emulations: 2048,

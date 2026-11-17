@@ -82,8 +82,8 @@ Formats and raw code:
   (microphone, camera, screen, input), where it can send it, the call paths between, what starts each capture
   (including init services at boot), and whether capture starts without a user-facing trigger.
 - [Android APKs and DEX](android.md): an APK's manifest, permissions with protection levels, components and
-  start-at-boot receivers, native libraries with JNI exports, DEX classes and methods, Dalvik bytecode, and the
-  capture APIs the code invokes.
+  start-at-boot receivers, native libraries with JNI exports, DEX classes and methods, Dalvik bytecode and
+  pseudocode, the capture APIs the code invokes, and strings hidden behind decoder methods.
 - [File formats](file-formats.md): Go and Rust build info, PyInstaller archives, WebAssembly modules, PE resources
   and load config, MSVC C++ metadata (vftables and exception tables), and .NET metadata.
 

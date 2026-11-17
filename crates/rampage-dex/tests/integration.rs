@@ -6,4 +6,5 @@ mod emulate;
 mod fixtures;
 mod graph;
 mod hostile;
+mod pseudo;
 mod scan;

@@ -15,6 +15,8 @@
     "instructions[].ref.index",
     "instructions[].ref.kind",
     "instructions_total",
+    "lines",
+    "lines_total",
     "method",
     "next_offset",
     "note",
@@ -29,7 +31,9 @@
     "tries[].handlers[].type",
     "tries[].start",
     "tries_on_page",
-    "tries_total"
+    "tries_total",
+    "truncated",
+    "view"
   ],
   "dex_metadata": [
     "application",

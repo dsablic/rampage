@@ -44,6 +44,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
   "decoded_strings"` (decoder, call site, inputs), `endpoint_inventory` reports them as `dex_decoded` evidence,
   and `privacy_surface` names them as sink endpoints and lists them in a `Decoded strings` section. See
   [decoded strings](docs/android.md#decoded-strings).
+- `dex_code` `view: "pseudo"`: structured pseudocode of one method, paged by line: parameters named `this`, `p1`,
+  ..., locals declared with the type their writes give them, `while (true)` loops with `break`/`continue` and
+  `if`/`else` read from the control flow, Java-like calls with results and constructors folded, const-strings
+  inline, and `goto` labels for jumps that fit no structure. Not Java decompilation; bounded by instructions,
+  nesting and lines. See [pseudocode](docs/android.md#pseudocode).
 - `dex_metadata`'s `accessibility_services` follows the class hierarchy across every DEX file of an APK.
 - `endpoint_inventory` reads APKs and DEX files: each DEX string pool with the methods that load every string and
   the networking calls they make (`dex_string` evidence), and each native library in the APK. See

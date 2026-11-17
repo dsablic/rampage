@@ -8,7 +8,7 @@ reading is capped (see [Limits](#limits)).
 | Tool | Answers |
 | --- | --- |
 | `dex_metadata` | What the app is and asks for: package, versions, SDK levels, permissions, components, boot receivers, native libraries with JNI exports, DEX files, one page of classes, methods or components, or the strings static decoder methods produce (`decoded_strings`). |
-| `dex_code` | What one method does: its Dalvik bytecode, smali style, with every reference resolved. |
+| `dex_code` | What one method does: its Dalvik bytecode, smali style, with every reference resolved, or structured pseudocode. |
 | `endpoint_inventory` (group `carve`) | The hosts and URLs in the app's DEX strings and native libraries, with the methods that load them. |
 | `privacy_surface` (group `carve`) | What the app can capture and send, the call paths between, and what starts each capture (boot, app start, push, jobs, UI), merged with its native libraries' report. |
 
@@ -142,7 +142,7 @@ The interpreter models integer and long arithmetic, branches and switches, array
 `Integer.parseInt`, and the static fields of app classes (initial `static_values`, then the class's `<clinit>`,
 run once under the same budget). Calls into other static app methods nest up to 16 deep. There is no I/O, no
 reflection, no instance field and no object of an app class: any other instruction or call stops that emulation,
-as do 100,000 instructions, 64 Ki elements per array, 4 Mi array elements and string characters allocated, or a
+as do 100,000 instructions, 64 Ki elements per array, 1 Mi array elements and string characters allocated, or a
 string past 64 Ki characters. Each distinct decoder and input is emulated once (shared by every call site
 passing the same); an app is decoded at up to 4096 call sites, 2048 emulations and 8 million instructions in all.
 Only printable results of two or more characters that differ from the input are kept.
@@ -176,8 +176,43 @@ type) and `const-method-handle`/`const-method-type`. The `packed-switch`, `spars
 payloads are listed as `*-payload` pseudo-instructions with their keys and absolute targets, or element width,
 count and data (the first 64 bytes). Bytes that decode to no complete instruction show as `.unit`. `offset` and
 `limit` (default 200, at most 1000) page by instruction, or `at` (`:0012`, `0x12`, `18`) starts at the instruction
-holding that address. A `native` method has `body: null` and points at the native libraries. There is no
-decompilation to Java yet.
+holding that address. A `native` method has `body: null` and points at the native libraries.
+
+### Pseudocode
+
+`view: "pseudo"` renders the method as structured pseudocode instead, paged by line (`offset`/`limit`, the same
+defaults, `lines_total`, `next_offset`):
+
+```text
+static String Codec.decode(String p1) {
+    char[] v0;
+    var v1;
+    var v2;
+    String v3;
+    v0 = p1.toCharArray();
+    v1 = 0;
+    while (true) {
+        v2 = v0.length;
+        if (v1 >= v2) break;
+        v2 = v0[v1];
+        v2 = v2 ^ 0x5a;
+        v2 = (char) v2;
+        v0[v1] = v2;
+        v1 = v1 + 1;
+    }
+    v3 = new String(v0);
+    return v3;
+}
+```
+
+Parameters are named `this` and `p1`, `p2`, ...; other registers keep their `vN` names and are declared with the
+type every write gives them (`var` when writes disagree). Loops come from back edges (`while (true)` with `break`
+and `continue`), `if`/`else` from forward branches, invokes read as Java-like calls with the result folded into an
+assignment, `new-instance` and its constructor as `new T(...)`, and const-strings inline. Every jump that fits no
+structure stays a `goto L_xxxx` to a label, so the text keeps the bytecode's meaning; try ranges are listed as
+comments with their handler labels. It is not Java: types are not propagated through expressions, and the smali
+view is the authority. Bodies over 20,000 instructions render with gotos only, nesting past 48 levels falls back to
+gotos, and output stops at 5,000 lines (`truncated`).
 
 ## Limits
 
@@ -194,7 +229,7 @@ decompilation to Java yet.
 | Type lists | 65,535 entries; 32 interfaces listed per class |
 | Names in reference text | 1 KiB; a long string many ids share is decoded once |
 | Call graph (`privacy_surface`) | 2 Mi methods, 8 Mi edges, 64 Mi code units; 32 by-name targets per call and 4096 candidates checked; walks of 6 levels and 2000 methods |
-| String decoding | 100,000 instructions, depth 16, 64 Ki elements per array, 4 Mi elements and characters per emulation; 4096 call sites, 2048 emulations, 8 M instructions per app |
+| String decoding | 100,000 instructions, depth 16, 64 Ki elements per array, 1 Mi elements and characters per emulation; 4096 call sites, 2048 emulations, 8 M instructions per app |
 | APK members | 384 MiB read in total; native libraries over 64 MiB are listed without exports; ZIP inflation stops at the declared size and at a 1000:1 ratio past 64 MiB |
 
 DEX files are read in multidex order (`classes.dex`, `classes2.dex`, ...) whatever their order in the archive.

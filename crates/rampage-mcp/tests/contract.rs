@@ -556,6 +556,8 @@ async fn contract_mcp_android_results() {
     exercise(c, o, "dex_metadata", json!({"path": apk, "list": "components", "limit": 2})).await;
     exercise(c, o, "dex_metadata", json!({"path": android.join("recorder.dex"), "limit": 1})).await;
     exercise(c, o, "dex_metadata", json!({"path": android.join("watch.apk"), "list": "decoded_strings"})).await;
+    let decode = "Lcom/example/watch/Codec;->decode(Ljava/lang/String;)Ljava/lang/String;";
+    exercise(c, o, "dex_code", json!({"path": android.join("watch.apk"), "method": decode, "view": "pseudo"})).await;
     exercise(c, o, "dex_metadata", json!({"path": android, "max_files": 1})).await;
     let method = "Lcom/example/recorder/Capture;->guarded()V";
     exercise(c, o, "dex_code", json!({"path": apk, "method": method, "limit": 2})).await;

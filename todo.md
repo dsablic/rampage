@@ -33,8 +33,8 @@ This file holds open items. Done sections, including every completed parity phas
 
 ## Next up (agreed 2026-11-17)
 
-1. Finish 1.7.0: Android slice 1 review fixes and merge; Android slice 2 (`privacy_surface` on an APK, Dalvik
-   pseudocode, string decryption); the tool-description trim; docs audit; release.
+1. Finish 1.7.0: Android slice 2 review and merge (`privacy_surface` on an APK and on extracted trees, Dalvik
+   pseudocode, string decryption: done, awaiting review); the tool-description trim; docs audit; release.
 2. Firmware leftovers from the Haiku runs: `xrefs` through Thumb literal pools in Raw images, `find_main` on Raw,
    ARM `exact_entry`, seeding inferred CRC routines into discovery, rejecting implausible vector-table candidates.
 3. Wider formats: binwalk v3 signature scanning for `carve`/`file_layout` (evaluate first), UBI/UBIFS, container
@@ -291,8 +291,11 @@ above stay under review until each is approved.
 - [x] **Android slice 2: string decryption (1.7.0).** Static decoder methods emulated at constant-argument call
   sites by a bounded Dalvik interpreter; results in `dex_metadata` (`decoded_strings`), `endpoint_inventory`
   (`dex_decoded`) and `privacy_surface`.
+- [x] **Android slice 2: Dalvik pseudocode (1.7.0).** `dex_code` `view: "pseudo"`: locals, if/else and loops from
+  the control flow, Java-like calls, gotos for the rest.
 - [ ] Android follow-ups (slice 2):
-  - Dalvik to Java decompilation, or a structured pseudocode first (registers to locals, branches to blocks).
+  - Dalvik to Java decompilation beyond the pseudocode view: type propagation through expressions, SSA-based
+    local naming, expression folding across instructions, `switch` and `try`/`catch` as structures.
   - String decryption follow-ups: decoders taking a `byte[]`/`char[]` built at the call site (`new-array` +
     `fill-array-data` arguments), instance decoders, decoders whose input comes from a static field of another
     class, and float arithmetic.

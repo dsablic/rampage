@@ -266,3 +266,21 @@ fn a_manifest_with_huge_lists_stays_bounded_and_pages() {
     assert_eq!(files["page"]["total"], 40);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn dex_code_renders_structured_pseudocode_paged_by_line() {
+    let apk = android("watch.apk");
+    let method = "Lcom/example/watch/Codec;->decode(Ljava/lang/String;)Ljava/lang/String;";
+    let out = call("dex_code", json!({"path": apk, "method": method, "view": "pseudo"})).unwrap();
+    assert_eq!(out["view"], "pseudo");
+    let lines: Vec<&str> = out["lines"].as_array().unwrap().iter().map(|line| line.as_str().unwrap()).collect();
+    assert_eq!(lines[0], "static String Codec.decode(String p1) {");
+    assert!(lines.contains(&"    while (true) {"), "{lines:?}");
+    assert!(lines.contains(&"        if (v1 >= v2) break;"), "{lines:?}");
+    let page =
+        call("dex_code", json!({"path": apk, "method": method, "view": "pseudo", "offset": 2, "limit": 3})).unwrap();
+    assert_eq!(page["lines"].as_array().unwrap().len(), 3);
+    assert_eq!(page["next_offset"], 5);
+    let error = call("dex_code", json!({"path": apk, "method": method, "view": "java"})).unwrap_err();
+    assert!(error.contains("expected smali or pseudo"), "{error}");
+}

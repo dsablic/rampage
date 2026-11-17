@@ -82,8 +82,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   IPv4 addresses stored as integers in code are not found. `privacy_surface` on a directory analyses only programs
   that import a capture API or name a capture device, and matches init files to programs by path; see its
   [limits](privacy-surface.md#limits).
-- Android: DEX files are read and Dalvik bytecode is listed (`dex_metadata`, `dex_code`), but not decompiled to
-  Java, and DEX code is not part of function discovery or xrefs. `privacy_surface` on an APK follows a call graph
+- Android: DEX files are read and Dalvik bytecode is listed (`dex_metadata`, `dex_code`, with a structured
+  pseudocode view), but not decompiled to Java, and DEX code is not part of function discovery or xrefs. `privacy_surface` on an APK follows a call graph
   of direct invokes, virtual and interface invokes resolved through the app's classes (by name to overrides, marked
   `by_name`), callbacks and const-class component starts, within 6 levels and 2000 methods per walk: reflection,
   method handles, framework code and run-time loaded code are not followed, and keep `no_user_trigger` from being

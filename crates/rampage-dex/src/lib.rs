@@ -13,6 +13,7 @@ pub mod insn;
 pub mod jni;
 pub mod manifest;
 pub mod permissions;
+pub mod pseudo;
 mod read;
 pub mod scan;
 #[cfg(feature = "testkit")]

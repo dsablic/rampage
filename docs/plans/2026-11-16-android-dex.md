@@ -57,3 +57,17 @@ calling `AudioRecord.startRecording`, a URL string, a `BOOT_COMPLETED` receiver,
 holding it, a manifest and `lib/arm64-v8a/libnative.so` (a tiny `zig cc` library exporting the matching
 `Java_` symbol, committed with its source and no local paths). Hostile tests: truncated and overlapping sections,
 huge counts, uleb128 overflow, cyclic superclasses, bad MUTF-8, AXML string pool bombs, ZIP bombs.
+
+## Slice 2 (2026-11-17)
+
+- `rampage-dex::graph`: the app's call graph across every DEX file (direct invokes; virtual and interface invokes
+  resolved through the class hierarchy, overrides by name marked `by_name`; callbacks from instantiated classes
+  with a framework supertype; const-class component starts), every pass bounded (methods, edges, code units,
+  by-name targets and candidates per call) with each bound hit noted.
+- `privacy_surface` on an APK or DEX file (`android_privacy.rs`): DEX sources and sinks, paths and Android
+  triggers over that graph, merged with each JNI library's native report; directory mode (`privacy_tree.rs`) with
+  init `.rc`, systemd and init.d boot starts (`init_services.rs`).
+- `rampage-dex::emulate`: string decryption by emulating static decoder methods at constant-argument call sites,
+  feeding `dex_metadata` (`decoded_strings`), `endpoint_inventory` (`dex_decoded`) and `privacy_surface`.
+- `rampage-dex::pseudo`: `dex_code` `view: "pseudo"`.
+- Fixture `watch.apk` with `libnet-arm64.so` (net.c), written by the testkit's Dalvik assembler.

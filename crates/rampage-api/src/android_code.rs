@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use rampage_dex::dex::{Dex, EncodedMethod, Member, access_names, descriptor_of};
 use rampage_dex::insn::{layout, render};
+use rampage_dex::pseudo::{PseudoLimits, pseudocode};
 use serde_json::{Value, json};
 
 use crate::android::{Opened, open};
@@ -29,6 +30,8 @@ pub struct DexCodeQuery {
     pub limit: Option<usize>,
     /// Start at the instruction holding this code-unit address (`:0012`, `0x12` or `18`).
     pub at: Option<String>,
+    /// `smali` (default): the instructions; `pseudo`: structured pseudocode, paged by line.
+    pub view: Option<String>,
 }
 
 /// A defined method found by a selector.
@@ -168,6 +171,47 @@ pub fn dex_code(query: &DexCodeQuery) -> Result<Value, String> {
         return Ok(out);
     }
     let code = dex.code_item(found.method.code_off).map_err(|error| format!("{}: {error}", out["method"]))?;
+    match query.view.as_deref() {
+        None | Some("smali") => {}
+        Some("pseudo") => {
+            if query.at.is_some() {
+                return Err("at selects an instruction; with view pseudo page by line with offset".to_owned());
+            }
+            let text = dex.method_text(found.method.method_idx);
+            let pseudo = pseudocode(dex, &text, found.method.access, &code, PseudoLimits::default());
+            let start = query.offset.unwrap_or(0);
+            let mut lines = Vec::new();
+            let mut bytes = 0usize;
+            let mut byte_capped = false;
+            for line in pseudo.lines.iter().skip(start).take(limit) {
+                if bytes + line.len() + 4 > PAGE_BYTES && !lines.is_empty() {
+                    byte_capped = true;
+                    break;
+                }
+                bytes += line.len() + 4;
+                lines.push(line);
+            }
+            let end = start + lines.len();
+            out["view"] = json!("pseudo");
+            out["registers"] = json!(code.registers);
+            out["code_units"] = json!(code.insns.len());
+            out["lines_total"] = json!(pseudo.lines.len());
+            out["offset"] = json!(start);
+            out["lines"] = json!(lines);
+            out["next_offset"] = json!((end < pseudo.lines.len()).then_some(end));
+            out["byte_capped"] = json!(byte_capped);
+            out["truncated"] = json!(pseudo.truncated);
+            if !pseudo.notes.is_empty() {
+                out["notes"] = json!(pseudo.notes);
+            }
+            out["note"] = json!(
+                "pseudocode, not Java: registers as locals (this, p1.. for parameters), loops and if/else from the \
+                 control flow, other jumps as goto; the smali view is the authority"
+            );
+            return Ok(out);
+        }
+        Some(other) => return Err(format!("unknown view `{other}` (expected smali or pseudo)")),
+    }
     let layout = layout(&code.insns);
     let start = match &query.at {
         Some(at) => {

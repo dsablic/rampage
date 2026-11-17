@@ -529,6 +529,9 @@ struct DexCodeArgs {
     limit: Option<usize>,
     /// Start at the instruction holding this code-unit address (:0012, 0x12 or 18).
     at: Option<String>,
+    /// smali (default) or pseudo: structured pseudocode (registers as locals, if/else and loops, Java-like calls),
+    /// paged by line with offset/limit.
+    view: Option<String>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -1007,7 +1010,8 @@ pub fn file_tools() -> Vec<FileTool> {
                           methods, protos, call sites and method handles resolved; branch targets as :xxxx code-unit \
                           labels; switch and array payloads; try ranges with catch types. method: \
                           Lpkg/Class;->name(params)ret, pkg.Class.name or an index (an overload is refused with \
-                          candidates). offset/limit or at page the instructions.",
+                          candidates). offset/limit or at page the instructions. view: pseudo gives \
+                          structured pseudocode (locals, if/else, loops, calls; not Java).",
             input_schema: schema::<DexCodeArgs>(),
             handler: |_, input| {
                 let args: DexCodeArgs = arguments(input)?;
@@ -1017,6 +1021,7 @@ pub fn file_tools() -> Vec<FileTool> {
                     offset: args.offset,
                     limit: args.limit,
                     at: args.at,
+                    view: args.view,
                 })
             },
         },
