@@ -214,7 +214,9 @@ async fn exact_entry_unsupported(client: &RunningService<RoleClient, TestClient>
     let result = call(client, "decompile", json!({ "path": path, "at": address, "exact_entry": true })).await;
     assert_eq!(result.is_error, Some(true), "{result:?}");
     assert!(
-        text(&result).contains("exact-entry decompilation supports little-endian x86, x86-64 and AArch64 only"),
+        text(&result)
+            .contains("exact-entry decompilation supports little-endian x86, x86-64, AArch64 and Raw Cortex-M")
+            && text(&result).contains("call decompile without exact_entry"),
         "ARM32 must be refused without a whole-program, inline or other-architecture fallback: {result:?}",
     );
 }

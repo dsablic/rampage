@@ -208,7 +208,9 @@ decoded code.
     reference; on the updater 37 functions became 910 and each sum-error string has its function;
   - `find_main` refuses Raw projects; done: Cortex-M reset handlers are followed to the first call that never
     returns or the copied code that starts the scheduler;
-  - `decompile` with `exact_entry` refuses ARM;
+  - `decompile` with `exact_entry` refuses ARM; done for Raw Cortex-M Thumb (mode points, flash folding). ARM ELF,
+    PE and Mach-O still refuse: their plan would need the ARM stub and veneer shapes (`add ip, pc` PLT entries,
+    `ldr pc`, `movw/movt ip; bx ip`) in the stub and wrapper checks, and A32/Thumb interworking per address;
   - the vector-table parser reports implausible words as `stack_pointer` instead of rejecting the candidate;
   - run-to-run variance is large (run 4 reached the RTOS startup, run 5 stopped at the jump fragment): consider
     `binary_info` naming the scatter jump target's enclosing function and the first functions worth reading.

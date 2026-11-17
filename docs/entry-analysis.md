@@ -76,8 +76,12 @@ There is no fallback to a containing function or to legacy whole-program analysi
 
 ### Supported inputs and mapping
 
-Exact-entry decompilation accepts little-endian x86, x86-64 and AArch64 only. AArch64 addresses must be four-byte
-aligned; x86 addresses must fit 32 bits. ARM/A32, Thumb, big-endian inputs and other architectures are refused.
+Exact-entry decompilation accepts little-endian x86, x86-64, AArch64 and Raw Cortex-M Thumb only. AArch64
+addresses must be four-byte aligned, Thumb addresses two-byte aligned (bit 0 clear); x86 addresses must fit 32 bits.
+A Raw Cortex-M project has no imports, so its plan has no stubs or wrappers to verify; the decompiler gets the
+discovered Thumb mode points, folds flash literals into constants and keeps device ranges volatile, as plain
+`decompile` does. Other ARM code (A32, or Thumb in an ELF, PE or Mach-O), big-endian inputs and other architectures
+are refused, and the refusal points at plain `decompile`, which takes any code address.
 This narrower contract does not narrow the architectures the legacy decoder/decompiler path supports.
 
 The requested entry must have available, backed executable code and must not be an import slot or overlap a

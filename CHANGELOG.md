@@ -6,6 +6,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- `decompile` with `exact_entry` takes Raw Cortex-M Thumb code: the plan has no imports to verify, the decompiler
+  gets the discovered Thumb mode points and the same flash-constant folding and volatile device ranges as plain
+  `decompile`, and an odd (Thumb-bit) address is refused. Other ARM code is still refused, and the refusal now
+  points at plain `decompile`, which takes any code address.
+
 - `find_main` takes a Raw project. On Cortex-M it follows the reset handler, through scatter-load's jump into copied
   code and a trampoline that loads the next code address, to the first call that never returns (an infinite loop,
   `svc`, PendSV pended through ICSR); after the C runtime init (copies, zero fills, an init-table walk) that callee

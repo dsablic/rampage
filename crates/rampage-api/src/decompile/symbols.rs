@@ -270,7 +270,7 @@ fn class_type_names(name: &str) -> Vec<String> {
 /// is not known to be constant: a pairing token, a version word or option bytes are written by a programmer or a
 /// bootloader, not the compiler, so those words stay reads. The peripheral, device and system ranges are volatile, so
 /// a store to a memory-mapped register (`SCB.AIRCR = 0x5fa0004` before a wait loop) is never removed as dead.
-fn cortex_m_operations(project: &Project) -> Vec<WorkerOperation> {
+pub(super) fn cortex_m_operations(project: &Project) -> Vec<WorkerOperation> {
     let binary = &project.binary;
     if !cortex_m_firmware(binary) {
         return Vec::new();

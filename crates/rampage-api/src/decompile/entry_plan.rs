@@ -230,10 +230,9 @@ fn supported(binary: &Binary, address: u64) -> Result<(), ApiError> {
     let endian_supported = !binary.big_endian && !binary.target().big_endian;
     match binary.arch {
         Arch::X86 | Arch::X86_64 | Arch::Aarch64 if endian_supported => {}
+        Arch::Arm if endian_supported && super::entry::raw_thumb(binary) => {}
         _ => {
-            return Err(ApiError::Unavailable(
-                "exact-entry decompilation supports little-endian x86, x86-64 and AArch64 only".to_owned(),
-            ));
+            return Err(ApiError::Unavailable(super::entry::UNSUPPORTED_ARCH.to_owned()));
         }
     }
     if !width_valid(binary, address) {
@@ -241,6 +240,9 @@ fn supported(binary: &Binary, address: u64) -> Result<(), ApiError> {
     }
     if binary.arch == Arch::Aarch64 && !address.is_multiple_of(4) {
         return Err(invalid("exact-entry AArch64 address must be four-byte aligned"));
+    }
+    if binary.arch == Arch::Arm && !address.is_multiple_of(2) {
+        return Err(invalid("exact-entry Thumb address must be two-byte aligned (bit 0 clear)"));
     }
     Ok(())
 }
@@ -252,6 +254,7 @@ fn width_valid(binary: &Binary, address: u64) -> bool {
 fn code(binary: &Binary, address: u64) -> Option<&[u8]> {
     if !width_valid(binary, address)
         || binary.arch == Arch::Aarch64 && !address.is_multiple_of(4)
+        || binary.arch == Arch::Arm && !address.is_multiple_of(2)
         || binary.import_slot(address).is_some()
         || !binary.segment_containing(address)?.perms.execute
     {

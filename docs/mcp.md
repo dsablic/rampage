@@ -537,7 +537,9 @@ out. The feature guide linked for each tool is the full reference.
   separately from paging. See [search](search.md).
 - `decompile` with `exact_entry`: the entry is an analyst assertion; entry metadata and decoding are not proof of
   boundaries or completeness, and output carries context counts, omissions and preparation timings. There is no
-  silent whole-program fallback. See [exact-entry decompilation](exact-entry-ui.md).
+  silent whole-program fallback. It takes Raw Cortex-M Thumb code (an address with bit 0 clear) as well as x86,
+  x86-64 and AArch64; other ARM code is refused with a pointer to plain `decompile`, which takes any code address.
+  See [exact-entry decompilation](exact-entry-ui.md).
 - `record_finding`: the ledger holds at most 1024 entries and 2 MiB, and a write that would leave the shared
   annotation log less than a quarter of its budget free is refused, so names and comments keep room.
 - `discard_undo`: the annotation log is not rewritten; the dropped step's edits stay.

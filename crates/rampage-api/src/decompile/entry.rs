@@ -5,20 +5,32 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use rampage_decompiler::worker::{
-    PROTOCOL_VERSION, WorkerFunction, WorkerMapping, WorkerOperation, WorkerOptions, WorkerRequest, run_supervised,
+    PROTOCOL_VERSION, WorkerCodeMode, WorkerFunction, WorkerMapping, WorkerOperation, WorkerOptions, WorkerRequest,
+    run_supervised,
 };
 use rampage_decompiler::{Decompiler, Platform};
 use serde::Serialize;
 
 use super::{
-    Decompilation, DecompiledToken, DecompilerConfigurationRevision, default_options, entry_plan, go_abi, image,
-    isolated, symbols, types,
+    Decompilation, DecompiledToken, DecompilerConfigurationRevision, context, default_options, entry_plan, go_abi,
+    image, isolated, symbols, types,
 };
 use crate::{ApiError, Project, debug_layout_import};
 
 pub use super::entry_plan::{EntryOrigin as DecompileEntryOrigin, EntryPlanCounts as EntryContextCounts};
 
 const MAX_ENTRY_IMAGE_BYTES: usize = 128 * 1024 * 1024;
+
+/// The refusal for other architectures, with the path that does serve them: plain `decompile` takes any code
+/// address, a start discovery did not find included (an ARM Linux function).
+pub(super) const UNSUPPORTED_ARCH: &str = "exact-entry decompilation supports little-endian x86, x86-64, AArch64 \
+     and Raw Cortex-M Thumb only; for other ARM code and other architectures call decompile without exact_entry, \
+     which decompiles any code address, including one discovery did not find";
+
+/// A Raw Cortex-M project: all Thumb code, no imports, so exact-entry needs only the Thumb mode of each address.
+pub(super) fn raw_thumb(binary: &rampage_loaders::Binary) -> bool {
+    binary.arch == rampage_arch::Arch::Arm && binary.raw_code_image().is_some() && binary.m_profile()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -156,14 +168,13 @@ impl Project {
         if cancellation.load(Ordering::Relaxed) {
             return Err(ApiError::Unavailable("exact-entry cancelled before configuration".to_owned()));
         }
-        if !matches!(
+        if !(matches!(
             self.binary.arch,
             rampage_arch::Arch::X86 | rampage_arch::Arch::X86_64 | rampage_arch::Arch::Aarch64
-        ) || self.binary.big_endian
+        ) || raw_thumb(&self.binary))
+            || self.binary.big_endian
         {
-            return Err(ApiError::Unavailable(
-                "exact-entry decompilation supports little-endian x86, x86-64 and AArch64 only".to_owned(),
-            ));
+            return Err(ApiError::Unavailable(UNSUPPORTED_ARCH.to_owned()));
         }
         progress(EntryPreparationProgress {
             phase: EntryPreparationPhase::Configuration,
@@ -228,6 +239,18 @@ impl Project {
         let stage = Instant::now();
         report_phase(EntryPreparationPhase::Metadata)?;
         let plan = entry_plan::prepare(self, &annotations, request, &check)?;
+        // Raw Cortex-M: every function is Thumb; the decompiler takes the discovered mode points.
+        let (code_modes, thumb_at) = if raw_thumb(&self.binary) {
+            let modes = &self.analysis()?.program.code_modes;
+            let target = self.binary.target();
+            let thumb: Box<dyn Fn(u64) -> bool> = {
+                let modes = modes.clone();
+                Box::new(move |address| context::mode_at(&target, &modes, address))
+            };
+            (context::arm_points(&self.binary, modes), thumb)
+        } else {
+            (Vec::new(), Box::new(|_| false) as Box<dyn Fn(u64) -> bool>)
+        };
         let sample = self.entry_diagnostics(Some(request.address))?;
         check("entry evidence")?;
         timings.metadata_ms = elapsed(stage);
@@ -272,6 +295,10 @@ impl Project {
         let replay_operations = replay.len() + local_replay.len() + hints.len();
         let generated_dependency_types = generated.len();
         let mut operations = plan.operations;
+        // Raw Cortex-M: flash literals fold into constants and device ranges stay volatile, as in plain decompile.
+        if raw_thumb(&self.binary) {
+            operations.extend(symbols::cortex_m_operations(self));
+        }
         operations.extend(replay);
         operations.extend(local_replay);
         operations.extend(hints);
@@ -333,9 +360,13 @@ impl Project {
                     arm_be8: options.arm_be8,
                 },
                 mappings,
-                code_modes: Vec::new(),
+                code_modes: code_modes.iter().map(|&(address, thumb)| WorkerCodeMode { address, thumb }).collect(),
                 operations,
-                decompile: WorkerFunction { address: plan.address, name: plan.name.clone(), thumb: false },
+                decompile: WorkerFunction {
+                    address: plan.address,
+                    name: plan.name.clone(),
+                    thumb: thumb_at(plan.address),
+                },
                 tokens: true,
                 validate_only: false,
                 type_query: None,
@@ -399,7 +430,7 @@ impl Project {
                 request.type_query = None;
             }
             for (address, name) in &hinted_callees {
-                request.decompile = WorkerFunction { address: *address, name: name.clone(), thumb: false };
+                request.decompile = WorkerFunction { address: *address, name: name.clone(), thumb: thumb_at(*address) };
                 request.tokens = false;
                 let output = run_worker(&request, "exact-entry hinted callee validation")?;
                 let structure = output.structure.ok_or_else(|| {
@@ -408,7 +439,8 @@ impl Project {
                 crate::propagation::validate_replayed_targets(self, &options, &annotations, *address, &structure)?;
                 check("hinted callee result validation")?;
             }
-            request.decompile = WorkerFunction { address: plan.address, name: plan.name.clone(), thumb: false };
+            request.decompile =
+                WorkerFunction { address: plan.address, name: plan.name.clone(), thumb: thumb_at(plan.address) };
             request.tokens = true;
             let output = run_worker(&request, "exact-entry worker")?;
             crate::type_library::validate_profile_replay(
@@ -428,6 +460,9 @@ impl Project {
             let mut engine =
                 Decompiler::open_with_options(self.binary.arch, self.binary.big_endian, &regions, &options)
                     .map_err(|error| ApiError::Unavailable(format!("exact-entry native initialization: {error}")))?;
+            engine
+                .set_code_modes(&code_modes)
+                .map_err(|error| ApiError::Unavailable(format!("exact-entry native initialization: {error}")))?;
             crate::type_library::validate_profile_replay(
                 &annotations,
                 &options,
@@ -453,7 +488,7 @@ impl Project {
             for (address, name) in &hinted_callees {
                 check("native hinted callee validation")?;
                 source(self)?;
-                engine.decompile(*address, name, false).map_err(|error| {
+                engine.decompile(*address, name, thumb_at(*address)).map_err(|error| {
                     ApiError::Unavailable(format!("exact-entry native hinted callee {address:#x}: {error}"))
                 })?;
                 let structure = engine.structured_result().map_err(|error| ApiError::Unavailable(error.to_string()))?;
@@ -462,7 +497,7 @@ impl Project {
             }
             check("native execution")?;
             let code = engine
-                .decompile(plan.address, &plan.name, false)
+                .decompile(plan.address, &plan.name, thumb_at(plan.address))
                 .map_err(|error| ApiError::Unavailable(format!("exact-entry native execution: {error}")))?;
             let tokens = engine
                 .tokens()

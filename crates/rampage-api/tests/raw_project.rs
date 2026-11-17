@@ -978,3 +978,29 @@ fn cortex_m_find_main_claims_nothing_without_startup_evidence() {
     assert_eq!(report["sections"][0]["total"], 0, "{report:#}");
     assert!(report["summary"][0].as_str().unwrap().starts_with("No main candidate found"), "{report:#}");
 }
+
+/// Fifth Haiku run: `decompile` with `exact_entry` refused ARM. On a Raw Cortex-M project it decompiles an asserted
+/// Thumb start, here a CRC routine nothing calls directly, with flash literals folded as plain decompile does.
+#[test]
+fn cortex_m_exact_entry_decompiles_an_asserted_thumb_start() {
+    let owned = OwnedDirectory::new();
+    let path = owned.file("records.bin", CORTEX_M_RECORDS);
+    let mut project = Session::default().open_raw(&path, &records_request()).unwrap();
+    let crc = elf_symbol(CORTEX_M_RECORDS_ELF, "crc32_update");
+    let registry = tools();
+    let (text, failed) = call_shared(
+        &registry,
+        &mut project,
+        "decompile",
+        json!({ "at": format!("{crc:#x}"), "exact_entry": true, "view": "code" }),
+    );
+    assert!(!failed, "{text}");
+    assert!(text.contains("0xedb88320"), "{text}");
+    let (text, failed) = call_shared(
+        &registry,
+        &mut project,
+        "decompile",
+        json!({ "at": format!("{:#x}", crc | 1), "exact_entry": true }),
+    );
+    assert!(failed && text.contains("bit 0 clear"), "{text}");
+}
