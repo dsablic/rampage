@@ -718,3 +718,106 @@ pub fn references(insns: &[u16], mut each: impl FnMut(RefKind, u32, u32)) {
         address += units;
     }
 }
+
+/// One instruction decoded for analysis (call graphs, emulation): opcode, registers, literal, index operand and
+/// branch, nothing resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decoded {
+    /// Address in code units.
+    pub address: u32,
+    pub units: u32,
+    pub opcode: u8,
+    /// Registers as the format lists them; for a range format every register of the range (at most 255).
+    pub regs: Vec<u32>,
+    /// The literal, already shifted for `const/high16` and `const-wide/high16`.
+    pub literal: Option<i64>,
+    pub index: Option<u32>,
+    /// Absolute branch target (or payload address for switches and fill-array-data), when it lies in the body.
+    pub target: Option<u32>,
+}
+
+/// Decodes the instruction at `address` of `insns`; `None` for a payload, a unit that starts no complete
+/// instruction or an address past the end.
+pub fn decode_at(insns: &[u16], address: u32) -> Option<Decoded> {
+    let rest = insns.get(address as usize..)?;
+    if rest.is_empty() || payload_units(rest).is_some() {
+        return None;
+    }
+    let unit = rest[0];
+    let op = opcode(unit as u8);
+    let units = op.format.units() as usize;
+    let raw = decode_raw(op.format, rest.get(..units)?)?;
+    let regs = if raw.range {
+        match raw.regs.as_slice() {
+            [first, last] => (*first..=*last).collect(),
+            _ => Vec::new(),
+        }
+    } else {
+        raw.regs
+    };
+    let literal = raw.literal.map(|literal| match (op.format, unit as u8) {
+        (Format::F21h, 0x15) => literal << 16,
+        (Format::F21h, _) => literal << 48,
+        _ => literal,
+    });
+    let target = raw
+        .branch
+        .map(|branch| i64::from(address) + branch)
+        .filter(|target| (0..insns.len() as i64).contains(target))
+        .map(|target| target as u32);
+    Some(Decoded {
+        address,
+        units: units as u32,
+        opcode: unit as u8,
+        regs,
+        literal,
+        index: op.reference.and(raw.index),
+        target,
+    })
+}
+
+/// Every instruction of `insns` in order, payloads and undecodable units skipped.
+pub fn decode_all(insns: &[u16]) -> Vec<Decoded> {
+    layout(insns)
+        .slots
+        .iter()
+        .filter(|(_, _, slot)| *slot == Slot::Instruction)
+        .filter_map(|&(address, _, _)| decode_at(insns, address))
+        .collect()
+}
+
+/// The keys and absolute targets of the switch payload at `payload` for the switch at `switch`, at most `max`.
+pub fn switch_cases(insns: &[u16], switch: u32, payload: u32, max: usize) -> Option<Vec<(i32, u32)>> {
+    let units = insns.get(payload as usize..)?;
+    let size = usize::try_from(payload_units(units)?).ok()?;
+    let units = units.get(..size)?;
+    let word = |i: usize| u32::from(units[i]) | (u32::from(units[i + 1]) << 16);
+    let all = usize::from(units[1]);
+    let count = all.min(max);
+    let target = |relative: u32| {
+        let absolute = i64::from(switch) + i64::from(relative as i32);
+        (0..insns.len() as i64).contains(&absolute).then_some(absolute as u32)
+    };
+    match units[0] {
+        0x0100 => {
+            (0..count).map(|i| Some(((word(2) as i32).wrapping_add(i as i32), target(word(4 + i * 2))?))).collect()
+        }
+        0x0200 => (0..count).map(|i| Some((word(2 + i * 2) as i32, target(word(2 + all * 2 + i * 2))?))).collect(),
+        _ => None,
+    }
+}
+
+/// The element width and little-endian data of the fill-array-data payload at `payload`.
+pub fn array_data(insns: &[u16], payload: u32) -> Option<(usize, Vec<u8>)> {
+    let units = insns.get(payload as usize..)?;
+    if units.first() != Some(&0x0300) {
+        return None;
+    }
+    let size = usize::try_from(payload_units(units)?).ok()?;
+    let units = units.get(..size)?;
+    let width = usize::from(units[1]);
+    let count = (u32::from(units[2]) | (u32::from(units[3]) << 16)) as usize;
+    let length = width.checked_mul(count)?;
+    let bytes: Vec<u8> = units[4..].iter().flat_map(|unit| unit.to_le_bytes()).take(length).collect();
+    (bytes.len() == length).then_some((width, bytes))
+}

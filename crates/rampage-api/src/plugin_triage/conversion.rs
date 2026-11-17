@@ -44,12 +44,13 @@ fn convert(prepared: &PreparedPluginTriage, body: contract::ReportBody) -> Workf
     let limits = ReportLimits { per_section: prepared.facts.per_section as usize };
     let mut report = WorkflowReport {
         workflow: "triage_report",
-        target: ReportTarget {
+        target: Some(ReportTarget {
             format: binary.format,
             arch: binary.arch,
             entry: binary.entry,
             sha256: rampage_arch::hex::bytes(&prepared.image_sha256),
-        },
+        }),
+        input: None,
         other: None,
         summary: body.summary,
         limitations: body.limitations,

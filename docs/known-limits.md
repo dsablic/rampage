@@ -79,12 +79,15 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   delta OTA payloads (they need the previous build) and compressed tar are not read; `carve` finds SquashFS and cpio
   images inside a container but not ext4, Android sparse or OTA payloads, whose offset you pass as `image_offset`.
 - `endpoint_inventory` matches endpoints lexically: addresses built at run time, encrypted or compressed data and
-  IPv4 addresses stored as integers in code are not found. `privacy_surface` analyses one binary at a time and
-  reads no Java/DEX code; see its [limits](privacy-surface.md#limits).
+  IPv4 addresses stored as integers in code are not found. `privacy_surface` on a directory analyses only programs
+  that import a capture API or name a capture device, and matches init files to programs by path; see its
+  [limits](privacy-surface.md#limits).
 - Android: DEX files are read and Dalvik bytecode is listed (`dex_metadata`, `dex_code`), but not decompiled to
-  Java, and DEX code is not part of function discovery, xrefs or the guided reports (`privacy_surface` reads
-  native code only; `dex_metadata` has the DEX-side capture APIs). Capture and network calls are matched by direct
-  invoke sites: reflection, interface dispatch and run-time loaded code are missed. JNI methods registered with
+  Java, and DEX code is not part of function discovery or xrefs. `privacy_surface` on an APK follows a call graph
+  of direct invokes, virtual and interface invokes resolved through the app's classes (by name to overrides, marked
+  `by_name`), callbacks and const-class component starts, within 6 levels and 2000 methods per walk: reflection,
+  method handles, framework code and run-time loaded code are not followed, and keep `no_user_trigger` from being
+  stated. JNI methods registered with
   `RegisterNatives` are only suggested by the strings a library holds; the registration table is not decoded. Obfuscated names are shown as
   stored; `resources.arsc` is counted, not resolved, so `@0x7f...` manifest values stay resource ids; an AAB's
   protobuf manifest and APK signature blocks are not read; a DEX 041 container with several DEX files has only

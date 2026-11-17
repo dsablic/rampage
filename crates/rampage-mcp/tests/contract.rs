@@ -462,6 +462,16 @@ async fn contract_mcp_carve_results() {
     exercise(c, o, "privacy_surface", json!({"path": privacy})).await;
     let apk = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/android/recorder.apk");
     exercise(c, o, "endpoint_inventory", json!({"path": apk})).await;
+    let watch = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/android/watch.apk");
+    exercise(c, o, "privacy_surface", json!({"path": watch})).await;
+    let tree = scratch.0.join("tree");
+    std::fs::create_dir_all(tree.join("system/bin")).unwrap();
+    std::fs::create_dir_all(tree.join("system/etc/init")).unwrap();
+    std::fs::copy(&privacy, tree.join("system/bin/voiced")).unwrap();
+    std::fs::write(tree.join("system/etc/init/voiced.rc"), "service voiced /system/bin/voiced\n    class main\n")
+        .unwrap();
+    std::fs::copy(&watch, tree.join("system/watch.apk")).unwrap();
+    exercise(c, o, "privacy_surface", json!({"path": tree, "max_files": 1})).await;
     check_group(client, "carve", &observed, &[]).await;
 }
 

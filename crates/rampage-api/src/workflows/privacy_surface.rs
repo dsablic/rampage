@@ -16,7 +16,7 @@ use rampage_analysis::discover::{Program, XrefKind};
 use rampage_arch::{Arch, Flow};
 use serde_json::{Value, json};
 
-use super::registry::{Workflow, WorkflowOptions, report_options, report_schema};
+use super::registry::{Workflow, WorkflowOptions};
 use super::{Confidence, Finding, ReportLimits, Section, WorkflowReport, match_api, quote};
 use crate::endpoints::{Kind, extract};
 use crate::tools::Group;
@@ -466,7 +466,57 @@ pub(crate) fn capture_api(name: &str) -> bool {
         || MANGLED_SOURCES.iter().any(|(fragment, _)| name.contains(fragment))
 }
 
+/// Device paths and class names a quick byte search looks for before a tree's program is analysed.
+const CAPTURE_MARKS: [&[u8]; 11] = [
+    b"/dev/snd",
+    b"/proc/asound",
+    b"/dev/video",
+    b"/dev/fb",
+    b"/dev/graphics/fb",
+    b"/dev/dri/",
+    b"/dev/input/",
+    b"AudioRecord",
+    b"MediaRecorder",
+    b"android/hardware/Camera",
+    b"MediaProjection",
+];
+
+/// Whether a program may capture, read cheaply before analysis: it imports a capture API, or its bytes name a
+/// capture device or Android capture class. A program for which this is false has no source the report could
+/// list except through raw system calls.
+pub(crate) fn may_capture(binary: &rampage_loaders::Binary, bytes: &[u8]) -> bool {
+    binary.imports.iter().any(|import| capture_api(&import.name))
+        || CAPTURE_MARKS.iter().any(|mark| memchr::memmem::find(bytes, mark).is_some())
+}
+
 pub struct PrivacySurface;
+
+// The arguments of privacy_surface. Not a doc comment: the schema would carry it.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct PrivacyArgs {
+    /// Findings kept per report section (default 25, at most 200); each section says when it was cut, and large
+    /// reports are cut further to fit one tool result.
+    max_per_section: Option<usize>,
+    /// Directory: the input.next_cursor of the previous page.
+    cursor: Option<String>,
+    /// Directory: programs and APKs analysed per page (default 10, at most 50).
+    max_files: Option<usize>,
+    /// Directory: time budget per page in ms (default 30000, at most 300000); one file is always analysed.
+    timeout_ms: Option<u64>,
+}
+
+/// What one JNI export reaches in its library through direct calls.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct JniReach {
+    pub(crate) function: String,
+    pub(crate) address: u64,
+    /// `(function, what, sink target, calls down)`.
+    pub(crate) sinks: Vec<(String, String, &'static str, usize)>,
+    /// `(function, what, medium, calls down, whether the evidence shows direction)`.
+    pub(crate) sources: Vec<(String, String, &'static str, usize, bool)>,
+    /// Whether the walk hit its bound.
+    pub(crate) cut: bool,
+}
 
 impl Workflow for PrivacySurface {
     fn name(&self) -> &'static str {
@@ -482,7 +532,11 @@ impl Workflow for PrivacySurface {
          PulseAudio, V4L2 and framebuffer ioctls, device paths, Android audio/camera classes; a capture-direction \
          flag or ioctl code at the call raises evidence from `name` to `argument`), network and file sinks with the \
          endpoints they name, call paths between them ranked by evidence, and what reaches each capture (program \
-         start, timer, network command, user input). Evidence, not intent."
+         start, timer, network command, user input). Evidence, not intent. path may also be an APK/DEX (capture and \
+         network APIs invoked from DEX, a call graph with by_name virtual edges, triggers from the manifest and \
+         framework callbacks: boot, push, jobs, UI; native libraries merged, Java callers of native methods linked \
+         to what the JNI export reaches) or a directory (an extracted tree: programs that may capture, with init \
+         .rc/systemd/init.d boot starts; paged by cursor)."
     }
 
     fn group(&self) -> Group {
@@ -490,11 +544,13 @@ impl Workflow for PrivacySurface {
     }
 
     fn input_schema(&self) -> Value {
-        report_schema()
+        crate::tools::schema::<PrivacyArgs>()
     }
 
     fn options(&self, input: Value) -> Result<WorkflowOptions, String> {
-        report_options(input)
+        let args: PrivacyArgs = crate::tools::arguments(input)?;
+        let _ = (args.cursor, args.max_files, args.timeout_ms);
+        Ok(WorkflowOptions { limits: ReportLimits::new(args.max_per_section), ..WorkflowOptions::default() })
     }
 
     fn run(&self, project: &Project, options: &WorkflowOptions) -> Result<WorkflowReport, ApiError> {
@@ -721,6 +777,16 @@ struct Survey<'p> {
 impl Project {
     /// What the binary can capture and send, the paths between, and what starts each capture.
     pub fn privacy_surface(&self, limits: ReportLimits) -> Result<WorkflowReport, ApiError> {
+        self.privacy_surface_with(limits, &[]).map(|(report, _)| report)
+    }
+
+    /// [`Project::privacy_surface`], plus what each of the exported functions named in `exports` (JNI symbols)
+    /// reaches through direct calls: the sinks and sources of the report in it or below it.
+    pub(crate) fn privacy_surface_with(
+        &self,
+        limits: ReportLimits,
+        exports: &[String],
+    ) -> Result<(WorkflowReport, BTreeMap<String, JniReach>), ApiError> {
         let mut report = WorkflowReport::new("privacy_surface", self);
         let analysis = match self.analysis() {
             Ok(analysis) => Some(analysis),
@@ -754,6 +820,7 @@ impl Project {
         let graph =
             analysis.map(|analysis| graph(self, &analysis.program, |address| analysis.function_containing(address)));
         let roots = self.roots();
+        let reach = graph.as_ref().map(|graph| survey.reach(graph, exports)).unwrap_or_default();
 
         let mut found: Vec<Finding> = Vec::new();
         for (&function, hits) in &survey.sources {
@@ -964,7 +1031,7 @@ impl Project {
                 survey.arch
             ));
         }
-        Ok(report)
+        Ok((report, reach))
     }
 
     /// Functions that start work on their own: the entry point, main, .init_array constructors, JNI_OnLoad and
@@ -1076,6 +1143,46 @@ fn graph(project: &Project, program: &Program, containing: impl Fn(u64) -> Optio
 impl Survey<'_> {
     fn name(&self, function: u64) -> String {
         self.project.function_name(function)
+    }
+
+    /// The sinks and sources each export in `exports` reaches through direct calls, within the walk's bounds.
+    fn reach(&self, graph: &Graph, exports: &[String]) -> BTreeMap<String, JniReach> {
+        let mut found = BTreeMap::new();
+        for name in exports {
+            let Some(export) = self.project.binary.exports.iter().find(|export| export.name == *name) else {
+                continue;
+            };
+            let mut reached = BTreeMap::from([(export.address, 0usize)]);
+            let mut queue = VecDeque::from([export.address]);
+            let mut entry = JniReach::default();
+            while let Some(function) = queue.pop_front() {
+                let depth = reached[&function];
+                for hit in self.sinks.get(&function).into_iter().flatten() {
+                    entry.sinks.push((self.name(function), hit.what.clone(), hit.kind.target(), depth));
+                }
+                for hit in self.sources.get(&function).into_iter().flatten().filter(|hit| hit.medium != Medium::Input) {
+                    let specific = hit.specific && hit.level >= Level::Name;
+                    entry.sources.push((self.name(function), hit.what.clone(), hit.medium.label(), depth, specific));
+                }
+                if depth == MAX_DEPTH {
+                    continue;
+                }
+                for &callee in graph.callees.get(&function).into_iter().flatten() {
+                    if reached.len() >= MAX_VISITED {
+                        entry.cut = true;
+                        break;
+                    }
+                    if let std::collections::btree_map::Entry::Vacant(slot) = reached.entry(callee) {
+                        slot.insert(depth + 1);
+                        queue.push_back(callee);
+                    }
+                }
+            }
+            entry.function = self.name(export.address);
+            entry.address = export.address;
+            found.insert(name.clone(), entry);
+        }
+        found
     }
 
     /// Capture strings: those referenced from code credit the referencing functions; the rest are listed apart.

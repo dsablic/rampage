@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rampage_dex::testkit::{sample_apk, sample_classes, write_dex};
+use rampage_dex::testkit::{sample_apk, sample_classes, watch_apk, write_dex};
 use rampage_unpack::{At, Limits, read_entries};
 
 fn android(name: &str) -> PathBuf {
@@ -27,9 +27,11 @@ fn committed_fixtures_match_the_writers() {
     let library = std::fs::read(android("libnative-arm64.so")).unwrap();
     let dex = write_dex(&sample_classes(), 35);
     let apk = sample_apk(Some(&library));
+    let watch = watch_apk(Some(&std::fs::read(android("libnet-arm64.so")).unwrap()));
     if std::env::var_os("RAMPAGE_WRITE_ANDROID_FIXTURES").is_some() {
         std::fs::write(android("recorder.dex"), &dex).unwrap();
         std::fs::write(android("recorder.apk"), &apk).unwrap();
+        std::fs::write(android("watch.apk"), &watch).unwrap();
     }
     let committed = std::fs::read(android("recorder.dex")).unwrap();
     assert!(committed == dex, "recorder.dex differs from the writer's output; see tests/fixtures/build-android.sh");
@@ -38,7 +40,11 @@ fn committed_fixtures_match_the_writers() {
     let expected = members(&generated);
     std::fs::remove_file(&generated).unwrap();
     assert!(members(&android("recorder.apk")) == expected, "recorder.apk members differ from the writers' output");
-    for name in ["recorder.dex", "recorder.apk", "libnative-arm64.so"] {
+    std::fs::write(&generated, &watch).unwrap();
+    let expected = members(&generated);
+    std::fs::remove_file(&generated).unwrap();
+    assert!(members(&android("watch.apk")) == expected, "watch.apk members differ from the writers' output");
+    for name in ["recorder.dex", "recorder.apk", "libnative-arm64.so", "watch.apk", "libnet-arm64.so"] {
         assert!(!local_paths(&std::fs::read(android(name)).unwrap()), "{name} holds a local path");
     }
 }

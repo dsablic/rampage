@@ -222,7 +222,7 @@ impl Project {
         };
         let mut report = WorkflowReport::new("diff_builds", self);
         let other_target = ReportTarget::of(&other);
-        if other_target.sha256 == report.target.sha256 {
+        if report.target.as_ref().is_some_and(|target| target.sha256 == other_target.sha256) {
             report.summary.push("The two images are byte-identical (same SHA-256).".to_owned());
         }
         report.other = Some(other_target);

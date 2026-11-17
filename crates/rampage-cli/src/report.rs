@@ -132,9 +132,14 @@ fn comparing_commands() -> String {
 }
 
 pub(crate) fn render(out: &mut impl Write, report: &WorkflowReport) -> Result<()> {
-    let target = &report.target;
-    let entry = target.entry.map_or_else(|| "no entry".to_owned(), |entry| format!("entry {entry:#x}"));
-    writeln!(out, "{}: {:?} {}, {entry}, sha256 {}", report.workflow, target.format, target.arch, target.sha256)?;
+    if let Some(target) = &report.target {
+        let entry = target.entry.map_or_else(|| "no entry".to_owned(), |entry| format!("entry {entry:#x}"));
+        writeln!(out, "{}: {:?} {}, {entry}, sha256 {}", report.workflow, target.format, target.arch, target.sha256)?;
+    }
+    if let Some(input) = &report.input {
+        let sha256 = input.sha256.as_ref().map(|sha256| format!(", sha256 {sha256}")).unwrap_or_default();
+        writeln!(out, "{}: {} {}{sha256}", report.workflow, input.kind, input.path)?;
+    }
     if let Some(other) = &report.other {
         writeln!(out, "compared with: {:?} {}, sha256 {}", other.format, other.arch, other.sha256)?;
     }

@@ -184,7 +184,8 @@ Areas marked *experimental* may change in any release; see the [stability policy
   [how to read the code in a firmware update file](docs/firmware-walkthrough.md).
 - **Device privacy:** `endpoint_inventory` lists the hosts, URLs, IPs and certificates a binary or an extracted
   firmware tree names, `endpoint_blocklist` writes them as a router blocklist, and `privacy_surface` maps what a
-  program can capture and where it can send it. See
+  program, an Android app or a whole extracted tree can capture, where it can send it and what starts it at boot.
+  See
   [how to check what a device records and where it sends it](docs/device-privacy-check.md).
 - **Library identification and detection:** FLIRT/FunctionID-style signatures with bundled databases, user PAT
   and Ghidra FID input, fuzzy candidates, packer/compiler detection (including signatures converted from Detect It

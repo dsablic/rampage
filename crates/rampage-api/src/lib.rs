@@ -3,6 +3,7 @@
 mod analysis_cache;
 mod android;
 mod android_code;
+mod android_privacy;
 pub mod annotations;
 mod archive;
 mod assembly;
@@ -48,6 +49,7 @@ mod go_strings;
 mod graph;
 mod image_export;
 mod import_types;
+mod init_services;
 pub mod integrity;
 mod jumptable;
 pub mod layout_containers;
@@ -67,6 +69,7 @@ mod peripherals;
 mod plugin_triage;
 mod pointer_compare;
 mod pointer_observation;
+mod privacy_tree;
 mod project;
 mod project_workspace;
 mod propagation;
@@ -108,6 +111,7 @@ pub use analysis_cache::{
 };
 pub use android::{DexMetadataQuery, MAX_DEX_PAGE, dex_metadata};
 pub use android_code::{DexCodeQuery, MAX_CODE_PAGE, dex_code};
+pub use android_privacy::privacy_surface_input;
 pub use annotations::{DataTypeAnnotation, DerivedTypeHint, TypeHintAnnotation, TypeHintEvidence, TypeHintTarget};
 pub use archive::{
     ArchiveMember, ArchiveMemberRef, ArchivePage, ArchiveQuery, ArchiveRef, MAX_ARCHIVE_PAGE, MAX_ARCHIVE_RESULT_BYTES,
@@ -304,7 +308,8 @@ pub use typed_data::{
 pub use variables::{VariableDescriptor, VariableEditRequest, VariableEditResult};
 pub use wasm::{MAX_WASM_PAGE, WasmList, WasmModulePage, wasm_module};
 pub use workflows::{
-    Confidence as FindingConfidence, Excerpt, Finding, NextStep, ReportLimits, ReportTarget, Section, WorkflowReport,
+    Confidence as FindingConfidence, Excerpt, Finding, NextStep, ReportInput, ReportLimits, ReportTarget, Section,
+    WorkflowReport,
 };
 pub use xrefs::{ObjcEdge, XrefQuery, XrefRow};
 

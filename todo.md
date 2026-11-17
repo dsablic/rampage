@@ -267,10 +267,9 @@ above stay under review until each is approved.
   audio/camera/screen names), `argument` evidence from constant arguments at the call, network/file sinks with
   their endpoints, ranked capture-to-send call paths, triggers (program start, timer, network command, user input)
   and `no_user_trigger`.
-- [ ] `privacy_surface` follow-ups: directory mode over an extracted tree (cursor, `max_files`, `timeout_ms`) with
-  boot triggers across files (init.d scripts, Android `.rc` services, systemd units starting a program with
-  sources); HDMI-CEC (`CEC_RECEIVE`, libcec); MIPS argument reading (delay slots) and 32-bit x86 stack arguments;
-  arguments set in a predecessor block; APK input (see the Android follow-ups).
+- [ ] `privacy_surface` follow-ups: HDMI-CEC (`CEC_RECEIVE`, libcec); MIPS argument reading (delay slots) and
+  32-bit x86 stack arguments; arguments set in a predecessor block; a CLI route for APK and directory input;
+  programs started by other programs at run time (scripts run by services) in directory mode.
 - [ ] Endpoint follow-ups: IPv4 addresses stored as integers in code (immediates passed to `connect`/`sin_addr`);
   `network_code` through one call level (a string passed to a helper that calls `connect`); hex SHA-256 and
   SHA-1 pins; a CLI route; merging groups across directory pages; a
@@ -284,9 +283,12 @@ above stay under review until each is approved.
   classes/methods pages, a `privacy` section of capture APIs invoked with callers, permissions and boot
   reachability, `jni` links of native methods to exports) and `dex_code` (smali-style bytecode).
   `endpoint_inventory` reads DEX string pools with the methods that load each string, and APK native libraries.
+- [x] **Android slice 2: `privacy_surface` on an APK, DEX file or directory (1.7.0).** DEX sources and network
+  and file sinks, a call graph across DEX files (direct, virtual through the class hierarchy, `by_name`,
+  callbacks, const-class component starts), Android triggers (boot, app start, push, jobs, exported components,
+  UI) with `no_user_trigger` under the native evidence discipline, native libraries merged through JNI; directory
+  mode with init `.rc`/systemd/init.d boot starts across files.
 - [ ] Android follow-ups (slice 2):
-  - `privacy_surface` on an APK: DEX capture sources and network sinks with call paths, merged with the native
-    libraries' report, and Android `.rc`/boot triggers.
   - Dalvik to Java decompilation, or a structured pseudocode first (registers to locals, branches to blocks).
   - String decryption: emulate small static decoder methods (`String` from a `byte[]`/`char[]` loop) and feed
     `endpoint_inventory` and `privacy`.
@@ -295,10 +297,9 @@ above stay under review until each is approved.
   - `resources.arsc`: resolve `@0x7f...` manifest values and string resources (URLs often live there); scan
     `res/xml` and `assets/` for endpoints.
   - Decode `RegisterNatives` tables in `JNI_OnLoad` (method name, signature, function pointer) to link natives by
-    address; virtual and interface dispatch in the call graph; AAB protobuf manifests; APK signature blocks.
+    address; AAB protobuf manifests; APK signature blocks.
   - A CLI route (`rampage android inspect|code`) and real-APK precision checks (local only, never named).
   - Read every DEX file of a DEX 041 container (only the first is read; the others are counted in a warning).
-  - A cross-DEX superclass map, so `AccessibilityService` subclasses and hierarchies resolve across multidex files.
   - `scan::index` stops collecting callees at 4096 per method without saying so: report it. Map
     `READ_PHONE_NUMBERS` to the identifiers APIs it guards (`getLine1Number`).
   - Attribute `static_values` (field initial values, often URLs and keys) to their fields and scan them in

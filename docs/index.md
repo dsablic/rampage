@@ -78,8 +78,9 @@ Formats and raw code:
   payload, cpio, tar and ZIP (APK) images safely.
 - [Endpoint inventory and blocklists](endpoint-inventory.md): the hosts, URLs, IPs, pins and certificates a binary or
   firmware tree names, grouped by domain, and a router blocklist of them.
-- [Privacy surface](privacy-surface.md): what a program can capture (microphone, camera, screen, input), where it
-  can send it, the call paths between, and whether capture starts without a user-facing trigger.
+- [Privacy surface](privacy-surface.md): what a program, an APK or an extracted firmware tree can capture
+  (microphone, camera, screen, input), where it can send it, the call paths between, what starts each capture
+  (including init services at boot), and whether capture starts without a user-facing trigger.
 - [Android APKs and DEX](android.md): an APK's manifest, permissions with protection levels, components and
   start-at-boot receivers, native libraries with JNI exports, DEX classes and methods, Dalvik bytecode, and the
   capture APIs the code invokes.

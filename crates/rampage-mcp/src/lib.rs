@@ -904,6 +904,17 @@ impl RampageServer {
                 Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
             };
         }
+        // An APK or DEX file is no binary: privacy_surface reads it through the DEX tools and its native libraries.
+        if name == "privacy_surface"
+            && raw.is_none()
+            && let Some(path) = arguments.get("path").and_then(Value::as_str)
+            && let Some(result) = rampage_api::privacy_surface_input(Path::new(path), &Value::Object(arguments.clone()))
+        {
+            return match result {
+                Ok(output) => CallToolResult::success(vec![ContentBlock::text(output.to_string())]),
+                Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
+            };
+        }
         let path = arguments.remove("path");
         let arch = arguments.remove("arch");
         let image_offset = arguments.remove("image_offset");

@@ -22,6 +22,22 @@ see the [stability policy](docs/stability.md) for what the version promises.
   declared `native` method to the `Java_` export that binds it (short or long mangled name), names the libraries
   with `JNI_OnLoad` that likely register it by table, and lists exports no native method claims. See
   [Android APKs and DEX](docs/android.md).
+- `privacy_surface` reads APKs and DEX files: capture sources are the Android capture APIs each method invokes,
+  sinks the network calls (`URL`, `HttpURLConnection`, sockets, OkHttp, Volley, Retrofit, `WebView`, Paho MQTT,
+  gRPC, Cronet) and file writes, with the endpoints the method or its direct callers load. Paths follow a call
+  graph across every DEX file: direct invokes, virtual and interface invokes resolved through the app's class
+  hierarchy (overrides found by name are marked `by_name` and rank lower), callbacks and `const-class` component
+  starts. Triggers name boot receivers (and the services they start), the Application class, push messages,
+  scheduled work, exported components, UI callbacks and activities; `no_user_trigger` is withheld when the walk is
+  cut, a caller is linked by name, reflection is on the way or the app loads code at run time. Each JNI library's
+  own report is merged, labelled with its origin, and a Java caller of a `native` method reaches what the bound
+  `Java_` export reaches. See [privacy surface](docs/privacy-surface.md#apks-and-dex-files).
+- `privacy_surface` on a directory, such as an extracted firmware tree: one page of programs and APKs that may
+  capture (`cursor`, `max_files`, `timeout_ms`), merged and labelled by file, plus the tree's Android init `.rc`
+  services, systemd units, init.d scripts and inittab, so a capture in a program init starts at boot is tied to
+  the init file and line (`no_user_trigger: <program> is started at boot, ...`) and a `Boot services` section
+  lists every start read. See [directories](docs/privacy-surface.md#directories-extracted-trees).
+- `dex_metadata`'s `accessibility_services` follows the class hierarchy across every DEX file of an APK.
 - `endpoint_inventory` reads APKs and DEX files: each DEX string pool with the methods that load every string and
   the networking calls they make (`dex_string` evidence), and each native library in the APK. See
   [endpoint inventory](docs/endpoint-inventory.md).

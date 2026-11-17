@@ -6,8 +6,10 @@ send it, how are the two connected, and is any capture reached from program star
 on the way. It reports evidence of what
 the code can do and how it is reached, never intent, and never that anything runs.
 
-It is a guided report in the `carve` group, beside [`endpoint_inventory`](endpoint-inventory.md). It takes the
-binary's `path` and the usual `max_per_section` (default 25, at most 200).
+It is a guided report in the `carve` group, beside [`endpoint_inventory`](endpoint-inventory.md). It takes a
+`path` and the usual `max_per_section` (default 25, at most 200). The path is a binary, an APK, AAB, JAR or DEX
+file ([APKs and DEX files](#apks-and-dex-files)), or a directory such as an extracted firmware tree
+([Directories](#directories-extracted-trees)), paged by `cursor`.
 
 ```json
 {"tool": "privacy_surface", "path": "/work/rootfs/usr/bin/voiced"}
@@ -122,15 +124,96 @@ input or runs a UI loop; none of those callers is referenced from data (a table 
 scanning non-code segments for pointers, whose callers are not followed); and the walk was not cut. Otherwise the
 program-start trigger says `no_user_trigger not stated` and why. It means none was found, not that none exists.
 
+## APKs and DEX files
+
+For an APK or DEX file the report has the same sections, read from the app's DEX code and merged with the native
+report of each JNI library it ships (one ABI per library name, arm64-v8a first, at most 16). The report names its
+`input` (`kind` `apk` or `dex`, `path`, `sha256`) instead of a binary `target`. Every finding's first evidence line
+is its `origin`: `dex classes.dex` (or `classes2.dex`, ...), or the library path, which also prefixes a native
+finding's observation (`lib/arm64-v8a/libnet.so: ...`).
+
+```json
+{"tool": "privacy_surface", "path": "/work/system/priv-app/Recorder/Recorder.apk"}
+```
+
+- **Sources:** the capture and personal-data APIs `dex_metadata`'s [`privacy` section](android.md#privacy) lists,
+  as invoked by each method (`evidence: invoke`): `AudioRecord`, `MediaRecorder` audio and video sources, camera
+  and camera2, `MediaProjection`, `PixelCopy`, accessibility window reads, location and device identifiers. A
+  `native` method bound to a `Java_` export is a source when the export reaches a native capture.
+- **Sinks:** network calls (`java.net.URL.openConnection`/`openStream`, `HttpURLConnection` and
+  `HttpsURLConnection` `connect`/`getOutputStream`, `Socket`, `DatagramSocket`, `SocketChannel`, OkHttp
+  `newCall`/`Call.execute`/`enqueue` and WebSocket `send`, Volley `RequestQueue.add`, Retrofit `create` and
+  `Call.execute`/`enqueue`, `WebView.loadUrl`/`postUrl`, Paho MQTT `connect`/`publish`, gRPC channels and client
+  calls, Cronet requests, Apache `HttpClient.execute`), `LocalSocket` (local), and file writes, weaker
+  (`FileOutputStream`, `FileWriter`, `RandomAccessFile`, `Files.write`, `ContentResolver.insert` and
+  `openOutputStream`, `openFileOutput`). Each network sink lists up to four endpoints from the const-strings of
+  the method or a method calling it directly, classified as `endpoint_inventory` does. A `native` method is a sink
+  when its export reaches `connect`, `send` or another native sink.
+- **Paths:** a call graph across every DEX file of the APK: direct, static and super invokes; virtual and
+  interface invokes resolved through the app's class hierarchy (across DEX files) to the method the receiver's
+  class defines, and by name and prototype to the overriding methods of app subclasses and implementers (at most
+  32 per call; such edges are marked `by_name`: possible, not shown, and a path through one ranks lower); an app
+  class with a framework supertype instantiated by a method (`registers callback`: a `Runnable`, a listener); and
+  a component class loaded with `const-class` beside a call that starts it (`startService`,
+  `startForegroundService`, `bindService`, `startActivity`, `sendBroadcast`, `Intent`/`ComponentName`
+  constructors, WorkManager work requests, `JobInfo.Builder`), linked to its entry methods (`starts component`).
+  A Java caller of a `native` method reaches what the bound export reaches through direct calls in its library.
+  Ranking is as for binaries.
+- **Triggers:** walking callers from each capture (6 levels, 2000 methods), the report names what the platform
+  starts: `start at boot` (a `BOOT_COMPLETED`, `LOCKED_BOOT_COMPLETED` or `QUICKBOOT_POWERON` receiver, including
+  through a service it starts), `app start` (the `Application` class or a content provider, which run when the
+  app's process starts), `broadcast` (other receivers, exported or not, with their intent filter actions),
+  `service start` (a service whose start was not seen, or an exported one other apps can start), `timer` (a
+  WorkManager `Worker`, `JobService`, or a method calling `AlarmManager.set*`, `JobScheduler.schedule`,
+  `WorkManager.enqueue*`, `Handler.postDelayed`, `Timer.schedule`, `ScheduledExecutorService.schedule*`),
+  `network command` (`FirebaseMessagingService.onMessageReceived`, MQTT `messageArrived`, WebSocket `onMessage`,
+  or a method calling `ServerSocket.accept`, `Socket.getInputStream`, `DatagramSocket.receive`), `accessibility
+  event`, and `user input` (an activity or fragment method, a UI callback such as `onClick`, `onTouch`, `onKey*`,
+  or a method registering an input listener).
+
+`no_user_trigger` is stated for a microphone, camera or screen capture reached from boot or app start only when no
+caller within the bounds is an activity, a UI callback or registers an input listener; the walk was not cut; no
+`by_name` edge is among the callers; no caller uses reflection, method handles or `invoke-custom`; the app loads
+no code at run time (`DexClassLoader`, `PathClassLoader`, `InMemoryDexClassLoader`); and every caller without
+callers of its own is a known entry point. Otherwise the start trigger says `no_user_trigger not stated` and why.
+
+## Directories (extracted trees)
+
+For a directory the report reads one page of programs and APKs (`max_files` per page, default 10, at most 50;
+`timeout_ms`, default 30,000, at most 300,000; at least one file per page) and gives `input.next_cursor` for the
+next; pass it back as `cursor`. Executables that import no capture API and name no capture device or Android
+capture class are not analysed (they are counted and the first 20 named in `limitations`). Each file's findings
+are labelled with its path in the tree.
+
+Every page also reads the tree's init files, so a program defined in one file and started from another is linked:
+
+- Android init `.rc` files: `service <name> <path>` with its `class`, `oneshot` and `disabled`; a service not
+  marked `disabled` starts with its class at boot (named with the `class_start` action when one is found); `start`,
+  `restart`, `exec_start` and `enable` in `on <trigger>` actions, at boot for `early-init` through `boot`,
+  `property:sys.boot_completed=1` and similar, otherwise on that trigger; and `exec -- <path>` commands.
+- systemd units (`ExecStart=`, at boot when `[Install] WantedBy=` names `multi-user.target`, `default.target`,
+  `graphical.target`, `sysinit.target`, `basic.target` or `network.target`), SysV init scripts (`etc/init.d`,
+  `rc.d`, `rcS`, `rc.local`: absolute paths under a `bin` or `sbin` directory) and `inittab` entries.
+
+A program is matched to an init file by its device path (`/system/bin/voiced` is `system/bin/voiced` in the tree,
+or `bin/voiced` in an extracted partition), or by file name alone when the path does not match (marked so, one
+confidence step lower). An analysed program with capture sources that is started at boot gets a `Capture triggers`
+finding naming the init file and line; when its own report has a `no_user_trigger` finding, it reads
+`no_user_trigger: <program> is started at boot, and its capture is reached from program start with no user-facing
+trigger found`. A `Boot services` section lists every start read, with the file and line and whether the program is
+in the tree. Init files are read up to 2000 files, 1 MiB each and 16 MiB in all, 100,000 lines per file and 4096
+characters per line, and 10,000 services and actions; a bound hit is a limitation.
+
 ## Limits
 
 - Constant arguments are read only from the instructions just before the call in the same basic block, on x86-64,
   AArch64 and 32-bit ARM. Values passed through variables, helpers or other blocks leave a source at `name` level
   (and an ioctl unread); on other architectures ioctl-based sources are missing entirely, and the report says so.
-- Virtual calls and other indirect calls are not followed, and nothing is executed. DEX code is not read here: for
-  an APK, `dex_metadata`'s [`privacy` section](android.md#privacy) lists the Android capture APIs its code
-  invokes, linked to the manifest's permissions and start-at-boot receivers.
+- Virtual calls and other indirect calls in native code are not followed, and nothing is executed. In DEX code,
+  reflection, method handles, framework code (a callback the framework makes on an object it was handed, other
+  than the instantiation link above) and code loaded at run time are not followed, and natives registered with
+  `RegisterNatives` are not linked.
 - V4L2 also drives video output, decoders and HDMI input; framebuffer queries are also used to draw. A source shows
   the capability, not what is recorded.
-- One binary at a time; running it over an extracted tree, and boot triggers across files (init scripts, Android
-  `.rc` services, systemd units starting a program with sources), are not done yet.
+- On a directory, programs started by other programs at run time (a shell script run by a service, a `fork` and
+  `exec`) are not traced, and an enabled systemd unit is read from the unit file, not from `.wants` links.

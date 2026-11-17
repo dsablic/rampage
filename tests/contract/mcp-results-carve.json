@@ -236,10 +236,18 @@
     "total"
   ],
   "privacy_surface": [
+    "input",
+    "input.files",
+    "input.kind",
+    "input.next_cursor",
+    "input.path",
+    "input.sha256",
     "limitations",
     "next_steps",
     "next_steps[].arguments",
     "next_steps[].arguments.at",
+    "next_steps[].arguments.cursor",
+    "next_steps[].arguments.method",
     "next_steps[].group",
     "next_steps[].reason",
     "next_steps[].tool",

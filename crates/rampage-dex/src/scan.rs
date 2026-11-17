@@ -141,6 +141,16 @@ pub struct CaptureUse {
     pub permissions: Vec<&'static str>,
 }
 
+/// The medium and guarding permissions of `callee` (smali text) when it is a capture or personal-data API.
+pub fn capture_api(callee: &str) -> Option<(&'static str, &'static [&'static str])> {
+    let (class, rest) = callee.split_once("->")?;
+    let name = rest.split('(').next().unwrap_or(rest);
+    CAPTURE_APIS
+        .iter()
+        .find(|api| api.class == class && (api.methods.is_empty() || api.methods.contains(&name)))
+        .map(|api| (api.medium, api.permissions))
+}
+
 /// Every capture API that some method in `calls` invokes, by API.
 pub fn capture_uses(calls: &BTreeMap<String, BTreeSet<String>>) -> Vec<CaptureUse> {
     let mut found: BTreeMap<String, CaptureUse> = BTreeMap::new();

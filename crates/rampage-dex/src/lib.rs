@@ -7,6 +7,7 @@ pub mod apk;
 pub mod axml;
 pub mod dex;
 mod error;
+pub mod graph;
 pub mod insn;
 pub mod jni;
 pub mod manifest;

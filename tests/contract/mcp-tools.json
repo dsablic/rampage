@@ -4419,12 +4419,20 @@
           "type": "null|string",
           "required": false
         },
+        "cursor": {
+          "type": "null|string",
+          "required": false
+        },
         "image_length": {
           "type": "integer|null|string",
           "required": false
         },
         "image_offset": {
           "type": "integer|null|string",
+          "required": false
+        },
+        "max_files": {
+          "type": "integer|null",
           "required": false
         },
         "max_per_section": {
@@ -4434,6 +4442,10 @@
         "path": {
           "type": "string",
           "required": true
+        },
+        "timeout_ms": {
+          "type": "integer|null",
+          "required": false
         }
       }
     },

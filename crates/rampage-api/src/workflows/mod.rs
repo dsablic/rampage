@@ -25,6 +25,7 @@ use crate::{Project, XrefQuery};
 
 pub use indicators::{Indicator, IndicatorKind, classify};
 pub(crate) use network_surface::network_api;
+pub(crate) use privacy_surface::{JniReach, may_capture};
 pub use registry::{WORKFLOWS, Workflow, WorkflowOptions, workflow};
 
 /// Findings per section unless the caller asks for another count.
@@ -189,12 +190,31 @@ impl ReportTarget {
     }
 }
 
+/// What a report on an APK, a DEX file or a directory read.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportInput {
+    /// `apk`, `dex` or `directory`.
+    pub kind: &'static str,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    /// For a directory: the files this page read, and the cursor of the next page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
 /// The uniform result of every workflow. Sections serialize last, so that a reader cut short by size still has the
 /// summary, limitations and next steps.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowReport {
     pub workflow: &'static str,
-    pub target: ReportTarget,
+    /// The binary read; `None` for a report on an APK, DEX file or directory, which names its `input` instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<ReportTarget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<ReportInput>,
     /// The second binary, for workflows that compare two.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub other: Option<ReportTarget>,
@@ -215,7 +235,23 @@ impl WorkflowReport {
     pub fn new(workflow: &'static str, project: &Project) -> Self {
         Self {
             workflow,
-            target: ReportTarget::of(project),
+            target: Some(ReportTarget::of(project)),
+            input: None,
+            other: None,
+            summary: Vec::new(),
+            sections: Vec::new(),
+            next_steps: Vec::new(),
+            next_steps_omitted: 0,
+            limitations: Vec::new(),
+        }
+    }
+
+    /// A report on a file or directory no loader opens as one binary (an APK, a DEX file, a firmware tree).
+    pub fn for_input(workflow: &'static str, input: ReportInput) -> Self {
+        Self {
+            workflow,
+            target: None,
+            input: Some(input),
             other: None,
             summary: Vec::new(),
             sections: Vec::new(),

@@ -3,6 +3,7 @@
 
 mod analysis_cache;
 mod android;
+mod android_privacy;
 mod annotate_batch;
 mod annotation_log_format;
 mod api;

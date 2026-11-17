@@ -458,7 +458,10 @@ writes chosen hosts to an absolute `output` file as a hosts, dnsmasq, unbound, d
 `privacy_surface` is a guided report on one binary: microphone, camera, screen and input-device capture sources
 (with `evidence` `argument`, `name` or `string`), network and file sinks with the endpoints they name, ranked
 capture-to-send call paths, and what reaches each capture (program start, timer, network command, user input;
-`no_user_trigger`). See [privacy surface](privacy-surface.md).
+`no_user_trigger`). Its `path` may also be an APK or DEX file (DEX call graph, manifest and framework triggers,
+native libraries merged through JNI; the report has `input` instead of `target`) or a directory (one page of
+programs and APKs with init `.rc`, systemd and init.d boot starts; `cursor`, `max_files`, `timeout_ms`). See
+[privacy surface](privacy-surface.md).
 `build_info` returns `{go, rust}`: Go build info (toolchain version, main package and module, dependency modules with
 `=>` replacements, build settings, and a cross-check of the version against the pclntab layout) and cargo-auditable
 `.dep-v0` packages. Each is `null` when absent, or has `status` `present` or `unreadable` with a `reason`. `offset`/

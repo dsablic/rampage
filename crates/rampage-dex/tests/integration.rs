@@ -3,5 +3,6 @@
 mod apk;
 mod dex;
 mod fixtures;
+mod graph;
 mod hostile;
 mod scan;

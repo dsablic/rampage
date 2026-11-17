@@ -470,12 +470,15 @@ fn privacy(opened: &Opened) -> Value {
         for (class, methods) in index.class_methods {
             class_methods.entry(class).or_default().extend(methods);
         }
-        for class_index in 0..dex.class_count() {
-            if let Ok(class) = dex.class_def(class_index)
-                && dex.superclasses(&class).iter().any(|name| name == ACCESSIBILITY_SERVICE)
-            {
-                accessibility.push(class_name(&dex.type_text(class.class_idx)));
-            }
+    }
+    // The class hierarchy across every DEX file: a subclass in classes2.dex of a class in classes.dex counts.
+    let dexes: Vec<&Dex> = opened.parsed().map(|(_, dex)| dex).collect();
+    let mut graph = rampage_dex::graph::AppGraph::build(&dexes, rampage_dex::graph::GraphLimits::default());
+    let mut classes: Vec<String> = graph.classes.keys().cloned().collect();
+    classes.sort();
+    for class in classes {
+        if graph.ancestors(&class).contains(ACCESSIBILITY_SERVICE) {
+            accessibility.push(class_name(&class));
         }
     }
     let manifest = opened.manifest();

@@ -571,7 +571,7 @@ fn file_kind(path: &Path, head: &[u8]) -> FileKind {
     }
 }
 
-fn read_head(path: &Path) -> std::io::Result<Vec<u8>> {
+pub(crate) fn read_head(path: &Path) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
     let mut head = Vec::with_capacity(64);
     std::fs::File::open(path)?.take(64).read_to_end(&mut head)?;
@@ -645,7 +645,7 @@ fn scan_file(
 
 /// A regular file in a tree: its path relative to the root as raw bytes (`/`-separated; the sort key), that path
 /// escaped as text (the component name and cursor), its full path and its size.
-type TreeFile = (Vec<u8>, String, PathBuf, u64);
+pub(crate) type TreeFile = (Vec<u8>, String, PathBuf, u64);
 
 /// A relative path's raw bytes as text: UTF-8 as is, a backslash doubled, any other byte as `\xHH`, so distinct
 /// names never share a text form.
@@ -661,7 +661,7 @@ fn escape_path(bytes: &[u8]) -> String {
 }
 
 /// The raw bytes [`escape_path`] wrote as `text`; an error for an escape it never writes.
-fn unescape_path(text: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn unescape_path(text: &str) -> Result<Vec<u8>, String> {
     let bytes = text.as_bytes();
     let mut raw = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -686,7 +686,7 @@ fn unescape_path(text: &str) -> Result<Vec<u8>, String> {
 
 /// The regular files under `root` in raw path order, never following symlinks, and how many symlinks were passed
 /// over; an error when the walk is too large or outlasts `deadline`.
-fn walk(root: &Path, deadline: Instant) -> Result<(Vec<TreeFile>, usize), String> {
+pub(crate) fn walk(root: &Path, deadline: Instant) -> Result<(Vec<TreeFile>, usize), String> {
     let mut files = Vec::new();
     let mut symlinks = 0;
     let mut entries = 0;

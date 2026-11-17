@@ -10,6 +10,7 @@ reading is capped (see [Limits](#limits)).
 | `dex_metadata` | What the app is and asks for: package, versions, SDK levels, permissions, components, boot receivers, native libraries with JNI exports, DEX files, one page of classes, methods or components. |
 | `dex_code` | What one method does: its Dalvik bytecode, smali style, with every reference resolved. |
 | `endpoint_inventory` (group `carve`) | The hosts and URLs in the app's DEX strings and native libraries, with the methods that load them. |
+| `privacy_surface` (group `carve`) | What the app can capture and send, the call paths between, and what starts each capture (boot, app start, push, jobs, UI), merged with its native libraries' report. |
 
 Enable the group with `enable_tools {"groups": ["android"]}`. Pull an APK off a firmware image with
 [`fs_extract`](firmware-images.md) first; `fs_list` and `fs_extract` also open any APK as a ZIP, so its native
@@ -106,7 +107,9 @@ with the binary tools (after `fs_extract` of the APK) to decompile the bound fun
 ```
 
 Calls through reflection, interfaces or superclass references, native code and code loaded at run time are not
-seen; a call reached from a boot receiver says the code path exists, not that it runs.
+seen; a call reached from a boot receiver says the code path exists, not that it runs. `accessibility_services`
+follows the class hierarchy across every DEX file of the APK. For call paths to network sends and the triggers of
+each capture, run [`privacy_surface`](privacy-surface.md#apks-and-dex-files) on the APK.
 
 ## Endpoints
 

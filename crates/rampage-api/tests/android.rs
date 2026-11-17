@@ -76,11 +76,11 @@ fn a_bare_dex_and_a_directory_are_read() {
     assert_eq!(out["kind"], "dex");
     assert!(out.get("package").is_none());
     let directory = call("dex_metadata", json!({"path": android(""), "max_files": 1})).unwrap();
-    assert_eq!(directory["files_total"], 2);
+    assert_eq!(directory["files_total"], 3);
     assert_eq!(directory["files"].as_array().unwrap().len(), 1);
     let next = directory["next_cursor"].as_str().unwrap();
     let second = call("dex_metadata", json!({"path": android(""), "cursor": next})).unwrap();
-    assert_eq!(second["files"].as_array().unwrap().len(), 1);
+    assert_eq!(second["files"].as_array().unwrap().len(), 2);
     assert!(second["next_cursor"].is_null());
 }
 
