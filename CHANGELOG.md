@@ -4,7 +4,7 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
-## Unreleased
+## 1.7.0 (2026-11-17)
 
 - Shorter tool descriptions: an agent session's default `tools/list` is 26% smaller (134,699 to 99,455 bytes, about
   8,800 fewer tokens; 24% smaller with every group), and the server instructions leave 358 characters spare before
