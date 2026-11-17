@@ -716,3 +716,41 @@ fn noise_before_a_verified_record_leaves_its_decode() {
     assert_eq!(found["decode_check"], "reproduced", "{report:#}");
     assert!(report["next"].as_str().unwrap().contains("integrity_checks"), "{report:#}");
 }
+
+/// Review: a reflected CRC-32 table holds the polynomial itself at entry 128, so code that loads that entry
+/// PC-relative looked like a literal load and gave an inferred routine. Slots inside a CRC table are skipped, and
+/// an inferred routine must decode cleanly up to its return.
+#[test]
+fn a_crc_table_entry_is_no_polynomial_literal() {
+    let mut table = Vec::new();
+    for index in 0u32..256 {
+        let mut crc = index;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+        }
+        table.extend(crc.to_le_bytes());
+    }
+    assert_eq!(&table[512..516], &0xedb8_8320u32.to_le_bytes());
+    // 0x00 bx lr (the entry); 0x04 push {r4, lr}; 0x06 ldr.w r1, [pc, #imm] to the table's entry 128; 0x0a eors;
+    // 0x0c pop {r4, pc}; the table at 0x10.
+    let slot = 0x10 + 512u32;
+    // ldr.w at 0x06 reads PC-relative from Align(0x06 + 4, 4) = 0x08.
+    let imm = slot - 0x08;
+    let mut image: Vec<u8> = vec![0x70, 0x47, 0x00, 0xbf, 0x10, 0xb5, 0xdf, 0xf8];
+    image.extend((0x1000 | imm as u16).to_le_bytes());
+    image.extend([0x48, 0x40, 0x10, 0xbd, 0x00, 0xbf]);
+    assert_eq!(image.len(), 0x10);
+    image.extend(&table);
+    let owned = Owned::new();
+    let path = owned.0.join("table.bin");
+    std::fs::write(&path, &image).unwrap();
+    let request: RawProjectRequest = serde_json::from_value(json!({
+        "profile": "cortex-m", "offset": 0, "length": image.len(), "base_address": "0x8000000", "entry": "0x8000000",
+        "pointer_tables": false,
+    }))
+    .unwrap();
+    let mut project = Session::default().open_raw(&path, &request).unwrap();
+    let report = call(&mut project, "integrity_checks", json!({}));
+    let routines = report["routines"].as_array().cloned().unwrap_or_default();
+    assert!(routines.iter().all(|routine| routine.get("inferred_range").is_none()), "{report:#}");
+}

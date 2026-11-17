@@ -65,6 +65,7 @@ fn raw_fixtures() -> Vec<(&'static str, PathBuf, Value)> {
     let length = |path: &Path| std::fs::metadata(path).unwrap().len();
     let cortex = fixture("firmware/raw-cortex-m.bin");
     let tables = fixture("firmware/raw-cortex-m-tables.bin");
+    let records = fixture("firmware/raw-cortex-m-records.bin");
     let msp430 = fixture("sleigh/msp430.bin");
     let mos6502 = fixture("sleigh/6502.bin");
     vec![
@@ -82,6 +83,14 @@ fn raw_fixtures() -> Vec<(&'static str, PathBuf, Value)> {
             json!({
                 "profile": "cortex-m3", "offset": 0, "length": length(&tables),
                 "base_address": "0x8000000", "vector_table": true, "pointer_tables": true,
+            }),
+        ),
+        (
+            "raw-cortex-m-records",
+            records.clone(),
+            json!({
+                "profile": "cortex-m4", "offset": 0, "length": length(&records),
+                "base_address": "0x8000000", "vector_table": true, "pointer_tables": false,
             }),
         ),
         (

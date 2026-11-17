@@ -83,6 +83,11 @@ pub(crate) fn encode(key: &str, program: &Program) -> Vec<u8> {
     for list in [&program.noreturn, &program.inferred_noreturn, &program.noreturn_calls] {
         out.addresses(0, list);
     }
+    let record = &program.record_seeds;
+    out.addresses(0, &record.seeds);
+    out.uint(u64::from(record.rounds));
+    out.uint(record.work);
+    out.0.push(u8::from(record.truncated));
     out.0
 }
 
@@ -204,6 +209,17 @@ pub(crate) fn decode(key: &str, bytes: &[u8]) -> Result<Program, Malformed> {
             return Err(Malformed("noreturn list out of order"));
         }
     }
+    program.record_seeds.seeds = input.addresses(0)?;
+    if program.record_seeds.seeds.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(Malformed("record seeds out of order"));
+    }
+    program.record_seeds.rounds = u8::try_from(input.uint()?).map_err(|_| Malformed("record rounds"))?;
+    program.record_seeds.work = input.uint()?;
+    program.record_seeds.truncated = match input.take(1)?[0] {
+        0 => false,
+        1 => true,
+        _ => return Err(Malformed("record truncation flag")),
+    };
     if input.at != bytes.len() {
         return Err(Malformed("trailing bytes"));
     }
@@ -431,6 +447,12 @@ mod tests {
             noreturn: vec![0x10, 0x20],
             inferred_noreturn: vec![0x20],
             noreturn_calls: vec![0x1004],
+            record_seeds: rampage_analysis::discover::RecordSeeds {
+                seeds: vec![0x1010, 0x1020],
+                rounds: 2,
+                work: 1234,
+                truncated: true,
+            },
         }
     }
 

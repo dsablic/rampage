@@ -19,9 +19,11 @@ with [the firmware walkthrough](firmware-walkthrough.md).
 Pass `raw` instead of a native image: `profile` (a Raw language ID or an alias such as `cortex-m4`, `msp430` or
 `avr`), `offset` and `length` (the bytes in the file) and `base_address`. For Cortex-M firmware add
 `"vector_table": true` to read the vector table at the base: Reset becomes the entry and the other handlers seeds.
-The table is refused as a whole, with `raw.vector_table.refused_reason`, unless its initial SP lies in RAM
-(0x10000000 to 0x40000000, or a `ram` region you map) and its Reset word is a Thumb address in the code: an image
-that starts with code (many decoded updates do) is then not misread, and you open it with `entry` instead.
+The table is refused as a whole, with `raw.vector_table.refused_reason`, when its Reset word is no Thumb address in
+the code, or when its initial SP lies outside RAM (0x10000000 to 0x40000000, or a `ram` region you map) and fewer
+than two other handlers check out: an image that starts with code (many decoded updates do) is then not misread,
+and you open it with `entry` instead. A table with an SP in external SDRAM is kept, its SP word flagged
+`sp_outside_ram`; map that RAM as a `ram` region to accept it.
 
 ```json
 {
@@ -121,11 +123,12 @@ stop reason.
 Discovery follows calls, jumps and code addresses the code loads. Firmware also names functions only in data:
 an RTOS thread definition (`{name, entry, stack size, priority}`) passed by address, a driver descriptor, a table
 of init routines. On Cortex-M, after discovery the words just past each address the code references are read;
-an odd word that points at code outside every discovered function and decodes like code (a `push {..., lr}`
-first, or a straight run that reaches a return or branch), and not at text, becomes a function start, for up to
-three more rounds. A word among three or more code pointers in a row (an array) counts only when its target opens
-with `push {..., lr}`, so an init or handler table counts and a switch's case labels do not. So a task's code, and
-the strings it loads, are found although nothing calls the task.
+an odd word that points at code outside every discovered function, not at text, becomes a function start when
+its target opens with `push {..., lr}` or follows the end of another function (a return, a branch, padding), and
+decodes straight to a return or branch, for up to three more rounds. A word among three or more code pointers in a
+row (an array) needs the `push {..., lr}`, so an init or handler table counts and a switch's case labels do not.
+So a task's code, and the strings it loads, are found although nothing calls the task. The work is bounded across
+rounds; `binary_info`'s `raw.record_seeds` says what was seeded and whether the budget ran out.
 
 ## Pointer tables
 
@@ -135,7 +138,8 @@ startup copies and your `regions`), each table's targets in the region holding i
 
 - unset (the default): automatic. The scan runs only when discovery from the entry, seeds, vector table,
   scatter-load jump and data records finds fewer than one function per 16 KiB of code, or functions covering less
-  than an eighth of it, and `binary_info` reports what happened under `raw.pointer_tables.automatic` (`applied`,
+  than an eighth of its code-like bytes (runs of one repeated byte, such as erased flash, do not count), and
+  `binary_info` reports what happened under `raw.pointer_tables.automatic` (`applied`,
   `found_none` or `refused`, with `covered_bytes`); `list_functions` adds a `note`;
 - `true`: always scan;
 - `false`: never scan.

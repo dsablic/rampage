@@ -34,6 +34,9 @@ const MAX_EMPTY_GAP: usize = 8;
 const MAX_WALK: usize = 256;
 /// Instructions from a target within which a `push {…, lr}` counts as its prologue.
 const PROLOGUE_WINDOW: usize = 4;
+/// Instructions all targets' straight-line decodes may take together in one scan; past it, targets not yet judged
+/// count as having no evidence and the scan says so.
+const MAX_WALK_TOTAL: usize = 2_000_000;
 /// Refused tables listed; more are counted in `refused_tables_not_listed`.
 const MAX_LISTED_REFUSED: usize = 64;
 const ERASED: u32 = 0xffff_ffff;
@@ -128,6 +131,9 @@ pub struct PointerTables {
     pub refused_tables_not_listed: usize,
     /// Distinct accepted targets.
     pub seeds: usize,
+    /// The scan's decode budget ran out: targets judged after that had no evidence, so some tables may be missed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub walk_budget_exhausted: bool,
     pub tables: Vec<PointerTable>,
     pub note: &'static str,
 }
@@ -141,6 +147,7 @@ impl PointerTables {
         self.accepted_tables += other.accepted_tables;
         self.refused_tables += other.refused_tables;
         self.refused_tables_not_listed += other.refused_tables_not_listed;
+        self.walk_budget_exhausted |= other.walk_budget_exhausted;
         self.tables.extend(other.tables);
         self.tables.sort_by_key(|table| table.address);
         self.seeds = self.targets().collect::<BTreeSet<_>>().len();
@@ -300,6 +307,7 @@ fn scan_uncached(bytes: &[u8], base: u64, skip: Option<Range<u64>>) -> PointerTa
         refused_tables,
         refused_tables_not_listed: refused_tables - listed_refused,
         seeds: 0,
+        walk_budget_exhausted: judge.remaining == 0,
         tables,
         note: "a table is a run of at least three Thumb code pointers whose targets decode like code; it is accepted \
                when two distinct targets open with push {..., lr} or are called by a decodable bl, and its targets \
@@ -340,6 +348,8 @@ struct Judge<'a> {
     decoder: Box<dyn rampage_arch::Disassembler>,
     calls: BTreeSet<u64>,
     cache: BTreeMap<u64, Vec<Evidence>>,
+    /// Instructions the walks may still decode.
+    remaining: usize,
 }
 
 impl<'a> Judge<'a> {
@@ -351,7 +361,8 @@ impl<'a> Judge<'a> {
             ..Target::new(Arch::Arm)
         };
         let decoder = rampage_arch::decoder(&target).expect("the native ARM decoder is always available");
-        let mut judge = Self { bytes, base, decoder, calls: BTreeSet::new(), cache: BTreeMap::new() };
+        let mut judge =
+            Self { bytes, base, decoder, calls: BTreeSet::new(), cache: BTreeMap::new(), remaining: MAX_WALK_TOTAL };
         let sites = bl_sites(bytes, base);
         judge.calls = sites
             .into_iter()
@@ -395,6 +406,10 @@ impl<'a> Judge<'a> {
         let mut address = target;
         self.decoder.begin_run();
         for step in 0..MAX_WALK {
+            if self.remaining == 0 {
+                return Vec::new();
+            }
+            self.remaining -= 1;
             let offset = (address - self.base) as usize;
             let Some(bytes) = self.bytes.get(offset..).filter(|bytes| !bytes.is_empty()) else { break };
             let insn = self.decoder.decode(&bytes[..bytes.len().min(4)], address);

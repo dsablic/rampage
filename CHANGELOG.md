@@ -9,18 +9,23 @@ see the [stability policy](docs/stability.md) for what the version promises.
 - A Cortex-M Raw `binary_info` names where to start reading: `raw.starting_points` lists at most eight functions,
   each with its reasons (the reset handler, the function scatter-load's jump lands in and a trampoline's target,
   `find_main`'s candidate, the largest routines of the init table the startup walks, inferred CRC routines), and
-  the summary view keeps the whole list. A request with `pointer_tables` unset now also seeds inferred CRC routines
-  when the automatic pointer-table scan was applied.
+  the summary view keeps the whole list. The list is computed once per project, and following the startup code
+  judges each function once within an instruction budget (a fan of calls three levels deep was cubic). Before
+  discovery has run, `binary_info`'s `next` says how to run it.
 
-- A Cortex-M Raw project's reset-time vector table is refused as a whole unless its initial SP lies in RAM
-  (0x10000000 to 0x40000000, or a mapped `ram` region) and Reset is a Thumb handler in the code:
-  `raw.vector_table.refused_reason` says why and to open the image with `entry` instead, and nothing of it is
-  seeded (fifth Haiku run: code at offset 0 was reported as an initial SP).
+- A Cortex-M Raw project's reset-time vector table is refused as a whole when Reset is no Thumb handler in the
+  code, or when its initial SP lies outside RAM (0x10000000 to 0x40000000, or a mapped `ram` region) and fewer than
+  two other handlers check out: `raw.vector_table.refused_reason` says why and to open the image with `entry`
+  instead, and nothing of it is seeded (fifth Haiku run: code at offset 0 was reported as an initial SP). A table
+  whose Reset and handlers check out keeps working with an SP in external SDRAM or a part's own RAM, the SP word
+  flagged `sp_outside_ram`.
 
 - CRC routines `integrity_checks` infers on a Cortex-M Raw project (a polynomial literal loaded outside every
   discovered function, after a `push {..., lr}` prologue) are seeded into discovery when the session opens the
-  project with `pointer_tables` unset, so `decompile`, `lock_mechanisms` and `integrity_checks` see them as functions; `binary_info` lists them
-  in `raw.inferred_seeds` with the evidence, at most 16, and the project is cached under both interpretations.
+  project with `pointer_tables` unset, so `decompile`, `lock_mechanisms` and `integrity_checks` see them as
+  functions; `binary_info` lists them in `raw.inferred_seeds` with the evidence, at most 16, and the project is
+  cached under both interpretations. A polynomial inside a CRC table is no literal, and the routine must decode
+  cleanly to its return; a refused reopen is reported in `raw.inferred_seeds_refused`.
 
 - `decompile` with `exact_entry` takes Raw Cortex-M Thumb code: the plan has no imports to verify, the decompiler
   gets the discovered Thumb mode points and the same flash-constant folding and volatile device ranges as plain
@@ -35,13 +40,17 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 - Raw Cortex-M discovery reaches code named only in data, so `xrefs` finds the code that loads a string (fifth
   Haiku run: the updater's sum-error strings had no references). After discovery, the words after each address the
-  code references are read, and odd words pointing at code that decodes like a function become seeds, for up to
-  three more rounds: RTOS thread definitions, descriptors and init tables passed by address (an entry of an array
-  only when its target opens with `push {..., lr}`, so case-label tables do not count). The pointer-table scan covers every
-  code region (an init-hook array in code copied to TCM), and the automatic scan also runs when discovered functions
-  cover less than an eighth of the code (`raw.pointer_tables.automatic.covered_bytes`). In M-profile Thumb code,
-  `adr rN, #0` (a string placed right after it) is a data reference. On the run's updater, discovery goes from 37 to
-  997 functions and each sum-error string has its referencing function.
+  code references are read, and odd words pointing at a function become seeds, for up to three more rounds: RTOS
+  thread definitions, descriptors and init tables passed by address. A target must open with `push {..., lr}`, or
+  (outside an array, so case-label tables do not count) follow a function end, and decode straight to a return or
+  branch. Each record and target is judged once across rounds, one budget bounds all their work, and
+  `raw.record_seeds` reports seeds, rounds, work and whether it was truncated. The pointer-table scan covers every
+  code region (an init-hook array in code copied to TCM) within its own decode budget (`walk_budget_exhausted`),
+  and the automatic scan also runs when discovered functions cover less than an eighth of the code-like bytes
+  (runs of one repeated byte excluded; `raw.pointer_tables.automatic.covered_bytes`). The pointer-table scan and
+  inferred CRC seeds share one reopen, which carries the record seeds over instead of finding them again. In
+  M-profile Thumb code, `adr rN, #0` (a string placed right after it) is a data reference. On the run's updater,
+  discovery goes from 37 to 991 functions and each sum-error string has its referencing function.
 
 - Hints: `list_dir`'s `next` names `fs_list` for ZIP archives and `dex_metadata` for APK, AAB, JAR and DEX files,
   and opening a bare DEX file as a binary points at `dex_metadata` instead of the headerless-image selectors.

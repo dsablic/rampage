@@ -123,6 +123,29 @@ pub struct Program {
     /// Calls to a [`Program::noreturn`] callee, sorted: each ends its block with no fall-through.
     #[serde(skip_serializing_if = "Vec::is_empty", serialize_with = "rampage_arch::hex::addresses")]
     pub noreturn_calls: Vec<u64>,
+    /// Raw Cortex-M: the starts the record pass seeded from code pointers in data records, and its work.
+    #[serde(skip_serializing_if = "RecordSeeds::is_empty")]
+    pub record_seeds: RecordSeeds,
+}
+
+/// What the Raw Cortex-M record pass seeded and how much work it did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct RecordSeeds {
+    /// Starts seeded from records (or carried from an earlier interpretation), sorted.
+    #[serde(serialize_with = "rampage_arch::hex::addresses")]
+    pub seeds: Vec<u64>,
+    /// Rounds that added seeds.
+    pub rounds: u8,
+    /// Record words read and instructions decoded, all rounds together.
+    pub work: u64,
+    /// The work budget or a round's seed cap ran out, so some records were not judged.
+    pub truncated: bool,
+}
+
+impl RecordSeeds {
+    pub fn is_empty(&self) -> bool {
+        self.seeds.is_empty() && self.work == 0 && !self.truncated
+    }
 }
 
 /// Why a call is taken never to return.

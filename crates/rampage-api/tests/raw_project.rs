@@ -985,8 +985,14 @@ fn cortex_m_find_main_claims_nothing_without_startup_evidence() {
 fn cortex_m_exact_entry_decompiles_an_asserted_thumb_start() {
     let owned = OwnedDirectory::new();
     let path = owned.file("records.bin", CORTEX_M_RECORDS);
-    let mut project = Session::default().open_raw(&path, &records_request()).unwrap();
+    // pointer_tables false: discovery stays lazy and no inferred CRC seed is added, so nothing seeds the routine.
+    let request = request(json!({
+        "profile": "cortex-m4", "offset": 0, "length": CORTEX_M_RECORDS.len(), "base_address": "0x8000000",
+        "vector_table": true, "pointer_tables": false,
+    }));
+    let mut project = Session::default().open_raw(&path, &request).unwrap();
     let crc = elf_symbol(CORTEX_M_RECORDS_ELF, "crc32_update");
+    assert_eq!(project.function_containing(crc).unwrap(), None, "nothing discovered the routine");
     let registry = tools();
     let (text, failed) = call_shared(
         &registry,
@@ -1117,4 +1123,131 @@ fn cortex_m_binary_info_names_the_scatter_jump_target() {
     let ram_main = elf_symbol(elf, "ram_main");
     let (_, reasons) = points.iter().find(|(at, _)| *at == ram_main).unwrap_or_else(|| panic!("{points:?}"));
     assert!(reasons.contains("scatter-load's jump") && reasons.contains("find_main"), "{reasons}");
+}
+
+/// A Thumb `bl` from `pc` to `target`.
+fn thumb_bl(pc: u64, target: u64) -> [u8; 4] {
+    let offset = target.wrapping_sub(pc + 4) as u32;
+    let s = (offset >> 24) & 1;
+    let (i1, i2) = ((offset >> 23) & 1, (offset >> 22) & 1);
+    let (j1, j2) = ((1 - i1) ^ s, (1 - i2) ^ s);
+    let first = 0xf000 | (s << 10) | ((offset >> 12) & 0x3ff);
+    let second = 0xd000 | (j1 << 13) | (j2 << 11) | ((offset >> 1) & 0x7ff);
+    let mut bytes = [0; 4];
+    bytes[..2].copy_from_slice(&(first as u16).to_le_bytes());
+    bytes[2..].copy_from_slice(&(second as u16).to_le_bytes());
+    bytes
+}
+
+/// Review of the find_main follow: three functions of `fan` calls each, each calling the next level `fan` times.
+/// Unmemoised, judging whether calls return grew as fan³ (80 calls took 29 s in a debug build); each verdict is
+/// now computed once per depth, within an instruction budget, and binary_info's starting points once per project.
+#[test]
+fn cortex_m_find_main_stays_bounded_on_a_fan_of_calls() {
+    let fan = 80u64;
+    let base = 0x0800_0000u64;
+    let mut image = vec![0u8; 0x40];
+    image[..4].copy_from_slice(&0x2000_1000u32.to_le_bytes());
+    image[4..8].copy_from_slice(&((base + 0x41) as u32).to_le_bytes());
+    let size = 4 + 4 * fan;
+    let starts = [0x40, 0x40 + size, 0x40 + 2 * size, 0x40 + 3 * size];
+    for level in 0..3 {
+        let mut code = vec![0x00, 0xb5]; // push {lr}
+        for _ in 0..fan {
+            let pc = base + starts[level] + code.len() as u64;
+            code.extend(thumb_bl(pc, base + starts[level + 1]));
+        }
+        code.extend([0x00, 0xbd]); // pop {pc}
+        while code.len() % 4 != 0 {
+            code.extend([0x00, 0xbf]);
+        }
+        image.extend(code);
+    }
+    image.extend([0x70, 0x47, 0x00, 0xbf]);
+    let owned = OwnedDirectory::new();
+    let path = owned.file("fan.bin", &image);
+    let request = request(json!({
+        "profile": "cortex-m", "offset": 0, "length": image.len(), "base_address": "0x8000000", "vector_table": true,
+    }));
+    let mut project = Session::default().open_raw(&path, &request).unwrap();
+    let started = std::time::Instant::now();
+    find_main(&mut project);
+    for _ in 0..3 {
+        serde_json::to_value(project.summary()).unwrap();
+    }
+    let elapsed = started.elapsed();
+    assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
+}
+
+/// Review of the record pass: many records of pointers into a run of `nop`s (each decodes, none reaches an exit,
+/// alternating with zero words so no array filter applies), plus a chain of records each found one round later.
+/// Rounds stay at most three, the record words and decodes stay within the shared budget, and the pass says so.
+#[test]
+fn cortex_m_record_pass_work_is_bounded() {
+    let base = 0x0800_0000u64;
+    let records = 2000u64;
+    let chain = 4u64;
+    let load = |address: u64| {
+        // ldr r0, [pc, #0]; b.n +2; .word address
+        let mut bytes = vec![0x00, 0x48, 0x01, 0xe0];
+        bytes.extend((address as u32).to_le_bytes());
+        bytes
+    };
+    let reset = 0x40u64;
+    let code_len = 4 + 8 * (records + 1) + 4;
+    let functions = reset + code_len;
+    let chain_records = functions + 16 * chain;
+    let plain_records = chain_records + 64 * (chain + 1);
+    let sled = plain_records + 64 * records;
+    let mut image = vec![0u8; 0x40];
+    image[..4].copy_from_slice(&0x2000_1000u32.to_le_bytes());
+    image[4..8].copy_from_slice(&((base + reset + 1) as u32).to_le_bytes());
+    image.extend([0x00, 0xb5, 0x00, 0xbf]);
+    for index in 0..records {
+        image.extend(load(base + plain_records + 64 * index));
+    }
+    image.extend(load(base + chain_records));
+    image.extend([0x00, 0xbd, 0x00, 0xbf]);
+    assert_eq!(image.len() as u64, functions);
+    for link in 0..chain {
+        image.extend([0x00, 0xb5, 0x00, 0xbf]);
+        image.extend(load(base + chain_records + 64 * (link + 1)));
+        image.extend([0x00, 0xbd, 0x00, 0xbf]);
+    }
+    for link in 0..=chain {
+        let mut record = [0u32; 16];
+        if link < chain {
+            record[0] = (base + functions + 16 * link + 1) as u32;
+        }
+        image.extend(record.iter().flat_map(|word| word.to_le_bytes()));
+    }
+    let mut target = 0u64;
+    for _ in 0..records {
+        let mut record = [0u32; 16];
+        for slot in (0..16).step_by(2) {
+            record[slot] = (base + sled + 2 * target + 1) as u32;
+            target += 1;
+        }
+        image.extend(record.iter().flat_map(|word| word.to_le_bytes()));
+    }
+    for _ in 0..(target + 256) {
+        image.extend([0x00, 0xbf]);
+    }
+    let owned = OwnedDirectory::new();
+    let path = owned.file("records.bin", &image);
+    let request = request(json!({
+        "profile": "cortex-m", "offset": 0, "length": image.len(), "base_address": "0x8000000", "vector_table": true,
+    }));
+    let started = std::time::Instant::now();
+    let project = Session::default().open_raw(&path, &request).unwrap();
+    let elapsed = started.elapsed();
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    let record = &summary["raw"]["record_seeds"];
+    assert!(record["rounds"].as_u64().unwrap() <= 3, "{record:#}");
+    assert!(record["work"].as_u64().unwrap() <= 1_000_000, "{record:#}");
+    assert_eq!(record["truncated"], true, "{record:#}");
+    // The chain's first links are found, one round each, up to the round bound.
+    let functions_found = project.functions(&rampage_api::FunctionsQuery::default()).unwrap().total;
+    assert!((3..=6).contains(&functions_found), "{functions_found}");
+    assert!(elapsed < std::time::Duration::from_secs(60), "{elapsed:?}");
 }

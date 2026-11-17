@@ -49,6 +49,9 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - On Raw projects `find_main` models Cortex-M reset code only, and finds a main that never returns. `decompile`
   with `exact_entry` takes Raw Cortex-M Thumb code but refuses other ARM code (A32, Thumb in ELF, PE or Mach-O);
   plain `decompile` takes any code address there.
+- Raw Cortex-M discovery's record pass and pointer-table scan stop at work budgets (1,000,000 record words and
+  decodes; 2,000,000 decodes per region scanned), and say so in `raw.record_seeds.truncated` and
+  `walk_budget_exhausted`; `find_main` and the starting points follow at most 50,000 startup instructions.
 - A Raw selector with `decode` decodes its input again on every call before the session finds the project, and
   `inspect_data` opens Raw images outside the session, so analyst names do not resolve in its `at` and its 16 KiB
   input budget refuses large selectors.

@@ -206,7 +206,7 @@ decoded code.
     discovered (a task named only by an RTOS thread-definition record, an init-hook table in code copied to TCM).
     Discovery now follows code pointers in records the code addresses, the pointer-table scan covers every code
     region and also runs when functions cover under an eighth of the code, and M-profile `adr rN, #0` is a data
-    reference; on the updater 37 functions became 997 and each sum-error string has its function;
+    reference; on the updater 37 functions became 991 and each sum-error string has its function;
   - `find_main` refuses Raw projects; done: Cortex-M reset handlers are followed to the first call that never
     returns or the copied code that starts the scheduler;
   - `decompile` with `exact_entry` refuses ARM; done for Raw Cortex-M Thumb (mode points, flash folding). ARM ELF,

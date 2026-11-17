@@ -152,8 +152,9 @@ impl Project {
         }
         candidates.extend(self.macho_entry_candidate());
         let cortex_m = self.binary.raw_code_image().is_some() && self.binary.m_profile();
+        let mut walk = super::find_main_cortex_m::Walk::new();
         if cortex_m {
-            candidates.extend(self.cortex_m_candidates()?);
+            candidates.extend(self.cortex_m_candidates(&mut walk)?);
         }
         let candidates = merge(candidates);
 
@@ -205,6 +206,9 @@ impl Project {
             }
         }
 
+        if let Some(limitation) = walk.limitation() {
+            report.limitation(limitation);
+        }
         if cortex_m {
             report.limitation(
                 "Raw Cortex-M: the reset handler is followed (through scatter-load's jump into copied code and a \

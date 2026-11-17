@@ -2,6 +2,9 @@
 //! code and a trampoline that loads the next code address, to the first call that never returns or the code that
 //! starts the scheduler. Every candidate is a heuristic with the instructions it rests on.
 
+use std::collections::{BTreeSet, HashMap};
+use std::rc::Rc;
+
 use rampage_arch::Flow;
 
 use super::Confidence;
@@ -33,6 +36,36 @@ const INIT_TABLE_WORDS: u64 = 64;
 const INIT_ROUTINES_LISTED: usize = 3;
 /// Starting points listed in binary_info.
 const MAX_STARTING_POINTS: usize = 8;
+/// Instructions listed while following the startup code, all functions together.
+const MAX_WALK_INSTRUCTIONS: usize = 50_000;
+
+/// One follow of the startup code: function listings and verdicts computed once each, within an instruction budget.
+pub(crate) struct Walk {
+    lines: HashMap<u64, Rc<Vec<DisassemblyLine>>>,
+    verdicts: HashMap<(u64, usize), Option<(String, Ends)>>,
+    remaining: usize,
+    exhausted: bool,
+}
+
+impl Walk {
+    pub(crate) fn new() -> Self {
+        Self::with_budget(MAX_WALK_INSTRUCTIONS)
+    }
+
+    fn with_budget(remaining: usize) -> Self {
+        Self { lines: HashMap::new(), verdicts: HashMap::new(), remaining, exhausted: false }
+    }
+
+    /// Why the follow stopped early, when its instruction budget ran out.
+    pub(crate) fn limitation(&self) -> Option<String> {
+        self.exhausted.then(|| {
+            format!(
+                "The follow of the Cortex-M startup code listed its budget of {MAX_WALK_INSTRUCTIONS} instructions and \
+                 stopped; functions past that were not judged."
+            )
+        })
+    }
+}
 
 /// Adds `reason` to the starting point at `address`, or a new point when there is room.
 pub(crate) fn add_starting_point(
@@ -59,12 +92,30 @@ fn describe(line: &DisassemblyLine) -> String {
 }
 
 impl Project {
-    /// A function's instructions in address order, or none when it has no listing.
-    fn ordered_lines(&self, function: u64) -> Vec<DisassemblyLine> {
-        let Ok(listing) = self.function_listing_for_frame(function) else { return Vec::new() };
-        let mut lines: Vec<DisassemblyLine> = listing.blocks.into_iter().flatten().collect();
-        lines.sort_by_key(|line| line.address);
-        lines.dedup_by_key(|line| line.address);
+    /// A function's instructions in address order, listed once per walk; none when it has no listing or the walk's
+    /// budget is spent.
+    fn ordered_lines(&self, walk: &mut Walk, function: u64) -> Rc<Vec<DisassemblyLine>> {
+        if let Some(lines) = walk.lines.get(&function) {
+            return Rc::clone(lines);
+        }
+        let lines = if walk.remaining == 0 {
+            walk.exhausted = true;
+            Vec::new()
+        } else {
+            let listing = self.function_listing_for_frame(function);
+            let mut lines: Vec<DisassemblyLine> =
+                listing.map(|listing| listing.blocks.into_iter().flatten().collect()).unwrap_or_default();
+            lines.sort_by_key(|line| line.address);
+            lines.dedup_by_key(|line| line.address);
+            if lines.len() > walk.remaining {
+                walk.exhausted = true;
+                lines.truncate(walk.remaining);
+            }
+            walk.remaining -= lines.len();
+            lines
+        };
+        let lines = Rc::new(lines);
+        walk.lines.insert(function, Rc::clone(&lines));
         lines
     }
 
@@ -73,13 +124,22 @@ impl Project {
     /// never returns, `depth` calls deep, before any return. None when a return comes first or nothing shows it. A
     /// function of a few instructions that ends spinning (`b .`) is a fault or error trap, which code calls on a
     /// failure path; a call to one says nothing about the caller.
-    fn never_returns(&self, function: u64, depth: usize) -> Result<Option<(String, Ends)>, ApiError> {
+    fn never_returns(&self, walk: &mut Walk, function: u64, depth: usize) -> Result<Option<(String, Ends)>, ApiError> {
+        if let Some(verdict) = walk.verdicts.get(&(function, depth)) {
+            return Ok(verdict.clone());
+        }
+        let verdict = self.judge_return(walk, function, depth)?;
+        walk.verdicts.insert((function, depth), verdict.clone());
+        Ok(verdict)
+    }
+
+    fn judge_return(&self, walk: &mut Walk, function: u64, depth: usize) -> Result<Option<(String, Ends)>, ApiError> {
         if self.analysis()?.program.noreturn.binary_search(&function).is_ok() {
             return Ok(Some((format!("discovery found that {function:#x} never returns"), Ends::Loops)));
         }
-        let lines = self.ordered_lines(function);
+        let lines = self.ordered_lines(walk, function);
         let mut backward = None;
-        for line in &lines {
+        for line in lines.iter() {
             if line.text.starts_with("svc") {
                 let reason = format!("{} hands control to the scheduler (supervisor call)", describe(line));
                 return Ok(Some((reason, Ends::Scheduler)));
@@ -105,7 +165,7 @@ impl Project {
                     }
                 }
                 Flow::Call(target) | Flow::Jump(target) if depth > 0 && target != function => {
-                    if let Some((reason, ends)) = self.never_returns(target, depth - 1)?
+                    if let Some((reason, ends)) = self.never_returns(walk, target, depth - 1)?
                         && ends != Ends::Trap
                     {
                         let how = if matches!(line.flow, Flow::Call(_)) { "calls" } else { "jumps to" };
@@ -128,8 +188,8 @@ impl Project {
 
     /// The function a trampoline at `function` jumps to: a short run without calls that ends in a register jump
     /// after loading a Thumb code address (`ldr r0, =target; bx r0`), with the instruction that loads it.
-    fn trampoline_target(&self, function: u64) -> Result<Option<(u64, String)>, ApiError> {
-        let lines = self.ordered_lines(function);
+    fn trampoline_target(&self, walk: &mut Walk, function: u64) -> Result<Option<(u64, String)>, ApiError> {
+        let lines = self.ordered_lines(walk, function);
         if lines.len() > TRAMPOLINE_INSTRUCTIONS
             || lines.iter().any(|line| matches!(line.flow, Flow::Call(_) | Flow::IndirectCall))
             || !lines.last().is_some_and(|line| line.flow == Flow::IndirectJump)
@@ -148,7 +208,7 @@ impl Project {
 
     /// The table of init routines the startup function `function` walks: a run of at least two Thumb code pointers,
     /// ended by zero, at an address the function loads or one word of a record there points at.
-    fn init_table(&self, function: u64) -> Result<Option<(u64, Vec<u64>)>, ApiError> {
+    fn init_table(&self, walk: &mut Walk, function: u64) -> Result<Option<(u64, Vec<u64>)>, ApiError> {
         let word = |address: u64| {
             self.binary.read(address, 4).map(|bytes| u64::from(u32::from_le_bytes(bytes.try_into().expect("word"))))
         };
@@ -163,7 +223,7 @@ impl Project {
             targets
         };
         let mut best: Option<(u64, Vec<u64>)> = None;
-        for line in self.ordered_lines(function) {
+        for line in self.ordered_lines(walk, function).iter() {
             let Some(value) = line.immediate.or(line.data_ref.filter(|_| !line.accesses)) else { continue };
             if value & 3 != 0 || self.binary.read(value, 4).is_none() {
                 continue;
@@ -183,6 +243,7 @@ impl Project {
     /// The functions worth reading first in a Raw Cortex-M image, each with why: the reset handler, the function
     /// scatter-load jumps into and a trampoline's target, find_main's candidate and the largest init routines.
     pub(crate) fn cortex_m_starting_points(&self) -> Result<Vec<crate::rows::StartingPoint>, ApiError> {
+        let walk = &mut Walk::new();
         let mut points = Vec::new();
         let Some(entry) = self.binary.entry else { return Ok(points) };
         let Some(raw) = self.binary.raw_code_image() else { return Ok(points) };
@@ -199,22 +260,22 @@ impl Project {
             };
             add_starting_point(self, &mut points, function, reason);
             startup = function;
-            if let Some((next, load)) = self.trampoline_target(function)? {
+            if let Some((next, load)) = self.trampoline_target(walk, function)? {
                 add_starting_point(self, &mut points, next, format!("the copied code jumps here: {load}"));
                 startup = next;
             }
         }
-        for candidate in self.cortex_m_candidates()? {
+        for candidate in self.cortex_m_candidates(walk)? {
             let reason = format!("find_main ({} confidence): {}", candidate.confidence.as_str(), candidate.observation);
             add_starting_point(self, &mut points, candidate.address, reason);
         }
-        if let Some((table, targets)) = self.init_table(startup)? {
+        if let Some((table, targets)) = self.init_table(walk, startup)? {
             let analysis = self.analysis()?;
             let size =
                 |address: u64| analysis.program.function_at(address).map_or(0, |function| function.end() - address);
-            let mut ranked: Vec<u64> = targets.clone();
+            let mut seen = BTreeSet::new();
+            let mut ranked: Vec<u64> = targets.iter().copied().filter(|&address| seen.insert(address)).collect();
             ranked.sort_by_key(|&address| std::cmp::Reverse(size(address)));
-            ranked.dedup();
             for address in ranked.into_iter().take(INIT_ROUTINES_LISTED) {
                 let size = match size(address) {
                     0 => "not a discovered function start".to_owned(),
@@ -231,7 +292,7 @@ impl Project {
     }
 
     /// Candidates for the program's own entry logic in a Raw Cortex-M image, from its reset handler.
-    pub(super) fn cortex_m_candidates(&self) -> Result<Vec<Candidate>, ApiError> {
+    pub(super) fn cortex_m_candidates(&self, walk: &mut Walk) -> Result<Vec<Candidate>, ApiError> {
         let Some(entry) = self.binary.entry else { return Ok(Vec::new()) };
         let Some(raw) = self.binary.raw_code_image() else { return Ok(Vec::new()) };
         let mut trail = vec![format!("reset handler (the entry) at {entry:#x}")];
@@ -256,11 +317,11 @@ impl Project {
                 jumped = true;
             }
         }
-        if jumped && let Some((target, load)) = self.trampoline_target(current)? {
+        if jumped && let Some((target, load)) = self.trampoline_target(walk, current)? {
             trail.push(format!("{current:#x} only loads the next code address and jumps there: {load}"));
             current = target;
         }
-        let lines = self.ordered_lines(current);
+        let lines = self.ordered_lines(walk, current);
         for (index, line) in lines.iter().enumerate() {
             // An indirect call inside a loop: the walk over a table of init routines (constructors, init hooks).
             if line.flow == Flow::IndirectCall
@@ -275,7 +336,7 @@ impl Project {
                 }
             }
             let Flow::Call(target) = line.flow else { continue };
-            let Some((reason, ends)) = self.never_returns(target, NEVER_RETURNS_DEPTH)? else { continue };
+            let Some((reason, ends)) = self.never_returns(walk, target, NEVER_RETURNS_DEPTH)? else { continue };
             if ends == Ends::Trap {
                 continue;
             }
@@ -312,7 +373,7 @@ impl Project {
         if jumped {
             let mut evidence = trail.clone();
             evidence.extend(init.iter().cloned());
-            let (confidence, observation) = match self.never_returns(current, NEVER_RETURNS_DEPTH)? {
+            let (confidence, observation) = match self.never_returns(walk, current, NEVER_RETURNS_DEPTH)? {
                 Some((reason, ends)) if ends != Ends::Trap => {
                     evidence.push(reason);
                     (

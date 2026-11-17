@@ -650,8 +650,12 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
     // polynomial with a PC-relative `ldr`: find those loads and the routine around them.
     let raw_thumb = project.binary.raw_code_image().is_some() && project.binary.m_profile();
     let mut inferred: BTreeMap<u64, (u64, u64)> = BTreeMap::new();
-    if raw_thumb {
+    if raw_thumb && let Ok(mut decoder) = project.binary.decoder() {
+        let tables = crc_table_ranges(&scan.hits);
         for (slot, family, what) in anchors.iter().filter(|(_, _, what)| what.starts_with("polynomial")) {
+            if tables.iter().any(|table| table.contains(slot)) {
+                continue;
+            }
             let referenced =
                 project.xrefs(XrefQuery::To(*slot), None, Some(1)).is_ok_and(|page| !page.items.is_empty());
             if referenced {
@@ -661,7 +665,9 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
                 if matches!(project.function_containing(site), Ok(Some(_))) {
                     continue;
                 }
-                if let Some(range) = thumb_routine_around(blocks, site) {
+                if let Some(range) = thumb_routine_around(blocks, site)
+                    && decodes_cleanly(&project.binary, decoder.as_mut(), range.0, range.1)
+                {
                     inferred.insert(site, range);
                     sites.push((site, family, format!("{what}, loaded by `ldr` outside every discovered function")));
                 }
@@ -1412,9 +1418,16 @@ pub(crate) fn inferred_crc_starts(project: &Project) -> Vec<(u64, String)> {
         return Vec::new();
     }
     let (blocks, _) = blocks(binary);
+    // A reflected CRC-32 table holds the polynomial itself (entry 128): a slot inside a table is no literal.
+    let scan = rampage_constants::scan_binary_report(binary, rampage_constants::ConstantDb::bundled());
+    let tables = crc_table_ranges(&scan.hits);
+    let Ok(mut decoder) = binary.decoder() else { return Vec::new() };
     let mut found: BTreeMap<u64, String> = BTreeMap::new();
     for (value, family) in POLYNOMIALS {
         for slot in slots_holding(&blocks, value, false, 8) {
+            if tables.iter().any(|table| table.contains(&slot)) {
+                continue;
+            }
             let referenced = project.xrefs(XrefQuery::To(slot), None, Some(1)).is_ok_and(|page| !page.items.is_empty());
             if referenced {
                 continue;
@@ -1423,7 +1436,9 @@ pub(crate) fn inferred_crc_starts(project: &Project) -> Vec<(u64, String)> {
                 if matches!(project.function_containing(site), Ok(Some(_))) {
                     continue;
                 }
-                if let Some((start, _)) = thumb_routine_around(&blocks, site) {
+                if let Some((start, end)) = thumb_routine_around(&blocks, site)
+                    && decodes_cleanly(binary, decoder.as_mut(), start, end)
+                {
                     found.entry(start).or_insert_with(|| {
                         format!(
                             "{family} polynomial {value:#010x} literal at {slot:#x}, loaded by `ldr` at {site:#x} \
@@ -1435,6 +1450,29 @@ pub(crate) fn inferred_crc_starts(project: &Project) -> Vec<(u64, String)> {
         }
     }
     found.into_iter().take(MAX_INFERRED_SEEDS).collect()
+}
+
+/// The address ranges of the CRC tables a constants scan found.
+fn crc_table_ranges(hits: &[rampage_constants::ConstantHit]) -> Vec<std::ops::Range<u64>> {
+    hits.iter()
+        .filter(|hit| hit.algorithm.starts_with("CRC") && hit.length > 4)
+        .map(|hit| hit.address..hit.address + hit.length as u64)
+        .collect()
+}
+
+/// Whether every instruction from `start` up to `end` decodes as Thumb code, stepping by instruction lengths.
+fn decodes_cleanly(binary: &Binary, decoder: &mut dyn rampage_arch::Disassembler, start: u64, end: u64) -> bool {
+    decoder.begin_run();
+    let mut address = start;
+    while address < end {
+        let Some(code) = binary.code_from(address) else { return false };
+        let insn = decoder.decode(&code[..code.len().min(4)], address);
+        if insn.flow == rampage_arch::Flow::Invalid || insn.len == 0 {
+            return false;
+        }
+        address += u64::from(insn.len);
+    }
+    address == end
 }
 
 /// Inferred CRC routine starts seeded into one Raw project's discovery.

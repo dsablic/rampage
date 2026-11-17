@@ -22,9 +22,26 @@ const DEFAULT_STRING_LENGTH: usize = 4;
 /// averages hundreds of bytes per function, so a handful in a large image means discovery stopped early (startup
 /// code, calls through pointers). A small image is held to at least one function.
 const RAW_BYTES_PER_FUNCTION: u64 = 16 * 1024;
-/// So does one whose discovered function bodies cover less than one part in this many of its code bytes: many
+/// So does one whose discovered function bodies cover less than one part in this many of its code-like bytes: many
 /// small functions found from records and literal pools can pass the count while most code stays unreached.
 const RAW_COVERAGE_PARTS: u64 = 8;
+/// A run of at least this many copies of one byte is fill (erased flash, zeroes, padding), not code.
+const RAW_FILL_RUN: usize = 64;
+
+/// Bytes of `bytes` in runs of at least [`RAW_FILL_RUN`] copies of one byte.
+fn fill_bytes(bytes: &[u8]) -> u64 {
+    let mut fill = 0u64;
+    let mut start = 0usize;
+    for index in 1..=bytes.len() {
+        if index == bytes.len() || bytes[index] != bytes[start] {
+            if index - start >= RAW_FILL_RUN {
+                fill += (index - start) as u64;
+            }
+            start = index;
+        }
+    }
+    fill
+}
 
 /// What triage measures on a Raw project, and which file-format facts do not apply to it.
 pub(crate) fn raw_triage_note(raw: &rampage_loaders::RawCodeImage) -> String {
@@ -126,6 +143,12 @@ pub struct Project {
     pub(crate) pointer_tables_auto: OnceLock<crate::rows::PointerTablesAuto>,
     /// A Cortex-M Raw project reopened with the CRC routines integrity_checks infers as further seeds.
     pub(crate) inferred_seeds: OnceLock<Vec<crate::rows::InferredSeed>>,
+    /// Why the reopen with inferred CRC seeds could not be admitted, when it could not.
+    pub(crate) inferred_seeds_refused: OnceLock<String>,
+    /// Record-pass starts an earlier interpretation of these bytes found, judged again by this project's discovery.
+    pub(crate) carried_record_seeds: OnceLock<Vec<u64>>,
+    /// A Cortex-M Raw project's starting points, once discovery has run.
+    starting_points: OnceLock<Vec<crate::rows::StartingPoint>>,
     /// A Raw project's container streams, found once by integrity_checks.
     pub(crate) container_scan: OnceLock<Arc<crate::integrity::ContainerScan>>,
     /// Strings of at least `DEFAULT_STRING_LENGTH` characters, scanned once.
@@ -408,6 +431,9 @@ impl Project {
             base_check: OnceLock::new(),
             pointer_tables_auto: OnceLock::new(),
             inferred_seeds: OnceLock::new(),
+            inferred_seeds_refused: OnceLock::new(),
+            carried_record_seeds: OnceLock::new(),
+            starting_points: OnceLock::new(),
             container_scan: OnceLock::new(),
             strings: OnceLock::new(),
             decompiler: std::sync::Mutex::new(crate::decompile::DecompilerState::default()),
@@ -453,14 +479,24 @@ impl Project {
     fn discover_through_store(&self, binding: Option<&str>) -> Result<Program, DecoderInitializationError> {
         use crate::AnalysisStoreStatus as Status;
         use crate::analysis_cache::Lookup;
-        let fresh =
-            || functions::analyze_with_factory(&self.binary, || crate::decoder::decoder_for_project(&self.binary));
+        let carried = self.carried_record_seeds.get().map_or(&[][..], Vec::as_slice);
+        let fresh = || {
+            functions::analyze_with_carried_seeds(
+                &self.binary,
+                || crate::decoder::decoder_for_project(&self.binary),
+                carried,
+            )
+        };
         let store = self.analysis_store.read().unwrap_or_else(|poison| poison.into_inner()).clone();
         let Some(store) = store else {
             let _ = self.analysis_store_status.set(Status::new("disabled", None, None));
             return fresh();
         };
-        let key = if self.patch_origin.is_some() { None } else { crate::analysis_cache::key(&self.binary, binding) };
+        let key = if self.patch_origin.is_some() || !carried.is_empty() {
+            None
+        } else {
+            crate::analysis_cache::key(&self.binary, binding)
+        };
         let Some(key) = key else {
             let _ = self.analysis_store_status.set(Status::new("unsupported", None, None));
             return fresh();
@@ -468,7 +504,7 @@ impl Project {
         let rejected = match store.load(&key) {
             Lookup::Hit(program) => {
                 let _ = self.analysis_store_status.set(Status::new("hit", Some(key), None));
-                return Ok(program);
+                return Ok(*program);
             }
             Lookup::Absent => None,
             Lookup::Rejected(reason) => Some(reason),
@@ -882,7 +918,7 @@ impl Project {
         // Only from an analysis that already ran: binary_info never starts discovery itself.
         let base_check = self.base_check();
         let wrong_base = base_check.and_then(|check| check.next.clone());
-        let next = match (wrong_base, self.raw_discovery_hint()) {
+        let next = match (wrong_base, self.raw_discovery_hint().or_else(|| self.starting_points_hint())) {
             (Some(base), Some(discovery)) => Some(format!("{base} {discovery}")),
             (base, discovery) => base.or(discovery),
         };
@@ -920,6 +956,19 @@ impl Project {
                 base_check,
                 inferred_seeds: self.inferred_seeds.get().map_or(&[], Vec::as_slice),
                 starting_points: self.starting_points(),
+                inferred_seeds_refused: self.inferred_seeds_refused.get().map(String::as_str),
+                record_seeds: self
+                    .analysis
+                    .get()
+                    .and_then(|analysis| analysis.as_ref().ok())
+                    .map(|analysis| &analysis.program.record_seeds)
+                    .filter(|record| !record.is_empty())
+                    .map(|record| crate::rows::RecordSeedsRow {
+                        seeds: record.seeds.len(),
+                        rounds: record.rounds,
+                        work: record.work,
+                        truncated: record.truncated,
+                    }),
             }),
             analysis_store: self.analysis_store_status(),
             encrypted_or_packed_code: self.encrypted_regions().cloned().collect(),
@@ -928,10 +977,26 @@ impl Project {
     }
 
     /// A Cortex-M Raw project's first functions worth reading, once discovery has run (binary_info never starts it).
-    fn starting_points(&self) -> Vec<crate::rows::StartingPoint> {
+    fn starting_points(&self) -> &[crate::rows::StartingPoint] {
         if !self.binary.m_profile() || !self.analysis.get().is_some_and(Result::is_ok) {
-            return Vec::new();
+            return &[];
         }
+        self.starting_points.get_or_init(|| self.compute_starting_points())
+    }
+
+    /// For a Cortex-M Raw project whose discovery has not run (an explicit `pointer_tables` keeps it lazy), how to
+    /// get the starting points binary_info would name.
+    fn starting_points_hint(&self) -> Option<String> {
+        (self.binary.raw_code_image().is_some() && self.binary.m_profile() && self.analysis.get().is_none()).then(
+            || {
+                "Discovery has not run for this project yet (an explicit pointer_tables keeps it lazy): call \
+             list_functions, then binary_info again to see raw.starting_points, the functions to read first."
+                    .to_owned()
+            },
+        )
+    }
+
+    fn compute_starting_points(&self) -> Vec<crate::rows::StartingPoint> {
         let mut points = self.cortex_m_starting_points().unwrap_or_default();
         for seed in self.inferred_seeds.get().into_iter().flatten() {
             crate::workflows::add_starting_point(
@@ -1066,12 +1131,21 @@ impl Project {
             }
         }
         let few = found as u64 * RAW_BYTES_PER_FUNCTION < code.max(RAW_BYTES_PER_FUNCTION);
-        let thin = covered * RAW_COVERAGE_PARTS < code;
+        // Coverage is judged against code-like bytes: runs of one repeated byte (erased flash, zero fill, padding)
+        // are no code to reach.
+        let fill: u64 = raw
+            .regions()
+            .iter()
+            .filter(|region| region.kind == rampage_loaders::RawRegionKind::Code && region.backed())
+            .map(|region| fill_bytes(&self.binary.image_bytes()[region.data_range()]))
+            .sum();
+        let thin = covered * RAW_COVERAGE_PARTS < code.saturating_sub(fill);
         (few || thin).then_some(crate::rows::RawCoverage { functions: found, code_bytes: code, covered_bytes: covered })
     }
 
-    /// For a Raw project whose discovery, already run, is sparse (see [`Project::raw_discovery_sparse`]), the selector options that would find more: pointer-table seeding on Cortex-M, and
-    /// mapping the startup copies when `scatter_load` false left them unmapped. None otherwise, when no option
+    /// For a Raw project whose discovery, already run, is sparse (see [`Project::raw_discovery_sparse`]), the
+    /// selector options that would find more: pointer-table seeding on Cortex-M, and mapping the startup copies when
+    /// `scatter_load` false left them unmapped. None otherwise, when no option
     /// applies, or before discovery has run.
     pub fn raw_discovery_hint(&self) -> Option<String> {
         let raw = self.binary.raw_code_image()?;

@@ -320,8 +320,24 @@ pub struct RawSummary<'a> {
     pub inferred_seeds: &'a [InferredSeed],
     /// Cortex-M, once discovery has run: the first functions worth reading, each with why (the reset handler, the
     /// copied code scatter-load jumps into, find_main's candidate, the largest init routines, inferred CRC routines).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub starting_points: Vec<StartingPoint>,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub starting_points: &'a [StartingPoint],
+    /// Cortex-M, once discovery has run: what the record pass seeded from code pointers in data records (`seeds`,
+    /// `rounds`), its work (record words read and instructions decoded) and whether its budget ran out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_seeds: Option<RecordSeedsRow>,
+    /// Why the reopen with inferred CRC seeds could not be admitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inferred_seeds_refused: Option<&'a str>,
+}
+
+/// The record pass of a Raw Cortex-M discovery, summarised.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecordSeedsRow {
+    pub seeds: usize,
+    pub rounds: u8,
+    pub work: u64,
+    pub truncated: bool,
 }
 
 /// A function worth reading first, and why.

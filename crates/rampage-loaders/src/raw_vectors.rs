@@ -64,6 +64,10 @@ pub enum RefusedReason {
     OutsideImage,
     /// The handler lies inside the vector table itself.
     InTable,
+    /// The initial SP word of a table whose Reset and other handlers check out lies outside RAM (external SDRAM,
+    /// a part-specific RAM address): the table is used, the word is flagged. Map that RAM as a `ram` region to
+    /// accept it.
+    SpOutsideRam,
 }
 
 /// Why reading the table stopped.
@@ -153,10 +157,14 @@ impl VectorTable {
 /// (0x20000000..0x40000000) and the RAM parts commonly put below it from 0x10000000 (core-coupled RAM, the lower
 /// SRAM block), the top of RAM itself included.
 const RAM_LIKE: std::ops::RangeInclusive<u64> = 0x1000_0000..=0x4000_0000;
+/// Handlers besides Reset a table needs for an SP word outside RAM to be flagged rather than refuse the table.
+const MIN_HANDLERS_FOR_SP_EXCEPTION: usize = 2;
 
-/// [`read`], for the table the core reads at reset: the whole candidate is refused, with the reason, unless its
-/// initial SP lies in RAM (the RAM-like range, or a region `ram` admits, its end included) and its Reset word is a
-/// Thumb handler inside the code. Individual words are still judged and listed.
+/// [`read`], for the table the core reads at reset: the whole candidate is refused, with the reason, when its
+/// Reset word is no Thumb handler inside the code, or when its initial SP lies outside RAM (the RAM-like range, or
+/// a region `ram` admits, its end included) and fewer than two other handlers check out. A table with a good Reset
+/// and enough handlers is kept with only its SP word flagged (`sp_outside_ram`). Individual words are still judged
+/// and listed.
 pub(crate) fn read_reset_table(
     bytes: &[u8],
     base: u64,
@@ -173,9 +181,11 @@ pub(crate) fn read_reset_table(
         {
             None
         }
-        VectorStatus::StackPointer => {
-            Some(format!("initial SP {:#x} lies outside RAM (0x10000000..=0x40000000 or a mapped ram region)", sp.word))
-        }
+        VectorStatus::StackPointer => Some(format!(
+            "initial SP {:#x} lies outside RAM (0x10000000..=0x40000000; map the RAM it names as a `ram` region to \
+             accept it)",
+            sp.word
+        )),
         VectorStatus::Empty | VectorStatus::Erased => Some(format!("initial SP word {:#x} is empty", sp.word)),
         _ => Some(format!("initial SP word {:#x} is not word aligned", sp.word)),
     };
@@ -192,6 +202,16 @@ pub(crate) fn read_reset_table(
         }
         _ => Some(format!("Reset word {:#x} is no handler", reset.word)),
     };
+    // A table whose Reset and at least two other handlers check out is a table, whatever its SP word: the SP may
+    // name external SDRAM or a part's own RAM. Only that word is flagged then.
+    let handlers = table.vectors.iter().filter(|vector| vector.index > 1 && vector.status == VectorStatus::Accepted);
+    if reset_reason.is_none() && sp_reason.is_some() && handlers.count() >= MIN_HANDLERS_FOR_SP_EXCEPTION {
+        if let Some(sp) = table.vectors.iter_mut().find(|vector| vector.index == 0) {
+            sp.status = VectorStatus::Refused;
+            sp.refused_reason = Some(RefusedReason::SpOutsideRam);
+        }
+        return Ok(table);
+    }
     let reasons: Vec<String> = sp_reason.into_iter().chain(reset_reason).collect();
     if !reasons.is_empty() {
         table.refused_reason = Some(format!(
@@ -551,6 +571,46 @@ mod tests {
         words[1] = 0x0900_0101;
         let outside = read_reset_table(&image(&words, 0x200), 0x0800_0000, 0x0800_0000, &no_ram).unwrap();
         assert!(outside.refused_reason.unwrap().contains("outside the mapped code"));
+    }
+
+    /// Review of the vector-table check: the RAM range's edges, an SP in external SDRAM or a part's own RAM with a
+    /// table that otherwise checks out (kept, the SP word flagged), and the VTOR path, which is not held to it.
+    #[test]
+    fn the_reset_table_sp_rule_has_exact_edges_and_spares_tables_that_check_out() {
+        let no_ram = |_: u64| false;
+        let table = |sp: u32, handlers: usize| {
+            let mut words = [0u32; 16];
+            words[0] = sp;
+            words[1] = 0x0800_0101;
+            for slot in 0..handlers {
+                words[2 + slot] = 0x0800_0105 + 4 * slot as u32;
+            }
+            read_reset_table(&image(&words, 0x200), 0x0800_0000, 0x0800_0000, &no_ram).unwrap()
+        };
+        for sp in [0x1000_0000, 0x4000_0000, 0x2000_5000] {
+            let read = table(sp, 0);
+            assert_eq!(read.refused_reason, None, "{sp:#x}");
+            assert_eq!(read.vectors[0].status, VectorStatus::StackPointer, "{sp:#x}");
+        }
+        // Just below the range, with only Reset: the whole candidate is refused and the reason names a ram region.
+        let below = table(0x0fff_fffc, 0);
+        let reason = below.refused_reason.clone().unwrap();
+        assert!(reason.contains("initial SP 0xffffffc") && reason.contains("`ram` region"), "{reason}");
+        assert_eq!(below.reset(), None);
+        // External SDRAM or 0x0800xxxx RAM, with Reset and two more handlers: kept, the SP word flagged.
+        for sp in [0x6000_8000, 0x7000_0000, 0x8000_0000, 0xc000_0000, 0x0800_4000] {
+            let kept = table(sp, 2);
+            assert_eq!(kept.refused_reason, None, "{sp:#x}");
+            assert_eq!(kept.vectors[0].refused_reason, Some(RefusedReason::SpOutsideRam), "{sp:#x}");
+            assert_eq!(kept.reset(), Some(0x0800_0100), "{sp:#x}");
+        }
+        // A table VTOR installs is read without the reset-time rule.
+        let mut words = [0u32; 16];
+        words[0] = 0x0fff_fffc;
+        words[1] = 0x0800_0101;
+        let vtor = read(&image(&words, 0x200), 0x0800_0000, 0x0800_0000).unwrap();
+        assert_eq!(vtor.refused_reason, None);
+        assert_eq!(vtor.reset(), Some(0x0800_0100));
     }
 
     #[test]

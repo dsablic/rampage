@@ -681,17 +681,18 @@ for Cortex-M seeding, `vector_table`. That lists every system vector and every a
 `stop_reason` (`image_end`, `max_external`, `reached_handler`, `non_handler_word`) and `stop_detail`. When handler
 words fall outside the asserted mapping, `base_address_suggestion` gives `base_address` (the most aligned base that
 would hold them) within `lowest_base`..`highest_base`; it is never applied, and an explicit `vector_table` address
-moves with the base. The reset-time table is also judged as a whole: unless the initial SP word lies in RAM
-(0x10000000..=0x40000000, or inside or at the end of a `ram` region) and Reset is `accepted`, `refused_reason` says
-why (for example code at offset 0, whose first words are no SP and no Thumb handler) and no handler of it becomes
-the entry or a seed; the words are still listed with their verdicts. A table that VTOR stores install is not held
-to the SP rule.
+moves with the base. The reset-time table is also judged as a whole: when Reset is not `accepted`, or the initial SP
+word lies outside RAM (0x10000000..=0x40000000, or inside or at the end of a `ram` region) and fewer than two other
+handlers are `accepted`, `refused_reason` says why (for example code at offset 0, whose first words are no SP and no
+Thumb handler) and no handler of it becomes the entry or a seed; the words are still listed with their verdicts. A
+table whose Reset and two more handlers check out is kept with an SP outside RAM (external SDRAM, a part's own RAM),
+the SP word `refused` with `sp_outside_ram`. A table that VTOR stores install is not held to the SP rule.
 
 `"pointer_tables": true` (Cortex-M only) also seeds functions from tables of Thumb code pointers,
 such as handler arrays and command tables, so a raw image needs no hand-built symbol list. `false` never scans.
 Left unset, the scan runs automatically when discovery from the entry, seeds, vector table, scatter-load jump and
 data records finds fewer than one function per 16 KiB of code (none at all in a smaller image) or functions whose
-bodies cover less than an eighth of it, and `list_functions` adds a one-line `note`. Every backed code region is
+bodies cover less than an eighth of its code-like bytes (runs of 64 or more copies of one byte excluded), and `list_functions` adds a one-line `note`. Every backed code region is
 scanned (the primary one, mapped startup copies and `regions`), each table's targets in the region that holds it.
 `raw.pointer_tables.automatic` gives `functions_before`, `code_bytes`, `covered_bytes`, `applied`, `reason` and
 `outcome`: `applied` (the project is opened with the scan, the interpretation of `"pointer_tables": true`),
@@ -832,18 +833,26 @@ true` on Cortex-M when `false` turned it off, and dropping `"scatter_load": fals
 reported were left unmapped. With `pointer_tables` unset, the scan runs by itself instead (above). Startup code and calls through function pointers are the usual reasons discovery stops early.
 
 Once discovery has run, a Cortex-M `binary_info` lists `raw.starting_points` (at most 8, never cut by the summary
-view): `address`, `name` and `reasons`, for the reset handler, the function holding scatter-load's jump target and
+view, computed once per project; before discovery its `next` says how to run it): `address`, `name` and `reasons`, for the reset handler, the function holding scatter-load's jump target and
 the target of a trampoline there, `find_main`'s candidate with its confidence and observation, the three largest
 routines of the init table the startup function walks (the longest run of at least two Thumb code pointers at an
 address that function loads, or one word of a record there points at), and the CRC routines in `inferred_seeds`.
 
 On Cortex-M, discovery also follows code pointers held in data: after it runs, the 16 words from each address the
 code references (a record such as an RTOS thread definition passed by address) are read, and an odd word that
-points at code outside every discovered function, not at text, and decodes like code (`push {..., lr}` first, or
-a straight-line decode up to 128 instructions reaching an unconditional return, branch or halt) becomes a seed; a
-word in a run of three code pointers (an array, the two words before the record included) also needs that
-`push {..., lr}`, which a switch's case labels and constants pointing into code lack;
-up to three more rounds run while each finds new starts, at most 4096 per round. In M-profile Thumb code,
+points at code outside every discovered function and not at text becomes a seed when its target opens with
+`push {..., lr}`, or follows a function end (`bx lr`, `pop {..., pc}`, an unconditional branch, `nop` or zero
+padding), and its straight-line decode reaches an unconditional return, branch or halt within 128 instructions with
+no undecodable bytes; a word in a run of three code pointers (an array, the two words before the record included)
+needs the `push {..., lr}`, which a switch's case labels and constants pointing into code lack. Up to three more
+rounds run while each finds new starts, at most 4096 per round; each record and target is judged once across
+rounds, and record words read plus instructions decoded share one budget of 1,000,000. `binary_info` reports
+`raw.record_seeds` (`seeds`, `rounds`, `work`, `truncated`) once discovery has run. The pointer-table scan has its
+own budget of 2,000,000 decoded instructions per region; when it runs out, `walk_budget_exhausted` is set and targets
+judged after that have no evidence. For a request with `pointer_tables` unset, the pointer-table scan and the
+inferred CRC seeds are applied in one reopen that carries the record seeds over (judged again, not found again);
+a reopen that cannot be admitted keeps the first project and says why in `raw.pointer_tables.automatic.refused` or
+`raw.inferred_seeds_refused`. In M-profile Thumb code,
 `adr rN, #0` forms the address of the word after it (a string placed in the code), and is a data reference.
 
 ### A compressed image as the code region

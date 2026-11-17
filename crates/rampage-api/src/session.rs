@@ -221,12 +221,7 @@ impl Session {
         // Discovery runs outside the session lock; concurrent first opens of this key wait on one build.
         let project = Arc::clone(cell.get_or_init(|| {
             let project = self.new_raw_project(binary, &key.0);
-            Arc::new(if automatic {
-                let project = self.with_automatic_pointer_tables(project, path, request, &key.0);
-                self.with_inferred_crc_seeds(project, path, request, &key.0)
-            } else {
-                project
-            })
+            Arc::new(if automatic { self.with_automatic_reopen(project, path, request, &key.0) } else { project })
         }));
         let project = {
             let mut state = self.state.lock().expect("session lock");
@@ -279,99 +274,104 @@ impl Session {
         project
     }
 
-    /// `project` (opened without pointer tables) after discovery, or, when that discovery is sparse, the image read
-    /// again with the pointer-table scan, recording why. A scan that accepts no table keeps `project` (the
-    /// interpretation of `false`); one whose seeds cannot be admitted keeps it too and records the refusal.
-    fn with_automatic_pointer_tables(
+    /// For a Cortex-M request that left `pointer_tables` unset: `project` after discovery, or the same image read
+    /// once more when that discovery calls for it, recording why. A sparse discovery (fewer than one function per
+    /// 16 KiB of code, or bodies covering under an eighth of it) asks for the pointer-table scan; CRC routines that
+    /// `integrity_checks` infers outside every discovered function (see
+    /// [`crate::integrity::inferred_crc_starts`]) are added as seeds. Both go into one reopen, which also carries
+    /// the record pass's seeds so it does not find them again round by round. A scan that accepts no table keeps
+    /// the interpretation of `false`; a reopen that cannot be admitted keeps `project` and records the refusal
+    /// (`raw.pointer_tables.automatic.refused`, or `raw.inferred_seeds_refused` when only CRC seeds were added).
+    fn with_automatic_reopen(
         &self,
         project: Project,
         path: &Path,
         request: &crate::RawProjectRequest,
         source: &Path,
     ) -> Project {
-        if project.analysis().is_err() {
-            return project;
-        }
-        let Some(crate::rows::RawCoverage { functions: functions_before, code_bytes, covered_bytes }) =
-            project.raw_discovery_sparse()
-        else {
-            return project;
-        };
-        let reason = format!(
-            "pointer_tables was unset and discovery found {functions_before} function{} covering {} of {} KiB of \
-             code, fewer than one per 16 KiB or under an eighth of the code",
-            if functions_before == 1 { "" } else { "s" },
-            covered_bytes.div_ceil(1024),
-            code_bytes.div_ceil(1024)
-        );
-        let mut scanned = request.clone();
-        scanned.pointer_tables = Some(true);
-        let binary = crate::raw_project::raw_image(path, &scanned).and_then(|image| {
-            Binary::from_raw_image(image).map_err(|source| ApiError::Load { path: path.into(), source })
-        });
-        let (project, outcome, refused) = match binary {
-            Ok(binary)
-                if binary
-                    .raw_code_image()
-                    .and_then(|raw| raw.pointer_tables())
-                    .is_some_and(|t| t.accepted_tables > 0) =>
-            {
-                (self.new_raw_project(binary, source), "applied", None)
-            }
-            Ok(_) => (project, "found_none", None),
-            Err(ApiError::Load { source, .. }) => (project, "refused", Some(source.to_string())),
-            Err(error) => (project, "refused", Some(error.to_string())),
-        };
-        let _ = project.pointer_tables_auto.set(crate::rows::PointerTablesAuto {
-            functions_before,
-            code_bytes,
-            covered_bytes,
-            applied: outcome == "applied",
-            outcome,
-            refused,
-            reason,
-        });
-        project
-    }
-
-    /// For a request that left `pointer_tables` unset (discovery runs at open; an explicit request stays lazy): a
-    /// Cortex-M Raw `project`, or, when `integrity_checks` would infer CRC routines outside every discovered function
-    /// (see [`crate::integrity::inferred_crc_starts`]), the same interpretation reopened with those starts as further
-    /// seeds, recording each with its evidence. A reopen that is refused keeps `project`.
-    fn with_inferred_crc_seeds(
-        &self,
-        project: Project,
-        path: &Path,
-        request: &crate::RawProjectRequest,
-        source: &Path,
-    ) -> Project {
-        if !project.binary.m_profile() {
-            return project;
-        }
+        let Ok(analysis) = project.analysis() else { return project };
+        let carried = analysis.program.record_seeds.seeds.clone();
+        let sparse = project.raw_discovery_sparse();
         let starts = crate::integrity::inferred_crc_starts(&project);
-        if starts.is_empty() {
+        if sparse.is_none() && starts.is_empty() {
             return project;
         }
-        let mut seeded = request.clone();
-        // The interpretation `project` has: an automatic scan's outcome is explicit from here on.
-        if let Some(auto) = project.pointer_tables_auto.get() {
-            seeded.pointer_tables = Some(auto.applied);
+        let build = |pointer_tables: bool| {
+            let mut reopened = request.clone();
+            reopened.pointer_tables = Some(pointer_tables);
+            reopened.seeds.extend(starts.iter().map(|&(start, _)| crate::FileOffset(start)));
+            crate::raw_project::raw_image(path, &reopened).and_then(|image| {
+                Binary::from_raw_image(image).map_err(|source| ApiError::Load { path: path.into(), source })
+            })
+        };
+        let refusal = |error: ApiError| match error {
+            ApiError::Load { source, .. } => source.to_string(),
+            error => error.to_string(),
+        };
+        let mut binary = None;
+        let mut automatic = None;
+        if let Some(crate::rows::RawCoverage { functions: functions_before, code_bytes, covered_bytes }) = sparse {
+            let reason = format!(
+                "pointer_tables was unset and discovery found {functions_before} function{} covering {} of {} KiB \
+                 of code, fewer than one per 16 KiB or under an eighth of the code",
+                if functions_before == 1 { "" } else { "s" },
+                covered_bytes.div_ceil(1024),
+                code_bytes.div_ceil(1024)
+            );
+            let (outcome, refused) = match build(true) {
+                Ok(scanned)
+                    if scanned
+                        .raw_code_image()
+                        .and_then(|raw| raw.pointer_tables())
+                        .is_some_and(|tables| tables.accepted_tables > 0) =>
+                {
+                    binary = Some(scanned);
+                    ("applied", None)
+                }
+                Ok(_) => ("found_none", None),
+                Err(error) => ("refused", Some(refusal(error))),
+            };
+            automatic = Some(crate::rows::PointerTablesAuto {
+                functions_before,
+                code_bytes,
+                covered_bytes,
+                applied: outcome == "applied",
+                outcome,
+                refused,
+                reason,
+            });
         }
-        seeded.seeds.extend(starts.iter().map(|&(start, _)| crate::FileOffset(start)));
-        let binary = crate::raw_project::raw_image(path, &seeded).and_then(|image| {
-            Binary::from_raw_image(image).map_err(|source| ApiError::Load { path: path.into(), source })
-        });
-        let Ok(binary) = binary else { return project };
-        let reopened = self.new_raw_project(binary, source);
-        if let Some(auto) = project.pointer_tables_auto.get() {
-            let _ = reopened.pointer_tables_auto.set(auto.clone());
+        let mut crc_refused = None;
+        if binary.is_none() && !starts.is_empty() {
+            match build(false) {
+                Ok(seeded) => binary = Some(seeded),
+                Err(error) => crc_refused = Some(refusal(error)),
+            }
         }
-        let _ = reopened
-            .inferred_seeds
-            .set(starts.into_iter().map(|(address, reason)| crate::rows::InferredSeed { address, reason }).collect());
+        let project = match binary {
+            Some(binary) => {
+                let reopened = self.new_raw_project(binary, source);
+                let _ = reopened.carried_record_seeds.set(carried);
+                if !starts.is_empty() {
+                    let seeds =
+                        starts.into_iter().map(|(address, reason)| crate::rows::InferredSeed { address, reason });
+                    let _ = reopened.inferred_seeds.set(seeds.collect());
+                }
+                reopened
+            }
+            None => {
+                if let Some(refused) = crc_refused {
+                    let _ = project.inferred_seeds_refused.set(refused);
+                }
+                project
+            }
+        };
+        if let Some(automatic) = automatic {
+            let _ = project.pointer_tables_auto.set(automatic);
+        }
         // Discovery runs at open for an automatic request, so binary_info can name the starting points.
-        let _ = reopened.analysis();
-        reopened
+        let _ = project.analysis();
+        project
     }
 
     fn open_at_policy(

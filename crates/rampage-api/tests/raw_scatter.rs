@@ -192,8 +192,10 @@ fn a_small_discovery_in_a_large_image_suggests_pointer_tables_and_mapping_the_co
         Session::default().open_raw(&path, &request).unwrap()
     };
     let next = |project: &rampage_api::Project| {
-        // binary_info never starts discovery: before list_functions it has no hint.
-        assert!(serde_json::to_value(project.summary()).unwrap().get("next").is_none());
+        // binary_info never starts discovery: before list_functions its hint, if any, only says how to run it (an
+        // unset pointer_tables runs discovery at open).
+        let before = serde_json::to_value(project.summary()).unwrap();
+        assert!(before["next"].as_str().is_none_or(|next| next.starts_with("Discovery has not run")), "{before:#}");
         let query = rampage_api::FunctionsQuery::default();
         let page = serde_json::to_value(project.functions_page(&query).unwrap()).unwrap();
         let summary = serde_json::to_value(project.summary()).unwrap();

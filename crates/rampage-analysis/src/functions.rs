@@ -65,6 +65,16 @@ where
     F: Fn() -> Result<Box<dyn rampage_arch::Disassembler>, E> + Sync,
     E: Send,
 {
+    analyze_with_carried_seeds(binary, new_decoder, &[])
+}
+
+/// [`analyze_with_factory`], with `carried`: record-pass starts an earlier interpretation of the same bytes found,
+/// judged again and seeded with the first record round instead of being found again round by round.
+pub fn analyze_with_carried_seeds<F, E>(binary: &Binary, new_decoder: F, carried: &[u64]) -> Result<Program, E>
+where
+    F: Fn() -> Result<Box<dyn rampage_arch::Disassembler>, E> + Sync,
+    E: Send,
+{
     let stubs = try_stub_names(binary, &new_decoder)?;
     let mut seeds: Vec<u64> = from_symbols(binary).iter().map(|function| function.address).collect();
     seeds.extend(&binary.function_starts);
@@ -86,16 +96,22 @@ where
     // descriptors), a few rounds while each finds more.
     if record_pointers::applies(binary) {
         let mut decoder = new_decoder()?;
+        let mut pass = record_pointers::RecordPass::new();
+        let mut carried = pass.carried(binary, &program, decoder.as_mut(), carried);
         for _ in 0..record_pointers::MAX_ROUNDS {
-            let found = record_pointers::seeds(binary, &program, decoder.as_mut());
-            let found: Vec<u64> =
-                found.into_iter().filter(|target| excluded.iter().all(|range| !range.contains(target))).collect();
+            let mut found = std::mem::take(&mut carried);
+            found.extend(pass.round(binary, &program, decoder.as_mut()));
+            found.retain(|target| excluded.iter().all(|range| !range.contains(target)));
+            found.sort_unstable();
+            found.dedup();
             if found.is_empty() {
                 break;
             }
+            pass.accept(&found);
             seeds.extend(found);
             program = discover(&seeds)?;
         }
+        program.record_seeds = pass.report();
     }
     Ok(program)
 }
