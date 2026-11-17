@@ -201,7 +201,11 @@ decoded code.
 - [ ] **Fifth Haiku run (2026-11-16, after f8f318b).** 45 turns, $0.53. Reset path, copies, CRC-32 routine and
   verified container sums all reported directly from tool output; no wrong base. Remaining gaps, in order of value:
   - `xrefs` from code to strings loaded through Thumb literal pools returns nothing in Raw images, so the
-    updater's error strings can't be traced to the code that checks the sums;
+    updater's error strings can't be traced to the code that checks the sums; done: the loads were in code never
+    discovered (a task named only by an RTOS thread-definition record, an init-hook table in code copied to TCM).
+    Discovery now follows code pointers in records the code addresses, the pointer-table scan covers every code
+    region and also runs when functions cover under an eighth of the code, and M-profile `adr rN, #0` is a data
+    reference; on the updater 37 functions became 910 and each sum-error string has its function;
   - `find_main` refuses Raw projects;
   - `decompile` with `exact_entry` refuses ARM;
   - the vector-table parser reports implausible words as `stack_pointer` instead of rejecting the candidate;

@@ -80,7 +80,7 @@ pub struct RawProjectRequest {
     /// ARM:LE:32:Cortex only: up to 15 further regions of the same file mapped beside the primary code region, e.g.
     /// a second stage at its RAM base, constant data, or RAM. Regions never overlap; references between them
     /// resolve, entry and seeds may lie in any code region, and binary_info reports each region with its source
-    /// range and SHA-256. vector_table and pointer_tables read the primary region only. All backed regions
+    /// range and SHA-256. vector_table reads the primary region only, pointer_tables every code region. All backed regions
     /// together hold at most 4194304 bytes.
     #[serde(default, deserialize_with = "regions")]
     #[schemars(length(max = 15))]

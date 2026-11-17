@@ -111,14 +111,25 @@ To see the copies without mapping them, pass `"scatter_load": false`. When that 
 `list_functions` says so in `next`. See [scatter-load copies](mcp.md#scatter-load-copies) for every field and
 stop reason.
 
+## Functions named only in data
+
+Discovery follows calls, jumps and code addresses the code loads. Firmware also names functions only in data:
+an RTOS thread definition (`{name, entry, stack size, priority}`) passed by address, a driver descriptor, a table
+of init routines. On Cortex-M, after discovery the words just past each address the code references are read;
+an odd word that points at code outside every discovered function and decodes like code (a `push {..., lr}`
+first, or a straight run that reaches a return or branch), and not at text, becomes a function start, for up to
+three more rounds. So a task's code, and the strings it loads, are found although nothing calls the task.
+
 ## Pointer tables
 
 Handlers reached only through tables of function pointers (command tables, callback arrays) are not found from
-the entry. On Cortex-M, `pointer_tables` controls a scan for such tables:
+the entry. On Cortex-M, `pointer_tables` controls a scan for such tables in every code region (the primary one,
+startup copies and your `regions`), each table's targets in the region holding it:
 
-- unset (the default): automatic. The scan runs only when discovery from the entry, seeds, vector table and
-  scatter-load jump finds fewer than one function per 16 KiB of code, and `binary_info` reports what happened
-  under `raw.pointer_tables.automatic` (`applied`, `found_none` or `refused`); `list_functions` adds a `note`;
+- unset (the default): automatic. The scan runs only when discovery from the entry, seeds, vector table,
+  scatter-load jump and data records finds fewer than one function per 16 KiB of code, or functions covering less
+  than an eighth of it, and `binary_info` reports what happened under `raw.pointer_tables.automatic` (`applied`,
+  `found_none` or `refused`, with `covered_bytes`); `list_functions` adds a `note`;
 - `true`: always scan;
 - `false`: never scan.
 

@@ -779,9 +779,10 @@ fn cortex_m_pointer_tables_recover_table_only_functions() {
     let (again, _, _) = discover(true);
     assert!(Arc::ptr_eq(&project, &again));
     assert_eq!(rampage_loaders::raw_pointers::scans_run(), scans + 1);
-    // Without tables: Reset, the two other vector-table handlers and classify, which Reset calls: precision 4/4,
-    // recall 4/18.
-    assert_eq!((without_found, without_hits), (4, 4));
+    // Without tables: Reset, the two other vector-table handlers and classify, which Reset calls, and from the
+    // {name, handler} records of COMMANDS the handlers they hold and the UART helpers those call; the switch's case
+    // labels and MAGIC's odd constants are arrays the record pass leaves to the scan: precision 8/8, recall 8/18.
+    assert_eq!((without_found, without_hits), (8, 8));
     // With them: precision 17/17, recall 17/18. The miss is run_command, which clang inlined into reset_handler and
     // nothing references; no seed can reach dead code.
     assert_eq!((found, hits), (17, 17));
@@ -859,4 +860,62 @@ fn cortex_m_decompilation_keeps_flash_data_reads_and_system_register_stores() {
 
 fn project_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware").join(name)
+}
+
+const CORTEX_M_RECORDS: &[u8] = include_bytes!("../../../tests/fixtures/firmware/raw-cortex-m-records.bin");
+const CORTEX_M_RECORDS_ELF: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/firmware/raw-cortex-m-records.elf");
+
+fn records_request() -> RawProjectRequest {
+    request(json!({
+        "profile": "cortex-m4", "offset": 0, "length": CORTEX_M_RECORDS.len(), "base_address": "0x8000000",
+        "vector_table": true,
+    }))
+}
+
+fn elf_symbol(path: &str, name: &str) -> u64 {
+    let elf = rampage_loaders::Binary::open(path).unwrap();
+    elf.symbols.iter().find(|symbol| symbol.name == name).unwrap_or_else(|| panic!("no {name}")).address & !1
+}
+
+/// Fifth Haiku run: `xrefs` on the updater's error strings returned nothing, because the code that loads them was
+/// reached only through an RTOS thread-definition record. Discovery now follows code pointers in records the code
+/// addresses, so the worker task is found, and xrefs, `references` search and `functions_referencing` agree on the
+/// function loading each string by a literal-pool word, a movw/movt pair or adr.
+#[test]
+fn cortex_m_strings_loaded_from_record_reached_code_have_xrefs() {
+    let owned = OwnedDirectory::new();
+    let path = owned.file("records.bin", CORTEX_M_RECORDS);
+    let mut project = Session::default().open_raw(&path, &records_request()).unwrap();
+    let functions = project.functions(&rampage_api::FunctionsQuery::default()).unwrap();
+    let found: Vec<u64> = functions.items.iter().map(|function| function.address).collect();
+    let worker = elf_symbol(CORTEX_M_RECORDS_ELF, "worker_task");
+    assert!(found.contains(&worker), "the task named only by its record is a function: {found:x?}");
+    let registry = tools();
+    for (text, loader) in
+        [("image sum err", "check_sum"), ("HEADER ERROR", "report_header"), ("COMPARE ERROR", "compare_error_text")]
+    {
+        let string = CORTEX_M_RECORDS.windows(text.len()).position(|window| window == text.as_bytes()).unwrap();
+        let string = 0x0800_0000 + string as u64;
+        let loader = elf_symbol(CORTEX_M_RECORDS_ELF, loader);
+        let xrefs = project.xrefs(rampage_api::XrefQuery::To(string), None, None).unwrap();
+        let from: Vec<u64> =
+            xrefs.items.iter().filter_map(|row| project.function_containing(row.from).unwrap()).collect();
+        assert_eq!(from, [loader], "{text}: {:?}", xrefs.items);
+        let (references, failed) = call_shared(
+            &registry,
+            &mut project,
+            "search",
+            json!({ "mode": { "kind": "references", "target": format!("{string:#x}") } }),
+        );
+        assert!(!failed && references.contains(&format!("\"address\":\"{loader:#x}\"")), "{text}: {references}");
+        let (referencing, failed) = call_shared(
+            &registry,
+            &mut project,
+            "search",
+            json!({ "mode": { "kind": "functions_referencing",
+                              "reference": { "kind": "string", "text": text, "encoding": "utf8" } } }),
+        );
+        assert!(!failed && referencing.contains(&format!("\"address\":\"{loader:#x}\"")), "{text}: {referencing}");
+    }
 }

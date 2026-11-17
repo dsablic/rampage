@@ -326,14 +326,25 @@ pub struct RawPointerTables<'a> {
     pub automatic: Option<&'a PointerTablesAuto>,
 }
 
+/// A sparse Raw discovery: the functions found, the bytes of backed code, and the bytes their bodies cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RawCoverage {
+    pub functions: usize,
+    pub code_bytes: u64,
+    pub covered_bytes: u64,
+}
+
 /// Why a Cortex-M Raw project whose selector left `pointer_tables` unset scanned for pointer tables: discovery
-/// from the entry, seeds, vector table and scatter-load jump found fewer than one function per 16 KiB of code.
+/// from the entry, seeds, vector table, scatter-load jump and data records found fewer than one function per 16 KiB
+/// of code, or bodies covering under an eighth of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PointerTablesAuto {
     /// Functions discovery found before the scan.
     pub functions_before: usize,
     /// Bytes of code in backed code regions.
     pub code_bytes: u64,
+    /// Bytes of that code the functions found before the scan cover.
+    pub covered_bytes: u64,
     /// Whether the scan's seeds were used: false when it accepted no table or admitting its seeds failed, and the
     /// project kept the sparse discovery (the interpretation of `pointer_tables` false).
     pub applied: bool,

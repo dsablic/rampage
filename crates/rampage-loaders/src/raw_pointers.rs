@@ -1,4 +1,6 @@
-//! Opt-in function discovery from tables of Thumb code pointers for the `ARM:LE:32:Cortex` Raw profile.
+//! Opt-in function discovery from tables of Thumb code pointers for the `ARM:LE:32:Cortex` Raw profile. Each
+//! backed code region is scanned on its own (the primary one, and code that scatter-load or the request maps
+//! elsewhere), and a table's targets lie in the region that holds it.
 //!
 //! A word is a code pointer when bit 0 is set, its target lies inside the mapped range and the target decodes like
 //! code: a `push {…, lr}` in its first instructions, a `bl` elsewhere that calls it, or a straight-line decode that
@@ -131,6 +133,19 @@ pub struct PointerTables {
 }
 
 impl PointerTables {
+    /// Adds the scan of another code region: its counts, and its tables in address order.
+    pub(crate) fn merge(&mut self, other: PointerTables) {
+        self.words_scanned += other.words_scanned;
+        self.pointers_without_evidence += other.pointers_without_evidence;
+        self.isolated_pointers += other.isolated_pointers;
+        self.accepted_tables += other.accepted_tables;
+        self.refused_tables += other.refused_tables;
+        self.refused_tables_not_listed += other.refused_tables_not_listed;
+        self.tables.extend(other.tables);
+        self.tables.sort_by_key(|table| table.address);
+        self.seeds = self.targets().collect::<BTreeSet<_>>().len();
+    }
+
     /// Every accepted target, in table order (duplicates kept).
     pub fn targets(&self) -> impl Iterator<Item = u64> + '_ {
         self.tables

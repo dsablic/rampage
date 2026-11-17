@@ -183,7 +183,8 @@ but ARMv8-M-only instructions are not reviewed, and `cortex-m33`/`cortex-m55` ar
   is never inferred: when handler words fall outside the mapping, a `base_address_suggestion` gives the most
   aligned base in the range that would hold them, labelled as not applied.
 - **Pointer tables.** `pointer_tables` (in a session, automatic when unset and discovery finds fewer than one
-  function per 16 KiB of code; off in `RawCodeOptions`) scans every word-aligned word outside the vector table
+  function per 16 KiB of code or covers under an eighth of it; off in `RawCodeOptions`) scans every word-aligned
+  word of each backed code region outside the vector table
   for Thumb code pointers: odd, inside the mapping, and whose target's first instruction decodes. Each target's
   evidence is `push_lr` (a `push {..., lr}`, `push.w` or `str lr, [sp, #-4]!` among its first four
   instructions), `call_target` (a 32-bit `bl` at any halfword targets it, counted only when the decoder reads it as that call

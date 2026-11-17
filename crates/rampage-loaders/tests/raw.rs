@@ -492,3 +492,36 @@ fn pointer_table_targets_meet_the_seed_cap_once_each() {
     assert!(error.contains("at most 8192 seeds"), "{error}");
     assert!(Binary::from_raw_code(function_table(MAX_RAW_SEEDS, MAX_RAW_SEEDS), options).is_ok());
 }
+
+/// Fifth Haiku run: the init-hook table of code copied to TCM was never scanned, because only the primary region
+/// was. Every backed code region is now scanned, each table's targets in the region holding it.
+#[test]
+fn pointer_tables_are_found_in_further_code_regions() {
+    let options = RawCodeOptions { pointer_tables: true, ..cortex(0x0800_0000, None) };
+    let mut further = function_table(3, 3);
+    // Rebase the table's words to the region's base.
+    for entry in 0..3 {
+        let at = 0x10c + 4 * entry;
+        let word = u32::from_le_bytes(further[at..at + 4].try_into().unwrap()) + 0x1000_0000;
+        further[at..at + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    let image = rampage_loaders::RawImage {
+        bytes: vec![0; 0x100],
+        options,
+        source: None,
+        regions: vec![rampage_loaders::RawRegion {
+            kind: rampage_loaders::RawRegionKind::Code,
+            base: 0x1000_0000,
+            size: further.len() as u64,
+            bytes: Some(further),
+            source: rampage_loaders::RawRegionSource::FileRange { offset: 0x100, length: 0x118 },
+        }],
+        records: None,
+        scatter_load: None,
+    };
+    let binary = Binary::from_raw_image(image).unwrap();
+    let found = binary.raw_code_image().unwrap().pointer_tables().unwrap();
+    assert_eq!(found.accepted_tables, 1, "{found:#?}");
+    assert_eq!(found.tables[0].address, 0x1000_010c);
+    assert_eq!(binary.function_starts, [0x1000_0100, 0x1000_0104, 0x1000_0108]);
+}

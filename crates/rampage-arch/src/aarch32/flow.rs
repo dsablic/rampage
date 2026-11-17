@@ -337,8 +337,10 @@ impl Aarch32Disassembler {
                 }
             }
         } else if name.starts_with("ADR") {
-            // A32 `add ip, pc, #0, #12` begins a PLT entry's address; it is not one yet.
-            let partial = is_non_canonical(decoded) || label_target(decoded, address) == Some(pc);
+            // A32 `add ip, pc, #0, #12` begins a PLT entry's address; it is not one yet. M-profile code has no PLT,
+            // and its `adr r0, #0` forms the address of data placed right after it (a string in the code).
+            let partial = is_non_canonical(decoded)
+                || (!(thumb && self.target.m_profile) && label_target(decoded, address) == Some(pc));
             if let Some(target) = label_target(decoded, address) {
                 if !partial {
                     found.data_ref = Some(target);

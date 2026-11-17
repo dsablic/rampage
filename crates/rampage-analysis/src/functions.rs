@@ -8,6 +8,7 @@ use serde::Serialize;
 use crate::code_integrity;
 use crate::discover::{Program, try_discover_with_noreturn};
 use crate::noreturn::return_facts_with_stub_names;
+use crate::record_pointers;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Function {
@@ -72,11 +73,31 @@ where
     let facts = return_facts_with_stub_names(binary, stubs);
     // Code regions judged encrypted or packed are not explored: what they decode to is noise, not functions.
     let excluded = code_integrity::flagged_ranges(&code_integrity::assess(binary, &new_decoder));
-    if excluded.is_empty() {
-        return try_discover_with_noreturn(binary, new_decoder, &seeds, &facts);
-    }
     let memory = code_integrity::ExcludingMemory { inner: binary, excluded: &excluded };
-    try_discover_with_noreturn(&memory, new_decoder, &seeds, &facts)
+    let discover = |seeds: &[u64]| {
+        if excluded.is_empty() {
+            try_discover_with_noreturn(binary, &new_decoder, seeds, &facts)
+        } else {
+            try_discover_with_noreturn(&memory, &new_decoder, seeds, &facts)
+        }
+    };
+    let mut program = discover(&seeds)?;
+    // Raw Cortex-M: functions named only inside records the discovered code addresses (thread definitions,
+    // descriptors), a few rounds while each finds more.
+    if record_pointers::applies(binary) {
+        let mut decoder = new_decoder()?;
+        for _ in 0..record_pointers::MAX_ROUNDS {
+            let found = record_pointers::seeds(binary, &program, decoder.as_mut());
+            let found: Vec<u64> =
+                found.into_iter().filter(|target| excluded.iter().all(|range| !range.contains(target))).collect();
+            if found.is_empty() {
+                break;
+            }
+            seeds.extend(found);
+            program = discover(&seeds)?;
+        }
+    }
+    Ok(program)
 }
 
 /// Function entries in the stub sections: each section's first stub (the ELF PLT[0] resolver) and every named

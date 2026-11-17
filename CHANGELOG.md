@@ -6,6 +6,15 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- Raw Cortex-M discovery reaches code named only in data, so `xrefs` finds the code that loads a string (fifth
+  Haiku run: the updater's sum-error strings had no references). After discovery, the words after each address the
+  code references are read, and odd words pointing at code that decodes like a function become seeds, for up to
+  three more rounds: RTOS thread definitions and descriptors passed by address. The pointer-table scan covers every
+  code region (an init-hook array in code copied to TCM), and the automatic scan also runs when discovered functions
+  cover less than an eighth of the code (`raw.pointer_tables.automatic.covered_bytes`). In M-profile Thumb code,
+  `adr rN, #0` (a string placed right after it) is a data reference. On the run's updater, discovery goes from 37 to
+  910 functions and each sum-error string has its referencing function.
+
 - Hints: `list_dir`'s `next` names `fs_list` for ZIP archives and `dex_metadata` for APK, AAB, JAR and DEX files,
   and opening a bare DEX file as a binary points at `dex_metadata` instead of the headerless-image selectors.
 

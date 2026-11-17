@@ -241,4 +241,7 @@ option-byte registers are recognised. See [lock mechanisms](lock-mechanisms.md) 
 - **`base_check` is `looks_wrong`.** Reopen with `better_candidate`; `next` names it.
 - **Few functions.** Check `raw.scatter_load.stop` and each copy's `not_mapped_reason`, and
   `raw.pointer_tables.automatic` for whether the pointer-table scan ran. See [Raw code](raw-code.md).
+- **`xrefs` to a string is empty.** The code that loads it was not discovered: `xrefs` lists references from
+  discovered functions only. Literal-pool words, movw/movt pairs and `adr` all count once the function is found;
+  map the startup copies, let the pointer-table scan run, or seed the function, and ask again.
 - **More than one image.** Each stream has its own record; open each with its own selector and base.

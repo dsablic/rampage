@@ -190,8 +190,8 @@ impl Session {
     /// No sidecar or annotation log is read or written.
     ///
     /// A Cortex-M request that leaves `pointer_tables` unset runs discovery when the project is first opened, and
-    /// when it finds fewer than one function per 16 KiB of code, opens the same image with the pointer-table scan
-    /// instead and records why ([`Project::pointer_tables_note`]). Such a request is cached under its own key and
+    /// when it finds fewer than one function per 16 KiB of code or bodies covering under an eighth of it, opens the
+    /// same image with the pointer-table scan instead and records why ([`Project::pointer_tables_note`]). Such a request is cached under its own key and
     /// under the identity of the project it produced, so a later explicit `pointer_tables` request with that
     /// interpretation (`true` when the scan was applied, `false` otherwise) shares its project and annotations.
     /// Concurrent first opens of one request build it once.
@@ -290,13 +290,16 @@ impl Session {
         if project.analysis().is_err() {
             return project;
         }
-        let Some((functions_before, code_bytes)) = project.raw_discovery_sparse() else {
+        let Some(crate::rows::RawCoverage { functions: functions_before, code_bytes, covered_bytes }) =
+            project.raw_discovery_sparse()
+        else {
             return project;
         };
         let reason = format!(
-            "pointer_tables was unset and discovery found {functions_before} function{} in {} KiB of code, fewer \
-             than one per 16 KiB",
+            "pointer_tables was unset and discovery found {functions_before} function{} covering {} of {} KiB of \
+             code, fewer than one per 16 KiB or under an eighth of the code",
             if functions_before == 1 { "" } else { "s" },
+            covered_bytes.div_ceil(1024),
             code_bytes.div_ceil(1024)
         );
         let mut scanned = request.clone();
@@ -320,6 +323,7 @@ impl Session {
         let _ = project.pointer_tables_auto.set(crate::rows::PointerTablesAuto {
             functions_before,
             code_bytes,
+            covered_bytes,
             applied: outcome == "applied",
             outcome,
             refused,

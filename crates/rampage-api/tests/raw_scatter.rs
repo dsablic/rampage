@@ -202,7 +202,7 @@ fn a_small_discovery_in_a_large_image_suggests_pointer_tables_and_mapping_the_co
     };
     let hint = next(&open_padded(json!({ "scatter_load": false, "pointer_tables": false })))
         .expect("three functions in 1 MiB");
-    assert!(hint.starts_with("Discovery from the entry and seeds found 3 functions in 1024 KiB of code"), "{hint}");
+    assert!(hint.starts_with("Discovery from the entry and seeds found 3 functions covering 1 of 1024 KiB"), "{hint}");
     assert!(hint.contains("\"pointer_tables\": true") && hint.contains("3 startup copies"), "{hint}");
     // Mapped copies alone leave the pointer-table suggestion; with pointer tables too, nothing is suggested.
     let hint = next(&open_padded(json!({ "pointer_tables": false }))).unwrap();
@@ -275,7 +275,7 @@ fn a_sparse_discovery_runs_the_pointer_table_scan_automatically() {
     let page = serde_json::to_value(project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap()).unwrap();
     assert_eq!(page["total"], 401);
     let note = page["note"].as_str().unwrap();
-    assert!(note.contains("found 1 function in") && note.contains("ran automatically"), "{note}");
+    assert!(note.contains("found 1 function covering") && note.contains("ran automatically"), "{note}");
     assert!(page.get("next").is_none() && summary.get("next").is_none(), "{page:#}");
     // The scan's interpretation is pointer_tables true's, and that request finds the same project.
     project.rename(0x0800_0010, Some("first")).unwrap();

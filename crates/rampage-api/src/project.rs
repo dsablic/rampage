@@ -22,6 +22,9 @@ const DEFAULT_STRING_LENGTH: usize = 4;
 /// averages hundreds of bytes per function, so a handful in a large image means discovery stopped early (startup
 /// code, calls through pointers). A small image is held to at least one function.
 const RAW_BYTES_PER_FUNCTION: u64 = 16 * 1024;
+/// So does one whose discovered function bodies cover less than one part in this many of its code bytes: many
+/// small functions found from records and literal pools can pass the count while most code stays unreached.
+const RAW_COVERAGE_PARTS: u64 = 8;
 
 /// What triage measures on a Raw project, and which file-format facts do not apply to it.
 pub(crate) fn raw_triage_note(raw: &rampage_loaders::RawCodeImage) -> String {
@@ -985,10 +988,11 @@ impl Project {
     pub fn pointer_tables_note(&self) -> Option<String> {
         let auto = self.pointer_tables_auto.get()?;
         let before = format!(
-            "Discovery from the entry, seeds, vector table and scatter-load jump found {} function{} in {} KiB of \
-             code (fewer than one per 16 KiB)",
+            "Discovery from the entry, seeds, vector table, scatter-load jump and data records found {} function{} \
+             covering {} of {} KiB of code (fewer than one per 16 KiB, or under an eighth of the code)",
             auto.functions_before,
             if auto.functions_before == 1 { "" } else { "s" },
+            auto.covered_bytes.div_ceil(1024),
             auto.code_bytes.div_ceil(1024)
         );
         Some(match (self.binary.raw_code_image().and_then(|raw| raw.pointer_tables()), &auto.refused) {
@@ -1012,9 +1016,10 @@ impl Project {
         })
     }
 
-    /// For a Raw project whose discovery already ran: the functions found and the bytes of backed code, when that
-    /// is fewer than one function per 16 KiB of code (none at all in a smaller image).
-    pub(crate) fn raw_discovery_sparse(&self) -> Option<(usize, u64)> {
+    /// For a Raw project whose discovery already ran: the functions found, the bytes of backed code and the bytes
+    /// their bodies cover, when that is fewer than one function per 16 KiB of code (none at all in a smaller image)
+    /// or the bodies cover less than an eighth of the code.
+    pub(crate) fn raw_discovery_sparse(&self) -> Option<crate::rows::RawCoverage> {
         let raw = self.binary.raw_code_image()?;
         let code: u64 = raw
             .regions()
@@ -1022,17 +1027,34 @@ impl Project {
             .filter(|region| region.kind == rampage_loaders::RawRegionKind::Code && region.backed())
             .map(|region| region.length)
             .sum();
-        let found = self.analysis.get()?.as_ref().ok()?.program.functions.len();
-        (found as u64 * RAW_BYTES_PER_FUNCTION < code.max(RAW_BYTES_PER_FUNCTION)).then_some((found, code))
+        let program = &self.analysis.get()?.as_ref().ok()?.program;
+        let found = program.functions.len();
+        let mut blocks: Vec<(u64, u64)> = program
+            .functions
+            .iter()
+            .flat_map(|function| function.blocks.iter().map(|block| (block.start, block.end)))
+            .collect();
+        blocks.sort_unstable();
+        let (mut covered, mut reached) = (0u64, 0u64);
+        for (start, end) in blocks {
+            let start = start.max(reached);
+            if end > start {
+                covered += end - start;
+                reached = end;
+            }
+        }
+        let few = found as u64 * RAW_BYTES_PER_FUNCTION < code.max(RAW_BYTES_PER_FUNCTION);
+        let thin = covered * RAW_COVERAGE_PARTS < code;
+        (few || thin).then_some(crate::rows::RawCoverage { functions: found, code_bytes: code, covered_bytes: covered })
     }
 
-    /// For a Raw project whose discovery, already run, found fewer than one function per 16 KiB of code (none at all
-    /// in a smaller image), the selector options that would find more: pointer-table seeding on Cortex-M, and
+    /// For a Raw project whose discovery, already run, is sparse (see [`Project::raw_discovery_sparse`]), the selector options that would find more: pointer-table seeding on Cortex-M, and
     /// mapping the startup copies when `scatter_load` false left them unmapped. None otherwise, when no option
     /// applies, or before discovery has run.
     pub fn raw_discovery_hint(&self) -> Option<String> {
         let raw = self.binary.raw_code_image()?;
-        let (found, code) = self.raw_discovery_sparse()?;
+        let crate::rows::RawCoverage { functions: found, code_bytes: code, covered_bytes: covered } =
+            self.raw_discovery_sparse()?;
         let mut steps = Vec::new();
         let automatic = self.pointer_tables_auto.get();
         if let Some(auto) = automatic.filter(|auto| auto.outcome == "refused") {
@@ -1066,8 +1088,9 @@ impl Project {
         }
         (!steps.is_empty()).then(|| {
             format!(
-                "Discovery from the entry and seeds found {found} function{} in {} KiB of code: {}.",
+                "Discovery from the entry and seeds found {found} function{} covering {} of {} KiB of code: {}.",
                 if found == 1 { "" } else { "s" },
+                covered.div_ceil(1024),
                 code.div_ceil(1024),
                 steps.join("; ")
             )

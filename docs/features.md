@@ -44,8 +44,8 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   unknown variant. Limits: pointer links are suppressed on loader warnings; decoding is not authentication or a load mapping.
 - [Raw Projects](sleigh-decoding.md) open headerless images with an asserted profile and base address: sixteen
   Sleigh families, and the *experimental* Cortex-M profile (`ARM:LE:32:Cortex`), which decodes Thumb natively,
-  decompiles, seeds from the vector table and code-pointer tables (on request, or by itself when discovery is
-  sparse), maps up to 15 further code, data or RAM regions (from file ranges, decoded bytes, a slice of another
+  decompiles, seeds from the vector table, code-pointer tables in every code region (on request, or by itself when
+  discovery is sparse) and code pointers in data records the code addresses (RTOS thread definitions), maps up to 15 further code, data or RAM regions (from file ranges, decoded bytes, a slice of another
   region or zero fill), and reads Intel HEX and Motorola S-records. A compressed image opens with its decoded
   bytes as the code region, from the selector the decoders return. The reset code is followed by a bounded
   interpreter for the [scatter-load copies](mcp.md#scatter-load-copies) startup code makes, which are reported

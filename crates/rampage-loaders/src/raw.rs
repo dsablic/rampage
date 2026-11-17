@@ -592,7 +592,7 @@ impl RawCodeImage {
         for &seed in &options.seeds {
             check_start(seed)?;
         }
-        // Vector and pointer tables are read from the primary region only; their targets lie inside it.
+        // The vector table is read from the primary region only; its targets lie inside it.
         let primary = &data[..length as usize];
         let vector_table = match options.vector_table {
             None => None,
@@ -698,7 +698,14 @@ impl RawCodeImage {
         } else if !options.profile.m_profile() {
             return Err(LoadError::Malformed("Raw pointer-table seeding is defined only for ARM:LE:32:Cortex".into()));
         } else {
-            let tables = crate::raw_pointers::scan(primary, options.base, table_words);
+            let mut tables = crate::raw_pointers::scan(primary, options.base, table_words);
+            // Code mapped elsewhere (startup copies, further regions) holds its own tables, such as an init-hook
+            // array in code copied to TCM.
+            for region in regions.iter().filter(|region| {
+                region.kind == RawRegionKind::Code && region.backed() && region.base_address != options.base
+            }) {
+                tables.merge(crate::raw_pointers::scan(&data[region.data_range()], region.base_address, None));
+            }
             let entry = options.entry;
             // Tables repeat targets (a default handler in many slots): dedupe before they meet the seed cap.
             let targets: std::collections::BTreeSet<u64> = tables.targets().collect();

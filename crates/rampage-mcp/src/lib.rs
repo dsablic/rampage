@@ -218,9 +218,9 @@ base_address (or give its address); accepted Thumb handlers become the entry and
 every word with its verdict and, for a base that misplaces the handlers, a base_address suggestion it never applies. \
 pointer_tables true also seeds functions from tables of Thumb code pointers (handler arrays, command tables) that \
 show prologue or call evidence; binary_info reports each table, accepted or refused, with evidence per entry. \
-Unset, the scan runs by itself when discovery from the entry, seeds, vector table and scatter-load jump finds \
-fewer than one function per 16 KiB of code (raw.pointer_tables.automatic and a list_functions note say so); \
-false never scans. \
+Unset, the scan runs by itself when discovery finds fewer than one function per 16 KiB of code or covers under \
+an eighth of it (raw.pointer_tables.automatic and a list_functions note say so); false never scans. Every code \
+region is scanned, and discovery also follows code pointers in records the code addresses (thread definitions). \
 The reset code at the entry is followed (a bounded interpreter; nothing runs natively) for the sections startup \
 code copies to their run addresses and the RAM it zeroes: binary_info's raw.scatter_load lists each copy \
 (destination, length, source, store sites, routine) and, by default, a complete copy from mapped bytes to an \
@@ -230,7 +230,7 @@ the copied code is seeded; scatter_load false reports them only. \
 For Cortex-M, binary_info's raw.base_check judges base_address against load-address candidates (pointer words \
 landing on prologues and strings, literal constants, the vector table, a fetch outside every region by the reset \
 code) and, when it looks wrong, names the better base in next. \
-When discovery finds fewer than one function per 16 KiB of Raw code, list_functions (and binary_info \
+When Raw discovery is that sparse, list_functions (and binary_info \
 afterwards) return a one-line next naming the options still off (pointer_tables false, unmapped startup copies). \
 Cortex-M only: regions (up to 15) maps more of the same file beside the primary code region, each {kind: code|data|\
 ram, base_address, offset, length, decode?, from?}: e.g. a second stage at its RAM base \

@@ -90,6 +90,7 @@
     "raw.pointer_tables.automatic",
     "raw.pointer_tables.automatic.applied",
     "raw.pointer_tables.automatic.code_bytes",
+    "raw.pointer_tables.automatic.covered_bytes",
     "raw.pointer_tables.automatic.functions_before",
     "raw.pointer_tables.automatic.outcome",
     "raw.pointer_tables.automatic.reason",

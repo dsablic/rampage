@@ -677,9 +677,11 @@ moves with the base.
 
 `"pointer_tables": true` (Cortex-M only) also seeds functions from tables of Thumb code pointers,
 such as handler arrays and command tables, so a raw image needs no hand-built symbol list. `false` never scans.
-Left unset, the scan runs automatically when discovery from the entry, seeds, vector table and scatter-load jump
-finds fewer than one function per 16 KiB of code (none at all in a smaller image), and `list_functions` adds a
-one-line `note`. `raw.pointer_tables.automatic` gives `functions_before`, `code_bytes`, `applied`, `reason` and
+Left unset, the scan runs automatically when discovery from the entry, seeds, vector table, scatter-load jump and
+data records finds fewer than one function per 16 KiB of code (none at all in a smaller image) or functions whose
+bodies cover less than an eighth of it, and `list_functions` adds a one-line `note`. Every backed code region is
+scanned (the primary one, mapped startup copies and `regions`), each table's targets in the region that holds it.
+`raw.pointer_tables.automatic` gives `functions_before`, `code_bytes`, `covered_bytes`, `applied`, `reason` and
 `outcome`: `applied` (the project is opened with the scan, the interpretation of `"pointer_tables": true`),
 `found_none` (the scan accepted no table, so the project stays that of `false`) or `refused` (its seeds cannot be
 admitted, more than 8192; `refused` says why, the sparse discovery stays and `next` suggests mapping less or giving
@@ -743,7 +745,8 @@ moves code and initialised data from its load address to its run address (scatte
 top-level `decode`); `region` is `0`, `"primary"` or `"raw.code"` for the primary region, or `n` or its name
 `raw.<kind>.<n>` for `regions[n-1]`, which must come earlier and have bytes. Copies count against the byte cap,
 and patches go to the source region, never to a copy. Regions never overlap (the refusal names both), all backed
-regions together hold at most 4 MiB, and `vector_table`/`pointer_tables` read the primary region only. Discovery,
+regions together hold at most 4 MiB, `vector_table` reads the primary region only and `pointer_tables` every code
+region. Discovery,
 data references, calls and the decompiler's memory image span every region, so a call from flash through a literal
 pool into the RAM stage, and back, resolves.
 
@@ -811,10 +814,17 @@ become seeds, so handlers that only the relocated table names are discovered. Ot
 why (for example, the table lies in memory nothing copied).
 
 When discovery from the entry and seeds finds fewer than one function per 16 KiB of a Raw project's code (none at all
-in a smaller image), `list_functions` adds a one-line `next` naming what to try, and so does `binary_info` once
+in a smaller image), or functions covering less than an eighth of it, `list_functions` adds a one-line `next` naming what to try, and so does `binary_info` once
 discovery has run (it never starts discovery itself): `"pointer_tables":
 true` on Cortex-M when `false` turned it off, and dropping `"scatter_load": false` when the startup copies it
 reported were left unmapped. With `pointer_tables` unset, the scan runs by itself instead (above). Startup code and calls through function pointers are the usual reasons discovery stops early.
+
+On Cortex-M, discovery also follows code pointers held in data: after it runs, the 16 words from each address the
+code references (a record such as an RTOS thread definition passed by address) are read, and an odd word that
+points at code outside every discovered function, not at text, and decodes like code (`push {..., lr}` first, or
+a straight-line decode up to 128 instructions reaching an unconditional return, branch or halt) becomes a seed;
+up to three more rounds run while each finds new starts, at most 4096 per round. In M-profile Thumb code,
+`adr rN, #0` forms the address of the word after it (a string placed in the code), and is a data reference.
 
 ### A compressed image as the code region
 

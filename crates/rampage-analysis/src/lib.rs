@@ -13,6 +13,7 @@ pub mod noreturn;
 pub mod objc_dispatch;
 pub mod pseudocode;
 mod reaching_store;
+mod record_pointers;
 pub mod rtti;
 pub mod ssa;
 pub mod strings;
