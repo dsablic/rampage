@@ -213,6 +213,7 @@ decoded code.
     PE and Mach-O still refuse: their plan would need the ARM stub and veneer shapes (`add ip, pc` PLT entries,
     `ldr pc`, `movw/movt ip; bx ip`) in the stub and wrapper checks, and A32/Thumb interworking per address;
   - the vector-table parser reports implausible words as `stack_pointer` instead of rejecting the candidate;
+    done: `raw.vector_table.refused_reason`;
   - run-to-run variance is large (run 4 reached the RTOS startup, run 5 stopped at the jump fragment): consider
     `binary_info` naming the scatter jump target's enclosing function and the first functions worth reading.
 - [ ] **Flaky UI test.** `rampage-ui` `debugger::tests::local_socket::genuine_save_refusal_remains_typed_until_resources_are_recorded_despite_obsolete_binding`

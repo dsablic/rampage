@@ -602,7 +602,10 @@ impl RawCodeImage {
                 ));
             }
             Some(address) => {
-                let table = crate::raw_vectors::read(primary, options.base, address)?;
+                let ram = |address: u64| {
+                    regions.iter().any(|region| region.kind == RawRegionKind::Ram && region.range().contains(&address))
+                };
+                let table = crate::raw_vectors::read_reset_table(primary, options.base, address, &ram)?;
                 if let Some(reset) = table.reset() {
                     match options.entry {
                         None => options.entry = Some(reset),

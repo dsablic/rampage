@@ -1038,3 +1038,30 @@ fn cortex_m_inferred_crc_routines_are_seeded_into_discovery() {
     let report: Value = serde_json::from_str(&text).unwrap();
     assert!(report["coverage"]["functions_analyzed"].as_u64().unwrap() > 0, "{report:#}");
 }
+
+/// Fifth Haiku run: an image that starts with code was read as a vector table and its first word reported as the
+/// stack pointer. The candidate is now refused as a whole, with the reason and what to do; nothing is seeded.
+#[test]
+fn cortex_m_code_read_as_a_vector_table_is_refused() {
+    let owned = OwnedDirectory::new();
+    // The records fixture from its first function on: Thumb code where a table would be.
+    let code = &CORTEX_M_RECORDS[0x40..];
+    let path = owned.file("code.bin", code);
+    let request = request(json!({
+        "profile": "cortex-m4", "offset": 0, "length": code.len(), "base_address": "0x8000040", "vector_table": true,
+        "pointer_tables": false,
+    }));
+    let project = Session::default().open_raw(&path, &request).unwrap();
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    let table = &summary["raw"]["vector_table"];
+    let reason = table["refused_reason"].as_str().unwrap_or_else(|| panic!("{table:#}"));
+    assert!(reason.starts_with("not a reset vector table") && reason.contains("give entry"), "{reason}");
+    assert!(summary["entry"].is_null(), "{summary:#}");
+    assert_eq!(summary["raw"]["seed_count"], 0, "{summary:#}");
+    // The real table is still accepted.
+    let path = owned.file("records.bin", CORTEX_M_RECORDS);
+    let project = Session::default().open_raw(&path, &records_request()).unwrap();
+    let summary = serde_json::to_value(project.summary()).unwrap();
+    assert!(summary["raw"]["vector_table"].get("refused_reason").is_none(), "{summary:#}");
+    assert_eq!(summary["entry"], format!("{:#x}", elf_symbol(CORTEX_M_RECORDS_ELF, "reset_handler")));
+}

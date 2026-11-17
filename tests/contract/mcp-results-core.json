@@ -187,6 +187,7 @@
     "raw.vector_table.base_address_suggestion.lowest_base",
     "raw.vector_table.base_address_suggestion.note",
     "raw.vector_table.empty_external_vectors",
+    "raw.vector_table.refused_reason",
     "raw.vector_table.stop_detail",
     "raw.vector_table.stop_reason",
     "raw.vector_table.vectors",

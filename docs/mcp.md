@@ -681,7 +681,11 @@ for Cortex-M seeding, `vector_table`. That lists every system vector and every a
 `stop_reason` (`image_end`, `max_external`, `reached_handler`, `non_handler_word`) and `stop_detail`. When handler
 words fall outside the asserted mapping, `base_address_suggestion` gives `base_address` (the most aligned base that
 would hold them) within `lowest_base`..`highest_base`; it is never applied, and an explicit `vector_table` address
-moves with the base.
+moves with the base. The reset-time table is also judged as a whole: unless the initial SP word lies in RAM
+(0x10000000..=0x40000000, or inside or at the end of a `ram` region) and Reset is `accepted`, `refused_reason` says
+why (for example code at offset 0, whose first words are no SP and no Thumb handler) and no handler of it becomes
+the entry or a seed; the words are still listed with their verdicts. A table that VTOR stores install is not held
+to the SP rule.
 
 `"pointer_tables": true` (Cortex-M only) also seeds functions from tables of Thumb code pointers,
 such as handler arrays and command tables, so a raw image needs no hand-built symbol list. `false` never scans.

@@ -19,6 +19,9 @@ with [the firmware walkthrough](firmware-walkthrough.md).
 Pass `raw` instead of a native image: `profile` (a Raw language ID or an alias such as `cortex-m4`, `msp430` or
 `avr`), `offset` and `length` (the bytes in the file) and `base_address`. For Cortex-M firmware add
 `"vector_table": true` to read the vector table at the base: Reset becomes the entry and the other handlers seeds.
+The table is refused as a whole, with `raw.vector_table.refused_reason`, unless its initial SP lies in RAM
+(0x10000000 to 0x40000000, or a `ram` region you map) and its Reset word is a Thumb address in the code: an image
+that starts with code (many decoded updates do) is then not misread, and you open it with `entry` instead.
 
 ```json
 {

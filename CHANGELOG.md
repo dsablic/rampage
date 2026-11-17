@@ -6,6 +6,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- A Cortex-M Raw project's reset-time vector table is refused as a whole unless its initial SP lies in RAM
+  (0x10000000 to 0x40000000, or a mapped `ram` region) and Reset is a Thumb handler in the code:
+  `raw.vector_table.refused_reason` says why and to open the image with `entry` instead, and nothing of it is
+  seeded (fifth Haiku run: code at offset 0 was reported as an initial SP).
+
 - CRC routines `integrity_checks` infers on a Cortex-M Raw project (a polynomial literal loaded outside every
   discovered function, after a `push {..., lr}` prologue) are seeded into discovery when the session opens the
   project with `pointer_tables` unset, so `decompile`, `lock_mechanisms` and `integrity_checks` see them as functions; `binary_info` lists them

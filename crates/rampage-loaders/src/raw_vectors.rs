@@ -125,18 +125,82 @@ pub struct VectorTable {
     pub vectors: Vec<Vector>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_address_suggestion: Option<BaseAddressSuggestion>,
+    /// Set when the words do not look like a reset-time vector table at all (an initial SP outside RAM, or no
+    /// usable Reset handler), as when the image starts with code: no handler of it becomes the entry or a seed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused_reason: Option<String>,
 }
 
 impl VectorTable {
-    /// The accepted Reset handler.
+    /// The accepted Reset handler of a table that was not refused.
     pub fn reset(&self) -> Option<u64> {
+        if self.refused_reason.is_some() {
+            return None;
+        }
         self.vectors.iter().find(|vector| vector.index == 1 && vector.status == VectorStatus::Accepted)?.target
     }
 
-    /// Every accepted handler, Reset included, in table order (duplicates kept).
+    /// Every accepted handler of a table that was not refused, Reset included, in table order (duplicates kept).
     pub fn handlers(&self) -> impl Iterator<Item = u64> + '_ {
-        self.vectors.iter().filter(|vector| vector.status == VectorStatus::Accepted).filter_map(|vector| vector.target)
+        self.vectors
+            .iter()
+            .filter(|vector| self.refused_reason.is_none() && vector.status == VectorStatus::Accepted)
+            .filter_map(|vector| vector.target)
     }
+}
+
+/// Addresses an initial stack pointer may hold without a mapped RAM region: the ARMv7-M SRAM region
+/// (0x20000000..0x40000000) and the RAM parts commonly put below it from 0x10000000 (core-coupled RAM, the lower
+/// SRAM block), the top of RAM itself included.
+const RAM_LIKE: std::ops::RangeInclusive<u64> = 0x1000_0000..=0x4000_0000;
+
+/// [`read`], for the table the core reads at reset: the whole candidate is refused, with the reason, unless its
+/// initial SP lies in RAM (the RAM-like range, or a region `ram` admits, its end included) and its Reset word is a
+/// Thumb handler inside the code. Individual words are still judged and listed.
+pub(crate) fn read_reset_table(
+    bytes: &[u8],
+    base: u64,
+    address: u64,
+    ram: &dyn Fn(u64) -> bool,
+) -> Result<VectorTable, LoadError> {
+    let mut table = read(bytes, base, address)?;
+    let word = |index: u16| table.vectors.iter().find(|vector| vector.index == index);
+    let sp = word(0).expect("the initial SP word is always read");
+    let reset = word(1).expect("the Reset word is always read");
+    let sp_reason = match sp.status {
+        VectorStatus::StackPointer
+            if RAM_LIKE.contains(&sp.word) || ram(sp.word) || sp.word.checked_sub(1).is_some_and(ram) =>
+        {
+            None
+        }
+        VectorStatus::StackPointer => {
+            Some(format!("initial SP {:#x} lies outside RAM (0x10000000..=0x40000000 or a mapped ram region)", sp.word))
+        }
+        VectorStatus::Empty | VectorStatus::Erased => Some(format!("initial SP word {:#x} is empty", sp.word)),
+        _ => Some(format!("initial SP word {:#x} is not word aligned", sp.word)),
+    };
+    let reset_reason = match (reset.status, reset.refused_reason) {
+        (VectorStatus::Accepted, _) => None,
+        (_, Some(RefusedReason::ThumbBitClear)) => {
+            Some(format!("Reset word {:#x} has bit 0 clear, so it is no Thumb handler", reset.word))
+        }
+        (_, Some(RefusedReason::OutsideImage)) => {
+            Some(format!("Reset word {:#x} points outside the mapped code", reset.word))
+        }
+        (_, Some(RefusedReason::InTable)) => {
+            Some(format!("Reset word {:#x} points into the vector table itself", reset.word))
+        }
+        _ => Some(format!("Reset word {:#x} is no handler", reset.word)),
+    };
+    let reasons: Vec<String> = sp_reason.into_iter().chain(reset_reason).collect();
+    if !reasons.is_empty() {
+        table.refused_reason = Some(format!(
+            "not a reset vector table: {}; no handler was used. If the image starts with code, open it without \
+             vector_table and give entry (its first instruction) instead",
+            reasons.join("; ")
+        ));
+    }
+    Ok(table)
 }
 
 /// Reads the table at code-space byte `address` of `bytes` mapped at `base`. Refuses a table that is unaligned,
@@ -229,6 +293,7 @@ pub(crate) fn read_with(
         stop_detail: format!("the image ends after {index} system vectors"),
         vectors,
         base_address_suggestion: None,
+        refused_reason: None,
     };
     if index == SYSTEM_VECTORS {
         read_external(&mut table, &word_at, &verdict, &vector, end);
@@ -453,6 +518,39 @@ mod tests {
         let right = read(&image(&words, 0x320), 0x0800_0000, 0x0800_0000).unwrap();
         assert!(right.base_address_suggestion.is_none());
         assert_eq!(right.reset(), Some(0x0800_0240));
+    }
+
+    /// Fifth Haiku run: an image that starts with code was read as a vector table, its first code word reported as
+    /// `stack_pointer`. The reset-time table is refused as a whole unless its SP is in RAM and its Reset in code.
+    #[test]
+    fn an_implausible_reset_table_is_refused_with_the_reason() {
+        let no_ram = |_: u64| false;
+        let mut words = [0u32; 16];
+        words[0] = 0x2000_5000;
+        words[1] = 0x0800_0101;
+        let good = read_reset_table(&image(&words, 0x200), 0x0800_0000, 0x0800_0000, &no_ram).unwrap();
+        assert_eq!(good.refused_reason, None);
+        assert_eq!(good.reset(), Some(0x0800_0100));
+        // Thumb code at offset 0: `push {r4, lr}; bl ...` read as words.
+        let code =
+            read_reset_table(&image(&[0xf000_b510, 0xf8bc_f83a], 0x200), 0x6000_0000, 0x6000_0000, &no_ram).unwrap();
+        let reason = code.refused_reason.as_deref().unwrap();
+        assert!(reason.contains("outside RAM") && reason.contains("bit 0 clear"), "{reason}");
+        assert!(reason.contains("give entry"), "{reason}");
+        assert_eq!(code.reset(), None);
+        assert_eq!(code.handlers().count(), 0);
+        // An SP word in a mapped ram region outside the usual range is accepted; its end counts too.
+        words[0] = 0x0100_8000;
+        let tcm = |address: u64| (0x0100_0000..0x0100_8000).contains(&address);
+        let table = read_reset_table(&image(&words, 0x200), 0x0800_0000, 0x0800_0000, &tcm).unwrap();
+        assert_eq!(table.refused_reason, None);
+        let refused = read_reset_table(&image(&words, 0x200), 0x0800_0000, 0x0800_0000, &no_ram).unwrap();
+        assert!(refused.refused_reason.unwrap().contains("initial SP 0x1008000"));
+        // A good SP with a Reset word outside the code is refused too.
+        words[0] = 0x2000_5000;
+        words[1] = 0x0900_0101;
+        let outside = read_reset_table(&image(&words, 0x200), 0x0800_0000, 0x0800_0000, &no_ram).unwrap();
+        assert!(outside.refused_reason.unwrap().contains("outside the mapped code"));
     }
 
     #[test]
