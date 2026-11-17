@@ -201,6 +201,22 @@ decoded code.
   `file_layout`, `carve`, ...) without annotations, which the MCP spec treats as possibly destructive; give them
   `read_only(true)`.
 
+### Binwalk and unblob (2026-11-17)
+
+The agent runs showed `carve` and `file_layout` missing many container formats (no tags for ext4, Android sparse,
+OTA, UBI or vendor headers) and `fs_list` refusing UBI/UBIFS, SquashFS 3.x and vendor variants. The existing
+"Borrow before building" note above already suggests evaluating binwalk and unblob. Two shapes, not exclusive:
+
+- **binwalk v3 as a Rust library for signature scanning (preferred).** Its signature set (hundreds of formats)
+  feeds `carve`/`file_layout` as candidates with offsets and confidence; rampage's own bounded extractors still do
+  the unpacking, and binwalk's extractors (which run external tools) are not used. First check the crate's API
+  stability, licence (MIT), dependencies (any C or external tools pulled in), and its behaviour on hostile input
+  (bounds, time).
+- **binwalk or unblob as an optional external extractor.** When installed, run it as a subprocess, sandboxed to a
+  new output directory with time and size caps, for formats rampage can't read, and report what it extracted. This
+  gives the broadest coverage, but it is an external dependency that runs third-party extraction code on hostile
+  input, so it stays opt-in (an explicit tool argument or a config setting), never automatic.
+
 ### Other ideas (2026-11-14)
 
 - **2.0 candidates** (breaking changes, only if a 2.0 is justified):
