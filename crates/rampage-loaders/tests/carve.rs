@@ -470,3 +470,184 @@ fn only_regular_files_are_carved() {
     assert!(carve::carve_file(&std::env::temp_dir(), &Limits::default()).is_err());
     assert!(carve::carve_file(Path::new("/dev/zero"), &Limits::default()).is_err());
 }
+
+fn fs_fixture(name: &str) -> Vec<u8> {
+    std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/fsimages").join(name)).unwrap()
+}
+
+/// A bzip2 stream's first 18 bytes, then filler: magic, 900k blocks, block magic, CRC and origin pointer 5.
+fn bzip2() -> Vec<u8> {
+    let mut bytes = b"BZh91AY&SY".to_vec();
+    bytes.extend([0x12, 0x34, 0x56, 0x78]);
+    bytes.extend((5u32 << 7).to_be_bytes());
+    bytes.extend(junk(30, 7));
+    bytes
+}
+
+/// A ustar header for a regular file `name` of `size` bytes, its checksum filled in.
+fn tar_header(name: &[u8], size: usize) -> Vec<u8> {
+    let mut header = vec![0u8; 512];
+    header[..name.len()].copy_from_slice(name);
+    header[100..108].copy_from_slice(b"0000644\0");
+    header[124..136].copy_from_slice(format!("{size:011o}\0").as_bytes());
+    header[156] = b'0';
+    header[257..263].copy_from_slice(b"ustar\0");
+    header[263..265].copy_from_slice(b"00");
+    header[148..156].fill(b' ');
+    let sum: u32 = header.iter().map(|&byte| u32::from(byte)).sum();
+    header[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+    header
+}
+
+fn tar_of(members: &[(&[u8], &[u8])]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for (name, data) in members {
+        bytes.extend(tar_header(name, data.len()));
+        bytes.extend(*data);
+        bytes.resize(bytes.len().next_multiple_of(512), 0);
+    }
+    bytes.extend([0u8; 1024]);
+    bytes
+}
+
+#[test]
+fn carves_file_system_images_and_skips_their_contents() {
+    // The extents leave out the padding after a SquashFS image's bytes_used and a tar archive's end blocks.
+    let images = [
+        ("ext2.img", Kind::Ext, None),
+        ("ext4.simg", Kind::AndroidSparse, None),
+        ("holes.ext4", Kind::Ext, None),
+        ("payload.bin", Kind::OtaPayload, None),
+        ("deep-8000.sqfs", Kind::Squashfs, Some(424_274)),
+        ("rootfs.tar", Kind::Tar, Some(28_672)),
+        ("squashfs-xz.img", Kind::Squashfs, Some(2978)),
+        ("rootfs.cpio", Kind::Cpio, None),
+        ("pattern.simg", Kind::AndroidSparse, None),
+        ("ext4.img", Kind::Ext, None),
+    ];
+    let names: Vec<&str> = images.iter().map(|image| image.0).collect();
+    let mut file = junk(777, 1);
+    let mut expected = Vec::new();
+    for (index, &(name, kind, extent)) in images.iter().enumerate() {
+        let image = fs_fixture(name);
+        let extent = extent.unwrap_or(image.len() as u64);
+        expected.push((file.len() as u64, kind, Confidence::Validated, None, Some(extent)));
+        file.extend(image);
+        file.extend(junk(101 + index, index as u32 + 50));
+    }
+    let offsets: Vec<u64> = expected.iter().map(|entry| entry.0).collect();
+    expected.push((file.len() as u64, Kind::Bzip2, Confidence::Validated, None, None));
+    file.extend(bzip2());
+    let tail = file.len() as u64;
+    let elf = fixture("hello-x64.elf");
+    expected.push((tail, Kind::Elf, Confidence::Validated, Some("x86_64"), Some(elf.len() as u64)));
+    file.extend(elf);
+    let carving = carve::scan(&file, &Limits::default());
+
+    // Executables stored uncompressed in the ext, tar and cpio images are reported; nothing else inside an image is.
+    let outside: Vec<_> =
+        carving.candidates.iter().filter(|c| c.kind != Kind::Elf || c.offset == tail).map(summary).collect();
+    assert_eq!(outside, expected);
+    let inside: Vec<_> = carving.candidates.iter().filter(|c| c.kind == Kind::Elf && c.offset != tail).collect();
+    assert!(!inside.is_empty());
+    for elf in inside {
+        let image = offsets.iter().rposition(|&offset| offset < elf.offset).unwrap();
+        assert!(!names[image].contains("sq"), "an ELF at {:#x} inside {}", elf.offset, names[image]);
+        assert!(elf.extent.is_some_and(|extent| extent < 0x10000), "{elf:?}");
+    }
+    let at = |offset| carving.candidates.iter().find(|c| c.offset == offset).unwrap();
+    assert!(at(offsets[0]).notes[0].starts_with("ext2, 1024-byte blocks, 512 blocks"), "{:?}", at(offsets[0]));
+    assert!(at(offsets[4]).notes[0].starts_with("no compression"), "{:?}", at(offsets[4]));
+    assert!(at(offsets[5]).notes.iter().any(|note| note.contains("only validated executables are reported inside")));
+    let mut seen = std::collections::BTreeSet::new();
+    assert!(carving.candidates.iter().all(|c| seen.insert(c.offset)), "an offset is listed twice");
+    assert!(!carving.truncated, "{:?}", carving.limitations);
+}
+
+#[test]
+fn an_executable_whose_section_table_is_not_its_own_keeps_its_program_header_extent() {
+    // As in an ext image whose file's later blocks lie elsewhere: the section header table reads other bytes.
+    let mut elf = fixture("hello-mips.elf");
+    let shoff = u32::from_be_bytes(elf[32..36].try_into().unwrap()) as usize;
+    elf[shoff..shoff + 200].fill(0xff);
+    let carving = carve::scan(&elf, &Limits::default());
+    let candidate = &carving.candidates[0];
+    assert_eq!((candidate.kind, candidate.confidence), (Kind::Elf, Confidence::Validated));
+    assert_eq!(candidate.extent_source, Some("ELF header and program header table"));
+    assert!(candidate.extent.unwrap() <= elf.len() as u64, "{candidate:?}");
+    assert!(candidate.notes.iter().any(|note| note.contains("section header table does not check out")));
+}
+
+#[test]
+fn new_kinds_reject_inconsistent_headers() {
+    let at_zero = |bytes: &[u8]| -> Vec<(Kind, Confidence)> {
+        let carving = carve::scan(bytes, &Limits::default());
+        carving.candidates.iter().filter(|c| c.offset == 0).map(|c| (c.kind, c.confidence)).collect()
+    };
+    let ext = fs_fixture("ext2.img");
+    let mut bad = ext.clone();
+    bad[0x400 + 40] ^= 1;
+    assert_eq!(at_zero(&bad), [(Kind::Ext, Confidence::MagicOnly)], "inodes per group disagree with the count");
+    let mut bad = ext.clone();
+    bad[0x400 + 60] = 9;
+    assert_eq!(at_zero(&bad), [], "an unknown error policy");
+    assert_eq!(at_zero(&ext[..0x440]), [(Kind::Ext, Confidence::MagicOnly)]);
+
+    let mut sparse = fs_fixture("ext4.simg");
+    sparse[28] = 0x99;
+    let carving = carve::scan(&sparse, &Limits::default());
+    assert_eq!((carving.candidates[0].kind, carving.candidates[0].extent), (Kind::AndroidSparse, None));
+    assert!(carving.candidates[0].notes.iter().any(|note| note.contains("unknown type")));
+
+    let mut stream = bzip2();
+    stream[14] = 0x7f;
+    assert_eq!(at_zero(&stream), [(Kind::Bzip2, Confidence::MagicOnly)], "origin pointer past 900k");
+    assert_eq!(at_zero(&b"BZh91AY&SX".repeat(3)), []);
+
+    let mut archive = tar_of(&[(b"a", b"hi")]);
+    archive[0] = b'b';
+    assert_eq!(at_zero(&archive), [], "a wrong tar checksum");
+    let archive = tar_of(&[(b"a", b"hi"), (b"b", &[7; 600])]);
+    assert_eq!(kinds_and_extents(&archive), [(0, Kind::Tar, Some(archive.len() as u64))]);
+    let cut = &archive[..archive.len() - 1500];
+    let carving = carve::scan(cut, &Limits::default());
+    assert_eq!(kinds_and_extents(cut), [(0, Kind::Tar, None)]);
+    assert!(carving.candidates[0].notes[0].contains("past the end of the file"), "{:?}", carving.candidates[0]);
+
+    let payload = fs_fixture("payload.bin");
+    let mut bad = payload.clone();
+    bad[11] = 3;
+    assert_eq!(at_zero(&bad), [(Kind::OtaPayload, Confidence::MagicOnly)], "major version 3");
+    assert_eq!(at_zero(&payload[..200]), [(Kind::OtaPayload, Confidence::MagicOnly)], "manifest past the end");
+}
+
+#[test]
+fn repeated_magics_of_the_new_kinds_stay_bounded() {
+    // Each file repeats one plausible header: the scan stops at its caps or budgets instead of walking each far.
+    let sparse = fs_fixture("ext4.simg")[..40].repeat(100_000);
+    assert_eq!(carve::scan(&sparse, &Limits::default()).candidates.len(), carve::MAX_CANDIDATES);
+    let streams = bzip2()[..18].repeat(100_000);
+    assert_eq!(carve::scan(&streams, &Limits::default()).candidates.len(), carve::MAX_CANDIDATES);
+    let payloads = fs_fixture("payload.bin")[..200].repeat(20_000);
+    assert_eq!(carve::scan(&payloads, &Limits::default()).candidates.len(), carve::MAX_CANDIDATES);
+
+    // Headers inside a walked archive are its members, not new archives.
+    let headers = tar_header(b"a", 0).repeat(20_000);
+    let carving = carve::scan(&headers, &Limits::default());
+    assert_eq!(kinds_and_extents(&headers), [(0, Kind::Tar, None)]);
+    assert!(carving.candidates[0].notes[0].contains("past the end"), "{:?}", carving.candidates[0]);
+
+    // A ustar magic every 512 bytes whose checksum fails: each costs a checksum, charged to the walk budget.
+    let mut forged = tar_header(b"a", 0);
+    forged[0] = b'b';
+    let forged = forged.repeat(20_000);
+    let limits = Limits { max_walk_bytes: 1 << 20, ..Limits::default() };
+    let carving = carve::scan(&forged, &limits);
+    assert!(carving.candidates.is_empty());
+    assert!(carving.truncated);
+    assert!(
+        carving.limitations[0].contains("walks ran out of their 0x100000-byte budget"),
+        "{:?}",
+        carving.limitations
+    );
+}

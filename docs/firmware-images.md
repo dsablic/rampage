@@ -103,5 +103,6 @@ blocklist. See [endpoint inventory and blocklists](endpoint-inventory.md).
 
 UBI and UBIFS; vendor SquashFS variants and SquashFS 3.x; delta OTA payloads (by design: they need the previous
 build); compressed tar (`.tar.gz`: decompress it first); finding images
-inside vendor containers automatically (use `carve` or `file_layout` for the offset, then `image_offset`). The
+inside vendor containers automatically (`carve` finds the offset of every format above, then pass it as
+`image_offset`). The
 design and its trade-offs are in [the plan](plans/2026-11-15-firmware-unpacking.md).

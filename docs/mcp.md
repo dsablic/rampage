@@ -452,7 +452,11 @@ against the DllCharacteristics that triage reports. Both return null for a non-P
 [PE resources and load config](file-formats.md#pe-resources-and-load-config).
 
 `carve` accepts any file path rather than requiring a loadable binary. Pages use `offset`/`limit` and `more`,
-not a total; scanning stops at the candidate after the page. It extracts/decompresses nothing.
+not a total; scanning stops at the candidate after the page. It extracts/decompresses nothing. It recognises ELF,
+PE, Mach-O, zip, gzip, xz, zstd, LZMA, bzip2, SquashFS, ext2/3/4, Android sparse and boot images, OTA payloads,
+cpio, tar and uImage. Inside a SquashFS, ext, Android sparse, OTA payload, cpio, tar or ZIP image whose validated
+extent fits the file, it reports only executables whose headers validate (the image's notes say so): its compressed
+blocks and nested images are left to `fs_list`.
 `archive_inventory` similarly needs no image or sidecar, but inventories bounded standalone ZIP32 central-directory
 metadata. Its member ordinals and metadata hashes are not payload validation or extraction-safe paths; whole-record
 JSON pages stay within 60,000 bytes and errors within 4,096 bytes. See [archive inventory](archive-inventory.md).

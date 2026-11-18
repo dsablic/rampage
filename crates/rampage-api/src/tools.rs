@@ -1034,10 +1034,10 @@ pub fn file_tools() -> Vec<FileTool> {
             group: Group::Carve,
             name: "carve",
             description: "Scan any file (firmware, installer, dump, archive) for embedded executables and containers \
-                (ELF, PE, Mach-O, zip, gzip, xz, zstd, LZMA, squashfs, cpio, uImage, Android boot images): each \
-                candidate's offset, kind, header facts and estimated extent, with confidence validated or magic_only. \
-                Pass an executable's offset as image_offset to analyze it in place. Nothing is extracted or \
-                decompressed. Paged with offset/limit; `more` says whether another page follows; the scan stops at \
+                (ELF, PE, Mach-O, zip, gzip, xz, zstd, LZMA, bzip2, squashfs, ext, Android sparse/boot, OTA, cpio, \
+                tar, uImage): each candidate's offset, kind, header facts and estimated extent, with confidence \
+                validated or magic_only. Pass an executable's offset as image_offset to analyze it in place. Nothing \
+                is extracted or decompressed. Paged with offset/limit; `more` says whether another page follows; the scan stops at \
                 4096 candidates.",
             input_schema: schema::<CarveArgs>(),
             handler: |_, input| {

@@ -1,6 +1,10 @@
 //! Carving: a bounded, read-only scan of a file for embedded executables (ELF, PE, Mach-O) and containers (zip,
-//! gzip, xz, zstd, LZMA, squashfs, cpio, uImage, Android boot images), found by magic and checked against their
-//! headers. Nothing is extracted, decompressed or executed: extents come from header tables alone.
+//! gzip, xz, zstd, LZMA, bzip2, squashfs, ext2/3/4, Android sparse images, OTA payloads, cpio, tar, uImage, Android
+//! boot images), found by magic and checked against their headers. Nothing is extracted, decompressed or executed:
+//! extents come from header tables alone.
+//!
+//! The ext, tar, bzip2 and Android sparse header checks follow binwalk's signatures (MIT, Copyright (c) 2024
+//! devttys0), adapted to the scan's bounds; see THIRD-PARTY-NOTICES.
 
 use std::fs::File;
 use std::path::Path;
@@ -19,6 +23,9 @@ pub const MAX_SCAN_BYTES: u64 = 4 << 30;
 /// The most bytes one scan searches for the end of gzip header fields, whose terminator can be far from the header
 /// that names them; past it, gzip headers carrying such fields are no longer checked.
 pub const MAX_PROBE_BYTES: u64 = 64 << 20;
+/// The most header bytes one scan reads walking tar headers, Android sparse chunk headers and OTA payload manifests
+/// in all; past it, those candidates are no longer checked.
+pub const MAX_WALK_BYTES: u64 = 64 << 20;
 /// The most table entries (ELF program and section headers, Mach-O load commands, fat slices, archive members)
 /// read for one candidate.
 const MAX_TABLE_ENTRIES: usize = 4096;
@@ -31,11 +38,17 @@ pub struct Limits {
     pub max_candidates: usize,
     pub max_scan_bytes: u64,
     pub max_probe_bytes: u64,
+    pub max_walk_bytes: u64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_candidates: MAX_CANDIDATES, max_scan_bytes: MAX_SCAN_BYTES, max_probe_bytes: MAX_PROBE_BYTES }
+        Self {
+            max_candidates: MAX_CANDIDATES,
+            max_scan_bytes: MAX_SCAN_BYTES,
+            max_probe_bytes: MAX_PROBE_BYTES,
+            max_walk_bytes: MAX_WALK_BYTES,
+        }
     }
 }
 
@@ -55,6 +68,24 @@ pub enum Kind {
     Cpio,
     UImage,
     AndroidBoot,
+    /// An ext2, ext3 or ext4 file system.
+    Ext,
+    AndroidSparse,
+    /// A POSIX ustar (or GNU) tar archive.
+    Tar,
+    Bzip2,
+    /// An Android OTA `payload.bin` (update_engine).
+    OtaPayload,
+}
+
+impl Kind {
+    /// Whether `fs_list` lists the format's contents.
+    pub fn is_listable_image(self) -> bool {
+        matches!(
+            self,
+            Self::Squashfs | Self::Ext | Self::AndroidSparse | Self::OtaPayload | Self::Cpio | Self::Tar | Self::Zip
+        )
+    }
 }
 
 impl std::fmt::Display for Kind {
@@ -73,6 +104,11 @@ impl std::fmt::Display for Kind {
             Self::Cpio => "cpio",
             Self::UImage => "u_image",
             Self::AndroidBoot => "android_boot",
+            Self::Ext => "ext",
+            Self::AndroidSparse => "android_sparse",
+            Self::Tar => "tar",
+            Self::Bzip2 => "bzip2",
+            Self::OtaPayload => "ota_payload",
         })
     }
 }
@@ -248,34 +284,71 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
     // Archive member headers inside an archive already reported are part of it, not new archives.
     let mut zip_members_until = 0;
     let mut cpio_members_until = 0;
+    let mut tar_members_until = 0;
+    // Inside an image `fs_list` reads whose validated extent lies within the file, only executables whose headers
+    // check out are reported: the rest is the image's own content (a SquashFS image's compressed blocks, the ext
+    // file system an Android sparse image holds), which `fs_list` lists.
+    let mut image_until = 0;
     let mut probe = Probe { left: limits.max_probe_bytes, exhausted: false };
     let mut probe_exhausted_at = None;
+    let mut walk = Probe { left: limits.max_walk_bytes, exhausted: false };
+    let mut walk_exhausted_at = None;
     for offset in 0..scanned {
         let bytes = &data[offset..];
-        let found = match bytes[0] {
-            0x7f | b'M' | 0xfe | 0xce | 0xcf | 0xca => executable(bytes),
-            b'P' if offset >= zip_members_until => zip(bytes).map(|(candidate, walked)| {
-                zip_members_until = offset.saturating_add(walked);
-                candidate
-            }),
-            0x1f => {
-                let found = gzip(bytes, &mut probe);
-                if probe.exhausted {
-                    probe_exhausted_at.get_or_insert(offset);
+        // Most offsets start no header: two byte loads rule out the formats without a magic at their start.
+        if !STARTS_A_MAGIC[usize::from(bytes[0])]
+            && bytes.get(EXT_SUPERBLOCK + 56) != Some(&0x53)
+            && bytes.get(257) != Some(&b'u')
+        {
+            continue;
+        }
+        let found = if offset < image_until {
+            // Compressed blocks keep header bytes as literals: only a header that checks out is reported.
+            executable(bytes).filter(|candidate| candidate.confidence == Confidence::Validated)
+        } else {
+            let found = match bytes[0] {
+                0x7f | b'M' | 0xfe | 0xce | 0xcf | 0xca => executable(bytes),
+                b'P' if offset >= zip_members_until => zip(bytes).map(|(candidate, walked)| {
+                    zip_members_until = offset.saturating_add(walked);
+                    candidate
+                }),
+                0x1f => {
+                    let found = gzip(bytes, &mut probe);
+                    if probe.exhausted {
+                        probe_exhausted_at.get_or_insert(offset);
+                    }
+                    found
                 }
-                found
+                0xfd => xz(bytes),
+                0x28 => zstd(bytes),
+                0x5d => lzma(bytes),
+                b'B' => bzip2(bytes),
+                b'h' | b's' => squashfs(bytes),
+                b'0' if offset >= cpio_members_until => cpio(bytes).map(|(candidate, walked)| {
+                    cpio_members_until = offset.saturating_add(walked);
+                    candidate
+                }),
+                0x27 => uimage(bytes),
+                b'A' => android_boot(bytes),
+                0x3a => android_sparse(bytes, &mut walk),
+                b'C' => ota_payload(bytes, &mut walk),
+                _ => None,
+            };
+            // ext and tar headers have no magic at their start, so every offset is checked for theirs.
+            let mut found = found;
+            if found.is_none() && bytes.get(EXT_SUPERBLOCK + 56) == Some(&0x53) {
+                found = ext(bytes);
             }
-            0xfd => xz(bytes),
-            0x28 => zstd(bytes),
-            0x5d => lzma(bytes),
-            b'h' | b's' => squashfs(bytes),
-            b'0' if offset >= cpio_members_until => cpio(bytes).map(|(candidate, walked)| {
-                cpio_members_until = offset.saturating_add(walked);
-                candidate
-            }),
-            0x27 => uimage(bytes),
-            b'A' => android_boot(bytes),
-            _ => None,
+            if found.is_none() && bytes.get(257) == Some(&b'u') && offset >= tar_members_until {
+                found = tar(bytes, &mut walk).map(|(candidate, walked)| {
+                    tar_members_until = offset.saturating_add(walked);
+                    candidate
+                });
+            }
+            if walk.exhausted {
+                walk_exhausted_at.get_or_insert(offset);
+            }
+            found
         };
         let Some(mut candidate) = found else { continue };
         if candidates.len() >= limits.max_candidates {
@@ -297,6 +370,16 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
                 .notes
                 .push(format!("extent runs {:#x} bytes past the end of the file", extent - bytes.len() as u64));
         }
+        if let Some(extent) = candidate.extent
+            && extent <= bytes.len() as u64
+            && candidate.confidence == Confidence::Validated
+            && candidate.kind.is_listable_image()
+        {
+            image_until = offset + extent as usize;
+            candidate
+                .notes
+                .push("only validated executables are reported inside it; fs_list lists its contents".to_owned());
+        }
         candidates.push(candidate);
     }
     if scanned < data.len() {
@@ -311,14 +394,28 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
             limits.max_probe_bytes
         ));
     }
+    if let Some(offset) = walk_exhausted_at {
+        otherwise_truncated = true;
+        limitations.push(format!(
+            "tar, Android sparse and OTA payload header walks ran out of their {:#x}-byte budget at offset \
+             {offset:#x}; from there on tar archives were not reported and the others have no extent",
+            limits.max_walk_bytes
+        ));
+    }
     limitations.push(
         "candidates are found by magic and header checks only: nothing is extracted, decompressed or executed, \
          and compressed streams have no extent unless their header records one"
             .to_owned(),
     );
     limitations.push(
-        "zip and cpio headers inside a reported archive, up to its end or its last member header read, are taken \
-         as its members: an archive stored inside another archive's members is not reported separately"
+        "zip, cpio and tar headers inside a reported archive, up to its end or its last member header read, are \
+         taken as its members: an archive stored inside another archive's members is not reported separately"
+            .to_owned(),
+    );
+    limitations.push(
+        "inside a squashfs, ext, Android sparse, OTA payload, cpio, tar or zip image whose validated extent lies \
+         within the file, only executables whose headers validate are reported; its other contents (compressed \
+         blocks, nested images and streams) are left to fs_list"
             .to_owned(),
     );
     Carving {
@@ -343,6 +440,21 @@ pub fn executable(bytes: &[u8]) -> Option<Candidate> {
         _ => None,
     }
 }
+
+/// The first bytes the scan dispatches on: the formats whose magic starts their header.
+const STARTS_A_MAGIC: [bool; 256] = {
+    let mut table = [false; 256];
+    let firsts = [
+        0x7f, b'M', 0xfe, 0xce, 0xcf, 0xca, b'P', 0x1f, 0xfd, 0x28, 0x5d, b'B', b'h', b's', b'0', 0x27, b'A', 0x3a,
+        b'C',
+    ];
+    let mut index = 0;
+    while index < firsts.len() {
+        table[firsts[index] as usize] = true;
+        index += 1;
+    }
+    table
+};
 
 fn end_of(offset: u64, size: u64) -> Option<u64> {
     offset.checked_add(size)
@@ -433,6 +545,15 @@ fn elf(bytes: &[u8]) -> Option<Candidate> {
     let mut candidate = Candidate::new(Kind::Elf).endian(big);
     candidate.bits = Some(bits);
     candidate.arch = Some(elf_arch(machine, bits));
+    // A section header table starts with an all-zero entry and holds its own string table's index. One that does not
+    // is not this file's: in a file system image, the file's later blocks need not follow its first.
+    let sections_ok = shnum == 0
+        || (usize::try_from(shoff)
+            .ok()
+            .and_then(|at| bytes.get(at..at + shentsize as usize))
+            .is_some_and(|entry| entry.iter().all(|&byte| byte == 0))
+            && read(at(50, 62), 2).is_some_and(|index| index < shnum));
+    let shnum = if sections_ok { shnum } else { 0 };
     let mut end = ehsize.max(if phnum == 0 { 0 } else { ph_end }).max(if shnum == 0 { 0 } else { sh_end });
     let overflow = || Some(Candidate::magic_only(Kind::Elf, "an ELF segment or section ends past 2^64"));
     for index in 0..phnum.min(MAX_TABLE_ENTRIES as u64) {
@@ -452,6 +573,14 @@ fn elf(bytes: &[u8]) -> Option<Candidate> {
     }
     candidate.notes.extend(table_note("program headers", phnum));
     candidate.notes.extend(table_note("section headers", shnum));
+    if !sections_ok {
+        candidate.notes.push(
+            "the section header table does not check out (no null first entry or string table index), so the \
+             extent leaves it out: the file may be fragmented or cut short here"
+                .to_owned(),
+        );
+        return Some(candidate.extent(end, "ELF header and program header table"));
+    }
     Some(candidate.extent(end, "ELF header, program and section header tables"))
 }
 
@@ -753,14 +882,24 @@ enum Walk {
 /// fits in it on common file systems, and a header with a longer field is not reported.
 const MAX_GZIP_FIELD: usize = 256;
 
-/// The bytes left for searching gzip header fields, so that a file of repeated plausible headers costs no more
-/// than `Limits::max_probe_bytes` in all.
+/// The bytes left for searching gzip header fields (`Limits::max_probe_bytes`) or for walking archive and image
+/// headers (`Limits::max_walk_bytes`), so that a file of repeated plausible headers costs no more than that in all.
 struct Probe {
     left: u64,
     exhausted: bool,
 }
 
 impl Probe {
+    /// Charges `bytes` about to be read, or marks the budget exhausted and refuses when fewer are left.
+    fn charge(&mut self, bytes: u64) -> bool {
+        if bytes > self.left {
+            self.exhausted = true;
+            return false;
+        }
+        self.left -= bytes;
+        true
+    }
+
     /// Where the first NUL in `field`'s first `MAX_GZIP_FIELD` bytes is, charging the bytes examined.
     fn nul(&mut self, field: &[u8]) -> Option<usize> {
         let allowed = usize::try_from(self.left).unwrap_or(usize::MAX).min(MAX_GZIP_FIELD);
@@ -897,17 +1036,13 @@ fn squashfs(bytes: &[u8]) -> Option<Candidate> {
     let Some([block_size, compression, block_log, major, used]) = header() else {
         return Some(Candidate::magic_only(Kind::Squashfs, "squashfs superblock is truncated"));
     };
-    if major != 4
-        || !(1..=6).contains(&compression)
-        || !(12..=20).contains(&block_log)
-        || block_size != 1 << block_log
-        || used < 96
-    {
+    // Compression id 0 is no compressor: the kernel does not mount such an image, but backhand writes and reads it.
+    if major != 4 || compression > 6 || !(12..=20).contains(&block_log) || block_size != 1 << block_log || used < 96 {
         // "hsqs" and "sqsh" occur in ordinary text; only a consistent superblock is worth reporting.
         return None;
     }
     let mut candidate = Candidate::new(Kind::Squashfs).endian(big);
-    let compressor = ["gzip", "lzma", "lzo", "xz", "lz4", "zstd"][compression as usize - 1];
+    let compressor = ["no", "gzip", "lzma", "lzo", "xz", "lz4", "zstd"][compression as usize];
     candidate.notes.push(format!("{compressor} compression, {block_size}-byte blocks"));
     candidate.declared_size = Some(used);
     Some(candidate.extent(used, "squashfs superblock bytes_used"))
@@ -1070,4 +1205,437 @@ fn android_boot(bytes: &[u8]) -> Option<Candidate> {
     candidate.notes.push(format!("header version {version}, page size {page}"));
     candidate.declared_size = Some(pages * page);
     Some(candidate.extent(pages * page, "Android boot image header part sizes"))
+}
+
+/// Where an ext superblock starts, from the file system's start.
+const EXT_SUPERBLOCK: usize = 0x400;
+
+/// An ext2/3/4 file system, found by the superblock magic at 0x438. The checks follow binwalk's ext signature (MIT):
+/// the state and error-policy words beside the magic, creator OS, revision and block size; the group geometry must
+/// also agree with the block and inode counts.
+fn ext(bytes: &[u8]) -> Option<Candidate> {
+    if bytes.get(EXT_SUPERBLOCK + 56..EXT_SUPERBLOCK + 58)? != [0x53, 0xef] {
+        return None;
+    }
+    let read = |at: usize, width: usize| read_uint(bytes, EXT_SUPERBLOCK + at, width, false);
+    let (state, errors) = (read(58, 2)?, read(60, 2)?);
+    // Two magic bytes are too common to report alone: the words beside them must also check out.
+    if state & !7 != 0 || !(1..=3).contains(&errors) {
+        return None;
+    }
+    let fields = || {
+        Some([
+            read(0, 4)?,
+            read(4, 4)?,
+            read(12, 4)?,
+            read(16, 4)?,
+            read(20, 4)?,
+            read(24, 4)?,
+            read(32, 4)?,
+            read(40, 4)?,
+            read(72, 4)?,
+            read(76, 4)?,
+        ])
+    };
+    let Some(
+        [
+            inodes,
+            blocks_lo,
+            free_blocks,
+            free_inodes,
+            first_block,
+            log_block,
+            per_group,
+            inodes_per_group,
+            os,
+            revision,
+        ],
+    ) = fields()
+    else {
+        return Some(Candidate::magic_only(Kind::Ext, "ext superblock is truncated"));
+    };
+    let inconsistent = || Some(Candidate::magic_only(Kind::Ext, "ext superblock fields are inconsistent"));
+    // Block sizes run from 1 KiB to 64 KiB; only a 1 KiB-block file system starts its first group at block 1.
+    if os > 4 || revision > 1 || log_block > 6 || first_block != u64::from(log_block == 0) {
+        return inconsistent();
+    }
+    let block_size = 1024u64 << log_block;
+    let features = if revision >= 1 { (read(92, 4), read(96, 4)) } else { (Some(0), Some(0)) };
+    let (Some(compat), Some(incompat)) = features else {
+        return Some(Candidate::magic_only(Kind::Ext, "ext superblock is truncated"));
+    };
+    // The 64bit feature keeps the block count's high word at 0x150.
+    let blocks = match incompat & 0x80 {
+        0 => blocks_lo,
+        _ => blocks_lo | read(0x150, 4).unwrap_or(0) << 32,
+    };
+    if blocks <= first_block
+        || per_group == 0
+        || per_group > 8 * block_size
+        || inodes_per_group == 0
+        || free_blocks > blocks
+        || free_inodes > inodes
+    {
+        return inconsistent();
+    }
+    // Every group has the same number of inodes.
+    let groups = (blocks - first_block).div_ceil(per_group);
+    if groups.checked_mul(inodes_per_group) != Some(inodes) {
+        return inconsistent();
+    }
+    // extents, 64bit or flex_bg make it ext4; a journal without them, ext3.
+    let version = if incompat & 0x2c0 != 0 {
+        "ext4"
+    } else if compat & 0x4 != 0 {
+        "ext3"
+    } else {
+        "ext2"
+    };
+    let mut candidate = Candidate::new(Kind::Ext).endian(false);
+    let mut note = format!("{version}, {block_size}-byte blocks, {blocks} blocks, {inodes} inodes");
+    if let Some(name) = bytes.get(EXT_SUPERBLOCK + 120..EXT_SUPERBLOCK + 136) {
+        let name = &name[..name.iter().position(|&byte| byte == 0).unwrap_or(name.len())];
+        if !name.is_empty() {
+            note.push_str(&format!(", volume name {:?}", String::from_utf8_lossy(name)));
+        }
+    }
+    candidate.notes.push(note);
+    let size = blocks.checked_mul(block_size)?;
+    candidate.declared_size = Some(size);
+    Some(candidate.extent(size, "ext superblock block count and size"))
+}
+
+const SPARSE_RAW: u64 = 0xcac1;
+const SPARSE_FILL: u64 = 0xcac2;
+const SPARSE_DONT_CARE: u64 = 0xcac3;
+const SPARSE_CRC32: u64 = 0xcac4;
+
+/// An Android sparse image, its extent from walking its chunk headers. The header checks follow binwalk's
+/// androidsparse signature (MIT).
+fn android_sparse(bytes: &[u8], walk: &mut Probe) -> Option<Candidate> {
+    if read_uint(bytes, 0, 4, false)? != 0xed26_ff3a {
+        return None;
+    }
+    let read = |at: u64, width: usize| read_uint(bytes, usize::try_from(at).ok()?, width, false);
+    let header =
+        || Some([read(4, 2)?, read(6, 2)?, read(8, 2)?, read(10, 2)?, read(12, 4)?, read(16, 4)?, read(20, 4)?]);
+    let Some([major, minor, header_size, chunk_header_size, block_size, blocks, chunks]) = header() else {
+        return Some(Candidate::magic_only(Kind::AndroidSparse, "Android sparse header is truncated"));
+    };
+    if major != 1
+        || minor != 0
+        || header_size < 28
+        || chunk_header_size < 12
+        || block_size == 0
+        || !block_size.is_multiple_of(4)
+        || block_size > 64 << 20
+    {
+        return Some(Candidate::magic_only(Kind::AndroidSparse, "Android sparse header fields are inconsistent"));
+    }
+    let mut candidate = Candidate::new(Kind::AndroidSparse).endian(false);
+    candidate.uncompressed_size = Some(blocks * block_size);
+    candidate.notes.push(format!("{chunks} chunks of {block_size}-byte blocks"));
+    let (mut at, mut covered) = (header_size, 0u64);
+    let stopped = 'walk: {
+        for _ in 0..chunks {
+            if !walk.charge(chunk_header_size) {
+                break 'walk Some("the scan's header walk budget ran out");
+            }
+            let fields = (|| Some([read(at, 2)?, read(at + 2, 2)?, read(at + 4, 4)?, read(at + 8, 4)?]))();
+            let Some([kind, reserved, chunk_blocks, total]) = fields else {
+                break 'walk Some("a chunk header lies past the end of the file");
+            };
+            let expected = match kind {
+                SPARSE_RAW => chunk_blocks * block_size,
+                SPARSE_FILL | SPARSE_CRC32 => 4,
+                SPARSE_DONT_CARE => 0,
+                _ => break 'walk Some("a chunk header has an unknown type"),
+            };
+            if reserved != 0 || total.checked_sub(chunk_header_size) != Some(expected) {
+                break 'walk Some("a chunk's size does not match its type");
+            }
+            if kind != SPARSE_CRC32 {
+                covered += chunk_blocks;
+            }
+            at += total;
+        }
+        None
+    };
+    match stopped {
+        Some(reason) => candidate.notes.push(format!("no extent: {reason}")),
+        None => {
+            if covered != blocks {
+                candidate.notes.push(format!("the chunks cover {covered} blocks; the header declares {blocks}"));
+            }
+            candidate = candidate.extent(at, "Android sparse header and chunk headers");
+        }
+    }
+    Some(candidate)
+}
+
+/// The longest run of tar headers one walk reads.
+const MAX_TAR_HEADERS: usize = 1 << 16;
+
+/// A tar numeric field: octal digits between optional spaces and NULs, or GNU base-256 (high bit of the first byte
+/// set).
+fn tar_number(field: &[u8]) -> Option<u64> {
+    if field.first().is_some_and(|byte| byte & 0x80 != 0) {
+        return field.iter().enumerate().try_fold(0u64, |value, (index, &byte)| {
+            value.checked_mul(256)?.checked_add(u64::from(if index == 0 { byte & 0x7f } else { byte }))
+        });
+    }
+    let text = field.trim_ascii_start();
+    let digits = &text[..text.iter().position(|&byte| byte == 0 || byte == b' ').unwrap_or(text.len())];
+    if digits.is_empty() || !text[digits.len()..].iter().all(|&byte| byte == 0 || byte == b' ') {
+        return None;
+    }
+    digits.iter().try_fold(0u64, |value, &digit| match digit {
+        b'0'..=b'7' => value.checked_mul(8)?.checked_add(u64::from(digit - b'0')),
+        _ => None,
+    })
+}
+
+/// The data size the ustar header at `at` records, if its magic and checksum check out.
+fn tar_header(bytes: &[u8], at: usize) -> Option<u64> {
+    let header = bytes.get(at..at.checked_add(512)?)?;
+    if &header[257..262] != b"ustar" {
+        return None;
+    }
+    let sum: u64 = header
+        .iter()
+        .enumerate()
+        .map(|(index, &byte)| if (148..156).contains(&index) { 32 } else { u64::from(byte) })
+        .sum();
+    if tar_number(&header[148..156])? != sum {
+        return None;
+    }
+    tar_number(&header[124..136])
+}
+
+/// A tar archive at its first header, and how many bytes from it the scan takes as the archive's own: through its
+/// end when that is known, else through the last header read whole. The checks follow binwalk's tarball signature
+/// (MIT): the ustar magic and header checksum, entries walked by their recorded sizes.
+fn tar(bytes: &[u8], walk: &mut Probe) -> Option<(Candidate, usize)> {
+    // The first header's checksum is charged too: a file of repeated "ustar" costs no more than the budget.
+    if bytes.get(257..262)? != b"ustar" || !walk.charge(512) {
+        return None;
+    }
+    tar_header(bytes, 0)?;
+    let mut candidate = Candidate::new(Kind::Tar);
+    let (mut at, mut covered, mut members) = (0usize, 512usize, 0u64);
+    let stopped = 'walk: {
+        for _ in 0..MAX_TAR_HEADERS {
+            let Some(block) = bytes.get(at..at.saturating_add(512)) else {
+                break 'walk Some("the archive runs past the end of the file".to_owned());
+            };
+            // The archive ends with two zero blocks; some writers leave out the second.
+            if block.iter().all(|&byte| byte == 0) {
+                let next = bytes.get(at + 512..at + 1024);
+                let end = at + if next.is_some_and(|next| next.iter().all(|&byte| byte == 0)) { 1024 } else { 512 };
+                candidate = candidate.extent(end as u64, "tar headers through the end-of-archive blocks");
+                covered = end;
+                break 'walk None;
+            }
+            if members > 0 && !walk.charge(512) {
+                break 'walk Some("the scan's header walk budget ran out".to_owned());
+            }
+            let Some(size) = tar_header(bytes, at) else {
+                break 'walk Some(
+                    "a block after the members is neither a tar header nor the end of the archive".to_owned(),
+                );
+            };
+            members += 1;
+            covered = at + 512;
+            let Some(data) = size.checked_next_multiple_of(512).and_then(|size| usize::try_from(size).ok()) else {
+                break 'walk Some("a member's size is out of range".to_owned());
+            };
+            at = covered.saturating_add(data);
+        }
+        Some(format!(
+            "the header walk stopped at its cap ({MAX_TAR_HEADERS} headers); tar headers up to the last one read \
+             are taken as its members"
+        ))
+    };
+    if let Some(reason) = stopped {
+        candidate.notes.push(format!("no extent: {reason}"));
+    }
+    candidate.notes.push(format!("{members} members walked"));
+    Some((candidate, covered))
+}
+
+/// A bzip2 stream: the "BZh" magic and block size, then the first block's magic (the BCD digits of pi), as
+/// binwalk's bzip2 signature has them (MIT), and the block's origin pointer within the block size. Nothing gives
+/// an extent without decompressing.
+fn bzip2(bytes: &[u8]) -> Option<Candidate> {
+    if !bytes.starts_with(b"BZh") || !(b'1'..=b'9').contains(bytes.get(3)?) {
+        return None;
+    }
+    if bytes.get(4..10)? != [0x31, 0x41, 0x59, 0x26, 0x53, 0x59] {
+        return None;
+    }
+    let level = u64::from(bytes[3] - b'0');
+    let Some(word) = read_uint(bytes, 14, 4, true) else {
+        return Some(Candidate::magic_only(Kind::Bzip2, "bzip2 block header is truncated"));
+    };
+    // After the block CRC come one randomised bit and the 24-bit origin pointer.
+    if (word >> 7) & 0xff_ffff >= level * 100_000 {
+        return Some(Candidate::magic_only(Kind::Bzip2, "bzip2 block origin pointer exceeds the block size"));
+    }
+    let mut candidate = Candidate::new(Kind::Bzip2);
+    candidate.notes.push(format!("{level}00k blocks"));
+    Some(candidate)
+}
+
+/// The most partition names an OTA payload candidate lists.
+const MAX_OTA_NAMES: usize = 16;
+
+/// A protobuf field's value: a varint (fixed-width values read as 0), or length-delimited bytes.
+enum Proto<'a> {
+    Int(u64),
+    Bytes(&'a [u8]),
+}
+
+/// The fields of the protobuf message `bytes`, as (field number, value); `None` for a malformed field, which
+/// ends the iteration.
+fn proto_fields(mut bytes: &[u8]) -> impl Iterator<Item = Option<(u64, Proto<'_>)>> {
+    fn varint(bytes: &mut &[u8]) -> Option<u64> {
+        let mut value = 0u64;
+        for shift in (0..64).step_by(7) {
+            let (&byte, rest) = bytes.split_first()?;
+            *bytes = rest;
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some(value);
+            }
+        }
+        None
+    }
+    let mut failed = false;
+    std::iter::from_fn(move || {
+        if bytes.is_empty() || failed {
+            return None;
+        }
+        let field = (|| {
+            let key = varint(&mut bytes)?;
+            let value = match key & 7 {
+                0 => Proto::Int(varint(&mut bytes)?),
+                1 | 5 => {
+                    bytes = bytes.get(if key & 7 == 1 { 8 } else { 4 }..)?;
+                    Proto::Int(0)
+                }
+                2 => {
+                    let len = usize::try_from(varint(&mut bytes)?).ok().filter(|len| *len <= bytes.len())?;
+                    let (head, rest) = bytes.split_at(len);
+                    bytes = rest;
+                    Proto::Bytes(head)
+                }
+                _ => return None,
+            };
+            Some((key >> 3, value))
+        })();
+        failed = field.is_none();
+        Some(field)
+    })
+}
+
+/// Where an OTA install operation's data blob ends, relative to the payload's data: its fields 2 (data_offset) and
+/// 3 (data_length).
+fn ota_operation_end(operation: &[u8]) -> Option<u64> {
+    let (mut offset, mut length) = (0u64, 0u64);
+    for field in proto_fields(operation) {
+        match field? {
+            (2, Proto::Int(value)) => offset = value,
+            (3, Proto::Int(value)) => length = value,
+            _ => {}
+        }
+    }
+    offset.checked_add(length)
+}
+
+/// An Android OTA payload (update_engine `payload.bin`), its extent from the manifest: the end of the furthest
+/// operation's data blob or of the payload signature, after the header, manifest and metadata signature.
+fn ota_payload(bytes: &[u8], walk: &mut Probe) -> Option<Candidate> {
+    if !bytes.starts_with(b"CrAU") {
+        return None;
+    }
+    let read = |at: usize, width: usize| read_uint(bytes, at, width, true);
+    let (Some(version), Some(manifest_size)) = (read(4, 8), read(12, 8)) else {
+        return Some(Candidate::magic_only(Kind::OtaPayload, "OTA payload header is truncated"));
+    };
+    let header_size: usize = match version {
+        1 => 20,
+        2 => 24,
+        _ => return Some(Candidate::magic_only(Kind::OtaPayload, "OTA payload major version is neither 1 nor 2")),
+    };
+    let signature_size = if version == 2 { read(20, 4)? } else { 0 };
+    let manifest =
+        usize::try_from(manifest_size).ok().and_then(|size| bytes.get(header_size..header_size.checked_add(size)?));
+    let Some(manifest) = manifest else {
+        return Some(Candidate::magic_only(Kind::OtaPayload, "OTA payload manifest lies outside the file"));
+    };
+    let mut candidate = Candidate::new(Kind::OtaPayload).endian(true);
+    if !walk.charge(manifest_size) {
+        candidate.notes.push("no extent: the scan's header walk budget ran out".to_owned());
+        return Some(candidate);
+    }
+    let malformed = || Some(Candidate::magic_only(Kind::OtaPayload, "OTA payload manifest is malformed"));
+    let (mut block_size, mut signatures, mut blobs_end) = (4096, (None, None), 0u64);
+    let (mut partitions, mut names) = (0usize, Vec::new());
+    // Manifest fields: 1 and 2 operations (major version 1), 3 block_size, 4 signatures_offset, 5 signatures_size
+    // and 13 partitions, whose field 1 is the name and 8 an operation.
+    for field in proto_fields(manifest) {
+        let Some(field) = field else { return malformed() };
+        let operation = match field {
+            (1 | 2, Proto::Bytes(operation)) => Some(operation),
+            (3, Proto::Int(value)) => {
+                block_size = value;
+                None
+            }
+            (4, Proto::Int(value)) => {
+                signatures.0 = Some(value);
+                None
+            }
+            (5, Proto::Int(value)) => {
+                signatures.1 = Some(value);
+                None
+            }
+            (13, Proto::Bytes(partition)) => {
+                partitions += 1;
+                for field in proto_fields(partition) {
+                    match field {
+                        None => return malformed(),
+                        Some((1, Proto::Bytes(name))) if names.len() < MAX_OTA_NAMES => {
+                            names.push(String::from_utf8_lossy(name).into_owned());
+                        }
+                        Some((8, Proto::Bytes(operation))) => {
+                            let Some(end) = ota_operation_end(operation) else { return malformed() };
+                            blobs_end = blobs_end.max(end);
+                        }
+                        _ => {}
+                    }
+                }
+                None
+            }
+            _ => None,
+        };
+        if let Some(operation) = operation {
+            let Some(end) = ota_operation_end(operation) else { return malformed() };
+            blobs_end = blobs_end.max(end);
+        }
+    }
+    if !(512..=1 << 20).contains(&block_size) || !block_size.is_power_of_two() {
+        return Some(Candidate::magic_only(Kind::OtaPayload, "OTA payload block size is implausible"));
+    }
+    if let (Some(offset), Some(size)) = signatures {
+        let Some(end) = offset.checked_add(size) else { return malformed() };
+        blobs_end = blobs_end.max(end);
+    }
+    let mut note = format!("major version {version}, {block_size}-byte blocks, {partitions} partitions");
+    if !names.is_empty() {
+        note.push_str(&format!(" ({})", names.join(", ")));
+    }
+    candidate.notes.push(note);
+    let end = (header_size as u64).checked_add(manifest_size)?.checked_add(signature_size)?.checked_add(blobs_end);
+    let Some(end) = end else { return malformed() };
+    Some(candidate.extent(end, "OTA payload header, manifest operations and payload signature"))
 }

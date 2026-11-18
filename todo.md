@@ -258,12 +258,17 @@ OTA, UBI or vendor headers) and `fs_list` refusing UBI/UBIFS, SquashFS 3.x and v
   inside it.
 
 Follow-ups for `carve` (its signature list stays the reference, and its code is MIT, so port with credit):
-- [ ] Tag what `rampage-unpack` already reads: ext2/3/4, Android sparse, tar, bzip2, OTA payload.
-- [ ] Don't report streams inside a container that has a known extent. 219 of 245 candidates on the composite
-      were xz/zstd blocks inside SquashFS images already reported.
-- [ ] The x86-64 ELF at the composite's end is listed twice, at the same offset.
-- [ ] The 8000-inode SquashFS (`deep-8000.sqfs`) isn't recognised at offset 0x4c44b (binwalk: "compression
-      unknown").
+- [x] Tag what `rampage-unpack` already reads: ext2/3/4, Android sparse, tar, bzip2, OTA payload. (carve
+      signatures wave 1: minimal header checks in carve, since rampage-loaders cannot depend on rampage-unpack's
+      decoders.)
+- [x] Don't report streams inside a container that has a known extent. 219 of 245 candidates on the composite
+      were xz/zstd blocks inside SquashFS images already reported. Inside an image `fs_list` reads, only validated
+      executables are reported now: 24 candidates.
+- [x] The x86-64 ELF at the composite's end is listed twice, at the same offset. Not reproduced: the CLI and
+      every MCP page size list it once (one candidate per offset by construction); a test now asserts unique
+      offsets on the composite.
+- [x] The 8000-inode SquashFS (`deep-8000.sqfs`) isn't recognised at offset 0x4c44b (binwalk: "compression
+      unknown"). It records compression id 0 (none), which backhand writes and reads; carve now accepts it.
 - [ ] Wave 2 of the signatures: UBI/UBIFS (with the readers), JFFS2, YAFFS2, CramFS, TRX, DTB, FAT, MBR/GPT,
       UEFI volumes and capsules, LZ4 frames, LZOP, SREC/HEX in a container, and vendor headers (TP-Link, CFE,
       Seama, JBOOT).
