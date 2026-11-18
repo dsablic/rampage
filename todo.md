@@ -37,8 +37,8 @@ This file holds open items. Done sections, including every completed parity phas
    pseudocode, string decryption: done, awaiting review); the tool-description trim; docs audit; release.
 2. Firmware leftovers from the Haiku runs: `xrefs` through Thumb literal pools in Raw images, `find_main` on Raw,
    ARM `exact_entry`, seeding inferred CRC routines into discovery, rejecting implausible vector-table candidates.
-3. Wider formats: binwalk v3 signature scanning for `carve`/`file_layout` (evaluate first), UBI/UBIFS, container
-   tagging for ext4/sparse/OTA, `privacy_surface` over an extracted tree with boot triggers.
+3. Wider formats: native `carve` signatures for what binwalk recognises (evaluated, no crate dependency),
+   UBI/UBIFS, container tagging for ext4/sparse/OTA, `privacy_surface` over an extracted tree with boot triggers.
 4. Housekeeping: the flaky debugger UI test; rebuilding fixtures that embed local paths, plus a CI check.
 
 ## Small hints (from the 1.7.0 docs audit)
@@ -240,6 +240,34 @@ OTA, UBI or vendor headers) and `fs_list` refusing UBI/UBIFS, SquashFS 3.x and v
   new output directory with time and size caps, for formats rampage can't read, and report what it extracted. This
   gives the broadest coverage, but it is an external dependency that runs third-party extraction code on hostile
   input, so it stays opt-in (an explicit tool argument or a config setting), never automatic.
+
+**Evaluated 2026-11-18: don't depend on the crate; port its formats into `carve` natively.** binwalk 3.1.0 (MIT):
+
+- Its dependencies rule it out. It has no cargo features, so the library always pulls in 124 crates, including
+  `bzip2-sys` and `lzma-sys` (C builds) and `plotters`/`font-kit` (Core Text on macOS, freetype/fontconfig on
+  Linux) for its entropy graph.
+- It has 85 signatures, not hundreds. The API is a plain `scan(&[u8])`: the whole file must be in memory, and
+  there is no time budget or cancellation.
+- Hostile input: 3000 mutated slices produced no panics. But some validators decompress, so the scan is slow on
+  repeated magics. 20 MB of repeated gzip headers took 11.8 s, against 0.04 s for `carve`. 40 MB of mixed
+  SquashFS/xz/bzip2/LZMA magics took 5.6 s, against `carve` stopping at its candidate cap at once. On 400 MB of
+  real binaries both took about 2 s.
+- Coverage on a composite of our fsimages fixtures: binwalk found 3 ext filesystems, 2 Android sparse images, a
+  tar, a bzip2 stream and the 8000-inode SquashFS, all of which `carve` missed. Both found nothing in the
+  LZSS-compressed Cortex-M update. binwalk skips past a container it has recognised, so it reports no blocks from
+  inside it.
+
+Follow-ups for `carve` (its signature list stays the reference, and its code is MIT, so port with credit):
+- [ ] Tag what `rampage-unpack` already reads: ext2/3/4, Android sparse, tar, bzip2, OTA payload.
+- [ ] Don't report streams inside a container that has a known extent. 219 of 245 candidates on the composite
+      were xz/zstd blocks inside SquashFS images already reported.
+- [ ] The x86-64 ELF at the composite's end is listed twice, at the same offset.
+- [ ] The 8000-inode SquashFS (`deep-8000.sqfs`) isn't recognised at offset 0x4c44b (binwalk: "compression
+      unknown").
+- [ ] Wave 2 of the signatures: UBI/UBIFS (with the readers), JFFS2, YAFFS2, CramFS, TRX, DTB, FAT, MBR/GPT,
+      UEFI volumes and capsules, LZ4 frames, LZOP, SREC/HEX in a container, and vendor headers (TP-Link, CFE,
+      Seama, JBOOT).
+- The opt-in subprocess extractor (the second shape above) is still undecided; unblob hasn't been evaluated.
 
 ### Other ideas (2026-11-14)
 

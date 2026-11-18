@@ -39,6 +39,9 @@ SquashFS, an image file inside an archive inside an archive, up to 4 layers.
 
 binwalk v3 (MIT, Rust) recognises far more formats but extracts by running external tools; rampage does not
 depend on anything being installed. It stays a recognition reference. Nothing here builds or links C.
+Evaluated as a library dependency on 2026-11-18 and rejected: it always pulls in C (`bzip2-sys`, `lzma-sys`) and
+font/graphics crates, needs the whole file in memory, and has no time budget. It is slow on repeated magics
+(11.8 s for 20 MB of gzip headers). The details are in todo.md under "Binwalk and unblob".
 
 ## Design
 
