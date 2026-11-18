@@ -23,8 +23,8 @@ pub const MAX_SCAN_BYTES: u64 = 4 << 30;
 /// The most bytes one scan searches for the end of gzip header fields, whose terminator can be far from the header
 /// that names them; past it, gzip headers carrying such fields are no longer checked.
 pub const MAX_PROBE_BYTES: u64 = 64 << 20;
-/// The most header bytes one scan reads walking tar headers, Android sparse chunk headers and OTA payload manifests
-/// in all; past it, those candidates are no longer checked.
+/// The most header bytes one scan reads walking tar headers, and again Android sparse chunk headers, and again OTA
+/// payload manifests; past a format's budget, its candidates are no longer walked.
 pub const MAX_WALK_BYTES: u64 = 64 << 20;
 /// The most table entries (ELF program and section headers, Mach-O load commands, fat slices, archive members)
 /// read for one candidate.
@@ -78,13 +78,28 @@ pub enum Kind {
     OtaPayload,
 }
 
+/// What the scan reports inside an image `fs_list` reads, once the image's extent is validated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Inside {
+    /// Contents compressed or split into chunks (SquashFS blocks, OTA blobs, sparse chunks): only executables whose
+    /// headers validate are reported, since anything else found there is a fragment of the image's own encoding.
+    Executables,
+    /// Contents stored as whole files (ext, tar, cpio, zip): every candidate whose header validates is a real file
+    /// and is reported; only magic-only matches are left out.
+    Validated,
+}
+
 impl Kind {
-    /// Whether `fs_list` lists the format's contents.
-    pub fn is_listable_image(self) -> bool {
-        matches!(
-            self,
-            Self::Squashfs | Self::Ext | Self::AndroidSparse | Self::OtaPayload | Self::Cpio | Self::Tar | Self::Zip
-        )
+    fn inside(self) -> Option<Inside> {
+        match self {
+            Self::Squashfs | Self::AndroidSparse | Self::OtaPayload => Some(Inside::Executables),
+            Self::Ext | Self::Cpio | Self::Tar | Self::Zip => Some(Inside::Validated),
+            _ => None,
+        }
+    }
+
+    fn is_executable(self) -> bool {
+        matches!(self, Self::Elf | Self::Pe | Self::MachO | Self::MachOFat)
     }
 }
 
@@ -274,6 +289,40 @@ pub(crate) fn map_regular_file(path: &Path) -> Result<Option<Mmap>, LoadError> {
     Ok(Some(unsafe { Mmap::map(&file) }.map_err(io_error)?))
 }
 
+/// An image enclosing the scan's offset, and the candidates left out inside it so far.
+struct Enclosing {
+    end: usize,
+    inside: Inside,
+    /// The image's index among the candidates.
+    index: usize,
+    left_out: Vec<(Kind, usize)>,
+}
+
+impl Enclosing {
+    fn leave_out(&mut self, kind: Kind) {
+        match self.left_out.iter_mut().find(|(seen, _)| *seen == kind) {
+            Some((_, count)) => *count += 1,
+            None => self.left_out.push((kind, 1)),
+        }
+    }
+
+    /// Notes on the image what was left out inside it.
+    fn finish(self, candidates: &mut [Candidate]) {
+        let total: usize = self.left_out.iter().map(|(_, count)| count).sum();
+        let mut note = match self.inside {
+            Inside::Executables => "inside it only executables whose headers validate are reported".to_owned(),
+            Inside::Validated => "inside it only candidates whose headers validate are reported".to_owned(),
+        };
+        if total > 0 {
+            let kinds: Vec<String> = self.left_out.iter().map(|(kind, count)| format!("{count} {kind}")).collect();
+            let plural = if total == 1 { "" } else { "s" };
+            note.push_str(&format!("; left out inside it: {total} candidate{plural} ({})", kinds.join(", ")));
+        }
+        note.push_str("; fs_list lists its contents");
+        candidates[self.index].notes.push(note);
+    }
+}
+
 /// Scans `data` for embedded executables and containers, in offset order.
 pub fn scan(data: &[u8], limits: &Limits) -> Carving {
     let scanned = data.len().min(usize::try_from(limits.max_scan_bytes).unwrap_or(usize::MAX));
@@ -285,72 +334,80 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
     let mut zip_members_until = 0;
     let mut cpio_members_until = 0;
     let mut tar_members_until = 0;
-    // Inside an image `fs_list` reads whose validated extent lies within the file, only executables whose headers
-    // check out are reported: the rest is the image's own content (a SquashFS image's compressed blocks, the ext
-    // file system an Android sparse image holds), which `fs_list` lists.
-    let mut image_until = 0;
+    // The images `fs_list` reads that enclose the offset, outermost first; see `Inside` for what each reports.
+    let mut enclosing: Vec<Enclosing> = Vec::new();
     let mut probe = Probe { left: limits.max_probe_bytes, exhausted: false };
     let mut probe_exhausted_at = None;
-    let mut walk = Probe { left: limits.max_walk_bytes, exhausted: false };
-    let mut walk_exhausted_at = None;
+    // Each walked format has its own budget, so that one long walk does not starve the others.
+    let mut walks = [(); 3].map(|()| Probe { left: limits.max_walk_bytes, exhausted: false });
+    let mut walk_exhausted_at = [None; 3];
     for offset in 0..scanned {
         let bytes = &data[offset..];
         // Most offsets start no header: two byte loads rule out the formats without a magic at their start.
         if !STARTS_A_MAGIC[usize::from(bytes[0])]
-            && bytes.get(EXT_SUPERBLOCK + 56) != Some(&0x53)
-            && bytes.get(257) != Some(&b'u')
+            && bytes.get(EXT_MAGIC_AT) != Some(&EXT_MAGIC[0])
+            && bytes.get(TAR_MAGIC_AT) != Some(&TAR_MAGIC[0])
         {
             continue;
         }
-        let found = if offset < image_until {
-            // Compressed blocks keep header bytes as literals: only a header that checks out is reported.
-            executable(bytes).filter(|candidate| candidate.confidence == Confidence::Validated)
-        } else {
-            let found = match bytes[0] {
-                0x7f | b'M' | 0xfe | 0xce | 0xcf | 0xca => executable(bytes),
-                b'P' if offset >= zip_members_until => zip(bytes).map(|(candidate, walked)| {
-                    zip_members_until = offset.saturating_add(walked);
-                    candidate
-                }),
-                0x1f => {
-                    let found = gzip(bytes, &mut probe);
-                    if probe.exhausted {
-                        probe_exhausted_at.get_or_insert(offset);
-                    }
-                    found
+        while let Some(image) = enclosing.pop_if(|image| offset >= image.end) {
+            image.finish(&mut candidates);
+        }
+        let [tar_walk, sparse_walk, ota_walk] = &mut walks;
+        let mut found = match bytes[0] {
+            0x7f | b'M' | 0xfe | 0xce | 0xcf | 0xca => executable(bytes),
+            b'P' if offset >= zip_members_until => zip(bytes).map(|(candidate, walked)| {
+                zip_members_until = offset.saturating_add(walked);
+                candidate
+            }),
+            0x1f => {
+                let found = gzip(bytes, &mut probe);
+                if probe.exhausted {
+                    probe_exhausted_at.get_or_insert(offset);
                 }
-                0xfd => xz(bytes),
-                0x28 => zstd(bytes),
-                0x5d => lzma(bytes),
-                b'B' => bzip2(bytes),
-                b'h' | b's' => squashfs(bytes),
-                b'0' if offset >= cpio_members_until => cpio(bytes).map(|(candidate, walked)| {
-                    cpio_members_until = offset.saturating_add(walked);
-                    candidate
-                }),
-                0x27 => uimage(bytes),
-                b'A' => android_boot(bytes),
-                0x3a => android_sparse(bytes, &mut walk),
-                b'C' => ota_payload(bytes, &mut walk),
-                _ => None,
-            };
-            // ext and tar headers have no magic at their start, so every offset is checked for theirs.
-            let mut found = found;
-            if found.is_none() && bytes.get(EXT_SUPERBLOCK + 56) == Some(&0x53) {
-                found = ext(bytes);
+                found
             }
-            if found.is_none() && bytes.get(257) == Some(&b'u') && offset >= tar_members_until {
-                found = tar(bytes, &mut walk).map(|(candidate, walked)| {
-                    tar_members_until = offset.saturating_add(walked);
-                    candidate
-                });
-            }
-            if walk.exhausted {
-                walk_exhausted_at.get_or_insert(offset);
-            }
-            found
+            0xfd => xz(bytes),
+            0x28 => zstd(bytes),
+            0x5d => lzma(bytes),
+            b'B' => bzip2(bytes),
+            b'h' | b's' => squashfs(bytes),
+            b'0' if offset >= cpio_members_until => cpio(bytes).map(|(candidate, walked)| {
+                cpio_members_until = offset.saturating_add(walked);
+                candidate
+            }),
+            0x27 => uimage(bytes),
+            b'A' => android_boot(bytes),
+            0x3a => android_sparse(bytes, sparse_walk),
+            b'C' => ota_payload(bytes, ota_walk),
+            _ => None,
         };
+        // ext and tar headers have no magic at their start, so every offset is checked for theirs.
+        if found.is_none() && bytes.get(EXT_MAGIC_AT) == Some(&EXT_MAGIC[0]) {
+            found = ext(bytes);
+        }
+        if found.is_none() && bytes.get(TAR_MAGIC_AT) == Some(&TAR_MAGIC[0]) && offset >= tar_members_until {
+            found = tar(bytes, tar_walk).map(|(candidate, walked)| {
+                tar_members_until = offset.saturating_add(walked);
+                candidate
+            });
+        }
+        for (walk, exhausted_at) in walks.iter().zip(&mut walk_exhausted_at) {
+            if walk.exhausted {
+                exhausted_at.get_or_insert(offset);
+            }
+        }
         let Some(mut candidate) = found else { continue };
+        if let Some(image) = enclosing.last_mut() {
+            let reported = candidate.confidence == Confidence::Validated
+                && (image.inside == Inside::Validated || candidate.kind.is_executable());
+            if !reported {
+                image.leave_out(candidate.kind);
+                continue;
+            }
+            let outer = &candidates[image.index];
+            candidate.notes.push(format!("inside the {} at {:#x}", outer.kind, outer.offset));
+        }
         if candidates.len() >= limits.max_candidates {
             candidate_cap_reached = true;
             limitations.push(format!(
@@ -373,14 +430,15 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
         if let Some(extent) = candidate.extent
             && extent <= bytes.len() as u64
             && candidate.confidence == Confidence::Validated
-            && candidate.kind.is_listable_image()
+            && let Some(inside) = candidate.kind.inside()
         {
-            image_until = offset + extent as usize;
-            candidate
-                .notes
-                .push("only validated executables are reported inside it; fs_list lists its contents".to_owned());
+            let end = offset + extent as usize;
+            enclosing.push(Enclosing { end, inside, index: candidates.len(), left_out: Vec::new() });
         }
         candidates.push(candidate);
+    }
+    while let Some(image) = enclosing.pop() {
+        image.finish(&mut candidates);
     }
     if scanned < data.len() {
         otherwise_truncated = true;
@@ -394,13 +452,22 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
             limits.max_probe_bytes
         ));
     }
-    if let Some(offset) = walk_exhausted_at {
-        otherwise_truncated = true;
-        limitations.push(format!(
-            "tar, Android sparse and OTA payload header walks ran out of their {:#x}-byte budget at offset \
-             {offset:#x}; from there on tar archives were not reported and the others have no extent",
-            limits.max_walk_bytes
-        ));
+    let walked = [
+        "tar header walks ran out of their {budget}-byte budget at offset {offset}; tar archives from there on were \
+         not reported",
+        "Android sparse chunk walks ran out of their {budget}-byte budget at offset {offset}; sparse images from \
+         there on have no extent",
+        "OTA payload manifest reads ran out of their {budget}-byte budget at offset {offset}; payloads from there on \
+         have no extent",
+    ];
+    for (text, offset) in walked.iter().zip(walk_exhausted_at) {
+        if let Some(offset) = offset {
+            otherwise_truncated = true;
+            limitations.push(
+                text.replace("{budget}", &format!("{:#x}", limits.max_walk_bytes))
+                    .replace("{offset}", &format!("{offset:#x}")),
+            );
+        }
     }
     limitations.push(
         "candidates are found by magic and header checks only: nothing is extracted, decompressed or executed, \
@@ -413,9 +480,9 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
             .to_owned(),
     );
     limitations.push(
-        "inside a squashfs, ext, Android sparse, OTA payload, cpio, tar or zip image whose validated extent lies \
-         within the file, only executables whose headers validate are reported; its other contents (compressed \
-         blocks, nested images and streams) are left to fs_list"
+        "inside a squashfs, Android sparse or OTA payload image whose validated extent lies within the file, only \
+         executables whose headers validate are reported; inside such an ext, tar, cpio or zip image, only \
+         candidates whose headers validate. Each image's notes count what was left out"
             .to_owned(),
     );
     Carving {
@@ -1041,6 +1108,20 @@ fn squashfs(bytes: &[u8]) -> Option<Candidate> {
         // "hsqs" and "sqsh" occur in ordinary text; only a consistent superblock is worth reporting.
         return None;
     }
+    // The tables follow the inode table in a fixed order and lie within bytes_used; absent ones are all ones. A
+    // superblock forged to claim the rest of the file rarely gets these right.
+    let tables = || Some([read(64, 8)?, read(72, 8)?, read(48, 8)?, read(56, 8)?, read(80, 8)?, read(88, 8)?]);
+    let Some([inodes, directories, optional @ ..]) = tables() else {
+        return Some(Candidate::magic_only(Kind::Squashfs, "squashfs superblock is truncated"));
+    };
+    let ids = optional[0];
+    if inodes < 96
+        || directories <= inodes
+        || !(directories..used).contains(&ids)
+        || optional[1..].iter().any(|&table| table != u64::MAX && !(directories..used).contains(&table))
+    {
+        return Some(Candidate::magic_only(Kind::Squashfs, "squashfs table offsets are inconsistent"));
+    }
     let mut candidate = Candidate::new(Kind::Squashfs).endian(big);
     let compressor = ["no", "gzip", "lzma", "lzo", "xz", "lz4", "zstd"][compression as usize];
     candidate.notes.push(format!("{compressor} compression, {block_size}-byte blocks"));
@@ -1209,12 +1290,18 @@ fn android_boot(bytes: &[u8]) -> Option<Candidate> {
 
 /// Where an ext superblock starts, from the file system's start.
 const EXT_SUPERBLOCK: usize = 0x400;
+/// Where the ext superblock magic lies, from the file system's start.
+const EXT_MAGIC_AT: usize = EXT_SUPERBLOCK + 56;
+const EXT_MAGIC: [u8; 2] = [0x53, 0xef];
+/// Where the ustar magic lies in a tar header.
+const TAR_MAGIC_AT: usize = 257;
+const TAR_MAGIC: &[u8; 5] = b"ustar";
 
 /// An ext2/3/4 file system, found by the superblock magic at 0x438. The checks follow binwalk's ext signature (MIT):
 /// the state and error-policy words beside the magic, creator OS, revision and block size; the group geometry must
 /// also agree with the block and inode counts.
 fn ext(bytes: &[u8]) -> Option<Candidate> {
-    if bytes.get(EXT_SUPERBLOCK + 56..EXT_SUPERBLOCK + 58)? != [0x53, 0xef] {
+    if bytes.get(EXT_MAGIC_AT..EXT_MAGIC_AT + 2)? != EXT_MAGIC {
         return None;
     }
     let read = |at: usize, width: usize| read_uint(bytes, EXT_SUPERBLOCK + at, width, false);
@@ -1300,7 +1387,10 @@ fn ext(bytes: &[u8]) -> Option<Candidate> {
         }
     }
     candidate.notes.push(note);
-    let size = blocks.checked_mul(block_size)?;
+    let Some(size) = blocks.checked_mul(block_size) else {
+        candidate.notes.push("no extent: the block count times the block size exceeds 2^64".to_owned());
+        return Some(candidate);
+    };
     candidate.declared_size = Some(size);
     Some(candidate.extent(size, "ext superblock block count and size"))
 }
@@ -1319,6 +1409,8 @@ fn android_sparse(bytes: &[u8], walk: &mut Probe) -> Option<Candidate> {
     let read = |at: u64, width: usize| read_uint(bytes, usize::try_from(at).ok()?, width, false);
     let header =
         || Some([read(4, 2)?, read(6, 2)?, read(8, 2)?, read(10, 2)?, read(12, 4)?, read(16, 4)?, read(20, 4)?]);
+    // The header ends with an image checksum at 24, not read but part of the 28-byte header.
+    let header = || header().filter(|_| bytes.len() >= 28);
     let Some([major, minor, header_size, chunk_header_size, block_size, blocks, chunks]) = header() else {
         return Some(Candidate::magic_only(Kind::AndroidSparse, "Android sparse header is truncated"));
     };
@@ -1363,12 +1455,11 @@ fn android_sparse(bytes: &[u8], walk: &mut Probe) -> Option<Candidate> {
     };
     match stopped {
         Some(reason) => candidate.notes.push(format!("no extent: {reason}")),
-        None => {
-            if covered != blocks {
-                candidate.notes.push(format!("the chunks cover {covered} blocks; the header declares {blocks}"));
-            }
-            candidate = candidate.extent(at, "Android sparse header and chunk headers");
-        }
+        // A forged header must not claim the rest of the file: the chunks must cover what the header declares.
+        None if chunks == 0 || covered != blocks => candidate
+            .notes
+            .push(format!("no extent: the {chunks} chunks cover {covered} blocks, the header declares {blocks}")),
+        None => candidate = candidate.extent(at, "Android sparse header and chunk headers"),
     }
     Some(candidate)
 }
@@ -1398,7 +1489,7 @@ fn tar_number(field: &[u8]) -> Option<u64> {
 /// The data size the ustar header at `at` records, if its magic and checksum check out.
 fn tar_header(bytes: &[u8], at: usize) -> Option<u64> {
     let header = bytes.get(at..at.checked_add(512)?)?;
-    if &header[257..262] != b"ustar" {
+    if &header[TAR_MAGIC_AT..TAR_MAGIC_AT + 5] != TAR_MAGIC {
         return None;
     }
     let sum: u64 = header
@@ -1417,14 +1508,18 @@ fn tar_header(bytes: &[u8], at: usize) -> Option<u64> {
 /// (MIT): the ustar magic and header checksum, entries walked by their recorded sizes.
 fn tar(bytes: &[u8], walk: &mut Probe) -> Option<(Candidate, usize)> {
     // The first header's checksum is charged too: a file of repeated "ustar" costs no more than the budget.
-    if bytes.get(257..262)? != b"ustar" || !walk.charge(512) {
+    if bytes.get(TAR_MAGIC_AT..TAR_MAGIC_AT + 5)? != TAR_MAGIC || !walk.charge(512) {
         return None;
     }
-    tar_header(bytes, 0)?;
+    let first = tar_header(bytes, 0)?;
     let mut candidate = Candidate::new(Kind::Tar);
-    let (mut at, mut covered, mut members) = (0usize, 512usize, 0u64);
+    let first_end = first.checked_next_multiple_of(512).and_then(|size| usize::try_from(size).ok());
+    let (mut at, mut covered, mut members) = (first_end.map_or(usize::MAX, |data| data.saturating_add(512)), 512, 1u64);
     let stopped = 'walk: {
-        for _ in 0..MAX_TAR_HEADERS {
+        if first_end.is_none() {
+            break 'walk Some("a member's size is out of range".to_owned());
+        }
+        for _ in 1..MAX_TAR_HEADERS {
             let Some(block) = bytes.get(at..at.saturating_add(512)) else {
                 break 'walk Some("the archive runs past the end of the file".to_owned());
             };
@@ -1436,7 +1531,7 @@ fn tar(bytes: &[u8], walk: &mut Probe) -> Option<(Candidate, usize)> {
                 covered = end;
                 break 'walk None;
             }
-            if members > 0 && !walk.charge(512) {
+            if !walk.charge(512) {
                 break 'walk Some("the scan's header walk budget ran out".to_owned());
             }
             let Some(size) = tar_header(bytes, at) else {
@@ -1567,7 +1662,10 @@ fn ota_payload(bytes: &[u8], walk: &mut Probe) -> Option<Candidate> {
         2 => 24,
         _ => return Some(Candidate::magic_only(Kind::OtaPayload, "OTA payload major version is neither 1 nor 2")),
     };
-    let signature_size = if version == 2 { read(20, 4)? } else { 0 };
+    let signature_size = if version == 2 { read(20, 4) } else { Some(0) };
+    let Some(signature_size) = signature_size else {
+        return Some(Candidate::magic_only(Kind::OtaPayload, "OTA payload header is truncated"));
+    };
     let manifest =
         usize::try_from(manifest_size).ok().and_then(|size| bytes.get(header_size..header_size.checked_add(size)?));
     let Some(manifest) = manifest else {
@@ -1580,7 +1678,7 @@ fn ota_payload(bytes: &[u8], walk: &mut Probe) -> Option<Candidate> {
     }
     let malformed = || Some(Candidate::magic_only(Kind::OtaPayload, "OTA payload manifest is malformed"));
     let (mut block_size, mut signatures, mut blobs_end) = (4096, (None, None), 0u64);
-    let (mut partitions, mut names) = (0usize, Vec::new());
+    let (mut partitions, mut operations, mut names) = (0usize, 0usize, Vec::new());
     // Manifest fields: 1 and 2 operations (major version 1), 3 block_size, 4 signatures_offset, 5 signatures_size
     // and 13 partitions, whose field 1 is the name and 8 an operation.
     for field in proto_fields(manifest) {
@@ -1609,6 +1707,7 @@ fn ota_payload(bytes: &[u8], walk: &mut Probe) -> Option<Candidate> {
                         }
                         Some((8, Proto::Bytes(operation))) => {
                             let Some(end) = ota_operation_end(operation) else { return malformed() };
+                            operations += 1;
                             blobs_end = blobs_end.max(end);
                         }
                         _ => {}
@@ -1620,6 +1719,7 @@ fn ota_payload(bytes: &[u8], walk: &mut Probe) -> Option<Candidate> {
         };
         if let Some(operation) = operation {
             let Some(end) = ota_operation_end(operation) else { return malformed() };
+            operations += 1;
             blobs_end = blobs_end.max(end);
         }
     }
@@ -1635,7 +1735,15 @@ fn ota_payload(bytes: &[u8], walk: &mut Probe) -> Option<Candidate> {
         note.push_str(&format!(" ({})", names.join(", ")));
     }
     candidate.notes.push(note);
-    let end = (header_size as u64).checked_add(manifest_size)?.checked_add(signature_size)?.checked_add(blobs_end);
+    // A header forged to claim the rest of the file through its metadata signature size carries no operations.
+    if operations == 0 || blobs_end == 0 {
+        candidate.notes.push("no extent: the manifest records no operation data".to_owned());
+        return Some(candidate);
+    }
+    let end = (header_size as u64)
+        .checked_add(manifest_size)
+        .and_then(|end| end.checked_add(signature_size))
+        .and_then(|end| end.checked_add(blobs_end));
     let Some(end) = end else { return malformed() };
     Some(candidate.extent(end, "OTA payload header, manifest operations and payload signature"))
 }

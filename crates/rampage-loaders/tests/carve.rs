@@ -43,14 +43,24 @@ fn zstd() -> Vec<u8> {
     vec![0x28, 0xb5, 0x2f, 0xfd, 0x20, 42, 0x11, 0, 0, b'h', b'i']
 }
 
-fn squashfs() -> Vec<u8> {
+/// A SquashFS superblock of a `used`-byte image: inode table at 96, directory table at 120, id table at 160.
+fn squashfs_of(used: u64) -> Vec<u8> {
     let mut bytes = vec![0u8; 96];
     bytes[..4].copy_from_slice(b"hsqs");
     bytes[12..16].copy_from_slice(&131_072u32.to_le_bytes());
     bytes[20..22].copy_from_slice(&4u16.to_le_bytes());
     bytes[22..24].copy_from_slice(&17u16.to_le_bytes());
     bytes[28..30].copy_from_slice(&4u16.to_le_bytes());
-    bytes[40..48].copy_from_slice(&96u64.to_le_bytes());
+    bytes[40..48].copy_from_slice(&used.to_le_bytes());
+    for (at, table) in [(48, 160), (56, u64::MAX), (64, 96), (72, 120), (80, u64::MAX), (88, u64::MAX)] {
+        bytes[at..at + 8].copy_from_slice(&table.to_le_bytes());
+    }
+    bytes
+}
+
+fn squashfs() -> Vec<u8> {
+    let mut bytes = squashfs_of(200);
+    bytes.resize(200, 0);
     bytes
 }
 
@@ -243,7 +253,7 @@ fn carves_fixtures_and_containers_at_odd_offsets_inside_junk() {
     let slices: Vec<_> = fat.slices.iter().map(|slice| (slice.arch.as_str(), slice.offset, slice.size)).collect();
     assert_eq!(slices, [("x86_64", offsets[5] + 0x1000, 0x2110), ("aarch64", offsets[5] + 0x4000, 33_456)]);
     assert_eq!(by_kind(Kind::Zstd).uncompressed_size, Some(42));
-    assert_eq!(by_kind(Kind::Squashfs).declared_size, Some(96));
+    assert_eq!(by_kind(Kind::Squashfs).declared_size, Some(200));
     assert_eq!(by_kind(Kind::UImage).declared_size, Some(80));
     assert!(by_kind(Kind::Gzip).notes.iter().any(|note| note.contains("inner.bin")));
     assert_eq!(by_kind(Kind::Pe).extent_source, Some("PE headers, section table and certificate table"));
@@ -544,21 +554,28 @@ fn carves_file_system_images_and_skips_their_contents() {
     file.extend(elf);
     let carving = carve::scan(&file, &Limits::default());
 
-    // Executables stored uncompressed in the ext, tar and cpio images are reported; nothing else inside an image is.
-    let outside: Vec<_> =
-        carving.candidates.iter().filter(|c| c.kind != Kind::Elf || c.offset == tail).map(summary).collect();
+    // Inside the ext, tar and cpio images the validated files are reported; inside the others, only executables.
+    let is_inside = |c: &&Candidate| c.notes.iter().any(|note| note.starts_with("inside the "));
+    let outside: Vec<_> = carving.candidates.iter().filter(|c| !is_inside(c)).map(summary).collect();
     assert_eq!(outside, expected);
-    let inside: Vec<_> = carving.candidates.iter().filter(|c| c.kind == Kind::Elf && c.offset != tail).collect();
-    assert!(!inside.is_empty());
-    for elf in inside {
-        let image = offsets.iter().rposition(|&offset| offset < elf.offset).unwrap();
-        assert!(!names[image].contains("sq"), "an ELF at {:#x} inside {}", elf.offset, names[image]);
-        assert!(elf.extent.is_some_and(|extent| extent < 0x10000), "{elf:?}");
+    let inside: Vec<_> = carving.candidates.iter().filter(is_inside).collect();
+    assert!(inside.iter().any(|c| c.kind == Kind::Elf));
+    for candidate in inside {
+        let image = offsets.iter().rposition(|&offset| offset < candidate.offset).unwrap();
+        assert_eq!(candidate.confidence, Confidence::Validated, "{candidate:?}");
+        let stored = ["ext2.img", "holes.ext4", "rootfs.tar", "rootfs.cpio", "ext4.img"].contains(&names[image]);
+        assert!(stored || candidate.kind == Kind::Elf, "{candidate:?} inside {}", names[image]);
+        if candidate.kind == Kind::Elf {
+            assert!(candidate.extent.is_some_and(|extent| extent < 0x10000), "{candidate:?}");
+        }
     }
     let at = |offset| carving.candidates.iter().find(|c| c.offset == offset).unwrap();
     assert!(at(offsets[0]).notes[0].starts_with("ext2, 1024-byte blocks, 512 blocks"), "{:?}", at(offsets[0]));
     assert!(at(offsets[4]).notes[0].starts_with("no compression"), "{:?}", at(offsets[4]));
-    assert!(at(offsets[5]).notes.iter().any(|note| note.contains("only validated executables are reported inside")));
+    let note = |index: usize| at(offsets[index]).notes.last().unwrap().clone();
+    assert!(note(5).starts_with("inside it only candidates whose headers validate are reported"), "{}", note(5));
+    assert!(note(6).contains("executables whose headers validate are reported; "), "{}", note(6));
+    assert!(note(6).contains("; left out inside it: ") && note(6).contains(" xz"), "{}", note(6));
     let mut seen = std::collections::BTreeSet::new();
     assert!(carving.candidates.iter().all(|c| seen.insert(c.offset)), "an offset is listed twice");
     assert!(!carving.truncated, "{:?}", carving.limitations);
@@ -644,10 +661,162 @@ fn repeated_magics_of_the_new_kinds_stay_bounded() {
     let limits = Limits { max_walk_bytes: 1 << 20, ..Limits::default() };
     let carving = carve::scan(&forged, &limits);
     assert!(carving.candidates.is_empty());
+    // Each walked format has its own budget: the tar walks spent theirs, a sparse image after them is still walked.
+    let mut then_sparse = forged.clone();
+    let sparse = fs_fixture("pattern.simg");
+    then_sparse.extend(&sparse);
+    let carving = carve::scan(&then_sparse, &limits);
+    let found: Vec<_> = carving.candidates.iter().map(|c| (c.offset, c.kind, c.extent)).collect();
+    assert_eq!(found, [(forged.len() as u64, Kind::AndroidSparse, Some(sparse.len() as u64))]);
     assert!(carving.truncated);
     assert!(
-        carving.limitations[0].contains("walks ran out of their 0x100000-byte budget"),
+        carving.limitations[0].contains("tar header walks ran out of their 0x100000-byte budget"),
         "{:?}",
         carving.limitations
     );
+}
+
+/// Kind, confidence and the enclosing-image note of each candidate after the first.
+fn nested(bytes: &[u8]) -> Vec<(Kind, Option<String>)> {
+    let carving = carve::scan(bytes, &Limits::default());
+    let inside = |c: &Candidate| c.notes.iter().find(|note| note.starts_with("inside the ")).cloned();
+    carving.candidates.iter().skip(1).map(|c| (c.kind, inside(c))).collect()
+}
+
+#[test]
+fn archives_report_the_validated_files_they_store() {
+    let image = uimage();
+    let stream = gzip();
+    let tar = tar_of(&[(b"kernel.uimg", &image), (b"rootfs.gz", &stream)]);
+    let inside_tar = Some("inside the tar at 0x0".to_owned());
+    assert_eq!(nested(&tar), [(Kind::UImage, inside_tar.clone()), (Kind::Gzip, inside_tar)]);
+    let carving = carve::scan(&tar, &Limits::default());
+    assert!(carving.candidates[0].notes.last().unwrap().starts_with("inside it only candidates whose headers"));
+
+    let cpio = cpio_of(&[(b"kernel.uimg", &image), (b"rootfs.gz", &stream), (b"TRAILER!!!", b"")]);
+    let inside_cpio = Some("inside the cpio at 0x0".to_owned());
+    assert_eq!(nested(&cpio), [(Kind::UImage, inside_cpio.clone()), (Kind::Gzip, inside_cpio)]);
+
+    // A stored zip member holding a gzip stream and a magic-only xz header: the latter is counted, not reported.
+    let mut member = gzip();
+    let mut broken = xz();
+    broken[8] ^= 1;
+    member.extend(broken);
+    let mut zip = Vec::new();
+    zip_local(&mut zip, b"a.gz", member.len() as u32);
+    zip.extend(&member);
+    let central = zip.len();
+    zip.extend(b"PK\x01\x02");
+    zip.extend([0u8; 24]);
+    zip.extend(4u16.to_le_bytes());
+    zip.extend([0u8; 16]);
+    zip.extend(b"a.gz");
+    let central_size = zip.len() - central;
+    zip.extend(b"PK\x05\x06");
+    zip.extend([0, 0, 0, 0, 1, 0, 1, 0]);
+    zip.extend((central_size as u32).to_le_bytes());
+    zip.extend((central as u32).to_le_bytes());
+    zip.extend(0u16.to_le_bytes());
+    assert_eq!(nested(&zip), [(Kind::Gzip, Some("inside the zip at 0x0".to_owned()))]);
+    let carving = carve::scan(&zip, &Limits::default());
+    let note = carving.candidates[0].notes.last().unwrap();
+    assert!(note.contains("left out inside it: 1 candidate (1 xz)"), "{note}");
+}
+
+#[test]
+fn a_forged_image_hides_nothing() {
+    let rest = [vec![0; 64], gzip(), vec![0; 64]].concat();
+    // An OTA header whose metadata signature size claims the rest of the file, with no manifest.
+    let mut ota = vec![0xff; 16];
+    ota.extend(b"CrAU");
+    ota.extend(2u64.to_be_bytes());
+    ota.extend(0u64.to_be_bytes());
+    ota.extend((rest.len() as u32).to_be_bytes());
+    ota.extend(&rest);
+    let carving = carve::scan(&ota, &Limits::default());
+    assert_eq!(kinds_and_extents(&ota), [(16, Kind::OtaPayload, None), (16 + 24 + 64, Kind::Gzip, None)]);
+    assert!(carving.candidates[0].notes.iter().any(|note| note.contains("no operation data")));
+
+    // A SquashFS superblock whose bytes_used claims the rest of the file, its table offsets left zero.
+    let mut squash = vec![0xff; 16];
+    let mut superblock = squashfs_of(96 + rest.len() as u64);
+    superblock[48..96].fill(0);
+    squash.extend(superblock);
+    squash.extend(&rest);
+    let carving = carve::scan(&squash, &Limits::default());
+    let found: Vec<_> = carving.candidates.iter().map(|c| (c.offset, c.kind, c.confidence)).collect();
+    assert_eq!(found, [(16, Kind::Squashfs, Confidence::MagicOnly), (16 + 96 + 64, Kind::Gzip, Confidence::Validated)]);
+
+    // A sparse image whose chunks cover fewer blocks than its header declares gets no extent either.
+    let mut sparse = fs_fixture("pattern.simg");
+    sparse[16] = sparse[16].wrapping_add(1);
+    let carving = carve::scan(&sparse, &Limits::default());
+    assert_eq!(carving.candidates[0].extent, None);
+    assert!(carving.candidates[0].notes.iter().any(|note| note.contains("the header declares")));
+}
+
+#[test]
+fn truncated_headers_of_the_new_kinds_are_magic_only() {
+    let first = |bytes: &[u8]| {
+        let carving = carve::scan(bytes, &Limits::default());
+        carving.candidates.first().map(|c| (c.offset, c.kind, c.confidence))
+    };
+    let sparse = fs_fixture("ext4.simg");
+    for len in 4..28 {
+        assert_eq!(first(&sparse[..len]), Some((0, Kind::AndroidSparse, Confidence::MagicOnly)), "{len} bytes");
+    }
+    let stream = bzip2();
+    for len in 10..18 {
+        assert_eq!(first(&stream[..len]), Some((0, Kind::Bzip2, Confidence::MagicOnly)), "{len} bytes");
+    }
+    let payload = fs_fixture("payload.bin");
+    for len in 20..24 {
+        assert_eq!(first(&payload[..len]), Some((0, Kind::OtaPayload, Confidence::MagicOnly)), "{len} bytes");
+    }
+}
+
+#[test]
+fn an_out_of_range_string_table_index_alone_rejects_the_section_table() {
+    let mut elf = fixture("hello-mips.elf");
+    let shnum = u16::from_be_bytes(elf[48..50].try_into().unwrap());
+    elf[50..52].copy_from_slice(&shnum.to_be_bytes());
+    let carving = carve::scan(&elf, &Limits::default());
+    let candidate = &carving.candidates[0];
+    assert_eq!(candidate.extent_source, Some("ELF header and program header table"));
+    assert!(candidate.notes.iter().any(|note| note.contains("section header table does not check out")));
+}
+
+#[test]
+fn a_64bit_ext_block_count_takes_its_high_word() {
+    // 64 KiB blocks, one inode per group of 2^19 blocks: the block count needs its high word at 0x150.
+    let superblock = |inodes: u32, blocks: u64| {
+        let mut bytes = vec![0u8; 0x400 + 0x400];
+        let mut put = |at: usize, value: u32| bytes[0x400 + at..0x400 + at + 4].copy_from_slice(&value.to_le_bytes());
+        put(0, inodes);
+        put(4, blocks as u32);
+        put(24, 6);
+        put(32, 1 << 19);
+        put(40, 1);
+        put(76, 1);
+        put(96, 0xc0);
+        put(0x150, (blocks >> 32) as u32);
+        bytes[0x438..0x43e].copy_from_slice(&[0x53, 0xef, 1, 0, 1, 0]);
+        bytes
+    };
+    let blocks = 0x1_0000_0000 + (1 << 19);
+    let image = superblock(8193, blocks);
+    let carving = carve::scan(&image, &Limits::default());
+    let candidate = &carving.candidates[0];
+    assert_eq!(
+        (candidate.kind, candidate.confidence, candidate.extent),
+        (Kind::Ext, Confidence::Validated, Some(blocks << 16))
+    );
+    assert!(candidate.notes[0].starts_with("ext4, 65536-byte blocks, 4295491584 blocks"), "{:?}", candidate.notes);
+
+    // The most groups 32-bit inode counts allow: the byte size passes 2^64, so there is no extent.
+    let image = superblock(u32::MAX, u64::from(u32::MAX) << 19);
+    let carving = carve::scan(&image, &Limits::default());
+    let candidate = &carving.candidates[0];
+    assert_eq!((candidate.kind, candidate.confidence, candidate.extent), (Kind::Ext, Confidence::Validated, None));
+    assert!(candidate.notes.iter().any(|note| note.contains("exceeds 2^64")), "{:?}", candidate.notes);
 }

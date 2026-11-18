@@ -8,13 +8,16 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 - `carve` recognises the images `fs_list` reads: ext2/3/4 (extent from the superblock), Android sparse images
   (extent from the chunk headers), OTA payloads (extent from the manifest's operations and signature), tar (extent
-  from walking the headers) and bzip2 streams. Inside a SquashFS, ext, Android sparse, OTA payload, cpio, tar or
-  ZIP image whose validated extent fits the file, only executables whose headers validate are reported, so a
-  firmware composite no longer lists hundreds of xz and zstd blocks from inside its SquashFS images (245
-  candidates down to 24 on the fixture composite). A SquashFS image that records no compressor (id 0, as backhand
-  writes it) is now recognised. An ELF whose section header table is not its own (a file fragmented inside an ext
-  image) keeps its program-header extent instead of reporting one past 8 GiB. Tar, sparse and OTA header walks share
-  a 64 MiB budget, so repeated headers stay fast. The ext, tar, bzip2 and sparse checks are adapted from binwalk
+  from walking the headers) and bzip2 streams. Inside a SquashFS, Android sparse or OTA payload image whose
+  validated extent fits the file, only executables whose headers validate are reported; inside such an ext, tar,
+  cpio or ZIP image, every candidate whose header validates, each marked with the image it is in. The image's notes
+  count what was left out, so a firmware composite no longer lists hundreds of xz and zstd blocks from inside its
+  SquashFS images (245 candidates down to 24 on the fixture composite). An image only encloses others when its
+  structure checks out: SquashFS table offsets in order within bytes_used, OTA manifests with operations, sparse
+  chunks that cover the declared blocks. A SquashFS image that records no compressor (id 0, as backhand writes it)
+  is now recognised. An ELF whose section header table is not its own (a file fragmented inside an ext image) keeps
+  its program-header extent instead of reporting one past 8 GiB. Tar, sparse and OTA header walks each have a
+  64 MiB budget, so repeated headers stay fast. The ext, tar, bzip2 and sparse checks are adapted from binwalk
   (MIT; see THIRD-PARTY-NOTICES).
 
 - A Cortex-M Raw `binary_info` names where to start reading: `raw.starting_points` lists at most eight functions,

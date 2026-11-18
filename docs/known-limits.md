@@ -81,7 +81,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   delta OTA payloads (they need the previous build), compressed tar, and ZIP members that are encrypted or use a
   method other than stored or deflate are not read. `carve` finds SquashFS, ext2/3/4, Android sparse, OTA payload,
   cpio and tar images inside a container (pass the offset as `image_offset`), but not UBI, UBIFS, JFFS2, YAFFS2,
-  CramFS or vendor headers; inside an image it finds, it reports only validated executables.
+  CramFS or vendor headers. Inside a SquashFS, Android sparse or OTA payload image it reports only executables, and
+  inside an ext, tar, cpio or ZIP image only candidates whose headers validate; each image's notes count the rest.
 - `endpoint_inventory` matches endpoints lexically: addresses built at run time, encrypted or compressed data and
   IPv4 addresses stored as integers in code are not found. `privacy_surface` on a directory analyses only programs
   that import a capture API or name a capture device, and matches init files to programs by path; see its

@@ -262,8 +262,9 @@ Follow-ups for `carve` (its signature list stays the reference, and its code is 
       signatures wave 1: minimal header checks in carve, since rampage-loaders cannot depend on rampage-unpack's
       decoders.)
 - [x] Don't report streams inside a container that has a known extent. 219 of 245 candidates on the composite
-      were xz/zstd blocks inside SquashFS images already reported. Inside an image `fs_list` reads, only validated
-      executables are reported now: 24 candidates.
+      were xz/zstd blocks inside SquashFS images already reported. Now 24: inside SquashFS, sparse and OTA images
+      only validated executables are reported, inside ext, tar, cpio and ZIP every validated candidate, and each
+      image's notes count what was left out.
 - [x] The x86-64 ELF at the composite's end is listed twice, at the same offset. Not reproduced: the CLI and
       every MCP page size list it once (one candidate per offset by construction); a test now asserts unique
       offsets on the composite.

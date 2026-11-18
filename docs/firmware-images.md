@@ -102,7 +102,6 @@ blocklist. See [endpoint inventory and blocklists](endpoint-inventory.md).
 ## Not supported yet
 
 UBI and UBIFS; vendor SquashFS variants and SquashFS 3.x; delta OTA payloads (by design: they need the previous
-build); compressed tar (`.tar.gz`: decompress it first); finding images
-inside vendor containers automatically (`carve` finds the offset of every format above, then pass it as
-`image_offset`). The
-design and its trade-offs are in [the plan](plans/2026-11-15-firmware-unpacking.md).
+build); compressed tar (`.tar.gz`: decompress it first); opening images inside vendor containers automatically
+(`carve` finds the offset of a SquashFS, ext, Android sparse, OTA payload, cpio, tar or ZIP image, but not of UBI or
+UBIFS; pass it as `image_offset`). The design and its trade-offs are in [the plan](plans/2026-11-15-firmware-unpacking.md).

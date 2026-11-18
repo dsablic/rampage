@@ -46,8 +46,9 @@ Compatibility entries showing only a command name take the same operands and fla
 `--rules` is optional when a [data pack](data-packs.md) supplies that kind of rule. YARA `include` statements
 are refused in every rule set, including user files, packs and agent-supplied rules; each file must stand alone.
 `carve` accepts 1–4096 candidates. Header-estimated extents do not establish that a whole container is valid.
-Inside a SquashFS, ext, Android sparse, OTA payload, cpio, tar or ZIP image whose validated extent fits the file,
-`carve` reports only executables whose headers validate; list the rest with `fs_list`.
+Inside a SquashFS, Android sparse or OTA payload image whose validated extent fits the file, `carve` reports only
+executables whose headers validate; inside such an ext, tar, cpio or ZIP image, every candidate whose header
+validates. The image's notes count what was left out; `fs_list` lists its files.
 `archive-inventory` has independent row/byte budgets and metadata/member references, not native-image offsets.
 See [ZIP32 inventory](archive-inventory.md) for format, path, paging and output limits.
 Search requests accept typed names/addresses for ranges and reference targets, not for immediate constants.
