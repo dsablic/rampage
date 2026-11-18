@@ -90,6 +90,14 @@ VENDORED = [
         ["crates/rampage-detect/data/LICENSE.detect-it-easy"],
     ),
     (
+        "binwalk signature checks",
+        "MIT",
+        "https://github.com/ReFirmLabs/binwalk/tree/v3.1.0/src/signatures",
+        "The ext, tar, bzip2 and Android sparse header checks in crates/rampage-loaders/src/carve.rs are adapted\n"
+        "from binwalk 3.1.0's signature parsers. No binwalk code is linked and no binwalk tool is run.",
+        ["crates/rampage-loaders/LICENSE.binwalk"],
+    ),
+    (
         "Public Suffix List",
         "MPL-2.0",
         "https://publicsuffix.org/list/public_suffix_list.dat (https://github.com/publicsuffix/list)",
