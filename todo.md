@@ -267,7 +267,19 @@ Follow-ups for `carve` (its signature list stays the reference, and its code is 
 - [ ] Wave 2 of the signatures: UBI/UBIFS (with the readers), JFFS2, YAFFS2, CramFS, TRX, DTB, FAT, MBR/GPT,
       UEFI volumes and capsules, LZ4 frames, LZOP, SREC/HEX in a container, and vendor headers (TP-Link, CFE,
       Seama, JBOOT).
-- The opt-in subprocess extractor (the second shape above) is still undecided; unblob hasn't been evaluated.
+
+**unblob evaluated 2026-11-18: not as a dependency or a subprocess; use it as a second format reference.** unblob
+26.6.4 (MIT, Python):
+- It needs Python 3, 20 pip packages (including lief, pyperscan/hyperscan, cryptography and ubi-reader) and 15
+  external tools (7z, sasquatch, debugfs, simg2img, unar and others). With 9 of them missing, most extractions
+  of the composite failed.
+- Recognition on the composite matched binwalk's, including correct extents (every ext, sparse, SquashFS, tar,
+  cpio, xz and bzip2), in 3.4 s and 160 MB. It found nothing in the LZSS-compressed Cortex-M update.
+- Hostile input: 20 MB of repeated gzip headers was still running when it hit the 5-minute timeout (`carve`:
+  0.04 s).
+- The subprocess shape is dropped. It would make users install a Python stack plus native tools, and it adds
+  minutes-long scans on hostile input, while what it adds over native readers is the formats we port anyway.
+  Reopen only if a real sample needs a format we can't port.
 
 ### Other ideas (2026-11-14)
 
