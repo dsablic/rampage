@@ -14,11 +14,12 @@ applies to a TV, camera or speaker.
 | Android sparse images, unsparsed virtually, inner filesystem recognised | done |
 | Android OTA `payload.bin` (major version 2), full payloads: REPLACE, REPLACE_BZ, REPLACE_XZ, ZERO, DISCARD | done; delta operations refused by name |
 | cpio newc/crc, tar (ustar, GNU long names, pax `path`/`linkpath`/`size`) | done |
-| UBI volumes, UBIFS | recognised and refused as "not read yet"; open |
+| UBI volumes (volume table, LEB mapping, duplicate LEBs by sequence number and data CRC) | done (2026-11-18) |
+| UBIFS in a UBI volume or a bare LEB dump: index walk, journal replay, none/LZO/zlib/zstd | done (2026-11-18); xattrs and fscrypt not read |
 | Vendor-variant SquashFS (AVM, LZMA variants, 3.x) | open |
 
 Nesting works through an `inner` chain of entry paths: sparse → ext4 is automatic, OTA → partition → ext4 or
-SquashFS, an image file inside an archive inside an archive, up to 4 layers.
+SquashFS, UBI → volume → UBIFS or SquashFS, an image file inside an archive inside an archive, up to 4 layers.
 
 ## Borrow before building
 
@@ -35,7 +36,7 @@ SquashFS, an image file inside an archive inside an archive, up to 4 layers.
 | Android sparse | own (≈200 lines) | — | `android-sparse-image` has headers only; the format is a chunk list. |
 | OTA payload | own (≈450 lines with a protobuf field reader) | — | `payload_dumper` brings tokio, prost and a CLI; the manifest needs five messages. |
 | cpio, tar | own | — | Listing and slicing needs a few hundred lines; `tar` and `cpio` add `filetime`/writers. |
-| UBI, UBIFS | open | — | `ubifs` 0.1 (MIT) is new and unproven; likely own UBI, and evaluate it for UBIFS. |
+| UBI, UBIFS | own (≈450 and ≈650 lines) | — | Written from the `ubi-media.h`/`ubifs-media.h` layouts; no code from ubi_reader (GPL-3.0) or the kernel. The `ubifs` crate (MIT, 0.1) was not taken: new and unproven, and the reader needs rampage's bounds, ratio metering and journal replay. CRC-32 through flate2's `Crc`; codecs already in the tree. |
 
 binwalk v3 (MIT, Rust) recognises far more formats but extracts by running external tools; rampage does not
 depend on anything being installed. It stays a recognition reference. Nothing here builds or links C.
@@ -90,7 +91,9 @@ A fresh-context review found the extraction escape-safe and these gaps, fixed in
 
 ## Open
 
-- UBI (volume table, LEB mapping) and UBIFS (index tree, LZO/zlib/zstd data nodes); recognised today.
+- UBIFS extended attributes and fscrypt content; UBI fastmap is ignored (the full scan reads every header, so it is
+  not needed); eraseblock sizes that are not powers of two. UBI fixtures come from mtd-utils in a Debian container
+  (tests/fixtures/build-ubi-fsimages.sh).
 - Vendor SquashFS variants and SquashFS 3.x; carve-driven discovery of images inside vendor containers.
 - `carve` does not yet tag ext4, sparse or OTA candidates; `fs_list` with `image_offset` works once an offset is
   known.

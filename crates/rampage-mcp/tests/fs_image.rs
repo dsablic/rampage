@@ -157,9 +157,32 @@ async fn fs_extract_writes_a_nested_partition_and_returns_openable_executables()
 }
 
 #[tokio::test]
+async fn ubi_volumes_open_as_nested_images() {
+    let client = connect(RampageServer::with_groups(Group::ALL)).await;
+    let ubi = fsimage("ubi.img");
+    let volumes = json_of(&call(&client, "fs_list", json!({ "path": ubi })).await);
+    assert_eq!(volumes["layers"][0]["format"], "ubi");
+    assert_eq!(volumes["entries"][0]["path"], "rootfs.img");
+    assert_eq!(volumes["entries"][0]["type"], "image");
+    assert!(volumes["hint"].as_str().unwrap().contains("volumes"), "{volumes}");
+    let files =
+        json_of(&call(&client, "fs_list", json!({ "path": ubi, "inner": ["rootfs.img"], "prefix": "bin" })).await);
+    assert_eq!(files["layers"][1]["format"], "ubifs");
+    assert_eq!(files["layers"][1]["entry"], "rootfs.img");
+    assert!(files["entries"].as_array().unwrap().iter().any(|entry| entry["path"] == "bin/hello"), "{files}");
+    let output = Output::new();
+    let report = json_of(
+        &call(&client, "fs_extract", json!({ "path": ubi, "inner": ["rootfs.img"], "output_dir": output.dir("root") }))
+            .await,
+    );
+    assert_eq!(report["executables"][0]["format"], "elf", "{report}");
+    client.cancel().await.unwrap();
+}
+
+#[tokio::test]
 async fn opening_a_filesystem_image_as_a_binary_points_at_fs_list() {
     let client = connect(RampageServer::default()).await;
-    for name in ["squashfs-gzip.img", "ext4.img", "payload.bin", "ext4.simg"] {
+    for name in ["squashfs-gzip.img", "ext4.img", "payload.bin", "ext4.simg", "ubi.img", "ubifs-lzo.ubifs"] {
         let result = call(&client, "triage_report", json!({ "path": fsimage(name) })).await;
         assert_eq!(result.is_error, Some(true), "{name}");
         assert!(text(&result).contains("fs_list"), "{name}: {}", text(&result));

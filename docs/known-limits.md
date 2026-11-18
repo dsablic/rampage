@@ -77,9 +77,10 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - The [persistent analysis store](mcp.md#persistent-analysis-store) (experimental) saves function discovery
   only (on by default in release builds): other derived results are recomputed on each open, runtime captures and
   byte-patched views are never stored, and an annotation edit does not trigger incremental re-analysis.
-- Firmware filesystem images: UBI and UBIFS are recognised but not read; vendor SquashFS variants, SquashFS 3.x,
-  delta OTA payloads (they need the previous build), compressed tar, and ZIP members that are encrypted or use a
-  method other than stored or deflate are not read. `carve` finds SquashFS, ext2/3/4, Android sparse, OTA payload,
+- Firmware filesystem images: vendor SquashFS variants, SquashFS 3.x, delta OTA payloads (they need the previous
+  build), compressed tar, ZIP members that are encrypted or use a method other than stored or deflate, UBIFS
+  extended attributes and fscrypt-encrypted UBIFS content are not read; UBIFS HMAC authentication is not checked,
+  and UBI eraseblock sizes must be powers of two from 4 KiB to 16 MiB. `carve` finds SquashFS, ext2/3/4, Android sparse, OTA payload,
   cpio and tar images inside a container (pass the offset as `image_offset`), but not UBI, UBIFS, JFFS2, YAFFS2,
   CramFS or vendor headers. Inside a SquashFS, Android sparse or OTA payload image it reports only executables, and
   inside an ext, tar, cpio or ZIP image only candidates whose headers validate; each image's notes count the rest.

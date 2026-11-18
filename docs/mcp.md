@@ -462,7 +462,7 @@ image's notes count what was left out inside it; `fs_list` lists the image's fil
 metadata. Its member ordinals and metadata hashes are not payload validation or extraction-safe paths; whole-record
 JSON pages stay within 60,000 bytes and errors within 4,096 bytes. See [archive inventory](archive-inventory.md).
 `fs_list` and `fs_extract` list and extract firmware filesystem images (SquashFS, ext2/3/4, Android sparse, Android
-OTA payloads, cpio, tar) and ZIP archives (APKs included) in any file, at an `image_offset` or nested through `inner`; `fs_extract` writes into a new
+OTA payloads, cpio, tar, UBI volumes, UBIFS) and ZIP archives (APKs included) in any file, at an `image_offset` or nested through `inner`; `fs_extract` writes into a new
 or empty `output_dir` under traversal, symlink, special-file and size limits and returns the executables it wrote.
 See [firmware filesystem images](firmware-images.md).
 `endpoint_inventory` lists the URLs, hosts, IPs, pins and certificates of a file or a directory tree (paged by

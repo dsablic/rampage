@@ -1,5 +1,5 @@
 //! `fs_list` and `fs_extract`: firmware filesystem images (SquashFS, ext2/3/4, Android sparse, OTA payloads, cpio,
-//! tar) listed and extracted through `rampage-unpack`, with JSON pages bounded like the other file tools.
+//! tar, ZIP, UBI, UBIFS) listed and extracted through `rampage-unpack`, with JSON pages bounded like the other file tools.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -86,6 +86,7 @@ pub fn fs_list(query: &FsListQuery) -> Result<Value, String> {
     let last = listing.layers.last().map(|layer| layer.format);
     let hint = match last {
         Some(Format::OtaPayload) => "partitions (type image) open with inner: [\"<name>.img\"]; fs_extract writes them",
+        Some(Format::Ubi) => "volumes (type image) open with inner: [\"<name>.img\"]; fs_extract writes them",
         _ if listing.entries.iter().any(|entry| entry.kind == rampage_unpack::EntryKind::Image) => {
             "type image entries open with inner: [path]"
         }
@@ -176,8 +177,9 @@ pub fn filesystem_guidance(path: &Path) -> Option<String> {
         Format::OtaPayload => "an Android OTA payload",
         Format::Cpio => "a cpio archive",
         Format::Tar => "a tar archive",
+        Format::Ubi => "a UBI flash image",
+        Format::Ubifs => "a UBIFS filesystem image",
         Format::Zip => return None,
-        Format::Ubi | Format::Ubifs => return None,
     };
     Some(format!(
         "The file is {what}: list it with fs_list and extract it with fs_extract (group `carve`), then open the \

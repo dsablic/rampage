@@ -159,7 +159,7 @@ impl Group {
             Group::Carve => concat!(
                 "Scan files for embedded executables/containers, inventory ",
                 "standalone ZIP32 metadata without extraction, and list and extract firmware filesystem images ",
-                "(SquashFS, ext2/3/4, Android sparse and OTA payloads, cpio, tar), inventory the network endpoints of a ",
+                "(SquashFS, ext2/3/4, Android sparse and OTA payloads, cpio, tar, UBI/UBIFS), inventory the network endpoints of a ",
                 "binary or extracted tree as a router blocklist, and map what a binary can capture (microphone, camera, ",
                 "screen, input) and send (privacy_surface)."
             ),
@@ -860,8 +860,8 @@ pub fn file_tools() -> Vec<FileTool> {
             group: Group::Carve,
             name: "fs_list",
             description: "List a firmware filesystem image (SquashFS, ext2/3/4, Android sparse, OTA payload.bin, cpio, \
-                          tar, ZIP/APK) in any file: path, type, size, mode, link per entry, paged. image_offset reads one \
-                          embedded in a larger file; inner opens nested images (an OTA partition, an image file).",
+                          tar, ZIP/APK, UBI/UBIFS) in any file: path, type, size, mode, link per entry, paged. image_offset reads one \
+                          embedded in a larger file; inner opens nested images (an OTA partition, a UBI volume, an image file).",
             input_schema: schema::<FsListArgs>(),
             handler: |_, input| {
                 let args: FsListArgs = arguments(input)?;
