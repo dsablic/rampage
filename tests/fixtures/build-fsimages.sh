@@ -89,6 +89,9 @@ mksquashfs "$bombs/hole" "$out/holes.sqfs" -b 131072 -noappend -all-root -no-xat
 mksquashfs "$bombs/repeat" "$out/repeat-xz.sqfs" -comp xz -b 1M -noappend -all-root -no-xattrs -mkfs-time 0 \
   -all-time 0 -quiet -no-progress > /dev/null
 
+# The UBI and UBIFS fixtures (ubi.img, ubifs-*.ubifs) come from build-ubi-fsimages.sh, which runs mtd-utils in a
+# Debian container.
+
 # deep-8000.sqfs (8,000 nested directories, uncompressed) is not rebuilt here: backhand's writer takes about 40
 # minutes for it. It came from nested_squashfs(8000) in crates/rampage-unpack/tests/hardening.rs (backhand 0.25.5,
 # mtime 0), run once on a thread with a 1 GiB stack.
