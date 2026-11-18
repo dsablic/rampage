@@ -92,7 +92,7 @@ pub enum EntryKind {
     BlockDevice,
     Fifo,
     Socket,
-    /// A partition or unpacked image inside a container (an OTA partition, an unsparsed image).
+    /// A partition or unpacked image inside a container (an OTA partition, a UBI volume, an unsparsed image).
     Image,
     /// An entry type this reader does not interpret.
     Other,
@@ -180,7 +180,8 @@ pub fn open(source: Source, entry: Option<String>, limits: &Limits, depth: usize
     let size = source.size();
     let format = detect(&*source).ok_or_else(|| {
         UnpackError::Unsupported(
-            "no SquashFS, ext2/3/4, Android sparse, OTA payload, cpio, tar or ZIP image starts here".to_owned(),
+            "no SquashFS, ext2/3/4, Android sparse, OTA payload, cpio, tar, ZIP, UBI or UBIFS image starts here"
+                .to_owned(),
         )
     })?;
     let image: Box<dyn Image> = match format {
@@ -190,6 +191,8 @@ pub fn open(source: Source, entry: Option<String>, limits: &Limits, depth: usize
         Format::Cpio => Box::new(crate::cpio::Cpio::open(source, limits)?),
         Format::Tar => Box::new(crate::tar::Tar::open(source, limits)?),
         Format::Zip => Box::new(crate::zip::Zip::open(source, limits)?),
+        Format::Ubi => Box::new(crate::ubi::Ubi::open(source, limits)?),
+        Format::Ubifs => Box::new(crate::ubifs::Ubifs::open(source, limits)?),
         Format::AndroidSparse => {
             let sparse = crate::sparse::SparseView::open(source)?;
             let notes = sparse.notes();
@@ -202,12 +205,6 @@ pub fn open(source: Source, entry: Option<String>, limits: &Limits, depth: usize
             }
             let image = Box::new(crate::sparse::Unsparsed::new(inner));
             return Ok(Opened { layers: vec![layer], image });
-        }
-        Format::Ubi | Format::Ubifs => {
-            return Err(UnpackError::Unsupported(format!(
-                "{} images are recognised but not read yet; carve or file_layout can still inspect the bytes",
-                if format == Format::Ubi { "UBI" } else { "UBIFS" }
-            )));
         }
     };
     let layer = Layer { format, size, entry, notes: image.notes() };

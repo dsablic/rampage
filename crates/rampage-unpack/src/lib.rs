@@ -1,5 +1,5 @@
 //! Lists and extracts firmware filesystem images: SquashFS 4.0, ext2/3/4, Android sparse images, Android OTA
-//! payloads (full payloads), cpio (newc), tar and ZIP (APK, AAB, JAR), nested inside one another. Every image is treated as hostile:
+//! payloads (full payloads), cpio (newc), tar, ZIP (APK, AAB, JAR), UBI and UBIFS, nested inside one another. Every image is treated as hostile:
 //! see [`Limits`] and [`extract`] for what is enforced. Design: docs/plans/2026-11-15-firmware-unpacking.md.
 
 mod codec;
@@ -14,6 +14,8 @@ mod source;
 mod sparse;
 mod squashfs;
 mod tar;
+mod ubi;
+mod ubifs;
 mod zip;
 
 use std::path::Path;

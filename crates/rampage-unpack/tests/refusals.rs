@@ -186,10 +186,12 @@ fn delta_payloads_are_listed_but_refused_clearly() {
 }
 
 #[test]
-fn ubi_is_recognised_and_refused_as_not_yet_read() {
+fn a_lone_ubi_or_ubifs_magic_is_malformed() {
     let scratch = Scratch::new("ubi");
-    let path = scratch.join("ubi.img");
-    std::fs::write(&path, [b"UBI#".to_vec(), vec![0; 60]].concat()).unwrap();
-    let error = list(&path, At::default(), &[], Limits::default()).unwrap_err().to_string();
-    assert!(error.contains("UBI images are recognised but not read yet"), "{error}");
+    for (name, magic) in [("ubi.img", b"UBI#".to_vec()), ("ubifs.img", 0x0610_1831u32.to_le_bytes().to_vec())] {
+        let path = scratch.join(name);
+        std::fs::write(&path, [magic, vec![0; 60]].concat()).unwrap();
+        let error = list(&path, At::default(), &[], Limits::default()).unwrap_err().to_string();
+        assert!(error.starts_with("malformed ubi"), "{error}");
+    }
 }

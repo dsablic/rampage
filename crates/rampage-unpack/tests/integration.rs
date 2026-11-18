@@ -6,4 +6,5 @@ mod hardening;
 mod refusals;
 mod round_trip;
 mod support;
+mod ubi;
 mod zip;
