@@ -94,10 +94,18 @@ pub fn headerless_triage(path: &Path, reason: &str) -> Result<Value, ApiError> {
         .flatten()
         .collect();
     for candidate in &embedded {
+        let kind = candidate["kind"].as_str().unwrap_or_default();
+        let (tool, why) = match kind {
+            "elf" | "pe" | "mach_o" | "mach_o_fat" => ("triage", "carve found an executable at this offset"),
+            "squashfs" | "ext" | "android_sparse" | "ota_payload" | "cpio" | "tar" | "zip" | "ubi" | "ubifs" => {
+                ("fs_list", "carve found an image fs_list reads at this offset")
+            }
+            _ => continue,
+        };
         next.push(json!({
-            "tool": "triage",
+            "tool": tool,
             "arguments": { "path": path_text, "image_offset": candidate["offset"] },
-            "why": "carve found an executable at this offset",
+            "why": why,
         }));
     }
     let mut then = String::from(
@@ -106,7 +114,7 @@ pub fn headerless_triage(path: &Path, reason: &str) -> Result<Value, ApiError> {
          base_candidates).",
     );
     if components.is_empty() && next.is_empty() {
-        then = "No compressed payload or embedded executable was found: read the regions with file_layout, \
+        then = "No compressed payload, embedded executable or readable image was found: read the regions with file_layout, \
                 inspect_raw_code or a `raw` selector over a region."
             .to_owned();
     }
@@ -121,7 +129,7 @@ pub fn headerless_triage(path: &Path, reason: &str) -> Result<Value, ApiError> {
             "regions_total": layout["bounds"]["regions"]["total"],
         },
         "compressed_components": components,
-        "embedded_executables": embedded,
+        "carve_candidates": embedded,
         "next": next,
         "then": then,
         "limitations": limitations,
@@ -164,5 +172,23 @@ mod tests {
         assert_eq!(probe["arguments"]["expected_output_size"], plain.len(), "{report:#}");
         assert!(report["then"].as_str().unwrap().contains("open_as_raw"), "{report:#}");
         assert_eq!(report["limitations"].as_array().unwrap().len(), 1, "a small file is laid out whole: {report:#}");
+    }
+
+    #[test]
+    fn an_embedded_image_points_at_fs_list_not_triage() {
+        let squashfs =
+            std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/fsimages/squashfs-gzip.img"))
+                .unwrap();
+        let mut file = vec![0x5a; 4096];
+        file.extend(&squashfs);
+        let directory = std::env::temp_dir().join(format!("rampage-headerless-triage-image-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("update.bin");
+        std::fs::write(&path, &file).unwrap();
+        let report = headerless_triage(&path, "no header").unwrap();
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert_eq!(report["carve_candidates"][0]["kind"], "squashfs", "{report:#}");
+        let call = report["next"].as_array().unwrap().iter().find(|call| call["arguments"]["image_offset"] == 4096);
+        assert_eq!(call.map(|call| &call["tool"]), Some(&serde_json::json!("fs_list")), "{report:#}");
     }
 }
