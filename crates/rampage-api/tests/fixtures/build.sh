@@ -28,9 +28,33 @@ cc -target x86_64-linux-gnu -O1 -g0 -o decode-x64.elf decode.c
 cc -target aarch64-linux-gnu -O1 -g0 -o decode-arm64.elf decode.c
 cc -target x86_64-linux-gnu -O1 -g0 -o decode-alloc-x64.elf decode-alloc.c
 cc -target aarch64-linux-gnu -O1 -g0 -o decode-alloc-arm64.elf decode-alloc.c
+# evaluate_function: floats per ABI (SSE, x87 on i686 without SSE, ARM hard and soft float, AArch64), SSE/AVX2
+# vector code, and the imports it models. operator new/delete come from a stub libstdc++ built into a temporary
+# directory, so they are real imports; only the program is kept. leaves out the runtime's debug info.
+cc -target x86_64-linux-gnu -O1 -g0 -o evaluate-float-x64.elf evaluate-float.c
+cc -target x86-linux-gnu -march=i686 -O1 -g0 -o evaluate-float-x86.elf evaluate-float.c
+cc -target arm-linux-gnueabihf -marm -O1 -g0 -o evaluate-float-armhf.elf evaluate-float.c
+cc -target arm-linux-gnueabi -marm -O1 -g0 -o evaluate-float-armel.elf evaluate-float.c
+cc -target aarch64-linux-gnu -O1 -g0 -o evaluate-float-arm64.elf evaluate-float.c
+cc -target x86_64-linux-gnu -O1 -g0 -o evaluate-simd-x64.elf evaluate-simd.c
+models=$(mktemp -d)
+printf '%s\n' 'void *_Znwm(unsigned long s){(void)s;return 0;}' 'void *_Znam(unsigned long s){(void)s;return 0;}' \
+    'void _ZdlPv(void *p){(void)p;}' 'void _ZdaPv(void *p){(void)p;}' >"$models/stdcxx.c"
+cc -target x86_64-linux-gnu -O1 -g0 -shared -fPIC -Wl,-soname,libstdc++.so.6 -o "$models/libstdc++.so.6" \
+    "$models/stdcxx.c"
+cc -target x86_64-linux-gnu -O1 -g0 -o evaluate-models-x64.elf evaluate-models.c "$models/libstdc++.so.6"
+rm -rf "$models"
 rm -f ./*.pdb
 scrub net-client-x64.elf net-client-x64-stripped.elf persist-x64.elf persist-x64.exe decode-x64.elf decode-arm64.elf \
-    decode-alloc-x64.elf decode-alloc-arm64.elf
+    decode-alloc-x64.elf decode-alloc-arm64.elf evaluate-float-x64.elf evaluate-float-x86.elf \
+    evaluate-float-armhf.elf evaluate-float-armel.elf evaluate-float-arm64.elf evaluate-simd-x64.elf \
+    evaluate-models-x64.elf
+# They keep their symbol tables, not the runtime's debug info (llvm-strip from Homebrew LLVM, or $LLVM).
+for name in evaluate-float-x64.elf evaluate-float-x86.elf evaluate-float-armhf.elf evaluate-float-armel.elf \
+    evaluate-float-arm64.elf evaluate-simd-x64.elf evaluate-models-x64.elf; do
+    "${LLVM:-/opt/homebrew/opt/llvm/bin}/llvm-strip" --strip-debug "$name"
+done
+check_paths evaluate-*.elf
 # endpoints.c embeds a self-signed certificate for an invented name, generated once with OpenSSL and pasted in as
 # PEM and DER (the pin is the base64 SHA-256 of its public key):
 #   openssl ecparam -name prime256v1 -genkey -noout -out key.pem
