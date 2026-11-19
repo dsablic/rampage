@@ -1244,3 +1244,22 @@ fn traces_keep_the_first_and_last_instructions_with_their_writes() {
         "{rows:?}"
     );
 }
+
+/// decompile points at evaluate_function for small functions that take arguments and return a value.
+#[test]
+fn decompile_points_small_value_functions_at_evaluate_function() {
+    let registry = crate::tools::tools();
+    let project = fixture("bench-v3/bin/semantics-x86.elf");
+    for (at, hinted) in [("0x12830", true), ("0x128c0", true)] {
+        let (text, failed) = crate::tools::call(&registry, &project, "decompile", json!({"at": at, "view": "code"}));
+        assert!(!failed, "{text}");
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let next = value["next"].as_str().unwrap_or_default();
+        assert_eq!(next.contains(&format!("evaluate_function {{\"at\": \"{at}\"")), hinted, "{at}: {next}");
+    }
+    assert!(crate::tools::evaluate_hint("void f(int a)\n{\n}\n", 0x10).is_none());
+    assert!(crate::tools::evaluate_hint("\nint f(void)\n{\n  return 1;\n}\n", 0x10).is_none());
+    assert!(crate::tools::evaluate_hint("\nuint4 f(uint4 param_1)\n{\n  return param_1;\n}\n", 0x10).is_some());
+    let long = format!("int f(int a)\n{{\n{}}}\n", "  a = a + 1;\n".repeat(400));
+    assert!(crate::tools::evaluate_hint(&long, 0x10).is_none());
+}

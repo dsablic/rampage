@@ -4287,7 +4287,17 @@
           "repeated": false,
           "required": false
         },
+        "--return-float": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
         "--timeout-ms": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--trace": {
           "type": "value",
           "repeated": false,
           "required": false

@@ -2070,11 +2070,19 @@
           "type": "integer|null",
           "required": false
         },
+        "return_float": {
+          "type": "integer|null",
+          "required": false
+        },
         "stubs": {
           "type": "boolean|null",
           "required": false
         },
         "timeout_ms": {
+          "type": "integer|null",
+          "required": false
+        },
+        "trace": {
           "type": "integer|null",
           "required": false
         }

@@ -1999,7 +1999,32 @@ fn decompile_tool(project: &Project, args: DecompileToolArgs) -> Result<Value, A
             region.explain()
         ));
     }
-    decompilation_view(value, args.view).map(|value| with_note(value, thumb_note))
+    let mut value = decompilation_view(value, args.view)?;
+    if let Some(next) = value.get("code").and_then(Value::as_str).and_then(|code| evaluate_hint(code, address)) {
+        value["next"] = Value::String(next);
+    }
+    Ok(with_note(value, thumb_note))
+}
+
+/// Characters of decompiled C up to which a function counts as small enough to point at evaluate_function.
+const EVALUATE_HINT_CHARS: usize = 4000;
+
+/// For a small function that takes arguments and returns a value, a pointer to evaluate_function: agents asked what
+/// such a function returns tend to trace its loops and bit operations by hand, and get them wrong.
+pub(crate) fn evaluate_hint(code: &str, address: u64) -> Option<String> {
+    if code.len() > EVALUATE_HINT_CHARS {
+        return None;
+    }
+    let header = code.lines().find(|line| line.contains('('))?;
+    let (signature, parameters) = header.split_once('(')?;
+    let parameters = parameters.trim_end().trim_end_matches(')').trim();
+    let returns_value = !signature.trim_start().starts_with("void ") && !signature.contains("noreturn");
+    (returns_value && !parameters.is_empty() && parameters != "void").then(|| {
+        format!(
+            "what it returns for given arguments: evaluate_function {{\"at\": \"{address:#x}\", \"args\": [...]}} \
+             runs it (return_bits/return_float for the width); do not trace it by hand"
+        )
+    })
 }
 
 /// `value` with `note` (what was done to the address the caller passed) added: on an object as `note`, on a list
@@ -3030,13 +3055,15 @@ pub fn tools() -> Vec<Tool> {
         tool(
             Group::Core,
             "evaluate_function",
-            "Experimental. Run a function on arguments and return its integer result instead of simulating code by \
-             hand: a p-code interpreter over the bundled Sleigh specifications (x86, x86-64, AArch64, ARM/Thumb, MIPS, \
-             PowerPC, RISC-V); nothing runs natively. Arguments follow the binary's calling convention; buffers are \
-             passed by pointer and returned. Calls inside the image are followed and common C library imports are \
-             modelled. `stop` says why the run ended (returned with result, step_limit, timeout, external_call, \
-             user_op, unmapped_read, ...). For a C int or bool on a 64-bit target read `low_32` or pass return_bits \
-             32.",
+            "Experimental. Run a function on arguments and return its result: use it for any \"what does f return \
+             for X\" question instead of working loops or bit operations out from decompiled code. A p-code \
+             interpreter over the bundled Sleigh specifications (x86/x86-64 with SSE/AVX2, AArch64, ARM/Thumb, MIPS, \
+             PowerPC, RISC-V); nothing runs natively. Arguments follow the binary's calling convention: integers, \
+             {float}, buffers by pointer (returned). Calls inside the image are followed; common C library imports are \
+             modelled. `stop` says why the run ended (returned with result, step_limit, external_call, user_op, ...). \
+             Result width: return_bits 32 for a C int on 64-bit targets (or read low_32), 64 for a 64-bit value on \
+             32-bit targets (EDX:EAX, r1:r0); return_float 32/64 for float/double. trace N shows the first and last \
+             N instructions.",
             |project, request: crate::evaluate::EvaluateRequest| {
                 let report = serde_json::to_value(project.evaluate_function(&request)?)
                     .map_err(|error| ApiError::Invalid(error.to_string()))?;

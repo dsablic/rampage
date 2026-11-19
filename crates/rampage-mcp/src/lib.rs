@@ -146,8 +146,9 @@ fn group_summary(group: Group) -> &'static str {
 
 const INSTRUCTIONS_START: &str = "\
 Start with triage_report: an overview ending with next calls, each naming the `group` to enable. For one \
-question: list_functions (name_contains), decompile, xrefs. rename, annotate_batch and record_finding persist \
-beside the binary.";
+question: list_functions (name_contains), decompile, xrefs. What a function returns for given inputs: run it with \
+evaluate_function, never work loops or bit operations out by hand. rename, annotate_batch and record_finding \
+persist beside the binary.";
 
 const INSTRUCTIONS_DEBUG_START: &str = "\
 Debug: the tools drive a live process through a GDB remote stub the operator started; rampage launches and \
