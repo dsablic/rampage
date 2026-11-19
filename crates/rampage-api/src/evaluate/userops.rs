@@ -254,9 +254,89 @@ fn float_format(last: u8) -> Format {
     if last == b'd' { DOUBLE } else { SINGLE }
 }
 
-/// Whether the interpreter computes the processor operation `name`.
-pub(crate) fn known(name: &str) -> bool {
-    kind(name).is_some()
+/// The instruction set whose processor operations are meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Family {
+    X86,
+    Arm,
+}
+
+/// Whether the interpreter computes the processor operation `name` of `family`.
+pub(crate) fn known(name: &str, family: Family) -> bool {
+    match family {
+        Family::X86 => kind(name).is_some(),
+        Family::Arm => arm_conversion(name).is_some(),
+    }
+}
+
+/// 32-bit ARM VFP/NEON conversions (`vcvt`), which Ghidra's ARM specification leaves as operations on the source
+/// (the first operand; later ones are mode values): (to float, from signed or unsigned integers) or (to integer,
+/// signed, rounding to nearest instead of toward zero).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArmConversion {
+    ToFloat { signed: bool },
+    ToInteger { signed: bool, nearest: bool },
+    FloatWidth,
+}
+
+fn arm_conversion(name: &str) -> Option<ArmConversion> {
+    use ArmConversion::*;
+    Some(match name {
+        "VectorSignedToFloat" => ToFloat { signed: true },
+        "VectorUnsignedToFloat" => ToFloat { signed: false },
+        "VectorFloatToSigned" => ToInteger { signed: true, nearest: false },
+        "VectorFloatToUnsigned" => ToInteger { signed: false, nearest: false },
+        "VectorFloatToSignedRound" | "FloatToSignedRound" => ToInteger { signed: true, nearest: true },
+        "VectorFloatToUnsignedRound" | "FloatToUnsignedRound" => ToInteger { signed: false, nearest: true },
+        "VectorFloatDoubleToSingle" | "VectorFloatSingleToDouble" => FloatWidth,
+        _ => return None,
+    })
+}
+
+/// An ARM conversion of the first operand: elementwise over 32-bit lanes when source and result are the same size
+/// (NEON), else one scalar of the source's and the result's sizes. Integers saturate; NaN converts to 0.
+fn arm(conversion: ArmConversion, operands: &[Operand], out: usize) -> Option<Vec<u8>> {
+    let source = &operands.first()?.bytes;
+    let (count, from, to) = if source.len() == out { (out / 4, 4, 4) } else { (1, source.len(), out) };
+    if !matches!(from, 4 | 8) || !matches!(to, 4 | 8) {
+        return None;
+    }
+    let mut result = vec![0u8; out];
+    for index in 0..count {
+        let value = get(source, from, index);
+        let converted = match conversion {
+            ArmConversion::ToFloat { signed: sign } => {
+                let integer = if sign { i128::from(signed(value, from)) } else { i128::from(value) };
+                float::from_integer(integer, float_of(to)) as u64
+            }
+            ArmConversion::ToInteger { signed: sign, nearest } => {
+                let format = float_of(from);
+                let mut bits = u128::from(value);
+                if nearest {
+                    bits = float::round_integral(bits, format, Rounding::Nearest);
+                }
+                let (low, high) = if sign {
+                    (-(1i128 << (8 * to - 1)), (1i128 << (8 * to - 1)) - 1)
+                } else {
+                    (0, (1i128 << (8 * to)) - 1)
+                };
+                let integer = match float::to_integer(bits, format) {
+                    Some(integer) => integer.clamp(low, high),
+                    None if float::is_nan(bits, format) => 0,
+                    None if float::compare(bits, 0, format) == Some(std::cmp::Ordering::Less) => low,
+                    None => high,
+                };
+                integer as u64 & mask(to)
+            }
+            ArmConversion::FloatWidth => float::convert(u128::from(value), float_of(from), float_of(to)) as u64,
+        };
+        put(&mut result, to, index, converted);
+    }
+    Some(result)
+}
+
+fn float_of(bytes: usize) -> Format {
+    if bytes == 8 { DOUBLE } else { SINGLE }
 }
 
 /// The element `index` of `size` bytes in `bytes` (zero past its end).
@@ -437,9 +517,12 @@ fn crc32c(mut crc: u32, data: &[u8]) -> u32 {
 
 /// Computes the processor operation `name` on `operands` for an `out`-byte result, or `None` when the interpreter
 /// does not know it.
-pub(crate) fn run(name: &str, operands: &[Operand], out: usize) -> Option<Result<Vec<u8>, String>> {
-    let kind = kind(name)?;
-    Some(compute(kind, operands, out).ok_or_else(|| format!("{name} with {} operands", operands.len())))
+pub(crate) fn run(name: &str, family: Family, operands: &[Operand], out: usize) -> Option<Result<Vec<u8>, String>> {
+    let result = match family {
+        Family::X86 => compute(kind(name)?, operands, out),
+        Family::Arm => arm(arm_conversion(name)?, operands, out),
+    };
+    Some(result.ok_or_else(|| format!("{name} with {} operands", operands.len())))
 }
 
 fn compute(kind: Kind, operands: &[Operand], out: usize) -> Option<Vec<u8>> {

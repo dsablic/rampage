@@ -4,7 +4,11 @@
 use serde_json::json;
 
 use super::tests::{fixture_api, returned, run};
-use super::userops::{Operand, known, run as compute};
+use super::userops::{Family, Operand, known};
+
+fn compute(name: &str, operands: &[Operand], out: usize) -> Option<Result<Vec<u8>, String>> {
+    super::userops::run(name, Family::X86, operands, out)
+}
 
 fn register(bytes: &[u8]) -> Operand {
     Operand { bytes: bytes.to_vec(), constant: false }
@@ -46,7 +50,9 @@ fn byte_shuffles_and_masks() {
     assert_eq!(op("pmovmskb", &[register(&signs)], 4), 0xf811u32.to_le_bytes());
     assert_eq!(op("movmskps", &[register(&[0; 4]), register(&signs)], 4), [0b1100, 0, 0, 0]);
     assert_eq!(op("movmskpd", &[register(&[0; 4]), register(&signs)], 4), [0b10, 0, 0, 0]);
-    assert!(known("vpshufb_avx") && known("pmovzxbd") && !known("vpermb_avx512_vbmi") && !known("syscall"));
+    let x86 = |name| known(name, Family::X86);
+    assert!(x86("vpshufb_avx") && x86("pmovzxbd") && !x86("vpermb_avx512_vbmi") && !x86("syscall"));
+    assert!(known("VectorSignedToFloat", Family::Arm) && !known("pshufb", Family::Arm));
 }
 
 #[test]
@@ -433,4 +439,71 @@ fn vector_fixture_functions_match_their_intrinsics() {
 
 fn hex_text(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+// ----------------------------------------------------------------------------------------------------------------
+// The evaluate-float fixture: float arguments and results under each float ABI.
+
+#[test]
+fn float_arguments_and_results_follow_each_abi() {
+    let fixtures = [
+        ("evaluate-float-x64.elf", "XMM0", "sysv"),
+        ("evaluate-float-x86.elf", "ST0", "cdecl"),
+        ("evaluate-float-armhf.elf", "d0", "aapcs_vfp"),
+        ("evaluate-float-armel.elf", "r1", "aapcs"),
+        ("evaluate-float-arm64.elf", "d0", "aapcs64"),
+    ];
+    let float = |report: &super::EvaluateReport| -> String {
+        assert_eq!(report.stop, super::StopReason::Returned, "{}", report.detail);
+        report.result.as_ref().unwrap().float.clone().unwrap()
+    };
+    let int = |report: &super::EvaluateReport| report.result.as_ref().unwrap().signed.as_i64().unwrap();
+    for (name, register, convention) in fixtures {
+        let project = fixture_api(name);
+        let double = json!({"return_float": 64});
+        let report = run(&project, "poly", json!([{"float": 1.5}]), double.clone());
+        assert_eq!((float(&report).as_str(), report.convention.as_str()), ("3.125", convention), "{name}");
+        assert_eq!(report.result.as_ref().unwrap().registers[0], register, "{name}");
+        assert_eq!(report.result.as_ref().unwrap().hex, format!("{:#018x}", 3.125f64.to_bits()), "{name}");
+        assert_eq!(float(&run(&project, "poly", json!([{"float": "-2"}]), double.clone())), "17.125", "{name}");
+        let single = json!({"return_float": 32});
+        let report = run(&project, "grow", json!([{"float": 1, "bits": 32}, 3]), single.clone());
+        assert_eq!(float(&report), "4.5625", "{name}");
+        let report = run(&project, "mean", json!([{"buffer": {"hex": "010000000200000004000000"}}, 3]), double.clone());
+        assert_eq!(float(&report), "2.3333333333333335", "{name}");
+        let int32 = json!({"return_bits": 32});
+        assert_eq!(int(&run(&project, "to_fixed", json!([{"float": 1.25}]), int32.clone())), 81920, "{name}");
+        assert_eq!(int(&run(&project, "to_fixed", json!([{"float": -0.5}]), int32.clone())), -32768, "{name}");
+        assert_eq!(int(&run(&project, "compare", json!([{"float": 1}, {"float": 2}]), int32.clone())), -1, "{name}");
+        assert_eq!(int(&run(&project, "compare", json!([{"float": 2}, {"float": 1}]), int32.clone())), 1, "{name}");
+        assert_eq!(int(&run(&project, "compare", json!([{"float": "nan"}, {"float": 1}]), int32.clone())), 0, "{name}");
+        let args = json!([3, {"float": 0.5}, {"float": 0.25, "bits": 32}, {"value": 2, "bits": 64}]);
+        assert_eq!(float(&run(&project, "mixed", args, double.clone())), "-0.25", "{name}");
+        assert_eq!(float(&run(&project, "halve", json!([{"float": 5}]), single.clone())), "2.5", "{name}");
+    }
+    let project = fixture_api("evaluate-float-x64.elf");
+    let refused =
+        super::tests::try_run_api(&project, "poly", json!([]), json!({"return_float": 64, "return_bits": 64}));
+    assert!(refused.is_err());
+    assert!(super::tests::try_run_api(&project, "poly", json!([]), json!({"return_float": 16})).is_err());
+}
+
+#[test]
+fn arm_conversions_saturate_and_round() {
+    let arm = |name: &str, source: &[u8], out: usize| {
+        super::userops::run(name, Family::Arm, &[register(source), register(&[0])], out).unwrap().unwrap()
+    };
+    assert_eq!(arm("VectorSignedToFloat", &(-3i32).to_le_bytes(), 8), (-3.0f64).to_le_bytes());
+    assert_eq!(arm("VectorUnsignedToFloat", &u32::MAX.to_le_bytes(), 4), 4_294_967_296f32.to_le_bytes());
+    assert_eq!(arm("VectorFloatToSigned", &2.9f64.to_le_bytes(), 4), 2i32.to_le_bytes());
+    assert_eq!(arm("VectorFloatToSigned", &(-2.9f64).to_le_bytes(), 4), (-2i32).to_le_bytes());
+    assert_eq!(arm("VectorFloatToSigned", &1e10f64.to_le_bytes(), 4), i32::MAX.to_le_bytes());
+    assert_eq!(arm("VectorFloatToSigned", &f64::NAN.to_le_bytes(), 4), [0; 4]);
+    assert_eq!(arm("VectorFloatToUnsigned", &(-1.5f32).to_le_bytes(), 4), [0; 4]);
+    assert_eq!(arm("FloatToSignedRound", &2.5f64.to_le_bytes(), 4), 2i32.to_le_bytes());
+    // NEON: four lanes.
+    let lanes: Vec<u8> = [1i32, -2, 3, -4].iter().flat_map(|value| value.to_le_bytes()).collect();
+    let floats: Vec<u8> = [1.0f32, -2.0, 3.0, -4.0].iter().flat_map(|value| value.to_le_bytes()).collect();
+    assert_eq!(arm("VectorSignedToFloat", &lanes, 16), floats);
+    assert!(super::userops::run("VectorSignedToFloat", Family::Arm, &[], 8).unwrap().is_err());
 }

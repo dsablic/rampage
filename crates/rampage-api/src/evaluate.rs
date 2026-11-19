@@ -55,7 +55,8 @@ pub struct EvaluateRequest {
     /// The function's entry: an address (hex) or a symbol name.
     pub at: String,
     /// Up to 16, in order: integers (number, or 0x-hex/decimal string; over 8 hex digits is 64-bit on 32-bit
-    /// targets), {value, bits}, or {buffer: {hex | text, size}} passed by pointer (text gets a NUL).
+    /// targets), {value, bits}, {float, bits: 32|64} (a double by default), or {buffer: {hex | text, size}} passed
+    /// by pointer (text gets a NUL).
     #[serde(default)]
     pub args: Vec<EvaluateArgument>,
     /// Calling convention; default is the binary's own.
@@ -64,6 +65,9 @@ pub struct EvaluateRequest {
     /// Result width in bits (default the register width; 32 for an `int` on 64-bit targets; twice the register
     /// width reads a pair such as EDX:EAX or r1:r0).
     pub return_bits: Option<u32>,
+    /// Read a float result of 32 (float) or 64 (double) bits from the convention's float result register (XMM0,
+    /// ST0 on 32-bit x86, s0/d0, or r0/r1:r0 under ARM soft float) instead of an integer.
+    pub return_float: Option<u32>,
     /// Up to 64 byte writes into the image (copy-on-write) before the run.
     #[serde(default)]
     pub memory: Vec<MemoryWrite>,
@@ -93,6 +97,15 @@ pub struct DetailedArgument {
     pub value: Option<IntegerText>,
     pub bits: Option<u32>,
     pub buffer: Option<BufferArgument>,
+    /// A float argument: a number, or a string (decimal, inf, -inf, nan, or 0x hex of its bits).
+    pub float: Option<FloatText>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum FloatText {
+    Number(f64),
+    Text(String),
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -166,7 +179,7 @@ pub struct EvaluateReport {
     pub detail: String,
     /// Instructions executed, including those of called functions.
     pub steps: u64,
-    /// The integer result, present when the function returned.
+    /// The result, present when the function returned.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<ResultValue>,
     /// Where execution stopped, unless it returned.
@@ -191,9 +204,15 @@ pub struct EvaluateReport {
 pub struct ResultValue {
     pub bits: u32,
     pub hex: String,
-    /// Decimal, as a number up to 64 bits and as a string beyond.
+    /// Decimal, as a number up to 64 bits and as a string beyond; absent for a float result.
+    #[serde(skip_serializing_if = "serde_json::Value::is_null")]
     pub unsigned: serde_json::Value,
+    #[serde(skip_serializing_if = "serde_json::Value::is_null")]
     pub signed: serde_json::Value,
+    /// A float result (return_float) in decimal, the shortest text that reads back as the same value (`hex` holds
+    /// its bits); `inf`, `-inf` and `NaN` as such.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub float: Option<String>,
     /// The registers read, high half first for a pair.
     pub registers: Vec<String>,
     /// Without return_bits on a target wider than 32 bits: the low 32 bits, the value of a C int or bool result,
@@ -265,8 +284,50 @@ pub struct CallRow {
 
 /// One argument after parsing: an integer of `bytes` width, or a buffer.
 enum Prepared {
-    Integer { value: u64, bytes: u32, negative: bool },
+    Integer {
+        value: u64,
+        bytes: u32,
+        negative: bool,
+    },
+    /// A float's bits, of `bytes` (4 or 8).
+    Float {
+        bits: u64,
+        bytes: u32,
+    },
     Buffer(Vec<u8>),
+}
+
+/// A float argument's bits at `bits` width (32 or 64).
+fn parse_float(value: &FloatText, bits: Option<u32>) -> Result<Prepared, ApiError> {
+    let bytes = match bits {
+        None | Some(64) => 8,
+        Some(32) => 4,
+        Some(other) => return Err(invalid(format!("a float argument's bits must be 32 or 64, not {other}"))),
+    };
+    let number = match value {
+        FloatText::Number(number) => *number,
+        FloatText::Text(text) => {
+            let trimmed = text.trim();
+            if let Some(hex) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
+                let raw = u64::from_str_radix(&hex.replace('_', ""), 16)
+                    .map_err(|_| invalid(format!("float argument {text:?} is not hex bits")))?;
+                if bytes == 4 && raw > u64::from(u32::MAX) {
+                    return Err(invalid(format!("float argument {text:?} has more than 32 bits")));
+                }
+                return Ok(Prepared::Float { bits: raw, bytes });
+            }
+            match trimmed.to_ascii_lowercase().as_str() {
+                "inf" | "+inf" | "infinity" => f64::INFINITY,
+                "-inf" | "-infinity" => f64::NEG_INFINITY,
+                "nan" => f64::NAN,
+                other => {
+                    other.parse::<f64>().map_err(|_| invalid(format!("float argument {text:?} is not a number")))?
+                }
+            }
+        }
+    };
+    let bits = if bytes == 4 { u64::from((number as f32).to_bits()) } else { number.to_bits() };
+    Ok(Prepared::Float { bits, bytes })
 }
 
 fn invalid(message: impl Into<String>) -> ApiError {
@@ -334,6 +395,10 @@ fn prepare(argument: &EvaluateArgument, width: u32) -> Result<Prepared, ApiError
     match argument {
         EvaluateArgument::Integer(value) => integer(value, None),
         EvaluateArgument::Detailed(detail) => match (&detail.value, &detail.buffer) {
+            (None, None) if detail.float.is_some() => parse_float(detail.float.as_ref().expect("checked"), detail.bits),
+            _ if detail.float.is_some() => {
+                Err(invalid("an argument object takes exactly one of value, float or buffer"))
+            }
             (Some(value), None) => integer(value, detail.bits),
             (None, Some(buffer)) => {
                 if detail.bits.is_some() {
@@ -355,7 +420,7 @@ fn prepare(argument: &EvaluateArgument, width: u32) -> Result<Prepared, ApiError
                 content.resize(size, 0);
                 Ok(Prepared::Buffer(content))
             }
-            _ => Err(invalid("an argument object takes exactly one of value or buffer")),
+            _ => Err(invalid("an argument object takes exactly one of value, float or buffer")),
         },
     }
 }
@@ -852,13 +917,44 @@ impl Project {
         }
         let target = binary.target();
         let big_endian = binary.big_endian;
-        let abi = Abi::select(binary.arch, binary.format, big_endian, request.convention).map_err(invalid)?;
+        let convention = match request.convention {
+            // An ARM ELF marked for the hard-float ABI passes floats in VFP registers.
+            Convention::Default if binary.arch == Arch::Arm && elf_arm_hard_float(binary) => Convention::AapcsVfp,
+            convention => convention,
+        };
+        let abi = Abi::select(binary.arch, binary.format, big_endian, convention).map_err(invalid)?;
         let width = abi.width;
+        if request.return_float.is_some() && request.return_bits.is_some() {
+            return Err(invalid("pass return_bits or return_float, not both"));
+        }
+        let float_result = match request.return_float {
+            None => None,
+            Some(bits @ (32 | 64)) => Some((bits, convention::float_result(&abi, bits / 8).map_err(invalid)?)),
+            Some(bits) => return Err(invalid(format!("return_float must be 32 or 64, not {bits}"))),
+        };
         let return_bits = request.return_bits.unwrap_or(width * 8);
         if return_bits == 0 || !return_bits.is_multiple_of(8) || return_bits > (2 * width * 8).min(128) {
             return Err(invalid(format!("return_bits must be a multiple of 8 up to {}", (2 * width * 8).min(128))));
         }
         let prepared = request.args.iter().map(|argument| prepare(argument, width)).collect::<Result<Vec<_>, _>>()?;
+        // Floats that travel as integers (the x86-32 stack, ARM soft float) are integers from here on.
+        let as_integers = abi.float == convention::FloatAbi::Integer;
+        let floats: Vec<Option<u32>> = prepared
+            .iter()
+            .map(|argument| match argument {
+                Prepared::Float { bytes, .. } if !as_integers => Some(*bytes),
+                _ => None,
+            })
+            .collect();
+        let prepared: Vec<Prepared> = prepared
+            .into_iter()
+            .map(|argument| match argument {
+                Prepared::Float { bits, bytes } if as_integers => {
+                    Prepared::Integer { value: bits, bytes, negative: false }
+                }
+                argument => argument,
+            })
+            .collect();
         let buffer_total: usize =
             prepared.iter().map(|argument| if let Prepared::Buffer(bytes) = argument { bytes.len() } else { 0 }).sum();
         if buffer_total > MAX_BUFFERS_TOTAL {
@@ -981,9 +1077,13 @@ impl Project {
             decoder_thumb: false,
             mode_switch,
         };
-        let x86 = matches!(binary.arch, Arch::X86 | Arch::X86_64);
-        run.machine.integer_indefinite = x86;
-        install_user_ops(&mut run, thread_base, x86);
+        let family = match binary.arch {
+            Arch::X86 | Arch::X86_64 => Some(userops::Family::X86),
+            Arch::Arm => Some(userops::Family::Arm),
+            _ => None,
+        };
+        run.machine.integer_indefinite = family == Some(userops::Family::X86);
+        install_user_ops(&mut run, thread_base, family);
 
         // Arguments and the stack frame.
         let widths: Vec<u32> = prepared
@@ -995,7 +1095,7 @@ impl Project {
                 _ => width,
             })
             .collect();
-        let places = convention::assign(&abi, &widths, big_endian);
+        let places = convention::assign_with_floats(&abi, &widths, &floats, big_endian).map_err(invalid)?;
         let stack_bytes: u64 = places
             .iter()
             .zip(&widths)
@@ -1033,6 +1133,7 @@ impl Project {
                     let masked = if bytes < 8 { extended & ((1u64 << (bytes * 8)) - 1) } else { extended };
                     (masked, None)
                 }
+                Prepared::Float { bits, .. } => (*bits, None),
                 Prepared::Buffer(content) => {
                     let address = buffer_addresses[index].expect("buffer address");
                     buffers.push((index, address, content.len()));
@@ -1232,7 +1333,11 @@ impl Project {
             steps += 1;
         };
 
-        let result = if stop == StopReason::Returned {
+        let result = if stop == StopReason::Returned
+            && let Some((bits, register)) = float_result
+        {
+            Some(read_float_result(&mut run, &abi, bits, register, big_endian)?)
+        } else if stop == StopReason::Returned {
             let half = width * 8;
             let half_mask = (1u128 << half) - 1;
             let (value, registers) = if return_bits > half {
@@ -1387,7 +1492,7 @@ const NO_EFFECT_USER_OPS: [&str; 12] = [
     "sync",
 ];
 
-fn install_user_ops(run: &mut Run<'_>, thread_base: u64, x86: bool) {
+fn install_user_ops(run: &mut Run<'_>, thread_base: u64, family: Option<userops::Family>) {
     let thread_selectors: Vec<(u32, u64)> = ["FS", "GS"]
         .iter()
         .filter_map(|name| run.decoder.register(name))
@@ -1401,13 +1506,68 @@ fn install_user_ops(run: &mut Run<'_>, thread_base: u64, x86: bool) {
             UserOp::Segment { thread_selectors: thread_selectors.clone(), thread_base: thread_base + THREAD_BYTES / 2 }
         } else if NO_EFFECT_USER_OPS.contains(&name.as_str()) {
             UserOp::Nop(name)
-        } else if x86 && userops::known(&name) {
-            UserOp::Computed(name)
+        } else if let Some(family) = family.filter(|&family| userops::known(&name, family)) {
+            UserOp::Computed(name, family)
         } else {
             UserOp::Other(name)
         };
         run.machine.set_user_op(u64::from(index), op);
     }
+}
+
+/// The float result of `bits` (32 or 64) from `register` (and whether it is the x87 ST0), or from the integer
+/// result registers under ARM soft float.
+fn read_float_result(
+    run: &mut Run<'_>,
+    abi: &Abi,
+    bits: u32,
+    register: Option<(&'static str, bool)>,
+    big_endian: bool,
+) -> Result<ResultValue, ApiError> {
+    let format = if bits == 32 { float::SINGLE } else { float::DOUBLE };
+    let mask = (1u128 << bits) - 1;
+    let (raw, registers) = match register {
+        Some((name, true)) => {
+            let extended = run.get_register(name)? & ((1u128 << 80) - 1);
+            (float::convert(extended, float::EXTENDED, format), vec![name.to_owned()])
+        }
+        Some((name, false)) => (run.get_register(name)? & mask, vec![name.to_owned()]),
+        None if bits <= abi.width * 8 => (run.get_register(abi.result.0)? & mask, vec![abi.result.0.to_owned()]),
+        None => {
+            let (low, high) = convention::result_pair(abi, big_endian);
+            let half = abi.width * 8;
+            let word = (1u128 << half) - 1;
+            let value = ((run.get_register(high)? & word) << half) | (run.get_register(low)? & word);
+            (value, vec![high.to_owned(), low.to_owned()])
+        }
+    };
+    let text = if bits == 32 {
+        format!("{:?}", f32::from_bits(raw as u32))
+    } else {
+        format!("{:?}", f64::from_bits(raw as u64))
+    };
+    Ok(ResultValue {
+        bits,
+        hex: format!("{raw:#0width$x}", width = (bits / 4) as usize + 2),
+        unsigned: serde_json::Value::Null,
+        signed: serde_json::Value::Null,
+        float: Some(text),
+        registers,
+        low_32: None,
+    })
+}
+
+/// Whether an ARM ELF's header flags select the hard-float (VFP) procedure call standard.
+fn elf_arm_hard_float(binary: &Binary) -> bool {
+    const EF_ARM_ABI_FLOAT_HARD: u32 = 0x400;
+    let bytes = binary.image_bytes();
+    if binary.format != rampage_loaders::Format::Elf || bytes.get(..4) != Some(b"\x7fELF") || bytes.get(4) != Some(&1) {
+        return false;
+    }
+    let Some(flags) = bytes.get(0x24..0x28) else { return false };
+    let flags = <[u8; 4]>::try_from(flags).expect("four bytes");
+    let flags = if bytes.get(5) == Some(&2) { u32::from_be_bytes(flags) } else { u32::from_le_bytes(flags) };
+    flags & EF_ARM_ABI_FLOAT_HARD != 0
 }
 
 fn result_value(value: u128, bits: u32, registers: Vec<String>) -> ResultValue {
@@ -1428,6 +1588,7 @@ fn result_value(value: u128, bits: u32, registers: Vec<String>) -> ResultValue {
         hex: format!("{value:#0width$x}", width = (bits / 4) as usize + 2),
         unsigned,
         signed,
+        float: None,
         registers,
         low_32: None,
     }

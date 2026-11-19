@@ -5,7 +5,8 @@ use std::collections::HashMap;
 
 use rampage_decompiler::sleigh_decode::{PcodeOp, Varnode};
 
-/// Ghidra's p-code opcode numbers (`opcodes.hh`), checked against the decoder's operation names by [`opcode_name`].
+/// Ghidra's p-code opcode numbers (`opcodes.hh`), checked against the decoder's operation names by [`opcode_name`]
+/// (Ghidra's `get_opname` spellings: the conversions are `INT2FLOAT`, `TRUNC` and so on, without `FLOAT_`).
 pub(crate) mod op {
     pub const COPY: u32 = 1;
     pub const LOAD: u32 = 2;
@@ -127,12 +128,12 @@ pub(crate) fn opcode_name(code: u32) -> Option<&'static str> {
         FLOAT_NEG => "FLOAT_NEG",
         FLOAT_ABS => "FLOAT_ABS",
         FLOAT_SQRT => "FLOAT_SQRT",
-        FLOAT_INT2FLOAT => "FLOAT_INT2FLOAT",
-        FLOAT_FLOAT2FLOAT => "FLOAT_FLOAT2FLOAT",
-        FLOAT_TRUNC => "FLOAT_TRUNC",
-        FLOAT_CEIL => "FLOAT_CEIL",
-        FLOAT_FLOOR => "FLOAT_FLOOR",
-        FLOAT_ROUND => "FLOAT_ROUND",
+        FLOAT_INT2FLOAT => "INT2FLOAT",
+        FLOAT_FLOAT2FLOAT => "FLOAT2FLOAT",
+        FLOAT_TRUNC => "TRUNC",
+        FLOAT_CEIL => "CEIL",
+        FLOAT_FLOOR => "FLOOR",
+        FLOAT_ROUND => "ROUND",
         PIECE => "PIECE",
         SUBPIECE => "SUBPIECE",
         POPCOUNT => "POPCOUNT",
@@ -203,7 +204,7 @@ pub(crate) enum UserOp {
     /// `TB` itself).
     Nop(String),
     /// A vector or other operation [`super::userops`] computes from its operands.
-    Computed(String),
+    Computed(String, super::userops::Family),
     Other(String),
 }
 
@@ -540,14 +541,14 @@ impl<R: Ram> Machine<R> {
             }
             Some(UserOp::Nop(name)) if current.output.is_some() => Err(Fault::UserOp(name)),
             Some(UserOp::Nop(_)) => Ok(()),
-            Some(UserOp::Computed(name)) => {
+            Some(UserOp::Computed(name, family)) => {
                 let mut operands = Vec::with_capacity(current.inputs.len().saturating_sub(1));
                 for input in current.inputs.iter().skip(1) {
                     let constant = input.space == self.ids.constant;
                     operands.push(super::userops::Operand { bytes: self.read_little(input)?, constant });
                 }
                 let output = current.output.as_ref().ok_or_else(|| Fault::UserOp(name.clone()))?;
-                match super::userops::run(&name, &operands, output.size as usize) {
+                match super::userops::run(&name, family, &operands, output.size as usize) {
                     Some(Ok(bytes)) => self.write_little(output, &bytes),
                     Some(Err(what)) => Err(Fault::Unsupported(format!("processor operation {what}"))),
                     None => Err(Fault::UserOp(name)),

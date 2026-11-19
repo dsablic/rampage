@@ -405,8 +405,18 @@ fn arguments_parse_widths_and_buffers() {
     let parse = |value: serde_json::Value, width| prepare(&serde_json::from_value(value).unwrap(), width);
     let integer = |value: serde_json::Value, width| match parse(value, width).unwrap() {
         Prepared::Integer { value, bytes, .. } => (value, bytes),
+        Prepared::Float { bits, bytes } => (bits, bytes + 100),
         Prepared::Buffer(_) => panic!("buffer"),
     };
+    // Floats: a double by default, a float with bits 32, special values and raw bits.
+    assert_eq!(integer(json!({"float": 1.5}), 4), (1.5f64.to_bits(), 108));
+    assert_eq!(integer(json!({"float": "0.1", "bits": 32}), 8), (u64::from(0.1f32.to_bits()), 104));
+    assert_eq!(integer(json!({"float": "-inf"}), 8), (f64::NEG_INFINITY.to_bits(), 108));
+    assert_eq!(integer(json!({"float": "0x7fc00001", "bits": 32}), 8), (0x7fc0_0001, 104));
+    assert!(parse(json!({"float": "0x1ffffffff", "bits": 32}), 8).is_err());
+    assert!(parse(json!({"float": 1.0, "bits": 16}), 8).is_err());
+    assert!(parse(json!({"float": 1.0, "value": 1}), 8).is_err());
+    assert!(parse(json!({"float": "one"}), 8).is_err());
     assert_eq!(integer(json!(3), 4), (3, 4));
     assert_eq!(integer(json!("0x00F0A500"), 4), (0x00f0_a500, 4));
     assert_eq!(integer(json!("0x0000000100000003"), 4), (0x1_0000_0003, 8));
@@ -448,6 +458,15 @@ fn fixture(path: &str) -> Project {
 pub(super) fn fixture_api(name: &str) -> Project {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
     Project::new(Binary::open(path).unwrap())
+}
+
+pub(super) fn try_run_api(
+    project: &Project,
+    at: &str,
+    args: serde_json::Value,
+    extra: serde_json::Value,
+) -> Result<EvaluateReport, ApiError> {
+    try_run(project, at, args, extra)
 }
 
 fn try_run(

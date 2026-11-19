@@ -19,6 +19,8 @@ pub enum Convention {
     Win64,
     Aapcs64,
     Aapcs,
+    /// AAPCS with the VFP variant: float arguments and results in s/d registers (hard float).
+    AapcsVfp,
     MipsO32,
     MipsN64,
     Riscv,
@@ -33,6 +35,27 @@ pub(crate) enum Link {
     Stack,
     Register(&'static str),
 }
+
+/// Where float arguments and results go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FloatAbi {
+    /// In float registers counted apart from the integer ones: x86-64 System V (XMM0-7) and AArch64 (s/d0-7).
+    Separate { single: &'static [&'static str], double: &'static [&'static str] },
+    /// Win64: the argument's position picks XMM0-3 in place of RCX, RDX, R8, R9.
+    Positional,
+    /// ARM hard float: s0-s15 and d0-d7, a single back-filling a gap a double left.
+    Vfp,
+    /// As integers of their size: on the x86-32 stack (results in ST0) and in ARM soft-float core registers.
+    Integer,
+    /// No float support for this convention.
+    Unsupported,
+}
+
+const XMM: &[&str] = &["XMM0", "XMM1", "XMM2", "XMM3", "XMM4", "XMM5", "XMM6", "XMM7"];
+const SINGLE_V: &[&str] = &["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7"];
+const DOUBLE_V: &[&str] = &["d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7"];
+const VFP_SINGLE: &[&str] =
+    &["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s12", "s13", "s14", "s15"];
 
 /// How a two-register value lines up in the argument registers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +92,7 @@ pub(crate) struct Abi {
     pub stack_alignment: u64,
     /// Apple arm64: stack arguments take their own size and alignment, not 8-byte slots.
     pub natural_stack_slots: bool,
+    pub float: FloatAbi,
 }
 
 const X86_NONE: &[&str] = &[];
@@ -101,9 +125,12 @@ impl Abi {
             global_pointer: None,
             stack_alignment: 16,
             natural_stack_slots: false,
+            float: FloatAbi::Unsupported,
         };
-        let x86 =
-            |convention, registers, pair| base(convention, registers, 4, "ESP", Link::Stack, ("EAX", "EDX"), pair, 0);
+        let x86 = |convention, registers, pair| Abi {
+            float: FloatAbi::Integer,
+            ..base(convention, registers, 4, "ESP", Link::Stack, ("EAX", "EDX"), pair, 0)
+        };
         let abi = match (arch, wanted) {
             (Arch::X86, Convention::Default | Convention::Cdecl) => x86(Convention::Cdecl, X86_NONE, PairRule::Stack),
             (Arch::X86, Convention::Stdcall) => x86(Convention::Stdcall, X86_NONE, PairRule::Stack),
@@ -112,19 +139,37 @@ impl Abi {
             (Arch::X86_64, Convention::Win64) | (Arch::X86_64, Convention::Default)
                 if format == Format::Pe || wanted == Convention::Win64 =>
             {
-                base(Convention::Win64, WIN64, 8, "RSP", Link::Stack, ("RAX", "RDX"), PairRule::Next, 0x20)
+                Abi {
+                    float: FloatAbi::Positional,
+                    ..base(Convention::Win64, WIN64, 8, "RSP", Link::Stack, ("RAX", "RDX"), PairRule::Next, 0x20)
+                }
             }
-            (Arch::X86_64, Convention::Default | Convention::Sysv) => {
-                base(Convention::Sysv, SYSV, 8, "RSP", Link::Stack, ("RAX", "RDX"), PairRule::Next, 0)
-            }
+            (Arch::X86_64, Convention::Default | Convention::Sysv) => Abi {
+                float: FloatAbi::Separate { single: XMM, double: XMM },
+                ..base(Convention::Sysv, SYSV, 8, "RSP", Link::Stack, ("RAX", "RDX"), PairRule::Next, 0)
+            },
             (Arch::Aarch64, Convention::Default | Convention::Aapcs64) => Abi {
                 natural_stack_slots: format == Format::MachO,
+                float: FloatAbi::Separate { single: SINGLE_V, double: DOUBLE_V },
                 ..base(Convention::Aapcs64, AARCH64, 8, "sp", Link::Register("x30"), ("x0", "x1"), PairRule::Next, 0)
             },
-            (Arch::Arm, Convention::Default | Convention::Aapcs) => Abi {
-                stack_alignment: 8,
-                ..base(Convention::Aapcs, ARM, 4, "sp", Link::Register("lr"), ("r0", "r1"), PairRule::Even, 0)
-            },
+            (Arch::Arm, Convention::Default | Convention::Aapcs | Convention::AapcsVfp) => {
+                let hard = wanted == Convention::AapcsVfp;
+                Abi {
+                    stack_alignment: 8,
+                    float: if hard { FloatAbi::Vfp } else { FloatAbi::Integer },
+                    ..base(
+                        if hard { Convention::AapcsVfp } else { Convention::Aapcs },
+                        ARM,
+                        4,
+                        "sp",
+                        Link::Register("lr"),
+                        ("r0", "r1"),
+                        PairRule::Even,
+                        0,
+                    )
+                }
+            }
             (Arch::Mips, Convention::Default | Convention::MipsO32) => Abi {
                 positional_slots: true,
                 entry_registers: &["t9"],
@@ -270,6 +315,85 @@ pub(crate) fn assign(abi: &Abi, widths: &[u32], big_endian: bool) -> Vec<Place> 
         }
     }
     places
+}
+
+/// Assigns argument locations as [`assign`] does, with float arguments (`floats[i]` is a float's bytes, 4 or 8)
+/// placed by the convention's float rules. A float placed as an integer takes `widths[i]` like any other.
+pub(crate) fn assign_with_floats(
+    abi: &Abi,
+    widths: &[u32],
+    floats: &[Option<u32>],
+    big_endian: bool,
+) -> Result<Vec<Place>, String> {
+    let is_float = |index: usize| floats.get(index).copied().flatten();
+    match abi.float {
+        FloatAbi::Integer => Ok(assign(abi, widths, big_endian)),
+        FloatAbi::Unsupported if floats.iter().any(Option::is_some) => {
+            Err(format!("float arguments are not supported under the {} convention", abi.name()))
+        }
+        FloatAbi::Unsupported => Ok(assign(abi, widths, big_endian)),
+        FloatAbi::Positional => {
+            let mut places = assign(abi, widths, big_endian);
+            for (index, place) in places.iter_mut().enumerate() {
+                if is_float(index).is_some()
+                    && let Place::Register(name) = place
+                {
+                    let position = abi.registers.iter().position(|register| register == name).unwrap_or(0);
+                    *place = Place::Register(XMM[position]);
+                }
+            }
+            Ok(places)
+        }
+        FloatAbi::Separate { .. } | FloatAbi::Vfp => {
+            let integers: Vec<u32> =
+                (0..widths.len()).filter(|&index| is_float(index).is_none()).map(|index| widths[index]).collect();
+            let mut integer_places = assign(abi, &integers, big_endian).into_iter();
+            let mut used = [false; 16];
+            let mut next = 0usize;
+            let mut places = Vec::with_capacity(widths.len());
+            for index in 0..widths.len() {
+                let Some(bytes) = is_float(index) else {
+                    places.push(integer_places.next().ok_or("argument placement ran out")?);
+                    continue;
+                };
+                let place = match abi.float {
+                    FloatAbi::Separate { single, double } => {
+                        let list = if bytes == 4 { single } else { double };
+                        next += 1;
+                        list.get(next - 1).map(|name| Place::Register(name))
+                    }
+                    _ if bytes == 4 => used.iter().position(|taken| !taken).map(|slot| {
+                        used[slot] = true;
+                        Place::Register(VFP_SINGLE[slot])
+                    }),
+                    _ => (0..8).find(|&pair| !used[2 * pair] && !used[2 * pair + 1]).map(|pair| {
+                        used[2 * pair] = true;
+                        used[2 * pair + 1] = true;
+                        Place::Register(["d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7"][pair])
+                    }),
+                };
+                places.push(place.ok_or_else(|| {
+                    format!("float arguments past the float argument registers are not supported ({})", abi.name())
+                })?);
+            }
+            Ok(places)
+        }
+    }
+}
+
+/// The register holding a float result of `bytes` (4 or 8), and whether it is the x87 ST0 (an 80-bit value);
+/// `None` when floats return in integer registers (ARM soft float) or the convention has no float support.
+pub(crate) fn float_result(abi: &Abi, bytes: u32) -> Result<Option<(&'static str, bool)>, String> {
+    Ok(match abi.float {
+        FloatAbi::Separate { single, double } => Some((if bytes == 4 { single[0] } else { double[0] }, false)),
+        FloatAbi::Positional => Some(("XMM0", false)),
+        FloatAbi::Vfp => Some((if bytes == 4 { "s0" } else { "d0" }, false)),
+        FloatAbi::Integer if abi.link == Link::Stack => Some(("ST0", true)),
+        FloatAbi::Integer => None,
+        FloatAbi::Unsupported => {
+            return Err(format!("float results are not supported under the {} convention", abi.name()));
+        }
+    })
 }
 
 fn pair_place(first: &'static str, second: &'static str, big_endian: bool) -> Place {
