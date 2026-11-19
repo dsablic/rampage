@@ -467,6 +467,32 @@ fn arm32_follows_helper_calls_and_returns_register_pairs() {
     assert!(report.calls.iter().any(|call| call.name.as_deref() == Some("__aeabi_uldivmod")), "{:?}", report.calls);
 }
 
+/// The suite v3 semantics tasks (crates/rampage-eval/tasks/v3/semantics-*.toml): each task's stripped fixture,
+/// address and arguments, called as an agent would through the tool registry, against the task's exact truth.
+#[test]
+fn suite_v3_semantics_tasks_return_their_truth() {
+    let tasks = [
+        // (fixture, at, args, return_bits, truth)
+        ("bench-v3/bin/semantics-x86.elf", "0x12830", json!(["0x00F0A500", 3]), None, 957_007_382u64),
+        ("bench-v3/bin/semantics-x86.elf", "0x128c0", json!(["0x00012345", "0x0003000D"]), Some(64), 149_560_347_578),
+        ("bench-v3/bin/semantics-arm32.elf", "0x2113c", json!([7, 20]), None, 13_328),
+        ("bench-v3/bin/semantics-arm32.elf", "0x210e0", json!(["0x0000000100000003", 4]), Some(64), 1_122_213_597_782),
+    ];
+    let registry = crate::tools::tools();
+    for (path, at, args, return_bits, truth) in tasks {
+        let project = fixture(path);
+        let mut input = json!({ "at": at, "args": args });
+        if let Some(bits) = return_bits {
+            input["return_bits"] = json!(bits);
+        }
+        let (text, failed) = crate::tools::call(&registry, &project, "evaluate_function", input);
+        assert!(!failed, "{at}: {text}");
+        let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(report["stop"], "returned", "{at}: {text}");
+        assert_eq!(report["result"]["unsigned"], json!(truth), "{at}: {text}");
+    }
+}
+
 #[test]
 fn add_runs_on_every_supported_architecture() {
     for name in [
@@ -959,4 +985,60 @@ fn replays_on_32_bit_pe_stop_at_imports_they_cannot_skip() {
     assert_eq!(report.stop, StopReason::ExternalCall, "{}", report.detail);
     assert!(report.detail.contains("32-bit PE"), "{}", report.detail);
     assert!(found.skipped.is_empty());
+}
+
+/// Survey: processor operations (CALLOTHER) in the instructions of x86 fixtures' functions, by frequency.
+/// `cargo nextest run -p rampage-api --run-ignored only --no-capture -E 'test(/survey_user_ops/)'`.
+#[test]
+#[ignore = "survey, run on demand"]
+fn survey_user_ops() {
+    let mut counts: BTreeMap<String, (u64, String)> = BTreeMap::new();
+    let paths = std::env::var("SURVEY").unwrap_or_default();
+    for path in paths.split(':').filter(|path| !path.is_empty()) {
+        let Ok(binary) = Binary::open_with(path, Some(Arch::X86_64)).or_else(|_| Binary::open(path)) else { continue };
+        let project = Project::new(binary);
+        let Ok(mut decoder) = SleighDecoder::for_emulation(&project.binary.target()) else { continue };
+        let query = crate::FunctionsQuery { limit: Some(1 << 20), ..Default::default() };
+        let Ok(page) = project.functions(&query) else { continue };
+        for function in page.items {
+            let Ok(listing) = project.function_listing(function.address) else { continue };
+            for line in listing.blocks.iter().flatten() {
+                let Some(bytes) =
+                    project.binary.read(line.address, 16).or_else(|| project.binary.read_to_segment_end(line.address))
+                else {
+                    continue;
+                };
+                let decoded = decoder.decode_instruction(bytes, line.address);
+                for op in decoded.pcode.iter().filter(|op| op.opcode == op::CALLOTHER) {
+                    let index = op.inputs.first().and_then(|input| input.offset).unwrap_or(u64::MAX);
+                    let name = decoder.user_op_name(index as u32).unwrap_or_else(|| format!("#{index}"));
+                    let shape = format!(
+                        "{} {} -> {:?} ({:?})",
+                        decoded.mnemonic,
+                        decoded.operand_text,
+                        op.output.as_ref().map(|output| output.size),
+                        op.inputs.iter().skip(1).map(|input| (input.space, input.size)).collect::<Vec<_>>()
+                    );
+                    let entry = counts.entry(name).or_insert((0, shape));
+                    entry.0 += 1;
+                }
+            }
+        }
+    }
+    let mut rows: Vec<_> = counts.into_iter().collect();
+    rows.sort_by_key(|(_, (count, _))| std::cmp::Reverse(*count));
+    for (name, (count, mnemonic)) in rows {
+        println!("{count:8} {name} ({mnemonic})");
+    }
+}
+
+/// Survey: every processor operation the decoder for `SURVEY` (one image) names.
+#[test]
+#[ignore = "survey, run on demand"]
+fn survey_user_op_names() {
+    let path = std::env::var("SURVEY").unwrap_or_default();
+    let Ok(binary) = Binary::open(&path) else { return };
+    let decoder = SleighDecoder::for_emulation(&binary.target()).unwrap();
+    let names: Vec<String> = (0..4096u32).map_while(|index| decoder.user_op_name(index)).collect();
+    println!("{}", names.join(" "));
 }
