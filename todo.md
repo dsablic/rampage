@@ -31,15 +31,24 @@
 This file holds open items. Done sections, including every completed parity phase, are archived verbatim in
 [docs/plans/todo-archive.md](docs/plans/todo-archive.md); each section below that lost done items links to them.
 
-## Next up (agreed 2026-11-17)
+## Next up (agreed 2026-11-19)
 
-1. Finish 1.7.0: Android slice 2 review and merge (`privacy_surface` on an APK and on extracted trees, Dalvik
-   pseudocode, string decryption: done, awaiting review); the tool-description trim; docs audit; release.
-2. Firmware leftovers from the Haiku runs: `xrefs` through Thumb literal pools in Raw images, `find_main` on Raw,
-   ARM `exact_entry`, seeding inferred CRC routines into discovery, rejecting implausible vector-table candidates.
-3. Wider formats: native `carve` signatures for what binwalk recognises (evaluated, no crate dependency),
-   UBI/UBIFS, container tagging for ext4/sparse/OTA, `privacy_surface` over an extracted tree with boot triggers.
-4. Housekeeping: the flaky debugger UI test; rebuilding fixtures that embed local paths, plus a CI check (done 2026-11-19).
+Before these: a Haiku run on the compressed Cortex-M test firmware, its small fixes, then the 1.8.0 release.
+Then, in order, one track at a time, each reviewed before merge:
+
+1. **Finish `evaluate_function`** (closes the measured suite v3 loss: every miss was a hand-evaluated loop): SSE/SIMD
+   CALLOTHER ops, x87 and float returns, a step trace on request, models for `sprintf`/`strdup`/`operator new`,
+   hints so agents reach for it; then a Haiku rerun of suite v3.
+2. **MIPS and Xtensa** for firmware: loading, discovery and decompilation (routers, cameras, ESP32).
+3. **Firmware version diffing**: two update files in, one answer out (functions, strings, endpoints, lock
+   mechanisms that changed), built on unpacking, Raw loading and build diffing.
+4. **Claim verification**: check a stated claim about the binary (a function computes X over a range, a key
+   lives at Y) by evaluation, constants and xrefs; report verified, refuted or unknown with the evidence.
+5. **Incremental analysis and a fuller analysis store**: cache xrefs, strings and types, and re-analyse only what
+   an edit touches.
+
+Done 2026-11-17 to 2026-11-19: Android 1.7.0, firmware leftovers, binwalk/unblob evaluation, carve signature waves
+1–2, UBI/UBIFS readers, housekeeping (fixture paths with a CI check, flaky UI test, read-only annotations).
 
 ## Small hints (from the 1.7.0 docs audit)
 
