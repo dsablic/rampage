@@ -37,13 +37,43 @@ pub(super) enum Stub {
     Calloc,
     Realloc,
     Free,
+    Strdup,
+    Strndup,
+    /// `sprintf(out, format, ...)`.
+    Sprintf,
+    /// `snprintf(out, size, format, ...)`.
+    Snprintf,
+    /// `__sprintf_chk(out, flag, object_size, format, ...)`.
+    SprintfChk,
+    /// `__snprintf_chk(out, size, flag, object_size, format, ...)`.
+    SnprintfChk,
+    /// C++ `operator new` and `new[]`: a heap block, as malloc.
+    New,
+    /// C++ `operator delete` and `delete[]`, sized or not: as free.
+    Delete,
 }
+
+/// Argument words a formatting stand-in reads after its format: the variadic arguments it may consume.
+const VARIADIC_WORDS: usize = 24;
 
 impl Stub {
     /// Integer and pointer arguments read (a fortified variant's trailing object size is not read).
     pub fn arity(self) -> usize {
         match self {
-            Self::Strlen | Self::Toupper | Self::Tolower | Self::Abs | Self::Malloc | Self::Free => 1,
+            Self::Strlen
+            | Self::Toupper
+            | Self::Tolower
+            | Self::Abs
+            | Self::Malloc
+            | Self::Free
+            | Self::Strdup
+            | Self::New
+            | Self::Delete => 1,
+            Self::Strndup => 2,
+            Self::Sprintf => 2 + VARIADIC_WORDS,
+            Self::Snprintf => 3 + VARIADIC_WORDS,
+            Self::SprintfChk => 4 + VARIADIC_WORDS,
+            Self::SnprintfChk => 5 + VARIADIC_WORDS,
             Self::Strnlen
             | Self::Strcpy
             | Self::Strcmp
@@ -60,8 +90,30 @@ impl Stub {
 /// The stand-in for an imported `name`: the C name, its Mach-O spelling with a leading underscore, a fortified
 /// `__name_chk` variant, an MSVC CRT `_name` alias, or an ELF name with a symbol version (`memcpy@GLIBC_2.14`).
 pub(super) fn lookup(name: &str) -> Option<Stub> {
+    // MSVC operator new/new[] (??2@, ??_U@) and delete/delete[] (??3@, ??_V@), any pointer width.
+    if name.starts_with("??2@") || name.starts_with("??_U@") {
+        return Some(Stub::New);
+    }
+    if name.starts_with("??3@") || name.starts_with("??_V@") {
+        return Some(Stub::Delete);
+    }
     let name = name.split('@').next().unwrap_or(name);
     let bare = name.trim_start_matches('_');
+    // Itanium operator new/new[] (size_t of either width, also nothrow) and delete/delete[] (also sized). Aligned
+    // forms (align_val_t) are left out: the heap aligns to 16 bytes only.
+    if !bare.contains("align_val_t") {
+        if ["Znwm", "Znwj", "Znam", "Znaj"].iter().any(|prefix| bare.starts_with(prefix)) {
+            return Some(Stub::New);
+        }
+        if ["ZdlPv", "ZdaPv"].iter().any(|prefix| bare.starts_with(prefix)) {
+            return Some(Stub::Delete);
+        }
+    }
+    match bare {
+        "sprintf_chk" => return Some(Stub::SprintfChk),
+        "snprintf_chk" => return Some(Stub::SnprintfChk),
+        _ => {}
+    }
     // Fortified variants are `__name_chk` (`___name_chk` on Mach-O).
     let base = if bare.len() < name.len() { bare.strip_suffix("_chk").unwrap_or(bare) } else { bare };
     Some(match base {
@@ -85,6 +137,10 @@ pub(super) fn lookup(name: &str) -> Option<Stub> {
         "calloc" => Stub::Calloc,
         "realloc" => Stub::Realloc,
         "free" => Stub::Free,
+        "strdup" => Stub::Strdup,
+        "strndup" => Stub::Strndup,
+        "sprintf" => Stub::Sprintf,
+        "snprintf" => Stub::Snprintf,
         _ => return None,
     })
 }
@@ -164,6 +220,8 @@ pub(super) struct Limits<'a> {
     pub deadline: Instant,
     /// The import called, for stop details.
     pub name: &'a str,
+    /// A variadic 64-bit argument on a 32-bit target starts at an even argument word (AAPCS, MIPS o32).
+    pub even_pairs: bool,
 }
 
 /// Chunks between deadline checks inside one stand-in (1 MiB).
@@ -469,11 +527,263 @@ pub(super) fn call(
             }
             outcome(address, kept)
         }
-        Stub::Free => {
+        Stub::Free | Stub::Delete => {
             if let Some(heap) = ram.heap.as_mut() {
                 heap.sizes.remove(&arg(0));
             }
             outcome(0, 0)
         }
+        Stub::New => {
+            let address = ram.allocate(arg(0), &format!("{name}({})", arg(0)))?;
+            outcome(address, 0)
+        }
+        Stub::Strdup | Stub::Strndup => {
+            let limit = if stub == Stub::Strndup { arg(1) } else { u64::MAX };
+            let length = scan(ram, arg(0), limit, limits, |_, _| {})?;
+            let length = limits.writable(ram, length + 1)? - 1;
+            let address = ram.allocate(length + 1, &format!("{name}({length} bytes)"))?;
+            copy(ram, address, arg(0), length, limits)?;
+            write_chunk(ram, address.wrapping_add(length), &[0])?;
+            outcome(address, 2 * length)
+        }
+        Stub::Sprintf | Stub::Snprintf | Stub::SprintfChk | Stub::SnprintfChk => {
+            // (output, size limit, format, first variadic word)
+            let (output, size, format, first) = match stub {
+                Stub::Sprintf => (arg(0), None, arg(1), 2),
+                Stub::Snprintf => (arg(0), Some(arg(1)), arg(2), 3),
+                Stub::SprintfChk => (arg(0), None, arg(3), 4),
+                _ => (arg(0), Some(arg(1)), arg(4), 5),
+            };
+            let words: Vec<u64> = args.iter().skip(first).map(|&word| word & mask).collect();
+            let text = format_printf(ram, format, &words, width, limits)?;
+            let length = text.len() as u64;
+            let written = match size {
+                None => length + 1,
+                Some(0) => 0,
+                Some(size) => (length + 1).min(size),
+            };
+            if written > 0 {
+                let written = limits.writable(ram, written)?;
+                let mut bytes = text.into_bytes();
+                bytes.truncate(written as usize - 1);
+                bytes.push(0);
+                write_chunk(ram, output, &bytes)?;
+            }
+            outcome(length, length + written)
+        }
+    }
+}
+
+/// Bytes of one formatted result; a longer one stops the run.
+const MAX_FORMATTED: usize = 64 * 1024;
+
+/// The C library's formatting of `format` (read from memory) with integer argument `words`: conversions d i u x
+/// X o c s p and %%, flags - 0 + space #, width and precision (also *), and length modifiers hh h l ll z j t.
+/// Floating-point conversions and %n stop the run.
+fn format_printf(
+    ram: &mut ImageRam<'_>,
+    format: u64,
+    words: &[u64],
+    width: u32,
+    limits: &Limits<'_>,
+) -> Result<String, Stop> {
+    let unsupported = |what: String| (StopReason::UnsupportedOp, format!("library stand-in {}: {what}", limits.name));
+    let mut spec = Vec::new();
+    scan(ram, format, MAX_FORMATTED as u64, limits, |_, chunk| spec.extend_from_slice(chunk))?;
+    let mut next = 0usize;
+    let mut take = |bytes: u32| -> Result<u64, Stop> {
+        // A 64-bit value on a 32-bit target takes two words, from an even word where the convention says so.
+        let value = if bytes > width {
+            if limits.even_pairs {
+                next = next.next_multiple_of(2);
+            }
+            let low = words.get(next).copied();
+            let high = words.get(next + 1).copied();
+            next += 2;
+            match (low, high) {
+                (Some(low), Some(high)) => low | (high << 32),
+                _ => return Err(unsupported("more variadic arguments than it reads".to_owned())),
+            }
+        } else {
+            next += 1;
+            words
+                .get(next - 1)
+                .copied()
+                .ok_or_else(|| unsupported("more variadic arguments than it reads".to_owned()))?
+        };
+        Ok(value)
+    };
+    let mut out = String::new();
+    let mut index = 0usize;
+    while index < spec.len() {
+        if out.len() > MAX_FORMATTED {
+            return Err(unsupported(format!("output longer than {MAX_FORMATTED} bytes")));
+        }
+        let byte = spec[index];
+        index += 1;
+        if byte != b'%' {
+            out.push(char::from(byte));
+            continue;
+        }
+        let (mut left, mut zero, mut plus, mut space, mut alternate) = (false, false, false, false, false);
+        while let Some(&flag) = spec.get(index) {
+            match flag {
+                b'-' => left = true,
+                b'0' => zero = true,
+                b'+' => plus = true,
+                b' ' => space = true,
+                b'#' => alternate = true,
+                _ => break,
+            }
+            index += 1;
+        }
+        let number = |index: &mut usize, take: &mut dyn FnMut(u32) -> Result<u64, Stop>| -> Result<Option<i64>, Stop> {
+            if spec.get(*index) == Some(&b'*') {
+                *index += 1;
+                return Ok(Some(i64::from(take(4)? as u32 as i32)));
+            }
+            let start = *index;
+            while spec.get(*index).is_some_and(u8::is_ascii_digit) {
+                *index += 1;
+            }
+            Ok((start < *index).then(|| {
+                std::str::from_utf8(&spec[start..*index]).ok().and_then(|text| text.parse().ok()).unwrap_or(i64::MAX)
+            }))
+        };
+        let mut field = number(&mut index, &mut take)?;
+        if let Some(negative) = field.filter(|&field| field < 0) {
+            left = true;
+            field = Some(-negative);
+        }
+        let precision = if spec.get(index) == Some(&b'.') {
+            index += 1;
+            Some(number(&mut index, &mut take)?.unwrap_or(0)).filter(|&precision| precision >= 0)
+        } else {
+            None
+        };
+        if field.is_some_and(|field| field > MAX_FORMATTED as i64)
+            || precision.is_some_and(|p| p > MAX_FORMATTED as i64)
+        {
+            return Err(unsupported("a field width or precision past the output limit".to_owned()));
+        }
+        // Integer size in bytes: int by default, long/size_t/pointer-sized for l z j t, 64-bit for ll.
+        let mut size = 4u32;
+        let mut narrow = 0u32;
+        loop {
+            match spec.get(index) {
+                Some(b'h') => narrow += 1,
+                Some(b'l') if spec.get(index + 1) == Some(&b'l') => {
+                    size = 8;
+                    index += 1;
+                }
+                Some(b'l' | b'z' | b't') => size = width,
+                Some(b'j' | b'q' | b'L') => size = 8,
+                _ => break,
+            }
+            index += 1;
+        }
+        let Some(&conversion) = spec.get(index) else { break };
+        index += 1;
+        let (body, sign_or_prefix): (String, String) = match conversion {
+            b'%' => {
+                out.push('%');
+                continue;
+            }
+            b'd' | b'i' => {
+                let raw = take(size)?;
+                let value = match (narrow, size) {
+                    (1, _) => i64::from(raw as u16 as i16),
+                    (n, _) if n >= 2 => i64::from(raw as u8 as i8),
+                    (_, 8) => raw as i64,
+                    _ => i64::from(raw as u32 as i32),
+                };
+                let sign = if value < 0 {
+                    "-"
+                } else if plus {
+                    "+"
+                } else if space {
+                    " "
+                } else {
+                    ""
+                };
+                (digits(value.unsigned_abs().to_string(), precision), sign.to_owned())
+            }
+            b'u' | b'x' | b'X' | b'o' => {
+                let raw = take(size)?;
+                let value = match (narrow, size) {
+                    (1, _) => raw & 0xffff,
+                    (n, _) if n >= 2 => raw & 0xff,
+                    (_, 8) => raw,
+                    _ => raw & 0xffff_ffff,
+                };
+                let text = match conversion {
+                    b'u' => value.to_string(),
+                    b'x' => format!("{value:x}"),
+                    b'X' => format!("{value:X}"),
+                    _ => format!("{value:o}"),
+                };
+                let prefix = match conversion {
+                    b'x' if alternate && value != 0 => "0x",
+                    b'X' if alternate && value != 0 => "0X",
+                    b'o' if alternate && !text.starts_with('0') => "0",
+                    _ => "",
+                };
+                (digits(text, precision), prefix.to_owned())
+            }
+            b'p' => {
+                let value = take(width)?;
+                if value == 0 { ("(nil)".to_owned(), String::new()) } else { (format!("{value:x}"), "0x".to_owned()) }
+            }
+            b'c' => (char::from(take(4)? as u8).to_string(), String::new()),
+            b's' => {
+                let address = take(width)?;
+                let text = if address == 0 {
+                    "(null)".to_owned()
+                } else {
+                    let limit = precision.map_or(MAX_FORMATTED as u64, |precision| precision as u64);
+                    let mut bytes = Vec::new();
+                    scan(ram, address, limit.min(MAX_FORMATTED as u64), limits, |_, chunk| {
+                        bytes.extend_from_slice(chunk)
+                    })?;
+                    bytes.iter().map(|&byte| char::from(byte)).collect()
+                };
+                let text = match precision {
+                    Some(precision) => text.chars().take(precision as usize).collect(),
+                    None => text,
+                };
+                (text, String::new())
+            }
+            other => {
+                return Err(unsupported(format!("conversion %{} is not modelled", char::from(other))));
+            }
+        };
+        let content = sign_or_prefix.len() + body.len();
+        let pad = field.map_or(0, |field| (field as usize).saturating_sub(content));
+        let numeric = !matches!(conversion, b's' | b'c' | b'p');
+        if left {
+            out.push_str(&sign_or_prefix);
+            out.push_str(&body);
+            out.extend(std::iter::repeat_n(' ', pad));
+        } else if zero && numeric && precision.is_none() {
+            out.push_str(&sign_or_prefix);
+            out.extend(std::iter::repeat_n('0', pad));
+            out.push_str(&body);
+        } else {
+            out.extend(std::iter::repeat_n(' ', pad));
+            out.push_str(&sign_or_prefix);
+            out.push_str(&body);
+        }
+    }
+    Ok(out)
+}
+
+/// `text` (decimal or hex digits) padded with zeros to `precision` digits; precision 0 prints 0 as nothing.
+fn digits(text: String, precision: Option<i64>) -> String {
+    match precision {
+        Some(0) if text == "0" => String::new(),
+        Some(precision) if (precision as usize) > text.len() => {
+            format!("{}{text}", "0".repeat(precision as usize - text.len()))
+        }
+        _ => text,
     }
 }

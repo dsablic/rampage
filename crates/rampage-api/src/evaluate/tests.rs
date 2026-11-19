@@ -804,10 +804,11 @@ fn library_names_map_to_stand_ins_across_platforms() {
         ("calloc", Stub::Calloc),
         ("realloc", Stub::Realloc),
         ("_free", Stub::Free),
+        ("_strdup", Stub::Strdup),
     ] {
         assert_eq!(lookup(name), Some(stub), "{name}");
     }
-    for name in ["puts", "__stack_chk_fail", "strlen_chk", "_strdup", "memcpy_s", "#12", ""] {
+    for name in ["puts", "__stack_chk_fail", "strlen_chk", "memcpy_s", "#12", ""] {
         assert_eq!(lookup(name), None, "{name}");
     }
 }
@@ -831,7 +832,7 @@ fn get(ram: &mut ImageRam<'_>, address: u64, length: usize) -> Vec<u8> {
 }
 
 fn limits(bytes: u64, name: &str) -> stubs::Limits<'_> {
-    stubs::Limits { bytes, deadline: Instant::now() + Duration::from_secs(60), name }
+    stubs::Limits { bytes, deadline: Instant::now() + Duration::from_secs(60), name, even_pairs: false }
 }
 
 #[test]
@@ -846,7 +847,7 @@ fn long_stand_ins_stream_and_stop_at_memory_and_time_limits() {
     // A past deadline stops a long stand-in.
     let mut ram = stub_ram(&project);
     ram.map(0x7200_0000, vec![b'x'; 2 << 20]);
-    let late = stubs::Limits { bytes: u64::MAX, deadline: Instant::now(), name: "strlen" };
+    let late = stubs::Limits { bytes: u64::MAX, deadline: Instant::now(), name: "strlen", even_pairs: false };
     let error = stubs::call(Stub::Strlen, &[0x7200_0000], 8, &mut ram, &late).unwrap_err();
     assert_eq!(error.0, StopReason::Timeout, "{}", error.1);
     // Copies stream in chunks, across chunk boundaries and through an overlap in both directions.
@@ -1115,4 +1116,96 @@ fn survey_user_op_names() {
     let decoder = SleighDecoder::for_emulation(&binary.target()).unwrap();
     let names: Vec<String> = (0..4096u32).map_while(|index| decoder.user_op_name(index)).collect();
     println!("{}", names.join(" "));
+}
+
+#[test]
+fn formatting_duplicating_and_cpp_allocation_imports_run_as_models() {
+    let project = fixture_api("evaluate-models-x64.elf");
+    let describe = |name: &str, value: i64, size: usize| {
+        let args = json!([{"buffer": {"size": 128}}, size, {"buffer": {"text": name}}, value]);
+        let report = run(&project, "describe", args, json!({"return_bits": 32}));
+        (returned(&report), report.buffers[0].text.clone().unwrap_or_default())
+    };
+    let full = "dev=00042/2a/Q%|ab    |      42|2A  |-42|126|360777252864";
+    assert_eq!(describe("dev", 42, 128), (full.len() as u64, full.to_owned()));
+    let negative = "x=-0007/fffffff9/:%|ab    |4294967289|FFFFFFF9|+7|-21|-60129542144";
+    assert_eq!(describe("x", -7, 128), (negative.len() as u64, negative.to_owned()));
+    // snprintf keeps size - 1 characters and returns the full length.
+    assert_eq!(describe("dev", 42, 10), (full.len() as u64, full[..9].to_owned()));
+    let report = run(&project, "label", json!([{"buffer": {"size": 32}}, 5]), json!({"return_bits": 32}));
+    assert_eq!((returned(&report), report.buffers[0].text.as_deref()), (13, Some("[  5:id :005]")));
+
+    let text = "Hello, models!";
+    let report = run(&project, "shout", json!([{"buffer": {"text": text}}]), json!({"return_bits": 32}));
+    let hash = text
+        .to_ascii_uppercase()
+        .bytes()
+        .fold(2_166_136_261u32, |hash, byte| (hash ^ u32::from(byte)).wrapping_mul(16_777_619));
+    assert_eq!(returned(&report), u64::from(hash));
+    assert_eq!(report.buffers[0].text.as_deref(), Some(text), "the copy is changed, not the argument");
+
+    for (count, sum) in [(5u64, 30u64), (4, 18), (1, 0)] {
+        let report = run(&project, "list_sum", json!([count]), json!({"return_bits": 32}));
+        assert_eq!(returned(&report), sum, "{count}");
+        let names: Vec<&str> = report.stubbed.iter().map(|row| row.name.as_str()).collect();
+        for import in ["_Znwm", "_Znam", "_ZdlPv", "_ZdaPv"] {
+            assert!(names.iter().any(|name| name.starts_with(import)), "{import} in {names:?}");
+        }
+    }
+}
+
+#[test]
+fn model_names_and_32_bit_variadic_pairs() {
+    for (name, stub) in [
+        ("??2@YAPEAX_K@Z", Some(Stub::New)),
+        ("??_U@YAPAXI@Z", Some(Stub::New)),
+        ("??3@YAXPEAX_K@Z", Some(Stub::Delete)),
+        ("_Znwj", Some(Stub::New)),
+        ("__ZnamRKSt9nothrow_t", Some(Stub::New)),
+        ("_ZdlPvm", Some(Stub::Delete)),
+        ("_ZnwmSt11align_val_t", None),
+        ("__sprintf_chk", Some(Stub::SprintfChk)),
+        ("___snprintf_chk", Some(Stub::SnprintfChk)),
+        ("snprintf@GLIBC_2.2.5", Some(Stub::Snprintf)),
+        ("_sprintf", Some(Stub::Sprintf)),
+        ("strndup", Some(Stub::Strndup)),
+        ("__strdup", Some(Stub::Strdup)),
+        ("vsprintf", None),
+    ] {
+        assert_eq!(stubs::lookup(name), stub, "{name}");
+    }
+    let project = fixture("bin/hello-x64.elf");
+    let mut ram = stub_ram(&project);
+    put(&mut ram, 0x7000_0100, b"%d|%lld|%s|%5.2s|%-3c|%#x|%p|%hhd|%.0d\0");
+    put(&mut ram, 0x7000_0200, b"words\0");
+    // A 32-bit AAPCS call: format in r1, so r2 holds 7 and the 64-bit value starts at the next even word (r3 is
+    // skipped); the words are (out, format, 7, pad, low, high, ...).
+    let args = [
+        0x7000_0000,
+        0x7000_0100,
+        7,
+        0xdead,
+        0x0000_0002,
+        0x0000_0001,
+        0x7000_0200,
+        0x7000_0200,
+        0x41,
+        255,
+        0,
+        0x1ff,
+        0,
+    ];
+    let mut even = limits(1 << 20, "sprintf");
+    even.even_pairs = true;
+    let outcome = stubs::call(Stub::Sprintf, &args, 4, &mut ram, &even).unwrap();
+    let expected = "7|4294967298|words|   wo|A  |0xff|(nil)|-1|";
+    assert_eq!(get(&mut ram, 0x7000_0000, expected.len() + 1), [expected.as_bytes(), &[0]].concat());
+    assert_eq!(outcome.value, expected.len() as u64);
+    // Floating-point conversions stop the run.
+    put(&mut ram, 0x7000_0300, b"%f\0");
+    let error = stubs::call(Stub::Sprintf, &[0x7000_0000, 0x7000_0300, 0], 8, &mut ram, &limits(1 << 20, "sprintf"));
+    assert_eq!(error.unwrap_err().0, StopReason::UnsupportedOp);
+    // strndup copies at most n bytes and terminates the copy.
+    let copy = stub(&mut ram, Stub::Strndup, &[0x7000_0200, 3]);
+    assert_eq!(get(&mut ram, copy, 4), b"wor\0");
 }

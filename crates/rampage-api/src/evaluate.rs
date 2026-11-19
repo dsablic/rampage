@@ -1265,8 +1265,13 @@ impl Project {
                 break (StopReason::Timeout, format!("stopped after {timeout_ms} ms (timeout_ms)"));
             }
             if let Some(name) = &stand_in {
-                let limits =
-                    Limits { bytes: (max_steps - steps).saturating_mul(BYTES_PER_STEP), deadline, name: name.as_str() };
+                let limits = Limits {
+                    bytes: (max_steps - steps).saturating_mul(BYTES_PER_STEP),
+                    deadline,
+                    name: name.as_str(),
+                    even_pairs: stub_abi.as_ref().unwrap_or(&abi).pair == convention::PairRule::Even
+                        || stub_abi.as_ref().unwrap_or(&abi).positional_slots,
+                };
                 match run.call_import(stub, stub_abi.as_ref().unwrap_or(&abi), &limits) {
                     Ok((target, cost)) => {
                         let rows = if stub.is_some() { &mut stubbed } else { &mut skipped };
