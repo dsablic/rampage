@@ -115,5 +115,5 @@ blocklist. See [endpoint inventory and blocklists](endpoint-inventory.md).
 Vendor SquashFS variants and SquashFS 3.x; UBIFS extended attributes and fscrypt-encrypted content; UBI images
 whose eraseblock size is not a power of two; delta OTA payloads (by design: they need the previous
 build); compressed tar (`.tar.gz`: decompress it first); opening images inside vendor containers automatically
-(`carve` finds the offset of a SquashFS, ext, Android sparse, OTA payload, cpio, tar or ZIP image, but not of UBI or
-UBIFS; pass it as `image_offset`). The design and its trade-offs are in [the plan](plans/2026-11-15-firmware-unpacking.md).
+(`carve` finds the offset of a SquashFS, ext, UBI, UBIFS, Android sparse, OTA payload, cpio, tar or ZIP image, also
+inside TRX, FAT, MBR/GPT or UEFI containers; pass it as `image_offset`). The design and its trade-offs are in [the plan](plans/2026-11-15-firmware-unpacking.md).

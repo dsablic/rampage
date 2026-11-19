@@ -80,10 +80,15 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - Firmware filesystem images: vendor SquashFS variants, SquashFS 3.x, delta OTA payloads (they need the previous
   build), compressed tar, ZIP members that are encrypted or use a method other than stored or deflate, UBIFS
   extended attributes and fscrypt-encrypted UBIFS content are not read; UBIFS HMAC authentication is not checked,
-  and UBI eraseblock sizes must be powers of two from 4 KiB to 16 MiB. `carve` finds SquashFS, ext2/3/4, Android sparse, OTA payload,
-  cpio and tar images inside a container (pass the offset as `image_offset`), but not UBI, UBIFS, JFFS2, YAFFS2,
-  CramFS or vendor headers. Inside a SquashFS, Android sparse or OTA payload image it reports only executables, and
-  inside an ext, tar, cpio or ZIP image only candidates whose headers validate; each image's notes count the rest.
+  and UBI eraseblock sizes must be powers of two from 4 KiB to 16 MiB. `carve` finds SquashFS, ext2/3/4, UBI,
+  UBIFS, JFFS2, CramFS, Android sparse, OTA payload, cpio and tar images inside a container (pass the offset as
+  `image_offset`), and TRX, device tree, MBR/GPT, FAT and UEFI containers, but not YAFFS2 (no checksum to tell it
+  from data) or vendor headers (TP-Link, CFE, Seama, JBOOT). MBR and GPT disks are found only at 512-byte-aligned
+  offsets with 512-byte sectors, FAT volumes only with the "FAT" type string in their boot sector, UBI images only
+  with power-of-two erase blocks, and LZ4 and lzop streams have no extent. Inside a SquashFS, UBI, UBIFS, JFFS2,
+  CramFS, Android sparse or OTA payload image it reports only executables, and inside an ext, tar, cpio or ZIP
+  image only candidates whose headers validate; each image's notes count the rest. `fs_list` does not read JFFS2,
+  CramFS or the containers.
 - `endpoint_inventory` matches endpoints lexically: addresses built at run time, encrypted or compressed data and
   IPv4 addresses stored as integers in code are not found. `privacy_surface` on a directory analyses only programs
   that import a capture API or name a capture device, and matches init files to programs by path; see its
