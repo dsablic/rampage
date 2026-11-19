@@ -39,7 +39,7 @@ This file holds open items. Done sections, including every completed parity phas
    ARM `exact_entry`, seeding inferred CRC routines into discovery, rejecting implausible vector-table candidates.
 3. Wider formats: native `carve` signatures for what binwalk recognises (evaluated, no crate dependency),
    UBI/UBIFS, container tagging for ext4/sparse/OTA, `privacy_surface` over an extracted tree with boot triggers.
-4. Housekeeping: the flaky debugger UI test; rebuilding fixtures that embed local paths, plus a CI check.
+4. Housekeeping: the flaky debugger UI test; rebuilding fixtures that embed local paths, plus a CI check (done 2026-11-19).
 
 ## Small hints (from the 1.7.0 docs audit)
 
@@ -217,11 +217,11 @@ decoded code.
   - run-to-run variance is large (run 4 reached the RTOS startup, run 5 stopped at the jump fragment): consider
     `binary_info` naming the scatter jump target's enclosing function and the first functions worth reading;
     done: `raw.starting_points`.
-- [ ] **Flaky UI test.** `rampage-ui` `debugger::tests::local_socket::genuine_save_refusal_remains_typed_until_resources_are_recorded_despite_obsolete_binding`
+- [x] **Flaky UI test.** `rampage-ui` `debugger::tests::local_socket::genuine_save_refusal_remains_typed_until_resources_are_recorded_despite_obsolete_binding`
   fails intermittently: locally with BrokenPipe on its socket, and on CI Linux ARM64 (2badb62) with "Harness::run
   exceeded max_steps (4)" from a text-selection repaint in `inspection_harness`. Use `run_steps` or wait for the
   socket explicitly.
-- [ ] **Read-only annotations for file tools.** MCP lists read-only file tools (`list_dir`, `decode_file_range`,
+- [x] **Read-only annotations for file tools.** MCP lists read-only file tools (`list_dir`, `decode_file_range`,
   `file_layout`, `carve`, ...) without annotations, which the MCP spec treats as possibly destructive; give them
   `read_only(true)`.
 

@@ -6,6 +6,11 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- File tools that only read (`list_dir`, `carve`, `fs_list`, `file_layout`, `dex_metadata` and others) carry the
+  MCP read-only annotation; `query_debugger` is read-only and open-world.
+- Committed fixtures no longer carry local paths. Zig fixture builds blank the start-file and cache directories zig
+  writes into debug info, Go fixtures build with `-trimpath`, and CI fails on any tracked file naming a home or
+  temp directory. Fixed a flaky debugger UI test.
 - `carve` recognises UBI and UBIFS images, JFFS2 and CramFS file systems, TRX containers, device trees (and FIT
   images), LZ4 frames, lzop files, MBR and GPT disks (at 512-byte-aligned offsets), FAT12/16/32 volumes, and UEFI
   firmware volumes and capsules, each checked by its CRC or checksum with header checks ported from binwalk.
