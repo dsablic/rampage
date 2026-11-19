@@ -50,6 +50,18 @@ Then, in order, one track at a time, each reviewed before merge:
 Done 2026-11-17 to 2026-11-19: Android 1.7.0, firmware leftovers, binwalk/unblob evaluation, carve signature waves
 1–2, UBI/UBIFS readers, housekeeping (fixture paths with a CI check, flaky UI test, read-only annotations).
 
+## Haiku suite v3 rerun after evaluate_function (2026-11-19)
+
+rampage only, 1 rep, label v3-haiku-evaluate-2026-11-19 (target/bench/h2h): 20/21, semantics 4/4 in 1–2 calls
+each, $0.08. Earlier Haiku passes: 19/21 and 17/21, semantics 4/4 and 3/4. The miss (type-fields-written) passed in
+both earlier passes, so it is likely model variance. Tool errors seen, as small follow-ups:
+- [ ] `inspect_jump_table` is ARM64-only; the agent tried it on an x86-64 switch. Support x86 (and ARM32) tables or
+      point at the tool that answers switches there.
+- [ ] Wrong argument names still cost a retry: `xrefs` `target` (meant `to`), `inspect_data` `count` (meant
+      `size`), `class_evidence` `class_name`. Consider unambiguous aliases, or name the closest tool for filters.
+- [ ] `get_type` on a Go type by its full import path (`github.com/.../restic.Snapshot`) fails; accept the full
+      path as well as the package-qualified name.
+
 ## Small hints (from the 1.7.0 docs audit)
 
 - [x] `list_dir`'s `next` hint doesn't mention ZIP/APK (`fs_list`, `dex_metadata`).
