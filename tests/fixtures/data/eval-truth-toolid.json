@@ -513,6 +513,13 @@
     }
   },
   "excluded": {
+    "../../../crates/rampage-api/tests/fixtures/evaluate-float-x64.elf": "an evaluate_function fixture built with zig cc and stripped of the runtime's debug info, from which zig is identified; that toolchain is scored through decode-alloc-*",
+    "../../../crates/rampage-api/tests/fixtures/evaluate-float-x86.elf": "an evaluate_function fixture built with zig cc and stripped of the runtime's debug info, from which zig is identified; that toolchain is scored through decode-alloc-*",
+    "../../../crates/rampage-api/tests/fixtures/evaluate-float-armhf.elf": "an evaluate_function fixture built with zig cc and stripped of the runtime's debug info, from which zig is identified; that toolchain is scored through decode-alloc-*",
+    "../../../crates/rampage-api/tests/fixtures/evaluate-float-armel.elf": "an evaluate_function fixture built with zig cc and stripped of the runtime's debug info, from which zig is identified; that toolchain is scored through decode-alloc-*",
+    "../../../crates/rampage-api/tests/fixtures/evaluate-float-arm64.elf": "an evaluate_function fixture built with zig cc and stripped of the runtime's debug info, from which zig is identified; that toolchain is scored through decode-alloc-*",
+    "../../../crates/rampage-api/tests/fixtures/evaluate-simd-x64.elf": "an evaluate_function fixture built with zig cc and stripped of the runtime's debug info, from which zig is identified; that toolchain is scored through decode-alloc-*",
+    "../../../crates/rampage-api/tests/fixtures/evaluate-models-x64.elf": "an evaluate_function fixture built with zig cc and stripped of the runtime's debug info, from which zig is identified; that toolchain is scored through decode-alloc-*",
     "../../../crates/rampage-api/tests/fixtures/endpoint-blocklists": "a directory of golden blocklist files for endpoint_blocklist, not a binary",
     "../bin/objc-dispatch-arm64.macho": "an Objective-C message-dispatch fixture built with Apple clang; that toolchain is scored through hello-*.macho",
     "../bin/objc-dispatch-arm64-stripped.macho": "an Objective-C message-dispatch fixture built with Apple clang; that toolchain is scored through hello-*.macho",
