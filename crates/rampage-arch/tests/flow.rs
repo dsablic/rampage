@@ -436,7 +436,7 @@ fn mips_pic_global_pointer_follows_the_function() {
         at += 4;
         (insn.flow, insn.data_ref, insn.accesses)
     };
-    decoder.begin_run();
+    decoder.begin_function(AT);
     // lui $v0, 1; addiu $v0, $v0, 0x7ff0; addu $s0, $v0, $t9; sw $s0, 16($sp)
     for hex in ["3c020001", "24427ff0", "00598021", "afb00010"] {
         step(&mut decoder, hex);
@@ -456,9 +456,36 @@ fn mips_pic_global_pointer_follows_the_function() {
     decoder.reset();
     assert_eq!(step(&mut decoder, "8fa30010").1, None);
     assert_eq!(step(&mut decoder, "8c618018"), (Flow::Next, Some(0x11008), true));
+    // The slot is forgotten by an overlapping narrower store (sb $zero, 17($sp)), by a store through $fp, which may
+    // alias $sp (sw $zero, 16($fp)), and by a change of its base register (addiu $sp, $sp, -8).
+    for clobber in ["a3a00011", "afc00010", "27bdfff8"] {
+        step(&mut decoder, "afb00010");
+        step(&mut decoder, clobber);
+        step(&mut decoder, "8fa30010");
+        assert_eq!(step(&mut decoder, "8c618018").1, None, "after {clobber}");
+    }
     // A new function forgets them all.
     decoder.begin_run();
     assert_eq!(step(&mut decoder, "8e018018").1, None);
+}
+
+/// A run that starts at a block (search, signatures) assumes nothing about `$t9`: GCC's `jr $t9` after a GOT load
+/// and a null check stays an indirect jump, not a jump to the block itself; nor does a function run whose first
+/// instruction is not its entry.
+#[test]
+fn mips_block_runs_assume_no_entry_t9() {
+    let target = Target { global_pointer: Some(0x1_8ff0), ..big_endian(Arch::Mips) };
+    let mut decoder = decoder(&target).unwrap();
+    for begin in [None, Some(AT - 0x20)] {
+        match begin {
+            None => decoder.begin_run(),
+            Some(entry) => decoder.begin_function(entry),
+        }
+        // jr $t9; nop
+        assert_eq!(decoder.decode(&bytes("03200008"), AT).flow, Flow::IndirectJump);
+    }
+    decoder.begin_function(AT);
+    assert_eq!(decoder.decode(&bytes("03200008"), AT).flow, Flow::Jump(AT));
 }
 
 #[test]

@@ -552,39 +552,59 @@ fn thumb_wide_constants(bytes: &[u8], base: u64) -> Vec<(u64, u32)> {
 }
 
 /// CRC polynomials MIPS code forms in a register, in the discovered functions: a 32-bit one from a `lui` and
-/// `ori`/`addiu` pair (the decoder's formed constant), and a 16-bit one as an instruction's immediate (`xori $v0,
-/// $v0, 0xa001` in a table-less CRC-16 loop). Returns the 32-bit sites, then the weaker 16-bit ones.
+/// `ori`/`addiu` pair (the decoder's formed constant), and a 16-bit one as an instruction's immediate. Small numbers
+/// such as 0x1021 are common, so a 16-bit one counts only in a function that also shifts by one bit and XORs, as a
+/// bitwise CRC-16 loop does (`xori $v0, $v0, 0xa001` is both). Returns at most 16 of each, the 32-bit sites first.
 type PolynomialSite = (u64, &'static str, String);
 fn mips_polynomial_sites(project: &Project) -> (Vec<PolynomialSite>, Vec<PolynomialSite>) {
+    const MAX_SITES: usize = 16;
     let (mut wide, mut narrow) = (Vec::new(), Vec::new());
     let (Ok(analysis), Ok(mut decoder)) = (project.analysis(), crate::decoder::project_decoder(project)) else {
         return (wide, narrow);
     };
     for function in &analysis.program.functions {
-        decoder.begin_run();
+        if wide.len() >= MAX_SITES && narrow.len() >= MAX_SITES {
+            break;
+        }
+        decoder.begin_function(function.address);
+        let (mut shifts_by_one, mut xors) = (false, false);
+        let mut candidates = Vec::new();
         for block in &function.blocks {
             decoder.reset();
             let mut at = block.start;
-            while at < block.end && wide.len() < 16 && narrow.len() < 16 {
+            while at < block.end {
                 let Some(code) = project.binary.code_from(at) else { break };
                 let insn = decoder.decode(code, at);
                 let length = u64::from(insn.len.max(1));
                 if let Some(value) = insn.immediate.and_then(|value| u32::try_from(value).ok())
                     && let Some(&(_, family)) = POLYNOMIALS.iter().find(|(polynomial, _)| *polynomial == value)
+                    && wide.len() < MAX_SITES
                 {
                     wide.push((at, family, format!("polynomial {value:#010x} formed by lui and ori/addiu")));
                 }
                 let bytes = &code[..usize::try_from(length).unwrap_or(4).min(code.len())];
-                let immediates = decoder.operands(bytes, at).unwrap_or_default();
-                for value in immediates.iter().filter_map(|operand| operand.immediate) {
+                let text = decoder.format(bytes, at);
+                let mnemonic = text.split(' ').next().unwrap_or_default();
+                let immediates: Vec<u64> = decoder
+                    .operands(bytes, at)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|operand| operand.immediate)
+                    .collect();
+                shifts_by_one |= matches!(mnemonic, "srl" | "sll") && immediates.last() == Some(&1);
+                xors |= matches!(mnemonic, "xor" | "xori");
+                for &value in &immediates {
                     if let Some(&(_, family)) =
                         POLYNOMIALS_16.iter().find(|(polynomial, _)| u64::from(*polynomial) == value)
                     {
-                        narrow.push((at, family, format!("polynomial {value:#06x} formed by an immediate")));
+                        candidates.push((at, family, format!("polynomial {value:#06x} formed by an immediate")));
                     }
                 }
                 at += length;
             }
+        }
+        if shifts_by_one && xors {
+            narrow.extend(candidates.into_iter().take(MAX_SITES - narrow.len().min(MAX_SITES)));
         }
     }
     (wide, narrow)

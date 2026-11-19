@@ -183,7 +183,7 @@ fn mips_operands(
                     OperandEvidence::unsupported(index)
                 }
                 ArchOperand::MipsOperand(arch::mips::MipsOperand::Imm(value)) => {
-                    let value = if mnemonic == "lui" { (value as i32 as i64) << 16 } else { value };
+                    let value = if mnemonic == "lui" { ((value as i32) << 16) as i64 } else { value };
                     OperandEvidence::immediate(index, value as u64, width)
                 }
                 ArchOperand::MipsOperand(arch::mips::MipsOperand::Mem(memory)) => OperandEvidence {
@@ -494,6 +494,10 @@ impl Disassembler for CapstoneDisassembler {
 
     fn begin_run(&mut self) {
         self.tracker.begin_run();
+    }
+
+    fn begin_function(&mut self, entry: u64) {
+        self.tracker.begin_function(entry);
     }
 
     fn delay_slots(&self) -> u8 {

@@ -57,16 +57,22 @@ pub(crate) struct Tracker {
     entry_register: Option<u16>,
     /// MIPS: the registers a callee preserves (`$s0`-`$s7`, `$fp`).
     callee_saved: Vec<u16>,
+    /// MIPS: `$sp` and `$fp`, through which a function's stack slots are addressed.
+    stack_registers: Vec<u16>,
     /// Values that hold for the rest of the function, whatever block is decoded: the entry `$t9` and registers
     /// holding the global pointer. Each is dropped once written, and a call drops the caller-saved ones.
     sticky: Vec<(u16, Value)>,
-    /// The next instruction decoded is a function's entry ([`Tracker::begin_run`]).
-    at_entry: bool,
+    /// The entry of the function being decoded ([`Tracker::begin_function`]), until its first instruction is.
+    at_entry: Option<u64>,
     /// Registers loaded from a GOT entry that the dynamic linker fills (an import's), with the entry's address.
     slots: Vec<(u16, u64)>,
     /// MIPS: stack slots (base register and displacement) the function saved its global pointer to, as
     /// unoptimised code does before each call and reloads after it.
     gp_slots: Vec<(u16, i64)>,
+    /// Slots this straight-line run can no longer trust: their base register was written, or a store through the
+    /// other of `$sp` and `$fp` may have overwritten them. Another block's run trusts them again, since the
+    /// function keeps its frame registers fixed between prologue and epilogue.
+    run_killed: Vec<(u16, i64)>,
 }
 
 fn native_register_width(arch: Arch) -> Option<TargetWidth> {
@@ -124,6 +130,11 @@ impl Tracker {
         } else {
             Vec::new()
         };
+        let stack_registers = if mips {
+            ["sp", "fp"].into_iter().filter_map(|name| register_named(engine, name)).collect()
+        } else {
+            Vec::new()
+        };
         Self {
             arch,
             register_width: native_register_width(arch),
@@ -133,27 +144,38 @@ impl Tracker {
             forget_after: None,
             entry_register,
             callee_saved,
+            stack_registers,
             sticky: Vec::new(),
-            at_entry: false,
+            at_entry: None,
             slots: Vec::new(),
             gp_slots: Vec::new(),
+            run_killed: Vec::new(),
         }
     }
 
     /// Forgets what the straight-line run proved; values that hold for the whole function stay.
     pub(crate) fn reset(&mut self) {
+        self.run_killed.clear();
         self.known.clear();
         self.slots.clear();
         self.forget_after = None;
         self.known.extend(self.sticky.iter().copied());
     }
 
-    /// Starts decoding a function at its entry: nothing carries over from another function.
+    /// Starts an independent run: nothing carries over from another one, and no register is assumed.
     pub(crate) fn begin_run(&mut self) {
         self.sticky.clear();
         self.gp_slots.clear();
         self.reset();
-        self.at_entry = self.entry_register.is_some();
+        self.at_entry = None;
+    }
+
+    /// Starts decoding the function at `entry`: as [`Tracker::begin_run`], and when the first instruction decoded is
+    /// the entry itself, MIPS `$t9` holds its address (the PIC calling convention). A run that starts at a block
+    /// inside a function assumes nothing.
+    pub(crate) fn begin_function(&mut self, entry: u64) {
+        self.begin_run();
+        self.at_entry = self.entry_register.map(|_| entry);
     }
 
     /// A call: caller-saved registers change, so only the callee-saved function-wide values stay.
@@ -217,7 +239,7 @@ impl Tracker {
             self.reset();
             return Found::default();
         }
-        if std::mem::take(&mut self.at_entry)
+        if self.at_entry.take() == Some(address)
             && let Some(register) = self.entry_register
             && let Some(value) = self.wrap(address)
         {
@@ -244,6 +266,9 @@ impl Tracker {
             self.clear(register);
             self.sticky.retain(|(sticky, _)| *sticky != register);
             self.slots.retain(|(slot, _)| *slot != register);
+            // A slot is addressed from its base register: once that changes, the offset means another place.
+            let moved = self.gp_slots.iter().filter(|(base, _)| *base == register).copied();
+            self.run_killed.extend(moved.collect::<Vec<_>>());
         }
         self.slots.extend(slot_load);
         if let Some((register, value)) = result {
@@ -277,22 +302,34 @@ impl Tracker {
         found
     }
 
-    /// Follows the global pointer through the stack in a MIPS function: a store of it records its slot (another
-    /// store there forgets it), and a pointer-sized load from a recorded slot reloads it.
+    /// Follows the global pointer through the stack in a MIPS function: a pointer-sized store of it records its
+    /// slot, and a pointer-sized load from a recorded slot reloads it. A store through the same base that overlaps a
+    /// slot forgets it; one through the other of `$sp` and `$fp`, which may alias it, does for the rest of the run.
     fn global_pointer_spill(&mut self, mnemonic: &str, operands: &[Operand]) -> Option<(u16, Value)> {
         self.entry_register?;
         let &[Operand::Register(register), Operand::Memory { base, index: 0, disp }] = operands else { return None };
-        let slot = (base, disp);
-        match mnemonic {
-            "sw" | "sd" => {
-                let saved = self.get(register).filter(|&value| self.is_global_pointer(value));
-                self.gp_slots.retain(|&known| known != slot);
-                if saved.is_some() {
-                    self.gp_slots.push(slot);
-                }
-                None
+        let pointer = i64::from(self.arch.default_pointer_size()?);
+        if let Some(size) = mips_store_size(mnemonic) {
+            let stack = &self.stack_registers;
+            self.gp_slots.retain(|&(slot_base, slot_disp)| {
+                !(slot_base == base && disp < slot_disp + pointer && slot_disp < disp + size)
+            });
+            let aliased: Vec<(u16, i64)> = self
+                .gp_slots
+                .iter()
+                .filter(|(slot_base, _)| *slot_base != base && stack.contains(slot_base) && stack.contains(&base))
+                .copied()
+                .collect();
+            self.run_killed.extend(aliased);
+            let saved = self.get(register).filter(|&value| self.is_global_pointer(value));
+            if size == pointer && saved.is_some() {
+                self.gp_slots.push((base, disp));
+                self.run_killed.retain(|&killed| killed != (base, disp));
             }
-            "lw" | "ld" if self.gp_slots.contains(&slot) => {
+            return None;
+        }
+        match mnemonic {
+            "lw" | "ld" if self.gp_slots.contains(&(base, disp)) && !self.run_killed.contains(&(base, disp)) => {
                 let (_, global) = self.global_pointer?;
                 Some((register, Value { value: self.wrap(global)?, address: true }))
             }
@@ -444,6 +481,17 @@ impl Tracker {
     }
 }
 
+/// The bytes a MIPS store writes, or `None` for any other instruction.
+fn mips_store_size(mnemonic: &str) -> Option<i64> {
+    match mnemonic {
+        "sb" => Some(1),
+        "sh" => Some(2),
+        "sw" | "swl" | "swr" | "sc" | "swc1" | "swc2" => Some(4),
+        "sd" | "sdl" | "sdr" | "scd" | "sdc1" | "sdc2" => Some(8),
+        _ => None,
+    }
+}
+
 /// Pointer-sized loads, whose destination can take a GOT entry's value.
 const LOADS: [&str; 7] = ["lw", "ld", "lwz", "ldr", "ldx", "lg", "l"];
 
@@ -547,10 +595,12 @@ mod width_tests {
             forget_after: Some(1),
             entry_register: None,
             callee_saved: Vec::new(),
+            stack_registers: Vec::new(),
             sticky: Vec::new(),
-            at_entry: false,
+            at_entry: None,
             slots: Vec::new(),
             gp_slots: Vec::new(),
+            run_killed: Vec::new(),
         };
         assert!(tracker.get(1).is_none());
         assert!(tracker.get(2).is_none());
@@ -571,10 +621,12 @@ mod width_tests {
             forget_after: None,
             entry_register: None,
             callee_saved: Vec::new(),
+            stack_registers: Vec::new(),
             sticky: Vec::new(),
-            at_entry: false,
+            at_entry: None,
             slots: Vec::new(),
             gp_slots: Vec::new(),
+            run_killed: Vec::new(),
         };
         assert_eq!(tracker.get(2).unwrap().value, u64::MAX);
         assert_eq!(tracker.wrap(u64::MAX), Some(u64::from(u32::MAX)));

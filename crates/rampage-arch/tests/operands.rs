@@ -266,3 +266,12 @@ fn mips_operands_are_typed() {
     let branch = decoder.operands(&[0x10, 0x40, 0x00, 0x03], 0x1000).unwrap(); // beqz $v0, 0x1010
     assert!(branch.iter().all(|operand| operand.kind != OperandKind::Immediate));
 }
+
+/// MIPS64 `lui` sign-extends its shifted immediate to 64 bits.
+#[test]
+fn mips64_lui_immediate_sign_extends() {
+    let target =
+        rampage_arch::Target { big_endian: true, data_big_endian: true, ..rampage_arch::Target::new(Arch::Mips64) };
+    let lui = rampage_arch::decoder(&target).unwrap().operands(&[0x3c, 0x02, 0xed, 0xb8], 0x1000).unwrap();
+    assert_eq!((lui[1].immediate, lui[1].width_bits), (Some(0xffff_ffff_edb8_0000), Some(64)));
+}

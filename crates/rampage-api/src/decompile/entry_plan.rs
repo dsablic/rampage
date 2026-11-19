@@ -686,7 +686,7 @@ fn noreturn_wrapper(
         .flatten()
         .fold(address.saturating_add(MAX_WRAPPER_BYTES as u64), u64::min);
     let mut decoder = binary.decoder()?;
-    decoder.begin_run();
+    decoder.begin_function(address);
     let mut at = address;
     let initial_instructions = counts.decoded_instructions;
     while counts.decoded_instructions - initial_instructions < MAX_WRAPPER_INSTRUCTIONS {

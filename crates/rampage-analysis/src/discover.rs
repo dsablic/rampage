@@ -633,7 +633,7 @@ fn explore(
     assumed: &Assumed,
     start: u64,
 ) -> Explored {
-    decoder.begin_run();
+    decoder.begin_function(start);
     let is_other_function = |address: u64| address != start && known.contains(&address);
     let mut exits = Exits::default();
     let mut noreturn_calls = Vec::new();

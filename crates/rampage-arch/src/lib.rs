@@ -494,6 +494,12 @@ pub trait Disassembler {
     fn begin_run(&mut self) {
         self.reset();
     }
+    /// Starts exploring the function whose entry is `entry`, as [`Disassembler::begin_run`]. When the first
+    /// instruction decoded is the entry, a decoder may assume the ABI's state there: MIPS `$t9` holds the function's
+    /// address. Only callers that decode from a real function entry call this; a run from a block uses `begin_run`.
+    fn begin_function(&mut self, _entry: u64) {
+        self.begin_run();
+    }
     /// Applies instruction-set modes learned from branches, before exploring another block.
     fn set_code_modes(&mut self, _modes: &[(u64, bool)]) {}
     /// ARM instruction-set modes learned at code addresses (`true` means Thumb).
