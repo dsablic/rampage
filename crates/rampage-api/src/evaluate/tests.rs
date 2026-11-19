@@ -170,7 +170,56 @@ fn floats_follow_ieee_semantics() {
     assert_eq!(value(op::FLOAT_TRUNC, &[((-2.75f64).to_bits(), 8)], 4), (-2i32) as u32 as u128);
     assert_eq!(value(op::FLOAT_FLOAT2FLOAT, &[(single(1.25), 4)], 8), u128::from(1.25f64.to_bits()));
     assert_eq!(value(op::FLOAT_NAN, &[(f64::NAN.to_bits(), 8)], 1), 1);
-    assert!(matches!(evaluate(op::FLOAT_ADD, &[(0, 10), (0, 10)], 10), Err(Fault::Unsupported(_))));
+    // Out of range: the integer indefinite on x86 (set by the evaluator), saturation elsewhere.
+    assert_eq!(value(op::FLOAT_TRUNC, &[(3e9f64.to_bits(), 8)], 4), 0x7fff_ffff);
+    assert_eq!(value(op::FLOAT_TRUNC, &[(f64::NAN.to_bits(), 8)], 4), 0);
+    // i64 to f32 rounds once, to nearest even (not through f64).
+    let wide = (1u64 << 53) + (1 << 29) + 1;
+    assert_eq!(value(op::FLOAT_INT2FLOAT, &[(wide, 8)], 4), u128::from(single(wide as f32)));
+    assert_eq!(value(op::FLOAT_ROUND, &[(2.5f64.to_bits(), 8)], 8), u128::from(2.0f64.to_bits()));
+    assert_eq!(value(op::FLOAT_NEG, &[(f64::NAN.to_bits(), 8)], 8), u128::from(f64::NAN.to_bits() ^ (1 << 63)));
+    assert!(matches!(evaluate(op::FLOAT_ADD, &[(0, 2), (0, 2)], 2), Err(Fault::Unsupported(_))));
+}
+
+/// x87 80-bit values: 1.0 is 0x3fff_8000000000000000.
+fn extended(value: f64) -> u128 {
+    super::float::from_f64(value, super::float::EXTENDED)
+}
+
+#[test]
+fn x87_extended_floats_convert_exactly() {
+    use super::float::{self as fp, DOUBLE, EXTENDED, Rounding, SINGLE};
+    assert_eq!(extended(1.0), 0x3fff_8000_0000_0000_0000);
+    assert_eq!(extended(-2.5), 0xc000_a000_0000_0000_0000);
+    assert_eq!(extended(f64::INFINITY), 0x7fff_8000_0000_0000_0000);
+    for value in [0.1, -1e300, 5e-324, f64::MIN_POSITIVE, 123_456.789, -0.0] {
+        assert_eq!(fp::to_f64(extended(value), EXTENDED).to_bits(), value.to_bits(), "{value}");
+        let single = fp::convert(extended(value), EXTENDED, SINGLE) as u32;
+        assert_eq!(single, (value as f32).to_bits(), "{value} as f32");
+    }
+    assert!(fp::to_f64(fp::from_f64(f64::NAN, EXTENDED), EXTENDED).is_nan());
+    // Integers beyond 2^53 are exact in extended precision.
+    let big = (1i128 << 62) + 3;
+    assert_eq!(fp::to_integer(fp::from_integer(big, EXTENDED), EXTENDED), Some(big));
+    assert_eq!(fp::from_integer(-7, DOUBLE) as u64, (-7.0f64).to_bits());
+    // Narrowing rounds to nearest even: 1 + 2^-53 is a tie between 1 and 1 + 2^-52.
+    let tie = fp::from_integer((1i128 << 63) + (1 << 10), EXTENDED);
+    assert_eq!(fp::to_f64(tie, EXTENDED), 9_223_372_036_854_775_808.0);
+    assert_eq!(fp::to_f64(fp::round_integral(extended(-2.5), EXTENDED, Rounding::Down), EXTENDED), -3.0);
+    assert_eq!(fp::to_f64(fp::round_integral(extended(0.75), EXTENDED, Rounding::Toward0), EXTENDED), 0.0);
+    assert_eq!(fp::compare(extended(-3.0), extended(-2.0), EXTENDED), Some(std::cmp::Ordering::Less));
+    assert_eq!(fp::compare(extended(f64::NAN), extended(1.0), EXTENDED), None);
+    // FLOAT_ADD and FLOAT_TRUNC on ST registers.
+    let mut machine = machine(false);
+    let (a, b, sum) = (register(0x10, 10), register(0x20, 10), register(0x30, 10));
+    machine.write_int(&a, extended(1.5)).unwrap();
+    machine.write_int(&b, extended(2.25)).unwrap();
+    machine.execute(&[pcode(op::FLOAT_ADD, Some(sum.clone()), vec![a, b])]).unwrap();
+    assert_eq!(machine.read_int(&sum).unwrap(), extended(3.75));
+    let truncated = register(0x40, 8);
+    machine.write_int(&sum, fp::from_integer(-(1i128 << 60) - 1, EXTENDED)).unwrap();
+    machine.execute(&[pcode(op::FLOAT_TRUNC, Some(truncated.clone()), vec![sum])]).unwrap();
+    assert_eq!(machine.read_int(&truncated).unwrap(), (-(1i64 << 60) - 1) as u64 as u128);
 }
 
 #[test]
@@ -395,6 +444,12 @@ fn fixture(path: &str) -> Project {
     Project::new(Binary::open(path).unwrap())
 }
 
+/// A fixture of this crate's tests/fixtures.
+pub(super) fn fixture_api(name: &str) -> Project {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
+    Project::new(Binary::open(path).unwrap())
+}
+
 fn try_run(
     project: &Project,
     at: &str,
@@ -406,11 +461,11 @@ fn try_run(
     project.evaluate_function(&serde_json::from_value(request).unwrap())
 }
 
-fn run(project: &Project, at: &str, args: serde_json::Value, extra: serde_json::Value) -> EvaluateReport {
+pub(super) fn run(project: &Project, at: &str, args: serde_json::Value, extra: serde_json::Value) -> EvaluateReport {
     try_run(project, at, args, extra).unwrap_or_else(|error| panic!("{at}: {error}"))
 }
 
-fn returned(report: &EvaluateReport) -> u64 {
+pub(super) fn returned(report: &EvaluateReport) -> u64 {
     assert_eq!(report.stop, StopReason::Returned, "{}", report.detail);
     report.result.as_ref().unwrap().unsigned.as_u64().unwrap()
 }

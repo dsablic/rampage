@@ -14,10 +14,14 @@ use serde::{Deserialize, Serialize};
 use crate::{ApiError, Project};
 
 mod convention;
+mod float;
 mod machine;
 mod stubs;
 #[cfg(test)]
 mod tests;
+mod userops;
+#[cfg(test)]
+mod vector_tests;
 
 pub use convention::Convention;
 use convention::{Abi, Link, Place};
@@ -360,6 +364,9 @@ fn prepare(argument: &EvaluateArgument, width: u32) -> Result<Prepared, ApiError
 struct Region {
     start: u64,
     bytes: Vec<u8>,
+    /// Bytes from the start a write may reach; reads reach all of `bytes`. An argument buffer reads to the end of
+    /// its page, as aligned vector loads (SSE `strlen`) do on real memory, but writes stop at its size.
+    writable: usize,
 }
 
 struct Segment<'a> {
@@ -455,7 +462,15 @@ impl<'a> ImageRam<'a> {
     }
 
     fn map(&mut self, start: u64, bytes: Vec<u8>) {
-        self.regions.push(Region { start, bytes });
+        let writable = bytes.len();
+        self.regions.push(Region { start, bytes, writable });
+    }
+
+    /// Maps `bytes` readable through the end of their last page and writable through their own length.
+    fn map_buffer(&mut self, start: u64, mut bytes: Vec<u8>) {
+        let writable = bytes.len();
+        bytes.resize(writable.next_multiple_of(PAGE as usize), 0);
+        self.regions.push(Region { start, bytes, writable });
     }
 
     fn segment(&self, address: u64) -> Option<&Segment<'a>> {
@@ -526,6 +541,11 @@ impl Ram for ImageRam<'_> {
 
     fn write(&mut self, address: u64, bytes: &[u8]) -> Result<(), Fault> {
         if let Some((region, offset)) = self.region_mut(address, bytes.len()) {
+            if offset + bytes.len() > region.writable {
+                let at = address.wrapping_add(region.writable.saturating_sub(offset) as u64);
+                self.last_fault = Some(at);
+                return Err(Fault::UnmappedWrite { address: at, size: bytes.len() as u32 });
+            }
             region.bytes[offset..offset + bytes.len()].copy_from_slice(bytes);
             return Ok(());
         }
@@ -628,7 +648,11 @@ impl Run<'_> {
         if bytes.is_empty() {
             return Err((StopReason::UnmappedFetch, format!("execution reached unmapped address {address:#x}")));
         }
-        let decoded = self.decoder.decode_instruction(&bytes, address);
+        let mut decoded = self.decoder.decode_instruction(&bytes, address);
+        if decoded.status == DecodeStatus::BudgetExceeded {
+            // Long p-code (AVX per-element operations): decode again with room for it.
+            decoded = self.decoder.decode_instruction_extended(&bytes, address);
+        }
         let text = format!("{} {}", decoded.mnemonic, decoded.operand_text).trim().to_owned();
         match decoded.status {
             DecodeStatus::Valid => {}
@@ -876,7 +900,7 @@ impl Project {
                 // Each buffer is followed by an unmapped guard gap, so overruns stop instead of corrupting.
                 let length = (bytes.len() as u64).next_multiple_of(PAGE) + PAGE;
                 let base = ram.free_range(&bases, length).ok_or_else(|| invalid("no free range for a buffer"))?;
-                ram.map(base, bytes.clone());
+                ram.map_buffer(base, bytes.clone());
                 buffer_addresses.push(Some(base));
             } else {
                 buffer_addresses.push(None);
@@ -957,7 +981,9 @@ impl Project {
             decoder_thumb: false,
             mode_switch,
         };
-        install_user_ops(&mut run, thread_base);
+        let x86 = matches!(binary.arch, Arch::X86 | Arch::X86_64);
+        run.machine.integer_indefinite = x86;
+        install_user_ops(&mut run, thread_base, x86);
 
         // Arguments and the stack frame.
         let widths: Vec<u32> = prepared
@@ -1361,7 +1387,7 @@ const NO_EFFECT_USER_OPS: [&str; 12] = [
     "sync",
 ];
 
-fn install_user_ops(run: &mut Run<'_>, thread_base: u64) {
+fn install_user_ops(run: &mut Run<'_>, thread_base: u64, x86: bool) {
     let thread_selectors: Vec<(u32, u64)> = ["FS", "GS"]
         .iter()
         .filter_map(|name| run.decoder.register(name))
@@ -1375,6 +1401,8 @@ fn install_user_ops(run: &mut Run<'_>, thread_base: u64) {
             UserOp::Segment { thread_selectors: thread_selectors.clone(), thread_base: thread_base + THREAD_BYTES / 2 }
         } else if NO_EFFECT_USER_OPS.contains(&name.as_str()) {
             UserOp::Nop(name)
+        } else if x86 && userops::known(&name) {
+            UserOp::Computed(name)
         } else {
             UserOp::Other(name)
         };

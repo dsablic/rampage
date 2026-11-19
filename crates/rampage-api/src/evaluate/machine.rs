@@ -202,6 +202,8 @@ pub(crate) enum UserOp {
     /// Hints and barriers with no effect on one thread, and ARM's `setISAMode` (the interpreter follows
     /// `TB` itself).
     Nop(String),
+    /// A vector or other operation [`super::userops`] computes from its operands.
+    Computed(String),
     Other(String),
 }
 
@@ -257,6 +259,9 @@ pub(crate) struct Machine<R: Ram> {
     unique: ByteSpace,
     other: HashMap<u32, ByteSpace>,
     user_ops: HashMap<u64, UserOp>,
+    /// x86: a float-to-integer conversion out of range (or of NaN) gives the integer indefinite (the minimum signed
+    /// value), not a saturated one.
+    pub integer_indefinite: bool,
     pub ram: R,
 }
 
@@ -290,6 +295,7 @@ impl<R: Ram> Machine<R> {
             unique: ByteSpace::default(),
             other: HashMap::new(),
             user_ops: HashMap::new(),
+            integer_indefinite: false,
             ram,
         }
     }
@@ -534,6 +540,19 @@ impl<R: Ram> Machine<R> {
             }
             Some(UserOp::Nop(name)) if current.output.is_some() => Err(Fault::UserOp(name)),
             Some(UserOp::Nop(_)) => Ok(()),
+            Some(UserOp::Computed(name)) => {
+                let mut operands = Vec::with_capacity(current.inputs.len().saturating_sub(1));
+                for input in current.inputs.iter().skip(1) {
+                    let constant = input.space == self.ids.constant;
+                    operands.push(super::userops::Operand { bytes: self.read_little(input)?, constant });
+                }
+                let output = current.output.as_ref().ok_or_else(|| Fault::UserOp(name.clone()))?;
+                match super::userops::run(&name, &operands, output.size as usize) {
+                    Some(Ok(bytes)) => self.write_little(output, &bytes),
+                    Some(Err(what)) => Err(Fault::Unsupported(format!("processor operation {what}"))),
+                    None => Err(Fault::UserOp(name)),
+                }
+            }
             Some(UserOp::Other(name)) => Err(Fault::UserOp(name)),
             None => Err(Fault::UserOp(format!("user operation {index}"))),
         }
@@ -544,6 +563,9 @@ impl<R: Ram> Machine<R> {
         let code = current.opcode;
         let first = self.input(current, 0)?;
         let size = first.size;
+        if size > 16 {
+            return self.wide_integer(current);
+        }
         let a = self.read_int(first)?;
         let unary = matches!(code, INT_2COMP | INT_NEGATE | BOOL_NEGATE | POPCOUNT | LZCOUNT);
         let b = if unary { 0 } else { self.read_int(self.input(current, 1)?)? };
@@ -602,79 +624,214 @@ impl<R: Ram> Machine<R> {
         self.write_int(output, result & mask(output.size))
     }
 
-    fn float(&mut self, current: &PcodeOp) -> Result<(), Fault> {
+    /// Integer operations on values wider than 16 bytes (AVX registers), on 64-bit limbs: bitwise, shifts,
+    /// addition, subtraction, negation and comparisons. Multiplication and division stay unsupported.
+    fn wide_integer(&mut self, current: &PcodeOp) -> Result<(), Fault> {
         use op::*;
         let code = current.opcode;
         let first = self.input(current, 0)?;
-        let output = self.output(current)?;
-        let unsupported = |size: u32| Fault::Unsupported(format!("{} on a {size}-byte float", current.name));
-        let as_float = |bits: u128, size: u32| -> Result<f64, Fault> {
-            match size {
-                4 => Ok(f64::from(f32::from_bits(bits as u32))),
-                8 => Ok(f64::from_bits(bits as u64)),
-                _ => Err(unsupported(size)),
-            }
+        let size = first.size as usize;
+        let a = limbs(&self.read_little(first)?);
+        let unary = matches!(code, INT_NEGATE | INT_2COMP);
+        let b_bytes = if unary { Vec::new() } else { self.read_little(self.input(current, 1)?)? };
+        let b = limbs(&b_bytes);
+        let bits = 8 * size as u64;
+        // A shift count: the second input's value, saturated at the width.
+        let count = || {
+            let low = b.first().copied().unwrap_or(0);
+            if b.iter().skip(1).any(|&limb| limb != 0) { bits } else { low.min(bits) }
         };
-        let from_float = |value: f64, size: u32| -> Result<u128, Fault> {
-            match size {
-                4 => Ok(u128::from((value as f32).to_bits())),
-                8 => Ok(u128::from(value.to_bits())),
-                _ => Err(unsupported(size)),
+        let negative = |value: &[u64]| (value[(size - 1) / 8] >> (8 * ((size - 1) % 8) + 7)) & 1 == 1;
+        let boolean = |condition: bool| -> Vec<u8> { vec![u8::from(condition)] };
+        let result: Vec<u8> = match code {
+            INT_XOR => from_limbs(&zip_limbs(&a, &b, |x, y| x ^ y), size),
+            INT_AND => from_limbs(&zip_limbs(&a, &b, |x, y| x & y), size),
+            INT_OR => from_limbs(&zip_limbs(&a, &b, |x, y| x | y), size),
+            INT_NEGATE => from_limbs(&a.iter().map(|x| !x).collect::<Vec<_>>(), size),
+            INT_2COMP => from_limbs(&add_limbs(&a.iter().map(|x| !x).collect::<Vec<_>>(), &[1]), size),
+            INT_ADD => from_limbs(&add_limbs(&a, &b), size),
+            INT_SUB => {
+                let negated = add_limbs(&pad(&b, a.len()).iter().map(|x| !x).collect::<Vec<_>>(), &[1]);
+                from_limbs(&add_limbs(&a, &negated), size)
             }
+            INT_LEFT => from_limbs(&shift_left(&a, count()), size),
+            INT_RIGHT => from_limbs(&shift_right(&a, count(), false, bits), size),
+            INT_SRIGHT => from_limbs(&shift_right(&a, count(), negative(&a), bits), size),
+            INT_EQUAL | INT_NOTEQUAL => boolean((pad(&a, b.len()) == pad(&b, a.len())) == (code == INT_EQUAL)),
+            INT_LESS | INT_LESSEQUAL => {
+                let order = compare_limbs(&a, &b);
+                boolean(order.is_lt() || (code == INT_LESSEQUAL && order.is_eq()))
+            }
+            INT_SLESS | INT_SLESSEQUAL => {
+                let (x, y) = (negative(&a), negative(&b));
+                let order = if x != y {
+                    if x { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater }
+                } else {
+                    compare_limbs(&a, &b)
+                };
+                boolean(order.is_lt() || (code == INT_SLESSEQUAL && order.is_eq()))
+            }
+            _ => return Err(Fault::Unsupported(format!("{} on a {size}-byte value", current.name))),
+        };
+        self.write_little(self.output(current)?, &result)
+    }
+
+    fn float(&mut self, current: &PcodeOp) -> Result<(), Fault> {
+        use op::*;
+        use std::cmp::Ordering;
+
+        use super::float::{self as fp, Rounding};
+        let code = current.opcode;
+        let first = self.input(current, 0)?;
+        let output = self.output(current)?;
+        let format = |size: u32| {
+            fp::format(size).ok_or_else(|| Fault::Unsupported(format!("{} on a {size}-byte float", current.name)))
         };
         let raw = self.read_int(first)?;
         if code == FLOAT_INT2FLOAT {
-            let value = signed(raw, first.size) as f64;
-            let result = from_float(value, output.size)?;
+            let result = fp::from_integer(signed(raw, first.size), format(output.size)?);
             return self.write_int(output, result);
         }
-        let a = as_float(raw, first.size)?;
-        let binary = matches!(
-            code,
-            FLOAT_EQUAL
-                | FLOAT_NOTEQUAL
-                | FLOAT_LESS
-                | FLOAT_LESSEQUAL
-                | FLOAT_ADD
-                | FLOAT_DIV
-                | FLOAT_MULT
-                | FLOAT_SUB
-        );
-        let b = if binary {
-            let second = self.input(current, 1)?;
-            let raw = self.read_int(second)?;
-            as_float(raw, second.size)?
-        } else {
-            0.0
+        let from = format(first.size)?;
+        let second = |machine: &mut Self| -> Result<u128, Fault> {
+            let input = machine.input(current, 1)?;
+            if input.size != first.size {
+                return Err(Fault::Malformed(format!("{} on floats of different sizes", current.name)));
+            }
+            machine.read_int(input)
         };
-        // Single-precision arithmetic rounds once in f64 and again to f32, which is exact for +, -, *, / and sqrt.
         let result = match code {
-            FLOAT_EQUAL => u128::from(a == b),
-            FLOAT_NOTEQUAL => u128::from(a != b),
-            FLOAT_LESS => u128::from(a < b),
-            FLOAT_LESSEQUAL => u128::from(a <= b),
-            FLOAT_NAN => u128::from(a.is_nan()),
-            FLOAT_ADD => from_float(a + b, output.size)?,
-            FLOAT_SUB => from_float(a - b, output.size)?,
-            FLOAT_MULT => from_float(a * b, output.size)?,
-            FLOAT_DIV => from_float(a / b, output.size)?,
-            FLOAT_NEG => from_float(-a, output.size)?,
-            FLOAT_ABS => from_float(a.abs(), output.size)?,
-            FLOAT_SQRT => from_float(a.sqrt(), output.size)?,
-            FLOAT_FLOAT2FLOAT => from_float(a, output.size)?,
-            FLOAT_CEIL => from_float(a.ceil(), output.size)?,
-            FLOAT_FLOOR => from_float(a.floor(), output.size)?,
-            FLOAT_ROUND => from_float(a.round(), output.size)?,
-            FLOAT_TRUNC => {
-                if output.size > 8 {
-                    return Err(unsupported(output.size));
-                }
-                (a.trunc() as i64) as u128 & mask(output.size)
+            FLOAT_EQUAL | FLOAT_NOTEQUAL | FLOAT_LESS | FLOAT_LESSEQUAL => {
+                let order = fp::compare(raw, second(self)?, from);
+                u128::from(match code {
+                    FLOAT_EQUAL => order == Some(Ordering::Equal),
+                    FLOAT_NOTEQUAL => order != Some(Ordering::Equal),
+                    FLOAT_LESS => order == Some(Ordering::Less),
+                    _ => matches!(order, Some(Ordering::Less | Ordering::Equal)),
+                })
+            }
+            FLOAT_NAN => u128::from(fp::is_nan(raw, from)),
+            FLOAT_NEG => fp::negate(raw, from),
+            FLOAT_ABS => fp::absolute(raw, from),
+            FLOAT_FLOAT2FLOAT => fp::convert(raw, from, format(output.size)?),
+            FLOAT_CEIL => fp::round_integral(raw, from, Rounding::Up),
+            FLOAT_FLOOR => fp::round_integral(raw, from, Rounding::Down),
+            // Ties to even, as x86 and ARM round in their default mode.
+            FLOAT_ROUND => fp::round_integral(raw, from, Rounding::Nearest),
+            FLOAT_TRUNC => self.truncate(raw, from, output.size)?,
+            FLOAT_ADD | FLOAT_SUB | FLOAT_MULT | FLOAT_DIV | FLOAT_SQRT => {
+                let x = fp::to_f64(raw, from);
+                let y = if code == FLOAT_SQRT { 0.0 } else { fp::to_f64(second(self)?, from) };
+                // binary32 rounds once in f64 and again to f32, which is exact for +, -, *, / and sqrt; x87
+                // extended values are computed in f64 (53-bit, not 64-bit, significands).
+                let value = match code {
+                    FLOAT_ADD => x + y,
+                    FLOAT_SUB => x - y,
+                    FLOAT_MULT => x * y,
+                    FLOAT_DIV => x / y,
+                    _ => x.sqrt(),
+                };
+                fp::from_f64(value, format(output.size)?)
             }
             _ => return Err(Fault::Unsupported(format!("p-code operation {} ({code})", current.name))),
         };
         self.write_int(output, result)
     }
+
+    /// FLOAT_TRUNC of `raw` to a signed `size`-byte integer: toward zero, then saturated (ARM and others) or the
+    /// integer indefinite (x86) when out of range; NaN gives 0 (indefinite on x86).
+    fn truncate(&self, raw: u128, format: super::float::Format, size: u32) -> Result<u128, Fault> {
+        use super::float as fp;
+        if size == 0 || size > 16 {
+            return Err(Fault::Unsupported(format!("float truncation to a {size}-byte integer")));
+        }
+        let bits = size * 8;
+        let (minimum, maximum) =
+            if bits >= 128 { (i128::MIN, i128::MAX) } else { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) };
+        let value = fp::to_integer(raw, format).filter(|value| (minimum..=maximum).contains(value));
+        let value = match value {
+            Some(value) => value,
+            None if self.integer_indefinite => minimum,
+            None if fp::is_nan(raw, format) => 0,
+            None if fp::compare(raw, 0, format) == Some(std::cmp::Ordering::Less) => minimum,
+            None => maximum,
+        };
+        Ok(value as u128 & mask(size))
+    }
+}
+
+/// Little-endian bytes as 64-bit limbs, least significant first.
+fn limbs(bytes: &[u8]) -> Vec<u64> {
+    bytes.chunks(8).map(|chunk| chunk.iter().rev().fold(0u64, |value, &byte| (value << 8) | u64::from(byte))).collect()
+}
+
+fn from_limbs(limbs: &[u64], size: usize) -> Vec<u8> {
+    let mut bytes: Vec<u8> = limbs.iter().flat_map(|limb| limb.to_le_bytes()).collect();
+    bytes.resize(size, 0);
+    bytes
+}
+
+fn pad(limbs: &[u64], length: usize) -> Vec<u64> {
+    let mut padded = limbs.to_vec();
+    if padded.len() < length {
+        padded.resize(length, 0);
+    }
+    padded
+}
+
+fn zip_limbs(a: &[u64], b: &[u64], f: impl Fn(u64, u64) -> u64) -> Vec<u64> {
+    let b = pad(b, a.len());
+    a.iter().zip(&b).map(|(&x, &y)| f(x, y)).collect()
+}
+
+fn add_limbs(a: &[u64], b: &[u64]) -> Vec<u64> {
+    let b = pad(b, a.len());
+    let mut carry = false;
+    a.iter()
+        .zip(&b)
+        .map(|(&x, &y)| {
+            let (sum, first) = x.overflowing_add(y);
+            let (sum, second) = sum.overflowing_add(u64::from(carry));
+            carry = first || second;
+            sum
+        })
+        .collect()
+}
+
+fn compare_limbs(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
+    let length = a.len().max(b.len());
+    pad(a, length).iter().rev().cmp(pad(b, length).iter().rev())
+}
+
+fn shift_left(value: &[u64], count: u64) -> Vec<u64> {
+    let (words, bits) = ((count / 64) as usize, (count % 64) as u32);
+    (0..value.len())
+        .map(|index| {
+            let Some(from) = index.checked_sub(words) else { return 0 };
+            let low = if bits > 0 && from > 0 { value[from - 1] >> (64 - bits) } else { 0 };
+            (value[from] << bits) | low
+        })
+        .collect()
+}
+
+/// A right shift of a `width`-bit value, filling with ones when `fill`.
+fn shift_right(value: &[u64], count: u64, fill: bool, width: u64) -> Vec<u64> {
+    let (words, bits) = ((count / 64) as usize, (count % 64) as u32);
+    let mut shifted: Vec<u64> = (0..value.len())
+        .map(|index| {
+            let from = index + words;
+            let Some(&word) = value.get(from) else { return 0 };
+            let high = if bits > 0 { value.get(from + 1).map_or(0, |&next| next << (64 - bits)) } else { 0 };
+            (word >> bits) | high
+        })
+        .collect();
+    if fill {
+        // Ones above bit width - count.
+        for bit in width.saturating_sub(count)..64 * value.len() as u64 {
+            shifted[(bit / 64) as usize] |= 1 << (bit % 64);
+        }
+    }
+    shifted
 }
 
 enum Destination {
