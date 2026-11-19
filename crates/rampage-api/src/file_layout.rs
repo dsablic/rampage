@@ -340,6 +340,78 @@ pub fn file_layout(path: &Path, request: &FileLayoutRequest) -> Result<FileLayou
     Ok(report)
 }
 
+/// An ESP32/ESP8266 flash dump's structure (bootloader image, partition table, application images), or an app
+/// image at the start of the file, each with the `raw` selector that opens it.
+fn esp_hints(bytes: &[u8]) -> Vec<LayoutHint> {
+    use rampage_loaders::esp;
+    let hint = |kind, offset, evidence| LayoutHint { kind, offset, evidence, cortex_m: None, container: None };
+    let image_evidence = |image: &esp::EspImage| {
+        let mut evidence = vec![format!(
+            "{} image: entry {:#x}, {} segments, {} ABI, checksum {}{}",
+            image.chip.label(),
+            image.entry,
+            image.segments.len(),
+            image.abi,
+            if image.checksum.valid { "valid" } else { "mismatch" },
+            match &image.sha256 {
+                Some(sha) => format!(", SHA-256 {}", if sha.valid { "valid" } else { "mismatch" }),
+                None => String::new(),
+            }
+        )];
+        if let Some(desc) = &image.app_desc {
+            evidence.push(format!(
+                "esp_app_desc: project {:?}, version {:?}, ESP-IDF {:?}, built {} {}",
+                desc.project_name, desc.version, desc.idf_version, desc.compile_date, desc.compile_time
+            ));
+        }
+        evidence.push(format!(
+            "open with \"raw\":{{\"profile\":\"xtensa\",\"format\":\"esp\",\"offset\":\"{:#x}\"}}",
+            image.offset
+        ));
+        evidence
+    };
+    let Some(layout) = esp::flash_layout(bytes) else {
+        return esp::parse_app_image(bytes, 0)
+            .ok()
+            .filter(|image| esp::looks_like_app_image(bytes, 0) && image.chip.xtensa())
+            .map(|image| vec![hint("esp_app_image", 0, image_evidence(&image))])
+            .unwrap_or_default();
+    };
+    let mut hints = Vec::new();
+    if let Some(bootloader) = &layout.bootloader {
+        hints.push(hint("esp_bootloader", bootloader.offset, image_evidence(bootloader)));
+    }
+    if let Some(table) = &layout.partition_table {
+        let mut evidence: Vec<String> = table
+            .partitions
+            .iter()
+            .map(|partition| {
+                format!(
+                    "{} {}/{} at {:#x}, {:#x} bytes{}",
+                    partition.label,
+                    partition.kind,
+                    partition.subtype,
+                    partition.offset,
+                    partition.size,
+                    if partition.encrypted { ", encrypted" } else { "" }
+                )
+            })
+            .collect();
+        if let Some(md5) = &table.md5 {
+            evidence.push(format!("MD5 entry {}", if md5.valid { "valid" } else { "mismatch" }));
+        }
+        hints.push(hint("esp_partition_table", table.offset, evidence));
+    }
+    for (partition, offset) in layout.app_images(bytes) {
+        if let Ok(image) = esp::parse_app_image(bytes, offset) {
+            let mut evidence = vec![format!("partition {} ({})", partition.label, partition.subtype)];
+            evidence.extend(image_evidence(&image));
+            hints.push(hint("esp_app_image", offset, evidence));
+        }
+    }
+    hints
+}
+
 /// The layout of `bytes`, which were read from `offset` of a source of `source_size` bytes. `explicit_length`
 /// says whether the caller chose the length, which decides how far a continuation reaches.
 pub(crate) fn layout(
@@ -365,6 +437,9 @@ pub(crate) fn layout(
         search.seed_limit_reached |= boundaries.occupied_truncated;
         bounds.container_search = Some(search);
         merge_hints(&mut hints, &mut bounds.hints, found.into_iter().map(crate::layout_containers::hint).collect());
+        if offset == 0 {
+            merge_hints(&mut hints, &mut bounds.hints, esp_hints(bytes));
+        }
     }
     let entropy = entropy_report(bytes, offset, parameters, &mut summary, &mut bounds);
     let string_clusters = clusters(bytes, offset, parameters, &mut summary, &mut bounds.string_clusters);

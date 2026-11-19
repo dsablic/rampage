@@ -101,6 +101,10 @@ pub enum Kind {
     /// A UEFI (PI) firmware volume.
     UefiVolume,
     UefiCapsule,
+    /// An Espressif ESP8266/ESP32 app or bootloader image (magic 0xE9 and segment headers).
+    EspImage,
+    /// An ESP-IDF partition table (0xAA50 entries and their MD5 entry), on a 4 KiB boundary of a flash dump.
+    EspPartitionTable,
 }
 
 /// What the scan reports inside an image or container, once its extent is validated.
@@ -178,6 +182,8 @@ impl std::fmt::Display for Kind {
             Self::Fat => "fat",
             Self::UefiVolume => "uefi_volume",
             Self::UefiCapsule => "uefi_capsule",
+            Self::EspImage => "esp_image",
+            Self::EspPartitionTable => "esp_partition_table",
         })
     }
 }
@@ -462,12 +468,15 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
             0xd0 => dtb(bytes),
             0x04 => lz4(bytes),
             0x89 => lzop(bytes),
-            0xeb | 0xe9 if offset != fat_backup_at => fat_fs(bytes).map(|(candidate, backup)| {
-                if backup != 0 {
-                    fat_backup_at = offset.saturating_add(backup);
-                }
-                candidate
-            }),
+            0xeb | 0xe9 if offset != fat_backup_at => fat_fs(bytes)
+                .map(|(candidate, backup)| {
+                    if backup != 0 {
+                        fat_backup_at = offset.saturating_add(backup);
+                    }
+                    candidate
+                })
+                .or_else(|| esp_image(bytes, offset)),
+            0xaa if offset.is_multiple_of(ESP_PARTITION_TABLE_ALIGN) => esp_partition_table(bytes),
             0xbd | 0x8b | 0xb9 | 0xed => uefi_capsule(bytes),
             _ => None,
         };
@@ -671,7 +680,7 @@ pub fn executable(bytes: &[u8]) -> Option<Candidate> {
 /// The magics that start a header, as the scan's parsers check them: the scan dispatches only on their first two
 /// bytes (see `STARTS_A_MAGIC`). A FAT boot sector starts with a jump whose second byte is its target, so 0xeb and
 /// 0xe9 take any second byte.
-const MAGICS: [&[u8]; 35] = [
+const MAGICS: [&[u8]; 36] = [
     b"\x7fELF",
     b"MZ",
     b"\xfe\xed\xfa",
@@ -707,6 +716,7 @@ const MAGICS: [&[u8]; 35] = [
     CAPSULE_GUIDS[3].0,
     b"\xeb",
     b"\xe9",
+    b"\xaa\x50",
 ];
 
 /// The first two bytes of `MAGICS`, as a bit set indexed by the two bytes.
@@ -764,6 +774,7 @@ fn elf_arch(machine: u64, bits: u8) -> String {
         (43, _) => Arch::Sparc64,
         (22, 64) => Arch::S390x,
         (4, _) => Arch::M68k,
+        (94, _) => Arch::Xtensa,
         _ => return format!("elf machine {machine:#x}"),
     };
     arch.to_string()
@@ -2827,6 +2838,97 @@ fn uefi_capsule(bytes: &[u8]) -> Option<Candidate> {
     Some(candidate.extent(size, "UEFI capsule header image size"))
 }
 
+/// Partition tables start on a flash sector.
+const ESP_PARTITION_TABLE_ALIGN: usize = 0x1000;
+
+/// An ESP app or bootloader image whose segment headers fit, every segment loading into the chip's memory map (or
+/// esptool's padding at address 0), with a matching checksum or appended SHA-256: a magic-only match otherwise.
+fn esp_image(bytes: &[u8], offset: usize) -> Option<Candidate> {
+    use crate::esp;
+    if !esp::looks_like_app_image(bytes, 0) {
+        return None;
+    }
+    let image = esp::parse_app_image(bytes, 0).ok()?;
+    let mapped = image.segments.iter().all(|segment| segment.memory.is_some() || segment.load_address == 0);
+    if !mapped || !image.chip.xtensa() {
+        return None;
+    }
+    let sha_valid = image.sha256.as_ref().is_some_and(|sha| sha.valid);
+    if !image.checksum.valid && !sha_valid {
+        return Some(Candidate::magic_only(Kind::EspImage, "ESP image checksum and SHA-256 do not match its bytes"));
+    }
+    let mut candidate = Candidate {
+        arch: Some(Arch::Xtensa.to_string()),
+        bits: Some(32),
+        ..Candidate::new(Kind::EspImage).endian(false)
+    }
+    .extent(image.length, "ESP image segment headers, checksum and SHA-256");
+    let what = match (&image.app_desc, &image.bootloader_desc) {
+        (Some(desc), _) => format!(
+            "{} application \"{}\" version {} (ESP-IDF {})",
+            image.chip.label(),
+            desc.project_name,
+            desc.version,
+            desc.idf_version
+        ),
+        (None, Some(desc)) => format!("{} bootloader (ESP-IDF {})", image.chip.label(), desc.idf_version),
+        (None, None) if offset == 0x1000 => {
+            format!("{} image at flash 0x1000, where the ROM loads the second-stage bootloader", image.chip.label())
+        }
+        (None, None) => format!("{} image", image.chip.label()),
+    };
+    candidate.notes.push(format!(
+        "{what}; entry {:#x}, {} segments, {} ABI; checksum {}{}",
+        image.entry,
+        image.segments.len(),
+        image.abi,
+        if image.checksum.valid { "valid" } else { "mismatch" },
+        match &image.sha256 {
+            Some(sha) if sha.valid => ", SHA-256 valid",
+            Some(_) => ", SHA-256 mismatch",
+            None => "",
+        }
+    ));
+    candidate
+        .notes
+        .push(format!("open it with \"raw\":{{\"profile\":\"xtensa\",\"format\":\"esp\",\"offset\":\"{offset:#x}\"}}"));
+    Some(candidate)
+}
+
+/// An ESP-IDF partition table: its entries, validated by the MD5 entry when it has one, or else by every partition
+/// lying on a 4 KiB boundary.
+fn esp_partition_table(bytes: &[u8]) -> Option<Candidate> {
+    let table = crate::esp::parse_partition_table(bytes, 0)?;
+    let aligned =
+        table.partitions.iter().all(|partition| partition.offset.is_multiple_of(0x1000) && partition.size > 0);
+    match &table.md5 {
+        Some(md5) if !md5.valid => {
+            return Some(Candidate::magic_only(Kind::EspPartitionTable, "partition table MD5 does not match"));
+        }
+        None if !aligned => return None,
+        _ => {}
+    }
+    let mut candidate =
+        Candidate::new(Kind::EspPartitionTable).extent((table.partitions.len() as u64 + 1) * 32, "partition entries");
+    let entries: Vec<String> = table
+        .partitions
+        .iter()
+        .map(|partition| {
+            format!(
+                "{} {}/{} at {:#x}, {:#x} bytes",
+                partition.label, partition.kind, partition.subtype, partition.offset, partition.size
+            )
+        })
+        .collect();
+    candidate.notes.push(format!(
+        "{} partitions{}: {}",
+        table.partitions.len(),
+        if table.md5.is_some() { ", MD5 valid" } else { "" },
+        entries.join("; ")
+    ));
+    Some(candidate)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2854,5 +2956,40 @@ mod tests {
         }
         assert!(starts_a_magic(0xeb, 0x3c) && starts_a_magic(0xe9, 0x00));
         assert!(!starts_a_magic(0x55, 0xaa) && !starts_a_magic(b'U', b'X') && !starts_a_magic(0x04, 0x00));
+    }
+
+    #[test]
+    fn esp_flash_dump_carves_bootloader_partition_table_and_app() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/xtensa/esp32-flash.bin");
+        let carving = scan(&std::fs::read(path).unwrap(), &Limits::default());
+        let found: Vec<(u64, Kind, Confidence)> = carving
+            .candidates
+            .iter()
+            .map(|candidate| (candidate.offset, candidate.kind, candidate.confidence))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (0x1000, Kind::EspImage, Confidence::Validated),
+                (0x8000, Kind::EspPartitionTable, Confidence::Validated),
+                (0x10000, Kind::EspImage, Confidence::Validated),
+            ]
+        );
+        let app = &carving.candidates[2];
+        assert_eq!((app.arch.as_deref(), app.extent), (Some("xtensa"), Some(0x10420 + 32)));
+        assert!(app.notes[0].starts_with("ESP32 application \"thermostat\" version 1.4.2"), "{:?}", app.notes);
+        assert!(
+            carving.candidates[1].notes[0].contains("factory app/factory at 0x10000"),
+            "{:?}",
+            carving.candidates[1]
+        );
+        // A flipped byte breaks the checksum and the digest: the image is then a magic-only match.
+        let mut image =
+            std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/xtensa/esp32-app.bin")).unwrap();
+        image[0x40] ^= 1;
+        assert_eq!(esp_image(&image, 0).unwrap().confidence, Confidence::MagicOnly);
+        let elf =
+            std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/xtensa/esp32-app.elf")).unwrap();
+        assert_eq!(executable(&elf).unwrap().arch.as_deref(), Some("xtensa"));
     }
 }

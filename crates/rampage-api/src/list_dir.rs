@@ -106,10 +106,14 @@ fn name_bytes(name: &std::ffi::OsStr) -> Vec<u8> {
 
 /// The format the first bytes of a file show: an executable (`elf`, `pe`, `macho`, `macho_universal`, `dex`,
 /// `wasm`), a filesystem image (`squashfs`, `ext`, `cpio`, `tar`, ...), an archive or compressed stream (`ar`, `zip`,
-/// `gzip`, `xz`, `zstd`, `bzip2`, `lz4_frame`, `7z`), Intel HEX or S-records (`ihex`, `srec`), `text`, or `unknown`.
+/// `gzip`, `xz`, `zstd`, `bzip2`, `lz4_frame`, `7z`), Intel HEX or S-records (`ihex`, `srec`), an ESP32/ESP8266 app
+/// image (`esp_image`), `text`, or `unknown`.
 fn sniff(head: &[u8]) -> &'static str {
     if let Some(format) = rampage_unpack::executable_format(head) {
         return format;
+    }
+    if rampage_loaders::esp::looks_like_app_image(head, 0) {
+        return "esp_image";
     }
     if let Some(format) = rampage_unpack::detect_bytes(head) {
         return format.name();
@@ -141,9 +145,28 @@ fn sniff(head: &[u8]) -> &'static str {
     "unknown"
 }
 
-/// Reads the first bytes of the regular file at `path` without following a symlink put in its place, and without
-/// blocking on a FIFO swapped in since it was listed.
-fn read_head(path: &Path) -> Option<Vec<u8>> {
+/// An ESP32 flash dump starts erased (0xff) up to its bootloader image at 0x1000; it is `esp_flash` when that image
+/// or a partition table at 0x8000 is there.
+fn sniff_flash(path: &Path, head: &[u8]) -> Option<&'static str> {
+    use std::io::{Seek, SeekFrom};
+    if head.len() < SNIFF_BYTES || head.iter().any(|&byte| byte != 0xff) {
+        return None;
+    }
+    let mut file = open_listed(path)?;
+    let mut read_at = |offset: u64, length: usize| {
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        let mut bytes = Vec::with_capacity(length);
+        (&mut file).take(length as u64).read_to_end(&mut bytes).ok()?;
+        Some(bytes)
+    };
+    let bootloader = read_at(0x1000, 24).is_some_and(|bytes| rampage_loaders::esp::looks_like_app_image(&bytes, 0));
+    let table = read_at(0x8000, 2).is_some_and(|bytes| bytes == [0xaa, 0x50]);
+    (bootloader || table).then_some("esp_flash")
+}
+
+/// Opens the regular file at `path` for reading without following a symlink put in its place, and without blocking
+/// on a FIFO swapped in since it was listed.
+fn open_listed(path: &Path) -> Option<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -152,9 +175,13 @@ fn read_head(path: &Path) -> Option<Vec<u8>> {
         options.custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32);
     }
     let file = options.open(path).ok()?;
-    if !file.metadata().ok()?.is_file() {
-        return None;
-    }
+    file.metadata().ok()?.is_file().then_some(file)
+}
+
+/// Reads the first bytes of the regular file at `path` without following a symlink put in its place, and without
+/// blocking on a FIFO swapped in since it was listed.
+fn read_head(path: &Path) -> Option<Vec<u8>> {
+    let file = open_listed(path)?;
     let mut head = Vec::with_capacity(SNIFF_BYTES);
     file.take(SNIFF_BYTES as u64).read_to_end(&mut head).ok()?;
     Some(head)
@@ -215,7 +242,9 @@ pub fn list_dir(query: &ListDirQuery) -> Result<DirListing, String> {
                 _ => "other",
             };
             let size = metadata.as_ref().filter(|metadata| metadata.is_file()).map(std::fs::Metadata::len);
-            let format = (kind == "file").then(|| read_head(&path).map_or("unreadable", |head| sniff(&head)));
+            let format = (kind == "file").then(|| {
+                read_head(&path).map_or("unreadable", |head| sniff_flash(&path, &head).unwrap_or_else(|| sniff(&head)))
+            });
             let link = (kind == "symlink")
                 .then(|| std::fs::read_link(&path).ok())
                 .flatten()
@@ -236,7 +265,8 @@ pub fn list_dir(query: &ListDirQuery) -> Result<DirListing, String> {
         }),
         next: "Open an executable by its path with binary_info or triage_report; a headerless image with \
                file_layout; a filesystem image (squashfs, ext, cpio, tar) or a ZIP with fs_list; an APK, AAB, JAR \
-               or DEX with dex_metadata (group `android`).",
+               or DEX with dex_metadata (group `android`); an esp_image or esp_flash with binary_info, which names \
+               its `raw` selector.",
     })
 }
 
@@ -254,6 +284,10 @@ mod tests {
         assert_eq!(sniff(b"\x1f\x8b\x08"), "gzip");
         assert_eq!(sniff(b"hello\n"), "text");
         assert_eq!(sniff(b"\x00\x01\x02"), "unknown");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/xtensa");
+        assert_eq!(sniff(&read_head(&fixtures.join("esp32-app.bin")).unwrap()), "esp_image");
+        let flash = fixtures.join("esp32-flash.bin");
+        assert_eq!(sniff_flash(&flash, &read_head(&flash).unwrap()), Some("esp_flash"));
     }
 
     /// Sorting by the escaped key and partitioning on it at the next key always advances, even where the key order
