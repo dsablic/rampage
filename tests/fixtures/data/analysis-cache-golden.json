@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "digests": {
     "bin/Microsoft.Bcl.HashCode.dll": "47a67c822d8b944f8f5b330d9e05ff0cdec69199ecd2aee9f48d789d95a903b5",
     "bin/auditable-arm64.macho": "c4d1fe40fe733d4a52f6ab51468a5266a741d7ee3978a32978e130fad12bb328",
@@ -37,8 +37,8 @@
     "bin/hello-arm64.macho": "b49b7bfe94b412e78ae916cc4a27060dd5fb0d8a5ce814aa5d3f4b12aecbeb4b",
     "bin/hello-go-arm64.elf": "e04a77ef2437029f17fd7b179fccb6f56d4924475fa60fd787049986896c98f0",
     "bin/hello-go-x64.elf": "357120958ec37fc01432cd2c2f203c2a363da2555c5c395b8b07ffc2a0af3b5c",
-    "bin/hello-mips.elf": "1e9e22e995f4a6fec8e5160ecfe468075ca8f44a383270fa72b50ed60714b6ba",
-    "bin/hello-mipsel.elf": "1e9e22e995f4a6fec8e5160ecfe468075ca8f44a383270fa72b50ed60714b6ba",
+    "bin/hello-mips.elf": "eb80cb63925a7b7d877ed80783d39aef8270b81d338334141908ffce8b89324b",
+    "bin/hello-mipsel.elf": "eb80cb63925a7b7d877ed80783d39aef8270b81d338334141908ffce8b89324b",
     "bin/hello-ppc.elf": "874c08dc35f0024381784a1df7bded777aa97b49baebdd0ca53805121af73295",
     "bin/hello-ppc64le.elf": "cdf34ed4e27070c00a40cea294535568da7f4f8ae8990a2a26bafd7756a587ec",
     "bin/hello-riscv64.elf": "190a726df0a89d846bdbe5a29edbdfb0089218900c74a9c3d3e12b8cf44890dd",

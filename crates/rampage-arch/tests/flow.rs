@@ -418,6 +418,49 @@ fn mips_address_pairs_and_the_global_pointer() {
     assert_eq!(run(target, "8f998010", &[4])[0].1, Some(0x41_1000));
 }
 
+/// MIPS PIC code: a run started at a function's entry knows `$t9`, so the `_gp_disp` prologue gives the global
+/// pointer, which its callee-saved copy keeps across blocks, calls and a stack spill. Local GOT entries hold pages
+/// (completed by `%lo`) or the address itself; a call through an import's entry references the entry.
+#[test]
+fn mips_pic_global_pointer_follows_the_function() {
+    let got = rampage_arch::Got {
+        address: 0x11000,
+        entries: vec![0, 0x8000_0000, 0x2_0000, 0x2345, 0].into(),
+        local_entries: 4,
+    };
+    let target = Target { global_pointer: Some(0x1_8ff0), got: Some(got), ..big_endian(Arch::Mips) };
+    let mut decoder = decoder(&target).unwrap();
+    let mut at = AT;
+    let mut step = |decoder: &mut Box<dyn rampage_arch::Disassembler>, hex: &str| {
+        let insn = decoder.decode(&bytes(hex), at);
+        at += 4;
+        (insn.flow, insn.data_ref, insn.accesses)
+    };
+    decoder.begin_run();
+    // lui $v0, 1; addiu $v0, $v0, 0x7ff0; addu $s0, $v0, $t9; sw $s0, 16($sp)
+    for hex in ["3c020001", "24427ff0", "00598021", "afb00010"] {
+        step(&mut decoder, hex);
+    }
+    // Another block: lw $at, %got(page)($s0); addiu $a0, $at, 0x123
+    decoder.reset();
+    assert_eq!(step(&mut decoder, "8e018018"), (Flow::Next, Some(0x11008), true));
+    assert_eq!(step(&mut decoder, "24240123"), (Flow::Next, Some(0x2_0123), false));
+    // lw $a0, %got(local)($s0): the entry holds the address itself.
+    assert_eq!(step(&mut decoder, "8e04801c"), (Flow::Next, Some(0x2345), false));
+    // lw $t9, %call16(import)($s0); jalr $t9; nop
+    assert_eq!(step(&mut decoder, "8e198020"), (Flow::Next, Some(0x11010), true));
+    assert_eq!(step(&mut decoder, "0320f809"), (Flow::IndirectCall, Some(0x11010), true));
+    step(&mut decoder, "00000000");
+    // $s0 survives the call; a reload of the spilled copy is the global pointer too.
+    assert_eq!(step(&mut decoder, "8e018018"), (Flow::Next, Some(0x11008), true));
+    decoder.reset();
+    assert_eq!(step(&mut decoder, "8fa30010").1, None);
+    assert_eq!(step(&mut decoder, "8c618018"), (Flow::Next, Some(0x11008), true));
+    // A new function forgets them all.
+    decoder.begin_run();
+    assert_eq!(step(&mut decoder, "8e018018").1, None);
+}
+
 #[test]
 fn riscv_auipc_pairs_and_far_calls() {
     // auipc a0, 1; addi a0, a0, 16; ld a1, 8(a0)

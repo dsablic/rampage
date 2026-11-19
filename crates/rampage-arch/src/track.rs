@@ -3,6 +3,11 @@
 //! `sethi`/`or`, and s390x `larl`. Loads and stores through a known
 //! base yield their address, and the ABI's global-pointer register reads as the image's global pointer, so GOT
 //! accesses resolve too.
+//!
+//! MIPS position-independent code computes its global pointer from `$t9`, which holds the function's own address
+//! on entry (`lui $v0, %hi(_gp_disp); addiu $v0, $v0, %lo(_gp_disp); addu $s0, $v0, $t9`), and keeps it in a
+//! callee-saved register for the whole function. A run that starts at a function entry ([`Tracker::begin_run`])
+//! knows `$t9`, and a register found to hold the global pointer stays known across blocks and calls until written.
 
 use capstone::arch::{self, ArchOperand};
 use capstone::{Capstone, InsnDetail, RegId};
@@ -48,6 +53,20 @@ pub(crate) struct Tracker {
     got: Option<Got>,
     /// Instructions left before a call made in a delay slot's shadow forgets every register.
     forget_after: Option<u8>,
+    /// MIPS: `$t9`, which holds a function's address on entry under the PIC calling convention.
+    entry_register: Option<u16>,
+    /// MIPS: the registers a callee preserves (`$s0`-`$s7`, `$fp`).
+    callee_saved: Vec<u16>,
+    /// Values that hold for the rest of the function, whatever block is decoded: the entry `$t9` and registers
+    /// holding the global pointer. Each is dropped once written, and a call drops the caller-saved ones.
+    sticky: Vec<(u16, Value)>,
+    /// The next instruction decoded is a function's entry ([`Tracker::begin_run`]).
+    at_entry: bool,
+    /// Registers loaded from a GOT entry that the dynamic linker fills (an import's), with the entry's address.
+    slots: Vec<(u16, u64)>,
+    /// MIPS: stack slots (base register and displacement) the function saved its global pointer to, as
+    /// unoptimised code does before each call and reloads after it.
+    gp_slots: Vec<(u16, i64)>,
 }
 
 fn native_register_width(arch: Arch) -> Option<TargetWidth> {
@@ -95,6 +114,16 @@ impl Tracker {
             Arch::PowerPc64 => register_named(engine, "r2"),
             _ => None,
         };
+        let mips = matches!(arch, Arch::Mips | Arch::Mips64);
+        let entry_register = if mips { register_named(engine, "t9") } else { None };
+        let callee_saved = if mips {
+            ["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "fp"]
+                .into_iter()
+                .filter_map(|name| register_named(engine, name))
+                .collect()
+        } else {
+            Vec::new()
+        };
         Self {
             arch,
             register_width: native_register_width(arch),
@@ -102,12 +131,45 @@ impl Tracker {
             global_pointer: register.zip(global_pointer),
             got,
             forget_after: None,
+            entry_register,
+            callee_saved,
+            sticky: Vec::new(),
+            at_entry: false,
+            slots: Vec::new(),
+            gp_slots: Vec::new(),
         }
     }
 
+    /// Forgets what the straight-line run proved; values that hold for the whole function stay.
     pub(crate) fn reset(&mut self) {
         self.known.clear();
+        self.slots.clear();
         self.forget_after = None;
+        self.known.extend(self.sticky.iter().copied());
+    }
+
+    /// Starts decoding a function at its entry: nothing carries over from another function.
+    pub(crate) fn begin_run(&mut self) {
+        self.sticky.clear();
+        self.gp_slots.clear();
+        self.reset();
+        self.at_entry = self.entry_register.is_some();
+    }
+
+    /// A call: caller-saved registers change, so only the callee-saved function-wide values stay.
+    fn forget_call(&mut self) {
+        let callee_saved = &self.callee_saved;
+        self.sticky.retain(|(register, _)| callee_saved.contains(register));
+        self.known.clear();
+        self.slots.clear();
+        self.known.extend(self.sticky.iter().copied());
+    }
+
+    /// Whether `value` is the global pointer, which a register keeps for the rest of the function.
+    fn is_global_pointer(&self, value: Value) -> bool {
+        value.address
+            && self.entry_register.is_some()
+            && self.global_pointer.is_some_and(|(_, global)| self.wrap(global) == Some(value.value))
     }
 
     fn get(&self, register: u16) -> Option<Value> {
@@ -155,6 +217,14 @@ impl Tracker {
             self.reset();
             return Found::default();
         }
+        if std::mem::take(&mut self.at_entry)
+            && let Some(register) = self.entry_register
+            && let Some(value) = self.wrap(address)
+        {
+            let entry = Value { value, address: true };
+            self.set(register, entry);
+            self.sticky.push((register, entry));
+        }
         let mut found = Found::default();
         // A load or store through a known base: its address.
         for operand in operands {
@@ -165,14 +235,25 @@ impl Tracker {
                 found.accesses = found.data_ref.is_some();
             }
         }
-        let result = self.result(mnemonic, operands, address, &mut found);
+        let slot_load = self.filled_at_run_time(mnemonic, operands, found.data_ref);
+        let result = match self.global_pointer_spill(mnemonic, operands) {
+            Some(reload) => Some(reload),
+            None => self.result(mnemonic, operands, address, &mut found),
+        };
         for &register in writes {
             self.clear(register);
+            self.sticky.retain(|(sticky, _)| *sticky != register);
+            self.slots.retain(|(slot, _)| *slot != register);
         }
+        self.slots.extend(slot_load);
         if let Some((register, value)) = result {
             self.set(register, value);
-            // Halves of an address (`lui` and its kin) are not reported.
-            if self.complete(mnemonic) {
+            if self.is_global_pointer(value) {
+                self.sticky.push((register, value));
+            }
+            // Halves of an address (`lui` and its kin) are not reported, nor is a MIPS function's own global
+            // pointer, which it computes or reloads and which references nothing.
+            if self.complete(mnemonic) && !self.is_global_pointer(value) {
                 let value_found = self.wrap(value.value);
                 if value.address {
                     found.data_ref = found.data_ref.or(value_found);
@@ -183,17 +264,53 @@ impl Tracker {
         }
         // A call changes registers; with a delay slot, only after the slot's instruction.
         match self.forget_after.take() {
-            Some(0) => self.known.clear(),
+            Some(0) => self.forget_call(),
             Some(left) => self.forget_after = Some(left - 1),
             None => {}
         }
         if is_call {
             match self.arch.delay_slots() {
-                0 => self.known.clear(),
+                0 => self.forget_call(),
                 slots => self.forget_after = Some(slots - 1),
             }
         }
         found
+    }
+
+    /// Follows the global pointer through the stack in a MIPS function: a store of it records its slot (another
+    /// store there forgets it), and a pointer-sized load from a recorded slot reloads it.
+    fn global_pointer_spill(&mut self, mnemonic: &str, operands: &[Operand]) -> Option<(u16, Value)> {
+        self.entry_register?;
+        let &[Operand::Register(register), Operand::Memory { base, index: 0, disp }] = operands else { return None };
+        let slot = (base, disp);
+        match mnemonic {
+            "sw" | "sd" => {
+                let saved = self.get(register).filter(|&value| self.is_global_pointer(value));
+                self.gp_slots.retain(|&known| known != slot);
+                if saved.is_some() {
+                    self.gp_slots.push(slot);
+                }
+                None
+            }
+            "lw" | "ld" if self.gp_slots.contains(&slot) => {
+                let (_, global) = self.global_pointer?;
+                Some((register, Value { value: self.wrap(global)?, address: true }))
+            }
+            _ => None,
+        }
+    }
+
+    /// For a MIPS load from a GOT entry the dynamic linker fills (an import's, zero in the file), the register
+    /// loaded and the entry's address: a call through that register calls the import.
+    fn filled_at_run_time(&self, mnemonic: &str, operands: &[Operand], slot: Option<u64>) -> Option<(u16, u64)> {
+        let got = self.got.as_ref().filter(|_| self.entry_register.is_some())?;
+        let slot = slot.filter(|_| LOADS.contains(&mnemonic))?;
+        let width = self.arch.default_pointer_size().filter(|width| matches!(width, 4 | 8))?;
+        got.entry(slot, width)?;
+        if got.value(slot, width).is_some() {
+            return None;
+        }
+        Some((operands.iter().find_map(register)?, slot))
     }
 
     /// Whether `mnemonic` finishes forming a constant (rather than starting one, as `lui` does; PowerPC64's
@@ -216,12 +333,19 @@ impl Tracker {
             && let Some(slot) = found.data_ref
             && LOADS.contains(&mnemonic)
             && let Some(width) = self.arch.default_pointer_size().filter(|width| matches!(width, 4 | 8))
-            && let Some(entry) = got.entry(slot, width).filter(|&entry| entry != 0)
+            && let Some(entry) = got.value(slot, width)
         {
             let destination = match self.arch {
                 Arch::Sparc | Arch::Sparc64 => operands.iter().rev().find_map(register),
                 _ => operands.iter().find_map(register),
             };
+            // A MIPS local entry holds a 64 KiB page that `%lo` offsets complete, or the address of a local
+            // symbol itself (`lw $a0, %got(main)($gp)`): the latter is the address the code takes, as an x86
+            // `lea` forms one, so it is what the instruction references.
+            if got.is_local(slot, width) && entry % 0x1_0000 != 0 {
+                found.data_ref = Some(entry);
+                found.accesses = false;
+            }
             return Some((destination?, Value { value: entry, address: true }));
         }
         match (self.arch, mnemonic, operands) {
@@ -233,6 +357,13 @@ impl Tracker {
             }
             (Arch::Mips | Arch::Mips64, "ori", &[R(rt), R(rs), I(value)]) => Some((rt, or(rs, value)?)),
             (Arch::Mips | Arch::Mips64, "move", &[R(rd), R(rs)]) => Some((rd, self.get(rs)?)),
+            // PIC prologues add `$t9` to the distance to the global pointer (`_gp_disp`).
+            (Arch::Mips | Arch::Mips64, "addu" | "daddu", &[R(rd), R(rs), R(rt)]) => {
+                let (left, right) = (self.get(rs)?, self.get(rt)?);
+                let sum = left.value.wrapping_add(right.value);
+                let value = if mnemonic == "addu" { self.extend32(sum)? } else { sum };
+                Some((rd, Value { value, address: left.address || right.address }))
+            }
 
             (Arch::Riscv32 | Arch::Riscv64, "auipc", &[R(rd), I(value)]) => {
                 Some((rd, Value { value: address.wrapping_add(self.extend32((value as u64) << 12)?), address: true }))
@@ -263,9 +394,16 @@ impl Tracker {
                     [R(_), R(base), I(disp)] | [R(_), M { base, index: 0, disp }] => (base, disp),
                     _ => return None,
                 };
-                found.branch_target = Some(offset(self.get(base)?, disp).value);
-                found.data_ref = None;
-                found.accesses = false;
+                if let Some(value) = self.get(base) {
+                    found.branch_target = Some(offset(value, disp).value);
+                    found.data_ref = None;
+                    found.accesses = false;
+                } else if let Some(&(_, slot)) = self.slots.iter().find(|(register, _)| *register == base) {
+                    // MIPS `lw $t9, %call16(f)($gp); jalr $t9`: a call through the import's GOT entry, as x86's
+                    // `call [slot]` is.
+                    found.data_ref = Some(slot);
+                    found.accesses = true;
+                }
                 None
             }
 
@@ -362,7 +500,13 @@ pub(crate) fn written_registers(arch: Arch, mnemonic: &str, detail: &InsnDetail,
     let mut registers = operands.iter().filter_map(register);
     let destination =
         if matches!(arch, Arch::Sparc | Arch::Sparc64) { registers.next_back() } else { registers.next() };
-    written.extend(destination);
+    // A MIPS store reads its first register (a store-conditional also writes it, with the outcome): a value saved
+    // to the stack stays known.
+    let mips_store = matches!(arch, Arch::Mips | Arch::Mips64)
+        && mnemonic.starts_with('s')
+        && !matches!(mnemonic, "sc" | "scd")
+        && operands.iter().any(|operand| matches!(operand, Operand::Memory { .. }));
+    written.extend(destination.filter(|_| !mips_store));
     if matches!(arch, Arch::PowerPc | Arch::PowerPc64) && (mnemonic.ends_with('u') || mnemonic.ends_with("ux")) {
         written.extend(operands.iter().filter_map(|operand| match *operand {
             Operand::Memory { base, .. } => Some(base),
@@ -401,6 +545,12 @@ mod width_tests {
             global_pointer: Some((2, 0x2000)),
             got: None,
             forget_after: Some(1),
+            entry_register: None,
+            callee_saved: Vec::new(),
+            sticky: Vec::new(),
+            at_entry: false,
+            slots: Vec::new(),
+            gp_slots: Vec::new(),
         };
         assert!(tracker.get(1).is_none());
         assert!(tracker.get(2).is_none());
@@ -419,6 +569,12 @@ mod width_tests {
             global_pointer: Some((2, u64::MAX)),
             got: None,
             forget_after: None,
+            entry_register: None,
+            callee_saved: Vec::new(),
+            sticky: Vec::new(),
+            at_entry: false,
+            slots: Vec::new(),
+            gp_slots: Vec::new(),
         };
         assert_eq!(tracker.get(2).unwrap().value, u64::MAX);
         assert_eq!(tracker.wrap(u64::MAX), Some(u64::from(u32::MAX)));

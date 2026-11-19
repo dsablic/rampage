@@ -193,7 +193,33 @@ where
             address = next;
         }
     }
+    names.extend(mips_stub_names(binary));
     Ok(names)
+}
+
+/// Names the lazy-binding stubs in a MIPS `.MIPS.stubs` section (GNU ld's), which jump to the dynamic linker
+/// rather than through the import's slot: until it is bound, an import's global GOT entry holds the address of its
+/// stub, so each stub takes the name of the import whose entry points at it.
+fn mips_stub_names(binary: &Binary) -> Vec<(u64, String)> {
+    if !matches!(binary.arch, Arch::Mips | Arch::Mips64) {
+        return Vec::new();
+    }
+    let Some(stubs) = binary.sections.iter().find(|section| section.name == ".MIPS.stubs" && section.size > 0) else {
+        return Vec::new();
+    };
+    let Some(got) = binary.target().got else { return Vec::new() };
+    let width = binary.arch.default_pointer_size().unwrap_or(4);
+    let mut names: Vec<(u64, String)> = binary
+        .import_slots
+        .iter()
+        .filter_map(|slot| {
+            let stub = got.entry(slot.address, width).filter(|&stub| stub.wrapping_sub(stubs.address) < stubs.size)?;
+            Some((stub, format!("{}@plt", slot.name)))
+        })
+        .collect();
+    names.sort();
+    names.dedup_by_key(|(stub, _)| *stub);
+    names
 }
 
 /// The GOT base a 32-bit x86 ELF's position-independent PLT reaches its slots through: `ebx` holds

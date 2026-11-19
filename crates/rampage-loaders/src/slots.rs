@@ -57,24 +57,51 @@ fn elf(parsed: &object::File) -> Vec<ImportSlot> {
     slots
 }
 
-/// MIPS GOT entries for dynamic symbols, which take no relocations: after `DT_MIPS_LOCAL_GOTNO` local entries,
-/// the GOT holds one entry per dynamic symbol from `DT_MIPS_GOTSYM` on. Returns each entry's address and symbol.
-fn mips_global_got(parsed: &object::File) -> Vec<(u64, object::SymbolIndex)> {
+/// A MIPS GOT's layout, from the dynamic section: `DT_PLTGOT` holds its address; `DT_MIPS_LOCAL_GOTNO` local
+/// entries come first, then one global entry per dynamic symbol from `DT_MIPS_GOTSYM` on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MipsGot {
+    pub(crate) address: u64,
+    pub(crate) local: u64,
+    pub(crate) first_symbol: u64,
+    /// One past the highest dynamic symbol index.
+    pub(crate) symbols: u64,
+}
+
+impl MipsGot {
+    /// Every entry: the local ones and one per global symbol.
+    pub(crate) fn entries(&self) -> u64 {
+        self.local.saturating_add(self.symbols.saturating_sub(self.first_symbol))
+    }
+}
+
+/// The MIPS GOT layout of a dynamically linked MIPS ELF, which needs no section headers (routers often ship
+/// binaries without them).
+pub(crate) fn mips_got(parsed: &object::File) -> Option<MipsGot> {
     use crate::details::{DT_MIPS_GOTSYM, DT_MIPS_LOCAL_GOTNO, DT_PLTGOT, dynamic};
     let entries = match parsed {
         object::File::Elf32(file) if parsed.architecture() == object::Architecture::Mips => dynamic(file).0,
         object::File::Elf64(file) if parsed.architecture() == object::Architecture::Mips64 => dynamic(file).0,
-        _ => return Vec::new(),
+        _ => return None,
     };
     let value = |tag| entries.iter().find(|&&(entry_tag, _)| entry_tag == tag).map(|&(_, value)| value);
-    let (Some(got), Some(local), Some(first)) = (value(DT_PLTGOT), value(DT_MIPS_LOCAL_GOTNO), value(DT_MIPS_GOTSYM))
-    else {
+    // The iterator skips the null symbol at index 0, so count by the highest index.
+    let symbols =
+        parsed.dynamic_symbol_table().and_then(|symbols| symbols.symbols().map(|symbol| symbol.index().0).max());
+    Some(MipsGot {
+        address: value(DT_PLTGOT)?,
+        local: value(DT_MIPS_LOCAL_GOTNO)?,
+        first_symbol: value(DT_MIPS_GOTSYM)?,
+        symbols: symbols.map_or(0, |last| last as u64 + 1),
+    })
+}
+
+/// MIPS GOT entries for dynamic symbols, which take no relocations: after `DT_MIPS_LOCAL_GOTNO` local entries,
+/// the GOT holds one entry per dynamic symbol from `DT_MIPS_GOTSYM` on. Returns each entry's address and symbol.
+fn mips_global_got(parsed: &object::File) -> Vec<(u64, object::SymbolIndex)> {
+    let Some(MipsGot { address: got, local, first_symbol: first, symbols: count }) = mips_got(parsed) else {
         return Vec::new();
     };
-    // The iterator skips the null symbol at index 0, so count by the highest index.
-    let count =
-        parsed.dynamic_symbol_table().and_then(|symbols| symbols.symbols().map(|symbol| symbol.index().0).max());
-    let count = count.map_or(0, |last| last as u64 + 1);
     let size: u64 = if parsed.is_64() { 8 } else { 4 };
     (first..count)
         .filter_map(|index| {

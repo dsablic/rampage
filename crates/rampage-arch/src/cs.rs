@@ -420,6 +420,10 @@ impl Disassembler for CapstoneDisassembler {
         self.tracker.reset();
     }
 
+    fn begin_run(&mut self) {
+        self.tracker.begin_run();
+    }
+
     fn delay_slots(&self) -> u8 {
         self.target.arch.delay_slots()
     }

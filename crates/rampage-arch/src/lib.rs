@@ -220,15 +220,37 @@ pub struct Target {
 pub struct Got {
     pub address: u64,
     pub entries: std::sync::Arc<[u64]>,
+    /// MIPS only: the local entries, indices `2..local_entries` after the two the dynamic linker reserves. Their
+    /// stored values are link-time addresses even when zero (the first 64 KiB page of a PIE), where an import's
+    /// entry holds zero or a lazy-binding stub. Zero elsewhere.
+    pub local_entries: usize,
 }
 
 impl Got {
     pub fn entry(&self, address: u64, pointer_size: u8) -> Option<u64> {
+        self.entries.get(self.index(address, pointer_size)?).copied()
+    }
+
+    fn index(&self, address: u64, pointer_size: u8) -> Option<usize> {
         let offset = address.checked_sub(self.address)?;
         if offset % u64::from(pointer_size) != 0 {
             return None;
         }
-        self.entries.get(usize::try_from(offset / u64::from(pointer_size)).ok()?).copied()
+        usize::try_from(offset / u64::from(pointer_size)).ok()
+    }
+
+    /// Whether the entry at `address` is a MIPS local entry, whose stored value the dynamic linker only moves by
+    /// the load bias.
+    pub fn is_local(&self, address: u64, pointer_size: u8) -> bool {
+        self.index(address, pointer_size).is_some_and(|index| (2..self.local_entries).contains(&index))
+    }
+
+    /// The address a load from the entry at `address` yields: its stored value when nonzero, or zero for a MIPS
+    /// local entry. `None` for an entry the dynamic linker fills (zero in the file).
+    pub fn value(&self, address: u64, pointer_size: u8) -> Option<u64> {
+        let index = self.index(address, pointer_size)?;
+        let entry = *self.entries.get(index)?;
+        (entry != 0 || self.is_local(address, pointer_size)).then_some(entry)
     }
 }
 

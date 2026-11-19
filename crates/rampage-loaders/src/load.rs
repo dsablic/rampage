@@ -107,6 +107,9 @@ pub struct Binary {
     global_pointer: Option<u64>,
     #[serde(skip)]
     got: Option<rampage_arch::Got>,
+    /// A dynamically linked MIPS ELF's GOT layout, from its dynamic section.
+    #[serde(skip)]
+    mips_got: Option<crate::slots::MipsGot>,
     /// Mach-O chained-fixup rebases: each pointer's location and the target the loader writes there.
     #[serde(skip)]
     rebases: Vec<(u64, u64)>,
@@ -293,6 +296,7 @@ impl Binary {
             code_ranges: raw.code_ranges(),
             global_pointer: None,
             got: None,
+            mips_got: None,
             rebases: Vec::new(),
             data: Bytes::Owned(data),
             snapshot_source: None,
@@ -490,6 +494,7 @@ impl Binary {
             code_ranges,
             global_pointer: None,
             got: None,
+            mips_got: None,
             rebases: Vec::new(),
             data: Bytes::Owned(data),
             image: 0..len,
@@ -946,6 +951,7 @@ impl Binary {
         let rebases = crate::slots::chained_rebases(&parsed, image_bytes, &mut warnings);
         let details = crate::details::collect(&parsed);
         let elf_m_profile = format == Format::Elf && arch == Arch::Arm && elf_m_profile(&parsed, &mut warnings);
+        let mips_got = crate::slots::mips_got(&parsed);
         let overlay = crate::details::overlay(&parsed, image_bytes, image.start as u64).unwrap_or_else(|warning| {
             warnings.push(warning);
             None
@@ -973,6 +979,7 @@ impl Binary {
             code_ranges: Vec::new(),
             global_pointer: None,
             got: None,
+            mips_got,
             rebases,
             data,
             snapshot_source: None,
@@ -1067,21 +1074,36 @@ impl Binary {
             let got = self.sections.iter().find(|section| section.name == ".got")?;
             got.address.checked_add(offset)
         };
+        // Without section headers, the dynamic section's DT_PLTGOT gives the GOT.
+        let dynamic_got = || self.mips_got.and_then(|layout| layout.address.checked_add(0x7ff0));
         match self.arch {
-            Arch::Mips | Arch::Mips64 => symbol("_gp").or_else(|| got(0x7ff0)),
+            Arch::Mips | Arch::Mips64 => symbol("_gp").or_else(|| got(0x7ff0)).or_else(dynamic_got),
             Arch::PowerPc64 => symbol(".TOC.").or_else(|| got(0x8000)),
             Arch::Riscv32 | Arch::Riscv64 => symbol("__global_pointer$"),
             _ => None,
         }
     }
 
-    /// The `.got` section's entries, in the image's byte order.
+    /// The `.got` section's entries, in the image's byte order; for a dynamically linked MIPS ELF, the GOT its
+    /// dynamic section describes, with its local entries marked.
     fn read_got(&self) -> Option<rampage_arch::Got> {
-        let section = self.sections.iter().find(|section| section.name == ".got")?;
-        let bytes = self.read(section.address, section.size)?;
         let size = usize::from(self.arch.default_pointer_size().filter(|width| matches!(width, 4 | 8))?);
+        let section = self.sections.iter().find(|section| section.name == ".got");
+        let mips = self.mips_got.filter(|layout| section.is_none_or(|section| section.address == layout.address));
+        let mips = mips.and_then(|layout| {
+            // A layout that runs past the mapped bytes is malformed: the section, if any, is used instead.
+            let length = layout.entries().checked_mul(size as u64)?;
+            self.read(layout.address, length)?;
+            Some((layout.address, length, usize::try_from(layout.local).ok()?))
+        });
+        let (address, length, local_entries) = match (mips, section) {
+            (Some(layout), _) => layout,
+            (None, Some(section)) => (section.address, section.size, 0),
+            (None, None) => return None,
+        };
+        let bytes = self.read(address, length)?;
         let entries = bytes.chunks_exact(size).filter_map(|entry| read_uint(entry, 0, size, self.big_endian)).collect();
-        Some(rampage_arch::Got { address: section.address, entries })
+        Some(rampage_arch::Got { address, entries, local_entries })
     }
 
     /// A decoder for this image's code.
