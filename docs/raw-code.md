@@ -38,12 +38,34 @@ report is large: `raw` lists keep their first rows with counts. Repeat the same 
 session keeps the project, with its annotations, for that exact interpretation. The CLI takes the same object as
 `--raw-json` ([CLI reference](cli-reference.md#raw-projects)).
 
-Only MSP430, AVR8 and Cortex-M decompile; the other Sleigh profiles disassemble. On Cortex-M, `decompile` with
+Only MSP430, AVR8, Cortex-M and MIPS32 decompile; the other Sleigh profiles disassemble. On Cortex-M, `decompile` with
 `"exact_entry": true` decompiles from an address you assert (an odd address is read as the Thumb code at the even
 one, with a `note`), discovered or not, with its context
 counts and omissions; plain `decompile` also takes any code address. Multiple regions, decoded
 regions, scatter-load and pointer tables are Cortex-M only, except a decoded primary region, which any profile
 takes.
+
+## MIPS boot ROMs and bare-metal MIPS
+
+A MIPS32 boot ROM, bootloader or bare-metal image (router and camera SoCs, PIC32 in MIPS32 mode) opens with the
+`MIPS:BE:32:default` profile (aliases `mips`, `mips32`, `mipseb`) or `MIPS:LE:32:default` (`mipsel`), decoded
+natively like Cortex-M: up to 4 MiB, further `regions` (a second stage at its RAM address, for example), typed
+operands and data references, `decompile` with the MIPS o32 C model and `evaluate_function`. Without `entry` the
+entry is `base_address`: a MIPS32 boot ROM starts at the reset vector, 0xbfc00000 (uncached kseg1), and copies or
+jumps to code in cached kseg0 (0x80000000 up). Map the image where it runs:
+
+```json
+{
+  "path": "tests/fixtures/mips/boot-mips.bin",
+  "raw": { "profile": "mips", "offset": 0, "length": 851, "base_address": "0xbfc00000" }
+}
+```
+
+Absolute `lui`/`addiu` pairs give string and data references, and `find_main` follows the reset code's first jump
+out of it (`la $t0, boot_main; jr $t0`). The exception vectors at 0xbfc00200 and 0xbfc00380 (BEV set) are not
+seeded on their own; add them to `seeds` when the image has handlers there. microMIPS and MIPS16e code, MIPS64
+and the vector table, pointer-table and scatter-load options of Cortex-M have no MIPS equivalent. A Linux userland
+or kernel ELF needs no Raw project: open it directly (position-independent code resolves its GOT through `$gp`).
 
 ## Choose the base address
 
@@ -176,6 +198,9 @@ at medium confidence. When the startup jumps into copied code that itself calls 
 function is main. Each candidate lists the instructions it rests on; a reset handler that only calls a few
 functions and loops gets no candidate. A main that returns, or a scheduler started another way, is not found.
 
+On a MIPS project `find_main` follows the reset code at the entry to its first jump out of it (`la $t0, f;
+jr $t0`, or `j f`): the boot ROM's C entry, at medium confidence when discovery found a function there.
+
 ## Raw-capable tools
 
 These tools take the `raw` selector:
@@ -186,7 +211,7 @@ These tools take the `raw` selector:
 | Functions and code | `list_functions`, `disassemble`, `function_graph`, `decompile`, `xrefs`, `search`, `analysis_diagnostics`, `entry_diagnostics` |
 | Data | `list_strings`, `inspect_data` (a file tool) |
 | Annotations | `rename`, `set_comment`, `annotate_batch`, `list_annotations`, `undo`, `redo` |
-| Execution | `evaluate_function` (processors the interpreter supports, Cortex-M among them) |
+| Execution | `evaluate_function` (processors the interpreter supports, Cortex-M and MIPS32 among them) |
 | Peripherals | `import_svd`, `peripheral_access` |
 | Patching | `patch_bytes`, `revert_patch`, `list_patches`, `integrity_checks`, `export_image` |
 | Detection | `identify_functions`, `find_crypto`, `lock_mechanisms` |

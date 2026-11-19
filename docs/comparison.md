@@ -90,7 +90,8 @@ Compared with Ghidra and IDA, rampage does not have:
 - a full project database: the experimental [analysis store](mcp.md#persistent-analysis-store) keeps only
   function discovery, and analysis does not run incrementally after edits;
 - decompilation for most of its Sleigh processor profiles (only MSP430 and AVR8 have reviewed C models; the
-  experimental Cortex-M profile decompiles with the ARM v8 Thumb model);
+  experimental Cortex-M and MIPS32 Raw profiles decompile with the ARM v8 Thumb and MIPS o32 models);
+- microMIPS, MIPS16e or Xtensa decompilation (Xtensa ELF files do not load; Xtensa Raw code disassembles only);
 - a Windows host build;
 - process launch or attach: debugging connects only to a stub the operator started; macOS `debugserver` has
   passed one live acceptance run and Windows targets are not yet live-verified, so both stay experimental;

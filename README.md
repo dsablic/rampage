@@ -174,7 +174,8 @@ Areas marked *experimental* may change in any release; see the [stability policy
 - **Firmware filesystem images:** `fs_list` and `fs_extract` read SquashFS, ext2/3/4, UBI volumes, UBIFS, Android
   sparse images, full Android OTA payloads, cpio, tar and ZIP (APKs included) in pure Rust, with hostile-input
   limits. See [firmware filesystem images](docs/firmware-images.md).
-- **Processors:** x86 and x86-64; AArch64, ARM and Thumb from Arm's machine-readable specification; MIPS,
+- **Processors:** x86 and x86-64; AArch64, ARM and Thumb from Arm's machine-readable specification; MIPS
+  (position-independent Linux userland with GOT and `$gp` resolution, and MIPS32 boot ROMs as Raw projects),
   PowerPC, RISC-V, SPARC, s390x and m68k through Capstone; sixteen more families (MSP430, AVR8, 8051, Z80,
   Xtensa, eBPF, LoongArch and others) as Raw Projects through Ghidra's Sleigh. Sleigh profiles other than MSP430
   and AVR8 are *experimental* and disassemble without decompiling.

@@ -39,6 +39,16 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   search, and a stopped search says so. On 32-bit ARM and Thumb an immediate search matches only constants
   loaded from a literal pool or built by a MOVW/MOVT pair in one block (`loaded_constant`), so its total is always
   a lower bound; see [search](search.md).
+- MIPS: the global pointer is the image's `_gp` (or the GOT plus 0x7ff0), one per image; multi-GOT objects
+  (very large shared libraries with several GOTs) resolve only through their primary GOT. `$t9` is known only in
+  runs that start at a function's entry, so `disassemble` from an arbitrary address shows no GOT references a
+  function's prologue sets up. microMIPS and MIPS16e (ISA-mode bit set) code is not decoded, and MIPS64 has no Raw
+  profile. A function that only spins (`j .`) is not inferred to never return, so a decompiled caller can run on
+  into the data after its last call (`halt_baddata`). Constant search on MIPS matches typed immediates and
+  `lui` pairs completed in one block (`loaded_constant`); other sequences are not matched.
+- The MIPS32 Raw profiles (`MIPS:BE:32:default`, `MIPS:LE:32:default`) are experimental: no vector-table,
+  pointer-table or scatter-load support, and the exception vectors at the base plus 0x200 and 0x380 are not seeded.
+  Raw MIPS decompilation shows string arguments as addresses unless a callee prototype types them.
 - The Cortex-M Raw profile (`ARM:LE:32:Cortex`) is experimental. Its backed regions hold at most 4 MiB in all
   (a compressed primary region at most 8 MiB encoded), with up to 15 regions beside the primary one, listed by the
   analyst or mapped from the startup copies the reset-code follow finds. The base address is the analyst's
@@ -48,7 +58,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   instruction it does not model (long multiplies, saturating and SIMD-within-register arithmetic, LDREX/STREX,
   SVC) or a branch on a peripheral's value is skipped, and a copy that call made is not mapped. Other Raw profiles
   have no reset-code follow.
-- On Raw projects `find_main` models Cortex-M reset code only, and finds a main that never returns. `decompile`
+- On Raw projects `find_main` models Cortex-M reset code, and finds a main that never returns, and MIPS reset
+  code, whose first jump out of the reset vector's code it takes as the C entry. `decompile`
   with `exact_entry` takes Raw Cortex-M Thumb code but refuses other ARM code (A32, Thumb in ELF, PE or Mach-O);
   plain `decompile` takes any code address there.
 - Code that only a function pointer or a computed address reaches stays undiscovered on Raw Cortex-M unless a

@@ -143,6 +143,25 @@ against their PDBs: every PDB procedure and thunk is discovered, all 20 vftables
 every slot resolving to a PDB function, and the four functions with C++ exception state report their three try
 blocks, seven catch handlers and seven cleanup funclets.
 
+## MIPS ELF: the GOT and the global pointer
+
+Position-independent MIPS code (o32 and n64 Linux userland, the norm on routers and cameras) reaches imports,
+strings and data through the GOT, addressed from `$gp`. rampage reads:
+
+- **The global pointer**: the `_gp` symbol, else `.got` plus 0x7ff0, else `DT_PLTGOT` plus 0x7ff0, so a binary
+  without section headers (many firmware images strip them) keeps it.
+- **The GOT layout** from the dynamic section: `DT_PLTGOT` (its address), `DT_MIPS_LOCAL_GOTNO` local entries, then
+  one global entry per dynamic symbol from `DT_MIPS_GOTSYM` on. Local entries hold addresses (a 64 KiB page that a
+  `%lo` offset completes, or a local symbol's own address) even when zero, the first page of a PIE; the first two
+  belong to the dynamic linker. Global entries for undefined symbols are the import slots `list_imports` reports.
+- **Lazy-binding stubs**: GNU ld's `.MIPS.stubs` jump to the dynamic linker rather than through a slot. Until an
+  import is bound its global entry holds its stub's address, so each stub is named `<import>@plt` after the entry
+  that points at it. lld's MIPS PLT (`.plt` with `.got.plt` slots) is named like other ELF PLTs.
+
+Code computes `$gp` from `$t9` (LLVM's `_gp_disp` prologue) or keeps it constant (GCC restores it from the stack
+after calls); discovery follows both, and the decompiler is told `$t9` and `$gp` at each function's entry.
+`DT_MIPS_RLD_MAP` and `.rld_map` (the debugger hook) and `.MIPS.abiflags` are not interpreted.
+
 ## Managed assemblies
 
 ECMA-335 metadata includes assembly identity, references, entry point and one paged list:

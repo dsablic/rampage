@@ -260,6 +260,9 @@ file, the native file with an optional PE CheckSum) or as a flat binary. Both ta
 except `export_patched`. Limits: one contiguous range per check; 256 MiB of hashing per search. See
 [firmware patching](firmware-patching.md).
 
+MIPS code names a CRC routine by the polynomial it builds with `lui` and `ori`/`addiu`, or by a CRC-16
+polynomial as an instruction's immediate (`xori $v0, $v0, 0xa001`).
+
 On a Raw project the CRC code evidence comes from the discovered functions (pointer tables and scatter-load copies
 included); on Cortex-M a polynomial literal that no discovered code references is followed to the PC-relative
 `ldr` that loads it (within 4 KiB, either side), and the routine around it is listed with `inferred_range`: from
@@ -689,14 +692,15 @@ Raw-capable tools (`binary_info`, `list_functions`, `disassemble`, `function_gra
 `find_main`, and the file tool `inspect_data`) take an optional `raw` object in place of a native image. `find_crypto`, `triage` and
 `triage_report` read every backed region (decoded ones included) at mapped addresses; `triage` adds a hint and
 `triage_report` a limitation saying which file-format facts (build time, libraries, imports, hardening, overlay,
-imphash) do not apply. `find_main` follows a Cortex-M reset handler to the first call that never returns, or to
+imphash) do not apply. `find_main` follows a MIPS reset vector's code to its first jump out (the C entry), and a
+Cortex-M reset handler to the first call that never returns, or to
 the copied code that starts the scheduler (see [find main](raw-code.md#find-main)). `function_summary` and `lock_mechanisms` work on the functions discovery found, pointer
 tables and scatter-load copies included; when no function qualifies, `lock_mechanisms` says why none was
 analysed. `list_strings` lists every backed region's strings at their mapped addresses (decoded regions
 included); in a code region, where flash images keep constants among instructions, only runs a NUL ends and no
 discovered instruction overlaps are listed. `inspect_data` gives `file_offset` only for bytes mapped from a
 file range (none for decoded, record or unbacked bytes). `evaluate_function` runs a Raw
-project's code when the interpreter supports its processor (the Cortex-M profiles among them); others, such as
+project's code when the interpreter supports its processor (the Cortex-M and MIPS32 profiles among them); others, such as
 MSP430, are refused with the reason. Only the selected bytes are mapped (RAM and peripherals are not): `memory`
 changes image bytes, `mmio` maps a page for each value it sets, and imported SVD register names work in `mmio`:
 
@@ -717,16 +721,23 @@ changes image bytes, `mmio` maps a page for each value it sets, and imported SVD
 `profile` is a closed Raw language ID, listed in the server instructions, in any letter case, or a processor
 alias such as `msp430`, `avr`, `8051`, `z80` or `cortex-m4`. An unknown name gets the closest profiles; an
 A-profile ARM, AArch64 or x86 name is pointed to `inspect_raw_code` with an example, since those have no Raw
-profile; `offset`/`length` select original-file bytes (1..=131072, or up to 4 MiB for `ARM:LE:32:Cortex`);
+profile; `offset`/`length` select original-file bytes (1..=131072, or up to 4 MiB for `ARM:LE:32:Cortex` and the
+MIPS32 profiles);
 `base_address`, `entry` and `seeds` (at most 8192) are internal code-space byte offsets, also for word-addressed
 processors, and tool addresses use the same coordinates. The mapping is an analyst assertion, not header admission.
 `raw` cannot be combined with `arch`, `image_offset` or `image_length`, and other tools refuse it with "tool X does not
 accept Raw projects". Tools that cannot answer on Raw code refuse explicitly (immediate search on Sleigh profiles;
-decompilation for every profile except MSP430, AVR8 and Cortex-M, which have reviewed C models). Annotations are
+decompilation for every profile except MSP430, AVR8, Cortex-M and MIPS32, which have reviewed C models). Annotations are
 memory-only for the server session and the exact interpretation (bytes, profile, mapping, entry, seed set): no sidecar
 or log is written, changed seeds or bytes give a fresh project, and at most 32 interpretations are retained. Each tool's
 `raw` schema is a compact shape
 (about 0.7 KB); the field meanings and profile list appear once in the server instructions to keep the catalog small. See [explicit Sleigh decoding](sleigh-decoding.md#ordinary-raw-projects).
+
+A MIPS32 boot ROM or bare-metal image opens with `MIPS:BE:32:default` (alias `mips`) or `MIPS:LE:32:default`
+(`mipsel`), decoded natively as Cortex-M is: up to 4 MiB, further `regions`, and `decompile` and
+`evaluate_function` with the o32 model. Without `entry` the entry is `base_address`, the reset vector of a boot ROM
+mapped at 0xbfc00000 ([MIPS boot ROMs](raw-code.md#mips-boot-roms-and-bare-metal-mips)). MIPS64, microMIPS and
+MIPS16e have no Raw profile.
 
 A Cortex-M flash image (experimental `ARM:LE:32:Cortex` profile) opens in one call from path, profile and base
 address, with `"vector_table": true` to read the vector table at `base_address` (or an address in its place):
@@ -792,7 +803,7 @@ The session keeps at most 32 Raw interpretations and 64 MiB of their input bytes
 
 ### Multiple regions, Intel HEX and S-records
 
-A Cortex-M project (experimental) may map up to 15 further regions of the same file beside the primary code region,
+A Cortex-M or MIPS project (experimental) may map up to 15 further regions of the same file beside the primary code region,
 so a bootloader's second stage is analysed at the address it runs from:
 
 ```json

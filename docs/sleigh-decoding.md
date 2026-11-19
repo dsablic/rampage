@@ -48,7 +48,8 @@ A Raw Project is one explicit, headerless code image analysed like an ordinary b
 `raw` selector of raw-capable tools ([MCP Raw projects](mcp.md#raw-projects)); the CLI uses
 `--raw-json`/`--raw-request` ([CLI reference](cli-reference.md#raw-projects)); the library entry point is
 `Binary::from_raw_code(bytes, RawCodeOptions { profile, base, entry, seeds, vector_table, pointer_tables })`. Input is 1..=128 KiB
-(4 MiB for the [Cortex-M profile](#cortex-m-profile)) with at most 8192 seeds. Base, entry and seeds must be
+(4 MiB for the natively decoded [Cortex-M profile](#cortex-m-profile) and the MIPS32 profiles,
+[MIPS boot ROMs](raw-code.md#mips-boot-roms-and-bare-metal-mips)) with at most 8192 seeds. Base, entry and seeds must be
 aligned to the profile and backed by code bytes, and the last byte must stay within the profile's code-space highest
 byte. Header-driven `Binary::open` never falls back to Raw or infers an entry.
 
