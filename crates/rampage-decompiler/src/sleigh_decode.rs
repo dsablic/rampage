@@ -371,6 +371,9 @@ pub struct SleighDecoder {
     last_unknown_gate: Option<UnknownGate>,
     last_valid_decode_site: Option<u64>,
     metadata: ProfileMetadata,
+    /// The overflow ops of extended decoding, allocated on first use and reused: the shim writes each slot it uses
+    /// before filling it.
+    extra_ops: Vec<NativeOp>,
 }
 
 // SAFETY: every native operation, including destruction, holds the process-wide FFI_LOCK.
@@ -519,7 +522,14 @@ impl SleighDecoder {
                 return Err(error);
             }
         };
-        Ok(Self { handle, profile: descriptor, last_unknown_gate: None, last_valid_decode_site: None, metadata })
+        Ok(Self {
+            handle,
+            profile: descriptor,
+            last_unknown_gate: None,
+            last_valid_decode_site: None,
+            metadata,
+            extra_ops: Vec::new(),
+        })
     }
 
     pub fn for_target(target: &Target) -> Result<Self, Error> {
@@ -569,12 +579,15 @@ impl SleighDecoder {
 
 impl SleighDecoder {
     /// [`Self::decode_instruction`], accepting instructions whose p-code is longer than the window decoder's limit
-    /// (up to 2048 operations, as AVX per-element operations need). For interpreting code, where each instruction
-    /// is decoded once: the overflow array costs a large allocation per call.
+    /// (up to 2048 operations, as AVX per-element operations need). For interpreting code: the overflow array is
+    /// allocated once per decoder, on the first call.
     pub fn decode_instruction_extended(&mut self, bytes: &[u8], address: u64) -> DecodedInstruction {
         let mut output = Box::<NativeResult>::new_uninit();
-        // SAFETY: NativeOp consists only of integers and fixed arrays of integers, so all-zero is a valid value.
-        let mut extra: Vec<NativeOp> = vec![unsafe { std::mem::zeroed() }; MAX_EXTRA_OPS];
+        if self.extra_ops.is_empty() {
+            // SAFETY: NativeOp consists only of integers and fixed arrays of integers, so all-zero is a valid value.
+            self.extra_ops = vec![unsafe { std::mem::zeroed() }; MAX_EXTRA_OPS];
+        }
+        let extra = &mut self.extra_ops;
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: C initializes the complete fixed-size result, writes at most `extra.len()` overflow ops, copies
         // bounded input, and keeps no Rust pointers.
@@ -590,7 +603,7 @@ impl SleighDecoder {
             );
         }
         let output = unsafe { output.assume_init() };
-        let decoded = convert(self.profile.id, address, &output, &extra);
+        let decoded = convert(self.profile.id, address, &output, &self.extra_ops);
         self.last_valid_decode_site = (decoded.status == DecodeStatus::Valid).then_some(decoded.address);
         self.last_unknown_gate = None;
         decoded

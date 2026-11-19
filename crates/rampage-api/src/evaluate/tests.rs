@@ -1164,6 +1164,10 @@ fn model_names_and_32_bit_variadic_pairs() {
         ("__ZnamRKSt9nothrow_t", Some(Stub::New)),
         ("_ZdlPvm", Some(Stub::Delete)),
         ("_ZnwmSt11align_val_t", None),
+        ("_ZnwmPv", None),
+        ("_ZnamPv", None),
+        ("??2@YAPEAX_KPEAX@Z", None),
+        ("??2@YAPEAX_KW4align_val_t@std@@@Z", None),
         ("__sprintf_chk", Some(Stub::SprintfChk)),
         ("___snprintf_chk", Some(Stub::SnprintfChk)),
         ("snprintf@GLIBC_2.2.5", Some(Stub::Snprintf)),
@@ -1258,8 +1262,87 @@ fn decompile_points_small_value_functions_at_evaluate_function() {
         assert_eq!(next.contains(&format!("evaluate_function {{\"at\": \"{at}\"")), hinted, "{at}: {next}");
     }
     assert!(crate::tools::evaluate_hint("void f(int a)\n{\n}\n", 0x10).is_none());
+    // A leading warning comment holds parentheses; the signature comes after it.
+    let warned = "/* WARNING: Removing unreachable block (ram,0x1010) */\n\nvoid f(int a)\n{\n}\n";
+    assert!(crate::tools::evaluate_hint(warned, 0x10).is_none());
+    let multiline = "/* WARNING: one (ram,0x1)\n   two */\nint f(int a)\n{\n  return a;\n}\n";
+    assert!(crate::tools::evaluate_hint(multiline, 0x10).is_some());
     assert!(crate::tools::evaluate_hint("\nint f(void)\n{\n  return 1;\n}\n", 0x10).is_none());
     assert!(crate::tools::evaluate_hint("\nuint4 f(uint4 param_1)\n{\n  return param_1;\n}\n", 0x10).is_some());
     let long = format!("int f(int a)\n{{\n{}}}\n", "  a = a + 1;\n".repeat(400));
     assert!(crate::tools::evaluate_hint(&long, 0x10).is_none());
+}
+
+#[test]
+fn formatting_copies_bytes_and_aligns_pairs_from_the_first_argument_word() {
+    // Bytes of 0x80 and above are copied, not re-encoded.
+    let project = fixture_api("evaluate-models-x64.elf");
+    let args = json!([{"buffer": {"size": 200}}, 200, {"buffer": {"hex": "c3a900"}}, 1]);
+    let report = run(&project, "describe", args, json!({"return_bits": 32}));
+    let expected = b"\xc3\xa9=00001/1/B%|ab    |       1|1   |-1|3|8589934592";
+    assert_eq!(returned(&report), expected.len() as u64);
+    let hex: String = expected.iter().chain([&0u8]).map(|byte| format!("{byte:02x}")).collect();
+    assert!(report.buffers[0].hex.starts_with(&hex), "{}", report.buffers[0].hex);
+
+    // 32-bit ARM: snprintf's %lld after three fixed words starts at word 4 (r3 is skipped), __snprintf_chk's after
+    // five at word 6; sprintf's after two at word 2.
+    let project = fixture("bin/hello-x64.elf");
+    let mut ram = stub_ram(&project);
+    put(&mut ram, 0x7000_0100, b"%lld|%d\0");
+    let mut even = limits(1 << 20, "snprintf");
+    even.even_pairs = true;
+    let text = |ram: &mut ImageRam<'_>| get(ram, 0x7000_0000, 15);
+    let (low, high) = (0x2345_6789u64, 0x1u64);
+    stubs::call(Stub::Snprintf, &[0x7000_0000, 64, 0x7000_0100, 0xdead, low, high, 7], 4, &mut ram, &even).unwrap();
+    assert_eq!(text(&mut ram), b"4886718345|7\0\0\0");
+    stubs::call(Stub::SnprintfChk, &[0x7000_0000, 64, 1, 64, 0x7000_0100, 0xdead, low, high, 8], 4, &mut ram, &even)
+        .unwrap();
+    assert_eq!(text(&mut ram), b"4886718345|8\0\0\0");
+    stubs::call(Stub::Sprintf, &[0x7000_0000, 0x7000_0100, low, high, 9], 4, &mut ram, &even).unwrap();
+    assert_eq!(text(&mut ram), b"4886718345|9\0\0\0");
+
+    // End to end: the 64-bit value on the ARM stack, and Apple arm64's variadic arguments all on the stack.
+    for (name, wide, label) in
+        [("evaluate-variadic-armhf.elf", "wide", "label"), ("evaluate-variadic-arm64.macho", "_wide", "_label")]
+    {
+        let project = fixture_api(name);
+        let args = json!([{"buffer": {"size": 64}}, 64, {"value": "0x123456789", "bits": 64}]);
+        let report = run(&project, wide, args, json!({"return_bits": 32}));
+        assert_eq!((returned(&report), report.buffers[0].text.as_deref()), (12, Some("4886718345|7")), "{name}");
+        let report = run(&project, label, json!([{"buffer": {"size": 64}}, 5]), json!({"return_bits": 32}));
+        assert_eq!(report.buffers[0].text.as_deref(), Some("5|42949672960|ok"), "{name}");
+        assert_eq!(returned(&report), 16, "{name}");
+    }
+}
+
+#[test]
+fn x86_fastcall_floats_go_on_the_stack() {
+    use super::convention::{FloatAbi, assign_with_floats};
+    let fastcall = abi(Arch::X86, rampage_loaders::Format::Pe, false, Convention::Fastcall);
+    assert_eq!(fastcall.float, FloatAbi::Integer);
+    // (int, double, int, float, int): ECX, stack+0, EDX, stack+8, stack+12.
+    let places = assign_with_floats(&fastcall, &[4, 8, 4, 4, 4], &[None, Some(8), None, Some(4), None], false).unwrap();
+    assert_eq!(
+        places,
+        [Place::Register("ECX"), Place::Stack(0), Place::Register("EDX"), Place::Stack(8), Place::Stack(12)]
+    );
+}
+
+#[test]
+fn signalling_nans_come_back_quiet_from_rounding() {
+    use super::float::{DOUBLE, Rounding, round_integral};
+    let signalling = 0x7ff0_0000_0000_0001u128;
+    let rounded = round_integral(signalling, DOUBLE, Rounding::Nearest);
+    assert!(f64::from_bits(rounded as u64).is_nan());
+    assert_ne!(rounded & (1 << 51), 0, "quiet bit set: {rounded:#x}");
+    assert_eq!(round_integral(2.5f64.to_bits() as u128, DOUBLE, Rounding::TiesAway), 3.0f64.to_bits() as u128);
+}
+
+#[test]
+fn trace_writes_keep_outermost_ranges() {
+    assert_eq!(
+        super::outermost(&[(8, 4), (0, 8), (0, 4), (0, 8), (12, 1), (16, 2)]),
+        [(0, 8), (8, 4), (12, 1), (16, 2)]
+    );
+    assert_eq!(super::outermost(&[(4, 1), (0, 16)]), [(0, 16)]);
 }

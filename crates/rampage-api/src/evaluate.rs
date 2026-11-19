@@ -697,6 +697,8 @@ struct Run<'a> {
     /// The decoder's register space, and trace labels by (offset, size).
     register_space: u32,
     labels: HashMap<(u64, u32), String>,
+    /// Whether decodes are extended (see `decode`).
+    extended: bool,
 }
 
 fn varnode(storage: RegisterStorage) -> Varnode {
@@ -747,9 +749,15 @@ impl Run<'_> {
         if bytes.is_empty() {
             return Err((StopReason::UnmappedFetch, format!("execution reached unmapped address {address:#x}")));
         }
-        let mut decoded = self.decoder.decode_instruction(&bytes, address);
-        if decoded.status == DecodeStatus::BudgetExceeded {
-            // Long p-code (AVX per-element operations): decode again with room for it.
+        // Long p-code (AVX per-element operations) needs extended decoding; once a run has met it, every later
+        // decode is extended, so none is decoded twice.
+        let mut decoded = if self.extended {
+            self.decoder.decode_instruction_extended(&bytes, address)
+        } else {
+            self.decoder.decode_instruction(&bytes, address)
+        };
+        if decoded.status == DecodeStatus::BudgetExceeded && !self.extended {
+            self.extended = true;
             decoded = self.decoder.decode_instruction_extended(&bytes, address);
         }
         let text = format!("{} {}", decoded.mnemonic, decoded.operand_text).trim().to_owned();
@@ -802,44 +810,43 @@ impl Run<'_> {
         label
     }
 
-    /// One instruction's writes, as a trace row shows them: values after it ran, a write inside a larger one of
-    /// the same instruction left out.
-    fn describe_writes(&mut self, log: &WriteLog) -> String {
-        let covered = |list: &[(u64, u32)], index: usize| {
-            let (offset, size) = list[index];
-            list.iter().enumerate().any(|(other, &(start, length))| {
-                other != index
-                    && start <= offset
-                    && offset + u64::from(size) <= start + u64::from(length)
-                    && (length > size || other > index)
+    /// One instruction's writes with their values after it ran, unnamed: a write inside a larger one of the same
+    /// instruction is left out.
+    fn capture(&mut self, log: &WriteLog) -> Writes {
+        let registers = outermost(&log.registers)
+            .into_iter()
+            .map(|(offset, size)| {
+                let node = Varnode {
+                    space: self.register_space,
+                    size,
+                    address_size: 0,
+                    word_size: 1,
+                    offset: Some(offset),
+                    selected_space: None,
+                };
+                (offset, size, self.machine.read_bytes(&node).ok())
             })
-        };
+            .collect();
+        let stores = outermost(&log.stores)
+            .into_iter()
+            .map(|(address, size)| {
+                (address, size, (size <= 16).then(|| self.machine.read_memory(address, size).ok()).flatten())
+            })
+            .collect();
+        Writes { registers, stores }
+    }
+
+    /// A kept trace row's writes as text: `REGISTER=value` and `[address]=value`, at most `TRACE_WRITES_CHARS`.
+    fn describe(&mut self, writes: &Writes) -> String {
         let mut parts = Vec::new();
-        for index in 0..log.registers.len() {
-            if covered(&log.registers, index) {
-                continue;
-            }
-            let (offset, size) = log.registers[index];
-            let node = Varnode {
-                space: self.register_space,
-                size,
-                address_size: 0,
-                word_size: 1,
-                offset: Some(offset),
-                selected_space: None,
-            };
-            let value = self.machine.read_int(&node).map_or_else(|_| "?".to_owned(), short_hex);
-            parts.push(format!("{}={value}", self.label(offset, size)));
+        for (offset, size, value) in &writes.registers {
+            let value = value.as_deref().map_or_else(|| "?".to_owned(), hex_bytes);
+            parts.push(format!("{}={value}", self.label(*offset, *size)));
         }
-        for index in 0..log.stores.len() {
-            if covered(&log.stores, index) {
-                continue;
-            }
-            let (address, size) = log.stores[index];
-            let value = if size <= 16 {
-                self.machine.read_memory(address, size).map_or_else(|_| "?".to_owned(), short_hex)
-            } else {
-                format!("{size} bytes")
+        for (address, size, value) in &writes.stores {
+            let value = match value {
+                Some(value) => short_hex(*value),
+                None => format!("{size} bytes"),
             };
             parts.push(format!("[{address:#x}]={value}"));
         }
@@ -883,8 +890,19 @@ impl Run<'_> {
         let unreadable = |error: ApiError| (StopReason::UnsupportedOp, error.to_string());
         let outcome = match stub {
             Some(stub) => {
-                let args: Vec<u64> =
-                    self.arguments(abi, stub.arity(), true)?.into_iter().map(|(_, value)| value).collect();
+                let args: Vec<u64> = match stub.fixed_words() {
+                    // Apple arm64 passes every variadic argument on the stack, in 8-byte slots.
+                    Some(fixed) if abi.natural_stack_slots => {
+                        let mut args: Vec<u64> =
+                            self.arguments(abi, fixed, true)?.into_iter().map(|(_, value)| value).collect();
+                        let sp = self.get_register(abi.stack_pointer).map_err(unreadable)? as u64;
+                        for index in 0..stubs::VARIADIC_WORDS as u64 {
+                            args.push(self.machine.read_memory(sp + 8 * index, 8).map_err(fault_stop)? as u64);
+                        }
+                        args
+                    }
+                    _ => self.arguments(abi, stub.arity(), true)?.into_iter().map(|(_, value)| value).collect(),
+                };
                 stubs::call(stub, &args, abi.width, &mut self.machine.ram, limits)?
             }
             None => stubs::Outcome { value: 0, bytes: 0 },
@@ -1037,12 +1055,13 @@ impl Project {
             return Err(invalid(format!("return_bits must be a multiple of 8 up to {}", (2 * width * 8).min(128))));
         }
         let prepared = request.args.iter().map(|argument| prepare(argument, width)).collect::<Result<Vec<_>, _>>()?;
-        // Floats that travel as integers (the x86-32 stack, ARM soft float) are integers from here on.
+        // Floats that travel as integers (the x86-32 stack, ARM soft float) are integers from here on; their
+        // placement still knows them as floats.
         let as_integers = abi.float == convention::FloatAbi::Integer;
         let floats: Vec<Option<u32>> = prepared
             .iter()
             .map(|argument| match argument {
-                Prepared::Float { bytes, .. } if !as_integers => Some(*bytes),
+                Prepared::Float { bytes, .. } => Some(*bytes),
                 _ => None,
             })
             .collect();
@@ -1178,16 +1197,17 @@ impl Project {
             mode_switch,
             register_space: space_ids.register,
             labels: HashMap::new(),
+            extended: false,
         };
         let trace_length = match request.trace {
             None => None,
             Some(length @ 1..=MAX_TRACE) => Some(length as usize),
             Some(_) => return Err(invalid(format!("trace must be 1..={MAX_TRACE}"))),
         };
-        let mut first_rows: Vec<TraceRow> = Vec::new();
-        let mut last_rows: std::collections::VecDeque<TraceRow> = std::collections::VecDeque::new();
+        let mut first_rows: Vec<RawRow> = Vec::new();
+        let mut last_rows: std::collections::VecDeque<RawRow> = std::collections::VecDeque::new();
         let mut omitted_rows = 0u64;
-        let mut record = |row: TraceRow| {
+        let mut record = |row: RawRow| {
             let Some(length) = trace_length else { return };
             if first_rows.len() < length {
                 first_rows.push(row);
@@ -1401,8 +1421,8 @@ impl Project {
                     Ok((target, cost)) => {
                         if let Some(log) = run.machine.trace.take() {
                             let kind = if stub.is_some() { "model" } else { "skipped, returns 0" };
-                            let writes = run.describe_writes(&log);
-                            record(TraceRow {
+                            let writes = run.capture(&log);
+                            record(RawRow {
                                 step: steps,
                                 address: pc,
                                 instruction: format!("{name} ({kind})"),
@@ -1447,8 +1467,8 @@ impl Project {
             }
             let executed = run.machine.execute(&decoded.ops);
             if let Some(log) = run.machine.trace.take() {
-                let writes = run.describe_writes(&log);
-                record(TraceRow { step: steps, address: pc, instruction: decoded.text.clone(), writes });
+                let writes = run.capture(&log);
+                record(RawRow { step: steps, address: pc, instruction: decoded.text.clone(), writes });
             }
             match executed {
                 Ok(Flow::Next) => pc = pc.wrapping_add(decoded.extent),
@@ -1585,10 +1605,18 @@ impl Project {
             stubbed_omitted,
             max_steps,
             timeout_ms,
-            trace: trace_length.map(|_| Trace {
-                first: first_rows,
-                last: last_rows.into_iter().collect(),
-                omitted: omitted_rows,
+            trace: trace_length.map(|_| {
+                let mut row = |raw: RawRow| TraceRow {
+                    step: raw.step,
+                    address: raw.address,
+                    instruction: raw.instruction,
+                    writes: run.describe(&raw.writes),
+                };
+                Trace {
+                    first: first_rows.into_iter().map(&mut row).collect(),
+                    last: last_rows.into_iter().map(&mut row).collect(),
+                    omitted: omitted_rows,
+                }
             }),
         };
         Ok((report, probed))
@@ -1623,6 +1651,51 @@ fn snapshot(ram: &mut ImageRam<'_>, address: u64) -> Vec<u8> {
         bytes.push(byte[0]);
     }
     bytes
+}
+
+/// What one traced instruction wrote, with the values after it ran: (register offset, bytes, little-endian
+/// value) and (address, bytes, value up to 16 bytes).
+#[derive(Debug, Default)]
+struct Writes {
+    registers: Vec<(u64, u32, Option<Vec<u8>>)>,
+    stores: Vec<(u64, u32, Option<u128>)>,
+}
+
+/// A trace row before its writes are named and formatted.
+struct RawRow {
+    step: u64,
+    address: u64,
+    instruction: String,
+    writes: Writes,
+}
+
+/// The distinct (start, length) ranges of `ranges` not inside another, in address order.
+fn outermost(ranges: &[(u64, u32)]) -> Vec<(u64, u32)> {
+    let mut sorted = ranges.to_vec();
+    // Longest first at each start, so a range inside an earlier one is seen after it.
+    sorted.sort_by_key(|&(start, length)| (start, std::cmp::Reverse(length)));
+    sorted.dedup();
+    let mut kept: Vec<(u64, u32)> = Vec::with_capacity(sorted.len());
+    let mut end = 0u64;
+    for (start, length) in sorted {
+        let stop = start.saturating_add(u64::from(length));
+        if kept.is_empty() || stop > end {
+            kept.push((start, length));
+            end = end.max(stop);
+        }
+    }
+    kept
+}
+
+/// Little-endian `bytes` as one hex number, or a single decimal digit.
+fn hex_bytes(bytes: &[u8]) -> String {
+    let digits: String = bytes.iter().rev().map(|byte| format!("{byte:02x}")).collect();
+    let digits = digits.trim_start_matches('0');
+    match digits {
+        "" => "0".to_owned(),
+        digit if digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit() => digit.to_owned(),
+        digits => format!("0x{digits}"),
+    }
 }
 
 /// `value` in hex without leading zeros, or a single decimal digit.

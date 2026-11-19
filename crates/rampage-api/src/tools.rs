@@ -2015,7 +2015,20 @@ pub(crate) fn evaluate_hint(code: &str, address: u64) -> Option<String> {
     if code.len() > EVALUATE_HINT_CHARS {
         return None;
     }
-    let header = code.lines().find(|line| line.contains('('))?;
+    // The signature is the first line outside comments (a `/* WARNING: ... (ram,0x1010) */` header comes first).
+    let mut in_comment = false;
+    let header = code.lines().find(|line| {
+        let line = line.trim_start();
+        if in_comment {
+            in_comment = !line.contains("*/");
+            return false;
+        }
+        if line.starts_with("/*") {
+            in_comment = !line.contains("*/");
+            return false;
+        }
+        !line.starts_with("//") && line.contains('(')
+    })?;
     let (signature, parameters) = header.split_once('(')?;
     let parameters = parameters.trim_end().trim_end_matches(')').trim();
     let returns_value = !signature.trim_start().starts_with("void ") && !signature.contains("noreturn");
