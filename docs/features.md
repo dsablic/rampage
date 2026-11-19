@@ -174,14 +174,16 @@ arm64 selector stubs, `objc_alloc_init`) are resolved to their selector and, whe
 confidence; `objc_sends` lists them and they become call edges in `xrefs`, `function_summary` and decompiled-C
 comments (see [Objective-C message sends](objc-dispatch.md)).
 
-`evaluate_function` (core, experimental) runs a function on integer and buffer arguments and returns its
+`evaluate_function` (core, experimental) runs a function on integer, float and buffer arguments and returns its
 result: a p-code interpreter over the bundled Sleigh specifications follows calls inside the image, places
-arguments and reads results by the binary's calling convention (64-bit values on 32-bit targets as register pairs)
-and says why a run stopped, naming the import, unmapped address or processor operation. Nothing runs natively.
-Common C library imports (memory, string and allocation functions, with their underscore, fortified and MSVC CRT
-names) run as built-in models. `string_decoding` with `evaluate: true` runs candidate decoders on their blobs and
-reports printable output as emulation evidence. Limits: integer results; system calls, other imports and SIMD
-processor operations stop the run; see
+arguments and reads results by the binary's calling convention (64-bit values on 32-bit targets as register pairs,
+float and double results from XMM0, ST0, s0/d0 or the soft-float core registers) and says why a run stopped,
+naming the import, unmapped address or processor operation. Nothing runs natively. SSE/AVX2 vector operations are
+interpreted, and `trace` returns the first and last instructions with what each wrote. Common C library imports
+(memory, string, formatting and allocation functions, C++ `operator new`/`delete`, with their underscore,
+fortified and MSVC names) run as built-in models. `string_decoding` with `evaluate: true` runs candidate decoders
+on their blobs and reports printable output as emulation evidence. Limits: system calls, other imports, AVX-512
+and x87 transcendental operations stop the run; x87 arithmetic is computed in double precision; see
 [the MCP reference](mcp.md#inputs-paging-and-decompiler-tokens).
 
 Types-group [`edit_variable`](local-variables.md) persists local/parameter names and types by native storage

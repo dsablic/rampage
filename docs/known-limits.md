@@ -117,6 +117,13 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   `resources.arsc` is counted, not resolved, so `@0x7f...` manifest values stay resource ids; an AAB's protobuf
   manifest and APK signature blocks are not read; a DEX 041 container with several DEX files has only its first read
   (and says so). JVM class files are not read.
+- `evaluate_function` (experimental) interprets p-code, not the processor: system calls, imports without a
+  model, AVX-512, AES/SHA/`pcmpistri`, x87 `fsin`/`fcos` and other transcendental operations, and NEON arithmetic
+  that Sleigh leaves as processor operations stop the run. Floats round to nearest even (a rounding mode set at
+  run time is not modelled), x87 arithmetic is computed in double precision, and a fused multiply-add rounds twice,
+  so a float result can differ from hardware in its last bits. MIPS, PowerPC and RISC-V take no float arguments or
+  results. A `string_decoding` replay starts at the block holding the call, so arguments the caller set up in
+  earlier blocks are not seen.
 - Not built yet: object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and
   vftable evidence, `__CxxFrameHandler4` and Itanium exception tables, and incremental re-analysis after edits.
 

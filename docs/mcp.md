@@ -406,16 +406,28 @@ recovery. See the [decompiler reference](../crates/rampage-decompiler/README.md)
 diagnostics and worker requirements; `function_summary` remains a structural alternative, not decompiled C.
 
 `evaluate_function` (core, experimental) runs one function of the image on given arguments and returns its
-integer result, so a question like "what does this return for (0x00F0A500, 3)?" is answered by running the code
-rather than simulating it from pseudocode. A p-code interpreter over the bundled Sleigh specifications executes it
+result, so a question like "what does this return for (0x00F0A500, 3)?" is answered by running the code rather
+than simulating it from pseudocode. A p-code interpreter over the bundled Sleigh specifications executes it
 (x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC, RISC-V); nothing runs natively. `at` names the entry;
 `args` are integers (numbers, or `0x` hex or decimal strings; `{value, bits}` for an explicit width, and a hex
-string longer than 8 digits is 64-bit on a 32-bit target) or `{buffer: {hex | text, size}}` buffers passed by
-pointer and returned with their final bytes. Arguments go where the binary's calling convention puts them;
-`convention` selects cdecl, stdcall, fastcall or thiscall on x86 and sysv or win64 on x86-64. `return_bits` sets
-the result width (default the register width), and twice the register width reads a register pair (EDX:EAX,
-r1:r0). Without `return_bits` on a 64-bit target the result also has `low_32`, the value of a C `int` or `bool`
-whose upper register bits are undefined. Addresses below 0x1000 and segments without permissions (Mach-O
+string longer than 8 digits is 64-bit on a 32-bit target), floats (`{float, bits}`: a number, or a string that is
+decimal, `inf`, `-inf`, `nan` or the `0x` hex of its bits; a double unless `bits` is 32) or
+`{buffer: {hex | text, size}}` buffers passed by pointer and returned with their final bytes. Arguments go where the
+binary's calling convention puts them; `convention` selects cdecl, stdcall, fastcall or thiscall on x86, sysv or
+win64 on x86-64, and aapcs or aapcs_vfp on 32-bit ARM. Floats travel in XMM registers on x86-64 (System V counts
+them apart from the integer registers, Win64 by position), on the stack on 32-bit x86, in s/d registers on AArch64
+and under ARM hard float (`aapcs_vfp`, chosen for an ELF whose header flags the hard-float ABI), and in core
+registers under ARM soft float; MIPS, PowerPC and RISC-V take no float arguments. `return_bits` sets the integer
+result width (default the register width), and twice the register width reads a register pair (EDX:EAX, r1:r0).
+Without `return_bits` on a 64-bit target the result also has `low_32`, the value of a C `int` or `bool` whose
+upper register bits are undefined. `return_float` 32 or 64 reads a float or double instead, from XMM0, ST0 on
+32-bit x86 (rounded from the x87 extended value), s0/d0, or r0 (r1:r0) under ARM soft float: the result then has
+`hex` (its bits) and `float` (the shortest decimal that reads back as the same value) in place of `unsigned` and
+`signed`. `trace` N (1-32) adds `trace`: the first and last N executed instructions with what each wrote
+(`REGISTER=value` after it ran, `[address]=value` for stores, a write inside a larger one left out, at most 200
+characters a row), the count omitted between them, and a row for each import run as a model; the report is
+otherwise unchanged. Small functions that take arguments and return a value get a `next` from `decompile` that
+points here. Addresses below 0x1000 and segments without permissions (Mach-O
 `__PAGEZERO`) are unmapped, except in a fixed-address image linked to run there (a Raw project or an ELF
 executable with a segment in page 0, as Cortex-M firmware often is), and Apple arm64 binaries pack stack arguments at their own size. Memory starts as the file's image (zero-filled bss, copy-on-write) plus a
 zeroed stack and thread block; `memory` writes bytes into it first. Calls inside the image are followed; `stop`
@@ -425,13 +437,25 @@ says why the run ended: `returned` (with `result` as hex, unsigned and signed), 
 `division_by_zero` or `memory_limit` (more than 64 MiB of written image pages), with `stopped_at` naming the
 instruction and function. Imports of common C library functions (`memcpy`, `memmove`, `memset`, `memcmp`,
 `strlen`, `strnlen`, `strcpy`, `strncpy`, `strcmp`, `strncmp`, `strchr`, `strrchr`, `strcat`, `toupper`,
-`tolower`, `abs`, `malloc`, `calloc`, `realloc`, `free`, also under their Mach-O underscore, `__name_chk`
-fortified and MSVC CRT names) run as built-in models with the binary's calling convention instead of stopping;
-`stubbed` counts them, and `stubs: false` stops at them as before. The allocators use a bump heap of at most
-16 MiB whose pages count against the 64 MiB cap. Each result also lists where every
-argument went and the functions called. Limits: `max_steps` (default 1,000,000, at most 20,000,000) and
-`timeout_ms` (default 10,000, at most 60,000); integer results only; SIMD instructions that Sleigh models as
-processor operations (many SSE ones) stop with `user_op`, and x87 extended floats with `unsupported_op`.
+`tolower`, `abs`, `malloc`, `calloc`, `realloc`, `free`, `strdup`, `strndup`, `sprintf`, `snprintf`, also under
+their Mach-O underscore, `__name_chk` fortified and MSVC CRT names, and C++ `operator new`/`new[]` and
+`delete`/`delete[]` under their Itanium and MSVC names) run as built-in models with the binary's calling convention
+instead of stopping; `stubbed` counts them, and `stubs: false` stops at them as before. The formatting models
+handle `%d %i %u %x %X %o %c %s %p %%` with flags, width, precision and length modifiers (a 64-bit value on a
+32-bit target from two argument words, an even pair under AAPCS and o32); `%f`-style conversions and `%n` stop
+with `unsupported_op`. The allocators use a bump heap of at most 16 MiB whose pages count against the 64 MiB cap;
+aligned `operator new` is not modelled. Argument buffers read to the end of their 4 KiB page, as aligned vector
+loads do on real memory, while writes stop at the buffer's size. On x86 the SSE, SSSE3, SSE4.1/4.2 and AVX/AVX2
+operations Sleigh leaves as processor operations (shuffles, packs, unpacks, blends, extensions, saturating and
+high multiplies, horizontal adds, sum of absolute differences, AVX shifts and permutes, packed float arithmetic,
+comparisons, rounding and conversions, `crc32`) are interpreted, as are 32-bit ARM's VFP/NEON `vcvt` conversions.
+Float p-code is IEEE binary32/binary64 with round-to-nearest-even (the default mode; other rounding modes set at
+run time are not modelled), conversions to integers saturate (the integer indefinite on x86), and x87 80-bit
+values convert exactly but compute their arithmetic in binary64 (53-bit, not 64-bit, significands). Each result
+also lists where every argument went and the functions called. Limits: `max_steps` (default 1,000,000, at most
+20,000,000) and `timeout_ms` (default 10,000, at most 60,000); AVX-512, AES, SHA and string-compare (`pcmpistri`)
+operations, x87 transcendental functions (`fsin`, `fcos`, ...) and NEON arithmetic left as processor operations
+stop with `user_op`; a fused multiply-add rounds twice, as Sleigh's p-code describes it.
 
 `string_decoding` with `evaluate: true` also runs each candidate decoder on the blobs passed to it (at most 16
 pairs, 200,000 steps and 500 ms per run, 5 s in all): it replays the caller's block holding the call through the
