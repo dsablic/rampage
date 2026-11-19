@@ -45,7 +45,13 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   function's prologue sets up. microMIPS and MIPS16e (ISA-mode bit set) code is not decoded, and MIPS64 has no Raw
   profile. A function that only spins (`j .`) is not inferred to never return, so a decompiled caller can run on
   into the data after its last call (`halt_baddata`). Constant search on MIPS matches typed immediates and
-  `lui` pairs completed in one block (`loaded_constant`); other sequences are not matched.
+  `lui` pairs completed in one block (`loaded_constant`); other sequences are not matched. `integrity_checks`
+  takes a 16-bit CRC polynomial immediate as evidence only in a function that also shifts by one bit and XORs, so
+  a table-driven CRC-16 without a table in the image is not found.
+- Decompiling MIPS position-independent code folds loads from read-only mappings, as on Cortex-M, besides the
+  local GOT entries it marks read-only: Ghidra prints `.rodata` text as string literals only with that property,
+  and one switch governs both. A program that writes its own read-only segment (through `mprotect`) would read as
+  constants there.
 - The MIPS32 Raw profiles (`MIPS:BE:32:default`, `MIPS:LE:32:default`) are experimental: no vector-table,
   pointer-table or scatter-load support, and the exception vectors at the base plus 0x200 and 0x380 are not seeded.
   Raw MIPS decompilation shows string arguments as addresses unless a callee prototype types them.
@@ -59,7 +65,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   SVC) or a branch on a peripheral's value is skipped, and a copy that call made is not mapped. Other Raw profiles
   have no reset-code follow.
 - On Raw projects `find_main` models Cortex-M reset code, and finds a main that never returns, and MIPS reset
-  code, whose first jump out of the reset vector's code it takes as the C entry. `decompile`
+  code: it follows jumps taken before `$sp` is set (`b reset` over the exception vectors) and takes the first
+  forward jump after it, or a kseg1-to-kseg0 jump, as the C entry; a C entry reached by a call is not found. `decompile`
   with `exact_entry` takes Raw Cortex-M Thumb code but refuses other ARM code (A32, Thumb in ELF, PE or Mach-O);
   plain `decompile` takes any code address there.
 - Code that only a function pointer or a computed address reaches stays undiscovered on Raw Cortex-M unless a

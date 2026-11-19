@@ -57,12 +57,12 @@ jumps to code in cached kseg0 (0x80000000 up). Map the image where it runs:
 ```json
 {
   "path": "tests/fixtures/mips/boot-mips.bin",
-  "raw": { "profile": "mips", "offset": 0, "length": 851, "base_address": "0xbfc00000" }
+  "raw": { "profile": "mips", "offset": 0, "length": 1186, "base_address": "0xbfc00000" }
 }
 ```
 
-Absolute `lui`/`addiu` pairs give string and data references, and `find_main` follows the reset code's first jump
-out of it (`la $t0, boot_main; jr $t0`). The exception vectors at 0xbfc00200 and 0xbfc00380 (BEV set) are not
+Absolute `lui`/`addiu` pairs give string and data references, and `find_main` follows the reset code to its C entry
+(see [find main](#find-main)). The exception vectors at 0xbfc00200 and 0xbfc00380 (BEV set) are not
 seeded on their own; add them to `seeds` when the image has handlers there. microMIPS and MIPS16e code, MIPS64
 and the vector table, pointer-table and scatter-load options of Cortex-M have no MIPS equivalent. A Linux userland
 or kernel ELF needs no Raw project: open it directly (position-independent code resolves its GOT through `$gp`).
@@ -198,8 +198,11 @@ at medium confidence. When the startup jumps into copied code that itself calls 
 function is main. Each candidate lists the instructions it rests on; a reset handler that only calls a few
 functions and loops gets no candidate. A main that returns, or a scheduler started another way, is not found.
 
-On a MIPS project `find_main` follows the reset code at the entry to its first jump out of it (`la $t0, f;
-jr $t0`, or `j f`): the boot ROM's C entry, at medium confidence when discovery found a function there.
+On a MIPS project `find_main` follows the reset code at the entry. The usual `b reset` at the vector, which jumps
+over the exception vectors, and other jumps taken before the stack pointer is set are followed (up to three); the
+first forward jump after `$sp` is set, or one from uncached kseg1 into cached kseg0 (`la $t0, f; jr $t0`), is the
+boot ROM's C entry, at medium confidence when discovery found a function there. Reset code that reaches its C code
+by a call, sets the stack after its last jump, or jumps through a table is not followed.
 
 ## Raw-capable tools
 

@@ -231,7 +231,10 @@
       "source_provenance_sha256": "3f904476bf71ea8a26218bf911eaddf6b8fab7a5b368bc6f49f84a1a579d416a",
       "notice": "sdk-zig-0.17.0-LICENSE.txt",
       "notice_sha256": "5c537d6853e005298a285d508cff9ac7192cea23576c840d485b2b586a7ff177",
-      "related_notices": ["sdk-musl-installed-COPYRIGHT.txt", "sdk-llvm-installed-LICENSE.txt"],
+      "related_notices": [
+        "sdk-musl-installed-COPYRIGHT.txt",
+        "sdk-llvm-installed-LICENSE.txt"
+      ],
       "scope": "Complete installed Zig legal text, byte-identical; not a published source archive identity."
     },
     {
@@ -488,6 +491,72 @@
       "notice": "portable-compiler-rt-22.1.8-LICENSE.txt",
       "notice_sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
       "scope": "complete upstream license file, byte-identical (shared with the portable compiler-rt profile)"
+    },
+    {
+      "profile": "fixture-mips-gnu-libgcc-12.2.0-14cross5-mips",
+      "license_declaration": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "1c5a56582eab727f02e89a74e501402ebdb4ede1a03b6859a58155c1f5899135",
+      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING.RUNTIME",
+      "source_notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+      "notice": "gcc-15.2.0-COPYING.RUNTIME.txt",
+      "notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+      "scope": "crtbegin/crtend linked into tests/fixtures/mips/router-gnu-mips*.elf from Debian libgcc-12-dev-mips-cross; complete GCC Runtime Library Exception 3.1 text, byte-identical; the toolchain archive ships no license files"
+    },
+    {
+      "profile": "fixture-mips-gnu-libgcc-12.2.0-14cross5-mips",
+      "license_declaration": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "1c5a56582eab727f02e89a74e501402ebdb4ede1a03b6859a58155c1f5899135",
+      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING3",
+      "source_notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "notice": "gcc-15.2.0-COPYING3.txt",
+      "notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "scope": "crtbegin/crtend linked into tests/fixtures/mips/router-gnu-mips*.elf from Debian libgcc-12-dev-mips-cross; complete GNU GPL version 3 text, byte-identical, which the runtime exception modifies"
+    },
+    {
+      "profile": "fixture-mips-gnu-glibc-2.36-8cross2-mips",
+      "license_declaration": "LGPL-2.1-or-later (crt1.o, crti.o and crtn.o carry its linking exception)",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "bc71c8d719aac14c5522fa261dbec6a11a2297ad22b75cf390818b06f225d687",
+      "source_notice_path": "glibc-2.40/COPYING.LIB",
+      "source_notice_sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+      "notice": "portable-glibc-2.40-COPYING.LIB.txt",
+      "notice_sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+      "scope": "crt1/crti/crtn linked into tests/fixtures/mips/router-gnu-mips*.elf from Debian libc6-dev-mips-cross; the LGPL-2.1 text, byte-identical to glibc 2.40's COPYING.LIB"
+    },
+    {
+      "profile": "fixture-mips-gnu-libgcc-12.2.0-14cross5-mipsel",
+      "license_declaration": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "a9fc26d0c98e17262cccd6389e6eb3ca5f70e185ce0e66505845b36315c55b74",
+      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING.RUNTIME",
+      "source_notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+      "notice": "gcc-15.2.0-COPYING.RUNTIME.txt",
+      "notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
+      "scope": "crtbegin/crtend linked into tests/fixtures/mips/router-gnu-mipsel*.elf from Debian libgcc-12-dev-mipsel-cross; complete GCC Runtime Library Exception 3.1 text, byte-identical; the toolchain archive ships no license files"
+    },
+    {
+      "profile": "fixture-mips-gnu-libgcc-12.2.0-14cross5-mipsel",
+      "license_declaration": "GPL-3.0-or-later WITH GCC-exception-3.1",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "a9fc26d0c98e17262cccd6389e6eb3ca5f70e185ce0e66505845b36315c55b74",
+      "source_notice_path": "gcc.git tag releases/gcc-15.2.0: COPYING3",
+      "source_notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "notice": "gcc-15.2.0-COPYING3.txt",
+      "notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "scope": "crtbegin/crtend linked into tests/fixtures/mips/router-gnu-mipsel*.elf from Debian libgcc-12-dev-mipsel-cross; complete GNU GPL version 3 text, byte-identical, which the runtime exception modifies"
+    },
+    {
+      "profile": "fixture-mips-gnu-glibc-2.36-8cross2-mipsel",
+      "license_declaration": "LGPL-2.1-or-later (crt1.o, crti.o and crtn.o carry its linking exception)",
+      "source_class": "toolchain-runtime",
+      "runtime_archive_sha256": "49ec500c8dd2540f9615881c3a66d3b038c3808e47bd4f0bd97c51cdcda6ffa0",
+      "source_notice_path": "glibc-2.40/COPYING.LIB",
+      "source_notice_sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+      "notice": "portable-glibc-2.40-COPYING.LIB.txt",
+      "notice_sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+      "scope": "crt1/crti/crtn linked into tests/fixtures/mips/router-gnu-mipsel*.elf from Debian libc6-dev-mipsel-cross; the LGPL-2.1 text, byte-identical to glibc 2.40's COPYING.LIB"
     }
   ]
 }

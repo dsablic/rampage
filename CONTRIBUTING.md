@@ -39,7 +39,8 @@ The CLI and desktop UI share the same API; they are secondary clients. There is 
 ## Fixtures
 
 Test inputs are owned and built from committed sources: C/C++/assembly under `tests/fixtures/src` (or next to a
-fixture's `build.sh`), compiled with `zig cc` or `clang` by the committed build scripts. Never commit third-party
+fixture's `build.sh`), compiled with `zig cc` or `clang` by the committed build scripts (with the exceptions
+below). Never commit third-party
 or commercial binaries, bytes extracted from them, captured process memory or secrets. Only permissively licensed
 inputs (Apache-2.0, MIT, BSD, zlib, public domain) belong in the repository.
 
@@ -48,6 +49,12 @@ libraries: newlib and newlib-nano (under the permissive terms in newlib's `COPYI
 the GCC Runtime Library Exception, which permits distributing compiled programs). They are built with
 `arm-none-eabi-gcc` by the committed scripts under `tools/embedded-signatures`, and the notices are recorded in
 `crates/rampage-signatures/data/notices`.
+
+The GNU-toolchain MIPS fixtures (`tests/fixtures/mips/router-gnu-*.elf`) exist because only GNU ld makes the
+lazy-binding `.MIPS.stubs` real router userlands have. `tests/fixtures/mips/build-gnu.sh` builds them with
+Debian's MIPS cross GCC at pinned package versions in a digest-pinned `gcc` image, and they link GCC's
+crtbegin/crtend (GPLv3 with the GCC Runtime Library Exception) and glibc's crt1/crti/crtn (LGPL-2.1 with its
+linking exception), whose notices are recorded in the same index.
 
 ## Pull requests
 

@@ -261,7 +261,8 @@ except `export_patched`. Limits: one contiguous range per check; 256 MiB of hash
 [firmware patching](firmware-patching.md).
 
 MIPS code names a CRC routine by the polynomial it builds with `lui` and `ori`/`addiu`, or by a CRC-16
-polynomial as an instruction's immediate (`xori $v0, $v0, 0xa001`).
+polynomial as an instruction's immediate (`xori $v0, $v0, 0xa001`) in a function that also shifts by one bit and
+XORs, as a bitwise CRC loop does.
 
 On a Raw project the CRC code evidence comes from the discovered functions (pointer tables and scatter-load copies
 included); on Cortex-M a polynomial literal that no discovered code references is followed to the PC-relative
@@ -692,7 +693,8 @@ Raw-capable tools (`binary_info`, `list_functions`, `disassemble`, `function_gra
 `find_main`, and the file tool `inspect_data`) take an optional `raw` object in place of a native image. `find_crypto`, `triage` and
 `triage_report` read every backed region (decoded ones included) at mapped addresses; `triage` adds a hint and
 `triage_report` a limitation saying which file-format facts (build time, libraries, imports, hardening, overlay,
-imphash) do not apply. `find_main` follows a MIPS reset vector's code to its first jump out (the C entry), and a
+imphash) do not apply. `find_main` follows a MIPS reset vector's code (past `b reset` over the exception vectors)
+to the jump into its C entry, and a
 Cortex-M reset handler to the first call that never returns, or to
 the copied code that starts the scheduler (see [find main](raw-code.md#find-main)). `function_summary` and `lock_mechanisms` work on the functions discovery found, pointer
 tables and scatter-load copies included; when no function qualifies, `lock_mechanisms` says why none was

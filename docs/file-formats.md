@@ -156,7 +156,8 @@ strings and data through the GOT, addressed from `$gp`. rampage reads:
   belong to the dynamic linker. Global entries for undefined symbols are the import slots `list_imports` reports.
 - **Lazy-binding stubs**: GNU ld's `.MIPS.stubs` jump to the dynamic linker rather than through a slot. Until an
   import is bound its global entry holds its stub's address, so each stub is named `<import>@plt` after the entry
-  that points at it. lld's MIPS PLT (`.plt` with `.got.plt` slots) is named like other ELF PLTs.
+  that points at it. This needs the `.MIPS.stubs` section header: without section headers the stubs stay
+  unnamed `sub_` functions, though calls through the GOT still name their imports. lld's MIPS PLT (`.plt` with `.got.plt` slots) is named like other ELF PLTs.
 
 Code computes `$gp` from `$t9` (LLVM's `_gp_disp` prologue) or keeps it constant (GCC restores it from the stack
 after calls); discovery follows both, and the decompiler is told `$t9` and `$gp` at each function's entry.

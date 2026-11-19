@@ -86,10 +86,10 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   [Capstone](https://www.capstone-engine.org), with supported little- and big-endian variants. MIPS and SPARC
   delay slots remain in their branch's block. MIPS position-independent code (Linux userland: routers, cameras)
   resolves its GOT through `$gp`, computed from `$t9` at each function entry or kept by GCC: calls through the GOT
-  name their imports, GNU ld's lazy-binding `.MIPS.stubs` are named, `lui`/`addiu` and GOT page loads give string
+  name their imports, GNU ld's lazy-binding `.MIPS.stubs` are named (the section header must be present), `lui`/`addiu` and GOT page loads give string
   references, and the decompiler gets `$t9` and `$gp` at entry, so calls read `getenv("…")`. Binaries without
   section headers keep their GOT from the dynamic section. MIPS operands are typed for constant search, and
-  `find_main` follows glibc's, uClibc's and musl's `__start`. MIPS32 boot ROMs and bare-metal images open as Raw
+  `find_main` follows glibc's and musl's `__start`. MIPS32 boot ROMs and bare-metal images open as Raw
   projects ([Raw code](raw-code.md#mips-boot-roms-and-bare-metal-mips)). Native, specification-derived decoders are the preferred direction
   where machine-readable specifications exist.
 - Runtime snapshots and bundle directories use the same query surfaces. Snapshots contain validated sparse
