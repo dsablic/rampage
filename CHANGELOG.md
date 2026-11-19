@@ -6,6 +6,12 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- `fs_list` and `fs_extract` read UBI and UBIFS. UBI images (raw flash dumps or `ubinize` output) list their
+  volumes as `<name>.img`, rebuilt from their eraseblocks with duplicate copies resolved by sequence number and data
+  CRC; each volume opens through `inner` (UBIFS, SquashFS or any other format read here). UBIFS, inside a volume or
+  as a bare dump, is read through its index and the journal written since the last commit; data may be
+  uncompressed, LZO, zlib or zstd, and symlinks, hard links and device nodes are listed. Extended attributes and
+  fscrypt-encrypted content are not read.
 - `carve` recognises the images `fs_list` reads: ext2/3/4 (extent from the superblock), Android sparse images
   (extent from the chunk headers), OTA payloads (extent from the manifest's operations and signature), tar (extent
   from walking the headers) and bzip2 streams. Inside a SquashFS, Android sparse or OTA payload image whose
