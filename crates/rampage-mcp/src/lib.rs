@@ -1140,7 +1140,7 @@ impl ServerHandler for RampageServer {
                 tools::Effect::None if tool.name == "query_debugger" => {
                     listed.annotate(rmcp::model::ToolAnnotations::new().read_only(true).open_world(true))
                 }
-                // Every other file tool reads the files it names and writes nothing.
+                // Effect::None means the tool writes nothing: it only reads the files it names.
                 tools::Effect::None => {
                     listed.annotate(rmcp::model::ToolAnnotations::new().read_only(true).open_world(false))
                 }

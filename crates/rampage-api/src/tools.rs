@@ -226,6 +226,8 @@ impl Tool {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Effect {
+    /// Writes nothing. The MCP server lists a file tool with this effect as read-only (`readOnlyHint`), so a tool
+    /// that writes a file, the annotations or a debug target must declare that effect instead.
     #[default]
     None,
     Annotations,

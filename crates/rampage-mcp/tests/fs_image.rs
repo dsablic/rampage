@@ -224,6 +224,21 @@ async fn endpoints_of_an_extracted_tree_become_a_blocklist() {
         let tool = tools.iter().find(|tool| tool.name == name).unwrap();
         assert_eq!(tool.annotations.as_ref().unwrap().read_only_hint, Some(false), "{name}");
     }
+    // The other groups' file tools: all read-only, and only query_debugger reaches outside rampage.
+    json_of(&call(&client, "enable_tools", json!({ "groups": ["android", "formats", "detection", "runtime"] })).await);
+    let tools = client.list_all_tools().await.unwrap();
+    for (name, open_world) in [
+        ("dex_metadata", false),
+        ("dex_code", false),
+        ("pyinstaller_archive", false),
+        ("wasm_module", false),
+        ("list_packs", false),
+        ("query_debugger", true),
+    ] {
+        let tool = tools.iter().find(|tool| tool.name == name).unwrap_or_else(|| panic!("{name} is listed"));
+        let hints = tool.annotations.as_ref().unwrap_or_else(|| panic!("{name} is annotated"));
+        assert_eq!((hints.read_only_hint, hints.open_world_hint), (Some(true), Some(open_world)), "{name}");
+    }
 
     let output = Output::new();
     let root = output.dir("rootfs");
