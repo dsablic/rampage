@@ -179,12 +179,17 @@ pub(crate) enum Rounding {
     Down,
     Up,
     Toward0,
+    /// To nearest, ties away from zero (ARM `vcvta`).
+    TiesAway,
 }
 
 /// `bits` rounded to an integral value in its own format (`Unpacked` of the result).
 pub(crate) fn round_integral(bits: u128, format: Format, rounding: Rounding) -> u128 {
-    let Unpacked::Finite { negative, mantissa, exponent } = format.unpack(bits) else {
-        return bits;
+    let (negative, mantissa, exponent) = match format.unpack(bits) {
+        Unpacked::Finite { negative, mantissa, exponent } => (negative, mantissa, exponent),
+        // A signalling NaN comes back quiet, as the instructions return it.
+        nan @ Unpacked::Nan { .. } => return format.pack(nan),
+        _ => return bits,
     };
     if exponent >= 0 {
         return bits;
@@ -201,6 +206,7 @@ pub(crate) fn round_integral(bits: u128, format: Format, rounding: Rounding) -> 
     };
     let up = match rounding {
         Rounding::Nearest => above_half || (half && integer & 1 == 1),
+        Rounding::TiesAway => above_half || half,
         Rounding::Toward0 => false,
         Rounding::Down => negative && fraction_nonzero,
         Rounding::Up => !negative && fraction_nonzero,

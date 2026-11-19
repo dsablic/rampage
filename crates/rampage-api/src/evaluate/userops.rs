@@ -13,6 +13,8 @@ use super::float::{self, DOUBLE, Format, Rounding, SINGLE};
 pub(crate) struct Operand {
     pub bytes: Vec<u8>,
     pub constant: bool,
+    /// Whether the operand is a register (not a memory operand loaded into a temporary).
+    pub register: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,13 +272,12 @@ pub(crate) fn known(name: &str, family: Family) -> bool {
 }
 
 /// 32-bit ARM VFP/NEON conversions (`vcvt`), which Ghidra's ARM specification leaves as operations on the source
-/// (the first operand; later ones are mode values): (to float, from signed or unsigned integers) or (to integer,
-/// signed, rounding to nearest instead of toward zero).
+/// (the first operand) with the rounding last: a constant (round toward zero, or the `vcvta/n/p/m` round type) or
+/// FPSCR.RMode (`vcvtr`). `size_flag`: the NEON round forms pass 0 for f16 lanes and 1 for f32 lanes second.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArmConversion {
     ToFloat { signed: bool },
-    ToInteger { signed: bool, nearest: bool },
-    FloatWidth,
+    ToInteger { signed: bool, size_flag: bool },
 }
 
 fn arm_conversion(name: &str) -> Option<ArmConversion> {
@@ -284,19 +285,39 @@ fn arm_conversion(name: &str) -> Option<ArmConversion> {
     Some(match name {
         "VectorSignedToFloat" => ToFloat { signed: true },
         "VectorUnsignedToFloat" => ToFloat { signed: false },
-        "VectorFloatToSigned" => ToInteger { signed: true, nearest: false },
-        "VectorFloatToUnsigned" => ToInteger { signed: false, nearest: false },
-        "VectorFloatToSignedRound" | "FloatToSignedRound" => ToInteger { signed: true, nearest: true },
-        "VectorFloatToUnsignedRound" | "FloatToUnsignedRound" => ToInteger { signed: false, nearest: true },
-        "VectorFloatDoubleToSingle" | "VectorFloatSingleToDouble" => FloatWidth,
+        "VectorFloatToSigned" | "FloatToSignedRound" => ToInteger { signed: true, size_flag: false },
+        "VectorFloatToUnsigned" | "FloatToUnsignedRound" => ToInteger { signed: false, size_flag: false },
+        "VectorFloatToSignedRound" => ToInteger { signed: true, size_flag: true },
+        "VectorFloatToUnsignedRound" => ToInteger { signed: false, size_flag: true },
+        _ => return None,
+    })
+}
+
+/// The ARM specification's rounding value (FPSCR.RMode, or its FPRounding constants): 0 to nearest with ties to
+/// even, 1 toward +infinity, 2 toward -infinity, 3 toward zero, 4 to nearest with ties away from zero.
+fn arm_rounding(value: u64) -> Option<Rounding> {
+    Some(match value {
+        0 => Rounding::Nearest,
+        1 => Rounding::Up,
+        2 => Rounding::Down,
+        3 => Rounding::Toward0,
+        4 => Rounding::TiesAway,
         _ => return None,
     })
 }
 
 /// An ARM conversion of the first operand: elementwise over 32-bit lanes when source and result are the same size
-/// (NEON), else one scalar of the source's and the result's sizes. Integers saturate; NaN converts to 0.
+/// (NEON), else one scalar of the source's and the result's sizes. Integers saturate; NaN converts to 0. Half
+/// precision (f16) forms are not interpreted.
 fn arm(conversion: ArmConversion, operands: &[Operand], out: usize) -> Option<Vec<u8>> {
     let source = &operands.first()?.bytes;
+    let rounding =
+        arm_rounding(operands.get(1..).and_then(<[Operand]>::last).map_or(0, |mode| get(&mode.bytes, 8, 0)))?;
+    if let ArmConversion::ToInteger { size_flag: true, .. } = conversion
+        && operands.get(1).is_none_or(|flag| get(&flag.bytes, 1, 0) != 1)
+    {
+        return None;
+    }
     let (count, from, to) = if source.len() == out { (out / 4, 4, 4) } else { (1, source.len(), out) };
     if !matches!(from, 4 | 8) || !matches!(to, 4 | 8) {
         return None;
@@ -306,15 +327,16 @@ fn arm(conversion: ArmConversion, operands: &[Operand], out: usize) -> Option<Ve
         let value = get(source, from, index);
         let converted = match conversion {
             ArmConversion::ToFloat { signed: sign } => {
+                // Integer to float rounds by FPSCR too; only its default, to nearest, is modelled.
+                if rounding != Rounding::Nearest {
+                    return None;
+                }
                 let integer = if sign { i128::from(signed(value, from)) } else { i128::from(value) };
                 float::from_integer(integer, float_of(to)) as u64
             }
-            ArmConversion::ToInteger { signed: sign, nearest } => {
+            ArmConversion::ToInteger { signed: sign, .. } => {
                 let format = float_of(from);
-                let mut bits = u128::from(value);
-                if nearest {
-                    bits = float::round_integral(bits, format, Rounding::Nearest);
-                }
+                let bits = float::round_integral(u128::from(value), format, rounding);
                 let (low, high) = if sign {
                     (-(1i128 << (8 * to - 1)), (1i128 << (8 * to - 1)) - 1)
                 } else {
@@ -328,7 +350,6 @@ fn arm(conversion: ArmConversion, operands: &[Operand], out: usize) -> Option<Ve
                 };
                 integer as u64 & mask(to)
             }
-            ArmConversion::FloatWidth => float::convert(u128::from(value), float_of(from), float_of(to)) as u64,
         };
         put(&mut result, to, index, converted);
     }
@@ -666,10 +687,13 @@ fn compute(kind: Kind, operands: &[Operand], out: usize) -> Option<Vec<u8>> {
         }
         Shuffle8 => {
             let (a, b) = binary()?;
+            // The MMX form shuffles 8 bytes, by the control's low 3 bits.
+            let select = if lane_bytes < 16 { 7 } else { 15 };
             for lane in 0..lanes {
                 for index in 0..lane_bytes {
                     let control = get(b, 1, lane * 16 + index);
-                    let value = if control & 0x80 != 0 { 0 } else { get(a, 1, lane * 16 + (control as usize & 15)) };
+                    let value =
+                        if control & 0x80 != 0 { 0 } else { get(a, 1, lane * 16 + (control as usize & select)) };
                     put(&mut result, 1, lane * 16 + index, value);
                 }
             }
@@ -805,8 +829,14 @@ fn compute(kind: Kind, operands: &[Operand], out: usize) -> Option<Vec<u8>> {
             let (a, b) = binary()?;
             let immediate = immediate?;
             result.copy_from_slice(&padded(a, out));
-            // A memory source is the 32-bit value itself; a register source selects one of its elements.
-            let value = if b.len() <= 4 { get(b, 4, 0) } else { get(b, 4, ((immediate >> 6) & 3) as usize) };
+            // A memory source is the 32-bit value itself (zero-extended into a temporary); a register source
+            // selects one of its elements.
+            let memory = operands
+                .iter()
+                .filter(|operand| !operand.constant)
+                .nth(count - 1)
+                .is_some_and(|operand| !operand.register);
+            let value = if memory || b.len() <= 4 { get(b, 4, 0) } else { get(b, 4, ((immediate >> 6) & 3) as usize) };
             put(&mut result, 4, ((immediate >> 4) & 3) as usize, value);
             for index in 0..4 {
                 if immediate & (1 << index) != 0 {

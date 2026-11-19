@@ -11,11 +11,11 @@ fn compute(name: &str, operands: &[Operand], out: usize) -> Option<Result<Vec<u8
 }
 
 fn register(bytes: &[u8]) -> Operand {
-    Operand { bytes: bytes.to_vec(), constant: false }
+    Operand { bytes: bytes.to_vec(), constant: false, register: true }
 }
 
 fn immediate(value: u8) -> Operand {
-    Operand { bytes: vec![value], constant: true }
+    Operand { bytes: vec![value], constant: true, register: false }
 }
 
 fn op(name: &str, operands: &[Operand], out: usize) -> Vec<u8> {
@@ -84,6 +84,12 @@ fn word_and_dword_shuffles() {
         dwords(&[0, 22, 12, 13])
     );
     assert_eq!(op("extractps", &[register(&[0; 4]), register(&source), immediate(2)], 4), dwords(&[12]));
+    // vinsertps from memory: the m32 value, zero-extended into a 16-byte temporary, whatever count_s says.
+    let memory = Operand { bytes: dwords(&[77, 0, 0, 0]), constant: false, register: false };
+    assert_eq!(
+        op("vinsertps_avx", &[register(&source), memory, immediate(0b1001_0000)], 16),
+        dwords(&[10, 77, 12, 13])
+    );
     let wide = [dwords(&[0, 1, 2, 3]), dwords(&[4, 5, 6, 7])].concat();
     assert_eq!(
         op("vpermq_avx2", &[register(&wide), immediate(0x4e)], 32),
@@ -116,6 +122,9 @@ fn extensions_packs_and_unpacks() {
     let low: Vec<u8> = (0..16).collect();
     let high: Vec<u8> = (16..32).collect();
     assert_eq!(&op("punpcklqdq", &[register(&low), register(&high)], 16)[..], [&low[..8], &high[..8]].concat());
+    // MMX pshufb: 8 bytes, selected by the control's low 3 bits.
+    let mmx: Vec<u8> = (0x10..0x18).collect();
+    assert_eq!(op("pshufb", &[register(&mmx), register(&hex("0f0e0981000102ff"))], 8), hex("1716110010111200"));
     assert_eq!(&op("vpunpckhbw_avx", &[register(&low), register(&high)], 16)[..4], [8, 24, 9, 25]);
     assert_eq!(&op("vpunpckldq_avx", &[register(&low), register(&high)], 16)[..8], [0, 1, 2, 3, 16, 17, 18, 19]);
 }
@@ -490,20 +499,40 @@ fn float_arguments_and_results_follow_each_abi() {
 
 #[test]
 fn arm_conversions_saturate_and_round() {
-    let arm = |name: &str, source: &[u8], out: usize| {
-        super::userops::run(name, Family::Arm, &[register(source), register(&[0])], out).unwrap().unwrap()
+    // The rounding operand: 3 for vcvt (toward zero), FPSCR.RMode (0, nearest) for vcvtr, or a vcvta/n/p/m round
+    // type: 0 ties to even, 1 +inf, 2 -inf, 4 ties away.
+    let arm =
+        |name: &str, operands: &[Operand], out: usize| super::userops::run(name, Family::Arm, operands, out).unwrap();
+    let mode = |value: u8| Operand { bytes: vec![value], constant: true, register: false };
+    let convert = |name: &str, source: &[u8], rounding: u8, out: usize| {
+        arm(name, &[register(source), mode(rounding)], out).unwrap()
     };
-    assert_eq!(arm("VectorSignedToFloat", &(-3i32).to_le_bytes(), 8), (-3.0f64).to_le_bytes());
-    assert_eq!(arm("VectorUnsignedToFloat", &u32::MAX.to_le_bytes(), 4), 4_294_967_296f32.to_le_bytes());
-    assert_eq!(arm("VectorFloatToSigned", &2.9f64.to_le_bytes(), 4), 2i32.to_le_bytes());
-    assert_eq!(arm("VectorFloatToSigned", &(-2.9f64).to_le_bytes(), 4), (-2i32).to_le_bytes());
-    assert_eq!(arm("VectorFloatToSigned", &1e10f64.to_le_bytes(), 4), i32::MAX.to_le_bytes());
-    assert_eq!(arm("VectorFloatToSigned", &f64::NAN.to_le_bytes(), 4), [0; 4]);
-    assert_eq!(arm("VectorFloatToUnsigned", &(-1.5f32).to_le_bytes(), 4), [0; 4]);
-    assert_eq!(arm("FloatToSignedRound", &2.5f64.to_le_bytes(), 4), 2i32.to_le_bytes());
-    // NEON: four lanes.
+    assert_eq!(convert("VectorSignedToFloat", &(-3i32).to_le_bytes(), 0, 8), (-3.0f64).to_le_bytes());
+    assert_eq!(convert("VectorUnsignedToFloat", &u32::MAX.to_le_bytes(), 0, 4), 4_294_967_296f32.to_le_bytes());
+    assert_eq!(convert("VectorFloatToSigned", &2.9f64.to_le_bytes(), 3, 4), 2i32.to_le_bytes());
+    assert_eq!(convert("VectorFloatToSigned", &(-2.9f64).to_le_bytes(), 3, 4), (-2i32).to_le_bytes());
+    // vcvtr: FPSCR's mode, to nearest.
+    assert_eq!(convert("VectorFloatToSigned", &2.9f64.to_le_bytes(), 0, 4), 3i32.to_le_bytes());
+    assert_eq!(convert("VectorFloatToSigned", &2.5f64.to_le_bytes(), 0, 4), 2i32.to_le_bytes());
+    assert_eq!(convert("VectorFloatToSigned", &1e10f64.to_le_bytes(), 3, 4), i32::MAX.to_le_bytes());
+    assert_eq!(convert("VectorFloatToSigned", &f64::NAN.to_le_bytes(), 3, 4), [0; 4]);
+    assert_eq!(convert("VectorFloatToUnsigned", &(-1.5f32).to_le_bytes(), 3, 4), [0; 4]);
+    // vcvtn, vcvtp, vcvta, vcvtm.
+    assert_eq!(convert("FloatToSignedRound", &2.5f64.to_le_bytes(), 0, 4), 2i32.to_le_bytes());
+    assert_eq!(convert("FloatToSignedRound", &2.5f64.to_le_bytes(), 1, 4), 3i32.to_le_bytes());
+    assert_eq!(convert("FloatToSignedRound", &2.5f64.to_le_bytes(), 4, 4), 3i32.to_le_bytes());
+    assert_eq!(convert("FloatToSignedRound", &(-2.5f64).to_le_bytes(), 4, 4), (-3i32).to_le_bytes());
+    assert_eq!(convert("FloatToSignedRound", &(-2.5f64).to_le_bytes(), 2, 4), (-3i32).to_le_bytes());
+    assert_eq!(convert("FloatToUnsignedRound", &2.1f32.to_le_bytes(), 1, 4), 3u32.to_le_bytes());
+    // NEON: four lanes; the round forms pass a size flag (1: f32 lanes) before the round type.
     let lanes: Vec<u8> = [1i32, -2, 3, -4].iter().flat_map(|value| value.to_le_bytes()).collect();
     let floats: Vec<u8> = [1.0f32, -2.0, 3.0, -4.0].iter().flat_map(|value| value.to_le_bytes()).collect();
-    assert_eq!(arm("VectorSignedToFloat", &lanes, 16), floats);
-    assert!(super::userops::run("VectorSignedToFloat", Family::Arm, &[], 8).unwrap().is_err());
+    assert_eq!(convert("VectorSignedToFloat", &lanes, 0, 16), floats);
+    let halves: Vec<u8> = [0.5f32, 1.5, -0.5, -1.5].iter().flat_map(|value| value.to_le_bytes()).collect();
+    let away: Vec<u8> = [1i32, 2, -1, -2].iter().flat_map(|value| value.to_le_bytes()).collect();
+    assert_eq!(arm("VectorFloatToSignedRound", &[register(&halves), mode(1), mode(4)], 16).unwrap(), away);
+    // Half precision is not interpreted: the f16 size flag, and a 2-byte source.
+    assert!(arm("VectorFloatToSignedRound", &[register(&halves), mode(0), mode(4)], 16).is_err());
+    assert!(arm("FloatToSignedRound", &[register(&[0, 0x3c]), mode(0)], 4).is_err());
+    assert!(arm("VectorSignedToFloat", &[], 8).is_err());
 }

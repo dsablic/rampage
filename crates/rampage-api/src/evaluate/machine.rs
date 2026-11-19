@@ -380,6 +380,11 @@ impl<R: Ram> Machine<R> {
         self.write_space(node.space, offset, &to_storage(&bytes, self.big_endian))
     }
 
+    /// The varnode's value as least-significant-first bytes, of any size.
+    pub fn read_bytes(&mut self, node: &Varnode) -> Result<Vec<u8>, Fault> {
+        self.read_little(node)
+    }
+
     pub fn read_int(&mut self, node: &Varnode) -> Result<u128, Fault> {
         if node.size as usize > 16 {
             return Err(Fault::Unsupported(format!("integer arithmetic on a {}-byte value", node.size)));
@@ -564,7 +569,8 @@ impl<R: Ram> Machine<R> {
                 let mut operands = Vec::with_capacity(current.inputs.len().saturating_sub(1));
                 for input in current.inputs.iter().skip(1) {
                     let constant = input.space == self.ids.constant;
-                    operands.push(super::userops::Operand { bytes: self.read_little(input)?, constant });
+                    let register = input.space == self.ids.register;
+                    operands.push(super::userops::Operand { bytes: self.read_little(input)?, constant, register });
                 }
                 let output = current.output.as_ref().ok_or_else(|| Fault::UserOp(name.clone()))?;
                 match super::userops::run(&name, family, &operands, output.size as usize) {

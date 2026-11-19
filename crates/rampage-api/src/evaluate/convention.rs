@@ -327,6 +327,26 @@ pub(crate) fn assign_with_floats(
 ) -> Result<Vec<Place>, String> {
     let is_float = |index: usize| floats.get(index).copied().flatten();
     match abi.float {
+        // x86 fastcall and thiscall: floats go on the stack, in order with the other stack arguments, never in
+        // ECX/EDX.
+        FloatAbi::Integer if abi.link == Link::Stack && !abi.registers.is_empty() => {
+            let mut next_register = 0usize;
+            let mut stack = 0u64;
+            let places = widths
+                .iter()
+                .enumerate()
+                .map(|(index, &bytes)| {
+                    if is_float(index).is_none() && bytes <= abi.width && next_register < abi.registers.len() {
+                        next_register += 1;
+                        return Place::Register(abi.registers[next_register - 1]);
+                    }
+                    let place = Place::Stack(stack);
+                    stack += u64::from(bytes.max(abi.width));
+                    place
+                })
+                .collect();
+            Ok(places)
+        }
         FloatAbi::Integer => Ok(assign(abi, widths, big_endian)),
         FloatAbi::Unsupported if floats.iter().any(Option::is_some) => {
             Err(format!("float arguments are not supported under the {} convention", abi.name()))
@@ -338,7 +358,9 @@ pub(crate) fn assign_with_floats(
                 if is_float(index).is_some()
                     && let Place::Register(name) = place
                 {
-                    let position = abi.registers.iter().position(|register| register == name).unwrap_or(0);
+                    let position = abi.registers.iter().position(|register| register == name).ok_or_else(|| {
+                        format!("float argument {index} was placed in {name}, not an argument register")
+                    })?;
                     *place = Place::Register(XMM[position]);
                 }
             }
