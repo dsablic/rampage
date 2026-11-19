@@ -70,6 +70,9 @@ where
 
 /// [`analyze_with_factory`], with `carried`: record-pass starts an earlier interpretation of the same bytes found,
 /// judged again and seeded with the first record round instead of being found again round by round.
+/// Most discovery passes Xtensa prologue seeds take to settle.
+const XTENSA_PROLOGUE_PASSES: usize = 3;
+
 pub fn analyze_with_carried_seeds<F, E>(binary: &Binary, new_decoder: F, carried: &[u64]) -> Result<Program, E>
 where
     F: Fn() -> Result<Box<dyn rampage_arch::Disassembler>, E> + Sync,
@@ -80,7 +83,6 @@ where
     seeds.extend(&binary.function_starts);
     seeds.extend(stub_seeds(binary, &stubs));
     seeds.extend(thunk_seeds(binary));
-    seeds.extend(crate::xtensa_starts::prologue_seeds(binary));
     let facts = return_facts_with_stub_names(binary, stubs);
     // Code regions judged encrypted or packed are not explored: what they decode to is noise, not functions.
     let excluded = code_integrity::flagged_ranges(&code_integrity::assess(binary, &new_decoder));
@@ -93,6 +95,36 @@ where
         }
     };
     let mut program = discover(&seeds)?;
+    // Xtensa: prologue matches seed further passes, less those inside a block another function holds (instruction
+    // bytes that happen to spell `entry`), until the set they leave holds still.
+    let prologues = crate::xtensa_starts::prologue_seeds(binary);
+    if !prologues.is_empty() {
+        let metadata = seeds.clone();
+        let mut accepted: Vec<u64> = Vec::new();
+        for _ in 0..XTENSA_PROLOGUE_PASSES {
+            let mut blocks: Vec<(u64, u64, u64)> = program
+                .functions
+                .iter()
+                .flat_map(|function| function.blocks.iter().map(|block| (block.start, block.end, function.address)))
+                .collect();
+            blocks.sort_unstable();
+            let inside = |address: u64| {
+                let index = blocks.partition_point(|&(start, ..)| start < address);
+                blocks[..index]
+                    .iter()
+                    .rev()
+                    .take(8)
+                    .any(|&(start, end, owner)| owner != address && start < address && address < end)
+            };
+            let next: Vec<u64> = prologues.iter().copied().filter(|&address| !inside(address)).collect();
+            if next == accepted {
+                break;
+            }
+            accepted = next;
+            seeds = metadata.iter().copied().chain(accepted.iter().copied()).collect();
+            program = discover(&seeds)?;
+        }
+    }
     // Raw Cortex-M: functions named only inside records the discovered code addresses (thread definitions,
     // descriptors), a few rounds while each finds more.
     if record_pointers::applies(binary) {

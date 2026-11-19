@@ -430,14 +430,27 @@ pub struct RegisterFacts(Facts);
 enum Facts {
     X86(Box<x86::switch::Registers>),
     A64(Box<a64::flow::Addresses>),
+    Xtensa(Box<xtensa::Registers>),
 }
 
 impl RegisterFacts {
+    fn xtensa(registers: xtensa::Registers) -> Self {
+        RegisterFacts(Facts::Xtensa(Box::new(registers)))
+    }
+
+    fn xtensa_registers(&self) -> Option<xtensa::Registers> {
+        match &self.0 {
+            Facts::Xtensa(registers) => Some(**registers),
+            _ => None,
+        }
+    }
+
     /// What holds on both of two paths that join.
     pub fn meet(&self, other: &Self) -> Self {
         match (&self.0, &other.0) {
             (Facts::X86(a), Facts::X86(b)) => RegisterFacts(Facts::X86(Box::new(a.meet(b)))),
             (Facts::A64(a), Facts::A64(b)) => RegisterFacts(Facts::A64(Box::new(a.meet(b)))),
+            (Facts::Xtensa(a), Facts::Xtensa(b)) => RegisterFacts(Facts::Xtensa(Box::new(xtensa::meet(a, b)))),
             // Facts from different decoders share nothing.
             _ => RegisterFacts(Facts::X86(Box::default())),
         }

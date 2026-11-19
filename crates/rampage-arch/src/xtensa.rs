@@ -148,10 +148,13 @@ enum Effect {
     Writes(u8),
     /// An instruction whose register effects are not modelled: forget everything.
     Clobber,
-    /// `bgeui as, bound` or `bgeu as, at`: on the fall-through path `as` is below `bound` (unsigned).
-    UnsignedBound {
+    /// An unsigned compare-and-branch of `s` with `t`: `bltu`/`bltui` (taken when `s < t`) or `bgeu`/`bgeui`
+    /// (taken when `s >= t`). The edge where `s < t` bounds `s` by a known `t`; the other bounds a register `t`
+    /// by a known `s` plus one.
+    UnsignedCompare {
         s: u8,
-        bound: Bound,
+        t: Bound,
+        taken_below: bool,
     },
 }
 
@@ -469,11 +472,7 @@ fn decode(bytes: &[u8], address: u32) -> Option<Decoded> {
                     _ => {
                         let mnemonic = if m == 2 { "bltui" } else { "bgeui" };
                         let constant = B4CONSTU[usize::from(r)];
-                        let effect = if m == 3 {
-                            Effect::UnsignedBound { s, bound: Bound::Constant(constant) }
-                        } else {
-                            Effect::None
-                        };
+                        let effect = Effect::UnsignedCompare { s, t: Bound::Constant(constant), taken_below: m == 2 };
                         insn(
                             3,
                             mnemonic,
@@ -506,8 +505,11 @@ fn decode(bytes: &[u8], address: u32) -> Option<Decoded> {
                 let bit = (u32::from(r & 1) << 4) | u32::from(t);
                 (vec![as_, Operand::Imm(bit.into()), Operand::Address(branch8)], Effect::None)
             } else {
-                let effect =
-                    if r == 11 { Effect::UnsignedBound { s, bound: Bound::Register(t) } } else { Effect::None };
+                let effect = match r {
+                    3 => Effect::UnsignedCompare { s, t: Bound::Register(t), taken_below: true },
+                    11 => Effect::UnsignedCompare { s, t: Bound::Register(t), taken_below: false },
+                    _ => Effect::None,
+                };
                 (vec![as_, at, Operand::Address(branch8)], effect)
             };
             insn(3, mnemonic, operands, Flow::ConditionalJump(branch8.into()), effect)
@@ -757,7 +759,7 @@ fn qrst(word: u32, _pc: u32) -> Option<Decoded> {
 
 /// What a run knows about one AR register.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Known {
+pub(crate) enum Known {
     Unknown,
     Value(u32),
     /// An index below `entries`, proven by the bounding branch at `guard`.
@@ -784,7 +786,17 @@ enum Known {
 /// rampage's native Xtensa decoder, with the register run it follows.
 pub struct XtensaDisassembler {
     registers: [Known; 16],
+    /// The registers where the conditional branch just decoded is taken, when they differ from the fall-through.
+    taken: Option<[Known; 16]>,
     jump_table: Option<JumpTable>,
+}
+
+/// What a run knows about the AR registers at one point, carried across joins.
+pub(crate) type Registers = [Known; 16];
+
+/// What holds on both of two paths that join.
+pub(crate) fn meet(a: &Registers, b: &Registers) -> Registers {
+    std::array::from_fn(|index| if a[index] == b[index] { a[index] } else { Known::Unknown })
 }
 
 impl Default for XtensaDisassembler {
@@ -795,7 +807,7 @@ impl Default for XtensaDisassembler {
 
 impl XtensaDisassembler {
     pub fn new() -> Self {
-        Self { registers: [Known::Unknown; 16], jump_table: None }
+        Self { registers: [Known::Unknown; 16], taken: None, jump_table: None }
     }
 
     fn value(&self, register: u8) -> Option<u32> {
@@ -817,6 +829,7 @@ impl Disassembler for XtensaDisassembler {
 
     fn decode_with_memory(&mut self, bytes: &[u8], address: u64, read: &dyn Fn(u64, u8) -> Option<u64>) -> Insn {
         self.jump_table = None;
+        self.taken = None;
         let mut insn = Insn {
             address,
             len: bytes.first().and_then(|&first| length(first)).unwrap_or(1).min(bytes.len().max(1) as u8),
@@ -917,17 +930,36 @@ impl Disassembler for XtensaDisassembler {
             }
             Effect::Writes(register) => self.set(register, Known::Unknown),
             Effect::Clobber => self.registers = [Known::Unknown; 16],
-            Effect::UnsignedBound { s, bound } => {
-                let bound = match bound {
-                    Bound::Constant(value) => Some(value),
-                    Bound::Register(register) => self.value(register),
+            Effect::UnsignedCompare { s, t, taken_below } => {
+                let entries = |count: Option<u32>| {
+                    count
+                        .filter(|&entries| entries > 0 && u64::from(entries) <= crate::MAX_JUMP_TABLE_ENTRIES)
+                        .map(|entries| Known::Bounded { entries, guard: address })
                 };
-                // The fall-through path (decoded next in this run) has the index below the bound.
-                if let Some(entries) =
-                    bound.filter(|&entries| entries > 0 && u64::from(entries) <= crate::MAX_JUMP_TABLE_ENTRIES)
-                {
-                    self.set(s, Known::Bounded { entries, guard: address });
+                // Where `s < t`: `s` is an index below a known `t`.
+                let below = match t {
+                    Bound::Constant(value) => entries(Some(value)),
+                    Bound::Register(register) => entries(self.value(register)),
+                };
+                // Where `s >= t`: a register `t` is at most a known `s`.
+                let at_most = match t {
+                    Bound::Register(register) => {
+                        entries(self.value(s).and_then(|value| value.checked_add(1))).map(|known| (register, known))
+                    }
+                    Bound::Constant(_) => None,
+                };
+                let mut below_edge = self.registers;
+                if let Some(known) = below {
+                    below_edge[usize::from(s)] = known;
                 }
+                let mut other_edge = self.registers;
+                if let Some((register, known)) = at_most {
+                    other_edge[usize::from(register)] = known;
+                }
+                let (taken, fall_through) =
+                    if taken_below { (below_edge, other_edge) } else { (other_edge, below_edge) };
+                self.registers = fall_through;
+                self.taken = Some(taken);
             }
         }
         insn
@@ -935,7 +967,21 @@ impl Disassembler for XtensaDisassembler {
 
     fn reset(&mut self) {
         self.registers = [Known::Unknown; 16];
+        self.taken = None;
         self.jump_table = None;
+    }
+
+    fn facts(&self) -> Option<crate::RegisterFacts> {
+        Some(crate::RegisterFacts::xtensa(self.registers))
+    }
+
+    fn taken_facts(&self) -> Option<crate::RegisterFacts> {
+        Some(crate::RegisterFacts::xtensa(self.taken.unwrap_or(self.registers)))
+    }
+
+    fn assume(&mut self, facts: &crate::RegisterFacts) {
+        self.registers = facts.xtensa_registers().unwrap_or([Known::Unknown; 16]);
+        self.taken = None;
     }
 
     fn jump_table(&self) -> Option<JumpTable> {
@@ -1037,6 +1083,7 @@ mod tests {
         let read = |address: u64, _| (address == 0x1000).then_some(0x2000);
         // bgeui a2, 8, +x; l32r a8, 0x1000; addx4 a2, a2, a8; l32i.n a2, a2, 0; jx a2
         decoder.decode_with_memory(&[0xf6, 0x82, 0x20], 0x1010, &read);
+        assert_eq!(decoder.taken_facts().unwrap().xtensa_registers().unwrap()[2], Known::Unknown);
         let at = 0x1013u32;
         let imm16 = ((0x1000u32.wrapping_sub((at + 3) & !3)) >> 2) & 0xffff;
         let l32r = [0x81, imm16 as u8, (imm16 >> 8) as u8];
