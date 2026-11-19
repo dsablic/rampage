@@ -26,6 +26,9 @@ pub enum Convention {
     Riscv,
     PpcSysv,
     Ppc64,
+    /// Xtensa: a2-a7, results in a2 (and a3), the return address in a0. The windowed and call0 ABIs place a
+    /// callee's arguments alike.
+    Xtensa,
 }
 
 /// Where the return address goes.
@@ -106,6 +109,7 @@ const O32: &[&str] = &["a0", "a1", "a2", "a3"];
 const N64: &[&str] = &["a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3"];
 const RISCV: &[&str] = &["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"];
 const PPC: &[&str] = &["r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10"];
+const XTENSA: &[&str] = &["a2", "a3", "a4", "a5", "a6", "a7"];
 
 impl Abi {
     /// The convention for `arch` in a `format` image, or why none applies.
@@ -208,6 +212,10 @@ impl Abi {
                     PairRule::Next,
                     if big_endian { 48 + 64 } else { 32 + 64 },
                 )
+            },
+            (Arch::Xtensa, Convention::Default | Convention::Xtensa) => Abi {
+                float: FloatAbi::Integer,
+                ..base(Convention::Xtensa, XTENSA, 4, "a1", Link::Register("a0"), ("a2", "a3"), PairRule::Even, 0)
             },
             (_, Convention::Default) => {
                 return Err(format!("evaluate_function has no calling convention for {arch:?}"));

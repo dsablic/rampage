@@ -22,6 +22,7 @@ mod tests;
 mod userops;
 #[cfg(test)]
 mod vector_tests;
+mod xtensa;
 
 pub use convention::Convention;
 use convention::{Abi, Link, Place};
@@ -1177,7 +1178,11 @@ impl Project {
             let base = ram.free_range(&bases, HEAP_BYTES).ok_or_else(|| invalid("no free range for the heap"))?;
             ram.heap = Some(Heap::new(base));
         }
-        let sentinel_candidates: Vec<u64> = if width >= 8 {
+        let sentinel_candidates: Vec<u64> = if binary.arch == Arch::Xtensa {
+            // A windowed return keeps the top two bits of its own address (the window increment's place), so the
+            // sentinel shares code's 0x4xxxxxxx quarter.
+            vec![0x7fff_ff00, 0x5fff_ff00, 0x4fff_ff00]
+        } else if width >= 8 {
             vec![0xffff_ffff_ffff_ff00, 0x7fff_ffff_ff00, 0x0fff_ffff_ff00]
         } else {
             vec![0xffff_ff00, 0x7fff_ff00, 0x0fff_ff00]
@@ -1410,9 +1415,14 @@ impl Project {
                 snapshots.push((address, snapshot(&mut run.machine.ram, address)));
             }
         }
+        let xtensa = binary.arch == Arch::Xtensa;
+        let mut windows = xtensa::Windows::default();
         let (stop, detail) = loop {
             if pc == sentinel {
                 break (StopReason::Returned, "the function returned".to_owned());
+            }
+            if xtensa && let Err(error) = windows.returned(&mut run, pc) {
+                break (StopReason::UnsupportedOp, format!("register window: {error}"));
             }
             if replay_return == Some(pc) {
                 break (StopReason::Returned, "the replayed call returned".to_owned());
@@ -1503,6 +1513,14 @@ impl Project {
             if trace_length.is_some() {
                 run.machine.trace = Some(WriteLog::default());
             }
+            let pending = if xtensa {
+                match windows.before(&mut run, pc, decoded.extent, &decoded.text, binary.code_from(pc)) {
+                    Ok(pending) => pending,
+                    Err(error) => break (StopReason::UnsupportedOp, format!("register window: {error}")),
+                }
+            } else {
+                xtensa::Pending::None
+            };
             let executed = run.machine.execute(&decoded.ops);
             if let Some(log) = run.machine.trace.take() {
                 let writes = run.capture(&log);
@@ -1531,6 +1549,13 @@ impl Project {
                 Err(fault) => {
                     steps += 1;
                     break fault_stop(fault);
+                }
+            }
+            if xtensa {
+                let fell_through = matches!(executed, Ok(Flow::Next));
+                match windows.after(&mut run, pending, fell_through, pc) {
+                    Ok(next) => pc = next,
+                    Err(error) => break (StopReason::UnsupportedOp, format!("register window: {error}")),
                 }
             }
             if std::mem::take(&mut run.machine.ram.code_written) {
@@ -1761,6 +1786,65 @@ const NO_EFFECT_USER_OPS: [&str; 12] = [
     "sync",
 ];
 
+/// Xtensa's register-window operations, as the compiler specification's fixups define them: `swapN` (before a
+/// windowed call) saves the callee's a2/a3.. in t-registers and moves the caller's a(N+2).. into a2.., `restoreN`
+/// (after it) moves the result back and restores them; `rotateRegWindow` and `restoreRegWindow` (`entry`, `retw`)
+/// then have no effect. The registers a window rotates out and back are not modelled beyond that, as in decompiled
+/// code.
+fn xtensa_window_moves(run: &Run<'_>, name: &str) -> Option<Vec<(u64, u64, u32)>> {
+    if run.decoder.profile() != "Xtensa:LE:32:default" {
+        return None;
+    }
+    let pairs: &[(&str, &str)] = match name {
+        "rotateRegWindow" | "restoreRegWindow" => &[],
+        "swap4" => &[
+            ("t2", "a2"),
+            ("t3", "a3"),
+            ("a2", "a6"),
+            ("a3", "a7"),
+            ("a4", "a8"),
+            ("a5", "a9"),
+            ("a6", "a10"),
+            ("a7", "a11"),
+        ],
+        "restore4" => &[("a6", "a2"), ("a7", "a3"), ("a2", "t2"), ("a3", "t3")],
+        "swap8" => &[
+            ("t2", "a2"),
+            ("t3", "a3"),
+            ("t4", "a4"),
+            ("t5", "a5"),
+            ("t6", "a6"),
+            ("t7", "a7"),
+            ("a2", "a10"),
+            ("a3", "a11"),
+            ("a4", "a12"),
+            ("a5", "a13"),
+            ("a6", "a14"),
+            ("a7", "a15"),
+        ],
+        "restore8" => &[
+            ("a10", "a2"),
+            ("a11", "a3"),
+            ("a2", "t2"),
+            ("a3", "t3"),
+            ("a4", "t4"),
+            ("a5", "t5"),
+            ("a6", "t6"),
+            ("a7", "t7"),
+        ],
+        "swap12" => &[("t2", "a2"), ("t3", "a3"), ("a2", "a14"), ("a3", "a15")],
+        "restore12" => &[("a14", "a2"), ("a15", "a3"), ("a2", "t2"), ("a3", "t3")],
+        _ => return None,
+    };
+    let mut moves = Vec::with_capacity(pairs.len());
+    for (destination, source) in pairs {
+        let destination = run.decoder.register(destination)?;
+        let source = run.decoder.register(source)?;
+        moves.push((destination.offset, source.offset, destination.size.min(source.size)));
+    }
+    Some(moves)
+}
+
 fn install_user_ops(run: &mut Run<'_>, thread_base: u64, family: Option<userops::Family>) {
     let thread_selectors: Vec<(u32, u64)> = ["FS", "GS"]
         .iter()
@@ -1771,7 +1855,10 @@ fn install_user_ops(run: &mut Run<'_>, thread_base: u64, family: Option<userops:
         let Some(name) = run.decoder.user_op_name(index) else {
             break;
         };
-        let op = if name == "segment" {
+        let window = xtensa_window_moves(run, &name);
+        let op = if let Some(moves) = window {
+            UserOp::Moves(moves)
+        } else if name == "segment" {
             UserOp::Segment { thread_selectors: thread_selectors.clone(), thread_base: thread_base + THREAD_BYTES / 2 }
         } else if NO_EFFECT_USER_OPS.contains(&name.as_str()) {
             UserOp::Nop(name)

@@ -415,6 +415,8 @@ impl SleighDecoder {
             (Arch::PowerPc64, true, _) => "PowerPC:BE:64:default",
             (Arch::Riscv32, false, _) => "RISCV:LE:32:default",
             (Arch::Riscv64, false, _) => "RISCV:LE:64:default",
+            // A window profile: the reviewed decoder, opened for interpretation.
+            (Arch::Xtensa, false, _) => return Self::open("Xtensa:LE:32:default"),
             _ => return Err(Error::UnsupportedArch(target.arch)),
         };
         let descriptor = EMULATION_PROFILES

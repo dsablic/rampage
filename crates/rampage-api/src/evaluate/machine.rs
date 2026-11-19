@@ -205,6 +205,9 @@ pub(crate) enum UserOp {
     Nop(String),
     /// A vector or other operation [`super::userops`] computes from its operands.
     Computed(String, super::userops::Family),
+    /// Register copies, in order, each `(destination, source, size)` in the register space: the Xtensa compiler
+    /// specification's window fixups (`swap8` moves a caller's a10-a15 into the callee's a2-a7 around a `call8`).
+    Moves(Vec<(u64, u64, u32)>),
     Other(String),
 }
 
@@ -578,6 +581,14 @@ impl<R: Ram> Machine<R> {
                     Some(Err(what)) => Err(Fault::Unsupported(format!("processor operation {what}"))),
                     None => Err(Fault::UserOp(name)),
                 }
+            }
+            Some(UserOp::Moves(moves)) => {
+                for (destination, source, size) in moves {
+                    let mut bytes = vec![0; size as usize];
+                    self.read_space(self.ids.register, source, &mut bytes)?;
+                    self.write_space(self.ids.register, destination, &bytes)?;
+                }
+                Ok(())
             }
             Some(UserOp::Other(name)) => Err(Fault::UserOp(name)),
             None => Err(Fault::UserOp(format!("user operation {index}"))),
