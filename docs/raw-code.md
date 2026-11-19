@@ -38,12 +38,12 @@ report is large: `raw` lists keep their first rows with counts. Repeat the same 
 session keeps the project, with its annotations, for that exact interpretation. The CLI takes the same object as
 `--raw-json` ([CLI reference](cli-reference.md#raw-projects)).
 
-Only MSP430, AVR8, Cortex-M and MIPS32 decompile; the other Sleigh profiles disassemble. On Cortex-M, `decompile` with
+Only MSP430, AVR8, Cortex-M, MIPS32 and Xtensa decompile; the other Sleigh profiles disassemble. On Cortex-M, `decompile` with
 `"exact_entry": true` decompiles from an address you assert (an odd address is read as the Thumb code at the even
 one, with a `note`), discovered or not, with its context
 counts and omissions; plain `decompile` also takes any code address. Multiple regions, decoded
 regions, scatter-load and pointer tables are Cortex-M only, except a decoded primary region, which any profile
-takes.
+takes, and further regions, which MIPS32 and Xtensa take too.
 
 ## MIPS boot ROMs and bare-metal MIPS
 
@@ -66,6 +66,51 @@ Absolute `lui`/`addiu` pairs give string and data references, and `find_main` fo
 seeded on their own; add them to `seeds` when the image has handlers there. microMIPS and MIPS16e code, MIPS64
 and the vector table, pointer-table and scatter-load options of Cortex-M have no MIPS equivalent. A Linux userland
 or kernel ELF needs no Raw project: open it directly (position-independent code resolves its GOT through `$gp`).
+
+## ESP32 and ESP8266 firmware
+
+Espressif firmware is Xtensa code: the ESP32, ESP32-S2 and ESP32-S3 (LX6/LX7 cores, windowed register ABI) and
+the ESP8266 (LX106, call0 ABI). The `Xtensa:LE:32:default` profile (aliases `xtensa`, `esp32`, `esp8266`, `lx6`,
+`lx7`, `lx106`) is decoded natively, as Cortex-M and MIPS are: up to 4 MiB, further regions, typed operands and
+data references, `decompile` and `evaluate_function`. An app image (the `.bin` a build writes, magic 0xE9) opens
+with `"format": "esp"`, which takes every address from its segment headers: give the image's file `offset`
+(default 0) and no `length` or `base_address`.
+
+```json
+{
+  "path": "tests/fixtures/xtensa/esp32-flash.bin",
+  "raw": { "profile": "esp32", "format": "esp", "offset": "0x10000" }
+}
+```
+
+Each segment becomes a region at its load address by the chip's memory map: IRAM and flash-mapped IROM code,
+flash-mapped DROM constants, DRAM and RTC memory as RAM with their initial bytes. esptool's padding segments and
+addresses outside the map are reported and not mapped; segment counts above 16, lengths past the file and
+overlapping segments are refused. The header's entry (`call_start_cpu0` on ESP-IDF) is the entry. `binary_info`
+reports the image under `raw.esp`: chip, ABI, flash mode, size and frequency, every segment with its memory, the
+checksum and appended SHA-256 (each with `valid`), and `esp_app_desc` (project name, version, ESP-IDF version,
+build date and time, secure version, the ELF's SHA-256). An ESP8266 image at the start of a flash dump also maps
+the rest of the flash as IROM at 0x40200000 plus its offset, as the cache does, so its flash code (NONOS SDK
+`irom0` at flash 0x10000, 0x40210000) is in the project. ESP32-family chips without Xtensa cores (C2, C3, C6, H2,
+P4: RISC-V) are refused.
+
+A whole flash dump is not opened as one project. `binary_info` on it (with no `raw`) names what it holds: the
+bootloader image at 0x1000 (0 on the ESP32-S3), the partition table at 0x8000 (or another 4 KiB boundary below
+0x10000) with each partition's label, type, subtype and offset, and the `raw` selector of each application
+partition's image. `file_layout` hints the same structure, `carve` reports `esp_image` and `esp_partition_table`
+candidates (the table's MD5 entry checked), and `list_dir` names `esp_image` and `esp_flash` files. Open the
+bootloader with its offset as you would an app.
+
+Discovery seeds windowed functions from their `entry a1, N` prologue and call0 ones from their stack adjustment
+(`addi a1, a1, -N`, with the argument moves GCC schedules before it), so task entries and handlers reached only
+through pointers are found. Strings, globals, constants and far call targets are `l32r` literals: references go to
+what the literal holds, `-mlongcalls`' `l32r` + `callx8` is a call to its target (ROM functions included),
+`disassemble` comments each `l32r` with the string or function it loads, and constant search matches it
+(`loaded_constant`). The decompiler folds literals (flash is read-only), so calls and strings read as addresses
+rather than literal-pool variables, and code from an ESP8266 image or an ELF whose `.xtensa.info` says call0 gets
+the call0 model. The decompiler does not model zero-overhead loops (`loop` bodies read as running once), which
+`evaluate_function` does. ROM functions are not named. `find_main` finds `app_main` from ESP-IDF's `main_task` (see
+[find main](#find-main)).
 
 ## Choose the base address
 
@@ -204,6 +249,13 @@ first forward jump after `$sp` is set, or one from uncached kseg1 into cached ks
 boot ROM's C entry, at medium confidence when discovery found a function there. Reset code that reaches its C code
 by a call, sets the stack after its last jump, or jumps through a table is not followed.
 
+On Xtensa (an ESP image or an Xtensa ELF) `find_main` takes `app_main` from ESP-IDF's `main_task`, the function
+that logs "Returned from app_main()": the call between that line and "Calling app_main()" whose callee
+`main_task` calls nowhere else, at high confidence (medium when only the "Returned" line is there). The startup
+chain (`call_start_cpu0`, `start_cpu0`, the scheduler) creates that task through a pointer and is not followed,
+so firmware without those log lines (the ESP8266 NONOS SDK's `user_init`, builds with logging off) gets no
+candidate.
+
 ## Raw-capable tools
 
 These tools take the `raw` selector:
@@ -214,7 +266,7 @@ These tools take the `raw` selector:
 | Functions and code | `list_functions`, `disassemble`, `function_graph`, `decompile`, `xrefs`, `search`, `analysis_diagnostics`, `entry_diagnostics` |
 | Data | `list_strings`, `inspect_data` (a file tool) |
 | Annotations | `rename`, `set_comment`, `annotate_batch`, `list_annotations`, `undo`, `redo` |
-| Execution | `evaluate_function` (processors the interpreter supports, Cortex-M and MIPS32 among them) |
+| Execution | `evaluate_function` (processors the interpreter supports, Cortex-M, MIPS32 and Xtensa among them) |
 | Peripherals | `import_svd`, `peripheral_access` |
 | Patching | `patch_bytes`, `revert_patch`, `list_patches`, `integrity_checks`, `export_image` |
 | Detection | `identify_functions`, `find_crypto`, `lock_mechanisms` |

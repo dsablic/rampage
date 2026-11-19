@@ -176,8 +176,9 @@ Areas marked *experimental* may change in any release; see the [stability policy
   limits. See [firmware filesystem images](docs/firmware-images.md).
 - **Processors:** x86 and x86-64; AArch64, ARM and Thumb from Arm's machine-readable specification; MIPS
   (position-independent Linux userland with GOT and `$gp` resolution, and MIPS32 boot ROMs as Raw projects),
-  PowerPC, RISC-V, SPARC, s390x and m68k through Capstone; sixteen more families (MSP430, AVR8, 8051, Z80,
-  Xtensa, eBPF, LoongArch and others) as Raw Projects through Ghidra's Sleigh. Sleigh profiles other than MSP430
+  PowerPC, RISC-V, SPARC, s390x and m68k through Capstone; Xtensa natively (ESP32 and ESP8266: ELF files, app
+  images and flash dumps, windowed and call0 code, *experimental*); fifteen more families (MSP430, AVR8, 8051, Z80,
+  eBPF, LoongArch and others) as Raw Projects through Ghidra's Sleigh. Sleigh profiles other than MSP430
   and AVR8 are *experimental* and disassemble without decompiling.
 - **Firmware** (*experimental*): a Cortex-M Raw profile for headerless Thumb images that discovers, decompiles
   and seeds from the vector table, from code-pointer tables (scanned by itself when discovery is sparse), from code

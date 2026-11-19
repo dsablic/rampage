@@ -3071,7 +3071,7 @@ pub fn tools() -> Vec<Tool> {
             "Experimental. Run a function on arguments and return its result: use it for any \"what does f return \
              for X\" question instead of working loops or bit operations out from decompiled code. A p-code \
              interpreter over the bundled Sleigh specifications (x86/x86-64 with SSE/AVX2, AArch64, ARM/Thumb, MIPS, \
-             PowerPC, RISC-V); nothing runs natively. Arguments follow the binary's calling convention: integers, \
+             PowerPC, RISC-V, Xtensa); nothing runs natively. Arguments follow the binary's calling convention: integers, \
              {float}, buffers by pointer (returned). Calls inside the image are followed; common C library imports are \
              modelled. `stop` says why the run ended (returned with result, step_limit, external_call, user_op, ...). \
              Result width: return_bits 32 for a C int on 64-bit targets (or read low_32), 64 for a 64-bit value on \

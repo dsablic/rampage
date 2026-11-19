@@ -103,8 +103,10 @@ never served from the code mapping. Every other profile refuses with "no reviewe
 
 Sleigh-decoded Raw Projects also refuse immediate/constant code search (no typed operands); every Raw Project
 refuses patch V1, capture identity and backing-source proofs. Annotations are memory-only, even when a persistent
-log is supplied. The sixteen Sleigh architectures have no legacy pointer width (`pointer_size()` is `None`) and no
-native/Capstone decoder. Sleigh profiles map exactly one code region; Intel HEX and S-record input is accepted
+log is supplied. The Sleigh architectures have no legacy pointer width (`pointer_size()` is `None`) and no
+native/Capstone decoder, except Xtensa, which rampage now decodes natively (ESP32 and ESP8266 firmware, ELF files
+included; see [ESP32 and ESP8266 firmware](raw-code.md#esp32-and-esp8266-firmware)): its Raw profile keeps its
+language ID and row below, with a 4 MiB limit, further regions and decompilation. Sleigh profiles map exactly one code region; Intel HEX and S-record input is accepted
 when its data form one contiguous run. Multiple regions (code, constant data, RAM and unbacked RAM/MMIO, from file
 ranges, decoder output or record runs) are Cortex-M only; see [Raw projects](mcp.md#multiple-regions-intel-hex-and-s-records).
 

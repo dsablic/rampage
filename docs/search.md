@@ -83,6 +83,9 @@ firmware holds a CRC polynomial or an address. Constants built other ways (shift
 additions, a MOVT whose MOVW is in another block, `ldrd`/`vldr` pools) are not matched, so an ARM search
 always stays a lower bound (`total_is_exact` false).
 
+Xtensa operands are typed (immediates of `movi`, `addi`, compare-with-constant branches and shifts), and the
+literal an `l32r` loads matches as `loaded_constant`.
+
 MIPS operands are typed (`lui`'s immediate shifted into place, `addiu` sign-extended, loads and stores with base,
 displacement and size), and a 32-bit constant built by `lui` and `ori`/`addiu` in one block also matches as
 `loaded_constant`, as a CRC polynomial is. Branch targets are not immediates.

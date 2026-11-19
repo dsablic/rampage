@@ -64,6 +64,20 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   instruction it does not model (long multiplies, saturating and SIMD-within-register arithmetic, LDREX/STREX,
   SVC) or a branch on a peripheral's value is skipped, and a copy that call made is not mapped. Other Raw profiles
   have no reset-code follow.
+- Xtensa (ESP32, ESP8266) is experimental. The decoder covers the core ISA with the windowed, loop, MUL/DIV,
+  MIN/MAX, boolean and single-precision options; MAC16, the ESP32-S3's vector (PIE) instructions and FLIX bundles
+  are rendered by opcode or refused, and big-endian Xtensa and the LITBASE option (literals addressed from a base
+  register) are not decoded. ESP ROM functions are called by address and not named, and calls through
+  `-mlongcalls` resolve only when the `l32r` and the `callx` are in one straight-line run. Discovery seeds windowed
+  functions from `entry` prologues and call0 functions from a frame-allocating `addi a1, a1, -N`, so a call0 leaf
+  reached only through a pointer is missed. The decompiler uses Ghidra's Xtensa model, whose windowed calls go
+  through its register fixups. It does not model zero-overhead loops: the body of a `loop`/`loopnez`/`loopgtz`
+  reads as running once (a bitwise CRC's eight-step inner loop shows one step), so check such a function with
+  `evaluate_function` or its listing. `evaluate_function` models windows and
+  zero-overhead loops but not window overflow exceptions, so call chains deeper than the hardware's register file
+  run as if the file were unlimited. ESP app images are read as the ESP8266 and ESP32/S2/S3 bootloaders load them:
+  ESP8266 `0xEA` (rBoot, v2) images and encrypted flash are not decoded, and secure-boot signatures are not
+  checked. `find_main` finds `app_main` only through ESP-IDF's `main_task` log lines.
 - On Raw projects `find_main` models Cortex-M reset code, and finds a main that never returns, and MIPS reset
   code: it follows jumps taken before `$sp` is set (`b reset` over the exception vectors) and takes the first
   forward jump after it, or a kseg1-to-kseg0 jump, as the C entry; a C entry reached by a call is not found. `decompile`

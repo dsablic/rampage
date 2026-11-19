@@ -42,8 +42,9 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   [explicit decoding](decoding.md) provides LZSS (classic 4K and every explicit variant) and LZ4-block providers,
   transient previews (`write_decoded_range` writes a new file) and a bounded probe that ranks parameter sets for an
   unknown variant. Limits: pointer links are suppressed on loader warnings; decoding is not authentication or a load mapping.
-- [Raw Projects](sleigh-decoding.md) open headerless images with an asserted profile and base address: sixteen
-  Sleigh families, and the *experimental* Cortex-M profile (`ARM:LE:32:Cortex`), which decodes Thumb natively,
+- [Raw Projects](sleigh-decoding.md) open headerless images with an asserted profile and base address: fifteen
+  Sleigh families, natively decoded MIPS32 and Xtensa (ESP app images by their headers), and the *experimental*
+  Cortex-M profile (`ARM:LE:32:Cortex`), which decodes Thumb natively,
   decompiles, seeds from the vector table, code-pointer tables in every code region (on request, or by itself when
   discovery is sparse), code pointers in data records the code addresses (RTOS thread definitions) and the CRC
   routines `integrity_checks` infers with the code that calls them, maps up to 15 further code, data or RAM regions
@@ -92,6 +93,14 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   `find_main` follows glibc's and musl's `__start`. MIPS32 boot ROMs and bare-metal images open as Raw
   projects ([Raw code](raw-code.md#mips-boot-roms-and-bare-metal-mips)). Native, specification-derived decoders are the preferred direction
   where machine-readable specifications exist.
+- Xtensa (*experimental*) decodes natively: the ESP32's windowed code and the ESP8266's call0 code, as ELF files
+  or as [ESP app images and flash dumps](raw-code.md#esp32-and-esp8266-firmware) (`format: esp`, with the chip,
+  segments, checksum, SHA-256 and `esp_app_desc` reported). `l32r` literals give string, data and call
+  references, `-mlongcalls`' `l32r` + `callx` resolves to its target, discovery finds functions by their `entry`
+  or stack-adjusting prologue, the decompiler folds literals with Ghidra's Xtensa model (call0 when the image says
+  so), `evaluate_function` runs both ABIs (register windows and zero-overhead loops modelled), and `find_main`
+  takes `app_main` from ESP-IDF's `main_task`. `carve`, `file_layout` and `list_dir` recognise app images,
+  partition tables and flash dumps.
 - Runtime snapshots and bundle directories use the same query surfaces. Snapshots contain validated sparse
   memory, virtual addresses, explicit seeds and provenance; missing memory is unavailable, not fabricated zeros.
   See [runtime snapshots](runtime-snapshots.md) for capture, persistence and format limits.

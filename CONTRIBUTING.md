@@ -56,6 +56,11 @@ Debian's MIPS cross GCC at pinned package versions in a digest-pinned `gcc` imag
 crtbegin/crtend (GPLv3 with the GCC Runtime Library Exception) and glibc's crt1/crti/crtn (LGPL-2.1 with its
 linking exception), whose notices are recorded in the same index.
 
+The Xtensa fixtures (`tests/fixtures/xtensa`) are built by `build.sh` with Espressif's `xtensa-esp-elf` GCC (the
+release tarball pinned by SHA-256, downloaded outside the repository) and Debian's `gcc-xtensa-lx106`, in the same
+digest-pinned image, with esptool making the app images. They link nothing but their own sources (`-nostdlib`,
+no libgcc, libc, HAL or ESP-IDF code; the build fails on an undefined symbol), so they carry no third-party notice.
+
 ## Pull requests
 
 Keep a pull request to one focused change with an imperative commit subject. Run the four commands above and note

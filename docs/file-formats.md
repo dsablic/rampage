@@ -163,6 +163,30 @@ Code computes `$gp` from `$t9` (LLVM's `_gp_disp` prologue) or keeps it constant
 after calls); discovery follows both, and the decompiler is told `$t9` and `$gp` at each function's entry.
 `DT_MIPS_RLD_MAP` and `.rld_map` (the debugger hook) and `.MIPS.abiflags` are not interpreted.
 
+## Xtensa ELF and ESP images
+
+Xtensa ELF files (`EM_XTENSA`, little-endian) load like other ELF executables. The `.xtensa.info` note the GNU
+toolchain writes says which ABI the code uses: `ABI=0` is the windowed ABI (ESP32), any other value call0
+(ESP8266's LX106); without the note the code is taken to be windowed. The call0 ABI changes how the decompiler
+models calls (a12-a15 survive them) and which prologue discovery looks for.
+
+An ESP app image (the format the ROM and the second-stage bootloader load) starts with magic 0xE9, a segment
+count, the SPI flash mode, size and frequency, and the entry; ESP32-family images add a 16-byte extended header
+(write-protect pin, drive settings, chip id, minimum and maximum chip revision, and whether a SHA-256 is
+appended), the ESP8266's do not, and the entry tells the two apart (the ESP8266's is in its IRAM at
+0x40100000). Then come the segments, each a load address and length, a checksum byte (the XOR of every segment
+byte with 0xEF) ending a 16-byte block, and the optional SHA-256 of everything before it. rampage reads these with
+[`format: esp`](raw-code.md#esp32-and-esp8266-firmware) and reports both checks; it never decides an image is
+genuine from them (they detect corruption, not tampering: secure boot signatures are not checked). ESP-IDF puts
+`esp_app_desc_t` (magic 0xABCD5432) at the start of the first flash data segment, and from ESP-IDF 5.1 the
+bootloader's `esp_bootloader_desc_t` at the start of its DRAM.
+
+The partition table (32-byte entries with magic 0xAA50: type, subtype, offset, size, label, flags; then an entry
+with magic 0xEBEB holding the MD5 of the entries) names each partition's type and subtype (`app`/`factory`,
+`ota_0`.., `data`/`nvs`, `phy`, `ota`, `coredump`, `spiffs`, `littlefs`, `fat` and the others ESP-IDF defines)
+and whether it is encrypted. Flash encryption itself is not undone: an encrypted partition's bytes are
+ciphertext.
+
 ## Managed assemblies
 
 ECMA-335 metadata includes assembly identity, references, entry point and one paged list:

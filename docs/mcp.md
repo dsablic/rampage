@@ -260,6 +260,8 @@ file, the native file with an optional PE CheckSum) or as a flat binary. Both ta
 except `export_patched`. Limits: one contiguous range per check; 256 MiB of hashing per search. See
 [firmware patching](firmware-patching.md).
 
+Xtensa code names a CRC routine by the polynomial literal its `l32r` loads.
+
 MIPS code names a CRC routine by the polynomial it builds with `lui` and `ori`/`addiu`, or by a CRC-16
 polynomial as an instruction's immediate (`xori $v0, $v0, 0xa001`) in a function that also shifts by one bit and
 XORs, as a bitwise CRC loop does.
@@ -412,7 +414,7 @@ diagnostics and worker requirements; `function_summary` remains a structural alt
 `evaluate_function` (core, experimental) runs one function of the image on given arguments and returns its
 result, so a question like "what does this return for (0x00F0A500, 3)?" is answered by running the code rather
 than simulating it from pseudocode. A p-code interpreter over the bundled Sleigh specifications executes it
-(x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC, RISC-V); nothing runs natively. `at` names the entry;
+(x86, x86-64, AArch64, 32-bit ARM and Thumb, MIPS, PowerPC, RISC-V, Xtensa); nothing runs natively. `at` names the entry;
 `args` are integers (numbers, or `0x` hex or decimal strings; `{value, bits}` for an explicit width, and a hex
 string longer than 8 digits is 64-bit on a 32-bit target), floats (`{float, bits}`: a number, or a string that is
 decimal, `inf`, `-inf`, `nan` or the `0x` hex of its bits; a double unless `bits` is 32) or
@@ -421,7 +423,9 @@ binary's calling convention puts them; `convention` selects cdecl, stdcall, fast
 win64 on x86-64, and aapcs or aapcs_vfp on 32-bit ARM. Floats travel in XMM registers on x86-64 (System V counts
 them apart from the integer registers, Win64 by position), on the stack on 32-bit x86, in s/d registers on AArch64
 and under ARM hard float (`aapcs_vfp`, chosen for an ELF whose header flags the hard-float ABI), and in core
-registers under ARM soft float; MIPS, PowerPC and RISC-V take no float arguments. `return_bits` sets the integer
+registers under ARM soft float; MIPS, PowerPC and RISC-V take no float arguments. Xtensa (`xtensa`: a2-a7,
+result in a2) runs the ESP32's windowed code and the ESP8266's call0 code: a `call4/8/12` rotates the register
+window into the callee and back on return, and `loop`/`loopnez`/`loopgtz` repeat their body. `return_bits` sets the integer
 result width (default the register width), and twice the register width reads a register pair (EDX:EAX, r1:r0).
 Without `return_bits` on a 64-bit target the result also has `low_32`, the value of a C `int` or `bool` whose
 upper register bits are undefined. `return_float` 32 or 64 reads a float or double instead, from XMM0, ST0 on
@@ -723,13 +727,13 @@ changes image bytes, `mmio` maps a page for each value it sets, and imported SVD
 `profile` is a closed Raw language ID, listed in the server instructions, in any letter case, or a processor
 alias such as `msp430`, `avr`, `8051`, `z80` or `cortex-m4`. An unknown name gets the closest profiles; an
 A-profile ARM, AArch64 or x86 name is pointed to `inspect_raw_code` with an example, since those have no Raw
-profile; `offset`/`length` select original-file bytes (1..=131072, or up to 4 MiB for `ARM:LE:32:Cortex` and the
-MIPS32 profiles);
+profile; `offset`/`length` select original-file bytes (1..=131072, or up to 4 MiB for `ARM:LE:32:Cortex`, the
+MIPS32 profiles and Xtensa);
 `base_address`, `entry` and `seeds` (at most 8192) are internal code-space byte offsets, also for word-addressed
 processors, and tool addresses use the same coordinates. The mapping is an analyst assertion, not header admission.
 `raw` cannot be combined with `arch`, `image_offset` or `image_length`, and other tools refuse it with "tool X does not
 accept Raw projects". Tools that cannot answer on Raw code refuse explicitly (immediate search on Sleigh profiles;
-decompilation for every profile except MSP430, AVR8, Cortex-M and MIPS32, which have reviewed C models). Annotations are
+decompilation for every profile except MSP430, AVR8, Cortex-M, MIPS32 and Xtensa, which have reviewed C models). Annotations are
 memory-only for the server session and the exact interpretation (bytes, profile, mapping, entry, seed set): no sidecar
 or log is written, changed seeds or bytes give a fresh project, and at most 32 interpretations are retained. Each tool's
 `raw` schema is a compact shape
@@ -740,6 +744,13 @@ A MIPS32 boot ROM or bare-metal image opens with `MIPS:BE:32:default` (alias `mi
 `evaluate_function` with the o32 model. Without `entry` the entry is `base_address`, the reset vector of a boot ROM
 mapped at 0xbfc00000 ([MIPS boot ROMs](raw-code.md#mips-boot-roms-and-bare-metal-mips)). MIPS64, microMIPS and
 MIPS16e have no Raw profile.
+
+ESP32 and ESP8266 firmware (`Xtensa:LE:32:default`, aliases `esp32`, `esp8266`, `xtensa`) is decoded natively too.
+`"format": "esp"` maps an app image by its segment headers, from `offset` (default 0) of the file, so an app in a
+flash dump opens with its partition's offset: `{"profile": "esp32", "format": "esp", "offset": "0x10000"}`.
+`binary_info` reports the image under `raw.esp` (chip, ABI, segments, checksum and SHA-256 checks, `esp_app_desc`),
+and on a flash dump opened without `raw` names the bootloader, the partition table and each app's selector
+([ESP32 and ESP8266 firmware](raw-code.md#esp32-and-esp8266-firmware)).
 
 A Cortex-M flash image (experimental `ARM:LE:32:Cortex` profile) opens in one call from path, profile and base
 address, with `"vector_table": true` to read the vector table at `base_address` (or an address in its place):

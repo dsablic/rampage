@@ -121,5 +121,8 @@ Vendor SquashFS variants and SquashFS 3.x; JFFS2, CramFS and YAFFS2 (`carve` fin
 size is not a power of two; delta OTA payloads (by design: they need the previous build); compressed tar
 (`.tar.gz`: decompress it first); opening images inside vendor containers automatically (`carve` finds the offset of
 a SquashFS, ext, UBI, UBIFS, Android sparse, OTA payload, cpio, tar or ZIP image, also inside TRX, FAT, MBR/GPT or
-UEFI containers; pass it as `image_offset`). The design and its trade-offs are in
+UEFI containers; pass it as `image_offset`). ESP32/ESP8266 flash partitions are not listed by `fs_list`: `binary_info`
+and `file_layout` name them, and an app partition opens with its offset in `"format": "esp"`
+([ESP32 and ESP8266 firmware](raw-code.md#esp32-and-esp8266-firmware)); SPIFFS, LittleFS and NVS contents are not
+read. The design and its trade-offs are in
 [the plan](plans/2026-11-15-firmware-unpacking.md).
