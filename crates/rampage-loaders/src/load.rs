@@ -153,6 +153,9 @@ pub struct Binary {
     /// An ARM ELF whose build attributes name an M-profile CPU ([`Binary::m_profile`]).
     #[serde(skip)]
     elf_m_profile: bool,
+    /// An Xtensa image built for the call0 ABI ([`Binary::xtensa_call0`]).
+    #[serde(skip)]
+    xtensa_call0: bool,
 }
 
 #[derive(Debug)]
@@ -264,6 +267,7 @@ impl Binary {
             source: None,
             regions: Vec::new(),
             records: None,
+            esp: None,
             scatter_load: None,
         })
     }
@@ -312,6 +316,7 @@ impl Binary {
             go_arguments: std::collections::BTreeMap::new(),
             raw_identity: std::sync::OnceLock::new(),
             elf_m_profile: false,
+            xtensa_call0: false,
             raw: Some(raw),
             image: 0..len,
         })
@@ -359,6 +364,17 @@ impl Binary {
     /// without retained admission facts counts too, so nothing native is trusted for it.
     pub fn is_sleigh_raw(&self) -> bool {
         self.format == Format::Raw && !self.raw.as_ref().is_some_and(|raw| raw.profile().native_decoder())
+    }
+
+    /// An Xtensa image for the call0 ABI (ESP8266): an ELF whose `.xtensa.info` says so, or a Raw image whose
+    /// interpretation does (an ESP8266 app image). Otherwise Xtensa code is taken to use register windows (ESP32).
+    pub fn xtensa_call0(&self) -> bool {
+        self.arch == Arch::Xtensa && (self.xtensa_call0 || self.raw.as_ref().is_some_and(|raw| raw.xtensa_call0()))
+    }
+
+    /// Sets whether this Xtensa image uses the call0 ABI, for an interpretation that decides it from the code.
+    pub fn set_xtensa_call0(&mut self, call0: bool) {
+        self.xtensa_call0 = call0;
     }
 
     /// An ARMv6-M/ARMv7-M(E)/ARMv8-M image: all Thumb, no A32 state, M-profile instruction set. A Raw project with
@@ -511,6 +527,7 @@ impl Binary {
             go_arguments: std::collections::BTreeMap::new(),
             raw_identity: std::sync::OnceLock::new(),
             elf_m_profile: false,
+            xtensa_call0: false,
             raw: None,
         })
     }
@@ -952,6 +969,7 @@ impl Binary {
         let details = crate::details::collect(&parsed);
         let elf_m_profile = format == Format::Elf && arch == Arch::Arm && elf_m_profile(&parsed, &mut warnings);
         let mips_got = crate::slots::mips_got(&parsed);
+        let xtensa_call0 = format == Format::Elf && arch == Arch::Xtensa && elf_xtensa_call0(&parsed);
         let overlay = crate::details::overlay(&parsed, image_bytes, image.start as u64).unwrap_or_else(|warning| {
             warnings.push(warning);
             None
@@ -995,6 +1013,7 @@ impl Binary {
             go_arguments: std::collections::BTreeMap::new(),
             raw_identity: std::sync::OnceLock::new(),
             elf_m_profile,
+            xtensa_call0,
             raw: None,
             image,
         };
@@ -1774,6 +1793,7 @@ fn arch_of(architecture: object::Architecture) -> Option<Arch> {
         A::Sparc64 => Arch::Sparc64,
         A::S390x => Arch::S390x,
         A::M68k => Arch::M68k,
+        A::Xtensa => Arch::Xtensa,
         _ => return None,
     })
 }
@@ -1784,6 +1804,17 @@ fn arm_mapping_symbol(name: &str) -> Option<char> {
     let kind = chars.next()?;
     let rest = chars.as_str();
     (matches!(kind, 'a' | 't' | 'x' | 'd') && (rest.is_empty() || rest.starts_with('.'))).then_some(kind)
+}
+
+/// Whether an Xtensa ELF was built for the call0 ABI (ESP8266's LX106 has no register windows): its `.xtensa.info`
+/// note says `ABI=` followed by a nonzero value (0 is the windowed ABI). Without the note, whether any discovered
+/// function opens with `entry` decides later ([`Binary::xtensa_call0`] stays false).
+fn elf_xtensa_call0(parsed: &object::File) -> bool {
+    let Some(data) = parsed.section_by_name(".xtensa.info").and_then(|section| section.data().ok()) else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(data);
+    text.split(['\n', '\0']).filter_map(|line| line.trim().strip_prefix("ABI=")).any(|value| value.trim() != "0")
 }
 
 /// Whether an ARM ELF's build attributes name an M-profile CPU; an unreadable section is a warning and not M.

@@ -64,7 +64,16 @@ impl Memory for Binary {
     /// M-profile code (a Cortex-M Raw image or an M-profile ELF) is all Thumb, mixed with constant data. An even
     /// address formed into it (a string, a switch table) is data, since every Thumb code pointer is odd; so is an
     /// odd one whose exact byte starts a printable NUL-terminated run, the usual odd-aligned string literal (`"Bc"` at 0x80000af).
+    ///
+    /// Xtensa functions are 4-byte aligned, and a windowed-ABI one (ESP32) opens with `entry a1, frame`; ESP firmware
+    /// keeps strings and tables in executable flash too, so a literal pointing elsewhere is data.
     fn may_point_to_code(&self, address: u64) -> bool {
+        if self.arch == rampage_arch::Arch::Xtensa {
+            if !address.is_multiple_of(4) || starts_text(self, address) {
+                return false;
+            }
+            return crate::xtensa_starts::may_start_function(self, address);
+        }
         if !self.m_profile() {
             return true;
         }

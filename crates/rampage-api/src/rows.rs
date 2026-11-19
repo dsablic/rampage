@@ -301,6 +301,11 @@ pub struct RawSummary<'a> {
     /// Intel HEX or S-record input: the format, data records read and the verdict on the start-address record.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub records: Option<&'a rampage_loaders::RawRecordsEvidence>,
+    /// An ESP32/ESP8266 app image (`format: esp`): chip, ABI, flash settings, every segment with the memory it
+    /// loads into, the checksum and appended SHA-256 checks, and esp_app_desc (project, version, IDF version, build
+    /// date).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub esp: Option<&'a rampage_loaders::esp::EspImage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_table: Option<&'a rampage_loaders::raw_vectors::VectorTable>,
     /// Pointer tables found when seeding from them was requested, or ran automatically (`automatic`).

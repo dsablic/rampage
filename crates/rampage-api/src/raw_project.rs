@@ -16,6 +16,11 @@ use serde::{Deserialize, Deserializer};
 use crate::range_source::RangeSource;
 use crate::{ApiError, FileOffset};
 
+/// Largest file `format: esp` reads: a 16 MiB flash dump.
+const MAX_ESP_FILE_BYTES: usize = 16 * 1024 * 1024;
+/// Where the ESP8266's cache maps flash offset 0.
+const ESP8266_IROM_BASE: u64 = 0x4020_0000;
+
 /// One Raw interpretation of a file range: closed profile, source range, code-space mapping, entry and seeds.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -35,7 +40,7 @@ pub struct RawProjectRequest {
     /// Original-file BYTE offset of the first code byte. Required for the `binary` format.
     #[serde(default)]
     pub offset: Option<FileOffset>,
-    /// Exact source byte count: 1..=131072, or 1..=4194304 for ARM:LE:32:Cortex and the MIPS profiles (with
+    /// Exact source byte count: 1..=131072, or 1..=4194304 for ARM:LE:32:Cortex, MIPS and Xtensa (with
     /// `decode`, the encoded count, at most 8 MiB). Required for the `binary` format.
     #[serde(default)]
     pub length: Option<FileOffset>,
@@ -78,7 +83,7 @@ pub struct RawProjectRequest {
     #[serde(default)]
     #[schemars(schema_with = "scatter_load_schema")]
     pub scatter_load: Option<bool>,
-    /// ARM:LE:32:Cortex and MIPS only: up to 15 further regions of the same file mapped beside the primary code
+    /// ARM:LE:32:Cortex, MIPS and Xtensa only: up to 15 further regions of the same file mapped beside the primary code
     /// region, e.g. a second stage at its RAM base, constant data, or RAM. Regions never overlap; references between them
     /// resolve, entry and seeds may lie in any code region, and binary_info reports each region with its source
     /// range and SHA-256. vector_table reads the primary region only, pointer_tables every code region. All backed regions
@@ -95,6 +100,8 @@ pub enum RawInputFormat {
     Binary,
     Ihex,
     Srec,
+    /// An Espressif app image (magic 0xE9) at `offset` (default 0): every segment mapped at its load address.
+    Esp,
 }
 
 fn format<'de, D: Deserializer<'de>>(deserializer: D) -> Result<RawInputFormat, D::Error> {
@@ -102,16 +109,18 @@ fn format<'de, D: Deserializer<'de>>(deserializer: D) -> Result<RawInputFormat, 
         None | Some("binary") => Ok(RawInputFormat::Binary),
         Some("ihex") => Ok(RawInputFormat::Ihex),
         Some("srec") => Ok(RawInputFormat::Srec),
-        Some(other) => Err(serde::de::Error::custom(format!("format {other:?}: binary, ihex or srec"))),
+        Some("esp") => Ok(RawInputFormat::Esp),
+        Some(other) => Err(serde::de::Error::custom(format!("format {other:?}: binary, ihex, srec or esp"))),
     }
 }
 
 fn format_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
         "description": "binary (default) maps offset/length at base_address; ihex (Intel HEX) and srec (Motorola \
-                        S-records) take addresses from the records, so offset, length and base_address are omitted.",
+                        S-records) take addresses from the records, so offset, length and base_address are omitted; \
+                        esp maps the ESP32/ESP8266 app image at offset (default 0) by its segment headers.",
         "type": ["string", "null"],
-        "enum": ["binary", "ihex", "srec", null]
+        "enum": ["binary", "ihex", "srec", "esp", null]
     })
 }
 
@@ -313,7 +322,7 @@ const PROFILE_ALIASES: [(RawProfile, &[&str]); 19] = [
     (RawProfile::SuperH2, &["sh2", "superh2"]),
     (RawProfile::V850, &["v850", "necv850"]),
     (RawProfile::Tricore, &["tricore", "aurix"]),
-    (RawProfile::Xtensa, &["xtensa"]),
+    (RawProfile::Xtensa, &["xtensa", "tensilica", "esp32", "esp32s2", "esp32s3", "esp8266", "lx6", "lx7", "lx106"]),
     (RawProfile::Z80, &["z80"]),
     (RawProfile::Hcs12, &["hcs12", "s12", "68hc12", "hc12"]),
     (RawProfile::Mc6805, &["6805", "mc6805", "hc05", "68hc05"]),
@@ -573,7 +582,7 @@ impl RawProjectRequest {
         }
         if !profile.native_decoder() {
             return Err(ApiError::Invalid(format!(
-                "Raw {} maps one code region: `regions` is defined only for ARM:LE:32:Cortex and the MIPS profiles",
+                "Raw {} maps one code region: `regions` is defined only for ARM:LE:32:Cortex, MIPS and Xtensa",
                 profile.language_id()
             )));
         }
@@ -708,7 +717,114 @@ impl RawProjectRequest {
         };
         let regions = self.read_regions(path, profile, max - bytes.len())?;
         let scatter_load = self.scatter_load_mode(profile)?;
-        Ok(RawImage { bytes, options, source: Some(source), regions, records: None, scatter_load })
+        Ok(RawImage { bytes, options, source: Some(source), regions, records: None, esp: None, scatter_load })
+    }
+
+    /// The ESP app image at `offset` (default 0) of the file: each segment the chip's memory map places becomes a
+    /// region at its load address (IRAM and IROM code, DROM data, DRAM and RTC RAM with their initial bytes), the
+    /// segment holding the entry the primary one, and the header's entry the entry. An ESP8266 image at the start
+    /// of a flash dump also maps the rest of the flash as IROM, at 0x40200000 plus its offset, as the cache does.
+    fn esp_image(&self, path: &Path, profile: RawProfile) -> Result<RawImage, ApiError> {
+        if profile != RawProfile::Xtensa {
+            return Err(ApiError::Invalid(format!(
+                "Raw format esp reads ESP32 and ESP8266 app images, whose code is Xtensa: use profile xtensa, not {}",
+                profile.language_id()
+            )));
+        }
+        if self.length.is_some() || self.base_address.is_some() || self.decode.is_some() {
+            return Err(invalid(
+                "Raw format esp takes every address from the app image's segment headers: give only offset (the \
+                 image's file offset, default 0), and omit length, base_address and decode",
+            ));
+        }
+        let offset = self.offset.map_or(0, |offset| offset.0);
+        let source = RangeSource::open_sized(path, 0, |size| {
+            usize::try_from(size).ok().filter(|&size| (1..=MAX_ESP_FILE_BYTES).contains(&size)).ok_or_else(|| {
+                ApiError::Invalid(format!("Raw format esp reads files of 1..={MAX_ESP_FILE_BYTES} bytes"))
+            })
+        })?;
+        let file = source.read()?;
+        source.revalidate()?;
+        let load = |source| ApiError::Load { path: path.to_owned(), source };
+        let image = rampage_loaders::esp::parse_app_image(&file, offset).map_err(load)?;
+        if !image.chip.xtensa() {
+            return Err(ApiError::Invalid(format!(
+                "the app image at {offset:#x} is for an ESP32-family chip without an Xtensa core (RISC-V: C2, C3, C5, \
+                 C6, H2, P4) or one rampage has no memory map for; it has no Xtensa code"
+            )));
+        }
+        let max = profile.max_bytes();
+        let mut regions: Vec<RawRegion> = Vec::new();
+        for (index, segment) in image.segments.iter().enumerate() {
+            let Some(kind) = segment.kind else { continue };
+            let start = (offset + segment.image_offset) as usize;
+            let bytes = file[start..start + segment.length as usize].to_vec();
+            let source = RawRegionSource::EspSegment {
+                image_offset: offset,
+                segment: index,
+                offset: offset + segment.image_offset,
+                length: segment.length,
+            };
+            regions.push(RawRegion {
+                kind,
+                base: segment.load_address,
+                size: segment.length,
+                bytes: Some(bytes),
+                source,
+            });
+        }
+        if image.chip == rampage_loaders::esp::EspChip::Esp8266 && offset == 0 {
+            // The rest of the flash, past the boot image, is what the cache maps at 0x40200000 + offset.
+            let from = (image.length as usize).next_multiple_of(0x1000);
+            let end = file.len() - file.iter().rev().take_while(|&&byte| byte == 0xff).count();
+            if end > from {
+                let used: usize = regions.iter().map(|region| region.size as usize).sum();
+                let end = end.min(from + max.saturating_sub(used));
+                regions.push(RawRegion {
+                    kind: RawRegionKind::Code,
+                    base: ESP8266_IROM_BASE + from as u64,
+                    size: (end - from) as u64,
+                    bytes: Some(file[from..end].to_vec()),
+                    source: RawRegionSource::FileRange { offset: from as u64, length: (end - from) as u64 },
+                });
+            }
+        }
+        drop(file);
+        let total: usize = regions.iter().map(|region| region.size as usize).sum();
+        if total > max {
+            return Err(ApiError::Invalid(format!(
+                "the app image's mapped segments hold {total} bytes; Raw Xtensa maps at most {max}"
+            )));
+        }
+        let primary = regions
+            .iter()
+            .position(|region| {
+                region.kind == RawRegionKind::Code && (region.base..region.base + region.size).contains(&image.entry)
+            })
+            .or_else(|| regions.iter().position(|region| region.kind == RawRegionKind::Code))
+            .ok_or_else(|| invalid("the app image maps no code segment"))?;
+        let primary = regions.remove(primary);
+        let mut requested = self.clone();
+        requested.entry = Some(self.entry.unwrap_or(FileOffset(image.entry)));
+        let mut options = requested.options(profile, primary.base)?;
+        options.entry = requested.entry.map(|entry| entry.0);
+        let extra = self.read_regions(path, profile, max - total)?;
+        regions.extend(extra);
+        if regions.len() >= MAX_RAW_REGIONS {
+            return Err(ApiError::Invalid(format!(
+                "Raw maps at most {MAX_RAW_REGIONS} regions; the app image and `regions` state {}",
+                regions.len() + 1
+            )));
+        }
+        Ok(RawImage {
+            bytes: primary.bytes.unwrap_or_default(),
+            options,
+            source: Some(primary.source),
+            regions,
+            records: None,
+            esp: Some(image),
+            scatter_load: None,
+        })
     }
 
     fn record_image(&self, path: &Path, profile: RawProfile, format: RawRecordFormat) -> Result<RawImage, ApiError> {
@@ -751,7 +867,7 @@ impl RawProjectRequest {
         if !regions.is_empty() && !profile.native_decoder() {
             return Err(ApiError::Invalid(format!(
                 "Raw {} maps one code region, and the {} records form {} separate runs; only ARM:LE:32:Cortex and \
-                 the MIPS profiles map several regions",
+                 the MIPS and Xtensa profiles map several regions",
                 profile.language_id(),
                 format.name(),
                 regions.len() + 1
@@ -804,6 +920,7 @@ impl RawProjectRequest {
             source: Some(RawRegionSource::Records { format }),
             regions,
             records: Some(facts),
+            esp: None,
             scatter_load,
         })
     }
@@ -823,6 +940,7 @@ pub(crate) fn raw_image(path: &Path, request: &RawProjectRequest) -> Result<RawI
         RawInputFormat::Binary => request.binary_image(path, profile),
         RawInputFormat::Ihex => request.record_image(path, profile, RawRecordFormat::Ihex),
         RawInputFormat::Srec => request.record_image(path, profile, RawRecordFormat::Srec),
+        RawInputFormat::Esp => request.esp_image(path, profile),
     }
 }
 
@@ -877,11 +995,81 @@ fn is_dex(path: &Path) -> bool {
 /// Whether a file with no executable header has a format of its own with pointed guidance: a filesystem image,
 /// DEX, or an Intel HEX or S-record file.
 pub fn headerless_format_known(path: &Path) -> bool {
-    crate::filesystem_guidance(path).is_some() || is_dex(path) || sniff_record_format(path).is_some()
+    crate::filesystem_guidance(path).is_some()
+        || is_dex(path)
+        || sniff_record_format(path).is_some()
+        || esp_guidance(path).is_some()
+}
+
+/// The first bytes of `path`, at most `limit`.
+fn file_prefix(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).ok()?.take(limit).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// The `raw` selector for the ESP app image at `offset`.
+fn esp_selector(offset: u64) -> String {
+    format!("\"raw\":{{\"profile\":\"xtensa\",\"format\":\"esp\",\"offset\":\"{offset:#x}\"}}")
+}
+
+/// How to read an Espressif file: an app image (magic 0xE9 at the start) or a flash dump (a bootloader image at
+/// 0x1000 or 0, and a partition table), with the `raw` selector for each application image it holds.
+pub fn esp_guidance(path: &Path) -> Option<String> {
+    use rampage_loaders::esp;
+    let bytes = file_prefix(path, MAX_ESP_FILE_BYTES as u64)?;
+    if let Some(layout) = esp::flash_layout(&bytes) {
+        let mut parts = Vec::new();
+        if let Some(bootloader) = &layout.bootloader {
+            parts.push(format!("an {} bootloader image at {:#x}", bootloader.chip.label(), bootloader.offset));
+        }
+        if let Some(table) = &layout.partition_table {
+            let entries: Vec<String> = table
+                .partitions
+                .iter()
+                .map(|partition| {
+                    format!("{} ({}/{}) at {:#x}", partition.label, partition.kind, partition.subtype, partition.offset)
+                })
+                .collect();
+            parts.push(format!("a partition table at {:#x}: {}", table.offset, entries.join(", ")));
+        }
+        let apps: Vec<String> = layout
+            .app_images(&bytes)
+            .map(|(partition, offset)| format!("{} with {}", partition.label, esp_selector(offset)))
+            .collect();
+        let open = match (apps.is_empty(), &layout.bootloader) {
+            (false, _) => format!("read each application with `raw`: {}", apps.join("; ")),
+            (true, Some(bootloader)) => format!("read the boot image with {}", esp_selector(bootloader.offset)),
+            (true, None) => "no application partition holds an app image".to_owned(),
+        };
+        return Some(format!(
+            "The file is an ESP32/ESP8266 flash dump holding {}; {open}. file_layout and carve list the same \
+             structure.",
+            parts.join(" and ")
+        ));
+    }
+    esp::looks_like_app_image(&bytes, 0).then(|| {
+        let chip = esp::parse_app_image(&bytes, 0).map_or(esp::EspChip::Other, |image| image.chip);
+        let flash = if chip == esp::EspChip::Esp8266 {
+            " (an ESP8266 flash dump's boot image: the rest of the flash maps as IROM at 0x40200000 plus its offset)"
+        } else {
+            ""
+        };
+        format!(
+            "The file starts with an {} app image (magic 0xE9){flash}: read it with {}, which maps every segment at \
+             its load address and reports the chip, checksum, SHA-256 and esp_app_desc in binary_info.",
+            chip.label(),
+            esp_selector(0)
+        )
+    })
 }
 
 pub fn headerless_guidance_for(path: &Path) -> String {
     if let Some(guidance) = crate::filesystem_guidance(path) {
+        return guidance;
+    }
+    if let Some(guidance) = esp_guidance(path) {
         return guidance;
     }
     if is_dex(path) {

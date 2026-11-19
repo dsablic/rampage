@@ -2059,7 +2059,15 @@ mod tests {
             vector_table: None,
             pointer_tables: false,
         };
-        let image = crate::RawImage { bytes, options, source: None, regions, records: None, scatter_load: Some(true) };
+        let image = crate::RawImage {
+            bytes,
+            options,
+            source: None,
+            regions,
+            records: None,
+            esp: None,
+            scatter_load: Some(true),
+        };
         crate::Binary::from_raw_image(image)
     }
 

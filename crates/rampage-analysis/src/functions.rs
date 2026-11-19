@@ -80,6 +80,7 @@ where
     seeds.extend(&binary.function_starts);
     seeds.extend(stub_seeds(binary, &stubs));
     seeds.extend(thunk_seeds(binary));
+    seeds.extend(crate::xtensa_starts::prologue_seeds(binary));
     let facts = return_facts_with_stub_names(binary, stubs);
     // Code regions judged encrypted or packed are not explored: what they decode to is noise, not functions.
     let excluded = code_integrity::flagged_ranges(&code_integrity::assess(binary, &new_decoder));

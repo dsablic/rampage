@@ -424,9 +424,10 @@ fn native_fourteen_keep_their_native_selector_and_raw_is_not_inferred_from_an_ar
     assert_eq!(analysis_binding(&binary).unwrap(), None);
     let mut decoder = decoder_for_project(&binary).unwrap();
     assert_eq!(decoder.decode(&[0xc3], 0x1000).flow, Flow::Return);
+    // Xtensa has a native decoder (ESP32 and ESP8266 firmware); the other Sleigh-only identities have none.
     for arch in Arch::ALL.into_iter().skip(14) {
         binary.arch = arch;
-        assert!(decoder_for_project(&binary).is_err());
+        assert_eq!(decoder_for_project(&binary).is_ok(), arch == Arch::Xtensa, "{arch}");
     }
 }
 

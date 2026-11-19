@@ -11,10 +11,12 @@ mod operand;
 pub mod registers;
 mod track;
 mod x86;
+mod xtensa;
 
 use serde::Serialize;
 
 pub use operand::{MemoryOperand, OperandEvidence, OperandKind};
+pub use xtensa::XtensaDisassembler;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -100,7 +102,14 @@ impl Arch {
     /// Legacy architecture default, not a compiler-specific C layout or code-space bound.
     pub fn default_pointer_size(self) -> Option<u8> {
         match self {
-            Arch::X86 | Arch::Arm | Arch::Mips | Arch::PowerPc | Arch::Riscv32 | Arch::Sparc | Arch::M68k => Some(4),
+            Arch::X86
+            | Arch::Arm
+            | Arch::Mips
+            | Arch::PowerPc
+            | Arch::Riscv32
+            | Arch::Sparc
+            | Arch::M68k
+            | Arch::Xtensa => Some(4),
             Arch::X86_64
             | Arch::Aarch64
             | Arch::Mips64
@@ -117,7 +126,6 @@ impl Arch {
             | Arch::Sh2
             | Arch::V850
             | Arch::Tricore
-            | Arch::Xtensa
             | Arch::Z80
             | Arch::Hcs12
             | Arch::Cr16c
@@ -130,9 +138,14 @@ impl Arch {
     /// Machine address calculation width of the existing native architectures, not a C ABI or profile bound.
     pub fn native_address_width(self) -> Option<TargetWidth> {
         match self {
-            Arch::X86 | Arch::Arm | Arch::Mips | Arch::PowerPc | Arch::Riscv32 | Arch::Sparc | Arch::M68k => {
-                Some(TargetWidth::Bits32)
-            }
+            Arch::X86
+            | Arch::Arm
+            | Arch::Mips
+            | Arch::PowerPc
+            | Arch::Riscv32
+            | Arch::Sparc
+            | Arch::M68k
+            | Arch::Xtensa => Some(TargetWidth::Bits32),
             Arch::X86_64
             | Arch::Aarch64
             | Arch::Mips64
@@ -149,7 +162,6 @@ impl Arch {
             | Arch::Sh2
             | Arch::V850
             | Arch::Tricore
-            | Arch::Xtensa
             | Arch::Z80
             | Arch::Hcs12
             | Arch::Cr16c
@@ -553,14 +565,15 @@ pub fn decoder_for(arch: Arch) -> Result<Box<dyn Disassembler>, UnsupportedArch>
     decoder(&Target::new(arch))
 }
 
-/// A decoder for `target`: native ones for x86 (iced-x86) and AArch64 (generated from Arm's specification),
-/// Capstone for the rest.
+/// A decoder for `target`: native ones for x86 (iced-x86), AArch64 and 32-bit ARM (generated from Arm's
+/// specification) and little-endian Xtensa, Capstone for the rest.
 pub fn decoder(target: &Target) -> Result<Box<dyn Disassembler>, UnsupportedArch> {
     match target.arch {
         Arch::X86 => Ok(Box::new(x86::X86Disassembler::new(32))),
         Arch::X86_64 => Ok(Box::new(x86::X86Disassembler::new(64))),
         Arch::Aarch64 => Ok(Box::new(a64::A64Disassembler::default())),
         Arch::Arm => Ok(Box::new(aarch32::Aarch32Disassembler::new(target))),
+        Arch::Xtensa if !target.big_endian => Ok(Box::new(xtensa::XtensaDisassembler::new())),
         _ => cs::CapstoneDisassembler::new(target).map(|decoder| Box::new(decoder) as Box<dyn Disassembler>),
     }
 }
@@ -601,7 +614,6 @@ mod width_tests {
             "sh2",
             "v850",
             "tricore",
-            "xtensa",
             "z80",
             "hcs12",
             "cr16c",
@@ -609,8 +621,11 @@ mod width_tests {
             "loongarch64",
             "hexagon",
         ];
-        assert_eq!(Arch::ALL.len(), 14 + names.len());
-        for (arch, name) in Arch::ALL.into_iter().skip(14).zip(names) {
+        // Xtensa left this list when it gained a native decoder (ESP32 and ESP8266 firmware).
+        assert_eq!(Arch::ALL.len(), 14 + names.len() + 1);
+        assert_eq!(Arch::Xtensa.pointer_size(), Some(4));
+        assert!(super::decoder_for(Arch::Xtensa).is_ok());
+        for (arch, name) in Arch::ALL.into_iter().skip(14).filter(|arch| *arch != Arch::Xtensa).zip(names) {
             assert_eq!(name.parse::<Arch>().unwrap(), arch);
             assert_eq!(arch.to_string(), name);
             assert_eq!(serde_json::to_value(arch).unwrap(), name);

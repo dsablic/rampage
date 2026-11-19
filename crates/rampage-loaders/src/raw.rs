@@ -53,7 +53,7 @@ enum RawDecoder {
     Sleigh,
     /// rampage's native decoder for `arch`, with the whole mapped range in Thumb mode.
     NativeThumb,
-    /// rampage's native decoder for `arch` (MIPS32), with no mode to choose.
+    /// rampage's native decoder for `arch` (MIPS32, Xtensa), with no mode to choose.
     Native,
 }
 
@@ -111,7 +111,10 @@ const PROFILE_FACTS: [RawProfileFacts; 19] = [
     facts(RawProfile::SuperH2, "SuperH:BE:32:SH-2", Arch::Sh2, true, space("ram", 4, 1, 0xffff_ffff, 1)),
     facts(RawProfile::V850, "V850:LE:32:default", Arch::V850, false, space("ram", 4, 1, 0xffff_ffff, 2)),
     facts(RawProfile::Tricore, "tricore:LE:32:default", Arch::Tricore, false, space("ram", 4, 1, 0xffff_ffff, 2)),
-    facts(RawProfile::Xtensa, "Xtensa:LE:32:default", Arch::Xtensa, false, space("ram", 4, 1, 0xffff_ffff, 1)),
+    RawProfileFacts {
+        decoder: RawDecoder::Native,
+        ..facts(RawProfile::Xtensa, "Xtensa:LE:32:default", Arch::Xtensa, false, space("ram", 4, 1, 0xffff_ffff, 1))
+    },
     facts(RawProfile::Z80, "z80:LE:16:default", Arch::Z80, false, space("ram", 2, 1, 0xffff, 1)),
     facts(RawProfile::Hcs12, "HCS-12:BE:24:default", Arch::Hcs12, true, space("RAM", 3, 1, 0xff_ffff, 1)),
     facts(RawProfile::Mc6805, "6805:BE:16:default", Arch::Mc6805, true, space("RAM", 2, 1, 0xffff, 1)),
@@ -296,6 +299,9 @@ pub enum RawRegionSource {
     },
     /// No bytes: zero-filled or uninitialised RAM, or memory-mapped I/O.
     Unbacked,
+    /// Segment `segment` of the ESP app image at `image_offset` of the opened file, whose `length` bytes lie at
+    /// `offset`; the load address comes from the segment header.
+    EspSegment { image_offset: u64, segment: usize, offset: u64, length: u64 },
 }
 
 /// One additional region of a Raw project: an analyst-stated mapping of `bytes`, or of `size` unbacked bytes.
@@ -330,6 +336,8 @@ pub struct RawImage {
     /// Additional regions; only the natively decoded Cortex-M profile admits any.
     pub regions: Vec<RawRegion>,
     pub records: Option<RawRecordFacts>,
+    /// The ESP app image the regions were read from, when the opener read one.
+    pub esp: Option<crate::esp::EspImage>,
     /// Cortex-M only: follow the reset code from the entry for scatter-load copies ([`crate::raw_scatter`]).
     /// `Some(true)` also maps each well-evidenced copy at its run address; `Some(false)` reports them only;
     /// `None` does not follow.
@@ -464,6 +472,8 @@ pub struct RawCodeImage {
     pointer_tables: Option<crate::raw_pointers::PointerTables>,
     #[serde(skip_serializing_if = "Option::is_none")]
     scatter_load: Option<crate::raw_scatter::ScatterLoad>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    esp: Option<crate::esp::EspImage>,
     /// Whether scatter-load copies were followed, and mapped.
     #[serde(skip)]
     scatter_load_mode: Option<bool>,
@@ -489,7 +499,13 @@ impl RawCodeImage {
     /// Admits `image` and returns the retained facts with the project's owned bytes: the primary region's bytes
     /// followed by every other backed region's, in region order.
     pub(crate) fn admit(image: RawImage) -> Result<(Self, Vec<u8>), LoadError> {
-        let RawImage { bytes, mut options, source, regions: extra, records, scatter_load: scatter_load_mode } = image;
+        let RawImage { bytes, mut options, source, regions: extra, records, esp, scatter_load: scatter_load_mode } =
+            image;
+        if esp.as_ref().is_some_and(|esp| !esp.chip.xtensa())
+            || (esp.is_some() && options.profile != RawProfile::Xtensa)
+        {
+            return Err(LoadError::Malformed("Raw ESP app images are read only with the Xtensa profile".into()));
+        }
         let length = bytes.len();
         let max = options.profile.max_bytes();
         if length == 0 || length > max || options.seeds.len() > MAX_RAW_SEEDS {
@@ -518,8 +534,8 @@ impl RawCodeImage {
         let mut data = bytes;
         if !extra.is_empty() && !options.profile.native_decoder() {
             return Err(LoadError::Malformed(format!(
-                "Raw {} maps one code region: additional regions are defined only for ARM:LE:32:Cortex and the MIPS \
-                 profiles",
+                "Raw {} maps one code region: additional regions are defined only for ARM:LE:32:Cortex, MIPS and \
+                 Xtensa",
                 options.profile.language_id()
             )));
         }
@@ -774,6 +790,7 @@ impl RawCodeImage {
             vector_table,
             pointer_tables,
             scatter_load,
+            esp,
             scatter_load_mode,
         };
         Ok((image, data))
@@ -781,6 +798,16 @@ impl RawCodeImage {
 
     pub fn profile(&self) -> RawProfile {
         self.profile
+    }
+
+    /// The ESP app image the project was read from.
+    pub fn esp(&self) -> Option<&crate::esp::EspImage> {
+        self.esp.as_ref()
+    }
+
+    /// Whether the code uses Xtensa's call0 ABI: an ESP8266 app image.
+    pub fn xtensa_call0(&self) -> bool {
+        self.esp.as_ref().is_some_and(|esp| esp.chip.call0())
     }
 
     /// Base address of the primary code region.
@@ -911,6 +938,12 @@ impl RawCodeImage {
                 }
                 Some(RawRegionSource::Records { format }) => hash.update([3, *format as u8]),
                 Some(RawRegionSource::Unbacked) => hash.update([4]),
+                Some(RawRegionSource::EspSegment { image_offset, segment, offset, length }) => {
+                    hash.update([7]);
+                    for value in [*image_offset, *segment as u64, *offset, *length] {
+                        hash.update(value.to_be_bytes());
+                    }
+                }
                 // Schema v6 binds a slice's source region and range.
                 Some(RawRegionSource::Slice { region, offset, length }) => {
                     hash.update([5]);
@@ -933,6 +966,10 @@ impl RawCodeImage {
             Some(false) => 1,
             Some(true) => 2,
         }]);
+        // An ESP app image binds its chip, which decides the ABI the code is decompiled with.
+        if let Some(esp) = &self.esp {
+            hash.update([8, esp.chip as u8]);
+        }
         for value in [self.base, self.length, self.end] {
             hash.update(value.to_be_bytes());
         }

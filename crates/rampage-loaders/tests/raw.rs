@@ -517,6 +517,7 @@ fn pointer_tables_are_found_in_further_code_regions() {
             source: rampage_loaders::RawRegionSource::FileRange { offset: 0x100, length: 0x118 },
         }],
         records: None,
+        esp: None,
         scatter_load: None,
     };
     let binary = Binary::from_raw_image(image).unwrap();

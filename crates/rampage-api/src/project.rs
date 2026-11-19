@@ -947,6 +947,7 @@ impl Project {
                 seed_count: raw.seeds().len(),
                 regions: raw.regions(),
                 records: raw.records(),
+                esp: raw.esp(),
                 vector_table: raw.vector_table(),
                 pointer_tables: match (raw.pointer_tables(), self.pointer_tables_auto.get()) {
                     (None, None) => None,
