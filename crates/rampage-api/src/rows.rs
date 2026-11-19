@@ -354,7 +354,18 @@ pub struct StartingPoint {
 pub struct InferredSeed {
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
+    pub kind: InferredSeedKind,
     pub reason: String,
+}
+
+/// What evidence seeded an [`InferredSeed`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InferredSeedKind {
+    /// A CRC routine around a polynomial literal no discovered code references.
+    CrcRoutine,
+    /// Code that calls an inferred routine with a Thumb `bl`.
+    CrcCaller,
 }
 
 /// A Raw project's pointer tables, with why they were scanned when the selector left `pointer_tables` unset.

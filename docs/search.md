@@ -79,9 +79,9 @@ not merely the encoded immediate field width.
 
 32-bit ARM and Thumb have no typed operand evidence. There a constant matches as `loaded_constant` where an
 `ldr rN, [pc, #imm]` loads it from a read-only literal pool or a MOVW/MOVT pair in one block builds it, the way
-firmware holds a CRC polynomial or an address. A value no ARM or Thumb instruction can encode (such as
-`0xedb88320`) reaches a register only that way, so for it the scan of read-only code is complete
-(`total_is_exact`); a small value an instruction may encode stays a lower bound.
+firmware holds a CRC polynomial or an address. Constants built other ways (shift-and-add sequences, split
+additions, a MOVT whose MOVW is in another block, `ldrd`/`vldr` pools) are not matched, so an ARM search
+always stays a lower bound (`total_is_exact` false).
 
 Instruction globs use `*` for zero or more bytes and `?` for one byte; other characters, including backslash,
 are literal. Whitespace collapses to one space. These are not regex. An operand-only query uses the implicit

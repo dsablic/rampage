@@ -299,7 +299,7 @@ impl Session {
         let build = |pointer_tables: bool| {
             let mut reopened = request.clone();
             reopened.pointer_tables = Some(pointer_tables);
-            reopened.seeds.extend(starts.iter().map(|&(start, _)| crate::FileOffset(start)));
+            reopened.seeds.extend(starts.iter().map(|seed| crate::FileOffset(seed.address)));
             crate::raw_project::raw_image(path, &reopened).and_then(|image| {
                 Binary::from_raw_image(image).map_err(|source| ApiError::Load { path: path.into(), source })
             })
@@ -353,9 +353,7 @@ impl Session {
                 let reopened = self.new_raw_project(binary, source);
                 let _ = reopened.carried_record_seeds.set(carried);
                 if !starts.is_empty() {
-                    let seeds =
-                        starts.into_iter().map(|(address, reason)| crate::rows::InferredSeed { address, reason });
-                    let _ = reopened.inferred_seeds.set(seeds.collect());
+                    let _ = reopened.inferred_seeds.set(starts);
                 }
                 reopened
             }

@@ -1412,7 +1412,7 @@ fn thumb_routine_around(blocks: &[Block], site: u64) -> Option<(u64, u64)> {
 /// (`inferred_range`): a polynomial literal no discovered code references, a PC-relative `ldr` of it outside every
 /// discovered function, and a `push {..., lr}` prologue before the load from which the instructions land on it.
 /// Each start with that evidence, at most [`MAX_INFERRED_SEEDS`], by address.
-pub(crate) fn inferred_crc_starts(project: &Project) -> Vec<(u64, String)> {
+pub(crate) fn inferred_crc_starts(project: &Project) -> Vec<crate::rows::InferredSeed> {
     let binary = &project.binary;
     if binary.raw_code_image().is_none() || !binary.m_profile() || binary.big_endian || project.analysis().is_err() {
         return Vec::new();
@@ -1449,11 +1449,19 @@ pub(crate) fn inferred_crc_starts(project: &Project) -> Vec<(u64, String)> {
             }
         }
     }
-    let mut starts: Vec<(u64, String)> = found.into_iter().take(MAX_INFERRED_SEEDS).collect();
+    let mut starts: Vec<crate::rows::InferredSeed> = found
+        .into_iter()
+        .take(MAX_INFERRED_SEEDS)
+        .map(|(address, reason)| crate::rows::InferredSeed {
+            address,
+            kind: crate::rows::InferredSeedKind::CrcRoutine,
+            reason,
+        })
+        .collect();
     // The code that checks with the routine is as undiscovered as the routine itself: a direct `bl` to an inferred
     // start from outside every discovered function, inside a `push {..., lr}` routine that decodes cleanly, seeds
     // that routine too, and so on for its own callers, a few rounds deep.
-    let mut frontier: BTreeSet<u64> = starts.iter().map(|(start, _)| *start).collect();
+    let mut frontier: BTreeSet<u64> = starts.iter().map(|seed| seed.address).collect();
     for _ in 0..CALLER_ROUNDS {
         if frontier.is_empty() || starts.len() >= MAX_INFERRED_SEEDS {
             break;
@@ -1467,19 +1475,20 @@ pub(crate) fn inferred_crc_starts(project: &Project) -> Vec<(u64, String)> {
                 continue;
             }
             let Some((start, end)) = thumb_routine_around(&blocks, site) else { continue };
-            if starts.iter().any(|(known, _)| *known == start)
+            if starts.iter().any(|seed| seed.address == start)
                 || matches!(project.function_containing(start), Ok(Some(_)))
                 || !decodes_cleanly(binary, decoder.as_mut(), start, end)
             {
                 continue;
             }
-            starts.push((
-                start,
-                format!(
+            starts.push(crate::rows::InferredSeed {
+                address: start,
+                kind: crate::rows::InferredSeedKind::CrcCaller,
+                reason: format!(
                     "calls the inferred routine at {target:#x} with `bl` at {site:#x} after the push {{..., lr}} \
                      prologue at {start:#x}; no discovered code reached it"
                 ),
-            ));
+            });
             next.insert(start);
         }
         frontier = next;

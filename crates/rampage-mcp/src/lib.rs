@@ -980,11 +980,13 @@ impl RampageServer {
                 if matches!(name, "triage" | "triage_report")
                     && image.is_none()
                     && headerless(&error)
-                    && rampage_api::headerless_guidance_for(Path::new(path)) == rampage_api::headerless_guidance()
+                    && !rampage_api::headerless_format_known(Path::new(path))
                 {
-                    return rampage_api::headerless_triage(Path::new(path), &open_error(&error))
+                    // Should the layout itself fail, the open error and its guidance still answer.
+                    let reason = open_error(&error);
+                    return rampage_api::headerless_triage(Path::new(path), &reason)
                         .map(|value| (value.to_string(), false))
-                        .map_err(|error| error_text(&error));
+                        .map_err(|_| reason);
                 }
                 Err(open_error(&error))
             };

@@ -79,11 +79,13 @@ pub fn headerless_triage(path: &Path, reason: &str) -> Result<Value, ApiError> {
             }));
         }
     }
-    next.push(json!({
-        "tool": "binary_info",
-        "arguments": { "path": path_text, "raw": "the probe's open_as_raw, plus profile (e.g. cortex-m) and base_address" },
-        "why": "opens the decoded image as a Raw project; every raw-capable tool then takes the same `raw`",
-    }));
+    let mut limitations = vec![
+        "Container-level only: nothing was decoded, mapped or executed. file_layout lists every region; \
+         compressed-component fields are inferred from values, not known.",
+    ];
+    if layout["source_size"].as_u64() > layout["source_length"].as_u64() {
+        limitations.push("Only the first 64 MiB were laid out.");
+    }
     let carving = crate::carve(path, Some(MAX_CANDIDATES)).ok();
     let embedded: Vec<Value> = carving
         .as_ref()
@@ -91,12 +93,22 @@ pub fn headerless_triage(path: &Path, reason: &str) -> Result<Value, ApiError> {
         .into_iter()
         .flatten()
         .collect();
-    if !embedded.is_empty() {
+    for candidate in &embedded {
         next.push(json!({
             "tool": "triage",
-            "arguments": { "path": path_text, "image_offset": "an embedded candidate's offset" },
-            "why": "carve found executables inside the file",
+            "arguments": { "path": path_text, "image_offset": candidate["offset"] },
+            "why": "carve found an executable at this offset",
         }));
+    }
+    let mut then = String::from(
+        "Then open the decoded image with binary_info (or any raw-capable tool) passing `raw`: the winning probe \
+         candidate's `open_as_raw` object plus `profile` (such as cortex-m) and `base_address` (the probe's \
+         base_candidates).",
+    );
+    if components.is_empty() && next.is_empty() {
+        then = "No compressed payload or embedded executable was found: read the regions with file_layout, \
+                inspect_raw_code or a `raw` selector over a region."
+            .to_owned();
     }
     Ok(json!({
         "parsed_as_executable": false,
@@ -111,11 +123,8 @@ pub fn headerless_triage(path: &Path, reason: &str) -> Result<Value, ApiError> {
         "compressed_components": components,
         "embedded_executables": embedded,
         "next": next,
-        "limitations": [
-            "Container-level only: nothing was decoded, mapped or executed. file_layout lists every region; \
-             compressed-component fields are inferred from values, not known.",
-            "Only the first 64 MiB were laid out.",
-        ],
+        "then": then,
+        "limitations": limitations,
     }))
 }
 
@@ -153,6 +162,7 @@ mod tests {
         assert_eq!(probe["arguments"]["offset"], header + 16, "{report:#}");
         assert_eq!(probe["arguments"]["length"], packed.len(), "{report:#}");
         assert_eq!(probe["arguments"]["expected_output_size"], plain.len(), "{report:#}");
-        assert!(report["next"].as_array().unwrap().iter().any(|call| call["tool"] == "binary_info"), "{report:#}");
+        assert!(report["then"].as_str().unwrap().contains("open_as_raw"), "{report:#}");
+        assert_eq!(report["limitations"].as_array().unwrap().len(), 1, "a small file is laid out whole: {report:#}");
     }
 }

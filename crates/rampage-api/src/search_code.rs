@@ -52,14 +52,6 @@ impl CodeImmediate {
         Ok(())
     }
 
-    /// The value as a 32-bit word, when it is one (a signed value in `i32` range is taken two's-complement).
-    fn as_u32(&self) -> Option<u32> {
-        match self.value {
-            CodeValue::Unsigned(value) => u32::try_from(value).ok(),
-            CodeValue::Signed(value) => i32::try_from(value).ok().map(|value| value as u32),
-        }
-    }
-
     fn matches(&self, unsigned: Option<u64>, signed: Option<i64>, width: Option<u16>) -> bool {
         self.width_bits.is_none_or(|wanted| width == Some(wanted))
             && match self.value {
@@ -445,15 +437,6 @@ fn search_program(
     }
     let annotations = project.annotations();
     let reference_mode = matches!(&query.kind, CodeSearchKind::FunctionsReferencing(_));
-    // On 32-bit ARM a value no instruction can encode reaches a register only through a literal-pool load or a
-    // MOVW/MOVT pair, both of which `loaded_constant` matches: the missing typed operands cannot hide it.
-    let loads_cover_value = project.binary.arch == rampage_arch::Arch::Arm
-        && match &query.kind {
-            CodeSearchKind::Immediate(value) | CodeSearchKind::FunctionsReferencing(CodeReference::Constant(value)) => {
-                !value.include_displacements && value.as_u32().is_some_and(|word| !arm_can_encode(word))
-            }
-            _ => false,
-        };
     'blocks: for (_, (block, function)) in blocks {
         if incomplete {
             break;
@@ -474,9 +457,6 @@ fn search_program(
             invalid_blocks += 1;
             continue;
         };
-        // Literal pools are read only from read-only memory, so code in writable memory keeps the lower bound.
-        let literal_evidence = loads_cover_value
-            && project.binary.segment_containing(block.start).is_some_and(|segment| !segment.perms.write);
         decoder.begin_run();
         let mut offset = 0;
         let mut gated = false;
@@ -667,14 +647,20 @@ fn search_program(
                 CodeSearchKind::Immediate(value)
                 | CodeSearchKind::FunctionsReferencing(CodeReference::Constant(value)) => {
                     let operands = decoder.operands(native, address);
-                    if (operands.is_none() && !literal_evidence)
+                    if operands.is_none()
                         || operands
                             .as_ref()
                             .is_some_and(|items| items.iter().any(|operand| operand.kind == OperandKind::Unsupported))
                     {
                         unsupported_operands += 1;
                     }
-                    immediate_evidence(value, &instruction, operands.as_deref(), address_bits)
+                    immediate_evidence(
+                        value,
+                        &instruction,
+                        operands.as_deref(),
+                        address_bits,
+                        project.binary.arch == rampage_arch::Arch::Arm,
+                    )
                 }
                 CodeSearchKind::Instruction { mnemonic, operands } => {
                     let (actual_mnemonic, actual_operands) = assembly_fields(&text);
@@ -868,6 +854,7 @@ fn immediate_evidence(
     instruction: &Insn,
     operands: Option<&[OperandEvidence]>,
     address_bits: Option<u16>,
+    arm: bool,
 ) -> Option<CodeSearchEvidence> {
     for operand in operands.unwrap_or_default() {
         if operand.kind == OperandKind::Immediate
@@ -885,9 +872,10 @@ fn immediate_evidence(
             return Some(evidence("displacement", None, Some(operand.clone())));
         }
     }
-    // A decoder without typed operands (32-bit ARM and Thumb) still reports the word an `ldr rN, =value` loads
-    // from a read-only literal pool, or a MOVW/MOVT pair builds: the constants firmware keeps out of encodings.
-    if operands.is_none()
+    // 32-bit ARM and Thumb have no typed operands, but the decoder reports the word an `ldr rN, =value` loads from
+    // a read-only literal pool, or a MOVW/MOVT pair builds: the constants firmware keeps out of encodings.
+    if arm
+        && operands.is_none()
         && let Some(value) = instruction.immediate
     {
         let (signed, width) = match u32::try_from(value) {
@@ -1125,21 +1113,6 @@ fn string_targets(
 fn tree_work(entries: usize) -> u64 {
     // Reserve for a full linear search of each B-tree node as well as its height.
     (u64::from(usize::BITS - entries.leading_zeros()) + 1) * 12
-}
-
-/// Whether some 32-bit ARM or Thumb instruction can carry `value` (or its complement or negation, for MVN, CMN
-/// and SUB forms) in its encoding: a 16-bit field, a rotated byte, or a Thumb replicated-byte pattern. Generous on
-/// purpose: a value judged encodable keeps the search a lower bound.
-fn arm_can_encode(value: u32) -> bool {
-    [value, !value, value.wrapping_neg()].into_iter().any(|word| {
-        let low = word & 0xff;
-        let second = (word >> 8) & 0xff;
-        word <= 0xffff
-            || word == low * 0x0001_0001
-            || word == (second << 8) * 0x0001_0001
-            || word == low * 0x0101_0101
-            || (0..32).any(|rotation| word.rotate_left(rotation) <= 0xff)
-    })
 }
 
 /// Comparisons a binary search of a sorted slice of `entries` makes: one per halving.

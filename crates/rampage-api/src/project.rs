@@ -999,10 +999,13 @@ impl Project {
     fn compute_starting_points(&self) -> Vec<crate::rows::StartingPoint> {
         let mut points = self.cortex_m_starting_points().unwrap_or_default();
         for seed in self.inferred_seeds.get().into_iter().flatten() {
-            let reason = if seed.reason.starts_with("calls the inferred routine") {
-                "calls an inferred CRC routine directly; nothing discovered calls it (raw.inferred_seeds)"
-            } else {
-                "a CRC routine integrity_checks infers from its polynomial literal (raw.inferred_seeds)"
+            let reason = match seed.kind {
+                crate::rows::InferredSeedKind::CrcCaller => {
+                    "calls an inferred CRC routine directly; nothing discovered calls it (raw.inferred_seeds)"
+                }
+                crate::rows::InferredSeedKind::CrcRoutine => {
+                    "a CRC routine integrity_checks infers from its polynomial literal (raw.inferred_seeds)"
+                }
             };
             crate::workflows::add_starting_point(self, &mut points, seed.address, reason.to_owned());
         }
@@ -1217,16 +1220,30 @@ impl Project {
         self.resolve_in(&self.annotations(), text)
     }
 
-    /// A code address as a 32-bit ARM tool needs it: an odd address whose even neighbour is executable carries the
-    /// Thumb bit (vector-table entries and function pointers do), so bit 0 is cleared, with a note saying so. Any
-    /// other address is returned unchanged, without a note.
+    /// A code address as a 32-bit ARM tool needs it. An odd address whose even neighbour is executable Thumb code
+    /// (an M-profile image, a Thumb range, or a mode discovery learned there) carries the Thumb bit that vector
+    /// tables and function pointers set: bit 0 is cleared, with a note. An odd executable address not known to be
+    /// Thumb is kept as given, with a note saying so. Any other address is returned unchanged, without a note.
     pub fn thumb_code_address(&self, address: u64) -> (u64, Option<String>) {
         let even = address & !1;
-        let thumb = self.binary.arch == rampage_arch::Arch::Arm
+        let odd_code = self.binary.arch == rampage_arch::Arch::Arm
             && address & 1 == 1
             && self.binary.segment_containing(even).is_some_and(|segment| segment.perms.execute);
-        if !thumb {
+        if !odd_code {
             return (address, None);
+        }
+        let learned = || {
+            self.analysis().is_ok_and(|analysis| {
+                let modes = &analysis.program.code_modes;
+                modes.binary_search_by_key(&even, |&(at, _)| at).is_ok_and(|index| modes[index].1)
+            })
+        };
+        let thumb = self.binary.m_profile() || self.binary.thumb.iter().any(|range| range.contains(&even)) || learned();
+        if !thumb {
+            let note = format!(
+                "{address:#x} has bit 0 set but {even:#x} is not known to be Thumb code: the address was used as                  given; pass an aligned instruction address"
+            );
+            return (address, Some(note));
         }
         let note = format!(
             "{address:#x} has bit 0 set, the Thumb bit a vector table or function pointer carries: read as the Thumb \

@@ -559,18 +559,22 @@ out. The feature guide linked for each tool is the full reference.
   See [exact-entry decompilation](exact-entry-ui.md).
 - ARM code addresses with bit 0 set (the Thumb bit vector tables and function pointers carry): `decompile`,
   `disassemble`, `function_graph`, `function_summary`, `xrefs` `from` and, on Cortex-M, `evaluate_function` read the
-  Thumb code at the even address; `decompile` says so in `note`.
+  Thumb code at the even address when it is known Thumb (an M-profile image, a Thumb range, or a mode discovery
+  learned there), and say so in `note` (`notes` for `xrefs`; on the first row of a `disassemble` listing). An odd
+  address not known to be Thumb is used as given, with a `note` saying so.
 - `xrefs` `to` that finds nothing adds `notes`: the start of the string the address lies inside, when that start is
-  referenced; on ARM, Thumb `bl` encodings outside every discovered function that target it (code discovery did not
-  reach, to seed); and that calls through pointers are not resolved.
+  referenced and NUL-terminated; on M-profile images and the Thumb ranges of other little-endian ARM images, up to
+  eight Thumb `bl` encodings outside every discovered function that target it (code discovery did not reach, to
+  seed; at most 64 MiB are read); and that calls through pointers are not resolved.
 - `lock_mechanisms` traces the functions its evidence selects (crypto constants, CRC routines, role registers,
   verify/MAC/random APIs), their callers and callees, not every function: `coverage` gives `functions_analyzed` of
   `functions_discovered`, and a limitation says so when that is under a tenth.
 - `triage` and `triage_report` on a file with no recognised executable header (and no `raw` or `image_offset`)
   return a container-level result instead of an error: `parsed_as_executable: false`, the open error as `reason`,
   a `file_layout` summary with the largest occupied regions, the compressed components headers describe, `carve`'s
-  first candidates, and `next`: `probe_compression` calls with each payload's offset, length and decoded size, then
-  `binary_info` with the probe's `open_as_raw`. Nothing is decoded.
+  first candidates, `next`: ready-to-run `probe_compression` calls with each payload's offset, length and decoded
+  size (and `triage` at each embedded executable), and `then`, what to do with the probe's `open_as_raw`. If the
+  layout itself fails, the open error is returned as before. Nothing is decoded.
 - `record_finding`: the ledger holds at most 1024 entries and 2 MiB, and a write that would leave the shared
   annotation log less than a quarter of its budget free is refused, so names and comments keep room.
 - `discard_undo`: the annotation log is not rewritten; the dropped step's edits stay.

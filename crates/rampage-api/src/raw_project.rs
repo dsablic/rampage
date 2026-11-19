@@ -857,6 +857,12 @@ fn is_dex(path: &Path) -> bool {
 
 /// [`headerless_guidance`], led by the record format when the file looks like Intel HEX or S-records. A filesystem
 /// image gets the filesystem tools instead, and a DEX file `dex_metadata`.
+/// Whether a file with no executable header has a format of its own with pointed guidance: a filesystem image,
+/// DEX, or an Intel HEX or S-record file.
+pub fn headerless_format_known(path: &Path) -> bool {
+    crate::filesystem_guidance(path).is_some() || is_dex(path) || sniff_record_format(path).is_some()
+}
+
 pub fn headerless_guidance_for(path: &Path) -> String {
     if let Some(guidance) = crate::filesystem_guidance(path) {
         return guidance;

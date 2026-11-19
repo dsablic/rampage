@@ -172,11 +172,7 @@ impl Project {
         }
         if self.binary.arch == rampage_arch::Arch::Arm {
             let target = address & !1;
-            let sites: Vec<u64> = thumb_bl_sites(self, target)
-                .into_iter()
-                .filter(|&site| analysis.function_containing(site).is_none())
-                .take(MAX_UNDISCOVERED_CALLS + 1)
-                .collect();
+            let sites = thumb_bl_sites(self, target, |site| analysis.function_containing(site).is_none());
             if !sites.is_empty() {
                 let listed: Vec<String> =
                     sites.iter().take(MAX_UNDISCOVERED_CALLS).map(|site| format!("{site:#x}")).collect();
@@ -197,25 +193,26 @@ impl Project {
         Ok(notes)
     }
 
-    /// When `address` lies inside a printable ASCII run (not at its start): the run's start and up to 64 bytes of
-    /// its text.
+    /// When `address` lies inside a C string (not at its start): a run of at least four printable ASCII bytes,
+    /// at most 256 long and ended by a NUL. The run's start and up to 64 bytes of its text.
     fn string_start_before(&self, address: u64) -> Option<(u64, String)> {
-        let printable = |at: u64| self.binary.read(at, 1).is_some_and(|byte| (0x20..0x7f).contains(&byte[0]));
+        let byte = |at: u64| self.binary.read(at, 1).map(|byte| byte[0]);
+        let printable = |at: u64| byte(at).is_some_and(|byte| (0x20..0x7f).contains(&byte));
         if !printable(address) {
             return None;
         }
         let mut start = address;
-        while address - start < 256 && start > 0 && printable(start - 1) {
+        while address - start < MAX_STRING && start > 0 && printable(start - 1) {
             start -= 1;
         }
-        if start == address {
-            return None;
-        }
         let mut end = address;
-        while end - start < 64 && printable(end) {
+        while end - start < MAX_STRING && printable(end) {
             end += 1;
         }
-        let bytes = self.binary.read(start, end - start)?;
+        if start == address || end - start < 4 || byte(end) != Some(0) {
+            return None;
+        }
+        let bytes = self.binary.read(start, (end - start).min(64))?;
         Some((start, String::from_utf8_lossy(bytes).into_owned()))
     }
 }
@@ -223,20 +220,48 @@ impl Project {
 /// Most undiscovered `bl` sites an empty `xrefs` note names.
 const MAX_UNDISCOVERED_CALLS: usize = 8;
 
-/// Sites of Thumb `bl` encodings at halfword boundaries of executable, file-backed segments that land on `target`.
-fn thumb_bl_sites(project: &Project, target: u64) -> Vec<u64> {
+/// Longest printable run an empty `xrefs` note reads as a string.
+const MAX_STRING: u64 = 256;
+
+/// Most bytes of Thumb code the empty-`xrefs` `bl` scan reads.
+const MAX_BL_SCAN_BYTES: u64 = 64 << 20;
+
+/// Up to `MAX_UNDISCOVERED_CALLS + 1` sites, kept by `keep`, of Thumb `bl` encodings that land on `target`: in
+/// every executable file-backed segment of an M-profile image, or in the Thumb ranges of another little-endian
+/// ARM image (A32 code is never read as Thumb). At most [`MAX_BL_SCAN_BYTES`] are read.
+fn thumb_bl_sites(project: &Project, target: u64, keep: impl Fn(u64) -> bool) -> Vec<u64> {
+    let binary = &project.binary;
+    let ranges: Vec<std::ops::Range<u64>> = if binary.m_profile() {
+        binary
+            .segments
+            .iter()
+            .filter(|segment| segment.perms.execute && segment.file_size > 0)
+            .map(|segment| segment.address..segment.address + segment.file_size.min(segment.size))
+            .collect()
+    } else if !binary.big_endian {
+        binary.thumb.clone()
+    } else {
+        Vec::new()
+    };
     let mut sites = Vec::new();
-    for segment in project.binary.segments.iter().filter(|segment| segment.perms.execute && segment.file_size > 0) {
-        let Some(bytes) = project.binary.read(segment.address, segment.file_size.min(segment.size)) else { continue };
-        let skip = (segment.address % 2) as usize;
-        let base = segment.address + skip as u64;
-        let halfwords: Vec<u16> =
-            bytes[skip.min(bytes.len())..].as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
-        for (index, pair) in halfwords.windows(2).enumerate() {
-            let site = base + 2 * index as u64;
-            if thumb_bl_target(pair[0], pair[1], site) == Some(target) {
+    let mut budget = MAX_BL_SCAN_BYTES;
+    for range in ranges {
+        let start = range.start + range.start % 2;
+        let length = range.end.saturating_sub(start).min(budget);
+        budget -= length;
+        let Some(bytes) = binary.read(start, length) else { continue };
+        let halfword = |index: usize| u16::from_le_bytes([bytes[2 * index], bytes[2 * index + 1]]);
+        for index in 0..(bytes.len() / 2).saturating_sub(1) {
+            let site = start + 2 * index as u64;
+            if thumb_bl_target(halfword(index), halfword(index + 1), site) == Some(target) && keep(site) {
                 sites.push(site);
+                if sites.len() > MAX_UNDISCOVERED_CALLS {
+                    return sites;
+                }
             }
+        }
+        if budget == 0 {
+            break;
         }
     }
     sites

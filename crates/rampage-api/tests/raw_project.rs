@@ -1066,14 +1066,47 @@ fn cortex_m_inferred_crc_routines_are_seeded_into_discovery() {
     assert!(!failed, "{text}");
     assert!(text.contains(&format!("lies 2 bytes into the string \\\"HEADER ERROR\\\" at {header:#x}")), "{text}");
     assert!(text.contains("pointers or computed addresses"), "{text}");
+    // An address with the Thumb bit names the Thumb code in every tool that takes it, with a note saying so.
+    let odd = format!("{:#x}", crc | 1);
+    for (tool, input) in [
+        ("function_summary", json!({ "at": odd, "view": "summary" })),
+        ("function_graph", json!({ "at": odd, "view": "summary" })),
+        ("disassemble", json!({ "at": odd, "count": 2 })),
+        ("xrefs", json!({ "from": odd })),
+    ] {
+        let (text, failed) = call_shared(&registry, &mut project, tool, input);
+        assert!(!failed && text.contains(&format!("read as the Thumb code at {crc:#x}")), "{tool}: {text}");
+    }
+}
+
+/// Review of the seventh run's fixes: the Thumb-bit reading and the undiscovered-`bl` scan are for Thumb code
+/// only. An odd x86 address is untouched; an odd address in A32 code is used as given, with a note; and an empty
+/// `xrefs` on an A32 image names no Thumb `bl` sites.
+#[test]
+fn thumb_bit_and_bl_notes_stay_out_of_non_thumb_code() {
+    let fixture = |name: &str| format!("{}/../../tests/fixtures/bin/{name}", env!("CARGO_MANIFEST_DIR"));
+    let session = Session::default();
+    let x64 = session.open(Path::new(&fixture("hello-x64.elf")), None).unwrap();
+    let entry = x64.binary.entry.unwrap();
+    assert_eq!(x64.thumb_code_address(entry | 1), (entry | 1, None));
+
+    let mut arm = session.open(Path::new(&fixture("hello-arm.elf")), None).unwrap();
+    assert!(arm.binary.thumb.is_empty() && !arm.binary.m_profile());
+    let entry = arm.binary.entry.unwrap();
+    let (address, note) = arm.thumb_code_address(entry | 1);
+    assert_eq!(address, entry | 1);
+    assert!(note.unwrap().contains("not known to be Thumb"));
+    let registry = tools();
+    let (text, failed) = call_shared(&registry, &mut arm, "xrefs", json!({ "to": format!("{:#x}", entry + 4) }));
+    assert!(!failed && text.contains("\"notes\"") && !text.contains("Thumb `bl`"), "{text}");
 }
 
 /// Seventh Haiku run: `search` for the functions referencing a CRC polynomial ran out of match work a tenth into a
 /// Thumb image and could not have matched anyway: ARM has no typed operands, and the polynomial sits in a literal
-/// pool. Literal-pool loads and MOVW/MOVT pairs now match as `loaded_constant`, and since no instruction can encode
-/// such a value the scan is complete.
+/// pool. Literal-pool loads and MOVW/MOVT pairs now match as `loaded_constant`; the result stays a lower bound,
+/// since compilers build constants other ways too (review: shift-and-add and split `add.w` sequences).
 #[test]
-fn cortex_m_constant_search_matches_literal_pool_loads_completely() {
+fn cortex_m_constant_search_matches_literal_pool_loads_as_a_lower_bound() {
     let owned = OwnedDirectory::new();
     let path = owned.file("records.bin", CORTEX_M_RECORDS);
     let mut project = Session::default().open_raw(&path, &records_request()).unwrap();
@@ -1092,7 +1125,7 @@ fn cortex_m_constant_search_matches_literal_pool_loads_completely() {
     let crc = elf_symbol(CORTEX_M_RECORDS_ELF, "crc32_update");
     let report = search(&mut project, 0xedb8_8320, "functions_referencing");
     assert_eq!(report["hits"][0]["address"], format!("{crc:#x}"), "{report:#}");
-    assert_eq!((&report["stop_reason"], &report["total_is_exact"]), (&json!("complete"), &json!(true)), "{report:#}");
+    assert_eq!(report["total_is_exact"], false, "{report:#}");
     // A MOVW/MOVT pair builds the header string's address.
     let header = elf_symbol(CORTEX_M_RECORDS_ELF, "header_error");
     let report = search(&mut project, header, "immediate");
@@ -1100,9 +1133,24 @@ fn cortex_m_constant_search_matches_literal_pool_loads_completely() {
     let hit = &report["hits"][0];
     assert_eq!(hit["function"]["address"], format!("{report_header:#x}"), "{report:#}");
     assert_eq!(hit["code"]["native"]["kind"], "loaded_constant", "{report:#}");
-    // A small value an instruction can encode stays a lower bound: ARM operands are not typed.
-    let report = search(&mut project, 0x40, "immediate");
-    assert_eq!(report["total_is_exact"], false, "{report:#}");
+
+    // Review: a function building 0x12034 with `movs; lsls; adds` and 0x12340 with two `add.w` has no literal or
+    // MOVW/MOVT, so nothing matches, and the empty result must not claim to be exact.
+    let mut image = vec![0u8; 512];
+    image[..8].copy_from_slice(&[0x00, 0x10, 0x00, 0x20, 0x41, 0x00, 0x00, 0x08]);
+    let code =
+        [0x10, 0xb5, 0x12, 0x20, 0x00, 0x03, 0x34, 0x30, 0x00, 0xf5, 0x90, 0x30, 0x00, 0xf5, 0x50, 0x70, 0x10, 0xbd];
+    image[0x40..0x40 + code.len()].copy_from_slice(&code);
+    let path = owned.file("built.bin", &image);
+    let request = request(json!({
+        "profile": "cortex-m3", "offset": 0, "length": image.len(), "base_address": "0x8000000",
+        "vector_table": true,
+    }));
+    let mut project = Session::default().open_raw(&path, &request).unwrap();
+    for value in [0x12034, 0x12340] {
+        let report = search(&mut project, value, "immediate");
+        assert_eq!((&report["total"], &report["total_is_exact"]), (&json!(0), &json!(false)), "{report:#}");
+    }
 }
 
 /// Fifth Haiku run: an image that starts with code was read as a vector table and its first word reported as the

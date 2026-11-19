@@ -278,8 +278,8 @@ pub use raw_code::{
 };
 pub use raw_file::{RawByteOrder, RawContinuation, RawFileReport, RawFileRequest, inspect_raw_file};
 pub use raw_project::{
-    RawProjectRequest, headerless_guidance, headerless_guidance_for, open_raw_binary, resolve_raw_profile,
-    sniff_record_format,
+    RawProjectRequest, headerless_format_known, headerless_guidance, headerless_guidance_for, open_raw_binary,
+    resolve_raw_profile, sniff_record_format,
 };
 pub use rows::{
     Annotation, AnnotationList, EditResult, FittedPage, FunctionRow, FunctionsQuery, ImportRow, ListQuery, Page,
