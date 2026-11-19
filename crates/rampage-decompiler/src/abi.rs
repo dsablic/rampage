@@ -75,7 +75,8 @@ pub fn c_data_organization(language_id: &str) -> Option<DataOrganization> {
         | "PowerPC:BE:32:default:macosx"
         | "RISCV:LE:32:default:gcc"
         | "sparc:BE:32:default:default"
-        | "68000:BE:32:default:default" => (4, 4, 4),
+        | "68000:BE:32:default:default"
+        | "Xtensa:LE:32:default:default" => (4, 4, 4),
         "x86:LE:64:default:gcc"
         | "AARCH64:LE:64:v8A:default"
         | "AARCH64:BE:64:v8A:default"
@@ -152,6 +153,7 @@ pub fn language_id_with_options(arch: Arch, big_endian: bool, options: &Decompil
         Arch::Msp430 if !big_endian => ("TI_MSP430:LE:16:default".to_owned(), "default"),
         Arch::Avr8 if !big_endian => ("avr8:LE:16:default".to_owned(), "gcc"),
         Arch::Mos6502 if !big_endian => ("6502:LE:16:default".to_owned(), "default"),
+        Arch::Xtensa if !big_endian => ("Xtensa:LE:32:default".to_owned(), "default"),
         Arch::S390x
         | Arch::Msp430
         | Arch::Avr8

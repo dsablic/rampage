@@ -7,6 +7,12 @@ cancellation, resource limits, and child reaping without initializing Ghidra in 
 The executable is resolved from `WorkerConfig::executable`, then `RAMPAGE_WORKER`, then `rampage-worker` beside the
 calling application's executable. Missing workers are explicit errors; there is no in-process fallback.
 
+## Protocol version 14
+
+Version 14 adds `default_prototype`: the compiler specification's prototype model functions without their own get
+(`{"model": "__call0"}`). rampage sends it for Xtensa code built for the call0 ABI (the ESP8266), whose cspec's
+default is the windowed ABI, along with `fold_read_only` for every Xtensa image.
+
 ## Protocol version 13
 
 Version 13 adds `entry_registers`: a register that holds each decompiled function's own address at its entry and

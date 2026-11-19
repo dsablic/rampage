@@ -34,7 +34,7 @@ pub use metrics::{
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 /// Parent-owned cleanup proof, independent of result category and diagnostic metrics. Confirmed covers
 /// the supported owned group and direct-root reap, not descendants outside the supervisor's group boundary.
@@ -226,6 +226,10 @@ pub enum WorkerOperation {
     /// Fold loads from read-only mappings into their values (see `Decompiler::set_read_only_folding`).
     FoldReadOnly {
         enabled: bool,
+    },
+    /// The prototype model functions without one get (see `Decompiler::set_default_prototype`).
+    DefaultPrototype {
+        model: String,
     },
     /// Register values at every function's entry (see `Decompiler::set_entry_registers`).
     EntryRegisters {
@@ -1164,6 +1168,7 @@ fn execute_request(request: WorkerRequest) -> Result<WorkerOutput, String> {
             WorkerOperation::CalleeInference { inference } => engine.set_callee_inference(inference),
             WorkerOperation::FoldReadOnly { enabled } => engine.set_read_only_folding(enabled),
             WorkerOperation::EntryRegisters { registers } => engine.set_entry_registers(&registers),
+            WorkerOperation::DefaultPrototype { model } => engine.set_default_prototype(&model),
             WorkerOperation::VirtualTables { tables, names } => engine.add_virtual_tables(&tables, &names),
         };
         result.map_err(|error| format!("operation {index}: {error}"))?;

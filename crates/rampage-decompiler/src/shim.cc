@@ -2411,6 +2411,17 @@ const char *rampage_decomp_fold_read_only(void *h, uint8_t enabled) noexcept {
     return mutate(handle, [&](bool &) { handle->arch->readonlypropagate = enabled != 0; });
 }
 
+// Makes the prototype model `model` of the compiler specification the default for functions without their own, as
+// Xtensa call0 code needs (`__call0`; the cspec's default is the windowed ABI). An unknown model fails.
+const char *rampage_decomp_default_prototype(void *h, const char *model) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &) {
+        ProtoModel *found = handle->arch->getModel(model != nullptr ? model : "");
+        if (found == nullptr) throw LowlevelError("unknown prototype model");
+        handle->arch->setDefaultModel(found);
+    });
+}
+
 // Gives every decompiled function's entry known register values, as Ghidra's analysis records them for MIPS PIC
 // code: `address` (MIPS `t9`) holds the entry's own address and `constant` (MIPS `gp`) holds `value`, so
 // `lui/addiu/addu $gp, ..., $t9` folds to the global pointer and GOT loads to their entries. An empty name sets

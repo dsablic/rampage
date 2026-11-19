@@ -340,6 +340,7 @@ unsafe extern "C" {
     fn rampage_decomp_read_only_range(handle: *mut Opaque, first: u64, last: u64, read_only: u8) -> *const c_char;
     fn rampage_decomp_callee_inference(handle: *mut Opaque, effects: u8, prototypes: u8) -> *const c_char;
     fn rampage_decomp_fold_read_only(handle: *mut Opaque, enabled: u8) -> *const c_char;
+    fn rampage_decomp_default_prototype(handle: *mut Opaque, model: *const c_char) -> *const c_char;
     fn rampage_decomp_entry_registers(
         handle: *mut Opaque,
         address: *const c_char,
@@ -672,6 +673,15 @@ impl Decompiler {
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: valid serialized handle; the returned error belongs to the handle.
         ffi_result(unsafe { rampage_decomp_fold_read_only(self.handle, u8::from(enabled)) })
+    }
+
+    /// Makes the compiler specification's prototype model `model` the default for functions without a prototype of
+    /// their own, as for Xtensa call0 code (`__call0`), whose cspec's default is the windowed ABI.
+    pub fn set_default_prototype(&mut self, model: &str) -> Result<(), Error> {
+        let model = CString::new(model).map_err(|_| Error::Ghidra("model name contains NUL".to_owned()))?;
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid serialized handle and NUL-terminated name; the returned error belongs to the handle.
+        ffi_result(unsafe { rampage_decomp_default_prototype(self.handle, model.as_ptr()) })
     }
 
     /// Gives every function's entry known register values: `registers.address` holds the entry's own address and

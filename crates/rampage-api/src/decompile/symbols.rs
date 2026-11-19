@@ -136,6 +136,7 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
     operations.extend(data_names(project, annotations, &identities, &slots));
     operations.extend(cortex_m_operations(project));
     operations.extend(mips_pic_operations(&project.binary));
+    operations.extend(xtensa_operations(&project.binary));
     operations.extend(virtual_tables(project, annotations));
     Ok(operations)
 }
@@ -170,6 +171,27 @@ pub(super) fn mips_pic_operations(binary: &rampage_loaders::Binary) -> Vec<Worke
         // but string rendering across the MIPS fixtures' 150 functions.
         operations.push(WorkerOperation::FoldReadOnly { enabled: true });
         operations.push(WorkerOperation::ReadOnlyRange { first, last, read_only: true });
+    }
+    operations
+}
+
+/// Memory-mapped peripherals of the ESP chips: ESP32's DPORT and APB peripherals, and the ESP8266's, ESP32-S2's and
+/// ESP32-S3's peripheral window.
+const XTENSA_DEVICE_RANGES: [(u64, u64); 2] = [(0x3ff0_0000, 0x3ff7_ffff), (0x6000_0000, 0x600f_ffff)];
+
+/// Xtensa firmware (ESP32, ESP8266): code reaches every constant and address through an `l32r` literal pool in its
+/// read-only code mapping (flash-mapped IROM, or IRAM the bootloader loaded and nothing writes), so loads from
+/// read-only mappings fold to the values they hold and a literal reads as the string, global or function it points
+/// at. DRAM is writable and never folds. Peripheral windows are volatile. Code built for the call0 ABI (the
+/// ESP8266) gets the cspec's `__call0` model as its default, so a12-a15 survive calls.
+pub(super) fn xtensa_operations(binary: &rampage_loaders::Binary) -> Vec<WorkerOperation> {
+    if binary.arch != rampage_arch::Arch::Xtensa {
+        return Vec::new();
+    }
+    let mut operations = vec![WorkerOperation::FoldReadOnly { enabled: true }];
+    operations.extend(XTENSA_DEVICE_RANGES.iter().map(|&(first, last)| WorkerOperation::VolatileRange { first, last }));
+    if binary.xtensa_call0() {
+        operations.push(WorkerOperation::DefaultPrototype { model: "__call0".to_owned() });
     }
     operations
 }
@@ -584,6 +606,9 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
             WorkerOperation::FoldReadOnly { enabled } => engine
                 .set_read_only_folding(enabled)
                 .map_err(|error| ApiError::Unavailable(format!("read-only folding: {error}")))?,
+            WorkerOperation::DefaultPrototype { model } => engine
+                .set_default_prototype(&model)
+                .map_err(|error| ApiError::Unavailable(format!("default prototype: {error}")))?,
             WorkerOperation::EntryRegisters { registers } => engine
                 .set_entry_registers(&registers)
                 .map_err(|error| ApiError::Unavailable(format!("entry registers: {error}")))?,
