@@ -57,6 +57,7 @@ fn first_argument_registers(arch: Arch) -> Option<&'static [&'static str]> {
     match arch {
         Arch::X86_64 => Some(&["rdi", "edi"]),
         Arch::Aarch64 => Some(&["x0"]),
+        Arch::Mips | Arch::Mips64 => Some(&["$a0"]),
         _ => None,
     }
 }
@@ -134,7 +135,7 @@ impl Project {
             match first_argument_registers(self.binary.arch) {
                 Some(registers) => candidates.extend(self.libc_start_candidate(registers)?),
                 None => report.limitation(format!(
-                    "The __libc_start_main heuristic models x86-64 and AArch64 argument registers only, not {}.",
+                    "The __libc_start_main heuristic models x86-64, AArch64 and MIPS argument registers only, not {}.",
                     self.binary.arch
                 )),
             }
@@ -221,9 +222,9 @@ impl Project {
         }
         report.limitation("Symbol names are taken at face value; a binary can give any function the name main.");
         report.limitation(
-            "Startup heuristics cover the ELF __libc_start_main first argument (x86-64, AArch64), the MinGW-w64 CRT \
-             call before _cexit/exit, and the Mach-O LC_MAIN entry convention. Custom, obfuscated or other runtimes' \
-             startup code (MSVC, Go without symbols, a hand-written _start) is not modelled.",
+            "Startup heuristics cover the ELF __libc_start_main first argument (x86-64, AArch64, MIPS), the MinGW-w64 \
+             CRT call before _cexit/exit, and the Mach-O LC_MAIN entry convention. Custom, obfuscated or other \
+             runtimes' startup code (MSVC, Go without symbols, a hand-written _start) is not modelled.",
         );
         report.limitation(
             "A candidate marks where the program's own code likely begins; it does not show what the code does.",
@@ -250,6 +251,36 @@ impl Project {
             });
         }
         candidates
+    }
+
+    /// musl's MIPS `_start` (`crt_arch.h`): `bal 1f; move $fp, $0`, then `.gpword .` and `.gpword _start_c` (each
+    /// an address less `_gp`), and at `1:` it forms `$gp` and `$t9` from them before `jalr $t9`. Returns
+    /// `_start_c`, once the first word checks out against the image's global pointer.
+    fn musl_mips_start_c(&self, entry: u64) -> Option<u64> {
+        if self.binary.arch != Arch::Mips {
+            return None;
+        }
+        let word = |address: u64| {
+            let bytes: [u8; 4] = self.binary.read(address, 4)?.try_into().ok()?;
+            Some(if self.binary.big_endian { u32::from_be_bytes(bytes) } else { u32::from_le_bytes(bytes) })
+        };
+        // `bal` is `bgezal $zero, offset`; its link register then holds the address after its delay slot.
+        if word(entry)? & 0xffff_0000 != 0x0411_0000 {
+            return None;
+        }
+        let link = entry.checked_add(8)?;
+        let global_pointer = u32::try_from(self.binary.target().global_pointer?).ok()?;
+        if u64::from(word(link)?.wrapping_add(global_pointer)) != link {
+            return None;
+        }
+        let start_c = u64::from(word(link.checked_add(4)?)?.wrapping_add(global_pointer));
+        self.binary.is_code(start_c).then_some(start_c)
+    }
+
+    /// The address a GOT entry holds in the file, when the entry is not filled by the dynamic linker.
+    fn got_value(&self, slot: u64) -> Option<u64> {
+        let width = self.binary.arch.default_pointer_size()?;
+        self.binary.target().got?.value(slot, width)
     }
 
     /// Names a startup stub's call target: by symbol, import or stub name, or else by library signature (matched
@@ -279,13 +310,34 @@ impl Project {
         let signatures = OnceCell::new();
         let mut loaded: Option<(u64, String)> = None;
         let mut trail = Vec::new();
+        if let Some(start_c) = self.musl_mips_start_c(at) {
+            trail.push(format!(
+                "{at:#x}: musl's MIPS `_start` calls {start_c:#x} (`_start_c`) through a `.gpword` after its `bal`"
+            ));
+            at = start_c;
+        }
         for _ in 0..STUB_DEPTH {
             let mut follow = None;
-            for line in self.disassemble(Some(&format!("{at:#x}")), STUB_INSTRUCTIONS)? {
+            let mut lines = self.disassemble(Some(&format!("{at:#x}")), STUB_INSTRUCTIONS)?;
+            // A MIPS delay slot runs before its branch takes effect, and often sets the call's first argument
+            // (`jal __libc_start_main; move $a0, $at`): read it first.
+            if self.binary.arch.delay_slots() == 1 {
+                let mut index = 0;
+                while index + 1 < lines.len() {
+                    if lines[index].flow != Flow::Next {
+                        lines.swap(index, index + 1);
+                        index += 1;
+                    }
+                    index += 1;
+                }
+            }
+            for line in lines {
                 if destination(&line.text).is_some_and(|register| registers.contains(&register)) {
-                    // A load's own address is data; the value it loads (`ldr r0, =main`) may be main.
+                    // A load's own address is data; the value it loads (`ldr r0, =main`) may be main, as may the
+                    // GOT entry it reads (MIPS `lw $a0, %got(main)($gp)`).
                     let formed = line.data_ref.filter(|_| !line.accesses);
-                    let value = formed.or(line.immediate).filter(|&value| self.binary.is_code(value));
+                    let from_got = line.data_ref.filter(|_| line.accesses).and_then(|slot| self.got_value(slot));
+                    let value = formed.or(line.immediate).or(from_got).filter(|&value| self.binary.is_code(value));
                     loaded = value.map(|value| (value, describe(&line)));
                     continue;
                 }

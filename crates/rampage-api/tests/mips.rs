@@ -1,0 +1,146 @@
+//! MIPS Linux userland (tests/fixtures/mips, built from router.c): position-independent code reaches its imports,
+//! strings and data through the GOT and `$gp`, which LLVM computes from `$t9` and keeps in a callee-saved register,
+//! and GCC restores from the stack after each call. Each fixture's -sym copy keeps the symbols as the truth.
+
+use rampage_api::{Project, XrefQuery};
+use rampage_loaders::Binary;
+
+const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/mips/");
+
+/// The o32 userland fixtures: LLVM (lld) big- and little-endian, unoptimised, static musl, and GCC (GNU ld) PIEs
+/// with lazy-binding stubs.
+const O32: [&str; 6] =
+    ["router-mips", "router-mipsel", "router-mipsel-O0", "router-mips-static", "router-gnu-mips", "router-gnu-mipsel"];
+const DYNAMIC: [&str; 5] = ["router-mips", "router-mipsel", "router-mipsel-O0", "router-gnu-mips", "router-mips64"];
+
+fn project(name: &str) -> Project {
+    Project::new(Binary::open(format!("{DIR}{name}.elf")).unwrap())
+}
+
+fn truth(name: &str, symbol: &str) -> u64 {
+    let binary = Binary::open(format!("{DIR}{name}-sym.elf")).unwrap();
+    binary.symbol_by_name(symbol).unwrap_or_else(|| panic!("{name}: no {symbol}")).address
+}
+
+/// The address of the NUL-terminated string `text` in the image.
+fn string(project: &Project, text: &str) -> u64 {
+    let binary = &project.binary;
+    let needle = [text.as_bytes(), &[0]].concat();
+    binary
+        .segments
+        .iter()
+        .find_map(|segment| {
+            let bytes = binary.read(segment.address, segment.size.min(1 << 20))?;
+            let at = bytes.windows(needle.len()).position(|window| window == needle)?;
+            Some(segment.address + at as u64)
+        })
+        .unwrap_or_else(|| panic!("{text:?} not in the image"))
+}
+
+fn referencing_functions(project: &Project, address: u64) -> Vec<String> {
+    let rows = project.xrefs(XrefQuery::To(address), None, None).unwrap();
+    rows.items.into_iter().filter_map(|row| row.from_function).collect()
+}
+
+/// `lw $at, %got(page)($gp); addiu $a0, $at, %lo(string)`: the local GOT entry holds the string's page, so the
+/// string is referenced from the function that passes it, whether `$gp` lives in `$gp` (GCC), in a callee-saved
+/// register computed from `$t9` (LLVM) or in a stack slot (LLVM -O0).
+#[test]
+fn strings_are_referenced_through_the_got() {
+    for name in O32.into_iter().chain(["router-mips64"]) {
+        let project = project(name);
+        let main = format!("sub_{:x}", truth(name, "main"));
+        let request = format!("sub_{:x}", truth(name, "handle_request"));
+        for (text, function) in [("ROUTER_USER", &main), ("login ok", &main), ("/cgi-bin/", &request)] {
+            let from = referencing_functions(&project, string(&project, text));
+            let named = project.function_name(truth(name, if function == &main { "main" } else { "handle_request" }));
+            assert!(from.contains(function) || from.contains(&named), "{name}: {text:?} referenced from {from:?}");
+        }
+    }
+}
+
+/// `lw $t9, %call16(getenv)($gp); jalr $t9`: the call goes through the import's GOT entry, so the call site
+/// references the import, as x86's `call [slot]` does.
+#[test]
+fn calls_through_import_got_entries_reference_the_import() {
+    for name in ["router-mips", "router-mipsel", "router-mipsel-O0", "router-mips64"] {
+        let project = project(name);
+        let slot = project.binary.import_slots.iter().find(|slot| slot.name == "getenv").unwrap().address;
+        let from = referencing_functions(&project, slot);
+        assert!(from.contains(&project.function_name(truth(name, "main"))), "{name}: getenv slot from {from:?}");
+    }
+}
+
+/// GNU ld's lazy-binding stubs take the name of the import whose GOT entry holds their address.
+#[test]
+fn lazy_binding_stubs_are_named_after_their_imports() {
+    for name in ["router-gnu-mips", "router-gnu-mipsel"] {
+        let project = project(name);
+        let stubs: Vec<(u64, String)> = rampage_analysis::functions::stub_names(&project.binary);
+        let getenv = stubs.iter().find(|(_, stub)| stub == "getenv@plt").unwrap_or_else(|| panic!("{stubs:?}"));
+        let stubs_section = project.binary.sections.iter().find(|section| section.name == ".MIPS.stubs").unwrap();
+        assert!(getenv.0 >= stubs_section.address && getenv.0 < stubs_section.address + stubs_section.size);
+        assert_eq!(project.function_name(getenv.0), "getenv@plt", "{name}");
+    }
+}
+
+/// With `$t9` the entry address and `$gp` the global pointer at every function's entry, GOT loads fold: imports by
+/// name, strings as literals, and no `in_t9` input is left.
+#[test]
+fn decompiled_pic_code_names_imports_and_strings() {
+    for name in DYNAMIC {
+        let project = project(name);
+        let main = project.decompile(truth(name, "main")).unwrap().code;
+        assert!(main.contains("getenv(\"ROUTER_USER\")"), "{name}: {main}");
+        assert!(main.contains("puts(\"login ok\")"), "{name}: {main}");
+        assert!(!main.contains("in_t9") && !main.contains("code *"), "{name}: {main}");
+        let request = project.decompile(truth(name, "handle_request")).unwrap().code;
+        assert!(request.contains("strncmp(param_1,\"/cgi-bin/\",9)"), "{name}: {request}");
+    }
+}
+
+/// main is the first argument to __libc_start_main: glibc's `__start` loads it from the GOT, and musl's `_start`
+/// reaches `_start_c` through a `.gpword`, which passes it in a call's delay slot.
+#[test]
+fn find_main_follows_the_mips_startup_code() {
+    for name in O32.into_iter().chain(["router-mips64"]) {
+        let project = project(name);
+        let report = project.find_main(rampage_api::ReportLimits::default(), false).unwrap();
+        let report = serde_json::to_value(&report).unwrap();
+        let candidate = &report["sections"][0]["findings"][0];
+        assert_eq!(candidate["address"], format!("{:#x}", truth(name, "main")), "{name}: {report:#}");
+        assert!(candidate.to_string().contains("first argument"), "{name}: {candidate:#}");
+    }
+}
+
+/// A GCC PIE is linked at 0, so its first functions lie in page 0: they run, while loads there still fault.
+#[test]
+fn evaluation_runs_pie_code_in_page_zero() {
+    for name in ["router-gnu-mips", "router-gnu-mipsel", "router-mips", "router-mips64"] {
+        let project = project(name);
+        let request = serde_json::json!({ "at": format!("{:#x}", truth(name, "scale_add")), "args": [5, 2, 1] });
+        let report = project.evaluate_function(&serde_json::from_value(request).unwrap()).unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        assert_eq!(report["stop"], "returned", "{name}: {report}");
+        assert_eq!(report["result"]["unsigned"], 16, "{name}: {report}");
+    }
+}
+
+/// Router firmware often ships binaries without section headers: the dynamic section's DT_PLTGOT and
+/// DT_MIPS_LOCAL_GOTNO still give the GOT and the global pointer.
+#[test]
+fn the_got_is_found_without_section_headers() {
+    let mut bytes = std::fs::read(format!("{DIR}router-mips.elf")).unwrap();
+    // e_shoff, e_shentsize, e_shnum and e_shstrndx of a big-endian ELF32 header.
+    bytes[0x20..0x24].fill(0);
+    bytes[0x2e..0x34].fill(0);
+    let binary = Binary::from_owned_native_bytes(bytes, rampage_arch::Arch::Mips).unwrap();
+    assert!(binary.sections.is_empty());
+    let target = binary.target();
+    assert_eq!(target.global_pointer, Some(truth("router-mips", "_gp")));
+    assert_eq!(target.got.unwrap().local_entries, 14);
+    let project = Project::new(binary);
+    let main = format!("sub_{:x}", truth("router-mips", "main"));
+    let from = referencing_functions(&project, string(&project, "ROUTER_USER"));
+    assert!(from.contains(&main), "{from:?}");
+}

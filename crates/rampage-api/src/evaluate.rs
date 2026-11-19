@@ -576,6 +576,23 @@ impl<'a> ImageRam<'a> {
         self.segments.iter().find(|segment| address >= segment.start && address - segment.start < segment.size)
     }
 
+    /// An instruction byte of an executable segment in the null page of an image that keeps the null-page guard
+    /// (a PIE linked at 0, whose first functions can lie in page 0): fetching there runs the code, while loads
+    /// and stores still fault as null dereferences.
+    fn fetch_guarded_byte(&self, address: u64) -> Option<u8> {
+        if address >= self.null_guard {
+            return None;
+        }
+        let segment = self
+            .segments
+            .iter()
+            .find(|segment| segment.execute && address >= segment.start && address - segment.start < segment.size)?;
+        if let Some(page) = self.pages.get(&(address / PAGE)) {
+            return Some(page[(address % PAGE) as usize]);
+        }
+        Some(segment.file.get((address - segment.start) as usize).copied().unwrap_or(0))
+    }
+
     fn region_mut(&mut self, address: u64, length: usize) -> Option<(&mut Region, usize)> {
         self.regions.iter_mut().find_map(|region| {
             let offset = address.checked_sub(region.start)?;
@@ -740,9 +757,13 @@ impl Run<'_> {
         }
         let mut bytes = Vec::with_capacity(16);
         for index in 0..16u64 {
+            let at = address.wrapping_add(index);
             let mut byte = [0u8];
-            if self.machine.ram.read(address.wrapping_add(index), &mut byte).is_err() {
-                break;
+            if self.machine.ram.read(at, &mut byte).is_err() {
+                match self.machine.ram.fetch_guarded_byte(at) {
+                    Some(value) => byte[0] = value,
+                    None => break,
+                }
             }
             bytes.push(byte[0]);
         }
