@@ -1435,11 +1435,11 @@ impl Project {
             .map_err(String::as_str)
     }
 
-    /// In a Raw image, whose code regions also hold constants, the strings that overlap no instruction of a
-    /// discovered function: printable instruction bytes (Thumb `movs rN, #imm` reads as a character and a NUL) are
-    /// not text. Other images, and a Raw image whose analysis fails, keep every string.
+    /// In a Raw image or Xtensa firmware, whose code regions also hold constants, the strings that overlap no
+    /// instruction of a discovered function: printable instruction bytes (Thumb `movs rN, #imm` reads as a character
+    /// and a NUL) are not text. Other images, and one whose analysis fails, keep every string.
     fn outside_instructions(&self, found: Vec<FoundString>) -> Vec<FoundString> {
-        if self.binary.raw_code_image().is_none() {
+        if self.binary.raw_code_image().is_none() && self.binary.arch != rampage_arch::Arch::Xtensa {
             return found;
         }
         let Ok(analysis) = self.analysis() else { return found };

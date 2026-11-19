@@ -868,10 +868,10 @@ fn immediate_evidence(
     }
     // 32-bit ARM and Thumb have no typed operands, but the decoder reports the word an `ldr rN, =value` loads from
     // a read-only literal pool, or a MOVW/MOVT pair builds: the constants firmware keeps out of encodings. MIPS
-    // builds them from `lui` and `ori`/`addiu`, which its decoder reports the same way.
+    // builds them from `lui` and `ori`/`addiu`, which its decoder reports the same way; Xtensa loads them with `l32r`.
     let loaded = match arch {
         rampage_arch::Arch::Arm => operands.is_none(),
-        rampage_arch::Arch::Mips | rampage_arch::Arch::Mips64 => true,
+        rampage_arch::Arch::Mips | rampage_arch::Arch::Mips64 | rampage_arch::Arch::Xtensa => true,
         _ => false,
     };
     if loaded && let Some(value) = instruction.immediate {

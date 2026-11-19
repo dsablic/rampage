@@ -22,7 +22,9 @@ pub struct FoundString {
 /// A Raw image (headerless firmware) keeps its constants among its code, so there a run in a code region is kept
 /// when a NUL ends it, as a C string's terminator does; printable instruction bytes rarely end in one.
 pub fn scan(binary: &Binary, min_len: usize) -> Vec<FoundString> {
-    let raw = binary.raw_code_image().is_some();
+    // Raw images and Xtensa firmware (whose ESP8266 builds keep strings in executable flash) take NUL-terminated
+    // strings found in code too; callers drop those that overlap discovered instructions.
+    let raw = binary.raw_code_image().is_some() || binary.arch == rampage_arch::Arch::Xtensa;
     let mut found = Vec::new();
     for segment in &binary.segments {
         if let Some(bytes) = binary.read_to_segment_end(segment.address) {

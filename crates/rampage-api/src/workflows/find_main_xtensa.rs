@@ -10,7 +10,7 @@ use rampage_arch::{Arch, Flow};
 
 use super::Confidence;
 use super::find_main::Candidate;
-use crate::{ApiError, Project, StringsQuery};
+use crate::{ApiError, Project};
 
 /// The log lines ESP-IDF's `main_task` prints around its call to `app_main`.
 const CALLING: &str = "Calling app_main()";
@@ -21,15 +21,36 @@ const MAX_PREFIX: u64 = 8;
 /// Instructions of `main_task` read.
 const MAX_TASK_INSTRUCTIONS: usize = 400;
 
+/// Most occurrences of each log line looked at.
+const MAX_OCCURRENCES: usize = 16;
+/// Furthest back a string's start is looked for from the text it contains.
+const MAX_STRING_LEAD: usize = 64;
+
+/// Where the NUL-terminated strings holding `text` start, in any mapped bytes: ESP8266 firmware keeps its strings
+/// in executable flash, where the string scan does not look.
+fn strings_containing(binary: &rampage_loaders::Binary, text: &[u8]) -> Vec<u64> {
+    let mut found = Vec::new();
+    for segment in &binary.segments {
+        let Some(bytes) = binary.read(segment.address, segment.size.min(segment.file_size)) else { continue };
+        for at in bytes.windows(text.len()).enumerate().filter(|(_, window)| *window == text).map(|(at, _)| at) {
+            let lead = &bytes[at.saturating_sub(MAX_STRING_LEAD)..at];
+            let start =
+                lead.iter().rposition(|&byte| byte == 0).map_or(at - lead.len(), |nul| at - lead.len() + nul + 1);
+            found.push(segment.address + start as u64);
+            if found.len() == MAX_OCCURRENCES {
+                return found;
+            }
+        }
+    }
+    found
+}
+
 impl Project {
     pub(super) fn esp_idf_main_candidates(&self) -> Result<Vec<Candidate>, ApiError> {
         if self.binary.arch != Arch::Xtensa {
             return Ok(Vec::new());
         }
-        let find = |text: &str| {
-            let query = StringsQuery { contains: Some(text.to_owned()), limit: Some(16), ..Default::default() };
-            self.strings(&query).items.into_iter().map(|found| found.address).collect::<Vec<u64>>()
-        };
+        let find = |text: &str| strings_containing(&self.binary, text.as_bytes());
         let (calling, returned) = (find(CALLING), find(RETURNED));
         if returned.is_empty() {
             return Ok(Vec::new());
