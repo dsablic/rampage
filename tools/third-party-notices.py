@@ -93,8 +93,9 @@ VENDORED = [
         "binwalk signature checks",
         "MIT",
         "https://github.com/ReFirmLabs/binwalk/tree/v3.1.0/src/signatures",
-        "The ext, tar, bzip2 and Android sparse header checks in crates/rampage-loaders/src/carve.rs are adapted\n"
-        "from binwalk 3.1.0's signature parsers. No binwalk code is linked and no binwalk tool is run.",
+        "The ext, tar, bzip2, Android sparse, UBI, UBIFS, JFFS2, CramFS, TRX, device tree, LZ4, lzop, MBR, GPT,\n"
+        "FAT and UEFI header checks in crates/rampage-loaders/src/carve.rs are adapted from binwalk 3.1.0's\n"
+        "signature parsers. No binwalk code is linked and no binwalk tool is run.",
         ["crates/rampage-loaders/LICENSE.binwalk"],
     ),
     (

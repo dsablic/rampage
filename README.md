@@ -159,29 +159,34 @@ Areas marked *experimental* may change in any release; see the [stability policy
   bundled libc/POSIX/Win32 basics, types on data and operands, stack frames, type propagation across calls, and
   checked DWARF and PDB type import. `get_type` also reads layouts straight from a binary's DWARF, and from the
   Go runtime type descriptors of stripped Go binaries, by member path or byte offset.
-- **Search and patching:** byte, text, regex, immediate, instruction and reference search; an assembler for an
-  x86/x64/AArch64 subset; checked byte patches kept in the annotation log and exported to a new file.
+- **Search and patching:** byte, text, regex, immediate, instruction and reference search (on 32-bit ARM and
+  Thumb, constants loaded from literal pools or built by MOVW/MOVT); an assembler for an x86/x64/AArch64 subset;
+  checked byte patches kept in the annotation log and exported to a new file.
 - **Formats:** ELF, PE and Mach-O (including universal binaries and embedded images), .NET metadata and CIL,
   [Android APKs and DEX](docs/android.md) (manifest, permissions, components, JNI libraries, Dalvik bytecode and
   pseudocode, strings hidden behind decoder methods), Go build info, cargo-auditable data, PE resources and load
-  config, PyInstaller archives, WebAssembly module summaries, ZIP inventory, embedded-file carving, raw firmware
-  windows, and a [file layout](docs/file-layout.md) of any file (padding, entropy, string clusters, hashes and
-  labelled hints). `list_dir` lists a folder with each file's sniffed format, so an agent given only a directory can
-  start.
-- **Firmware filesystem images:** `fs_list` and `fs_extract` read SquashFS, ext2/3/4, Android sparse images, full
-  Android OTA payloads, cpio, tar and ZIP (APKs included) in pure Rust, with hostile-input limits. See
-  [firmware filesystem images](docs/firmware-images.md).
+  config, PyInstaller archives, WebAssembly module summaries, ZIP inventory, raw firmware windows, and a
+  [file layout](docs/file-layout.md) of any file (padding, entropy, string clusters, hashes and labelled hints).
+  `carve` finds embedded executables, compressed streams, filesystem images (UBI, UBIFS, JFFS2 and CramFS among
+  them) and TRX, device-tree, MBR/GPT, FAT and UEFI containers, each checked against its header. `list_dir` lists
+  a folder with each file's sniffed format, and `triage` on a file with no executable header answers with its
+  layout, compressed components and carve candidates, so an agent given only a directory can start.
+- **Firmware filesystem images:** `fs_list` and `fs_extract` read SquashFS, ext2/3/4, UBI volumes, UBIFS, Android
+  sparse images, full Android OTA payloads, cpio, tar and ZIP (APKs included) in pure Rust, with hostile-input
+  limits. See [firmware filesystem images](docs/firmware-images.md).
 - **Processors:** x86 and x86-64; AArch64, ARM and Thumb from Arm's machine-readable specification; MIPS,
   PowerPC, RISC-V, SPARC, s390x and m68k through Capstone; sixteen more families (MSP430, AVR8, 8051, Z80,
-  Xtensa, eBPF, LoongArch and others) as Raw Projects through Ghidra's Sleigh. Sleigh profiles other than MSP430 and AVR8
-  are *experimental* and disassemble without decompiling.
+  Xtensa, eBPF, LoongArch and others) as Raw Projects through Ghidra's Sleigh. Sleigh profiles other than MSP430
+  and AVR8 are *experimental* and disassemble without decompiling.
 - **Firmware** (*experimental*): a Cortex-M Raw profile for headerless Thumb images that discovers, decompiles
-  and seeds from the vector table and from code-pointer tables (scanned by itself when discovery is sparse); a
-  compressed image opened directly as the code region, with ranked load-address candidates and a check of the base
-  you chose; startup scatter-load copies followed and mapped at their run addresses; up to 15 further code, data or
-  RAM regions; Intel HEX and Motorola S-record input; `probe_compression` for unknown LZSS and LZ4 variants; and
-  integrity checks that find and fix an image's CRCs and checksums and verify those in a container's records.
-  Strings, triage, crypto and lock-mechanism tools work on Raw projects too. See
+  and seeds from the vector table, from code-pointer tables (scanned by itself when discovery is sparse), from code
+  pointers in data records and from the CRC routines `integrity_checks` infers; a compressed image opened directly
+  as the code region, with ranked load-address candidates and a check of the base you chose; startup scatter-load
+  copies followed and mapped at their run addresses; `find_main` and `binary_info`'s starting points following the
+  reset handler; up to 15 further code, data or RAM regions; Intel HEX and Motorola S-record input;
+  `probe_compression` for unknown LZSS and LZ4 variants; and integrity checks that find and fix an image's CRCs and
+  checksums and verify those in a container's records. Code addresses with the Thumb bit set work where the code
+  is known to be Thumb. Strings, triage, crypto and lock-mechanism tools work on Raw projects too. See
   [how to read the code in a firmware update file](docs/firmware-walkthrough.md).
 - **Device privacy:** `endpoint_inventory` lists the hosts, URLs, IPs and certificates a binary or an extracted
   firmware tree names, `endpoint_blocklist` writes them as a router blocklist, and `privacy_surface` maps what a
@@ -269,4 +274,6 @@ targets debugged through an RSP stub, from a macOS or Linux host.
 
 Apache-2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE). The decompiler embeds Ghidra (Apache-2.0), and the
 AArch64/AArch32 decoder tables are generated from Arm's machine-readable architecture specification, which Arm
-licenses under the BSD 3-clause license; see [Arm's license](crates/rampage-arch/src/a64/LICENSE-ARM).
+licenses under the BSD 3-clause license; see [Arm's license](crates/rampage-arch/src/a64/LICENSE-ARM). Other
+third-party data and code, such as the Detect It Easy signatures and `carve`'s header checks adapted from binwalk
+(both MIT), are listed in [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES).

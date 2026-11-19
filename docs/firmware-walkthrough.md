@@ -170,8 +170,8 @@ With the same `raw` selector, `list_functions` lists the startup code and the co
 
 `binary_info` names where to start in `raw.starting_points`: the reset handler, the copied function at
 0x100000e0 that scatter-load's jump lands in, and `find_main`'s candidate. `find_main` follows the reset code the
-same way and names that copied function at medium confidence: the startup jumps into it and it never returns. `decompile` at `entry` shows the startup code walking
-its region table and calling each entry's handler:
+same way and names that copied function at medium confidence: the startup jumps into it and it never returns.
+`decompile` at `entry` shows the startup code walking its region table and calling each entry's handler:
 
 ```c
   pxVar2 = (xunknown4 *)0x8000188;
@@ -221,21 +221,23 @@ It finds the record's byte sum as a valid `sum32` check over the stream and list
 Its `next` says to run `integrity_checks` again with that selector, since the routines that check the image's own
 CRCs are in the decoded code. On an image with CRC routines it finds their tables and polynomial literals, and on
 Cortex-M names a routine around a polynomial literal even when discovery missed it (`inferred_range`); this sample
-has none. When the project opens with `pointer_tables` unset (the default), such a routine is also seeded into discovery (`raw.inferred_seeds` in
-`binary_info`, with the evidence), so `decompile`, `lock_mechanisms` and `integrity_checks` see it as a function;
-code that calls it directly with `bl` is seeded with it, so `xrefs` to the routine finds the check. After patching, the same tool recomputes the checks; see
-[firmware patching](firmware-patching.md).
+has none. When the project opens with `pointer_tables` unset (the default), such a routine is also seeded into
+discovery (`raw.inferred_seeds` in `binary_info`, with the evidence), so `decompile`, `lock_mechanisms` and
+`integrity_checks` see it as a function; code that calls it directly with `bl` is seeded with it, so `xrefs` to the
+routine finds the check. To find a polynomial's loads yourself, `search` for it as an immediate: on Thumb code it
+matches the literal-pool loads and MOVW/MOVT pairs that hold it (`loaded_constant`). After patching,
+`integrity_checks` recomputes the checks; see [firmware patching](firmware-patching.md).
 
 If another tool needs the decoded bytes as a file, `write_decoded_range` writes them to a new file at an absolute
 `output_path`.
 
 ## 7. Look for lock mechanisms
 
-`lock_mechanisms` with the same selector looks for signature checks, parts pairing, anti-rollback counters and
-debug locks. On this sample it analyses nothing and says why: none of the 6 functions references a crypto
-constant, a CRC routine, a known verify or MAC API, or a register with a role. Without an SVD map only DHCSR,
-DAUTHCTRL and AIRCR writes are known; import the part's SVD with `import_svd` first so that unique-ID, OTP and
-option-byte registers are recognised. See [lock mechanisms](lock-mechanisms.md) and
+`lock_mechanisms` with the same selector looks for signature checks, parts pairing, anti-rollback counters and debug
+locks. On this sample it analyses nothing (`coverage`: `functions_analyzed` 0 of `functions_discovered` 6) and says why:
+none of the 6 functions references a crypto constant, a CRC routine, a known verify or MAC API, or a register with a
+role. Without an SVD map only DHCSR, DAUTHCTRL and AIRCR writes are known; import the part's SVD with `import_svd` first
+so that unique-ID, OTP and option-byte registers are recognised. See [lock mechanisms](lock-mechanisms.md) and
 [CMSIS-SVD peripheral maps](peripheral-maps.md).
 
 ## When a step does not work
@@ -248,6 +250,13 @@ option-byte registers are recognised. See [lock mechanisms](lock-mechanisms.md) 
 - **Few functions.** Check `raw.scatter_load.stop` and each copy's `not_mapped_reason`, and
   `raw.pointer_tables.automatic` for whether the pointer-table scan ran. See [Raw code](raw-code.md).
 - **`xrefs` to a string is empty.** The code that loads it was not discovered: `xrefs` lists references from
-  discovered functions only. Literal-pool words, movw/movt pairs and `adr` all count once the function is found;
-  map the startup copies, let the pointer-table scan run, or seed the function, and ask again.
+  discovered functions only. Its `notes` say where the string the address lies inside starts, and list Thumb `bl`
+  instructions outside every discovered function that target the address. Literal-pool words, movw/movt pairs and
+  `adr` all count once the function is found; map the startup copies, let the pointer-table scan run, or seed the
+  function, and ask again.
+- **A vector table entry or function pointer is odd.** That is the Thumb bit. `decompile`, `disassemble`,
+  `function_graph`, `function_summary`, `xrefs` `from` and `evaluate_function` take the odd address on Cortex-M and
+  read the code at the even one, with a note.
+- **`lock_mechanisms` finds nothing.** Check `coverage.functions_analyzed` against `functions_discovered`: it
+  traces only the functions its evidence selects, and a limitation says so when that is under a tenth.
 - **More than one image.** Each stream has its own record; open each with its own selector and base.

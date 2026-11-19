@@ -45,16 +45,21 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 - [Raw Projects](sleigh-decoding.md) open headerless images with an asserted profile and base address: sixteen
   Sleigh families, and the *experimental* Cortex-M profile (`ARM:LE:32:Cortex`), which decodes Thumb natively,
   decompiles, seeds from the vector table, code-pointer tables in every code region (on request, or by itself when
-  discovery is sparse) and code pointers in data records the code addresses (RTOS thread definitions), maps up to 15 further code, data or RAM regions (from file ranges, decoded bytes, a slice of another
-  region or zero fill), and reads Intel HEX and Motorola S-records. A compressed image opens with its decoded
-  bytes as the code region, from the selector the decoders return. The reset code is followed by a bounded
-  interpreter for the [scatter-load copies](mcp.md#scatter-load-copies) startup code makes, which are reported
-  and mapped at their run addresses so discovery continues into the copied code, and `binary_info` names the
-  functions to start reading (`raw.starting_points`). See [Raw code](raw-code.md) for
-  the workflow, [Raw Projects in MCP](mcp.md#multiple-regions-intel-hex-and-s-records) for the fields and
-  [the firmware walkthrough](firmware-walkthrough.md) for a vendor update file end to end. Limits: base addresses and regions are
-  the analyst's assertion; Sleigh profiles other than MSP430 and AVR8 do not decompile; the reset-code follow
-  models the integer Thumb instructions startup code uses and skips calls it cannot follow.
+  discovery is sparse), code pointers in data records the code addresses (RTOS thread definitions) and the CRC
+  routines `integrity_checks` infers with the code that calls them, maps up to 15 further code, data or RAM regions
+  (from file ranges, decoded bytes, a slice of another region or zero fill), and reads Intel HEX and Motorola
+  S-records. A compressed image opens with its decoded bytes as the code region, from the selector the decoders
+  return. The reset code is followed by a bounded interpreter for the [scatter-load copies](mcp.md#scatter-load-copies)
+  startup code makes, which are reported and mapped at their run addresses so discovery continues into the copied
+  code; `find_main` follows the reset handler to the call that never returns, and `binary_info` names the functions
+  to start reading (`raw.starting_points`). A vector table that is implausible as a whole is refused, and one the
+  program builds in RAM at run time is reported as such. Code addresses with the Thumb bit set work in
+  `decompile`, `disassemble`, `function_graph`, `function_summary`, `xrefs` `from` and `evaluate_function`. See
+  [Raw code](raw-code.md) for the workflow, [Raw Projects in MCP](mcp.md#multiple-regions-intel-hex-and-s-records)
+  for the fields and [the firmware walkthrough](firmware-walkthrough.md) for a vendor update file end to end.
+  Limits: base addresses and regions are the analyst's assertion; Sleigh profiles other than MSP430 and AVR8 do not
+  decompile; the reset-code follow models the integer Thumb instructions startup code uses and skips calls it
+  cannot follow; code reached only through computed addresses stays undiscovered.
 - [CMSIS-SVD peripheral maps](peripheral-maps.md) (`import_svd`, `peripheral_access`) name memory-mapped
   registers everywhere: decompiled C reads `TIMER0.CR = uVar1 | 0x21; /* CR: EN|MODE=Single_MATCH */`,
   disassembly, xrefs and evaluation faults say `TIMER0.CR`, and `peripheral_access` lists the functions that read
@@ -69,8 +74,9 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   a repair: signature and MAC checks, challenge-response unlocks, binding to a unique chip ID, anti-rollback
   counters, debug and readout protection, and fuse feature locks, each with what is checked, the data consulted,
   the decision site and what each path does (reset, halt, error return, a flag written). It explains and never
-  suggests changes. Limits: register roles need an imported SVD map; decisions through heap data or indirect calls
-  are missed.
+  suggests changes. Only the functions its evidence selects are traced, and `coverage` says how many of the
+  discovered functions that was. Limits: register roles need an imported SVD map; decisions through heap data or
+  indirect calls are missed.
 - ELF, PE and Mach-O, including universal Mach-O binaries and explicitly selected embedded executable images.
 - x86 and x86-64 use [iced-x86](https://github.com/icedland/iced).
 - AArch64 and 32-bit ARM decode natively from Arm's
@@ -234,6 +240,12 @@ using pefile's algorithm without its ordinal-name tables. Format details include
 - ELF interpreter, needed libraries, NX/RELRO/PIE and build ID.
 - Mach-O dylibs, platform, UUID, signing and encryption.
 
+Given a file with no executable header and no format of its own (a vendor update file, say), MCP `triage` and
+`triage_report` answer at container level instead of failing: the largest occupied regions, the compressed
+components headers describe, `carve`'s first candidates, and ready-to-run `probe_compression` calls for each
+payload. Nothing is decoded. A filesystem image, DEX file or Intel HEX or S-record file gets its own pointer to
+the tool that reads it instead.
+
 Hints identify likely packing and missing hardening. Code is also judged for encrypted or packed stretches: every
 code section, every executable PE section, or the executable segments of an image without sections, in 4 KiB
 windows. Adjacent windows of at least 7.6 bits per byte form a run; its edges are trimmed in 512-byte blocks below
@@ -304,7 +316,9 @@ structured immediates, mnemonic/operand globs, and retained references or refere
 preserve function context, native evidence and address ordering; incomplete scans report lower-bound totals
 and explicit budgets rather than complete negative answers. Exact text is matched in linear time against the
 budget, so a default search covers a 50 MB image, and a stopped byte/text scan says where to resume and which
-ranges it left unscanned. See [search reference](search.md).
+ranges it left unscanned. On 32-bit ARM and Thumb, which have no typed operands, an immediate matches where an
+`ldr` loads it from a read-only literal pool or a MOVW/MOVT pair builds it (`loaded_constant`), the way firmware
+holds a CRC polynomial; such a search is always a lower bound. See [search reference](search.md).
 
 Search is static and read-only. Native preparation/scanning is bounded and cancellable after the
 non-interruptible analysis/cache initialization. Unmapped overlays, virtual gaps and zero-fill are not
@@ -361,9 +375,10 @@ rename functions. Exact signatures and existing analyst names retain priority.
 
 ## Guided reports and batch analysis
 
-`triage_report`, `find_main` (a Cortex-M Raw project too), `network_surface`, `persistence_surface`, `string_decoding` and `diff_builds` (in
-`core`), `find_crypto` (in the `detection` group) and `privacy_surface` (in `carve`) compose primitives into bounded reports. Each finding
-retains evidence, source tool and confidence; reports state limitations and end with concrete next tool calls.
+`triage_report`, `find_main` (a Cortex-M Raw project too), `network_surface`, `persistence_surface`,
+`string_decoding` and `diff_builds` (in `core`), `find_crypto` (in the `detection` group) and `privacy_surface` (in
+`carve`) compose primitives into bounded reports. Each finding retains evidence, source tool and confidence; reports
+state limitations and end with concrete next tool calls.
 These are MCP tools or CLI workflows.
 
 `binary analyze` (legacy `analyze`) composes workflows and explicitly selected supervised decompilations across
@@ -380,11 +395,22 @@ decompression, automatic member opening or execution occurs. See [archive invent
 
 ## Firmware filesystem images
 
-`fs_list` and `fs_extract` (MCP `carve` group) list and extract SquashFS 4.0 (all six codecs), ext2/3/4, Android
-sparse images, full Android OTA payloads, cpio, tar and ZIP (APK, AAB, JAR), including images nested in one another
-or embedded at an offset. Extraction treats every image as hostile: no traversal, symlinks contained and never
+`fs_list` and `fs_extract` (MCP `carve` group) list and extract SquashFS 4.0 (all six codecs), ext2/3/4, UBI
+images (each volume rebuilt from its eraseblocks), UBIFS (uncompressed, LZO, zlib or zstd data), Android sparse
+images, full Android OTA payloads, cpio, tar and ZIP (APK, AAB, JAR), including images nested in one another or
+embedded at an offset. Extraction treats every image as hostile: no traversal, symlinks contained and never
 followed, no device nodes or setuid bits, and caps on size, file count, compression ratio and nesting. See
 [firmware filesystem images](firmware-images.md).
+
+`carve` (same group) finds where such images sit inside a larger file, along with embedded executables, compressed
+streams (gzip, xz, zstd, LZMA, bzip2, LZ4 frames, lzop), JFFS2 and CramFS file systems and TRX, device-tree and FIT,
+MBR and GPT, FAT and UEFI containers. Each candidate is checked against its header and, where the format has one,
+its CRC or checksum. Inside an image whose contents are compressed blocks or chunks (SquashFS, UBIFS, JFFS2,
+CramFS, Android sparse, OTA payload) it reports only validated executables; inside one whose files or volumes are
+stored whole (ext, UBI, tar, cpio, ZIP) every validated candidate, marked with the image; and inside a TRX, device
+tree, disk, FAT volume or UEFI container, which `fs_list` does not read, every candidate, marked with its
+container. Each image's notes count what was left out. It extracts nothing.
+See [the MCP reference](mcp.md#inputs-paging-and-decompiler-tokens) and [known limits](known-limits.md#analysis).
 
 ## Endpoint inventory
 

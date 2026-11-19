@@ -149,6 +149,13 @@ no listing to navigate. It does not offer the file tools (`carve`, `archive_inve
 `query_debugger`, `list_dir`, `inspect_data`, `decode_file_range`, `probe_compression`, `file_layout`,
 `inspect_raw_code`, `inspect_sleigh`, `pyinstaller_archive`, `wasm_module`) or the `debug` tools.
 
+File tools that only read the files they name (`list_dir`, `carve`, `fs_list`, `file_layout`, `decode_file_range`,
+`probe_compression`, `archive_inventory`, `endpoint_inventory`, `dex_metadata`, `dex_code`, `inspect_data`,
+`inspect_raw_code`, `inspect_sleigh`, `pyinstaller_archive`, `wasm_module`, `list_packs`) carry the MCP read-only
+annotation and are closed-world; `query_debugger` is read-only and open-world. `fs_extract` and
+`write_decoded_range` are marked as writing new files, and `endpoint_blocklist` as replacing the file it names.
+The `debug` tools' annotations are described with those tools below.
+
 ## Flywheel (improve)
 
 `rampage server serve --corpus target/flywheel/corpus/<version>` starts a server for the flywheel ([how-to](flywheel.md)),

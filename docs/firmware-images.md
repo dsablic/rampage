@@ -2,9 +2,10 @@
 
 Device firmware usually ships its programs and configuration inside filesystem images: SquashFS on routers and
 cameras, UBI and UBIFS on raw NAND flash, ext4 and Android sparse images on TVs and set-top boxes, an Android OTA
-`payload.bin` for system updates, cpio for an initramfs, ZIP for an Android app (APK) or a packaged update. `fs_list` lists such an image and
-`fs_extract` writes its files to a directory, so the binaries inside open as ordinary analysis targets. Both are
-file tools in the `carve` group: they take any file path and open no project.
+`payload.bin` for system updates, cpio for an initramfs, ZIP for an Android app (APK) or a packaged update.
+`fs_list` lists such an image and `fs_extract` writes its files to a directory, so the binaries inside open as
+ordinary analysis targets. Both are file tools in the `carve` group: they take any file path, open no project and
+carry the MCP read-only annotation (`fs_list`) or the one for writing new files (`fs_extract`).
 
 ## Formats
 
@@ -20,10 +21,9 @@ file tools in the `carve` group: they take any file path and open no project.
 | UBIFS | in a UBI volume or as a bare dump of its LEBs back to back. The index tree from the newest master node, then the journal written since the last commit replayed over it; data uncompressed, LZO, zlib or zstd; symlinks, hard links (noted, written as copies) and device nodes (`device major:minor`). Extended attributes are not read; fscrypt-encrypted files are listed and not decrypted; authenticated images are read without checking their HMACs |
 | ZIP (APK, AAB, JAR) | stored and deflate members, ZIP64; the central directory is authoritative, and inflation stops at a member's declared size; encrypted members and other methods are listed with a note and not read; members whose data overlap another's are noted. [`dex_metadata`](android.md) reads an APK's manifest and DEX files |
 
-A delta OTA payload lists its partitions, each
-noted with the first operation that needs the previous build (SOURCE_COPY, BSDIFF, PUFFDIFF, ...); rebuilding one
-is refused with that reason, since the payload alone cannot reproduce it. Partition and operation SHA-256 hashes in
-the manifest are checked, and a mismatch is an error.
+A delta OTA payload lists its partitions, each noted with the first operation that needs the previous build
+(SOURCE_COPY, BSDIFF, PUFFDIFF, ...); rebuilding one is refused with that reason, since the payload alone cannot
+reproduce it. Partition and operation SHA-256 hashes in the manifest are checked, and a mismatch is an error.
 
 Nothing external runs: every codec is pure Rust, and no extractor needs to be installed.
 
@@ -36,8 +36,9 @@ Nothing external runs: every codec is pure Rust, and no extractor needs to be in
 - `image_offset` (default 0) reads an image embedded in a larger file, such as one `carve` or `file_layout`
   found. Hex strings or integers.
 - `inner` descends into nested images, outermost first: a partition of an OTA payload (`["system.img"]`), a UBI
-  volume (`["rootfs.img"]`, then the UBIFS or SquashFS inside it is listed), an image file inside an archive (`["payload.bin", "vendor.img"]`). Each entry named is spooled into an unlinked temporary
-  file. An Android sparse image needs no `inner`: its filesystem is opened directly.
+  volume (`["rootfs.img"]`, then the UBIFS or SquashFS inside it is listed), an image file inside an archive
+  (`["payload.bin", "vendor.img"]`). Each entry named is spooled into an unlinked temporary file. An Android
+  sparse image needs no `inner`: its filesystem is opened directly.
 - `prefix` keeps entries at or below one path; `offset`/`limit` page them (limit 1–1000, default 200; a page also
   stops at about 50,000 JSON bytes, with `byte_capped`).
 
@@ -45,8 +46,8 @@ The result has `layers` (each image on the way, outermost first: `format`, `size
 `notes` such as the compression, block size or whether a payload is full or delta), `counts` by entry type over
 the whole image, `total` entries matching `prefix`, `entries` and `next_offset`. Each entry has its `path` inside
 the image (no leading `/`, as stored, not sanitised), `type` (`file`, `dir`, `symlink`, `char_device`,
-`block_device`, `fifo`, `socket`, `image` for a partition or volume, `other`), `size`, `mode` (permission bits including
-setuid, setgid and sticky, as stored), `uid`, `gid`, `link` (a symlink's target) and `note`.
+`block_device`, `fifo`, `socket`, `image` for a partition or volume, `other`), `size`, `mode` (permission bits
+including setuid, setgid and sticky, as stored), `uid`, `gid`, `link` (a symlink's target) and `note`.
 
 ## Extracting
 
@@ -83,8 +84,8 @@ Every image is treated as hostile:
   Fixed: at most 4 image layers, 500,000 entries per image, 128 directory levels (checked before backhand builds a
   SquashFS tree), 256 MiB of SquashFS tables, 4,000,000 UBI eraseblocks, and for UBIFS 64 index levels, 4,000,000
   index nodes, 8,000,000 inodes, directory entries and data blocks (index branches counted, repeats included), and
-  node reads while opening of four times the image size plus 16 MiB. Exceeding a limit stops the extraction with an error; files written
-  before it stay.
+  node reads while opening of four times the image size plus 16 MiB. Exceeding a limit stops the extraction with
+  an error; files written before it stay.
 - **Malformed input.** Truncated or inconsistent images are errors, not partial listings. A file whose content
   turns out corrupt (a bad OTA data hash, a broken SquashFS block) is skipped with its reason and its partial file
   removed; when every file fails, the extraction is an error. OTA operations must exactly fill their extents, no two
@@ -94,15 +95,18 @@ Every image is treated as hostile:
   recursion, each child one level below its parent, and a node reached twice is refused as a cycle; a directory
   linked twice, and an entry named `.`, `..` or holding `/` or NUL, is skipped with a note. Each node type has a
   minimum and maximum length, checked from its header before the node is read; an index naming one leaf twice is
-  refused. A journal that ends in a damaged node (a write cut short by power loss) is
-  read up to it, with a note. Every size and offset is range-checked.
+  refused. A journal that ends in a damaged node (a write cut short by power loss) is read up to it, with a note.
+  Every size and offset is range-checked.
 
 ## Opening an image as a binary
 
 `triage_report` or any binary tool given a filesystem image answers that the file is a SquashFS, ext, Android
-sparse, OTA payload, cpio, tar, UBI or UBIFS image and names `fs_list` and `fs_extract`, instead of the headerless-image
-guidance. Given a ZIP, it names `dex_metadata` for an APK, AAB or JAR, and `fs_list` and `fs_extract` for its
-members.
+sparse, OTA payload, cpio, tar, UBI or UBIFS image and names `fs_list` and `fs_extract`, instead of the
+headerless-image guidance. Given a ZIP, it names `dex_metadata` for an APK, AAB or JAR, and `fs_list` and
+`fs_extract` for its members. A file in no format rampage reads, such as a vendor update container, gets a
+container-level answer from MCP `triage` and `triage_report` instead: its largest regions, the compressed
+components headers describe and `carve`'s first candidates. Pass the offset of a filesystem image found there to
+`fs_list` as `image_offset`.
 
 ## Next: the endpoints inside
 
@@ -112,8 +116,10 @@ blocklist. See [endpoint inventory and blocklists](endpoint-inventory.md).
 
 ## Not supported yet
 
-Vendor SquashFS variants and SquashFS 3.x; UBIFS extended attributes and fscrypt-encrypted content; UBI images
-whose eraseblock size is not a power of two; delta OTA payloads (by design: they need the previous
-build); compressed tar (`.tar.gz`: decompress it first); opening images inside vendor containers automatically
-(`carve` finds the offset of a SquashFS, ext, UBI, UBIFS, Android sparse, OTA payload, cpio, tar or ZIP image, also
-inside TRX, FAT, MBR/GPT or UEFI containers; pass it as `image_offset`). The design and its trade-offs are in [the plan](plans/2026-11-15-firmware-unpacking.md).
+Vendor SquashFS variants and SquashFS 3.x; JFFS2, CramFS and YAFFS2 (`carve` finds JFFS2 and CramFS images but
+`fs_list` does not read them); UBIFS extended attributes and fscrypt-encrypted content; UBI images whose eraseblock
+size is not a power of two; delta OTA payloads (by design: they need the previous build); compressed tar
+(`.tar.gz`: decompress it first); opening images inside vendor containers automatically (`carve` finds the offset of
+a SquashFS, ext, UBI, UBIFS, Android sparse, OTA payload, cpio, tar or ZIP image, also inside TRX, FAT, MBR/GPT or
+UEFI containers; pass it as `image_offset`). The design and its trade-offs are in
+[the plan](plans/2026-11-15-firmware-unpacking.md).

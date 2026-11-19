@@ -75,8 +75,8 @@ Formats and raw code:
 - [Raw-code windows](raw-code.md#raw-code-windows), [explicit Sleigh decoding and Raw Projects](sleigh-decoding.md),
   [explicit content decoding](decoding.md) (including `write_decoded_range` and `probe_compression`),
   [native data inspection](data-inspection.md), [ZIP32 inventory](archive-inventory.md).
-- [Firmware filesystem images](firmware-images.md): list and extract SquashFS, ext2/3/4, Android sparse and OTA
-  payload, cpio, tar and ZIP (APK) images safely.
+- [Firmware filesystem images](firmware-images.md): list and extract SquashFS, ext2/3/4, UBI and UBIFS, Android
+  sparse and OTA payload, cpio, tar and ZIP (APK) images safely.
 - [Endpoint inventory and blocklists](endpoint-inventory.md): the hosts, URLs, IPs, pins and certificates a binary or
   firmware tree names, grouped by domain, and a router blocklist of them.
 - [Privacy surface](privacy-surface.md): what a program, an APK or an extracted firmware tree can capture

@@ -1,6 +1,6 @@
 # Known limits
 
-What rampage does not do, or does only partly, as of 1.7.0. The
+What rampage does not do, or does only partly, as of 1.8.0. The
 [comparison with Ghidra, IDA and REA](comparison.md) sets these against other tools, and the
 [stability policy](stability.md) says which areas are *experimental*.
 
@@ -36,7 +36,9 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - `search` runs under work budgets. Reference search decodes only the blocks that hold a matching reference, and
   wildcard byte patterns scan for their longest fixed run first, so both complete on a 26 MB stripped Go binary;
   a wildcard pattern whose fixed runs are short or common still covers less of a large image than an exact
-  search, and a stopped search says so.
+  search, and a stopped search says so. On 32-bit ARM and Thumb an immediate search matches only constants
+  loaded from a literal pool or built by a MOVW/MOVT pair in one block (`loaded_constant`), so its total is always
+  a lower bound; see [search](search.md).
 - The Cortex-M Raw profile (`ARM:LE:32:Cortex`) is experimental. Its backed regions hold at most 4 MiB in all
   (a compressed primary region at most 8 MiB encoded), with up to 15 regions beside the primary one, listed by the
   analyst or mapped from the startup copies the reset-code follow finds. The base address is the analyst's
@@ -58,6 +60,9 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - Raw Cortex-M discovery's record pass and pointer-table scan stop at work budgets (1,000,000 record words and
   decodes; 2,000,000 decodes per region scanned), and say so in `raw.record_seeds.truncated` and
   `walk_budget_exhausted`; `find_main` and the starting points follow at most 50,000 startup instructions.
+- An ARM code address with the Thumb bit set is read as Thumb only where the code is known to be Thumb (an
+  M-profile image, a Thumb range, or a mode discovery learned there); elsewhere the odd address is used as given,
+  with a note.
 - A Raw selector with `decode` decodes its input again on every call before the session finds the project, and
   `inspect_data` opens Raw images outside the session, so analyst names do not resolve in its `at` and its 16 KiB
   input budget refuses large selectors.
@@ -94,8 +99,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   with power-of-two erase blocks, and LZ4 and lzop streams have no extent. Inside a SquashFS, UBIFS, JFFS2,
   CramFS, Android sparse or OTA payload image it reports only executables, and inside an ext, UBI, tar, cpio or ZIP
   image only candidates whose headers validate; each image's notes count the rest. Past 65,536 candidates left out
-  inside images, the rest of the image being scanned is skipped (a limitation says where). `fs_list` does not read JFFS2,
-  CramFS or the containers.
+  inside images, the rest of the image being scanned is skipped (a limitation says where). `fs_list` does not read
+  JFFS2, CramFS or the containers.
 - `endpoint_inventory` matches endpoints lexically: addresses built at run time, encrypted or compressed data and
   IPv4 addresses stored as integers in code are not found. `privacy_surface` on a directory analyses only programs
   that import a capture API or name a capture device, and matches init files to programs by path; see its

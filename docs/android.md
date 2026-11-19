@@ -14,7 +14,9 @@ reading is capped (see [Limits](#limits)).
 
 Enable the group with `enable_tools {"groups": ["android"]}`. Pull an APK off a firmware image with
 [`fs_extract`](firmware-images.md) first; `fs_list` and `fs_extract` also open any APK as a ZIP, so its native
-libraries can be extracted and opened by path with the binary tools.
+libraries can be extracted and opened by path with the binary tools. `list_dir` names `dex_metadata` for APK,
+AAB, JAR and DEX files, and a DEX file given to a binary tool such as `triage` gets an error pointing at
+`dex_metadata` rather than the headerless-image guidance.
 
 ## dex_metadata
 

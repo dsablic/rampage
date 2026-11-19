@@ -25,11 +25,13 @@ Run `list_dir` on the folder holding the update. It names each file's format fro
 {"name": "squashfs-xz.img", "kind": "file", "size": 4096, "format": "squashfs"}
 ```
 
-- If the format is `squashfs`, `ext`, `android_sparse`, `ota_payload`, `cpio`, `tar` or `zip`, list it with
-  `fs_list` and extract it with `fs_extract` into a new, empty directory. An APK is a `zip` too: check it directly
-  with the tools below, or extract it to open its native libraries by path.
-- If the image sits inside a vendor container, find its offset with `carve` or `file_layout` and pass it as
-  `image_offset`. Nested images (a partition inside an OTA payload) open with `inner`.
+- If the format is `squashfs`, `ext`, `ubi`, `ubifs`, `android_sparse`, `ota_payload`, `cpio`, `tar` or `zip`,
+  list it with `fs_list` and extract it with `fs_extract` into a new, empty directory. An APK is a `zip` too: check
+  it directly with the tools below, or extract it to open its native libraries by path.
+- If the image sits inside a vendor container (`unknown`), find its offset with `carve` or `file_layout` and pass it
+  as `image_offset`; `triage` on such a file lists `carve`'s first candidates with its layout. `carve` also looks
+  inside TRX, FAT, MBR/GPT and UEFI containers. Nested images (a partition inside an OTA payload, a UBI volume) open
+  with `inner`.
 - If the update is a microcontroller image rather than a filesystem, see
   [how to read the code in a firmware update file](firmware-walkthrough.md); this guide assumes programs and
   configuration files.

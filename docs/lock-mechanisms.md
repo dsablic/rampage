@@ -51,8 +51,9 @@ known without a map are architectural: `DHCSR`, `DAUTHCTRL` and `AIRCR` (a reset
 3. Every conditional branch whose condition derives from a source is a decision. Its sources' roles give the
    category. A call's role is that of what it hands back: its returned value (or, for the buffers it fills, what it
    writes through the pointers it was given) and the sources that derive from, followed through callees; crypto
-   elsewhere in its call tree whose result does not reach that output does not count. A decision whose verdict is only passed up (a `verify_image` that returns an error code) is folded into
-   the caller's decision on it and listed under `related` as `inner_decision`.
+   elsewhere in its call tree whose result does not reach that output does not count. A decision whose verdict is
+   only passed up (a `verify_image` that returns an error code) is folded into the caller's decision on it and
+   listed under `related` as `inner_decision`.
 4. Each path is followed within the function, up to the next decision: a call that requests a reset (writes
    `SYSRESETREQ` to `AIRCR` or is `NVIC_SystemReset`, `reboot`), exits, never returns, jumps through a pointer (into a
    verified image), a fixed address written, a return value. Calls through import slots (a PLT, `-fno-plt` GOT or
@@ -85,9 +86,11 @@ it detects damage but does not restrict who may change the data), `identity_read
 decision depends on, such as a serial-number string), `debugger_presence_check` (a `DHCSR` decision whose debugger
 side is not shown to be the refusal, such as a fault handler that breaks into an attached debugger) and
 `crypto_without_decision` (a digest or signature computed with no branch or return value depending on it, such as a
-log digest). `coverage` gives the functions and
-instructions analyzed, whether a budget stopped the analysis, the crypto constants and SVD peripherals seen, and
-whether the image was treated as firmware.
+log digest). `coverage` gives the functions analyzed (`functions_analyzed`) of those discovery found
+(`functions_discovered`), the instructions analyzed, whether a budget stopped the analysis, the crypto constants and
+SVD peripherals seen, and whether the image was treated as firmware. Only the functions the evidence selects are
+traced, so when they are under a tenth of those discovered, a limitation says that an empty or short list covers
+them only, not the whole firmware.
 
 ## Measured
 
@@ -109,12 +112,12 @@ regression gates, not an estimate of accuracy on real firmware.
 ## Limits
 
 The analysis lifts at most 2,048 functions and 1,500,000 instructions and tracks at most 63 sources per function
-(`coverage.incomplete` says when either stopped); results are followed six call levels deep. Data flow is tracked through registers, stack slots, fixed addresses and
-buffers passed by pointer (a pointer argument is taken to cover 64 bytes, or the length passed after it), not
-through heap objects, structures reached through pointers in memory, indirect calls or other threads; a decision
-made that way is missed. Crypto is recognized only by constants and names: an implementation without distinctive
-tables (or with them computed at run time) and stripped library code with no known constant are unknown. Whether a
-digest is keyed is known only from HMAC pads or a MAC function's name; a plain digest compare is listed as an
-integrity check. Paths are read within one function and stop at the next decision; which side is the refusal is a
-reading of the code, not a proof. Register roles are only as good as the SVD map's names. No CLI command exists yet;
-use the MCP tool.
+(`coverage.incomplete` says when either stopped); results are followed six call levels deep. Data flow is tracked
+through registers, stack slots, fixed addresses and buffers passed by pointer (a pointer argument is taken to cover 64
+bytes, or the length passed after it), not through heap objects, structures reached through pointers in memory, indirect
+calls or other threads; a decision made that way is missed. Crypto is recognized only by constants and names: an
+implementation without distinctive tables (or with them computed at run time) and stripped library code with no known
+constant are unknown. Whether a digest is keyed is known only from HMAC pads or a MAC function's name; a plain digest
+compare is listed as an integrity check. Paths are read within one function and stop at the next decision; which side is
+the refusal is a reading of the code, not a proof. Register roles are only as good as the SVD map's names. No CLI
+command exists yet; use the MCP tool.
