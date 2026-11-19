@@ -6,6 +6,21 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- `search` on 32-bit ARM/Thumb matches constants loaded from literal pools or built by MOVW/MOVT
+  (`loaded_constant`); results stay lower bounds. The work charges for the decoder's mode map, get-PC lookahead and
+  sorted-list lookups were overstated: a 3.5 MB Thumb image now scans all discovered code in about an eighth of the
+  budget, where it used to stop a tenth of the way in.
+- Raw Cortex-M: code that calls an inferred CRC routine with a Thumb `bl` is seeded with it (three rounds of
+  callers), so `xrefs` to the routine finds the check. `ANALYSIS_VERSION` 8.
+- `xrefs` `to` with no result explains itself in `notes`: the string start the address lies inside, `bl` sites in
+  undiscovered Thumb code, and that calls through pointers are not resolved.
+- `lock_mechanisms` reports `coverage.functions_discovered` and says when it analysed under a tenth of them.
+- ARM code addresses with the Thumb bit set work in `decompile` (including `exact_entry`), `disassemble`,
+  `function_graph`, `function_summary`, `xrefs from` and Cortex-M `evaluate_function`, each with a note; bit 0 is
+  cleared only where the code is known to be Thumb.
+- `triage` and `triage_report` answer a file with no executable header at container level (layout, compressed
+  components, carve candidates, ready-to-run next calls) instead of erroring.
+- A RAM vector table installed through VTOR and filled at run time is reported as such.
 - File tools that only read (`list_dir`, `carve`, `fs_list`, `file_layout`, `dex_metadata` and others) carry the
   MCP read-only annotation; `query_debugger` is read-only and open-world.
 - Committed fixtures no longer carry local paths. Zig fixture builds blank the start-file and cache directories zig
