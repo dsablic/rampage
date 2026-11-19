@@ -36,7 +36,7 @@ This file holds open items. Done sections, including every completed parity phas
 Before these: a Haiku run on the compressed Cortex-M test firmware, its small fixes, then the 1.8.0 release.
 Then, in order, one track at a time, each reviewed before merge:
 
-1. **Finish `evaluate_function`** (closes the measured suite v3 loss: every miss was a hand-evaluated loop): SSE/SIMD
+1. [x] (2026-11-19, except the Haiku rerun and replays before the caller's block) **Finish `evaluate_function`** (closes the measured suite v3 loss: every miss was a hand-evaluated loop): SSE/SIMD
    CALLOTHER ops, x87 and float returns, a step trace on request, models for `sprintf`/`strdup`/`operator new`,
    hints so agents reach for it; then a Haiku rerun of suite v3.
 2. **MIPS and Xtensa** for firmware: loading, discovery and decompilation (routers, cameras, ESP32).

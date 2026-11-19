@@ -4,6 +4,28 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
+## Unreleased
+
+- `evaluate_function` interprets the SSE, SSSE3, SSE4.1/4.2 and AVX/AVX2 operations Sleigh leaves as processor
+  operations (shuffles, packs, blends, extensions, saturating and high multiplies, AVX shifts and permutes, packed
+  float arithmetic, comparisons, rounding, conversions, `crc32`) and 32-bit ARM `vcvt` with its rounding modes;
+  instructions with long p-code (AVX per-byte compares) decode.
+- `evaluate_function` takes float arguments (`{float, bits}`) and reads float results (`return_float` 32/64) under
+  each ABI: XMM registers on x86-64, the stack and ST0 on 32-bit x86 (fastcall floats on the stack), s/d registers
+  on AArch64 and ARM hard float (`aapcs_vfp`, detected from the ELF header), core registers under ARM soft float.
+  Float p-code follows IEEE rounding (to nearest even); x87 80-bit values convert exactly.
+- `evaluate_function` `trace: N` returns the first and last N executed instructions with the registers and memory
+  each wrote.
+- New library models: `sprintf`/`snprintf` (and `__chk` forms, with 64-bit arguments in even register pairs and
+  Apple arm64 variadics on the stack), `strdup`/`strndup`, C++ `operator new`/`delete` (placement and aligned forms
+  are not modelled).
+- `decompile` points small value-returning functions at `evaluate_function`; the server instructions and the tool
+  description say to run functions rather than trace them by hand.
+- Fix: `evaluate_function` refused every float conversion (`INT2FLOAT`, `TRUNC`, ...) because of an opcode-name
+  mismatch.
+- Fix: argument buffers read to the end of their page, so aligned SSE string loops no longer stop at the buffer's
+  end.
+
 ## 1.8.0 (2026-11-19)
 
 - `search` on 32-bit ARM/Thumb matches constants loaded from literal pools or built by MOVW/MOVT
