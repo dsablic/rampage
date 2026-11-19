@@ -340,6 +340,12 @@ unsafe extern "C" {
     fn rampage_decomp_read_only_range(handle: *mut Opaque, first: u64, last: u64, read_only: u8) -> *const c_char;
     fn rampage_decomp_callee_inference(handle: *mut Opaque, effects: u8, prototypes: u8) -> *const c_char;
     fn rampage_decomp_fold_read_only(handle: *mut Opaque, enabled: u8) -> *const c_char;
+    fn rampage_decomp_entry_registers(
+        handle: *mut Opaque,
+        address: *const c_char,
+        constant: *const c_char,
+        value: u64,
+    ) -> *const c_char;
     fn rampage_decomp_virtual_table(
         handle: *mut Opaque,
         address: u64,
@@ -475,6 +481,16 @@ pub struct VirtualTable {
     pub truncated: bool,
     /// Type names whose pointers point at an object whose vfptr at offset 0 is this table.
     pub types: Vec<String>,
+}
+
+/// Register values known at every function's entry (see [`Decompiler::set_entry_registers`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntryRegisters {
+    /// The register that holds the function's own address on entry (MIPS `t9`).
+    pub address: Option<String>,
+    /// A register and the constant it holds on entry (MIPS `gp` and the image's `_gp`).
+    pub constant: Option<(String, u64)>,
 }
 
 /// What the decompiler infers about a function's direct callees before decompiling it. Off by default: Ghidra then
@@ -656,6 +672,22 @@ impl Decompiler {
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: valid serialized handle; the returned error belongs to the handle.
         ffi_result(unsafe { rampage_decomp_fold_read_only(self.handle, u8::from(enabled)) })
+    }
+
+    /// Gives every function's entry known register values: `registers.address` holds the entry's own address and
+    /// `registers.constant` its value. MIPS position-independent code computes `$gp` from `$t9`, the function's
+    /// address under the PIC calling convention, and reaches its GOT through it; with both known, GOT loads fold to
+    /// the entries' addresses and names.
+    pub fn set_entry_registers(&mut self, registers: &EntryRegisters) -> Result<(), Error> {
+        let name = |text: Option<&str>| {
+            CString::new(text.unwrap_or_default()).map_err(|_| Error::Ghidra("register name contains NUL".to_owned()))
+        };
+        let address = name(registers.address.as_deref())?;
+        let constant = name(registers.constant.as_ref().map(|(register, _)| register.as_str()))?;
+        let value = registers.constant.as_ref().map_or(0, |&(_, value)| value);
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: valid serialized handle and NUL-terminated names; the returned error belongs to the handle.
+        ffi_result(unsafe { rampage_decomp_entry_registers(self.handle, address.as_ptr(), constant.as_ptr(), value) })
     }
 
     /// Registers a vftable. Once any is registered, each decompilation finds the calls through a vfptr whose object

@@ -135,8 +135,38 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
     }
     operations.extend(data_names(project, annotations, &identities, &slots));
     operations.extend(cortex_m_operations(project));
+    operations.extend(mips_pic_operations(&project.binary));
     operations.extend(virtual_tables(project, annotations));
     Ok(operations)
+}
+
+/// MIPS code that reaches its GOT through `$gp` (position-independent Linux userland, built with `-mabicalls`):
+/// every function's entry gets `$t9` as its own address (the PIC calling convention, which `_gp_disp` prologues
+/// add to) and `$gp` as the image's global pointer, so GOT loads resolve to their entries and calls through
+/// import entries to the imports' names. The local GOT entries (page addresses that the dynamic linker only
+/// relocates by the load bias) are read-only with read-only folding on, so `lw $a0, %got(page)($gp); addiu $a0,
+/// $a0, %lo(s)` reads as the string's address. Ghidra's own MIPS analysis records the same values. Other
+/// architectures, and MIPS images with no global pointer, get nothing.
+pub(super) fn mips_pic_operations(binary: &rampage_loaders::Binary) -> Vec<WorkerOperation> {
+    if !matches!(binary.arch, rampage_arch::Arch::Mips | rampage_arch::Arch::Mips64) {
+        return Vec::new();
+    }
+    let target = binary.target();
+    let Some(global_pointer) = target.global_pointer else { return Vec::new() };
+    let registers = rampage_decompiler::EntryRegisters {
+        address: Some("t9".to_owned()),
+        constant: Some(("gp".to_owned(), global_pointer)),
+    };
+    let mut operations = vec![WorkerOperation::EntryRegisters { registers }];
+    let width = u64::from(binary.arch.default_pointer_size().unwrap_or(4));
+    // Entries 0 and 1 belong to the dynamic linker (the lazy resolver and the module pointer).
+    if let Some(got) = target.got.filter(|got| got.local_entries > 2) {
+        let first = got.address.saturating_add(2 * width);
+        let last = got.address.saturating_add(got.local_entries as u64 * width).saturating_sub(1);
+        operations.push(WorkerOperation::FoldReadOnly { enabled: true });
+        operations.push(WorkerOperation::ReadOnlyRange { first, last, read_only: true });
+    }
+    operations
 }
 
 /// The MSVC vftables of a PE, so virtual calls through them decompile with their slot's targets named. Each table
@@ -549,6 +579,9 @@ pub(super) fn apply(operations: Vec<WorkerOperation>, engine: &mut Decompiler) -
             WorkerOperation::FoldReadOnly { enabled } => engine
                 .set_read_only_folding(enabled)
                 .map_err(|error| ApiError::Unavailable(format!("read-only folding: {error}")))?,
+            WorkerOperation::EntryRegisters { registers } => engine
+                .set_entry_registers(&registers)
+                .map_err(|error| ApiError::Unavailable(format!("entry registers: {error}")))?,
             WorkerOperation::VirtualTables { tables, names } => engine
                 .add_virtual_tables(&tables, &names)
                 .map_err(|error| ApiError::Unavailable(format!("virtual tables: {error}")))?,

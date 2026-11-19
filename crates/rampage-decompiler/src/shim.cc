@@ -339,6 +339,11 @@ struct Handle {
     std::map<uintb, std::string> virtualNames;
     // Functions whose call-site overrides and comments the virtual call pass set, cleared before the next one.
     std::set<uintb> virtualTouched;
+    // Register values at every function's entry (see `rampage_decomp_entry_registers`): a register holding the
+    // entry's own address (MIPS PIC `t9`) and one holding a constant (MIPS `gp`). Empty names track nothing.
+    std::string entryAddressRegister;
+    std::string entryConstantRegister;
+    uintb entryConstant = 0;
     bool preparingTypeHintContext = false;
     bool poisoned = false;
     bool fallbackError = false;
@@ -2406,6 +2411,44 @@ const char *rampage_decomp_fold_read_only(void *h, uint8_t enabled) noexcept {
     return mutate(handle, [&](bool &) { handle->arch->readonlypropagate = enabled != 0; });
 }
 
+// Gives every decompiled function's entry known register values, as Ghidra's analysis records them for MIPS PIC
+// code: `address` (MIPS `t9`) holds the entry's own address and `constant` (MIPS `gp`) holds `value`, so
+// `lui/addiu/addu $gp, ..., $t9` folds to the global pointer and GOT loads to their entries. An empty name sets
+// nothing.
+const char *rampage_decomp_entry_registers(void *h, const char *address, const char *constant, uint64_t value) noexcept {
+    Handle *handle = static_cast<Handle *>(h);
+    return mutate(handle, [&](bool &) {
+        std::string addressName = address != nullptr ? address : "";
+        std::string constantName = constant != nullptr ? constant : "";
+        // Unknown registers fail here, not in the middle of a decompilation.
+        if (!addressName.empty()) handle->arch->translate->getRegister(addressName);
+        if (!constantName.empty()) handle->arch->translate->getRegister(constantName);
+        handle->entryAddressRegister = addressName;
+        handle->entryConstantRegister = constantName;
+        handle->entryConstant = value;
+    });
+}
+
+// Records the entry register values for the function at `entry`, before its flow is followed.
+void trackEntryRegisters(Handle *handle, const Address &entry) {
+    if (handle->entryAddressRegister.empty() && handle->entryConstantRegister.empty()) return;
+    Architecture *arch = handle->arch;
+    Address end = entry + 1;
+    TrackedSet &set = arch->context->createSet(entry, end);
+    if (!handle->entryAddressRegister.empty()) {
+        TrackedContext tracked;
+        tracked.loc = arch->translate->getRegister(handle->entryAddressRegister);
+        tracked.val = entry.getOffset();
+        set.push_back(tracked);
+    }
+    if (!handle->entryConstantRegister.empty()) {
+        TrackedContext tracked;
+        tracked.loc = arch->translate->getRegister(handle->entryConstantRegister);
+        tracked.val = handle->entryConstant;
+        set.push_back(tracked);
+    }
+}
+
 // Opts in to callee register-effect inference (inferCalleeEffects) and callee prototype derivation
 // (deriveCalleePrototypes) before each decompilation.
 const char *rampage_decomp_callee_inference(void *h, uint8_t effects, uint8_t prototypes) noexcept {
@@ -2712,6 +2755,7 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
         }
         fd->setInferenceHint(rampage::nativeInferenceHint, &hintContext);
         fd->setCallInferenceHint(rampage::nativeCallInferenceHint, &hintContext);
+        trackEntryRegisters(handle, entry);
         arch->clearAnalysis(fd);
         // The entry is not a lower flow bound: cold blocks and tail targets can precede it.
         Address low(arch->getDefaultCodeSpace(), 0);
