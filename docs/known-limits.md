@@ -118,8 +118,10 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   manifest and APK signature blocks are not read; a DEX 041 container with several DEX files has only its first read
   (and says so). JVM class files are not read.
 - `evaluate_function` (experimental) interprets p-code, not the processor: system calls, imports without a
-  model, AVX-512, AES/SHA/`pcmpistri`, x87 `fsin`/`fcos` and other transcendental operations, and NEON arithmetic
-  that Sleigh leaves as processor operations stop the run. Floats round to nearest even (a rounding mode set at
+  model, AVX-512, AES/SHA/`pcmpistri`, x87 `fsin`/`fcos` and other transcendental operations, NEON arithmetic and
+  half-precision conversions that Sleigh leaves as processor operations stop the run. The library models leave out
+  `%f`-style conversions and `%n`, `vsprintf`-style `va_list` functions, and aligned and placement `operator new`.
+  Argument buffers read as zero-padded to their page end, so an unterminated buffer looks terminated. Floats round to nearest even (a rounding mode set at
   run time is not modelled), x87 arithmetic is computed in double precision, and a fused multiply-add rounds twice,
   so a float result can differ from hardware in its last bits. MIPS, PowerPC and RISC-V take no float arguments or
   results. A `string_decoding` replay starts at the block holding the call, so arguments the caller set up in

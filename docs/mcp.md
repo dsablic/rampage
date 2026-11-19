@@ -441,14 +441,18 @@ instruction and function. Imports of common C library functions (`memcpy`, `memm
 their Mach-O underscore, `__name_chk` fortified and MSVC CRT names, and C++ `operator new`/`new[]` and
 `delete`/`delete[]` under their Itanium and MSVC names) run as built-in models with the binary's calling convention
 instead of stopping; `stubbed` counts them, and `stubs: false` stops at them as before. The formatting models
-handle `%d %i %u %x %X %o %c %s %p %%` with flags, width, precision and length modifiers (a 64-bit value on a
-32-bit target from two argument words, an even pair under AAPCS and o32); `%f`-style conversions and `%n` stop
-with `unsupported_op`. The allocators use a bump heap of at most 16 MiB whose pages count against the 64 MiB cap;
-aligned `operator new` is not modelled. Argument buffers read to the end of their 4 KiB page, as aligned vector
-loads do on real memory, while writes stop at the buffer's size. On x86 the SSE, SSSE3, SSE4.1/4.2 and AVX/AVX2
+handle `%d %i %u %x %X %o %c %s %p %%` with flags, width, precision and length modifiers, copying bytes as they
+are (a 64-bit value on a 32-bit target from two argument words, an even pair of the call's words under AAPCS and
+o32; on Apple arm64 the variadic arguments are read from the stack); `%f`-style conversions and `%n` stop with
+`unsupported_op`. The allocators use a bump heap of at most 16 MiB whose pages count against the 64 MiB cap;
+aligned and placement `operator new` are not modelled. Argument buffers read to the end of their 4 KiB page, as
+aligned vector loads do on real memory, while writes stop at the buffer's size: the padding reads as zeros, so a
+hex buffer without a terminating NUL still looks NUL-terminated to `strlen` or `%s`. On 32-bit x86, fastcall and
+thiscall pass float arguments on the stack, not in ECX/EDX. On x86 the SSE, SSSE3, SSE4.1/4.2 and AVX/AVX2
 operations Sleigh leaves as processor operations (shuffles, packs, unpacks, blends, extensions, saturating and
 high multiplies, horizontal adds, sum of absolute differences, AVX shifts and permutes, packed float arithmetic,
-comparisons, rounding and conversions, `crc32`) are interpreted, as are 32-bit ARM's VFP/NEON `vcvt` conversions.
+comparisons, rounding and conversions, `crc32`) are interpreted, as are 32-bit ARM's VFP/NEON `vcvt` conversions
+with their rounding (toward zero, FPSCR's mode, or the `vcvta/n/p/m` round type; half-precision forms stop).
 Float p-code is IEEE binary32/binary64 with round-to-nearest-even (the default mode; other rounding modes set at
 run time are not modelled), conversions to integers saturate (the integer indefinite on x86), and x87 80-bit
 values convert exactly but compute their arithmetic in binary64 (53-bit, not 64-bit, significands). Each result
