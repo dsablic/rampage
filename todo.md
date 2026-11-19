@@ -271,8 +271,11 @@ Follow-ups for `carve` (its signature list stays the reference, and its code is 
 - [x] The 8000-inode SquashFS (`deep-8000.sqfs`) isn't recognised at offset 0x4c44b (binwalk: "compression
       unknown"). It records compression id 0 (none), which backhand writes and reads; carve now accepts it.
 - [x] UBI/UBIFS readers for `fs_list`/`fs_extract` (2026-11-19).
-- [ ] Wave 2 of the signatures: UBI/UBIFS tags, JFFS2, YAFFS2, CramFS, TRX, DTB, FAT, MBR/GPT, UEFI volumes and
-      capsules, LZ4 frames, LZOP, SREC/HEX in a container, and vendor headers (TP-Link, CFE, Seama, JBOOT).
+- [x] Wave 2 of the signatures (2026-11-19): UBI/UBIFS, JFFS2, CramFS, TRX, DTB/FIT, FAT, MBR/GPT, UEFI volumes and
+      capsules, LZ4 frames, LZOP.
+- [ ] Skipped from wave 2: YAFFS2 (binwalk's check has no checksum, too weak), vendor headers (Seama and CFE carry
+      no checksum, TP-Link needs vendor-keyed MD5, binwalk doesn't validate JBOOT's), SREC/HEX inside a container.
+      Revisit only when a real sample needs one.
 
 **unblob evaluated 2026-11-18: not as a dependency or a subprocess; use it as a second format reference.** unblob
 26.6.4 (MIT, Python):

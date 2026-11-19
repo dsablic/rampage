@@ -6,6 +6,15 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- `carve` recognises UBI and UBIFS images, JFFS2 and CramFS file systems, TRX containers, device trees (and FIT
+  images), LZ4 frames, lzop files, MBR and GPT disks (at 512-byte-aligned offsets), FAT12/16/32 volumes, and UEFI
+  firmware volumes and capsules, each checked by its CRC or checksum with header checks ported from binwalk.
+  Inside UBIFS, JFFS2 and CramFS images only validated executables are reported; inside UBI volumes every validated
+  candidate; inside TRX, device tree, MBR/GPT, FAT and UEFI containers, which `fs_list` does not read, every
+  candidate, marked with its container. Device tree, UEFI volume, LZ4 and boot-sector magics report nothing unless
+  the whole header checks out, so ordinary binaries stay quiet. Every walk and checksum has its own budget, and past
+  65,536 candidates left out inside images the rest of the image is skipped and noted. A faster prefilter makes
+  the scan of large files about 20% quicker.
 - `fs_list` and `fs_extract` read UBI and UBIFS. UBI images (raw flash dumps or `ubinize` output) list their
   volumes as `<name>.img`, rebuilt from their eraseblocks with duplicate copies resolved by sequence number and data
   CRC; each volume opens through `inner` (UBIFS, SquashFS or any other format read here). UBIFS, inside a volume or
