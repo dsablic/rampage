@@ -54,9 +54,20 @@ pub(super) enum Stub {
 }
 
 /// Argument words a formatting stand-in reads after its format: the variadic arguments it may consume.
-const VARIADIC_WORDS: usize = 24;
+pub(super) const VARIADIC_WORDS: usize = 24;
 
 impl Stub {
+    /// For a variadic stand-in, its fixed argument words (the rest are variadic).
+    pub fn fixed_words(self) -> Option<usize> {
+        match self {
+            Self::Sprintf => Some(2),
+            Self::Snprintf => Some(3),
+            Self::SprintfChk => Some(4),
+            Self::SnprintfChk => Some(5),
+            _ => None,
+        }
+    }
+
     /// Integer and pointer arguments read (a fortified variant's trailing object size is not read).
     pub fn arity(self) -> usize {
         match self {
@@ -90,24 +101,27 @@ impl Stub {
 /// The stand-in for an imported `name`: the C name, its Mach-O spelling with a leading underscore, a fortified
 /// `__name_chk` variant, an MSVC CRT `_name` alias, or an ELF name with a symbol version (`memcpy@GLIBC_2.14`).
 pub(super) fn lookup(name: &str) -> Option<Stub> {
-    // MSVC operator new/new[] (??2@, ??_U@) and delete/delete[] (??3@, ??_V@), any pointer width.
+    // Aligned forms (align_val_t) are left out: the heap aligns to 16 bytes only.
+    if name.contains("align_val_t") {
+        return None;
+    }
+    // MSVC operator new/new[] (??2@, ??_U@) and delete/delete[] (??3@, ??_V@), any pointer width; placement new
+    // (a pointer parameter after the size) is left out.
     if name.starts_with("??2@") || name.starts_with("??_U@") {
-        return Some(Stub::New);
+        return (!name.contains("_KPEAX@") && !name.contains("IPAX@")).then_some(Stub::New);
     }
     if name.starts_with("??3@") || name.starts_with("??_V@") {
         return Some(Stub::Delete);
     }
     let name = name.split('@').next().unwrap_or(name);
     let bare = name.trim_start_matches('_');
-    // Itanium operator new/new[] (size_t of either width, also nothrow) and delete/delete[] (also sized). Aligned
-    // forms (align_val_t) are left out: the heap aligns to 16 bytes only.
-    if !bare.contains("align_val_t") {
-        if ["Znwm", "Znwj", "Znam", "Znaj"].iter().any(|prefix| bare.starts_with(prefix)) {
-            return Some(Stub::New);
-        }
-        if ["ZdlPv", "ZdaPv"].iter().any(|prefix| bare.starts_with(prefix)) {
-            return Some(Stub::Delete);
-        }
+    // Itanium operator new/new[] (size_t of either width, also nothrow) and delete/delete[] (also sized). Placement
+    // new (`_ZnwmPv`) returns its pointer argument and is left out.
+    if let Some(rest) = ["Znwm", "Znwj", "Znam", "Znaj"].iter().find_map(|prefix| bare.strip_prefix(prefix)) {
+        return (rest.is_empty() || rest == "RKSt9nothrow_t").then_some(Stub::New);
+    }
+    if ["ZdlPv", "ZdaPv"].iter().any(|prefix| bare.starts_with(prefix)) {
+        return Some(Stub::Delete);
     }
     match bare {
         "sprintf_chk" => return Some(Stub::SprintfChk),
@@ -555,7 +569,7 @@ pub(super) fn call(
                 _ => (arg(0), Some(arg(1)), arg(4), 5),
             };
             let words: Vec<u64> = args.iter().skip(first).map(|&word| word & mask).collect();
-            let text = format_printf(ram, format, &words, width, limits)?;
+            let text = format_printf(ram, format, &words, first, width, limits)?;
             let length = text.len() as u64;
             let written = match size {
                 None => length + 1,
@@ -564,7 +578,7 @@ pub(super) fn call(
             };
             if written > 0 {
                 let written = limits.writable(ram, written)?;
-                let mut bytes = text.into_bytes();
+                let mut bytes = text;
                 bytes.truncate(written as usize - 1);
                 bytes.push(0);
                 write_chunk(ram, output, &bytes)?;
@@ -577,16 +591,18 @@ pub(super) fn call(
 /// Bytes of one formatted result; a longer one stops the run.
 const MAX_FORMATTED: usize = 64 * 1024;
 
-/// The C library's formatting of `format` (read from memory) with integer argument `words`: conversions d i u x
-/// X o c s p and %%, flags - 0 + space #, width and precision (also *), and length modifiers hh h l ll z j t.
+/// The C library's formatting of `format` (read from memory) with integer argument `words`, the argument words
+/// from word `first` of the call on: conversions d i u x X o c s p and %%, flags - 0 + space #, width and
+/// precision (also *), and length modifiers hh h l ll z j t. Bytes are copied as they are (no text encoding).
 /// Floating-point conversions and %n stop the run.
 fn format_printf(
     ram: &mut ImageRam<'_>,
     format: u64,
     words: &[u64],
+    first: usize,
     width: u32,
     limits: &Limits<'_>,
-) -> Result<String, Stop> {
+) -> Result<Vec<u8>, Stop> {
     let unsupported = |what: String| (StopReason::UnsupportedOp, format!("library stand-in {}: {what}", limits.name));
     let mut spec = Vec::new();
     scan(ram, format, MAX_FORMATTED as u64, limits, |_, chunk| spec.extend_from_slice(chunk))?;
@@ -594,8 +610,9 @@ fn format_printf(
     let mut take = |bytes: u32| -> Result<u64, Stop> {
         // A 64-bit value on a 32-bit target takes two words, from an even word where the convention says so.
         let value = if bytes > width {
+            // The pair's position counts from the call's first argument word, not the first variadic one.
             if limits.even_pairs {
-                next = next.next_multiple_of(2);
+                next = (first + next).next_multiple_of(2) - first;
             }
             let low = words.get(next).copied();
             let high = words.get(next + 1).copied();
@@ -613,7 +630,7 @@ fn format_printf(
         };
         Ok(value)
     };
-    let mut out = String::new();
+    let mut out: Vec<u8> = Vec::new();
     let mut index = 0usize;
     while index < spec.len() {
         if out.len() > MAX_FORMATTED {
@@ -622,7 +639,7 @@ fn format_printf(
         let byte = spec[index];
         index += 1;
         if byte != b'%' {
-            out.push(char::from(byte));
+            out.push(byte);
             continue;
         }
         let (mut left, mut zero, mut plus, mut space, mut alternate) = (false, false, false, false, false);
@@ -684,9 +701,9 @@ fn format_printf(
         }
         let Some(&conversion) = spec.get(index) else { break };
         index += 1;
-        let (body, sign_or_prefix): (String, String) = match conversion {
+        let (body, sign_or_prefix): (Vec<u8>, String) = match conversion {
             b'%' => {
-                out.push('%');
+                out.push(b'%');
                 continue;
             }
             b'd' | b'i' => {
@@ -706,7 +723,7 @@ fn format_printf(
                 } else {
                     ""
                 };
-                (digits(value.unsigned_abs().to_string(), precision), sign.to_owned())
+                (digits(value.unsigned_abs().to_string(), precision).into_bytes(), sign.to_owned())
             }
             b'u' | b'x' | b'X' | b'o' => {
                 let raw = take(size)?;
@@ -728,29 +745,32 @@ fn format_printf(
                     b'o' if alternate && !text.starts_with('0') => "0",
                     _ => "",
                 };
-                (digits(text, precision), prefix.to_owned())
+                (digits(text, precision).into_bytes(), prefix.to_owned())
             }
             b'p' => {
                 let value = take(width)?;
-                if value == 0 { ("(nil)".to_owned(), String::new()) } else { (format!("{value:x}"), "0x".to_owned()) }
+                if value == 0 {
+                    (b"(nil)".to_vec(), String::new())
+                } else {
+                    (format!("{value:x}").into_bytes(), "0x".to_owned())
+                }
             }
-            b'c' => (char::from(take(4)? as u8).to_string(), String::new()),
+            b'c' => (vec![take(4)? as u8], String::new()),
             b's' => {
                 let address = take(width)?;
-                let text = if address == 0 {
-                    "(null)".to_owned()
+                let mut text = if address == 0 {
+                    b"(null)".to_vec()
                 } else {
                     let limit = precision.map_or(MAX_FORMATTED as u64, |precision| precision as u64);
                     let mut bytes = Vec::new();
                     scan(ram, address, limit.min(MAX_FORMATTED as u64), limits, |_, chunk| {
                         bytes.extend_from_slice(chunk)
                     })?;
-                    bytes.iter().map(|&byte| char::from(byte)).collect()
+                    bytes
                 };
-                let text = match precision {
-                    Some(precision) => text.chars().take(precision as usize).collect(),
-                    None => text,
-                };
+                if let Some(precision) = precision {
+                    text.truncate(precision as usize);
+                }
                 (text, String::new())
             }
             other => {
@@ -761,17 +781,17 @@ fn format_printf(
         let pad = field.map_or(0, |field| (field as usize).saturating_sub(content));
         let numeric = !matches!(conversion, b's' | b'c' | b'p');
         if left {
-            out.push_str(&sign_or_prefix);
-            out.push_str(&body);
-            out.extend(std::iter::repeat_n(' ', pad));
+            out.extend_from_slice(sign_or_prefix.as_bytes());
+            out.extend_from_slice(&body);
+            out.extend(std::iter::repeat_n(b' ', pad));
         } else if zero && numeric && precision.is_none() {
-            out.push_str(&sign_or_prefix);
-            out.extend(std::iter::repeat_n('0', pad));
-            out.push_str(&body);
+            out.extend_from_slice(sign_or_prefix.as_bytes());
+            out.extend(std::iter::repeat_n(b'0', pad));
+            out.extend_from_slice(&body);
         } else {
-            out.extend(std::iter::repeat_n(' ', pad));
-            out.push_str(&sign_or_prefix);
-            out.push_str(&body);
+            out.extend(std::iter::repeat_n(b' ', pad));
+            out.extend_from_slice(sign_or_prefix.as_bytes());
+            out.extend_from_slice(&body);
         }
     }
     Ok(out)
