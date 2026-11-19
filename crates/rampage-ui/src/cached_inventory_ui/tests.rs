@@ -311,6 +311,10 @@ fn actual_load_controls_display_historical_rows_without_discovery_even_after_fil
         std::thread::yield_now();
     }
     assert!(!harness.state().workspace_io_running());
+    // The load's own wake-up may still be on its way; let it land before running to idle, and keep the filter
+    // field's cursor from blinking so idle is reachable (see debugger.rs `steady_cursor`).
+    crate::workspace::settle_wakeups();
+    harness.ctx.all_styles_mut(|style| style.visuals.text_cursor.blink = false);
     harness.run();
     harness.get_by_label("Cached / unverified historical candidates");
     harness.get_by_label("cached_unverified_historical");

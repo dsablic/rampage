@@ -17,7 +17,13 @@ use rampage_loaders::{Binary, Details, Format};
 use crate::theme;
 use crate::workspace::{Job, Workspace};
 
+/// The client deadline of one query (or of Prepare's nine). Unit tests answer through a mock socket served by the
+/// test thread itself, so a loaded machine can stall that thread for seconds; they get a deadline longer than the
+/// mock's own wait, so a stall fails in the mock by name instead of as a client timeout.
+#[cfg(not(test))]
 const TIMEOUT_MS: u64 = 3000;
+#[cfg(test)]
+const TIMEOUT_MS: u64 = 30_000;
 const OPERATIONS: [&str; 6] =
     ["describe_session", "list_modules", "list_threads", "read_registers", "read_memory", "resolve_module_address"];
 
@@ -3566,6 +3572,11 @@ mod tests {
         use std::os::unix::net::UnixListener;
         use std::sync::atomic::{AtomicU64, Ordering};
 
+        /// How long the mock waits for the UI's client, shorter than the client's own deadline in tests
+        /// ([`TIMEOUT_MS`]): a stalled client then fails here, by name, instead of giving up first and leaving the
+        /// mock's reply to a closed socket (BrokenPipe).
+        const MOCK_WAIT: Duration = Duration::from_secs(20);
+
         struct MockSocket {
             directory: PathBuf,
             path: PathBuf,
@@ -3590,21 +3601,29 @@ mod tests {
                 assert_eq!(self.listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
             }
 
+            /// Answers the next connection. Waits for it in poll(2) rather than spinning, so a test competing for
+            /// the CPU does not starve the client it is waiting on.
             fn respond(&self, response: serde_json::Value) -> serde_json::Value {
-                let deadline = Instant::now() + Duration::from_secs(5);
+                let deadline = Instant::now() + MOCK_WAIT;
                 let mut stream = loop {
                     match self.listener.accept() {
                         Ok((stream, _)) => break stream,
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            assert!(Instant::now() < deadline, "explicit UI query never connected");
-                            std::thread::yield_now();
+                            let left = deadline.saturating_duration_since(Instant::now());
+                            assert!(!left.is_zero(), "explicit UI query never connected");
+                            let timeout = rustix::event::Timespec::try_from(left).unwrap();
+                            let mut ready = [rustix::event::PollFd::new(&self.listener, rustix::event::PollFlags::IN)];
+                            match rustix::event::poll(&mut ready, Some(&timeout)) {
+                                Ok(_) | Err(rustix::io::Errno::INTR) => {}
+                                Err(error) => panic!("mock socket poll failed: {error}"),
+                            }
                         }
                         Err(error) => panic!("mock socket accept failed: {error}"),
                     }
                 };
                 stream.set_nonblocking(false).unwrap();
-                stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-                stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+                stream.set_read_timeout(Some(MOCK_WAIT)).unwrap();
+                stream.set_write_timeout(Some(MOCK_WAIT)).unwrap();
                 let mut request = Vec::new();
                 stream.read_to_end(&mut request).unwrap();
                 assert_eq!(request.pop(), Some(b'\n'));
@@ -3624,6 +3643,7 @@ mod tests {
         fn finish(debugger: &mut Debugger) {
             let Job::Running(receiver) = &debugger.job else { panic!("UI query was not a background job") };
             let response = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            crate::workspace::settle_wakeups();
             debugger.job = Job::Done(response);
             assert!(debugger.job.error().is_none(), "{:?}", debugger.job.error());
         }
@@ -3763,6 +3783,7 @@ mod tests {
         fn finish_workflow(workflow: &mut Workflow) {
             let Job::Running(receiver) = &workflow.job else { panic!("explicit action did not start a local job") };
             workflow.job = Job::Done(receiver.recv_timeout(Duration::from_secs(5)).unwrap());
+            crate::workspace::settle_wakeups();
         }
 
         #[test]
@@ -3809,6 +3830,15 @@ mod tests {
             harness.step();
         }
 
+        /// Stops the text cursor blinking, so a focused text field (or a clicked selectable row) lets the UI go idle
+        /// and `Harness::run` means "until idle". A blinking cursor wakes egui every 0.5 s; the harness subtracts its
+        /// 0.25 s frame time from each wake-up, so every other frame asks for an immediate repaint. A finished
+        /// background job's own `request_repaint` lands whenever its thread is scheduled and adds two more
+        /// immediate frames, and on a loaded machine the two together outran `run`'s four-step limit.
+        fn steady_cursor(harness: &Harness<'_, crate::App>) {
+            harness.ctx.all_styles_mut(|style| style.visuals.text_cursor.blink = false);
+        }
+
         fn inspection_harness(fixture: &StaticFixture, mock: &MockSocket) -> Harness<'static, crate::App> {
             let mut app = crate::App::blocking();
             app.open(&egui::Context::default(), fixture.path.clone(), None);
@@ -3817,6 +3847,7 @@ mod tests {
                 .with_size(egui::vec2(1700.0, 1500.0))
                 .build_ui_state(|ui, app: &mut crate::App| app.show(ui), app);
             harness.run();
+            steady_cursor(&harness);
             replace_input(&mut harness, "debugger-socket", mock.path.to_str().unwrap());
             mock.assert_no_connection();
             let replies = capture_replies(64);
@@ -3846,9 +3877,7 @@ mod tests {
             harness
                 .get_by_label(&format!("Module 1 · image · {} · x86_64-apple-macosx", TEST_UUID.to_uppercase()))
                 .click_accesskit();
-            // Clicking the row leaves a blinking text-selection cursor that keeps requesting repaints; run a fixed
-            // number of frames instead of waiting for the UI to go idle.
-            harness.run_steps(4);
+            harness.run();
             let threads = controlled_response(
                 "list_threads",
                 serde_json::json!({
@@ -3940,6 +3969,7 @@ mod tests {
         ) -> (std::sync::mpsc::Sender<Result<WorkResult, String>>, Result<WorkResult, String>) {
             let Job::Running(receiver) = &workflow.job else { panic!("expected an explicitly started job") };
             let result = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            crate::workspace::settle_wakeups();
             let (sender, receiver) = std::sync::mpsc::channel();
             workflow.job = Job::Running(receiver);
             (sender, result)

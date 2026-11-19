@@ -16,6 +16,26 @@ use rampage_loaders::{Export, ImageAt};
 
 use crate::listing::Listing;
 
+#[cfg(test)]
+thread_local! {
+    /// Background jobs started from this (UI) thread that have yet to wake their context.
+    static PENDING_WAKEUPS: Arc<std::sync::atomic::AtomicUsize> = Arc::default();
+}
+
+/// Waits until every background job started from this thread has woken its context. A job's wake-up
+/// (`request_repaint`, after it sends its result) lands whenever its thread is next scheduled, so a test that takes
+/// a result and then runs frames calls this first; otherwise the wake-up can land in the middle of `Harness::run`
+/// and add frames to it.
+#[cfg(test)]
+pub(crate) fn settle_wakeups() {
+    let pending = PENDING_WAKEUPS.with(Arc::clone);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while pending.load(std::sync::atomic::Ordering::Acquire) != 0 {
+        assert!(Instant::now() < deadline, "a finished background job never woke its context");
+        std::thread::yield_now();
+    }
+}
+
 /// A result computed on a background thread, or inline when the workspace runs synchronously (in tests).
 pub enum Job<T> {
     Idle,
@@ -36,9 +56,16 @@ impl<T: Send + 'static> Job<T> {
         }
         let (sender, receiver) = channel();
         let ctx = ctx.clone();
+        #[cfg(test)]
+        let pending = PENDING_WAKEUPS.with(|pending| {
+            pending.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            Arc::clone(pending)
+        });
         std::thread::spawn(move || {
             let _ = sender.send(work());
             ctx.request_repaint();
+            #[cfg(test)]
+            pending.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
         });
         *self = Job::Running(receiver);
     }
