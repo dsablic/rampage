@@ -16,7 +16,7 @@ file tools in the `carve` group: they take any file path and open no project.
 | Android OTA `payload.bin` | major version 2, full payloads: REPLACE, REPLACE_BZ, REPLACE_XZ, ZERO, DISCARD. Partitions list as `<name>.img` |
 | cpio | newc (`070701`) and crc (`070702`) |
 | tar | ustar, GNU long names, pax `path`, `linkpath` and `size` |
-| UBI | raw flash dumps and `ubinize` output, eraseblock size found from the headers (powers of two, 4 KiB to 16 MiB). Volumes list as `<name>.img` (type `image`, noted static or dynamic and with the format inside) and open through `inner`. A LEB written more than once is read from its newest copy whose data CRC checks out; a static volume reads at its data size, a dynamic one up to its last mapped LEB, unmapped LEBs before that as 0xFF |
+| UBI | raw flash dumps and `ubinize` output, eraseblock size found from the headers (powers of two, 4 KiB to 16 MiB; bad or erased blocks at the start are skipped). Volumes list as `<name>.img` (type `image`, noted static or dynamic and with the format inside) and open through `inner`. A LEB written more than once is read from its newest copy whose data CRC checks out; a static volume reads at its data size, a dynamic one up to its last mapped LEB, unmapped LEBs before that as 0xFF |
 | UBIFS | in a UBI volume or as a bare dump of its LEBs back to back. The index tree from the newest master node, then the journal written since the last commit replayed over it; data uncompressed, LZO, zlib or zstd; symlinks, hard links (noted, written as copies) and device nodes (`device major:minor`). Extended attributes are not read; fscrypt-encrypted files are listed and not decrypted; authenticated images are read without checking their HMACs |
 | ZIP (APK, AAB, JAR) | stored and deflate members, ZIP64; the central directory is authoritative, and inflation stops at a member's declared size; encrypted members and other methods are listed with a note and not read; members whose data overlap another's are noted. [`dex_metadata`](android.md) reads an APK's manifest and DEX files |
 
@@ -82,7 +82,8 @@ Every image is treated as hostile:
   file) and unmapped LEBs of a UBI volume (64 bytes each).
   Fixed: at most 4 image layers, 500,000 entries per image, 128 directory levels (checked before backhand builds a
   SquashFS tree), 256 MiB of SquashFS tables, 4,000,000 UBI eraseblocks, and for UBIFS 64 index levels, 4,000,000
-  index nodes and 8,000,000 inodes, directory entries and data blocks. Exceeding a limit stops the extraction with an error; files written
+  index nodes, 8,000,000 inodes, directory entries and data blocks (index branches counted, repeats included), and
+  node reads while opening of four times the image size plus 16 MiB. Exceeding a limit stops the extraction with an error; files written
   before it stay.
 - **Malformed input.** Truncated or inconsistent images are errors, not partial listings. A file whose content
   turns out corrupt (a bad OTA data hash, a broken SquashFS block) is skipped with its reason and its partial file
@@ -91,7 +92,9 @@ Every image is treated as hostile:
   UBI headers, volume table records and UBIFS nodes are CRC-checked: a damaged UBIFS index node, inode or directory
   entry is an error, and a damaged data node or static-volume LEB skips its file. The UBIFS index is walked without
   recursion, each child one level below its parent, and a node reached twice is refused as a cycle; a directory
-  linked twice is skipped with a note. A journal that ends in a damaged node (a write cut short by power loss) is
+  linked twice, and an entry named `.`, `..` or holding `/` or NUL, is skipped with a note. Each node type has a
+  minimum and maximum length, checked from its header before the node is read; an index naming one leaf twice is
+  refused. A journal that ends in a damaged node (a write cut short by power loss) is
   read up to it, with a note. Every size and offset is range-checked.
 
 ## Opening an image as a binary

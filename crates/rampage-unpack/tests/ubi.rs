@@ -216,6 +216,11 @@ fn the_journal_is_replayed_over_the_index() {
         inode_with_size(&image, conf, 9, 1006),
         node(4, 1007, &truncation),
         inode_with_size(&image, blocks, 100, 1008),
+        node(3, 1009, &{
+            let mut body = key(1, 3, 0x55);
+            body.extend([0; 16]);
+            body
+        }),
     ];
     let mut at = 14 * LEB;
     for node in &bud {
@@ -223,7 +228,7 @@ fn the_journal_is_replayed_over_the_index() {
         at += node.len().div_ceil(8) * 8;
     }
     // A node cut short by a power loss ends the bud.
-    let mut torn = data(1000, 1, b"lost", 1009);
+    let mut torn = data(1000, 1, b"lost", 1010);
     torn[30] ^= 0xff;
     image[at..at + torn.len()].copy_from_slice(&torn);
     // The log's commit start node and its padding fill LEB 3 up to 512: the reference to the bud goes there.
@@ -238,8 +243,9 @@ fn the_journal_is_replayed_over_the_index() {
     let path = write_image(&scratch, "journal.ubifs", &image);
     let listing = list(&path, At::default(), &[], Limits::default()).unwrap();
     let notes = &listing.layers[0].notes;
-    assert!(notes.iter().any(|note| note.starts_with("journal replayed: 8 nodes from 1 LEBs")), "{notes:?}");
+    assert!(notes.iter().any(|note| note.starts_with("journal replayed: 9 nodes from 1 LEBs")), "{notes:?}");
     assert!(notes.iter().any(|note| note.contains("damaged node")), "{notes:?}");
+    assert!(notes.contains(&"1 extended attributes not read".to_owned()), "{notes:?}");
     assert!(!listing.entries.iter().any(|entry| entry.path.starts_with("var")), "the deleted entry is gone");
     let out = scratch.join("out");
     extract(&path, At::default(), &[], &out, &[], Limits::default()).unwrap();
@@ -487,10 +493,25 @@ fn ubi_forgeries_are_refused_or_bounded() {
         listing.entries[1]
     );
     assert_eq!(listing.entries[1].size, listed(&fixture("ubi.img")).unwrap().entries[1].size);
-    // A first header with a bad CRC, and one whose data offset leaves no room.
+    // A first eraseblock whose header is damaged (a bad block at the start of a raw dump): the size is found from
+    // the next intact one, and the second copy of the volume table serves.
     let mut first = original.clone();
     first[10] ^= 1;
-    assert!(listed(&write_image(&scratch, "first.img", &first)).unwrap_err().contains("CRC"));
+    let listing = listed(&write_image(&scratch, "first.img", &first)).unwrap();
+    assert_eq!(listing.entries.len(), 2);
+    assert!(
+        listing.layers[0].notes.iter().any(|note| note.contains("1 with damaged headers")),
+        "{:?}",
+        listing.layers[0].notes
+    );
+    let mut erased = original.clone();
+    erased[..PEB].fill(0xff);
+    erased[..4].copy_from_slice(b"UBI#");
+    assert_eq!(
+        listed(&write_image(&scratch, "erased.img", &erased)).unwrap().layers[0].notes[0],
+        "eraseblock size 16384"
+    );
+    // A header whose data offset leaves no room.
     let mut offsets = original.clone();
     for peb in (0..offsets.len() / PEB).map(|index| index * PEB) {
         offsets[peb + 20..peb + 24].copy_from_slice(&15_000u32.to_be_bytes());
@@ -538,6 +559,20 @@ fn fuzz(name: &str, inner: &[String], cases: usize, seed: u64, repair: fn(&mut [
                 }
             }
         }
+        if rng.below(3) == 0 {
+            // Shorten one UBIFS node's length field; the repair gives it a matching CRC, so the readers see a
+            // well-formed node too short for its type.
+            let starts: Vec<usize> =
+                (0..bytes.len() - 24).step_by(8).filter(|at| bytes[*at..*at + 4] == MAGIC).collect();
+            if !starts.is_empty() {
+                let at = starts[rng.below(starts.len())];
+                let len = le32(&bytes, at + 16) as usize;
+                if len > 24 {
+                    let shorter = (24 + rng.below(len - 24)) as u32;
+                    bytes[at + 16..at + 20].copy_from_slice(&shorter.to_le_bytes());
+                }
+            }
+        }
         if rng.below(10) == 0 {
             bytes.truncate(rng.below(bytes.len()).max(1));
         }
@@ -573,4 +608,233 @@ fn ubi_survives_crc_preserving_mutation() {
     fuzz("ubi.img", &["rootfs.img".to_owned()], 200, 26, refresh_ubi_deep);
     fuzz("ubi.img", &["squash.img".to_owned()], 100, 27, refresh_ubi_deep);
     fuzz("ubi.img", &[], 100, 28, |_| {});
+}
+
+/// Eraseblock size of the synthetic UBIFS images: 8 LEBs of 16 KiB.
+const SYNTH_LEB: usize = 16384;
+
+/// A minimal UBIFS image: a superblock with `flags`, a master node in LEB 1 naming `root`, a commit start node in
+/// the log (LEB 3), and `nodes` placed at (LEB, offset).
+fn synthetic(flags: u32, root: (u32, u32, u32), nodes: &[(usize, usize, Vec<u8>)]) -> Vec<u8> {
+    let mut image = vec![0xff; SYNTH_LEB * 8];
+    let mut sb = vec![0u8; 4096 - 24];
+    sb[28 - 24..32 - 24].copy_from_slice(&flags.to_le_bytes());
+    for (at, value) in [(32, 8u32), (36, SYNTH_LEB as u32), (40, 8), (44, 8), (56, 1), (80, 4)] {
+        sb[at - 24..at - 20].copy_from_slice(&value.to_le_bytes());
+    }
+    let mut master = vec![0u8; 512 - 24];
+    for (at, value) in [(44, 3u32), (48, root.0), (52, root.1), (56, root.2)] {
+        master[at - 24..at - 20].copy_from_slice(&value.to_le_bytes());
+    }
+    let mut placed = vec![(0, 0, node(6, 1, &sb)), (1, 0, node(7, 2, &master)), (3, 0, node(10, 3, &[0; 8]))];
+    placed.extend(nodes.iter().cloned());
+    for (lnum, offs, bytes) in placed {
+        let at = lnum * SYNTH_LEB + offs;
+        image[at..at + bytes.len()].copy_from_slice(&bytes);
+    }
+    image
+}
+
+fn inode(inum: u32, mode: u32, size: u64, data: &[u8]) -> Vec<u8> {
+    let mut body = key(inum, 0, 0);
+    body.resize(160 - 24, 0);
+    body[48 - 24..56 - 24].copy_from_slice(&size.to_le_bytes());
+    body[92 - 24..96 - 24].copy_from_slice(&1u32.to_le_bytes());
+    body[104 - 24..108 - 24].copy_from_slice(&mode.to_le_bytes());
+    body[112 - 24..116 - 24].copy_from_slice(&(data.len() as u32).to_le_bytes());
+    body.extend(data);
+    node(0, 10, &body)
+}
+
+fn entry(parent: u32, name: &[u8], inum: u32) -> Vec<u8> {
+    let mut body = key(parent, 2, name.len() as u32);
+    body.extend(u64::from(inum).to_le_bytes());
+    body.extend([0, 0]);
+    body.extend((name.len() as u16).to_le_bytes());
+    body.extend([0; 4]);
+    body.extend(name);
+    body.push(0);
+    node(2, 11, &body)
+}
+
+/// An index branch: (LEB, offset, the node it names, key inode, key type, key value).
+type Branch<'a> = (u32, u32, &'a [u8], u32, u32, u32);
+
+/// A level-0 index node over `branches`.
+fn index(branches: &[Branch]) -> Vec<u8> {
+    let mut body = (branches.len() as u16).to_le_bytes().to_vec();
+    body.extend(0u16.to_le_bytes());
+    for (lnum, offs, node, inum, kind, value) in branches {
+        body.extend(lnum.to_le_bytes());
+        body.extend(offs.to_le_bytes());
+        body.extend((node.len() as u32).to_le_bytes());
+        body.extend(&key(*inum, *kind, *value)[..8]);
+    }
+    node(9, 20, &body)
+}
+
+/// Writes `image` and lists it, on a thread so a panic is reported as one.
+fn list_synthetic(name: &str, image: &[u8]) -> Result<rampage_unpack::Listing, String> {
+    let scratch = Scratch::new("synthetic");
+    let path = write_image(&scratch, name, image);
+    std::thread::spawn(move || list(&path, At::default(), &[], Limits::default()).map_err(|error| error.to_string()))
+        .join()
+        .expect("listing must not panic")
+}
+
+/// A root directory holding one regular file `f` of `size` bytes whose block 0 is `data`, plus `extra` index
+/// branches and nodes.
+fn one_file(flags: u32, data: Vec<u8>, size: u64) -> Vec<u8> {
+    let (root_dir, file, dent) = (inode(1, 0o40755, 0, &[]), inode(2, 0o100644, size, &[]), entry(1, b"f", 2));
+    let idx = index(&[
+        (4, 0, &root_dir, 1, 0, 0),
+        (4, 512, &dent, 1, 2, 1),
+        (4, 1024, &file, 2, 0, 0),
+        (4, 2048, &data, 2, 1, 0),
+    ]);
+    let nodes = [
+        (4, 0, root_dir.clone()),
+        (4, 512, dent.clone()),
+        (4, 1024, file.clone()),
+        (4, 2048, data),
+        (5, 0, idx.clone()),
+    ];
+    synthetic(flags, (5, 0, idx.len() as u32), &nodes)
+}
+
+#[test]
+fn an_index_node_too_short_for_its_branches_is_refused() {
+    let short = node(9, 3, &[]);
+    let image = synthetic(0, (4, 0, 24), &[(4, 0, short)]);
+    let error = list_synthetic("short-idx.ubifs", &image).unwrap_err();
+    assert!(error.contains("outside 28"), "{error}");
+}
+
+#[test]
+fn short_data_nodes_are_refused_in_the_journal_and_the_index() {
+    // Indexed: a 24-byte data node is refused when the file is read, not when its fields are.
+    let image = one_file(0, node(1, 12, &[]), 10);
+    let scratch = Scratch::new("short-data");
+    let path = write_image(&scratch, "short.ubifs", &image);
+    // Its only file failing, the extraction is an error naming the reason.
+    let error = extract(&path, At::default(), &[], &scratch.join("out"), &[], Limits::default()).unwrap_err();
+    assert!(error.to_string().contains("outside 48"), "{error}");
+    // In the journal: a log reference to a bud whose first node is a 24-byte data node.
+    let mut reference = 6u32.to_le_bytes().to_vec();
+    reference.extend([0; 36]);
+    let mut image = one_file(
+        0,
+        {
+            let mut body = key(2, 1, 0);
+            body.extend([0; 8]);
+            node(1, 12, &body)
+        },
+        0,
+    );
+    for (at, bytes) in [(3 * SYNTH_LEB + 32, node(8, 30, &reference)), (6 * SYNTH_LEB, node(1, 31, &[]))] {
+        image[at..at + bytes.len()].copy_from_slice(&bytes);
+    }
+    let listing = list_synthetic("short-journal.ubifs", &image).unwrap();
+    assert!(listing.layers[0].notes.iter().any(|note| note.contains("damaged node")), "{:?}", listing.layers[0].notes);
+}
+
+#[test]
+fn index_branches_repeating_a_leaf_are_refused_quickly() {
+    // 700 branches naming one 4 KiB inode would read and sum it 700 times (52,000 in a 1 MiB index node).
+    let big = inode(1, 0o40755, 0, &[0x41; 4096]);
+    let branches: Vec<_> = (0..700).map(|_| (4u32, 0u32, big.as_slice(), 1u32, 0u32, 0u32)).collect();
+    let idx = index(&branches);
+    let image = synthetic(0, (5, 0, idx.len() as u32), &[(4, 0, big.clone()), (5, 0, idx)]);
+    let started = std::time::Instant::now();
+    let error = list_synthetic("fanout.ubifs", &image).unwrap_err();
+    assert!(error.contains("reaches the leaf node at LEB 4 offset 0 twice"), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[test]
+fn a_master_slot_of_the_wrong_length_is_not_read_whole() {
+    let file = node(1, 12, &{
+        let mut body = key(2, 1, 0);
+        body.extend(4u32.to_le_bytes());
+        body.extend([0; 4]);
+        body.extend(b"data");
+        body
+    });
+    let mut image = one_file(0, file, 4);
+    let good = image[SYNTH_LEB..SYNTH_LEB + 512].to_vec();
+    // LEB 1 starts with a 4 KiB "master" node; LEB 2 holds the real one.
+    let mut long = good[24..].to_vec();
+    long.resize(4096 - 24, 0);
+    let long = node(7, 99, &long);
+    image[SYNTH_LEB..SYNTH_LEB + long.len()].copy_from_slice(&long);
+    image[2 * SYNTH_LEB..2 * SYNTH_LEB + 512].copy_from_slice(&good);
+    let listing = list_synthetic("master.ubifs", &image).unwrap();
+    assert_eq!(listing.entries[0].path, "f");
+    image[2 * SYNTH_LEB..2 * SYNTH_LEB + 512].fill(0xff);
+    assert!(list_synthetic("no-master.ubifs", &image).unwrap_err().contains("no intact master node"));
+}
+
+#[test]
+fn superblock_flags_follow_ubifs_media_h() {
+    let data = node(1, 12, &{
+        let mut body = key(2, 1, 0);
+        body.extend([0; 8]);
+        body
+    });
+    let notes =
+        |flags| list_synthetic("flags.ubifs", &one_file(flags, data.clone(), 0)).unwrap().layers[0].notes.clone();
+    let has = |notes: &[String], text: &str| notes.iter().any(|note| note.contains(text));
+    // 0x08 is double hashing, which changes nothing here.
+    let plain = notes(0x08);
+    assert!(!has(&plain, "encryption") && !has(&plain, "authenticated"), "{plain:?}");
+    assert!(has(&notes(0x10), "encryption enabled"));
+    assert!(has(&notes(0x20), "authenticated"));
+}
+
+#[test]
+fn directory_entries_with_unsafe_names_are_skipped() {
+    let (root_dir, file) = (inode(1, 0o40755, 0, &[]), inode(2, 0o100644, 0, &[]));
+    let names: [&[u8]; 5] = [b"ok", b"a/b", b"..", b".", b"nul\0x"];
+    let dents: Vec<Vec<u8>> = names.iter().map(|name| entry(1, name, 2)).collect();
+    let mut branches = vec![(4u32, 0u32, root_dir.as_slice(), 1u32, 0u32, 0u32), (4, 512, file.as_slice(), 2, 0, 0)];
+    let mut nodes = vec![(4, 0, root_dir.clone()), (4, 512, file.clone())];
+    for (index, dent) in dents.iter().enumerate() {
+        let offs = 1024 + index * 128;
+        branches.push((4, offs as u32, dent.as_slice(), 1, 2, index as u32));
+        nodes.push((4, offs, dent.clone()));
+    }
+    let idx = index(&branches);
+    nodes.push((5, 0, idx.clone()));
+    let listing = list_synthetic("names.ubifs", &synthetic(0, (5, 0, idx.len() as u32), &nodes)).unwrap();
+    let paths: Vec<&str> = listing.entries.iter().map(|entry| entry.path.as_str()).collect();
+    assert_eq!(paths, ["ok"]);
+    assert!(
+        listing.layers[0].notes.iter().any(|note| note.starts_with("4 directory entries skipped")),
+        "{:?}",
+        listing.layers[0].notes
+    );
+}
+
+#[test]
+fn ubi_volume_names_stay_unique_and_used_ebs_disagreements_are_noted() {
+    let mut image = std::fs::read(fixture("ubi.img")).unwrap();
+    // Volume 0 named "volume1" and volume 1 unnamed: both would fall back to volume1.img.
+    for peb in (0..image.len() / PEB).map(|index| index * PEB) {
+        if be32(&image, peb + 520) == 0x7fff_efff {
+            let (first, second) = (peb + 1024, peb + 1024 + 172);
+            image[first + 14..first + 16].copy_from_slice(&7u16.to_be_bytes());
+            image[first + 16..first + 24].copy_from_slice(b"volume1\0");
+            image[second + 14..second + 16].copy_from_slice(&0u16.to_be_bytes());
+            image[second + 16..second + 24].fill(0);
+        }
+        // LEB 1 of the static volume says it is the only one.
+        if be32(&image, peb + 520) == 1 && be32(&image, peb + 524) == 1 {
+            image[peb + 512 + 24..peb + 512 + 28].copy_from_slice(&1u32.to_be_bytes());
+        }
+    }
+    refresh_ubi(&mut image);
+    let listing = list_synthetic("names.img", &image).unwrap();
+    let paths: Vec<&str> = listing.entries.iter().map(|entry| entry.path.as_str()).collect();
+    assert_eq!(paths, ["volume1.img", "volume1-2.img"]);
+    assert!(listing.entries[1].note.as_deref().unwrap().contains("disagree"), "{:?}", listing.entries[1]);
 }

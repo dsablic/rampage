@@ -131,23 +131,38 @@ pub struct Ubi {
     notes: Vec<String>,
 }
 
-/// The PEB size: the smallest power of two at which most of the following eraseblock starts hold a valid
-/// erase-counter header of the same image (half of them do at half the real size).
-fn find_peb_size(source: &dyn ReadAt, first: Ec) -> Option<u64> {
+/// Eraseblocks probed after the first intact one when sizing them.
+const PROBES: u64 = 16;
+
+/// The first intact erase-counter header, at a multiple of the smallest eraseblock size within the first 16 MiB:
+/// raw dumps can start with bad or erased blocks.
+fn first_header(source: &dyn ReadAt) -> Option<(u64, Ec)> {
+    let mut header = [0u8; HEADER];
+    (0..source.size().min(MAX_PEB) / MIN_PEB).map(|index| index * MIN_PEB).find_map(|at| {
+        source.read_at(at, &mut header).ok()?;
+        parse_ec(&header).map(|ec| (at, ec))
+    })
+}
+
+/// The PEB size: the smallest power of two that divides `start`, the offset of the first intact header `first`,
+/// at which most of the following eraseblock starts hold a valid header of the same image (half of them do at half
+/// the real size).
+fn find_peb_size(source: &dyn ReadAt, start: u64, first: Ec) -> Option<u64> {
     let size = source.size();
     let sizes = std::iter::successors(Some(MIN_PEB), |peb| Some(peb * 2)).take_while(|peb| *peb <= MAX_PEB);
     for peb in sizes {
-        if peb <= u64::from(first.data_offset) {
+        if peb <= u64::from(first.data_offset) || !start.is_multiple_of(peb) {
             continue;
         }
-        if peb >= size {
+        let after = (size - start) / peb;
+        if after < 2 {
             break;
         }
-        let probes = (size / peb - 1).min(8);
+        let probes = (after - 1).min(PROBES);
         let mut valid = 0;
         for k in 1..=probes {
             let mut header = [0u8; HEADER];
-            if source.read_at(k * peb, &mut header).is_ok() && parse_ec(&header).is_some_and(|ec| ec == first) {
+            if source.read_at(start + k * peb, &mut header).is_ok() && parse_ec(&header).is_some_and(|ec| ec == first) {
                 valid += 1;
             }
         }
@@ -156,15 +171,15 @@ fn find_peb_size(source: &dyn ReadAt, first: Ec) -> Option<u64> {
         }
     }
     // A single eraseblock, or nothing after it is UBI.
-    (size.is_power_of_two() && (MIN_PEB..=MAX_PEB).contains(&size)).then_some(size)
+    (start == 0 && size.is_power_of_two() && (MIN_PEB..=MAX_PEB).contains(&size)).then_some(size)
 }
 
 impl Ubi {
     pub fn open(source: Source, limits: &Limits) -> Result<Self> {
         let mut header = [0u8; HEADER];
-        source.read_at(0, &mut header).map_err(|_| malformed("truncated erase-counter header"))?;
-        let first = parse_ec(&header).ok_or_else(|| malformed("the first erase-counter header fails its CRC"))?;
-        let peb_size = find_peb_size(&*source, first)
+        let (start, first) = first_header(&*source)
+            .ok_or_else(|| malformed("no intact erase-counter header (its CRC checked) in the first 16 MiB"))?;
+        let peb_size = find_peb_size(&*source, start, first)
             .ok_or_else(|| malformed("no eraseblock size from 4 KiB to 16 MiB repeats the first header"))?;
         let (vid_offset, data_offset) = (u64::from(first.vid_offset), u64::from(first.data_offset));
         // The data area is most of the block in every real layout; a tiny one would make reads crawl.
@@ -314,6 +329,12 @@ impl Ubi {
                     let size = present.iter().sum::<u64>() + missing * volume.usable;
                     note.push(format!("static volume {}, {span} LEBs", volume.id));
                     let declared = volume.lebs.values().next().map_or(0, |leb| leb.vid.used_ebs);
+                    if volume.lebs.values().any(|leb| leb.vid.used_ebs != declared) {
+                        note.push(format!(
+                            "LEBs disagree on the LEB count; LEB {} says {declared}",
+                            volume.lebs.keys().next().unwrap_or(&0)
+                        ));
+                    }
                     if declared > volume.reserved {
                         note.push(format!("declares {declared} LEBs, more than the {} reserved", volume.reserved));
                     }
@@ -355,7 +376,13 @@ impl Ubi {
                 && volume.name != "..";
             let mut path = format!("{}.img", volume.name);
             if !simple || names.contains(&path) {
+                // `volume<id>.img`, then `volume<id>-2.img` and so on until no earlier volume has the name.
                 path = format!("volume{}.img", volume.id);
+                let mut suffix = 2;
+                while names.contains(&path) {
+                    path = format!("volume{}-{suffix}.img", volume.id);
+                    suffix += 1;
+                }
                 note.push(format!("named {:?}", volume.name));
             }
             names.push(path.clone());

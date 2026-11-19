@@ -3,6 +3,7 @@
 //! entry and data nodes give the tree; data is uncompressed, LZO, zlib (raw deflate) or zstd. Extended attributes
 //! are not read. Layouts follow `ubifs-media.h`.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::codec::{Codec, decompress};
@@ -43,6 +44,32 @@ const MAX_LEAVES: usize = 8_000_000;
 /// The largest node read: index nodes of a wide fanout; data nodes are at most 4 KiB and change.
 const MAX_NODE: u64 = 1 << 20;
 const CRYPT_FLAG: u32 = 0x40;
+/// Superblock flags (`UBIFS_FLG_*`).
+const SB_ENCRYPTION: u32 = 0x10;
+const SB_AUTHENTICATION: u32 = 0x20;
+/// Bytes of nodes opening an image may read: a few times the image, so overlapping or repeated references cannot
+/// turn a small image into hours of CRC work.
+const READ_FACTOR: u64 = 4;
+const READ_FLOOR: u64 = 16 << 20;
+
+/// The smallest and largest length a node of each type may have: every field a reader touches lies inside the
+/// smallest, and the largest leaves room for a block of data, a name or inline data (fscrypt padding included).
+fn node_bounds(kind: u8) -> (u64, u64) {
+    let (min, max) = match kind {
+        INO_NODE => (INO_SIZE, INO_SIZE + BLOCK as usize + 64),
+        DATA_NODE => (DATA_SIZE, DATA_SIZE + BLOCK as usize + 64),
+        DENT_NODE | XENT_NODE => (DENT_SIZE, DENT_SIZE + 256 + 64),
+        TRUN_NODE => (56, 56),
+        PAD_NODE => (28, 28),
+        SB_NODE => (128, 4096),
+        MST_NODE => (MST_SIZE, MST_SIZE),
+        REF_NODE => (64, 64),
+        IDX_NODE => (28, MAX_NODE as usize),
+        CS_NODE => (32, 32),
+        _ => (CH, MAX_NODE as usize),
+    };
+    (min as u64, max as u64)
+}
 /// Input charged to the ratio meter for a file's holes, which UBIFS stores as missing data nodes.
 const NOMINAL_HOLE_INPUT: u64 = 4096;
 
@@ -105,14 +132,19 @@ fn parse_inode(node: &[u8]) -> Result<(u64, Inode, u32)> {
         return Err(malformed("inode node is too short"));
     }
     let data_len = le32(node, 112) as usize;
-    let data = node.get(INO_SIZE..INO_SIZE.saturating_add(data_len)).ok_or_else(|| malformed("inode data overruns"))?;
+    // Only short inline data is kept (a symlink target, a device number); longer is never read.
+    let data = if data_len <= BLOCK as usize {
+        node.get(INO_SIZE..INO_SIZE + data_len).ok_or_else(|| malformed("inode data overruns"))?
+    } else {
+        &[]
+    };
     let inode = Inode {
         size: le64(node, 48),
         mode: le32(node, 104),
         uid: le32(node, 96),
         gid: le32(node, 100),
         flags: le32(node, 108),
-        data: if data_len <= BLOCK as usize { data.to_vec() } else { Vec::new() },
+        data: data.to_vec(),
     };
     Ok((key(node, CH).inum, inode, le32(node, 92)))
 }
@@ -134,6 +166,8 @@ struct Tree {
     dents: HashMap<(u64, Vec<u8>), u64>,
     data: BTreeMap<(u64, u32), Loc>,
     index_nodes: usize,
+    /// Branches of level-0 index nodes followed: every one counts against [`MAX_LEAVES`], repeats included.
+    branches: usize,
     xattrs: usize,
 }
 
@@ -153,6 +187,8 @@ pub struct Ubifs {
     /// The inode of each entry.
     inums: Vec<u64>,
     notes: Vec<String>,
+    /// Node bytes opening may still read; `None` once the image is open (file reads are bounded by their output).
+    read_budget: Cell<Option<u64>>,
 }
 
 /// The nodes a LEB holds from an offset, and whether the scan stopped at a damaged node.
@@ -179,6 +215,7 @@ impl Ubifs {
         if key_fmt != 0 {
             return Err(UnpackError::Unsupported(format!("UBIFS key format {key_fmt}")));
         }
+        let read_budget = source.size().saturating_mul(READ_FACTOR).saturating_add(READ_FLOOR);
         if !(4096..=(64 << 20)).contains(&leb_size) || !min_io.is_power_of_two() || min_io > leb_size {
             return Err(malformed(format!("LEB size {leb_size}, minimum I/O size {min_io}")));
         }
@@ -194,14 +231,15 @@ impl Ubifs {
             entries: Vec::new(),
             inums: Vec::new(),
             notes: Vec::new(),
+            read_budget: Cell::new(Some(read_budget)),
         };
         fs.notes.push(format!("LEB size {leb_size}, {leb_cnt} LEBs"));
         fs.notes.push(format!("format version {fmt_version}"));
         fs.notes.push(format!("default compression {}", compression_name(compr)));
-        if flags & 0x8 != 0 {
+        if flags & SB_ENCRYPTION != 0 {
             fs.notes.push("encryption enabled: encrypted files are listed, not decrypted".to_owned());
         }
-        if flags & 0x10 != 0 {
+        if flags & SB_AUTHENTICATION != 0 {
             fs.notes.push("authenticated: HMACs and hashes are not checked, node CRCs are".to_owned());
         }
         let master = fs.master()?;
@@ -217,6 +255,7 @@ impl Ubifs {
             fs.notes.push(format!("{} extended attributes not read", fs.tree.xattrs));
         }
         fs.list(limits)?;
+        fs.read_budget.set(None);
         Ok(fs)
     }
 
@@ -227,20 +266,35 @@ impl Ubifs {
             return Err(malformed(format!("a node reference ({loc}, {len} bytes) lies outside the LEBs")));
         }
         let at = u64::from(loc.lnum) * self.leb_size + offs;
-        let mut node = vec![0u8; len as usize];
-        self.source.read_at(at, &mut node).map_err(|_| {
+        let past_end = || {
             malformed(format!("the node at {loc} lies past the end of the image (truncated, or the LEB is unmapped)"))
-        })?;
-        if le32(&node, 0) != MAGIC || u64::from(le32(&node, 16)) != len {
+        };
+        // The common header first: magic, length and type are checked before the rest is read or summed.
+        let mut header = [0u8; CH];
+        self.source.read_at(at, &mut header).map_err(|_| past_end())?;
+        if le32(&header, 0) != MAGIC || u64::from(le32(&header, 16)) != len {
             return Err(malformed(format!("no node of {len} bytes at {loc}")));
         }
+        let found = header[20];
+        if let Some(kind) = kind
+            && found != kind
+        {
+            return Err(malformed(format!("the node at {loc} has type {found}, not {kind}")));
+        }
+        let (min, max) = node_bounds(found);
+        if len < min || len > max {
+            return Err(malformed(format!("the type {found} node at {loc} is {len} bytes, outside {min}..={max}")));
+        }
+        if let Some(left) = self.read_budget.get() {
+            let left = left.checked_sub(len).ok_or_else(|| {
+                UnpackError::Limit("index and journal reads exceed a few times the image size".to_owned())
+            })?;
+            self.read_budget.set(Some(left));
+        }
+        let mut node = vec![0u8; len as usize];
+        self.source.read_at(at, &mut node).map_err(|_| past_end())?;
         if crc32(&node[8..]) != le32(&node, 4) {
             return Err(malformed(format!("the node at {loc} fails its CRC")));
-        }
-        if let Some(kind) = kind
-            && node[20] != kind
-        {
-            return Err(malformed(format!("the node at {loc} has type {}, not {kind}", node[20])));
         }
         Ok(node)
     }
@@ -267,11 +321,10 @@ impl Ubifs {
         for lnum in [MASTER_LEB, MASTER_LEB + 1] {
             let mut offs = 0;
             while offs + MST_SIZE as u64 <= self.leb_size {
-                let Ok(Some(node)) = self.node_at(lnum, offs) else { break };
-                if node[20] == MST_NODE
-                    && node.len() >= MST_SIZE
-                    && best.as_ref().is_none_or(|best| le64(&node, 8) > le64(best, 8))
-                {
+                // Only a 512-byte master node is read at each slot: its header is checked before its CRC is.
+                let loc = Loc { lnum, offs: offs as u32, len: MST_SIZE as u32 };
+                let Ok(node) = self.node(loc, Some(MST_NODE)) else { break };
+                if best.as_ref().is_none_or(|best| le64(&node, 8) > le64(best, 8)) {
                     best = Some(node);
                 }
                 offs += stride;
@@ -284,6 +337,7 @@ impl Ubifs {
     /// and no node may be reached twice, so a forged tree can neither loop nor fan out without bound.
     fn walk_index(&mut self, root: Loc) -> Result<()> {
         let mut visited: HashSet<(u32, u32)> = HashSet::new();
+        let mut leaves: HashSet<(u32, u32)> = HashSet::new();
         let mut pending = vec![(root, None::<u16>)];
         while let Some((loc, expected)) = pending.pop() {
             if !visited.insert((loc.lnum, loc.offs)) {
@@ -302,12 +356,22 @@ impl Ubifs {
                 return Err(malformed(format!("the index node at {loc} has {children} branches in {room} bytes")));
             }
             let branch = room / children;
+            if level == 0 {
+                self.tree.branches = self.tree.branches.saturating_add(children);
+                if self.tree.branches > MAX_LEAVES {
+                    return Err(UnpackError::Limit(format!("more than {MAX_LEAVES} index branches to leaf nodes")));
+                }
+            }
             for child in 0..children {
                 let at = 28 + child * branch;
                 let child_loc = Loc { lnum: le32(&node, at), offs: le32(&node, at + 4), len: le32(&node, at + 8) };
                 if level > 0 {
                     pending.push((child_loc, Some(level - 1)));
                 } else {
+                    // A leaf is one node: two branches naming it are forged, and would read it again.
+                    if !leaves.insert((child_loc.lnum, child_loc.offs)) {
+                        return Err(malformed(format!("the index reaches the leaf node at {child_loc} twice")));
+                    }
                     self.leaf(child_loc, key(&node, at + 12))?;
                 }
             }
@@ -390,7 +454,9 @@ impl Ubifs {
         // scanning quadratic.
         let mut buds: BTreeMap<u32, u64> = BTreeMap::new();
         for step in 0..log_lebs {
-            let lnum = LOG_LEB + (log_lnum - LOG_LEB + step) % log_lebs;
+            // In 64 bits: a forged log head and log size cannot overflow.
+            let position = (u64::from(log_lnum - LOG_LEB) + u64::from(step)) % u64::from(log_lebs);
+            let lnum = LOG_LEB + position as u32;
             let nodes = if step == 0 { log.clone() } else { self.scan(lnum, 0)?.0 };
             let refs: Vec<_> =
                 nodes.iter().filter(|(_, node)| node[20] == REF_NODE && le64(node, 8) > commit).collect();
@@ -420,7 +486,15 @@ impl Ubifs {
                     if newer.len() + self.tree.leaves() >= MAX_LEAVES {
                         return Err(UnpackError::Limit(format!("more than {MAX_LEAVES} nodes")));
                     }
-                    let node = if node[20] == DATA_NODE { node[..CH + 16].to_vec() } else { node };
+                    // Keep what replay reads: a data node's key, an inode with at most a block of inline data.
+                    let node = match node[20] {
+                        DATA_NODE => node[..CH + 16].to_vec(),
+                        INO_NODE => {
+                            let keep = INO_SIZE + (le32(&node, 112) as usize).min(BLOCK as usize);
+                            node[..keep.min(node.len())].to_vec()
+                        }
+                        _ => node,
+                    };
                     newer.push((le64(&node, 8), loc, node));
                 }
             }
@@ -453,7 +527,8 @@ impl Ubifs {
                         self.tree.dents.insert((parent, name), inum);
                     }
                 }
-                TRUN_NODE if node.len() >= 56 => {
+                XENT_NODE => self.tree.xattrs += 1,
+                TRUN_NODE => {
                     let (inum, new_size) = (u64::from(le32(node, CH)), le64(node, 48));
                     let first = u32::try_from(new_size.div_ceil(BLOCK)).unwrap_or(u32::MAX);
                     let blocks: Vec<_> =
@@ -484,7 +559,7 @@ impl Ubifs {
         let mut inums = Vec::new();
         let mut first_path: HashMap<u64, String> = HashMap::new();
         let mut seen_dirs: HashSet<u64> = HashSet::from([ROOT_INODE]);
-        let (mut relinked, mut missing) = (0usize, 0usize);
+        let (mut relinked, mut missing, mut unsafe_names) = (0usize, 0usize, 0usize);
         let mut pending = vec![(ROOT_INODE, String::new(), 0usize)];
         while let Some((dir, prefix, depth)) = pending.pop() {
             let mut items = children.remove(&dir).unwrap_or_default();
@@ -493,6 +568,11 @@ impl Ubifs {
             for (name, inum) in items {
                 if entries.len() >= limits.max_entries {
                     return Err(UnpackError::Limit(format!("more than {} entries", limits.max_entries)));
+                }
+                // A name is one path component: a separator, NUL, `.` or `..` would change the path it lands at.
+                if name.is_empty() || name.contains(&b'/') || name.contains(&0) || name == b"." || name == b".." {
+                    unsafe_names += 1;
+                    continue;
                 }
                 let name = String::from_utf8_lossy(name);
                 let path = if prefix.is_empty() { name.into_owned() } else { format!("{prefix}/{name}") };
@@ -548,6 +628,11 @@ impl Ubifs {
         }
         if relinked > 0 {
             self.notes.push(format!("{relinked} directory entries skipped: a directory linked twice (a cycle)"));
+        }
+        if unsafe_names > 0 {
+            self.notes.push(format!(
+                "{unsafe_names} directory entries skipped: an empty name, `.`, `..` or one holding `/` or NUL"
+            ));
         }
         if missing > 0 {
             self.notes.push(format!("{missing} directory entries skipped: their inode is missing"));
@@ -661,5 +746,24 @@ impl Image for Ubifs {
             next += 1;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opening_stops_once_node_reads_pass_the_budget() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/fsimages/ubifs-lzo.ubifs");
+        let source = crate::file_source(&path, crate::At::default()).unwrap();
+        let fs = Ubifs::open(source, &Limits::default()).unwrap();
+        assert!(fs.read_budget.get().is_none(), "file reads after opening are bounded by their output instead");
+        let master = Loc { lnum: MASTER_LEB, offs: 0, len: MST_SIZE as u32 };
+        fs.read_budget.set(Some(1000));
+        fs.node(master, Some(MST_NODE)).unwrap();
+        let error = fs.node(master, Some(MST_NODE)).unwrap_err();
+        assert!(matches!(error, UnpackError::Limit(_)), "{error}");
     }
 }
