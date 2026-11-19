@@ -551,6 +551,45 @@ fn thumb_wide_constants(bytes: &[u8], base: u64) -> Vec<(u64, u32)> {
     found
 }
 
+/// CRC polynomials MIPS code forms in a register, in the discovered functions: a 32-bit one from a `lui` and
+/// `ori`/`addiu` pair (the decoder's formed constant), and a 16-bit one as an instruction's immediate (`xori $v0,
+/// $v0, 0xa001` in a table-less CRC-16 loop). Returns the 32-bit sites, then the weaker 16-bit ones.
+type PolynomialSite = (u64, &'static str, String);
+fn mips_polynomial_sites(project: &Project) -> (Vec<PolynomialSite>, Vec<PolynomialSite>) {
+    let (mut wide, mut narrow) = (Vec::new(), Vec::new());
+    let (Ok(analysis), Ok(mut decoder)) = (project.analysis(), crate::decoder::project_decoder(project)) else {
+        return (wide, narrow);
+    };
+    for function in &analysis.program.functions {
+        decoder.begin_run();
+        for block in &function.blocks {
+            decoder.reset();
+            let mut at = block.start;
+            while at < block.end && wide.len() < 16 && narrow.len() < 16 {
+                let Some(code) = project.binary.code_from(at) else { break };
+                let insn = decoder.decode(code, at);
+                let length = u64::from(insn.len.max(1));
+                if let Some(value) = insn.immediate.and_then(|value| u32::try_from(value).ok())
+                    && let Some(&(_, family)) = POLYNOMIALS.iter().find(|(polynomial, _)| *polynomial == value)
+                {
+                    wide.push((at, family, format!("polynomial {value:#010x} formed by lui and ori/addiu")));
+                }
+                let bytes = &code[..usize::try_from(length).unwrap_or(4).min(code.len())];
+                let immediates = decoder.operands(bytes, at).unwrap_or_default();
+                for value in immediates.iter().filter_map(|operand| operand.immediate) {
+                    if let Some(&(_, family)) =
+                        POLYNOMIALS_16.iter().find(|(polynomial, _)| u64::from(*polynomial) == value)
+                    {
+                        narrow.push((at, family, format!("polynomial {value:#06x} formed by an immediate")));
+                    }
+                }
+                at += length;
+            }
+        }
+    }
+    (wide, narrow)
+}
+
 fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -> CodeEvidence {
     let mut evidence = CodeEvidence::default();
     if let Err(error) = project.analysis() {
@@ -644,6 +683,11 @@ fn code_evidence(project: &Project, blocks: &[Block], notes: &mut Vec<String>) -
                 }
             }
         }
+    }
+    if matches!(project.binary.arch, rampage_arch::Arch::Mips | rampage_arch::Arch::Mips64) {
+        let (wide, mips_narrow) = mips_polynomial_sites(project);
+        sites.extend(wide.into_iter().take(16));
+        narrow.extend(mips_narrow);
     }
     sites.extend(narrow.into_iter().take(16));
     // A Raw Cortex-M routine discovery did not reach (called only through code it did not find) still loads its

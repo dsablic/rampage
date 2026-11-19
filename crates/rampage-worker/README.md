@@ -7,6 +7,12 @@ cancellation, resource limits, and child reaping without initializing Ghidra in 
 The executable is resolved from `WorkerConfig::executable`, then `RAMPAGE_WORKER`, then `rampage-worker` beside the
 calling application's executable. Missing workers are explicit errors; there is no in-process fallback.
 
+## Protocol version 13
+
+Version 13 adds `entry_registers`: a register that holds each decompiled function's own address at its entry and
+one that holds a constant (`{"registers": {"address": "t9", "constant": ["gp", 233504]}}`). rampage sends it for
+MIPS images with a global pointer, so position-independent code reaches its GOT.
+
 ## Protocol version 10
 
 Version 10 adds `data_name` (name an untyped global), `data_region` (name unnamed globals in a range by prefix),

@@ -242,3 +242,27 @@ fn signed_immediate_json_keeps_decimal_strings_alongside_hexadecimal_raw_bits() 
     assert!(json[1]["memory"].is_null());
     assert!(json[0]["signed_value"].is_null());
 }
+
+/// MIPS: `lui` immediates are shifted into place, `addiu` sign-extends, a load gives its base, displacement and
+/// size, and a branch target is no immediate.
+#[test]
+fn mips_operands_are_typed() {
+    let decoder = rampage_arch::decoder(&rampage_arch::Target {
+        big_endian: true,
+        data_big_endian: true,
+        ..rampage_arch::Target::new(Arch::Mips)
+    })
+    .unwrap();
+    let lui = decoder.operands(&[0x3c, 0x02, 0xed, 0xb8], 0x1000).unwrap(); // lui $v0, 0xedb8
+    assert_eq!((lui[1].kind, lui[1].immediate), (OperandKind::Immediate, Some(0xedb8_0000)));
+    let addiu = decoder.operands(&[0x24, 0x42, 0xff, 0xfc], 0x1000).unwrap(); // addiu $v0, $v0, -4
+    assert_eq!(
+        (addiu[2].immediate, addiu[2].signed_value, addiu[2].width_bits),
+        (Some(0xffff_fffc), Some(-4), Some(32))
+    );
+    let lw = decoder.operands(&[0x8f, 0x99, 0x80, 0x10], 0x1000).unwrap(); // lw $t9, -0x7ff0($gp)
+    let memory = lw[1].memory.as_ref().unwrap();
+    assert_eq!((memory.base.as_deref(), memory.displacement, memory.access_size), (Some("gp"), -0x7ff0, Some(4)));
+    let branch = decoder.operands(&[0x10, 0x40, 0x00, 0x03], 0x1000).unwrap(); // beqz $v0, 0x1010
+    assert!(branch.iter().all(|operand| operand.kind != OperandKind::Immediate));
+}

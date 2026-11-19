@@ -147,6 +147,65 @@ fn mips(mnemonic: &str, operands: &str, is_branch: bool) -> Option<Branch> {
     branch(kind, false)
 }
 
+/// Typed MIPS operands: registers, semantic immediates (`lui`'s shifted into place, others as the instruction
+/// extends them, at the register width) and base-plus-displacement memory with the size a load or store moves.
+/// A branch or jump target is not an immediate, so it is unsupported evidence.
+fn mips_operands(
+    engine: &Capstone,
+    arch: Arch,
+    insn: &Insn,
+    detail: &capstone::InsnDetail,
+) -> Option<Vec<crate::OperandEvidence>> {
+    use crate::{MemoryOperand, OperandEvidence, OperandKind};
+    let mnemonic = insn.mnemonic().unwrap_or("");
+    let transfer = classify(arch, insn, detail).0 != Flow::Next;
+    let width: u16 = if arch == Arch::Mips64 { 64 } else { 32 };
+    let access = match mnemonic {
+        "lb" | "lbu" | "sb" => Some(1),
+        "lh" | "lhu" | "sh" => Some(2),
+        "lw" | "lwu" | "sw" | "lwl" | "lwr" | "swl" | "swr" | "ll" | "sc" | "lwc1" | "swc1" => Some(4),
+        "ld" | "sd" | "ldl" | "ldr" | "sdl" | "sdr" | "lld" | "scd" | "ldc1" | "sdc1" => Some(8),
+        _ => None,
+    };
+    let operands = detail.arch_detail().operands();
+    let evidence = operands
+        .into_iter()
+        .enumerate()
+        .map(|(index, operand)| {
+            let index = u8::try_from(index).unwrap_or(u8::MAX);
+            match operand {
+                ArchOperand::MipsOperand(arch::mips::MipsOperand::Reg(_)) => OperandEvidence {
+                    kind: OperandKind::Register,
+                    width_bits: Some(width),
+                    ..OperandEvidence::unsupported(index)
+                },
+                ArchOperand::MipsOperand(arch::mips::MipsOperand::Imm(_)) if transfer => {
+                    OperandEvidence::unsupported(index)
+                }
+                ArchOperand::MipsOperand(arch::mips::MipsOperand::Imm(value)) => {
+                    let value = if mnemonic == "lui" { (value as i32 as i64) << 16 } else { value };
+                    OperandEvidence::immediate(index, value as u64, width)
+                }
+                ArchOperand::MipsOperand(arch::mips::MipsOperand::Mem(memory)) => OperandEvidence {
+                    kind: OperandKind::Memory,
+                    width_bits: access.map(|bytes| bytes * 8),
+                    memory: Some(MemoryOperand {
+                        base: engine.reg_name(memory.base()),
+                        index: None,
+                        displacement: memory.disp(),
+                        scale: 1,
+                        access_size: access,
+                        relative: false,
+                    }),
+                    ..OperandEvidence::unsupported(index)
+                },
+                _ => OperandEvidence::unsupported(index),
+            }
+        })
+        .collect();
+    Some(evidence)
+}
+
 /// PowerPC encodes the link (`l`), the count-register target (`ctr`) and the link-register target (`lr`) in the
 /// mnemonic, after the condition: `bnelr`, `bdnzl`, `bctrl`.
 fn powerpc(mnemonic: &str, is_branch: bool) -> Option<Branch> {
@@ -414,6 +473,19 @@ impl Disassembler for CapstoneDisassembler {
             operands = format!("{kept}{target:#x}");
         }
         if operands.is_empty() { mnemonic.to_owned() } else { format!("{mnemonic} {operands}") }
+    }
+
+    fn operands(&self, bytes: &[u8], address: u64) -> Option<Vec<crate::OperandEvidence>> {
+        if !matches!(self.target.arch, Arch::Mips | Arch::Mips64) {
+            return None;
+        }
+        let instructions = self.engine.disasm_count(bytes, address, 1).ok()?;
+        let insn = instructions.iter().next()?;
+        if insn.len() != bytes.len() {
+            return None;
+        }
+        let detail = self.engine.insn_detail(insn).ok()?;
+        mips_operands(&self.engine, self.target.arch, insn, &detail)
     }
 
     fn reset(&mut self) {

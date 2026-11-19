@@ -184,3 +184,27 @@ fn raw_mips_boot_rom_at_the_reset_vector() {
     let report = serde_json::to_value(project.evaluate_function(&serde_json::from_value(request).unwrap()).unwrap());
     assert_eq!(report.unwrap()["result"]["unsigned"], (1 << 5) + (16 >> 3) + 0x1234);
 }
+
+/// The CRC-32 polynomial MIPS code builds with `lui` and `ori` is found by constant search (`loaded_constant`) and
+/// names the routine in integrity_checks; a small `addiu` immediate is a typed operand.
+#[test]
+fn constants_mips_code_builds_are_searchable() {
+    let registry = rampage_api::tools::tools();
+    for name in ["router-gnu-mips", "router-gnu-mipsel"] {
+        let mut project = std::sync::Arc::new(project(name));
+        let mode = serde_json::json!({ "kind": "functions_referencing", "reference": { "kind": "constant", "immediate": { "value": { "kind": "unsigned", "value": 0xedb8_8320u32 } } } });
+        let (text, failed) =
+            rampage_api::tools::call_shared(&registry, &mut project, "search", serde_json::json!({ "mode": mode }));
+        assert!(!failed, "{text}");
+        let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(report["hits"][0]["address"], format!("{:#x}", truth(name, "crc32_init")), "{report:#}");
+        let (text, failed) =
+            rampage_api::tools::call_shared(&registry, &mut project, "integrity_checks", serde_json::json!({}));
+        assert!(!failed && text.contains("polynomial 0xedb88320 formed by lui and ori"), "{text}");
+    }
+    let mut project = std::sync::Arc::new(project("router-mips"));
+    let mode = serde_json::json!({ "kind": "immediate", "immediate": { "value": { "kind": "unsigned", "value": 9 } } });
+    let (text, failed) =
+        rampage_api::tools::call_shared(&registry, &mut project, "search", serde_json::json!({ "mode": mode }));
+    assert!(!failed && text.contains("addiu $a2, $zero, 9"), "{text}");
+}

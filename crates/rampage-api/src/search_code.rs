@@ -654,13 +654,7 @@ fn search_program(
                     {
                         unsupported_operands += 1;
                     }
-                    immediate_evidence(
-                        value,
-                        &instruction,
-                        operands.as_deref(),
-                        address_bits,
-                        project.binary.arch == rampage_arch::Arch::Arm,
-                    )
+                    immediate_evidence(value, &instruction, operands.as_deref(), address_bits, project.binary.arch)
                 }
                 CodeSearchKind::Instruction { mnemonic, operands } => {
                     let (actual_mnemonic, actual_operands) = assembly_fields(&text);
@@ -854,7 +848,7 @@ fn immediate_evidence(
     instruction: &Insn,
     operands: Option<&[OperandEvidence]>,
     address_bits: Option<u16>,
-    arm: bool,
+    arch: rampage_arch::Arch,
 ) -> Option<CodeSearchEvidence> {
     for operand in operands.unwrap_or_default() {
         if operand.kind == OperandKind::Immediate
@@ -873,11 +867,14 @@ fn immediate_evidence(
         }
     }
     // 32-bit ARM and Thumb have no typed operands, but the decoder reports the word an `ldr rN, =value` loads from
-    // a read-only literal pool, or a MOVW/MOVT pair builds: the constants firmware keeps out of encodings.
-    if arm
-        && operands.is_none()
-        && let Some(value) = instruction.immediate
-    {
+    // a read-only literal pool, or a MOVW/MOVT pair builds: the constants firmware keeps out of encodings. MIPS
+    // builds them from `lui` and `ori`/`addiu`, which its decoder reports the same way.
+    let loaded = match arch {
+        rampage_arch::Arch::Arm => operands.is_none(),
+        rampage_arch::Arch::Mips | rampage_arch::Arch::Mips64 => true,
+        _ => false,
+    };
+    if loaded && let Some(value) = instruction.immediate {
         let (signed, width) = match u32::try_from(value) {
             Ok(word) => (i64::from(word as i32), 32),
             Err(_) => (value as i64, 64),
