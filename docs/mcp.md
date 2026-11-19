@@ -455,10 +455,10 @@ against the DllCharacteristics that triage reports. Both return null for a non-P
 not a total; scanning stops at the candidate after the page. It extracts/decompresses nothing. It recognises ELF,
 PE, Mach-O, zip, gzip, xz, zstd, LZMA, bzip2, LZ4 frames, lzop, SquashFS, ext2/3/4, UBI, UBIFS, JFFS2, CramFS, FAT,
 Android sparse and boot images, OTA payloads, cpio, tar, uImage, TRX, device trees (and FIT images), MBR and GPT
-disks (at 512-byte-aligned offsets), and UEFI firmware volumes and capsules. Inside a SquashFS, UBI, UBIFS, JFFS2,
+disks (at 512-byte-aligned offsets), and UEFI firmware volumes and capsules. Inside a SquashFS, UBIFS, JFFS2,
 CramFS, Android sparse or OTA payload image whose validated extent fits the file, whose contents are compressed
-blocks or chunks, it reports only executables whose headers validate; inside such an ext, tar, cpio or ZIP image,
-whose files are stored whole, it reports every candidate whose header validates. The image's notes count what was
+blocks or chunks, it reports only executables whose headers validate; inside such an ext, UBI, tar, cpio or ZIP
+image, whose files or volumes are stored whole, it reports every candidate whose header validates. The image's notes count what was
 left out inside it; `fs_list` lists the image's files (not yet for JFFS2 or CramFS). Inside a TRX, device tree,
 MBR or GPT disk, FAT volume or UEFI volume or capsule, which `fs_list` does not read, it reports every candidate,
 each noting its container.

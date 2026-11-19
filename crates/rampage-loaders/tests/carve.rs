@@ -884,20 +884,40 @@ fn ubifs_superblock(lebs: u32) -> Vec<u8> {
 
 #[test]
 fn carves_ubi_and_ubifs_images() {
-    // Four erase blocks, the third erased: the extent runs through the fourth. A gzip stream in a LEB is left out,
-    // an ELF is reported.
+    // Four erase blocks, the third erased: the extent runs through the fourth. Volumes store their contents whole,
+    // so a gzip stream and an ELF in LEBs are reported; a magic-only xz header is left out.
     let elf = fixture("hello-mips.elf");
-    let blocks = [ubi_block(&gzip(), false), ubi_block(&elf, false), vec![0xff; PEB], ubi_block(b"", true)];
+    let mut broken = xz();
+    broken[8] ^= 1;
+    let first_leb = [gzip(), broken].concat();
+    let blocks = [ubi_block(&first_leb, false), ubi_block(&elf, false), vec![0xff; PEB], ubi_block(b"", true)];
     let mut image = blocks.concat();
     image.extend(junk(1000, 3));
     let carving = carve::scan(&image, &Limits::default());
     let found: Vec<_> = carving.candidates.iter().map(|c| (c.offset, c.kind, c.extent)).collect();
     let elf_extent = carve::executable(&elf).unwrap().extent;
-    assert_eq!(found, [(0, Kind::Ubi, Some(4 * PEB as u64)), (PEB as u64 + 0x800, Kind::Elf, elf_extent)]);
+    let expected =
+        [(0, Kind::Ubi, Some(4 * PEB as u64)), (0x800, Kind::Gzip, None), (PEB as u64 + 0x800, Kind::Elf, elf_extent)];
+    assert_eq!(found, expected);
     let notes = &carving.candidates[0].notes;
     assert!(notes[0].starts_with("4 erase blocks of 0x4000 bytes (2 with a volume header)"), "{notes:?}");
-    assert!(notes[1].contains("left out inside it: 1 candidate (1 gzip); fs_list lists its contents"), "{notes:?}");
-    assert_eq!(carving.candidates[1].notes.last().unwrap(), "inside the ubi at 0x0");
+    assert!(notes[1].starts_with("inside it only candidates whose headers validate are reported"), "{notes:?}");
+    assert!(notes[1].contains("left out inside it: 1 candidate (1 xz); fs_list lists its contents"), "{notes:?}");
+    assert_eq!(carving.candidates[2].notes.last().unwrap(), "inside the ubi at 0x0");
+
+    // With the second block erased, the erase block size still comes from the headers after it.
+    let blocks = [ubi_block(b"", false), vec![0xff; PEB], ubi_block(b"", false), ubi_block(b"", false)];
+    let image = blocks.concat();
+    let carving = carve::scan(&image, &Limits::default());
+    assert_eq!(kinds_and_extents(&image), [(0, Kind::Ubi, Some(4 * PEB as u64))]);
+    assert!(carving.candidates[0].notes[0].starts_with("4 erase blocks of 0x4000 bytes"), "{carving:?}");
+    // A block whose header alone is erased is not erased: the image ends before it, and what it holds is reported.
+    let mut hiding = vec![0xff; PEB];
+    hiding[0x100..0x100 + gzip().len()].copy_from_slice(&gzip());
+    let blocks = [ubi_block(b"", false), ubi_block(b"", false), hiding, ubi_block(b"", false)];
+    let image = blocks.concat();
+    let found = kinds_and_extents(&image);
+    assert_eq!(found[..2], [(0, Kind::Ubi, Some(2 * PEB as u64)), (2 * PEB as u64 + 0x100, Kind::Gzip, None)]);
 
     // One block alone has no erase block size, so no extent; a wrong CRC is magic_only; truncated, magic_only.
     let one = ubi_block(b"", false);
@@ -937,34 +957,71 @@ fn jffs2_node(kind: u16, size: u32, big: bool) -> Vec<u8> {
     node
 }
 
+/// A JFFS2 directory entry named `name`, its node CRC filled in.
+fn jffs2_dirent(name: &[u8], big: bool) -> Vec<u8> {
+    let mut node = jffs2_node(0xe001, 40 + name.len() as u32, big);
+    node[28] = name.len() as u8;
+    node[40..].copy_from_slice(name);
+    let crc = crc_register(0, &node[..32]);
+    put32(&mut node, 32, crc, big);
+    node
+}
+
+/// A JFFS2 inode with `data` as its compressed data, its node CRC filled in.
+fn jffs2_inode(data: &[u8], big: bool) -> Vec<u8> {
+    let mut node = jffs2_node(0xe002, 68 + data.len() as u32, big);
+    put32(&mut node, 48, data.len() as u32, big);
+    node[68..].copy_from_slice(data);
+    let crc = crc_register(0, &node[..60]);
+    put32(&mut node, 64, crc, big);
+    node
+}
+
 #[test]
 fn carves_jffs2_images_by_walking_their_nodes() {
     for big in [false, true] {
         // A clean marker, an inode, 100 bytes of erased padding, a directory entry (size not a multiple of 4).
         let mut image = jffs2_node(0x2003, 12, big);
-        image.extend(jffs2_node(0xe002, 68, big));
+        image.extend(jffs2_inode(b"data", big));
         image.extend([0xff; 100]);
-        image.extend(jffs2_node(0xe001, 41, big));
+        image.extend(jffs2_dirent(b"a", big));
         image.extend([0xff; 3]);
         let end = image.len() as u64;
         image.extend(gzip());
         let carving = carve::scan(&image, &Limits::default());
         let found: Vec<_> = carving.candidates.iter().map(|c| (c.offset, c.kind, c.extent)).collect();
         assert_eq!(found, [(0, Kind::Jffs2, Some(end)), (end, Kind::Gzip, None)], "big-endian {big}");
-        assert_eq!(carving.candidates[0].notes[0], "3 nodes walked");
+        assert_eq!(carving.candidates[0].notes[0], "3 nodes walked, 2 of them directory entries or inodes");
         assert!(carving.candidates[0].notes[1].ends_with("; fs_list does not read it"), "{:?}", carving.candidates[0]);
         assert_eq!(
             carving.candidates[0].endianness.unwrap().to_string(),
             if big { "big-endian" } else { "little-endian" }
         );
     }
-    // Two nodes are not an image; a wrong header CRC is nothing; a truncated header, magic_only.
-    let two = [jffs2_node(0xe001, 12, false), jffs2_node(0xe002, 12, false)].concat();
+    // Two nodes are not an image; a wrong header or node CRC is nothing; a truncated header, magic_only.
+    let two = [jffs2_dirent(b"a", false), jffs2_inode(b"", false)].concat();
     assert_eq!(first(&two), Some((Kind::Jffs2, Confidence::MagicOnly, None)));
-    let mut forged = [two.clone(), jffs2_node(0xe002, 12, false)].concat();
+    let mut forged = [two.clone(), jffs2_inode(b"", false)].concat();
     forged[8] ^= 1;
     assert_eq!(first(&forged), None);
+    let mut forged = [two.clone(), jffs2_inode(b"", false)].concat();
+    forged[20] ^= 1;
+    assert_eq!(first(&forged), None, "a directory entry whose node CRC does not match");
     assert_eq!(first(&two[..8]), Some((Kind::Jffs2, Confidence::MagicOnly, None)));
+
+    // Header-only nodes claiming a megabyte each hide nothing: they have no node CRC, so they extend nothing.
+    let mut hiding =
+        [jffs2_dirent(b"abcd", false), jffs2_node(0x2004, 1 << 20, false), jffs2_node(0x2004, 1 << 20, false)].concat();
+    hiding[0x1000..0x1000 + gzip().len()].copy_from_slice(&gzip());
+    let found = kinds_and_extents(&hiding);
+    assert_eq!(found, [(0, Kind::Jffs2, Some(44)), (0x1000, Kind::Gzip, None)]);
+    // Nor do directory entries claiming more than a node may hold.
+    let mut huge = jffs2_dirent(b"a", false);
+    huge.resize(4 << 20, 0);
+    put32(&mut huge, 4, 4 << 20, false);
+    let crc = crc_register(0, &huge[..8]);
+    put32(&mut huge, 8, crc, false);
+    assert_eq!(first(&huge), None);
 }
 
 /// A little-endian CramFS image of `size` bytes with its CRC, the root inode a directory.
@@ -1371,7 +1428,7 @@ fn repeated_headers_of_wave_two_kinds_stay_bounded() {
     let carving = carve::scan(&superblock.repeat(300), &Limits::default());
     assert_eq!(carving.candidates.len(), 300);
     // Walked images take the repeats as their own blocks or nodes: one candidate.
-    let nodes = jffs2_node(0xe001, 12, false).repeat(100_000);
+    let nodes = jffs2_dirent(b"abcd", false).repeat(30_000);
     assert_eq!(kinds_and_extents(&nodes), [(0, Kind::Jffs2, Some(nodes.len() as u64))]);
     let blocks = ubi_block(b"", false).repeat(200);
     assert_eq!(kinds_and_extents(&blocks), [(0, Kind::Ubi, Some(blocks.len() as u64))]);
@@ -1391,3 +1448,65 @@ fn repeated_headers_of_wave_two_kinds_stay_bounded() {
 
 const CAPSULE_HEAD: [u8; 16] =
     [0xbd, 0x86, 0x66, 0x3b, 0x76, 0x0d, 0x30, 0x40, 0xb7, 0x0e, 0xb5, 0x51, 0x9e, 0x2f, 0xc5, 0xa0];
+
+#[test]
+fn checksums_of_wave_two_kinds_are_charged_to_their_budgets() {
+    let kinds = |bytes: &[u8], limits: &Limits| -> Vec<(Kind, Confidence)> {
+        carve::scan(bytes, limits).candidates.iter().map(|c| (c.kind, c.confidence)).collect()
+    };
+    let limitation = |bytes: &[u8], limits: &Limits, text: &str| {
+        let carving = carve::scan(bytes, limits);
+        assert!(carving.limitations.iter().any(|line| line.starts_with(text)), "{:?}", carving.limitations);
+    };
+    let (valid, magic_only) = (Confidence::Validated, Confidence::MagicOnly);
+
+    let mut superblock = ubifs_superblock(1);
+    superblock.resize(0x3800, 0);
+    let file = superblock.repeat(4);
+    let limits = Limits { max_walk_bytes: 3 * 4096, ..Limits::default() };
+    assert_eq!(
+        kinds(&file, &limits),
+        [(Kind::Ubifs, valid), (Kind::Ubifs, valid), (Kind::Ubifs, valid), (Kind::Ubifs, magic_only)]
+    );
+    limitation(&file, &limits, "UBIFS superblock checksums ran out");
+
+    let file = gpt_disk().repeat(2);
+    let limits = Limits { max_walk_bytes: 20_000, ..Limits::default() };
+    assert_eq!(kinds(&file, &limits), [(Kind::Gpt, valid), (Kind::Mbr, valid)]);
+    limitation(&file, &limits, "GPT checksums ran out");
+
+    let file = firmware_volume(1).repeat(2);
+    let limits = Limits { max_walk_bytes: 0x50, ..Limits::default() };
+    assert_eq!(kinds(&file, &limits), [(Kind::UefiVolume, valid), (Kind::UefiVolume, magic_only)]);
+    limitation(&file, &limits, "UEFI firmware volume header checksums ran out");
+
+    // TRX checksums run over the whole container.
+    let file = trx_image(4096, [28, 0, 0]).repeat(3);
+    let limits = Limits { max_walk_bytes: 2 * 4096, ..Limits::default() };
+    assert_eq!(kinds(&file, &limits), [(Kind::Trx, valid), (Kind::Trx, valid), (Kind::Trx, magic_only)]);
+    limitation(&file, &limits, "TRX checksums ran out");
+}
+
+#[test]
+fn an_image_enclosing_endless_decoys_is_skipped_past_the_left_out_cap() {
+    // A SquashFS image enclosing more LZ4 frame headers than the cap: each would be checked and left out.
+    let frame = [0x04, 0x22, 0x4d, 0x18, 0x64, 0x50, 0x08, 0x8a];
+    let decoys = carve::MAX_LEFT_OUT + 1000;
+    let mut file = squashfs_of(96 + 8 * decoys as u64 + 64);
+    file.extend(frame.repeat(decoys));
+    file.resize(96 + 8 * decoys + 64, 0);
+    let elf = fixture("hello-mips.elf");
+    file.extend(&elf);
+    let carving = carve::scan(&file, &Limits::default());
+    let found: Vec<_> = carving.candidates.iter().map(|c| (c.offset, c.kind)).collect();
+    assert_eq!(found, [(0, Kind::Squashfs), ((96 + 8 * decoys + 64) as u64, Kind::Elf)]);
+    assert!(carving.truncated);
+    let text = &carving.limitations[0];
+    assert!(text.contains("candidates were left out inside images") && text.contains("squashfs at 0x0"), "{text}");
+}
+
+#[test]
+fn a_magic_only_match_does_not_hide_a_tar_header_at_the_same_offset() {
+    let archive = tar_of(&[(b"UBI#\x01 not an erase block", b"hi")]);
+    assert_eq!(first(&archive), Some((Kind::Tar, Confidence::Validated, Some(archive.len() as u64))));
+}

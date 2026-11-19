@@ -85,9 +85,10 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   `image_offset`), and TRX, device tree, MBR/GPT, FAT and UEFI containers, but not YAFFS2 (no checksum to tell it
   from data) or vendor headers (TP-Link, CFE, Seama, JBOOT). MBR and GPT disks are found only at 512-byte-aligned
   offsets with 512-byte sectors, FAT volumes only with the "FAT" type string in their boot sector, UBI images only
-  with power-of-two erase blocks, and LZ4 and lzop streams have no extent. Inside a SquashFS, UBI, UBIFS, JFFS2,
-  CramFS, Android sparse or OTA payload image it reports only executables, and inside an ext, tar, cpio or ZIP
-  image only candidates whose headers validate; each image's notes count the rest. `fs_list` does not read JFFS2,
+  with power-of-two erase blocks, and LZ4 and lzop streams have no extent. Inside a SquashFS, UBIFS, JFFS2,
+  CramFS, Android sparse or OTA payload image it reports only executables, and inside an ext, UBI, tar, cpio or ZIP
+  image only candidates whose headers validate; each image's notes count the rest. Past 65,536 candidates left out
+  inside images, the rest of the image being scanned is skipped (a limitation says where). `fs_list` does not read JFFS2,
   CramFS or the containers.
 - `endpoint_inventory` matches endpoints lexically: addresses built at run time, encrypted or compressed data and
   IPv4 addresses stored as integers in code are not found. `privacy_surface` on a directory analyses only programs
