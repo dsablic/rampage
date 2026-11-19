@@ -25,7 +25,7 @@ mod vector_tests;
 
 pub use convention::Convention;
 use convention::{Abi, Link, Place};
-use machine::{Fault, Flow, Machine, Ram, SpaceIds, UserOp};
+use machine::{Fault, Flow, Machine, Ram, SpaceIds, UserOp, WriteLog};
 use stubs::{BYTES_PER_STEP, HEAP_BYTES, Heap, Limits, Stop, Stub};
 
 pub const DEFAULT_MAX_STEPS: u64 = 1_000_000;
@@ -82,6 +82,9 @@ pub struct EvaluateRequest {
     /// Model common C library imports (memcpy, strlen, strcmp, malloc, free, ...) instead of stopping at them
     /// (default true).
     pub stubs: Option<bool>,
+    /// Return a trace of the first and last N executed instructions (1-32), each with the registers and memory it
+    /// wrote, to explain a result.
+    pub trace: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -198,7 +201,35 @@ pub struct EvaluateReport {
     pub stubbed_omitted: usize,
     pub max_steps: u64,
     pub timeout_ms: u64,
+    /// With `trace`: the first and last executed instructions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace: Option<Trace>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct Trace {
+    pub first: Vec<TraceRow>,
+    /// The last instructions, after `omitted` others; empty when `first` holds the whole run.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub last: Vec<TraceRow>,
+    pub omitted: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TraceRow {
+    pub step: u64,
+    #[serde(serialize_with = "rampage_arch::hex::address")]
+    pub address: u64,
+    pub instruction: String,
+    /// What it wrote: `REGISTER=value` and `[address]=value` (stores), space-separated, after it ran.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub writes: String,
+}
+
+/// Instructions a trace keeps at each end.
+const MAX_TRACE: u32 = 32;
+/// Characters of one trace row's writes; longer ones end in `...`.
+const TRACE_WRITES_CHARS: usize = 200;
 
 #[derive(Debug, Serialize)]
 pub struct ResultValue {
@@ -663,6 +694,9 @@ struct Run<'a> {
     thumb: bool,
     decoder_thumb: bool,
     mode_switch: Option<RegisterStorage>,
+    /// The decoder's register space, and trace labels by (offset, size).
+    register_space: u32,
+    labels: HashMap<(u64, u32), String>,
 }
 
 fn varnode(storage: RegisterStorage) -> Varnode {
@@ -750,6 +784,72 @@ impl Run<'_> {
         }
         self.cache.insert(key, Rc::clone(&decoded));
         Ok(decoded)
+    }
+
+    /// The name of the register bytes at `offset`: the register's own name, or `NAME+offset:size` for part of one.
+    fn label(&mut self, offset: u64, size: u32) -> String {
+        if let Some(label) = self.labels.get(&(offset, size)) {
+            return label.clone();
+        }
+        let label = match self.decoder.register_name(self.register_space, offset, size) {
+            Some((name, base)) => {
+                let whole = self.decoder.register(&name).is_some_and(|storage| storage.size == size);
+                if base == offset && whole { name } else { format!("{name}+{}:{size}", offset.wrapping_sub(base)) }
+            }
+            None => format!("register[{offset:#x}:{size}]"),
+        };
+        self.labels.insert((offset, size), label.clone());
+        label
+    }
+
+    /// One instruction's writes, as a trace row shows them: values after it ran, a write inside a larger one of
+    /// the same instruction left out.
+    fn describe_writes(&mut self, log: &WriteLog) -> String {
+        let covered = |list: &[(u64, u32)], index: usize| {
+            let (offset, size) = list[index];
+            list.iter().enumerate().any(|(other, &(start, length))| {
+                other != index
+                    && start <= offset
+                    && offset + u64::from(size) <= start + u64::from(length)
+                    && (length > size || other > index)
+            })
+        };
+        let mut parts = Vec::new();
+        for index in 0..log.registers.len() {
+            if covered(&log.registers, index) {
+                continue;
+            }
+            let (offset, size) = log.registers[index];
+            let node = Varnode {
+                space: self.register_space,
+                size,
+                address_size: 0,
+                word_size: 1,
+                offset: Some(offset),
+                selected_space: None,
+            };
+            let value = self.machine.read_int(&node).map_or_else(|_| "?".to_owned(), short_hex);
+            parts.push(format!("{}={value}", self.label(offset, size)));
+        }
+        for index in 0..log.stores.len() {
+            if covered(&log.stores, index) {
+                continue;
+            }
+            let (address, size) = log.stores[index];
+            let value = if size <= 16 {
+                self.machine.read_memory(address, size).map_or_else(|_| "?".to_owned(), short_hex)
+            } else {
+                format!("{size} bytes")
+            };
+            parts.push(format!("[{address:#x}]={value}"));
+        }
+        let mut text = parts.join(" ");
+        if text.len() > TRACE_WRITES_CHARS {
+            let cut = (0..=TRACE_WRITES_CHARS).rev().find(|&at| text.is_char_boundary(at)).unwrap_or(0);
+            text.truncate(cut);
+            text.push_str("...");
+        }
+        text
     }
 
     /// The first `count` register-width arguments under `abi`, with their locations. `pushed` says whether an x86
@@ -1076,6 +1176,28 @@ impl Project {
             thumb,
             decoder_thumb: false,
             mode_switch,
+            register_space: space_ids.register,
+            labels: HashMap::new(),
+        };
+        let trace_length = match request.trace {
+            None => None,
+            Some(length @ 1..=MAX_TRACE) => Some(length as usize),
+            Some(_) => return Err(invalid(format!("trace must be 1..={MAX_TRACE}"))),
+        };
+        let mut first_rows: Vec<TraceRow> = Vec::new();
+        let mut last_rows: std::collections::VecDeque<TraceRow> = std::collections::VecDeque::new();
+        let mut omitted_rows = 0u64;
+        let mut record = |row: TraceRow| {
+            let Some(length) = trace_length else { return };
+            if first_rows.len() < length {
+                first_rows.push(row);
+                return;
+            }
+            if last_rows.len() == length {
+                last_rows.pop_front();
+                omitted_rows += 1;
+            }
+            last_rows.push_back(row);
         };
         let family = match binary.arch {
             Arch::X86 | Arch::X86_64 => Some(userops::Family::X86),
@@ -1265,6 +1387,9 @@ impl Project {
                 break (StopReason::Timeout, format!("stopped after {timeout_ms} ms (timeout_ms)"));
             }
             if let Some(name) = &stand_in {
+                if trace_length.is_some() {
+                    run.machine.trace = Some(WriteLog::default());
+                }
                 let limits = Limits {
                     bytes: (max_steps - steps).saturating_mul(BYTES_PER_STEP),
                     deadline,
@@ -1274,6 +1399,16 @@ impl Project {
                 };
                 match run.call_import(stub, stub_abi.as_ref().unwrap_or(&abi), &limits) {
                     Ok((target, cost)) => {
+                        if let Some(log) = run.machine.trace.take() {
+                            let kind = if stub.is_some() { "model" } else { "skipped, returns 0" };
+                            let writes = run.describe_writes(&log);
+                            record(TraceRow {
+                                step: steps,
+                                address: pc,
+                                instruction: format!("{name} ({kind})"),
+                                writes,
+                            });
+                        }
                         let rows = if stub.is_some() { &mut stubbed } else { &mut skipped };
                         match rows.iter_mut().find(|(seen, _)| seen == name) {
                             Some(row) => row.1 += 1,
@@ -1307,7 +1442,15 @@ impl Project {
             if let Some(storage) = run.mode_switch {
                 let _ = run.machine.write_int(&varnode(storage), u128::from(run.thumb));
             }
-            match run.machine.execute(&decoded.ops) {
+            if trace_length.is_some() {
+                run.machine.trace = Some(WriteLog::default());
+            }
+            let executed = run.machine.execute(&decoded.ops);
+            if let Some(log) = run.machine.trace.take() {
+                let writes = run.describe_writes(&log);
+                record(TraceRow { step: steps, address: pc, instruction: decoded.text.clone(), writes });
+            }
+            match executed {
                 Ok(Flow::Next) => pc = pc.wrapping_add(decoded.extent),
                 Ok(Flow::Jump { target, call }) => {
                     let mut target = target;
@@ -1442,6 +1585,11 @@ impl Project {
             stubbed_omitted,
             max_steps,
             timeout_ms,
+            trace: trace_length.map(|_| Trace {
+                first: first_rows,
+                last: last_rows.into_iter().collect(),
+                omitted: omitted_rows,
+            }),
         };
         Ok((report, probed))
     }
@@ -1475,6 +1623,11 @@ fn snapshot(ram: &mut ImageRam<'_>, address: u64) -> Vec<u8> {
         bytes.push(byte[0]);
     }
     bytes
+}
+
+/// `value` in hex without leading zeros, or a single decimal digit.
+fn short_hex(value: u128) -> String {
+    if value < 10 { value.to_string() } else { format!("{value:#x}") }
 }
 
 fn width_mask(width: u32) -> u64 {

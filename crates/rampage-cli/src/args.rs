@@ -606,6 +606,12 @@ pub(crate) struct EvaluateArgs {
     /// Width of the integer result in bits (twice the register width reads a register pair)
     #[arg(long)]
     pub(crate) return_bits: Option<u32>,
+    /// Read a float result of 32 or 64 bits from the convention's float result register
+    #[arg(long, conflicts_with = "return_bits")]
+    pub(crate) return_float: Option<u32>,
+    /// Print the first and last N executed instructions (1-32) with the registers and memory each wrote
+    #[arg(long, value_name = "N")]
+    pub(crate) trace: Option<u32>,
     /// Bytes written into the image first, as ADDRESS=HEX, repeated
     #[arg(long = "memory", value_name = "ADDRESS=HEX")]
     pub(crate) memory: Vec<String>,

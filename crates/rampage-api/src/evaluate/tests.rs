@@ -1209,3 +1209,38 @@ fn model_names_and_32_bit_variadic_pairs() {
     let copy = stub(&mut ram, Stub::Strndup, &[0x7000_0200, 3]);
     assert_eq!(get(&mut ram, copy, 4), b"wor\0");
 }
+
+#[test]
+fn traces_keep_the_first_and_last_instructions_with_their_writes() {
+    let project = fixture("bench-v3/twins/semantics-x86.elf");
+    let report = run(&project, "fold_bits", json!(["0x00F0A500", 3]), json!({"trace": 6}));
+    let trace = report.trace.as_ref().unwrap();
+    assert_eq!((trace.first.len(), trace.last.len()), (6, 6));
+    assert_eq!(trace.omitted, report.steps - 12);
+    assert_eq!(trace.first[0].step, 0);
+    assert_eq!(trace.first[0].address, report.function);
+    assert!(trace.first[0].writes.contains("ESP="), "{:?}", trace.first[0]);
+    let last = trace.last.last().unwrap();
+    assert_eq!((last.step, last.instruction.as_str()), (report.steps - 1, "RET"));
+    // The result register's last write shows the returned value.
+    let hex = report.result.as_ref().unwrap().hex.trim_start_matches("0x").trim_start_matches('0').to_owned();
+    assert!(trace.last.iter().any(|row| row.writes.contains(&format!("EAX=0x{hex}"))), "{:?}", trace.last);
+    // A short run fits in `first`; the default report has no trace.
+    let report = run(&fixture("bin/hello-x64.elf"), "add", json!([1, 2]), json!({"trace": 32}));
+    let trace = report.trace.as_ref().unwrap();
+    assert_eq!((trace.first.len() as u64, trace.last.len(), trace.omitted), (report.steps, 0, 0));
+    assert!(trace.first.iter().any(|row| row.writes.contains("RAX=3") || row.writes.contains("EAX=3")), "{trace:?}");
+    let plain = serde_json::to_value(run(&fixture("bin/hello-x64.elf"), "add", json!([1, 2]), json!({}))).unwrap();
+    assert!(plain.get("trace").is_none());
+    for bad in [0, 33] {
+        assert!(try_run(&fixture("bin/hello-x64.elf"), "add", json!([1, 2]), json!({"trace": bad})).is_err());
+    }
+    // Imports run as models are rows of their own.
+    let project = fixture_api("decode-alloc-x64.elf");
+    let report = run(&project, "reveal", json!([{"buffer": {"text": "abc"}}]), json!({"trace": 32}));
+    let rows: Vec<&TraceRow> = report.trace.as_ref().unwrap().first.iter().collect();
+    assert!(
+        rows.iter().any(|row| row.instruction.starts_with("strlen") && row.instruction.ends_with("(model)")),
+        "{rows:?}"
+    );
+}

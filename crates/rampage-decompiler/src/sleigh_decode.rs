@@ -269,6 +269,15 @@ unsafe extern "C" {
         capacity: usize,
     );
     fn rampage_sleigh_op_size() -> usize;
+    fn rampage_sleigh_register_name(
+        handle: *mut c_void,
+        space: u32,
+        offset: u64,
+        size: u32,
+        output: *mut c_char,
+        capacity: usize,
+        base: *mut u64,
+    ) -> u8;
     fn rampage_sleigh_close(handle: *mut c_void);
     fn rampage_sleigh_register(
         handle: *mut c_void,
@@ -420,6 +429,19 @@ impl SleighDecoder {
         // SAFETY: the handle is live; the shim writes only the three outputs and keeps no pointers.
         let found = unsafe { rampage_sleigh_register(self.handle, name.as_ptr(), &mut space, &mut offset, &mut size) };
         (found != 0).then_some(RegisterStorage { space, offset, size })
+    }
+
+    /// The register at `offset` of space `space` covering `size` bytes (the register itself, or the smallest one
+    /// containing the range), with the register's own offset.
+    pub fn register_name(&self, space: u32, offset: u64, size: u32) -> Option<(String, u64)> {
+        let mut output = [0 as c_char; 128];
+        let mut base = 0u64;
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: the handle is live; the shim writes at most `output.len()` bytes, NUL-terminated, and `base`.
+        let found = unsafe {
+            rampage_sleigh_register_name(self.handle, space, offset, size, output.as_mut_ptr(), output.len(), &mut base)
+        };
+        (found != 0).then(|| (text(&output), base))
     }
 
     /// The name of user-defined p-code operation `index`, the constant first input of a CALLOTHER.

@@ -1995,6 +1995,30 @@ uint8_t rampage_sleigh_register(void *pointer, const char *name, uint32_t *space
     return 0;
 }
 
+// The name of the register at `offset` of translator space `space` holding `size` bytes there (Ghidra's
+// getRegisterName: the register itself, or the smallest one containing the range), truncated to `capacity`, with the
+// register's own offset in `base`. Returns 0 when no register covers the range.
+uint8_t rampage_sleigh_register_name(void *pointer, uint32_t space, uint64_t offset, uint32_t size, char *output,
+                                     size_t capacity, uint64_t *base) noexcept {
+    DecodeHandle *handle = static_cast<DecodeHandle *>(pointer);
+    if (handle == nullptr || handle->error[0] != 0 || !handle->sleigh || output == nullptr || capacity == 0
+        || base == nullptr || space >= uint32_t(handle->sleigh->numSpaces()))
+        return 0;
+    try {
+        AddrSpace *addressSpace = handle->sleigh->getSpace(int4(space));
+        if (addressSpace == nullptr) return 0;
+        std::string name = handle->sleigh->getRegisterName(addressSpace, offset, int4(size));
+        if (name.empty()) return 0;
+        const VarnodeData &value = handle->sleigh->getRegister(name);
+        *base = value.offset;
+        size_t length = std::min(name.size(), capacity - 1);
+        memcpy(output, name.data(), length);
+        output[length] = 0;
+        return 1;
+    } catch (...) {}
+    return 0;
+}
+
 // The name of user-defined p-code operation `index` (a CALLOTHER's first input), truncated to `capacity`.
 uint8_t rampage_sleigh_userop_name(void *pointer, uint32_t index, char *output, size_t capacity) noexcept {
     DecodeHandle *handle = static_cast<DecodeHandle *>(pointer);

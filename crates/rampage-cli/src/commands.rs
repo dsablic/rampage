@@ -2126,6 +2126,8 @@ pub fn evaluate(out: &mut impl Write, args: &crate::args::EvaluateArgs, options:
     for (key, value) in [
         ("convention", args.convention.clone().map(serde_json::Value::from)),
         ("return_bits", args.return_bits.map(serde_json::Value::from)),
+        ("return_float", args.return_float.map(serde_json::Value::from)),
+        ("trace", args.trace.map(serde_json::Value::from)),
         ("max_steps", args.max_steps.map(serde_json::Value::from)),
         ("timeout_ms", args.timeout_ms.map(serde_json::Value::from)),
     ] {
@@ -2153,14 +2155,18 @@ pub fn evaluate(out: &mut impl Write, args: &crate::args::EvaluateArgs, options:
     if let Some(value) = result.get("result") {
         let registers: Vec<&str> =
             value["registers"].as_array().into_iter().flatten().filter_map(|name| name.as_str()).collect();
-        writeln!(
-            out,
-            "result: {} (unsigned {}, signed {}) in {}",
-            value["hex"].as_str().unwrap_or(""),
-            value["unsigned"],
-            value["signed"],
-            registers.join(":")
-        )?;
+        if let Some(float) = value["float"].as_str() {
+            writeln!(out, "result: {float} ({}) in {}", value["hex"].as_str().unwrap_or(""), registers.join(":"))?;
+        } else {
+            writeln!(
+                out,
+                "result: {} (unsigned {}, signed {}) in {}",
+                value["hex"].as_str().unwrap_or(""),
+                value["unsigned"],
+                value["signed"],
+                registers.join(":")
+            )?;
+        }
     }
     if let Some(at) = result.get("stopped_at") {
         writeln!(
@@ -2172,6 +2178,28 @@ pub fn evaluate(out: &mut impl Write, args: &crate::args::EvaluateArgs, options:
     }
     for buffer in result["buffers"].as_array().into_iter().flatten() {
         writeln!(out, "buffer (argument {}): {}", buffer["argument"], buffer["hex"].as_str().unwrap_or(""))?;
+    }
+    if let Some(trace) = result.get("trace") {
+        let row = |out: &mut dyn Write, row: &serde_json::Value| -> std::io::Result<()> {
+            writeln!(
+                out,
+                "  {:>6} {} {:<32} {}",
+                row["step"].as_u64().unwrap_or(0),
+                row["address"].as_str().unwrap_or(""),
+                row["instruction"].as_str().unwrap_or(""),
+                row["writes"].as_str().unwrap_or("")
+            )
+        };
+        writeln!(out, "trace:")?;
+        for each in trace["first"].as_array().into_iter().flatten() {
+            row(out, each)?;
+        }
+        if trace["omitted"].as_u64().unwrap_or(0) > 0 {
+            writeln!(out, "  ... {} instructions", trace["omitted"])?;
+        }
+        for each in trace["last"].as_array().into_iter().flatten() {
+            row(out, each)?;
+        }
     }
     Ok(())
 }

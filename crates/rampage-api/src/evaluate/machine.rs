@@ -210,6 +210,13 @@ pub(crate) enum UserOp {
 
 pub(crate) const DENSE_LIMIT: u64 = 1 << 24;
 
+/// The register and memory writes of one instruction, kept while tracing: (register offset or address, bytes).
+#[derive(Debug, Default)]
+pub(crate) struct WriteLog {
+    pub registers: Vec<(u64, u32)>,
+    pub stores: Vec<(u64, u32)>,
+}
+
 /// One byte-addressed scratch space, dense near zero and sparse beyond.
 #[derive(Default)]
 struct ByteSpace {
@@ -263,6 +270,8 @@ pub(crate) struct Machine<R: Ram> {
     /// x86: a float-to-integer conversion out of range (or of NaN) gives the integer indefinite (the minimum signed
     /// value), not a saturated one.
     pub integer_indefinite: bool,
+    /// When set, register writes and stores are logged here.
+    pub trace: Option<WriteLog>,
     pub ram: R,
 }
 
@@ -297,6 +306,7 @@ impl<R: Ram> Machine<R> {
             other: HashMap::new(),
             user_ops: HashMap::new(),
             integer_indefinite: false,
+            trace: None,
             ram,
         }
     }
@@ -329,6 +339,9 @@ impl<R: Ram> Machine<R> {
             let address = offset & self.address_mask();
             self.ram.write(address, bytes)
         } else if space == self.ids.register {
+            if let Some(log) = self.trace.as_mut() {
+                log.registers.push((offset, bytes.len() as u32));
+            }
             self.registers.write(offset, bytes);
             Ok(())
         } else if space == self.ids.unique {
@@ -463,6 +476,12 @@ impl<R: Ram> Machine<R> {
                 let address = self.read_int(self.input(current, 1)?)? as u64;
                 let value = self.read_little(self.input(current, 2)?)?;
                 self.write_space(space, address, &to_storage(&value, self.big_endian))?;
+                let masked = address & self.address_mask();
+                if space == self.ids.ram
+                    && let Some(log) = self.trace.as_mut()
+                {
+                    log.stores.push((masked, value.len() as u32));
+                }
             }
             BRANCH | CALL => {
                 return Ok(match self.destination(self.input(current, 0)?)? {
