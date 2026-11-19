@@ -97,7 +97,12 @@ async fn only_write_decoded_range_writes_and_only_new_files() {
     let client = connect().await;
     let core = client.list_all_tools().await.unwrap();
     let decode = core.iter().find(|tool| tool.name == "decode_file_range").unwrap();
-    assert!(decode.annotations.is_none(), "decode_file_range is read-only again");
+    let hints = decode.annotations.as_ref().expect("decode_file_range is annotated");
+    assert_eq!(
+        (hints.read_only_hint, hints.open_world_hint),
+        (Some(true), Some(false)),
+        "decode_file_range is read-only"
+    );
     assert!(!decode.input_schema["properties"].as_object().unwrap().contains_key("output_path"));
     let enable = CallToolRequestParams::new("enable_tools".to_owned())
         .with_arguments(json!({ "groups": ["carve"] }).as_object().unwrap().clone());

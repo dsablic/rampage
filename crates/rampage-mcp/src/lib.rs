@@ -1136,6 +1136,14 @@ impl ServerHandler for RampageServer {
                         .idempotent(false)
                         .open_world(false),
                 ),
+                // query_debugger only reads, but from an operator-started debugger outside rampage.
+                tools::Effect::None if tool.name == "query_debugger" => {
+                    listed.annotate(rmcp::model::ToolAnnotations::new().read_only(true).open_world(true))
+                }
+                // Every other file tool reads the files it names and writes nothing.
+                tools::Effect::None => {
+                    listed.annotate(rmcp::model::ToolAnnotations::new().read_only(true).open_world(false))
+                }
                 _ => listed,
             }
         });

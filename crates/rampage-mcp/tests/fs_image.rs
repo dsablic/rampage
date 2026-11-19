@@ -202,8 +202,28 @@ async fn endpoints_of_an_extracted_tree_become_a_blocklist() {
     let annotations = blocklist.annotations.as_ref().unwrap();
     assert_eq!((annotations.read_only_hint, annotations.destructive_hint), (Some(false), Some(true)));
     assert_eq!(annotations.idempotent_hint, Some(true));
-    let inventory = tools.iter().find(|tool| tool.name == "endpoint_inventory").unwrap();
-    assert!(inventory.annotations.is_none());
+    // The carve group's and core's file tools that only read say so; the writers above and fs_extract do not.
+    for name in [
+        "endpoint_inventory",
+        "archive_inventory",
+        "fs_list",
+        "carve",
+        "list_dir",
+        "decode_file_range",
+        "file_layout",
+        "probe_compression",
+        "inspect_data",
+        "inspect_raw_code",
+        "inspect_sleigh",
+    ] {
+        let tool = tools.iter().find(|tool| tool.name == name).unwrap_or_else(|| panic!("{name} is listed"));
+        let hints = tool.annotations.as_ref().unwrap_or_else(|| panic!("{name} is annotated"));
+        assert_eq!((hints.read_only_hint, hints.open_world_hint), (Some(true), Some(false)), "{name}");
+    }
+    for name in ["fs_extract", "write_decoded_range", "endpoint_blocklist"] {
+        let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+        assert_eq!(tool.annotations.as_ref().unwrap().read_only_hint, Some(false), "{name}");
+    }
 
     let output = Output::new();
     let root = output.dir("rootfs");
