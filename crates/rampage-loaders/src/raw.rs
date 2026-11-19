@@ -670,8 +670,12 @@ impl RawCodeImage {
                     let holder = regions.iter().find(|region| region.backed() && region.range().contains(&store.value));
                     match holder {
                         None => {
-                            report.vector_table_refused =
-                                Some(format!("VTOR value {:#x} lies in no region with bytes", store.value));
+                            report.vector_table_refused = Some(format!(
+                                "VTOR value {:#x} lies in no region with bytes: the program fills that table at run \
+                                 time, so its interrupt handlers are not seeded; `xrefs` to {:#x} and the stores \
+                                 after it show the code that fills it",
+                                store.value, store.value
+                            ));
                         }
                         Some(region) => {
                             match crate::raw_vectors::read_with(

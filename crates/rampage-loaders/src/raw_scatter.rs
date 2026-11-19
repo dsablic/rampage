@@ -2025,7 +2025,11 @@ mod tests {
         assert_eq!(kinds, [("raw.code", u64::from(BASE)), ("raw.code.1", 0x1000_0000), ("raw.ram.2", 0x2000_0000)]);
         assert!(raw.seeds().contains(&0x1000_0000));
         let report = raw.scatter_load().unwrap();
-        assert_eq!(report.vector_table_refused.as_deref(), Some("VTOR value 0x30000000 lies in no region with bytes"));
+        let refused = report.vector_table_refused.as_deref().unwrap_or_default();
+        assert!(
+            refused.starts_with("VTOR value 0x30000000 lies in no region with bytes: the program fills"),
+            "{refused}"
+        );
         let binary = admit(0x1000_0000);
         let report = binary.raw_code_image().unwrap().scatter_load().unwrap();
         assert_eq!(report.vector_table.as_ref().map(|table| table.address), Some(0x1000_0000), "{report:#?}");
