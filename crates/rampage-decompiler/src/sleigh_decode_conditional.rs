@@ -240,7 +240,7 @@ fn actual_cr16_oracle_recovers_flow_but_context_helper_and_delay_gates_still_win
         record.context_mediated_flow = context;
         record.processor_helper_required = helper;
         record.extent = extent;
-        let gated = convert(decoder.profile(), address, &record);
+        let gated = convert(decoder.profile(), address, &record, &[]);
         assert_eq!(gated.status, DecodeStatus::Valid);
         assert_eq!(gated.flow, InstructionFlow::Unknown { reason });
         assert_eq!(gated.unknown_gate.as_ref().unwrap().reason, reason);

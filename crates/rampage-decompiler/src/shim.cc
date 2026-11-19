@@ -765,6 +765,9 @@ public:
 class DecodePcode : public PcodeEmit {
     DecodeResult &result;
     const Sleigh &sleigh;
+    // Ops past the result's own `decodeMaxOps` (extended decoding only): `extra[index - decodeMaxOps]`.
+    DecodeOp *extra;
+    size_t extraCapacity;
 
     uint32_t spaceId(AddrSpace *space) const {
         for (int4 i = 0; i < sleigh.numSpaces(); ++i) {
@@ -787,12 +790,16 @@ class DecodePcode : public PcodeEmit {
     }
 
 public:
-    DecodePcode(DecodeResult &output, const Sleigh &translator) : result(output), sleigh(translator) {}
+    DecodePcode(DecodeResult &output, const Sleigh &translator, DecodeOp *overflow, size_t capacity)
+        : result(output), sleigh(translator), extra(overflow), extraCapacity(capacity) {}
     void dump(const Address &address, OpCode opcode, VarnodeData *output,
               VarnodeData *inputs, int4 count) override {
-        if (result.opCount >= decodeMaxOps || count < 0 || size_t(count) > decodeMaxInputs)
+        size_t index = result.opCount;
+        if (index >= decodeMaxOps + extraCapacity || count < 0 || size_t(count) > decodeMaxInputs)
             throw DecodeLimit();
-        DecodeOp &op = result.ops[result.opCount++];
+        DecodeOp &op = index < decodeMaxOps ? result.ops[index] : extra[index - decodeMaxOps];
+        if (index >= decodeMaxOps) op = DecodeOp{};
+        result.opCount++;
         op.opcode = uint32_t(opcode);
         decodeText(op.name, get_opname(opcode));
         op.address = address.getOffset();
@@ -1872,9 +1879,10 @@ const char *rampage_sleigh_error(void *pointer) noexcept {
 }
 
 // Status: valid, invalid, truncated, unavailable, unimplemented, limit, internal, ambiguous tail.
-void rampage_sleigh_decode(void *pointer, uint64_t base, const uint8_t *bytes,
-                          size_t size, DecodeResult *result) noexcept {
+static void decodeInto(void *pointer, uint64_t base, const uint8_t *bytes, size_t size, DecodeResult *result,
+                       DecodeOp *extra, size_t extraCapacity) noexcept {
     if (result == nullptr) return;
+    if (extra == nullptr) extraCapacity = 0;
     memset(result, 0, sizeof(*result));
     result->status = 6;
     DecodeHandle *handle = static_cast<DecodeHandle *>(pointer);
@@ -1910,7 +1918,7 @@ void rampage_sleigh_decode(void *pointer, uint64_t base, const uint8_t *bytes,
         DecodeAssembly assembly(*result);
         if (handle->sleigh->printAssembly(assembly, address) != length)
             throw LowlevelError("Inconsistent assembly instruction length");
-        DecodePcode pcode(*result, *handle->sleigh);
+        DecodePcode pcode(*result, *handle->sleigh, extra, extraCapacity);
         int4 extent = handle->sleigh->oneInstruction(pcode, address);
         result->contextMediatedFlow |= handle->sleigh->hasContextCommits(address);
         handle->image.require(extent, address);
@@ -1947,6 +1955,20 @@ void rampage_sleigh_decode(void *pointer, uint64_t base, const uint8_t *bytes,
         decodeError(result->error, "Unexpected native instruction decoder exception");
     }
 }
+
+void rampage_sleigh_decode(void *pointer, uint64_t base, const uint8_t *bytes,
+                          size_t size, DecodeResult *result) noexcept {
+    decodeInto(pointer, base, bytes, size, result, nullptr, 0);
+}
+
+// As rampage_sleigh_decode, with ops past the result's own array written to `extra` (at most `capacity`), for
+// instructions with long p-code such as AVX per-element operations. `opCount` counts both.
+void rampage_sleigh_decode_extended(void *pointer, uint64_t base, const uint8_t *bytes, size_t size,
+                                    DecodeResult *result, DecodeOp *extra, size_t capacity) noexcept {
+    decodeInto(pointer, base, bytes, size, result, extra, capacity);
+}
+
+size_t rampage_sleigh_op_size() noexcept { return sizeof(DecodeOp); }
 
 void rampage_sleigh_close(void *pointer) noexcept {
     try { delete static_cast<DecodeHandle *>(pointer); } catch (...) {}

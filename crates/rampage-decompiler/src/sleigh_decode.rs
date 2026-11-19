@@ -11,6 +11,8 @@ use crate::{Error, FFI_LOCK, context};
 
 pub const MAX_WINDOW_BYTES: usize = 65_536;
 const MAX_OPS: usize = 128;
+/// Ops past `MAX_OPS` an extended decode accepts ([`SleighDecoder::decode_instruction_extended`]).
+const MAX_EXTRA_OPS: usize = 1920;
 const MAX_INPUTS: usize = 16;
 const MAX_SPACES: usize = 32;
 
@@ -257,6 +259,16 @@ unsafe extern "C" {
     fn rampage_sleigh_open(home: *const c_char, sla: *const c_char, pspec: *const c_char) -> *mut c_void;
     fn rampage_sleigh_error(handle: *mut c_void) -> *const c_char;
     fn rampage_sleigh_decode(handle: *mut c_void, base: u64, bytes: *const u8, size: usize, result: *mut NativeResult);
+    fn rampage_sleigh_decode_extended(
+        handle: *mut c_void,
+        base: u64,
+        bytes: *const u8,
+        size: usize,
+        result: *mut NativeResult,
+        extra: *mut NativeOp,
+        capacity: usize,
+    );
+    fn rampage_sleigh_op_size() -> usize;
     fn rampage_sleigh_close(handle: *mut c_void);
     fn rampage_sleigh_register(
         handle: *mut c_void,
@@ -442,7 +454,9 @@ impl SleighDecoder {
     fn open_descriptor(descriptor: &'static RegisteredProfile) -> Result<Self, Error> {
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         // SAFETY: this reads only the shim's compile-time record size under the native serialization lock.
-        if unsafe { rampage_sleigh_result_size() } != std::mem::size_of::<NativeResult>() {
+        if unsafe { rampage_sleigh_result_size() } != std::mem::size_of::<NativeResult>()
+            || unsafe { rampage_sleigh_op_size() } != std::mem::size_of::<NativeOp>()
+        {
             return Err(Error::Ghidra("instruction decoder ABI record size mismatch".to_owned()));
         }
         let proof = context::require_verified_bundled_native_context_locked()?;
@@ -522,11 +536,41 @@ impl SleighDecoder {
             rampage_sleigh_decode(self.handle, address, bytes.as_ptr(), bytes.len(), output.as_mut_ptr());
         }
         let output = unsafe { output.assume_init() };
-        let decoded = convert(self.profile.id, address, &output);
+        let decoded = convert(self.profile.id, address, &output, &[]);
         self.last_valid_decode_site = (decoded.status == DecodeStatus::Valid).then_some(decoded.address);
         self.last_unknown_gate = decoded.unknown_gate.clone().filter(|gate| {
             decoded.status == DecodeStatus::Valid && gate.address == decoded.address && gate.profile == self.profile.id
         });
+        decoded
+    }
+}
+
+impl SleighDecoder {
+    /// [`Self::decode_instruction`], accepting instructions whose p-code is longer than the window decoder's limit
+    /// (up to 2048 operations, as AVX per-element operations need). For interpreting code, where each instruction
+    /// is decoded once: the overflow array costs a large allocation per call.
+    pub fn decode_instruction_extended(&mut self, bytes: &[u8], address: u64) -> DecodedInstruction {
+        let mut output = Box::<NativeResult>::new_uninit();
+        // SAFETY: NativeOp consists only of integers and fixed arrays of integers, so all-zero is a valid value.
+        let mut extra: Vec<NativeOp> = vec![unsafe { std::mem::zeroed() }; MAX_EXTRA_OPS];
+        let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+        // SAFETY: C initializes the complete fixed-size result, writes at most `extra.len()` overflow ops, copies
+        // bounded input, and keeps no Rust pointers.
+        unsafe {
+            rampage_sleigh_decode_extended(
+                self.handle,
+                address,
+                bytes.as_ptr(),
+                bytes.len(),
+                output.as_mut_ptr(),
+                extra.as_mut_ptr(),
+                extra.len(),
+            );
+        }
+        let output = unsafe { output.assume_init() };
+        let decoded = convert(self.profile.id, address, &output, &extra);
+        self.last_valid_decode_site = (decoded.status == DecodeStatus::Valid).then_some(decoded.address);
+        self.last_unknown_gate = None;
         decoded
     }
 }
@@ -557,15 +601,15 @@ fn node(value: NativeNode, spaces: &[Space]) -> Varnode {
     }
 }
 
-fn convert(profile: &str, address: u64, value: &NativeResult) -> DecodedInstruction {
-    if value.op_count as usize > MAX_OPS
+fn convert(profile: &str, address: u64, value: &NativeResult, extra: &[NativeOp]) -> DecodedInstruction {
+    let count = value.op_count as usize;
+    let ops = || value.ops[..count.min(MAX_OPS)].iter().chain(&extra[..count.saturating_sub(MAX_OPS).min(extra.len())]);
+    if count > MAX_OPS + extra.len()
         || value.space_count as usize > MAX_SPACES
         || value.status > 7
         || value.context_mediated_flow > 1
         || value.processor_helper_required > 1
-        || value.ops[..value.op_count as usize]
-            .iter()
-            .any(|op| op.input_count as usize > MAX_INPUTS || op.has_output > 1)
+        || ops().any(|op| op.input_count as usize > MAX_INPUTS || op.has_output > 1)
     {
         return malformed_record(profile, address);
     }
@@ -591,8 +635,7 @@ fn convert(profile: &str, address: u64, value: &NativeResult) -> DecodedInstruct
             highest: space.highest,
         })
         .collect::<Vec<_>>();
-    let pcode = value.ops[..value.op_count as usize]
-        .iter()
+    let pcode = ops()
         .map(|op| PcodeOp {
             opcode: op.opcode,
             name: text(&op.name),
@@ -1032,7 +1075,7 @@ mod tests {
             record.op_count = ops as u32;
             record.space_count = spaces as u32;
             record.ops[0].input_count = inputs as u32;
-            let result = convert("x86:LE:64:default", 0x1000, &record);
+            let result = convert("x86:LE:64:default", 0x1000, &record, &[]);
             assert_eq!(result.status, DecodeStatus::InternalError, "{result:?}");
             assert_eq!(result.flow, InstructionFlow::Unknown { reason: UnknownFlow::MalformedPcode });
             assert!(result.pcode.is_empty());
