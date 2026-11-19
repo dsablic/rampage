@@ -974,17 +974,33 @@ impl RampageServer {
                 (None, Some(_)) => return Err("`image_length` needs `image_offset`".to_owned()),
                 (None, None) => None,
             };
+            // A file with no executable header and no format of its own (a filesystem image, DEX or a record file
+            // keeps its pointed error) gets triage at container level instead of an error.
+            let container = |error: rampage_api::ApiError| -> Result<(String, bool), String> {
+                if matches!(name, "triage" | "triage_report")
+                    && image.is_none()
+                    && headerless(&error)
+                    && rampage_api::headerless_guidance_for(Path::new(path)) == rampage_api::headerless_guidance()
+                {
+                    return rampage_api::headerless_triage(Path::new(path), &open_error(&error))
+                        .map(|value| (value.to_string(), false))
+                        .map_err(|error| error_text(&error));
+                }
+                Err(open_error(&error))
+            };
             let mut project = if tool.reads_annotations {
-                let project =
-                    self.session.open_at(&PathBuf::from(path), arch, image).map_err(|error| open_error(&error))?;
+                let project = match self.session.open_at(&PathBuf::from(path), arch, image) {
+                    Ok(project) => project,
+                    Err(error) => return container(error),
+                };
                 // Other clients (the UI, the CLI) may have saved names since the last call.
                 project.refresh_annotations().map_err(|error| error_text(&error))?;
                 project
             } else {
-                let binary = rampage_loaders::Binary::open_image(path, image, arch);
-                let project = Project::new(binary.map_err(|source| {
-                    open_error(&rampage_api::ApiError::Load { path: PathBuf::from(path), source })
-                })?);
+                let project = match rampage_loaders::Binary::open_image(path, image, arch) {
+                    Ok(binary) => Project::new(binary),
+                    Err(source) => return container(rampage_api::ApiError::Load { path: PathBuf::from(path), source }),
+                };
                 project.set_packs(self.packs());
                 Arc::new(project)
             };
@@ -1048,8 +1064,7 @@ impl RampageServer {
 /// Why a native open failed; for a file without a recognised header, also how to read it as headerless code.
 fn open_error(error: &rampage_api::ApiError) -> String {
     let text = error_text(error);
-    let headerless = matches!(error, rampage_api::ApiError::Load { source: rampage_loaders::LoadError::Parse(_), .. })
-        && text.contains("Unknown file magic");
+    let headerless = headerless(error);
     match error {
         rampage_api::ApiError::Load { path, .. } if headerless => {
             format!("{text}. {}", rampage_api::headerless_guidance_for(path))
@@ -1057,6 +1072,12 @@ fn open_error(error: &rampage_api::ApiError) -> String {
         _ if headerless => format!("{text}. {}", rampage_api::headerless_guidance()),
         _ => text,
     }
+}
+
+/// Whether a native open failed because the file has no recognised executable header.
+fn headerless(error: &rampage_api::ApiError) -> bool {
+    matches!(error, rampage_api::ApiError::Load { source: rampage_loaders::LoadError::Parse(_), .. })
+        && error_text(error).contains("Unknown file magic")
 }
 
 /// An `image_offset` or `image_length` argument (see [`FileOffset`]); `null` means none.

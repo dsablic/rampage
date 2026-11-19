@@ -47,6 +47,7 @@ mod fs_image;
 mod fuzzy_signatures;
 mod go_strings;
 mod graph;
+mod headerless_triage;
 mod image_export;
 mod import_types;
 mod init_services;
@@ -202,6 +203,7 @@ pub use fuzzy_signatures::{
     MAX_FUZZY_QUERY_FUNCTIONS, fuzzy_code_identity, fuzzy_code_projection,
 };
 pub use graph::{Edge, EdgeKind, FunctionGraph, GraphBlock};
+pub use headerless_triage::headerless_triage;
 pub use image_export::{ExportFormat, ExportImageRequest, ImageExport};
 pub use import_types::{ImportPrototype, PosixContext, import_prototype};
 pub use integrity::{IntegrityOutcome, IntegrityReport, IntegrityRequest};

@@ -101,6 +101,12 @@ async fn headerless_files_and_unknown_profiles_say_what_to_use_instead() {
     let (text, failed) = call(&client, "binary_info", json!({ "path": path })).await;
     assert!(failed && text.contains("Unknown file magic"), "{text}");
     assert!(text.contains("inspect_raw_code") && text.contains("\"profile\":\"msp430\""), "{text}");
+    // Seventh Haiku run: `triage` answers such a file at container level instead of with the error.
+    for tool in ["triage", "triage_report"] {
+        let (text, failed) = call(&client, tool, json!({ "path": path })).await;
+        assert!(!failed && text.contains("\"parsed_as_executable\":false"), "{tool}: {text}");
+        assert!(text.contains("Unknown file magic") && text.contains("largest_occupied_regions"), "{tool}: {text}");
+    }
 
     let mut selector = raw(&[]);
     for profile in ["cortex-m3", "thumb", "ARM:LE:32:Cortex", "armv7m", "cortex-m0+", "armv6m"] {
