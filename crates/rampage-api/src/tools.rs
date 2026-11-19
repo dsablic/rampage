@@ -1034,12 +1034,14 @@ pub fn file_tools() -> Vec<FileTool> {
             group: Group::Carve,
             name: "carve",
             description: "Scan any file (firmware, installer, dump, archive) for embedded executables and containers \
-                (ELF, PE, Mach-O, zip, gzip, xz, zstd, LZMA, bzip2, squashfs, ext, Android sparse/boot, OTA, cpio, \
-                tar, uImage): each candidate's offset, kind, header facts and estimated extent, with confidence \
-                validated or magic_only. Inside images fs_list reads, only validated candidates (only executables in \
-                squashfs, sparse, OTA) are listed; the image's notes count the rest. Pass an executable's offset as \
-                image_offset to analyze it in place. Nothing is extracted or decompressed. Paged with offset/limit; \
-                `more` says whether another page follows; the scan stops at 4096 candidates.",
+                (ELF, PE, Mach-O, zip, gzip, xz, zstd, LZMA, bzip2, LZ4, lzop, squashfs, ext, UBI, UBIFS, JFFS2, \
+                CramFS, FAT, Android sparse/boot, OTA, cpio, tar, uImage, TRX, DTB, MBR, GPT, UEFI): each \
+                candidate's offset, kind, header facts and estimated extent, with confidence validated or \
+                magic_only. Inside ext, tar, cpio and zip only validated candidates are listed, inside compressed \
+                images (squashfs, UBI, JFFS2, ...) only validated executables; the image's notes count the rest. \
+                Pass an executable's offset as image_offset to analyze it in place. Nothing is extracted or \
+                decompressed. Paged with offset/limit; `more` says whether another page follows; the scan stops at \
+                4096 candidates.",
             input_schema: schema::<CarveArgs>(),
             handler: |_, input| {
                 let args: CarveArgs =

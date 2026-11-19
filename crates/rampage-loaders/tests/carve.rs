@@ -820,3 +820,574 @@ fn a_64bit_ext_block_count_takes_its_high_word() {
     assert_eq!((candidate.kind, candidate.confidence, candidate.extent), (Kind::Ext, Confidence::Validated, None));
     assert!(candidate.notes.iter().any(|note| note.contains("exceeds 2^64")), "{:?}", candidate.notes);
 }
+
+/// The reflected CRC-32 register after `bytes` from `state`, with no inversion before or after.
+fn crc_register(mut state: u32, bytes: &[u8]) -> u32 {
+    for &byte in bytes {
+        state ^= u32::from(byte);
+        for _ in 0..8 {
+            state = if state & 1 != 0 { (state >> 1) ^ 0xedb8_8320 } else { state >> 1 };
+        }
+    }
+    state
+}
+
+fn put32(bytes: &mut [u8], at: usize, value: u32, big: bool) {
+    bytes[at..at + 4].copy_from_slice(&if big { value.to_be_bytes() } else { value.to_le_bytes() });
+}
+
+/// The first candidate at offset 0: its kind, confidence and extent.
+fn first(bytes: &[u8]) -> Option<(Kind, Confidence, Option<u64>)> {
+    let carving = carve::scan(bytes, &Limits::default());
+    carving.candidates.first().filter(|c| c.offset == 0).map(|c| (c.kind, c.confidence, c.extent))
+}
+
+const PEB: usize = 0x4000;
+
+/// One UBI erase block: an erase counter header (VID header at 0x200, data at 0x800, image sequence 0x1234), a
+/// volume header unless `unmapped`, then `data` and 0xff.
+fn ubi_block(data: &[u8], unmapped: bool) -> Vec<u8> {
+    let mut block = vec![0xff; PEB];
+    block[..64].fill(0);
+    block[..5].copy_from_slice(b"UBI#\x01");
+    put32(&mut block, 16, 0x200, true);
+    put32(&mut block, 20, 0x800, true);
+    put32(&mut block, 24, 0x1234, true);
+    let crc = crc_register(!0, &block[..60]);
+    put32(&mut block, 60, crc, true);
+    if !unmapped {
+        block[0x200..0x240].fill(0);
+        block[0x200..0x206].copy_from_slice(b"UBI!\x01\x01");
+        let crc = crc_register(!0, &block[0x200..0x23c]);
+        put32(&mut block, 0x23c, crc, true);
+    }
+    block[0x800..0x800 + data.len()].copy_from_slice(data);
+    block
+}
+
+/// A UBIFS superblock node of `lebs` LEBs of 0x3800 bytes.
+fn ubifs_superblock(lebs: u32) -> Vec<u8> {
+    let mut node = vec![0u8; 4096];
+    put32(&mut node, 0, 0x0610_1831, false);
+    put32(&mut node, 16, 4096, false);
+    node[20] = 6;
+    put32(&mut node, 32, 0x800, false);
+    put32(&mut node, 36, 0x3800, false);
+    put32(&mut node, 40, lebs, false);
+    put32(&mut node, 44, 2048, false);
+    put32(&mut node, 80, 4, false);
+    node[84] = 1;
+    let crc = crc_register(!0, &node[8..]);
+    put32(&mut node, 4, crc, false);
+    node
+}
+
+#[test]
+fn carves_ubi_and_ubifs_images() {
+    // Four erase blocks, the third erased: the extent runs through the fourth. A gzip stream in a LEB is left out,
+    // an ELF is reported.
+    let elf = fixture("hello-mips.elf");
+    let blocks = [ubi_block(&gzip(), false), ubi_block(&elf, false), vec![0xff; PEB], ubi_block(b"", true)];
+    let mut image = blocks.concat();
+    image.extend(junk(1000, 3));
+    let carving = carve::scan(&image, &Limits::default());
+    let found: Vec<_> = carving.candidates.iter().map(|c| (c.offset, c.kind, c.extent)).collect();
+    let elf_extent = carve::executable(&elf).unwrap().extent;
+    assert_eq!(found, [(0, Kind::Ubi, Some(4 * PEB as u64)), (PEB as u64 + 0x800, Kind::Elf, elf_extent)]);
+    let notes = &carving.candidates[0].notes;
+    assert!(notes[0].starts_with("4 erase blocks of 0x4000 bytes (2 with a volume header)"), "{notes:?}");
+    assert!(notes[1].contains("left out inside it: 1 candidate (1 gzip); fs_list lists its contents"), "{notes:?}");
+    assert_eq!(carving.candidates[1].notes.last().unwrap(), "inside the ubi at 0x0");
+
+    // One block alone has no erase block size, so no extent; a wrong CRC is magic_only; truncated, magic_only.
+    let one = ubi_block(b"", false);
+    let carving = carve::scan(&one, &Limits::default());
+    assert_eq!((carving.candidates[0].kind, carving.candidates[0].extent), (Kind::Ubi, None));
+    assert!(carving.candidates[0].notes[0].contains("no second erase counter header"), "{:?}", carving.candidates);
+    let mut forged = image.clone();
+    forged[8] ^= 1;
+    assert_eq!(first(&forged), Some((Kind::Ubi, Confidence::MagicOnly, None)));
+    assert_eq!(first(&image[..40]), Some((Kind::Ubi, Confidence::MagicOnly, None)));
+    assert_eq!(first(b"UBI#\x02 and so on"), None);
+
+    let superblock = ubifs_superblock(3);
+    let mut fs = superblock.clone();
+    fs.resize(3 * 0x3800, 0);
+    assert_eq!(first(&fs), Some((Kind::Ubifs, Confidence::Validated, Some(3 * 0x3800))));
+    let carving = carve::scan(&fs, &Limits::default());
+    assert!(carving.candidates[0].notes[0].contains("3 LEBs of 0x3800 bytes, lzo compression"), "{:?}", carving);
+    let mut forged = fs.clone();
+    forged[40] = 4;
+    assert_eq!(first(&forged), Some((Kind::Ubifs, Confidence::MagicOnly, None)), "a LEB count the CRC does not cover");
+    assert_eq!(first(&fs[..4000]), Some((Kind::Ubifs, Confidence::MagicOnly, None)));
+    let mut other_node = fs.clone();
+    other_node[20] = 1;
+    assert_eq!(first(&other_node), None, "only the superblock node starts a file system");
+}
+
+/// A JFFS2 node header of `kind` and `size` bytes, padded to its size.
+fn jffs2_node(kind: u16, size: u32, big: bool) -> Vec<u8> {
+    let mut node = vec![0u8; size as usize];
+    let half = |value: u16| if big { value.to_be_bytes() } else { value.to_le_bytes() };
+    node[..2].copy_from_slice(&half(0x1985));
+    node[2..4].copy_from_slice(&half(kind));
+    put32(&mut node, 4, size, big);
+    let crc = crc_register(0, &node[..8]);
+    put32(&mut node, 8, crc, big);
+    node
+}
+
+#[test]
+fn carves_jffs2_images_by_walking_their_nodes() {
+    for big in [false, true] {
+        // A clean marker, an inode, 100 bytes of erased padding, a directory entry (size not a multiple of 4).
+        let mut image = jffs2_node(0x2003, 12, big);
+        image.extend(jffs2_node(0xe002, 68, big));
+        image.extend([0xff; 100]);
+        image.extend(jffs2_node(0xe001, 41, big));
+        image.extend([0xff; 3]);
+        let end = image.len() as u64;
+        image.extend(gzip());
+        let carving = carve::scan(&image, &Limits::default());
+        let found: Vec<_> = carving.candidates.iter().map(|c| (c.offset, c.kind, c.extent)).collect();
+        assert_eq!(found, [(0, Kind::Jffs2, Some(end)), (end, Kind::Gzip, None)], "big-endian {big}");
+        assert_eq!(carving.candidates[0].notes[0], "3 nodes walked");
+        assert!(carving.candidates[0].notes[1].ends_with("; fs_list does not read it"), "{:?}", carving.candidates[0]);
+        assert_eq!(
+            carving.candidates[0].endianness.unwrap().to_string(),
+            if big { "big-endian" } else { "little-endian" }
+        );
+    }
+    // Two nodes are not an image; a wrong header CRC is nothing; a truncated header, magic_only.
+    let two = [jffs2_node(0xe001, 12, false), jffs2_node(0xe002, 12, false)].concat();
+    assert_eq!(first(&two), Some((Kind::Jffs2, Confidence::MagicOnly, None)));
+    let mut forged = [two.clone(), jffs2_node(0xe002, 12, false)].concat();
+    forged[8] ^= 1;
+    assert_eq!(first(&forged), None);
+    assert_eq!(first(&two[..8]), Some((Kind::Jffs2, Confidence::MagicOnly, None)));
+}
+
+/// A little-endian CramFS image of `size` bytes with its CRC, the root inode a directory.
+fn cramfs_image(size: usize) -> Vec<u8> {
+    let mut image = vec![0u8; size];
+    put32(&mut image, 0, 0x28cd_3d45, false);
+    put32(&mut image, 4, size as u32, false);
+    put32(&mut image, 8, 3, false);
+    image[16..32].copy_from_slice(b"Compressed ROMFS");
+    put32(&mut image, 40, 1, false);
+    put32(&mut image, 44, 1, false);
+    image[64..66].copy_from_slice(&0x41edu16.to_le_bytes());
+    let crc = crc32(&image);
+    put32(&mut image, 32, crc, false);
+    image
+}
+
+#[test]
+fn carves_cramfs_images_checking_their_crc() {
+    let image = cramfs_image(4096);
+    assert_eq!(first(&image), Some((Kind::Cramfs, Confidence::Validated, Some(4096))));
+    let mut forged = image.clone();
+    put32(&mut forged, 4, 2048, false);
+    assert_eq!(first(&forged), Some((Kind::Cramfs, Confidence::MagicOnly, None)), "a size the CRC does not cover");
+    let carving = carve::scan(&image[..1000], &Limits::default());
+    let candidate = &carving.candidates[0];
+    assert_eq!((candidate.confidence, candidate.extent), (Confidence::Validated, Some(4096)));
+    assert!(candidate.notes.iter().any(|note| note.contains("CRC was not checked")), "{candidate:?}");
+    assert_eq!(first(&image[..40]), Some((Kind::Cramfs, Confidence::MagicOnly, None)));
+    // Without the version 2 identifier there is no CRC, so no extent.
+    let mut old = image.clone();
+    old[8] = 2;
+    assert_eq!(first(&old), Some((Kind::Cramfs, Confidence::Validated, None)));
+    // Big-endian: the same fields, swapped.
+    let mut big = vec![0u8; 512];
+    put32(&mut big, 0, 0x28cd_3d45, true);
+    put32(&mut big, 4, 512, true);
+    put32(&mut big, 8, 1, true);
+    big[16..32].copy_from_slice(b"Compressed ROMFS");
+    big[64..66].copy_from_slice(&0x41edu16.to_be_bytes());
+    let crc = crc32(&big);
+    put32(&mut big, 32, crc, true);
+    assert_eq!(first(&big), Some((Kind::Cramfs, Confidence::Validated, Some(512))));
+    // Each CRC is charged to the checksum budget.
+    let limits = Limits { max_walk_bytes: 10_000, ..Limits::default() };
+    let carving = carve::scan(&image.repeat(4), &limits);
+    let confidences: Vec<_> = carving.candidates.iter().map(|c| c.confidence).collect();
+    assert_eq!(confidences[..3], [Confidence::Validated, Confidence::Validated, Confidence::MagicOnly]);
+    assert!(carving.limitations.iter().any(|text| text.starts_with("CramFS checksums ran out")), "{carving:?}");
+}
+
+/// A version 1 TRX of `len` bytes, partitions at `offsets`, with its CRC.
+fn trx_image(len: usize, offsets: [u32; 3]) -> Vec<u8> {
+    let mut image = vec![0u8; len];
+    image[..4].copy_from_slice(b"HDR0");
+    put32(&mut image, 4, len as u32, false);
+    put32(&mut image, 12, 1 << 16, false);
+    for (index, offset) in offsets.into_iter().enumerate() {
+        put32(&mut image, 16 + 4 * index, offset, false);
+    }
+    let crc = crc_register(!0, &image[12..]);
+    put32(&mut image, 8, crc, false);
+    image
+}
+
+#[test]
+fn carves_trx_containers_and_reports_everything_inside() {
+    // A TRX holding an LZMA kernel (magic_only) and a SquashFS image: both are reported, marked with the TRX.
+    let mut payload = vec![0x5d, 0, 0, 0x80, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0];
+    payload.resize(100, 0x11);
+    payload.extend(squashfs());
+    let mut image = trx_image(28 + payload.len(), [28, 128, 0]);
+    image[28..].copy_from_slice(&payload);
+    let crc = crc_register(!0, &image[12..]);
+    put32(&mut image, 8, crc, false);
+    let carving = carve::scan(&image, &Limits::default());
+    let found: Vec<_> = carving.candidates.iter().map(|c| (c.offset, c.kind, c.confidence)).collect();
+    assert_eq!(
+        found,
+        [
+            (0, Kind::Trx, Confidence::Validated),
+            (28, Kind::Lzma, Confidence::MagicOnly),
+            (128, Kind::Squashfs, Confidence::Validated)
+        ]
+    );
+    assert_eq!(carving.candidates[0].notes, ["version 1, partitions at 0x1c, 0x80"]);
+    assert_eq!(carving.candidates[1].notes.last().unwrap(), "inside the trx at 0x0");
+
+    let mut forged = image.clone();
+    forged[200] ^= 1;
+    assert_eq!(first(&forged), Some((Kind::Trx, Confidence::MagicOnly, None)), "a wrong CRC");
+    assert_eq!(first(&trx_image(100, [28, 10, 0])), None, "partitions out of order");
+    assert_eq!(first(&image[..20]), Some((Kind::Trx, Confidence::MagicOnly, None)));
+    let carving = carve::scan(&image[..100], &Limits::default());
+    assert!(carving.candidates[0].notes.iter().any(|note| note.contains("CRC was not checked")));
+}
+
+/// A device tree of one empty root node.
+fn dtb() -> Vec<u8> {
+    let mut tree = vec![0u8; 72];
+    for (at, value) in [(0, 0xd00d_feed), (4, 72), (8, 56), (12, 72), (16, 40), (20, 17), (24, 16), (36, 16)] {
+        put32(&mut tree, at, value, true);
+    }
+    for (at, token) in [(56, 1), (64, 2), (68, 9)] {
+        put32(&mut tree, at, token, true);
+    }
+    tree
+}
+
+#[test]
+fn carves_device_trees_and_ignores_their_magic_alone() {
+    let tree = dtb();
+    assert_eq!(first(&tree), Some((Kind::Dtb, Confidence::Validated, Some(72))));
+    let mut wrong = tree.clone();
+    wrong[71] = 8;
+    assert_eq!(first(&wrong), None, "no end token");
+    let mut wrong = tree.clone();
+    wrong[23] = 16;
+    assert_eq!(first(&wrong), None, "version 16");
+    assert_eq!(first(&tree[..60]), Some((Kind::Dtb, Confidence::MagicOnly, None)));
+    assert_eq!(first(&tree[..30]), None);
+    assert_eq!(first(&[0xd0, 0x0d, 0xfe, 0xed, 0, 0, 0, 0].repeat(10)), None);
+}
+
+#[test]
+fn carves_lz4_and_lzop_headers_by_their_checksums() {
+    // Frame headers as the lz4 tool writes them: default flags, then with the content size.
+    let frame = [0x04, 0x22, 0x4d, 0x18, 0x64, 0x50, 0x08, 0x8a, 0xbc, 0x01];
+    assert_eq!(first(&frame), Some((Kind::Lz4, Confidence::Validated, None)));
+    let sized = [0x04, 0x22, 0x4d, 0x18, 0x6c, 0x50, 0x40, 0x0d, 0x03, 0, 0, 0, 0, 0, 0x5e, 0x8a];
+    let carving = carve::scan(&sized, &Limits::default());
+    assert_eq!(carving.candidates[0].uncompressed_size, Some(200_000));
+    assert_eq!(carving.candidates[0].notes, ["256 KiB maximum block size"]);
+    let mut forged = frame;
+    forged[6] = 0x09;
+    assert_eq!(first(&forged), Some((Kind::Lz4, Confidence::MagicOnly, None)));
+    assert_eq!(first(&frame[..6]), Some((Kind::Lz4, Confidence::MagicOnly, None)));
+    let mut constant = frame;
+    constant[4] = 0xa4;
+    assert_eq!(first(&constant), None, "version bits other than 01: the magic as a program constant");
+
+    let mut header = vec![0x89, b'L', b'Z', b'O', 0, 0x0d, 0x0a, 0x1a, 0x0a];
+    header.extend([0x10, 0x30, 0x20, 0xa0, 0x09, 0x40, 0x01, 0x05]);
+    header.extend([0x03, 0, 0, 0x01]);
+    header.extend([0, 0, 0x81, 0xa4, 0, 0, 0, 0, 0, 0, 0, 0]);
+    header.push(5);
+    header.extend(b"a.txt");
+    let (mut low, mut high) = (1u32, 0u32);
+    for &byte in &header[9..] {
+        low = (low + u32::from(byte)) % 65521;
+        high = (high + low) % 65521;
+    }
+    header.extend(((high << 16) | low).to_be_bytes());
+    let carving = carve::scan(&header, &Limits::default());
+    assert_eq!(summary(&carving.candidates[0]), (0, Kind::Lzop, Confidence::Validated, None, None));
+    assert_eq!(carving.candidates[0].notes, ["LZO1X-1, original name \"a.txt\""]);
+    let mut forged = header.clone();
+    forged[30] ^= 1;
+    assert_eq!(first(&forged), Some((Kind::Lzop, Confidence::MagicOnly, None)));
+    assert_eq!(first(&header[..30]), Some((Kind::Lzop, Confidence::MagicOnly, None)));
+}
+
+/// A FAT16 boot sector of a `sectors`-sector volume labelled "BOOT".
+fn fat16(sectors: u16) -> Vec<u8> {
+    let mut sector = vec![0u8; 512];
+    sector[..3].copy_from_slice(&[0xeb, 0x3c, 0x90]);
+    sector[3..11].copy_from_slice(b"mkfs.fat");
+    sector[11..13].copy_from_slice(&512u16.to_le_bytes());
+    sector[13] = 4;
+    sector[14..16].copy_from_slice(&1u16.to_le_bytes());
+    sector[16] = 2;
+    sector[17..19].copy_from_slice(&512u16.to_le_bytes());
+    sector[19..21].copy_from_slice(&sectors.to_le_bytes());
+    sector[21] = 0xf8;
+    sector[22..24].copy_from_slice(&64u16.to_le_bytes());
+    sector[0x26] = 0x29;
+    sector[0x2b..0x36].copy_from_slice(b"BOOT       ");
+    sector[0x36..0x3e].copy_from_slice(b"FAT16   ");
+    sector[510..].copy_from_slice(&[0x55, 0xaa]);
+    sector
+}
+
+/// An MBR with one bootable partition of `count` sectors at sector `start`, of `kind`.
+fn mbr(partitions: &[(u8, u32, u32)]) -> Vec<u8> {
+    let mut sector = vec![0u8; 512];
+    sector[..2].copy_from_slice(&[0xfa, 0x33]);
+    for (index, &(kind, start, count)) in partitions.iter().enumerate() {
+        let entry = 446 + 16 * index;
+        sector[entry] = 0x80;
+        sector[entry + 4] = kind;
+        put32(&mut sector, entry + 8, start, false);
+        put32(&mut sector, entry + 12, count, false);
+    }
+    sector[510..].copy_from_slice(&[0x55, 0xaa]);
+    sector
+}
+
+#[test]
+fn carves_mbr_disks_and_fat_volumes() {
+    // A disk with one FAT16 partition at sector 4 holding an ELF: disk, volume and ELF are reported, nested.
+    let elf = fixture("hello-mips.elf");
+    let mut disk = mbr(&[(0x06, 4, 20_000)]);
+    disk.resize(4 * 512, 0);
+    disk.extend(fat16(20_000));
+    disk.resize(40 * 1024, 0);
+    disk.extend(&elf);
+    disk.resize(4 * 512 + 20_000 * 512, 0);
+    let carving = carve::scan(&disk, &Limits::default());
+    let found: Vec<_> = carving.candidates.iter().map(|c| (c.offset, c.kind, c.extent)).collect();
+    let elf_extent = carve::executable(&elf).unwrap().extent;
+    assert_eq!(
+        found,
+        [(0, Kind::Mbr, Some(20_004 * 512)), (2048, Kind::Fat, Some(20_000 * 512)), (40 * 1024, Kind::Elf, elf_extent)]
+    );
+    assert_eq!(carving.candidates[0].notes[0], "1 partitions: type 0x06 at 0x800");
+    assert_eq!(carving.candidates[1].notes[0], "FAT16, 512-byte sectors, 4959 clusters, volume label \"BOOT\"");
+    assert_eq!(carving.candidates[1].notes[1], "inside the mbr at 0x0");
+    assert_eq!(carving.candidates[2].notes.last().unwrap(), "inside the fat at 0x800");
+
+    // An MBR only at a sector-aligned offset, with sane non-overlapping entries.
+    let mut shifted = vec![0u8; 100];
+    shifted.extend(mbr(&[(0x83, 4, 20)]));
+    assert!(carve::scan(&shifted, &Limits::default()).candidates.is_empty());
+    assert_eq!(first(&mbr(&[(0x83, 4, 20), (0x83, 10, 20)])), None, "overlapping partitions");
+    assert_eq!(first(&mbr(&[(0x83, 0, 20)])), None, "a partition over the MBR");
+    let mut flagged = mbr(&[(0x83, 4, 20)]);
+    flagged[446] = 0x81;
+    assert_eq!(first(&flagged), None, "a boot flag other than 0 or 0x80");
+    assert_eq!(first(&[0x55, 0xaa].repeat(256)), None);
+    assert_eq!(first(&[0u8; 510].iter().copied().chain([0x55, 0xaa]).collect::<Vec<_>>()), None, "no partitions");
+
+    // FAT: the "FAT" type string and the layout must check out.
+    let mut volume = fat16(20_000);
+    volume.resize(20_000 * 512, 0);
+    assert_eq!(first(&volume), Some((Kind::Fat, Confidence::Validated, Some(20_000 * 512))));
+    let mut untyped = volume.clone();
+    untyped[0x36..0x39].copy_from_slice(b"XYZ");
+    assert_eq!(first(&untyped), None);
+    assert_eq!(first(&fat16(100)), None, "a FAT larger than the volume");
+    assert_eq!(first(&volume[..300]), None);
+
+    // A FAT32 volume's backup boot sector (sector 6) is part of it, not a second volume.
+    let mut boot = fat16(0);
+    boot[17..21].fill(0);
+    boot[22..24].fill(0);
+    boot[32..36].copy_from_slice(&20_000u32.to_le_bytes());
+    boot[36..40].copy_from_slice(&100u32.to_le_bytes());
+    boot[50..52].copy_from_slice(&6u16.to_le_bytes());
+    boot[0x36..0x3e].fill(0);
+    boot[0x47..0x52].copy_from_slice(b"NO NAME    ");
+    boot[0x52..0x5a].copy_from_slice(b"FAT32   ");
+    let mut volume = boot.clone();
+    volume.resize(6 * 512, 0);
+    volume.extend(&boot);
+    volume.resize(20_000 * 512, 0);
+    let carving = carve::scan(&volume, &Limits::default());
+    let found: Vec<_> = carving.candidates.iter().map(|c| (c.offset, c.kind, c.extent)).collect();
+    assert_eq!(found, [(0, Kind::Fat, Some(20_000 * 512))]);
+    assert_eq!(carving.candidates[0].notes[0], "FAT32, 512-byte sectors, 4949 clusters");
+}
+
+/// A GPT disk of 100 sectors: protective MBR, header, 128 entries at LBA 2 (one partition "data" at 34..=90).
+fn gpt_disk() -> Vec<u8> {
+    let mut disk = mbr(&[(0xee, 1, 99)]);
+    disk[446] = 0;
+    disk.resize(100 * 512, 0);
+    let mut entries = vec![0u8; 128 * 128];
+    entries[..16].copy_from_slice(&[
+        0xaf, 0x3d, 0xc6, 0x0f, 0x83, 0x84, 0x72, 0x47, 0x8e, 0x79, 0x3d, 0x69, 0xd8, 0x47, 0x7d, 0xe4,
+    ]);
+    entries[16] = 1;
+    entries[32..40].copy_from_slice(&34u64.to_le_bytes());
+    entries[40..48].copy_from_slice(&90u64.to_le_bytes());
+    for (index, unit) in "data".encode_utf16().enumerate() {
+        entries[56 + 2 * index..58 + 2 * index].copy_from_slice(&unit.to_le_bytes());
+    }
+    disk[1024..1024 + entries.len()].copy_from_slice(&entries);
+    let header = &mut disk[512..1024];
+    header[..8].copy_from_slice(b"EFI PART");
+    put32(header, 8, 0x0001_0000, false);
+    put32(header, 12, 92, false);
+    header[24..32].copy_from_slice(&1u64.to_le_bytes());
+    header[32..40].copy_from_slice(&99u64.to_le_bytes());
+    header[40..48].copy_from_slice(&34u64.to_le_bytes());
+    header[48..56].copy_from_slice(&66u64.to_le_bytes());
+    header[72..80].copy_from_slice(&2u64.to_le_bytes());
+    put32(header, 80, 128, false);
+    put32(header, 84, 128, false);
+    put32(header, 88, crc32(&entries), false);
+    let crc = crc32(&header[..92]);
+    put32(header, 16, crc, false);
+    disk
+}
+
+#[test]
+fn carves_gpt_disks_behind_their_protective_mbr() {
+    let disk = gpt_disk();
+    let carving = carve::scan(&disk, &Limits::default());
+    assert_eq!(summary(&carving.candidates[0]), (0, Kind::Gpt, Confidence::Validated, None, Some(100 * 512)));
+    assert_eq!(carving.candidates[0].notes, ["1 partitions: data at 0x4400"]);
+    // A header CRC that does not match leaves the protective MBR, noted.
+    let mut forged = disk.clone();
+    forged[512 + 40] = 35;
+    let carving = carve::scan(&forged, &Limits::default());
+    assert_eq!(summary(&carving.candidates[0]), (0, Kind::Mbr, Confidence::Validated, None, Some(100 * 512)));
+    assert!(carving.candidates[0].notes[1].contains("GPT header after it does not check out"));
+    let mut forged = disk.clone();
+    forged[1024 + 40] = 91;
+    assert_eq!(first(&forged).unwrap().0, Kind::Mbr, "a partition array the CRC does not cover");
+    assert_eq!(first(&disk[..1000]).unwrap().0, Kind::Mbr);
+}
+
+/// A UEFI firmware volume of `blocks` 0x1000-byte blocks (FFS version 2), its header checksum filled in.
+fn firmware_volume(blocks: u32) -> Vec<u8> {
+    let mut volume = vec![0xffu8; blocks as usize * 0x1000];
+    volume[..0x48].fill(0);
+    volume[0x10..0x20].copy_from_slice(&[
+        0x78, 0xe5, 0x8c, 0x8c, 0x3d, 0x8a, 0x1c, 0x4f, 0x99, 0x35, 0x89, 0x61, 0x85, 0xc3, 0x2d, 0xd3,
+    ]);
+    volume[0x20..0x28].copy_from_slice(&(u64::from(blocks) * 0x1000).to_le_bytes());
+    volume[0x28..0x2c].copy_from_slice(b"_FVH");
+    put32(&mut volume, 0x2c, 0x0004_feff, false);
+    volume[0x30..0x32].copy_from_slice(&0x48u16.to_le_bytes());
+    volume[0x37] = 2;
+    put32(&mut volume, 0x38, blocks, false);
+    put32(&mut volume, 0x3c, 0x1000, false);
+    let sum = volume[..0x48].chunks(2).fold(0u16, |sum, word| sum.wrapping_add(u16::from_le_bytes([word[0], word[1]])));
+    volume[0x32..0x34].copy_from_slice(&0u16.wrapping_sub(sum).to_le_bytes());
+    volume
+}
+
+#[test]
+fn carves_uefi_volumes_and_capsules() {
+    // A capsule holding a firmware volume holding a PE: all three are reported, nested.
+    let pe = fixture("hello-x64.exe");
+    let mut volume = firmware_volume(0x40);
+    volume[0x100..0x100 + pe.len()].copy_from_slice(&pe);
+    let mut capsule =
+        vec![0xbd, 0x86, 0x66, 0x3b, 0x76, 0x0d, 0x30, 0x40, 0xb7, 0x0e, 0xb5, 0x51, 0x9e, 0x2f, 0xc5, 0xa0];
+    capsule.extend(28u32.to_le_bytes());
+    capsule.extend(0x0005_0000u32.to_le_bytes());
+    capsule.extend((28 + volume.len() as u32).to_le_bytes());
+    capsule.extend(&volume);
+    let carving = carve::scan(&capsule, &Limits::default());
+    let found: Vec<_> = carving.candidates.iter().map(|c| (c.offset, c.kind, c.confidence)).collect();
+    assert_eq!(
+        found,
+        [
+            (0, Kind::UefiCapsule, Confidence::Validated),
+            (28, Kind::UefiVolume, Confidence::Validated),
+            (28 + 0x100, Kind::Pe, Confidence::Validated)
+        ]
+    );
+    assert_eq!(carving.candidates[0].extent, Some(capsule.len() as u64));
+    assert_eq!(carving.candidates[1].notes[0], "revision 2, FFS version 2");
+    assert_eq!(carving.candidates[2].notes.last().unwrap(), "inside the uefi_volume at 0x1c");
+
+    let mut forged = volume.clone();
+    forged[0x2c] ^= 1;
+    assert_eq!(first(&forged), Some((Kind::UefiVolume, Confidence::MagicOnly, None)), "a wrong header checksum");
+    let mut forged = volume.clone();
+    forged[0x20] = 0x10;
+    assert_eq!(first(&forged), None, "a length the block map does not cover");
+    assert_eq!(first(&volume[..0x40]), Some((Kind::UefiVolume, Confidence::MagicOnly, None)));
+    // "_FVH" alone, as code comparing with it carries it, is nothing.
+    assert!(carve::scan(&b"\x81\x7e\x28_FVH".repeat(100), &Limits::default()).candidates.is_empty());
+    let mut forged = capsule.clone();
+    forged[24..28].copy_from_slice(&20u32.to_le_bytes());
+    assert_eq!(first(&forged), Some((Kind::UefiCapsule, Confidence::MagicOnly, None)));
+    // A firmware management capsule.
+    let mut fmp = capsule.clone();
+    fmp[..16].copy_from_slice(&[
+        0xed, 0xd5, 0xcb, 0x6d, 0x2d, 0xe8, 0x44, 0x4c, 0xbd, 0xa1, 0x71, 0x94, 0x19, 0x9a, 0xd9, 0x2a,
+    ]);
+    let carving = carve::scan(&fmp, &Limits::default());
+    assert_eq!(carving.candidates[0].notes[0], "firmware management capsule, header size 0x1c");
+}
+
+#[test]
+fn repeated_headers_of_wave_two_kinds_stay_bounded() {
+    let cap = |bytes: &[u8]| {
+        let carving = carve::scan(bytes, &Limits::default());
+        (carving.candidates.len(), carving.truncated)
+    };
+    // Headers that report each time stop at the candidate cap.
+    for (name, unit) in [
+        ("dtb", dtb()),
+        ("lz4", vec![0x04, 0x22, 0x4d, 0x18, 0x64, 0x50, 0x08, 0x8a]),
+        (
+            "capsule",
+            [&CAPSULE_HEAD[..], &28u32.to_le_bytes(), &0u32.to_le_bytes(), &32u32.to_le_bytes(), &[0; 4]].concat(),
+        ),
+        ("fat", fat16(20_000)),
+        ("mbr", mbr(&[(0x83, 4, 20)])),
+        ("cramfs", cramfs_image(256)),
+        ("trx", trx_image(64, [28, 0, 0])),
+    ] {
+        let copies = 40_000_000 / unit.len() / 10;
+        assert_eq!(cap(&unit.repeat(copies)), (carve::MAX_CANDIDATES, true), "{name}");
+    }
+    // Each UBIFS superblock is checked once; those inside an earlier one's extent are left out.
+    let mut superblock = ubifs_superblock(1);
+    superblock.resize(0x3800, 0);
+    let carving = carve::scan(&superblock.repeat(300), &Limits::default());
+    assert_eq!(carving.candidates.len(), 300);
+    // Walked images take the repeats as their own blocks or nodes: one candidate.
+    let nodes = jffs2_node(0xe001, 12, false).repeat(100_000);
+    assert_eq!(kinds_and_extents(&nodes), [(0, Kind::Jffs2, Some(nodes.len() as u64))]);
+    let blocks = ubi_block(b"", false).repeat(200);
+    assert_eq!(kinds_and_extents(&blocks), [(0, Kind::Ubi, Some(blocks.len() as u64))]);
+    // A TRX whose length claims 1 MiB each time: the checksums spend their budget, then each is magic_only.
+    let mut claims = trx_image(64, [28, 0, 0]);
+    claims[4..8].copy_from_slice(&(1u32 << 20).to_le_bytes());
+    let limits = Limits { max_walk_bytes: 4 << 20, ..Limits::default() };
+    let carving = carve::scan(&claims.repeat(100_000), &limits);
+    assert_eq!(carving.candidates.len(), carve::MAX_CANDIDATES);
+    assert!(carving.candidates.iter().all(|c| c.kind == Kind::Trx));
+    assert!(
+        carving.limitations.iter().any(|text| text.starts_with("TRX checksums ran out")),
+        "{:?}",
+        carving.limitations
+    );
+}
+
+const CAPSULE_HEAD: [u8; 16] =
+    [0xbd, 0x86, 0x66, 0x3b, 0x76, 0x0d, 0x30, 0x40, 0xb7, 0x0e, 0xb5, 0x51, 0x9e, 0x2f, 0xc5, 0xa0];

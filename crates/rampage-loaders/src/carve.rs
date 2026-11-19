@@ -1,10 +1,12 @@
 //! Carving: a bounded, read-only scan of a file for embedded executables (ELF, PE, Mach-O) and containers (zip,
-//! gzip, xz, zstd, LZMA, bzip2, squashfs, ext2/3/4, Android sparse images, OTA payloads, cpio, tar, uImage, Android
-//! boot images), found by magic and checked against their headers. Nothing is extracted, decompressed or executed:
+//! gzip, xz, zstd, LZMA, bzip2, LZ4, LZOP, squashfs, ext2/3/4, UBI, UBIFS, JFFS2, CramFS, FAT, Android sparse images,
+//! OTA payloads, cpio, tar, uImage, TRX, device trees, Android boot images, MBR and GPT disks, UEFI firmware volumes
+//! and capsules), found by magic and checked against their headers. Nothing is extracted, decompressed or executed:
 //! extents come from header tables alone.
 //!
-//! The ext, tar, bzip2 and Android sparse header checks follow binwalk's signatures (MIT, Copyright (c) 2024
-//! devttys0), adapted to the scan's bounds; see THIRD-PARTY-NOTICES.
+//! The ext, tar, bzip2, Android sparse, UBI, UBIFS, JFFS2, CramFS, TRX, device tree, LZ4, LZOP, MBR, GPT, FAT and
+//! UEFI header checks follow binwalk's signatures (MIT, Copyright (c) 2024 devttys0), adapted to the scan's bounds;
+//! see THIRD-PARTY-NOTICES.
 
 use std::fs::File;
 use std::path::Path;
@@ -23,8 +25,9 @@ pub const MAX_SCAN_BYTES: u64 = 4 << 30;
 /// The most bytes one scan searches for the end of gzip header fields, whose terminator can be far from the header
 /// that names them; past it, gzip headers carrying such fields are no longer checked.
 pub const MAX_PROBE_BYTES: u64 = 64 << 20;
-/// The most header bytes one scan reads walking tar headers, and again Android sparse chunk headers, and again OTA
-/// payload manifests; past a format's budget, its candidates are no longer walked.
+/// The most header bytes one scan reads walking tar headers, and again each for Android sparse chunk headers, OTA
+/// payload manifests, UBI erase block headers and JFFS2 nodes, and the most bytes it checksums for CramFS images and
+/// again for TRX containers; past a format's budget, its candidates are no longer walked or checksummed.
 pub const MAX_WALK_BYTES: u64 = 64 << 20;
 /// The most table entries (ELF program and section headers, Mach-O load commands, fat slices, archive members)
 /// read for one candidate.
@@ -76,26 +79,67 @@ pub enum Kind {
     Bzip2,
     /// An Android OTA `payload.bin` (update_engine).
     OtaPayload,
+    /// A UBI image: a run of physical erase blocks, each starting with an erase counter header.
+    Ubi,
+    /// A UBIFS file system, found by its superblock node.
+    Ubifs,
+    Jffs2,
+    Cramfs,
+    /// A Broadcom TRX firmware container.
+    Trx,
+    /// A flattened device tree (also the format of U-Boot FIT images).
+    Dtb,
+    /// An LZ4 frame.
+    Lz4,
+    Lzop,
+    /// A DOS master boot record with its partition table.
+    Mbr,
+    /// A GUID partition table disk: the protective MBR, then the GPT header.
+    Gpt,
+    /// A FAT12, FAT16 or FAT32 file system, found by its boot sector.
+    Fat,
+    /// A UEFI (PI) firmware volume.
+    UefiVolume,
+    UefiCapsule,
 }
 
-/// What the scan reports inside an image `fs_list` reads, once the image's extent is validated.
+/// What the scan reports inside an image or container, once its extent is validated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Inside {
-    /// Contents compressed or split into chunks (SquashFS blocks, OTA blobs, sparse chunks): only executables whose
-    /// headers validate are reported, since anything else found there is a fragment of the image's own encoding.
+    /// Contents compressed or split into chunks (SquashFS, UBI, UBIFS, JFFS2 and CramFS blocks, OTA blobs, sparse
+    /// chunks): only executables whose headers validate are reported, since anything else found there is a
+    /// fragment of the image's own encoding.
     Executables,
-    /// Contents stored as whole files (ext, tar, cpio, zip): every candidate whose header validates is a real file
-    /// and is reported; only magic-only matches are left out.
+    /// Contents stored as whole files in an image `fs_list` reads (ext, tar, cpio, zip): every candidate whose
+    /// header validates is a real file and is reported; only magic-only matches are left out.
     Validated,
+    /// Contents stored raw in a container `fs_list` does not read (TRX, device trees, MBR and GPT disks, FAT, UEFI
+    /// volumes and capsules): every candidate is reported, since carving is the only way to find them, and marked
+    /// with the container.
+    All,
 }
 
 impl Kind {
     fn inside(self) -> Option<Inside> {
         match self {
-            Self::Squashfs | Self::AndroidSparse | Self::OtaPayload => Some(Inside::Executables),
+            Self::Squashfs
+            | Self::AndroidSparse
+            | Self::OtaPayload
+            | Self::Ubi
+            | Self::Ubifs
+            | Self::Jffs2
+            | Self::Cramfs => Some(Inside::Executables),
             Self::Ext | Self::Cpio | Self::Tar | Self::Zip => Some(Inside::Validated),
+            Self::Trx | Self::Dtb | Self::Mbr | Self::Gpt | Self::Fat | Self::UefiVolume | Self::UefiCapsule => {
+                Some(Inside::All)
+            }
             _ => None,
         }
+    }
+
+    /// Whether `fs_list` lists this image's contents.
+    fn listed_by_fs_list(self) -> bool {
+        !matches!(self, Self::Jffs2 | Self::Cramfs) && self.inside() != Some(Inside::All)
     }
 
     fn is_executable(self) -> bool {
@@ -124,6 +168,19 @@ impl std::fmt::Display for Kind {
             Self::Tar => "tar",
             Self::Bzip2 => "bzip2",
             Self::OtaPayload => "ota_payload",
+            Self::Ubi => "ubi",
+            Self::Ubifs => "ubifs",
+            Self::Jffs2 => "jffs2",
+            Self::Cramfs => "cramfs",
+            Self::Trx => "trx",
+            Self::Dtb => "dtb",
+            Self::Lz4 => "lz4",
+            Self::Lzop => "lzop",
+            Self::Mbr => "mbr",
+            Self::Gpt => "gpt",
+            Self::Fat => "fat",
+            Self::UefiVolume => "uefi_volume",
+            Self::UefiCapsule => "uefi_capsule",
         })
     }
 }
@@ -312,13 +369,20 @@ impl Enclosing {
         let mut note = match self.inside {
             Inside::Executables => "inside it only executables whose headers validate are reported".to_owned(),
             Inside::Validated => "inside it only candidates whose headers validate are reported".to_owned(),
+            // Nothing is left out, and each candidate inside names the container.
+            Inside::All => return,
         };
         if total > 0 {
             let kinds: Vec<String> = self.left_out.iter().map(|(kind, count)| format!("{count} {kind}")).collect();
             let plural = if total == 1 { "" } else { "s" };
             note.push_str(&format!("; left out inside it: {total} candidate{plural} ({})", kinds.join(", ")));
         }
-        note.push_str("; fs_list lists its contents");
+        let kind = candidates[self.index].kind;
+        note.push_str(if kind.listed_by_fs_list() {
+            "; fs_list lists its contents"
+        } else {
+            "; fs_list does not read it"
+        });
         candidates[self.index].notes.push(note);
     }
 }
@@ -334,26 +398,33 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
     let mut zip_members_until = 0;
     let mut cpio_members_until = 0;
     let mut tar_members_until = 0;
-    // The images `fs_list` reads that enclose the offset, outermost first; see `Inside` for what each reports.
+    // Likewise UBI erase block headers and JFFS2 nodes inside an image already walked.
+    let mut ubi_blocks_until = 0;
+    let mut jffs2_nodes_until = 0;
+    // A FAT32 volume's backup boot sector is part of it, not another volume.
+    let mut fat_backup_at = usize::MAX;
+    // The images and containers that enclose the offset, outermost first; see `Inside` for what each reports.
     let mut enclosing: Vec<Enclosing> = Vec::new();
     let mut probe = Probe { left: limits.max_probe_bytes, exhausted: false };
     let mut probe_exhausted_at = None;
-    // Each walked format has its own budget, so that one long walk does not starve the others.
-    let mut walks = [(); 3].map(|()| Probe { left: limits.max_walk_bytes, exhausted: false });
-    let mut walk_exhausted_at = [None; 3];
+    // Each walked or checksummed format has its own budget, so that one long walk does not starve the others.
+    let mut walks = [(); WALKS.len()].map(|()| Probe { left: limits.max_walk_bytes, exhausted: false });
+    let mut walk_exhausted_at = [None; WALKS.len()];
     for offset in 0..scanned {
         let bytes = &data[offset..];
-        // Most offsets start no header: two byte loads rule out the formats without a magic at their start.
-        if !STARTS_A_MAGIC[usize::from(bytes[0])]
+        // Most offsets start no header: a few byte loads rule out the formats without a magic at their start.
+        if !starts_a_magic(bytes[0], bytes.get(1).copied().unwrap_or(0))
             && bytes.get(EXT_MAGIC_AT) != Some(&EXT_MAGIC[0])
             && bytes.get(TAR_MAGIC_AT) != Some(&TAR_MAGIC[0])
+            && bytes.get(FV_MAGIC_AT) != Some(&FV_MAGIC[0])
+            && !(offset % SECTOR == 0 && bytes.get(BOOT_SIGNATURE_AT) == Some(&BOOT_SIGNATURE[0]))
         {
             continue;
         }
         while let Some(image) = enclosing.pop_if(|image| offset >= image.end) {
             image.finish(&mut candidates);
         }
-        let [tar_walk, sparse_walk, ota_walk] = &mut walks;
+        let [tar_walk, sparse_walk, ota_walk, ubi_walk, jffs2_walk, cramfs_sum, trx_sum] = &mut walks;
         let mut found = match bytes[0] {
             0x7f | b'M' | 0xfe | 0xce | 0xcf | 0xca => executable(bytes),
             b'P' if offset >= zip_members_until => zip(bytes).map(|(candidate, walked)| {
@@ -368,7 +439,8 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
                 found
             }
             0xfd => xz(bytes),
-            0x28 => zstd(bytes),
+            0x28 => zstd(bytes).or_else(|| cramfs(bytes, cramfs_sum)),
+            0x45 => cramfs(bytes, cramfs_sum),
             0x5d => lzma(bytes),
             b'B' => bzip2(bytes),
             b'h' | b's' => squashfs(bytes),
@@ -380,11 +452,37 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
             b'A' => android_boot(bytes),
             0x3a => android_sparse(bytes, sparse_walk),
             b'C' => ota_payload(bytes, ota_walk),
+            b'U' if offset >= ubi_blocks_until => ubi(bytes, ubi_walk).map(|(candidate, walked)| {
+                ubi_blocks_until = offset.saturating_add(walked);
+                candidate
+            }),
+            0x31 => ubifs(bytes),
+            0x19 | 0x85 if offset >= jffs2_nodes_until => jffs2(bytes, jffs2_walk).map(|(candidate, walked)| {
+                jffs2_nodes_until = offset.saturating_add(walked);
+                candidate
+            }),
+            b'H' => trx(bytes, trx_sum),
+            0xd0 => dtb(bytes),
+            0x04 => lz4(bytes),
+            0x89 => lzop(bytes),
+            0xeb | 0xe9 if offset != fat_backup_at => fat_fs(bytes).map(|(candidate, backup)| {
+                if backup != 0 {
+                    fat_backup_at = offset.saturating_add(backup);
+                }
+                candidate
+            }),
+            0xbd | 0x8b | 0xb9 | 0xed => uefi_capsule(bytes),
             _ => None,
         };
-        // ext and tar headers have no magic at their start, so every offset is checked for theirs.
+        // ext, tar, UEFI volume and MBR headers have no magic at their start, so offsets are checked for theirs.
         if found.is_none() && bytes.get(EXT_MAGIC_AT) == Some(&EXT_MAGIC[0]) {
             found = ext(bytes);
+        }
+        if found.is_none() && bytes.get(FV_MAGIC_AT) == Some(&FV_MAGIC[0]) {
+            found = uefi_volume(bytes);
+        }
+        if found.is_none() && offset % SECTOR == 0 && bytes.get(BOOT_SIGNATURE_AT) == Some(&BOOT_SIGNATURE[0]) {
+            found = disk(bytes);
         }
         if found.is_none() && bytes.get(TAR_MAGIC_AT) == Some(&TAR_MAGIC[0]) && offset >= tar_members_until {
             found = tar(bytes, tar_walk).map(|(candidate, walked)| {
@@ -399,8 +497,12 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
         }
         let Some(mut candidate) = found else { continue };
         if let Some(image) = enclosing.last_mut() {
-            let reported = candidate.confidence == Confidence::Validated
-                && (image.inside == Inside::Validated || candidate.kind.is_executable());
+            let validated = candidate.confidence == Confidence::Validated;
+            let reported = match image.inside {
+                Inside::Executables => validated && candidate.kind.is_executable(),
+                Inside::Validated => validated,
+                Inside::All => true,
+            };
             if !reported {
                 image.leave_out(candidate.kind);
                 continue;
@@ -452,15 +554,7 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
             limits.max_probe_bytes
         ));
     }
-    let walked = [
-        "tar header walks ran out of their {budget}-byte budget at offset {offset}; tar archives from there on were \
-         not reported",
-        "Android sparse chunk walks ran out of their {budget}-byte budget at offset {offset}; sparse images from \
-         there on have no extent",
-        "OTA payload manifest reads ran out of their {budget}-byte budget at offset {offset}; payloads from there on \
-         have no extent",
-    ];
-    for (text, offset) in walked.iter().zip(walk_exhausted_at) {
+    for (text, offset) in WALKS.iter().zip(walk_exhausted_at) {
         if let Some(offset) = offset {
             otherwise_truncated = true;
             limitations.push(
@@ -476,14 +570,19 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
     );
     limitations.push(
         "zip, cpio and tar headers inside a reported archive, up to its end or its last member header read, are \
-         taken as its members: an archive stored inside another archive's members is not reported separately"
+         taken as its members: an archive stored inside another archive's members is not reported separately; \
+         likewise UBI erase blocks and JFFS2 nodes inside a reported image"
             .to_owned(),
     );
     limitations.push(
-        "inside a squashfs, Android sparse or OTA payload image whose validated extent lies within the file, only \
-         executables whose headers validate are reported; inside such an ext, tar, cpio or zip image, only \
-         candidates whose headers validate. Each image's notes count what was left out"
+        "inside a squashfs, UBI, UBIFS, JFFS2, CramFS, Android sparse or OTA payload image whose validated extent \
+         lies within the file, only executables whose headers validate are reported; inside such an ext, tar, cpio \
+         or zip image, only candidates whose headers validate. Each image's notes count what was left out. Inside a \
+         TRX, device tree, MBR, GPT, FAT or UEFI container every candidate is reported, marked with it"
             .to_owned(),
+    );
+    limitations.push(
+        "MBR and GPT disks are looked for only at 512-byte-aligned file offsets, with 512-byte sectors".to_owned(),
     );
     Carving {
         file_size: data.len() as u64,
@@ -508,20 +607,68 @@ pub fn executable(bytes: &[u8]) -> Option<Candidate> {
     }
 }
 
-/// The first bytes the scan dispatches on: the formats whose magic starts their header.
-const STARTS_A_MAGIC: [bool; 256] = {
-    let mut table = [false; 256];
-    let firsts = [
-        0x7f, b'M', 0xfe, 0xce, 0xcf, 0xca, b'P', 0x1f, 0xfd, 0x28, 0x5d, b'B', b'h', b's', b'0', 0x27, b'A', 0x3a,
-        b'C',
+/// The first two bytes of the formats whose magic starts their header, as a bit set indexed by the two bytes: the
+/// scan dispatches only on these. A FAT boot sector starts with a jump whose second byte is its target.
+const STARTS_A_MAGIC: [u64; 1024] = {
+    let mut table = [0u64; 1024];
+    let pairs: [[u8; 2]; 35] = [
+        [0x7f, b'E'],
+        *b"MZ",
+        [0xfe, 0xed],
+        [0xce, 0xfa],
+        [0xcf, 0xfa],
+        [0xca, 0xfe],
+        *b"PK",
+        [0x1f, 0x8b],
+        [0xfd, b'7'],
+        [0x28, 0xb5],
+        [0x28, 0xcd],
+        [0x45, 0x3d],
+        [0x5d, 0x00],
+        *b"BZ",
+        *b"hs",
+        *b"sq",
+        *b"07",
+        [0x27, 0x05],
+        *b"AN",
+        [0x3a, 0xff],
+        *b"Cr",
+        *b"UB",
+        [0x31, 0x18],
+        [0x19, 0x85],
+        [0x85, 0x19],
+        *b"HD",
+        [0xd0, 0x0d],
+        [0x04, 0x22],
+        [0x89, b'L'],
+        [0xbd, 0x86],
+        [0x8b, 0xa6],
+        [0xb9, 0x82],
+        [0xed, 0xd5],
+        [0xeb, 0],
+        [0xe9, 0],
     ];
     let mut index = 0;
-    while index < firsts.len() {
-        table[firsts[index] as usize] = true;
+    while index < pairs.len() {
+        let [first, second] = pairs[index];
+        // The jumps take any second byte.
+        let (mut second, last) =
+            if first == 0xeb || first == 0xe9 { (0, 255) } else { (second as usize, second as usize) };
+        while second <= last {
+            let bit = (first as usize) << 8 | second;
+            table[bit >> 6] |= 1 << (bit & 63);
+            second += 1;
+        }
         index += 1;
     }
     table
 };
+
+/// Whether a format's magic starts with these two bytes.
+fn starts_a_magic(first: u8, second: u8) -> bool {
+    let bit = usize::from(first) << 8 | usize::from(second);
+    STARTS_A_MAGIC[bit >> 6] >> (bit & 63) & 1 != 0
+}
 
 fn end_of(offset: u64, size: u64) -> Option<u64> {
     offset.checked_add(size)
@@ -1017,15 +1164,58 @@ fn gzip(bytes: &[u8], probe: &mut Probe) -> Option<Candidate> {
     }
 }
 
-fn crc32(bytes: &[u8]) -> u32 {
-    let mut crc = !0u32;
-    for &byte in bytes {
-        crc ^= u32::from(byte);
-        for _ in 0..8 {
+/// Slicing-by-8 tables for the reflected CRC-32 (polynomial 0xedb88320): whole-image checksums (TRX, CramFS)
+/// run over many megabytes.
+const CRC_TABLES: [[u32; 256]; 8] = {
+    let mut tables = [[0u32; 256]; 8];
+    let mut index = 0;
+    while index < 256 {
+        let mut crc = index as u32;
+        let mut bit = 0;
+        while bit < 8 {
             crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+            bit += 1;
         }
+        tables[0][index] = crc;
+        index += 1;
     }
-    !crc
+    let mut index = 0;
+    while index < 256 {
+        let mut slice = 1;
+        while slice < 8 {
+            let previous = tables[slice - 1][index];
+            tables[slice][index] = (previous >> 8) ^ tables[0][(previous & 0xff) as usize];
+            slice += 1;
+        }
+        index += 1;
+    }
+    tables
+};
+
+/// The CRC-32 register after `bytes`, from `state`, with no inversion before or after: the standard CRC-32 is
+/// `!crc32_update(!0, bytes)`; UBI and TRX keep the register as is, and JFFS2 starts it at 0.
+fn crc32_update(mut state: u32, bytes: &[u8]) -> u32 {
+    let (chunks, remainder) = bytes.as_chunks::<8>();
+    for chunk in chunks {
+        let low = state ^ u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let t = &CRC_TABLES;
+        state = t[7][(low & 0xff) as usize]
+            ^ t[6][((low >> 8) & 0xff) as usize]
+            ^ t[5][((low >> 16) & 0xff) as usize]
+            ^ t[4][(low >> 24) as usize]
+            ^ t[3][usize::from(chunk[4])]
+            ^ t[2][usize::from(chunk[5])]
+            ^ t[1][usize::from(chunk[6])]
+            ^ t[0][usize::from(chunk[7])];
+    }
+    for &byte in remainder {
+        state = CRC_TABLES[0][((state ^ u32::from(byte)) & 0xff) as usize] ^ (state >> 8);
+    }
+    state
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    !crc32_update(!0, bytes)
 }
 
 fn xz(bytes: &[u8]) -> Option<Candidate> {
@@ -1746,4 +1936,761 @@ fn ota_payload(bytes: &[u8], walk: &mut Probe) -> Option<Candidate> {
         .and_then(|end| end.checked_add(blobs_end));
     let Some(end) = end else { return malformed() };
     Some(candidate.extent(end, "OTA payload header, manifest operations and payload signature"))
+}
+
+/// What running out of each walked or checksummed format's budget costs, in the order of the scan's budgets.
+const WALKS: [&str; 7] = [
+    "tar header walks ran out of their {budget}-byte budget at offset {offset}; tar archives from there on were not \
+     reported",
+    "Android sparse chunk walks ran out of their {budget}-byte budget at offset {offset}; sparse images from there on \
+     have no extent",
+    "OTA payload manifest reads ran out of their {budget}-byte budget at offset {offset}; payloads from there on have \
+     no extent",
+    "UBI erase block walks ran out of their {budget}-byte budget at offset {offset}; UBI images from there on have no \
+     extent",
+    "JFFS2 node walks ran out of their {budget}-byte budget at offset {offset}; JFFS2 images from there on have no \
+     extent",
+    "CramFS checksums ran out of their {budget}-byte budget at offset {offset}; CramFS images from there on are \
+     magic_only",
+    "TRX checksums ran out of their {budget}-byte budget at offset {offset}; TRX images from there on are magic_only",
+];
+
+/// The string `bytes` holds up to its first NUL, for a note.
+fn c_string(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(&bytes[..bytes.iter().position(|&byte| byte == 0).unwrap_or(bytes.len())]).into_owned()
+}
+
+/// UBI's CRC-32 (also TRX's): the register after the bytes, without the final inversion.
+fn ubi_crc(bytes: &[u8]) -> u32 {
+    crc32_update(!0, bytes)
+}
+
+const UBI_EC_MAGIC: &[u8; 4] = b"UBI#";
+const UBI_VID_MAGIC: &[u8; 4] = b"UBI!";
+const UBI_HEADER: usize = 64;
+/// The erase block sizes looked for: powers of two in this range.
+const MIN_UBI_PEB: usize = 1 << 10;
+const MAX_UBI_PEB: usize = 16 << 20;
+
+/// The VID header offset, data offset and image sequence number of the UBI erase counter header at `at`, if its
+/// padding and CRC check out (binwalk's ubi signature, MIT).
+fn ubi_ec_header(bytes: &[u8], at: usize) -> Option<[u64; 3]> {
+    let header = bytes.get(at..at.checked_add(UBI_HEADER)?)?;
+    if &header[..4] != UBI_EC_MAGIC
+        || header[4] != 1
+        || header[5..8] != [0; 3]
+        || header[28..60].iter().any(|&byte| byte != 0)
+        || u64::from(ubi_crc(&header[..60])) != read_uint(header, 60, 4, true)?
+    {
+        return None;
+    }
+    let [vid, data, sequence] = [16, 20, 24].map(|at| read_uint(header, at, 4, true).unwrap_or(0));
+    (vid >= UBI_HEADER as u64 && data >= vid + UBI_HEADER as u64 && data < MAX_UBI_PEB as u64)
+        .then_some([vid, data, sequence])
+}
+
+/// Whether a UBI volume identifier header with a good CRC lies at `at`.
+fn ubi_vid_header(bytes: &[u8], at: usize) -> bool {
+    bytes.get(at..at.saturating_add(UBI_HEADER)).is_some_and(|header| {
+        &header[..4] == UBI_VID_MAGIC
+            && header[4] == 1
+            && read_uint(header, 60, 4, true) == Some(u64::from(ubi_crc(&header[..60])))
+    })
+}
+
+/// A UBI image at its first erase counter header, and how many bytes from it the scan takes as the image's own.
+/// The erase block size is the first power of two past the data offset where the next erase counter header of the
+/// same image lies; the extent ends after the last of the consecutive blocks with such a header (erased blocks
+/// between them, all 0xff, are part of the image).
+fn ubi(bytes: &[u8], walk: &mut Probe) -> Option<(Candidate, usize)> {
+    if !bytes.starts_with(UBI_EC_MAGIC) || bytes.get(4) != Some(&1) {
+        return None;
+    }
+    if bytes.len() < UBI_HEADER {
+        return Some((Candidate::magic_only(Kind::Ubi, "UBI erase counter header is truncated"), 4));
+    }
+    let Some(first) = ubi_ec_header(bytes, 0) else {
+        let reason = "UBI erase counter header padding or CRC does not check out";
+        return Some((Candidate::magic_only(Kind::Ubi, reason), 4));
+    };
+    let [vid, data, sequence] = first;
+    let mut candidate = Candidate::new(Kind::Ubi).endian(true);
+    let budget = "no extent: the scan's header walk budget ran out";
+    let same_image = |at: usize| ubi_ec_header(bytes, at) == Some(first);
+    let mut peb = (data as usize + 1).next_power_of_two().max(MIN_UBI_PEB);
+    while peb <= MAX_UBI_PEB && peb < bytes.len() {
+        if !walk.charge(UBI_HEADER as u64) {
+            candidate.notes.push(budget.to_owned());
+            return Some((candidate, UBI_HEADER));
+        }
+        if same_image(peb) {
+            break;
+        }
+        peb *= 2;
+    }
+    if peb > MAX_UBI_PEB || peb >= bytes.len() {
+        candidate.notes.push(format!(
+            "image sequence {sequence:#x}; no extent: no second erase counter header of the image lies at a \
+             power-of-two distance up to {MAX_UBI_PEB:#x} bytes"
+        ));
+        return Some((candidate, UBI_HEADER));
+    }
+    let erased = |at: usize| bytes.get(at..at + UBI_HEADER).is_some_and(|header| header.iter().all(|&b| b == 0xff));
+    let (mut blocks, mut mapped, mut at) = (0usize, 0u64, 0usize);
+    let mut ran_out = false;
+    while at < bytes.len() {
+        if !walk.charge(2 * UBI_HEADER as u64) {
+            ran_out = true;
+            break;
+        }
+        if same_image(at) {
+            blocks = at / peb + 1;
+            mapped += u64::from(ubi_vid_header(bytes, at + vid as usize));
+        } else if !erased(at) {
+            break;
+        }
+        at = match at.checked_add(peb) {
+            Some(next) => next,
+            None => break,
+        };
+    }
+    candidate.notes.push(format!(
+        "{blocks} erase blocks of {peb:#x} bytes ({mapped} with a volume header), data at {data:#x} in each, image \
+         sequence {sequence:#x}"
+    ));
+    if ran_out {
+        candidate.notes.push(budget.to_owned());
+        return Some((candidate, at.min(bytes.len())));
+    }
+    let end = blocks * peb;
+    Some((candidate.extent(end as u64, "UBI erase counter headers of consecutive erase blocks"), end.min(bytes.len())))
+}
+
+const UBIFS_NODE_MAGIC: u64 = 0x0610_1831;
+const UBIFS_SUPERBLOCK_NODE: u8 = 6;
+const UBIFS_SUPERBLOCK_SIZE: usize = 4096;
+
+/// A UBIFS file system at its superblock node: the common node header's CRC over the node, and the geometry (as
+/// binwalk's ubifs signature, MIT). The extent is the LEB count times the LEB size, as stored by mkfs.ubifs; inside
+/// a UBI image the LEBs lie in erase blocks instead.
+fn ubifs(bytes: &[u8]) -> Option<Candidate> {
+    // Every UBIFS node carries the magic; only the superblock node starts a file system.
+    if read_uint(bytes, 0, 4, false)? != UBIFS_NODE_MAGIC || *bytes.get(20)? != UBIFS_SUPERBLOCK_NODE {
+        return None;
+    }
+    let Some(node) = bytes.get(..UBIFS_SUPERBLOCK_SIZE) else {
+        return Some(Candidate::magic_only(Kind::Ubifs, "UBIFS superblock node is truncated"));
+    };
+    let read = |at: usize, width: usize| read_uint(node, at, width, false);
+    if read(16, 4)? != UBIFS_SUPERBLOCK_SIZE as u64
+        || node[21] > 2
+        || node[22..26] != [0; 4]
+        || read(4, 4)? != u64::from(ubi_crc(&node[8..]))
+    {
+        return Some(Candidate::magic_only(Kind::Ubifs, "UBIFS superblock node header or CRC does not check out"));
+    }
+    let [min_io, leb_size, lebs, max_lebs, version] = [32, 36, 40, 44, 80].map(|at| read(at, 4).unwrap_or(0));
+    if !min_io.is_power_of_two() || leb_size == 0 || !leb_size.is_multiple_of(min_io) || lebs == 0 || lebs > max_lebs {
+        return Some(Candidate::magic_only(Kind::Ubifs, "UBIFS superblock geometry is inconsistent"));
+    }
+    let compressor = match read(84, 2)? {
+        0 => "no".to_owned(),
+        1 => "lzo".to_owned(),
+        2 => "zlib".to_owned(),
+        3 => "zstd".to_owned(),
+        other => format!("unknown ({other})"),
+    };
+    let mut candidate = Candidate::new(Kind::Ubifs).endian(false);
+    candidate.notes.push(format!(
+        "format version {version}, {lebs} LEBs of {leb_size:#x} bytes, {compressor} compression by default"
+    ));
+    candidate.declared_size = Some(lebs * leb_size);
+    Some(candidate.extent(lebs * leb_size, "UBIFS superblock LEB count and size"))
+}
+
+const JFFS2_MAGIC: u64 = 0x1985;
+const JFFS2_NODE_HEADER: usize = 12;
+/// The most padding between two JFFS2 nodes the walk crosses (binwalk's limit).
+const MAX_JFFS2_GAP: usize = 64 << 10;
+/// The largest JFFS2 node the walk accepts: nodes are at most an erase block.
+const MAX_JFFS2_NODE: u64 = 16 << 20;
+/// The fewest nodes, the first included, that make a JFFS2 image (binwalk asks for more than two).
+const MIN_JFFS2_NODES: u64 = 3;
+
+/// The size of the JFFS2 node whose header lies at `at`, if its magic, header CRC and size check out.
+fn jffs2_node(bytes: &[u8], at: usize, big: bool) -> Option<u64> {
+    let header = bytes.get(at..at.checked_add(JFFS2_NODE_HEADER)?)?;
+    let size = read_uint(header, 4, 4, big)?;
+    (read_uint(header, 0, 2, big)? == JFFS2_MAGIC
+        && read_uint(header, 8, 4, big)? == u64::from(crc32_update(0, &header[..8]))
+        && (JFFS2_NODE_HEADER as u64..=MAX_JFFS2_NODE).contains(&size))
+    .then_some(size)
+}
+
+/// A JFFS2 image at its first node (a directory entry, inode or clean marker, as binwalk's jffs2 signature has
+/// it, MIT), and how many bytes from it the scan takes as the image's own: nodes are walked by their sizes, each
+/// next one looked for at 4-byte boundaries across at most 64 KiB of padding.
+fn jffs2(bytes: &[u8], walk: &mut Probe) -> Option<(Candidate, usize)> {
+    let big = match bytes.get(..2)? {
+        [0x19, 0x85] => true,
+        [0x85, 0x19] => false,
+        _ => return None,
+    };
+    if !matches!(read_uint(bytes, 2, 2, big)?, 0xe001 | 0xe002 | 0x2003) {
+        return None;
+    }
+    if bytes.len() < JFFS2_NODE_HEADER {
+        return Some((Candidate::magic_only(Kind::Jffs2, "JFFS2 node header is truncated"), 2));
+    }
+    // A node magic and type are four bytes: only a header whose CRC checks out is reported.
+    let first = jffs2_node(bytes, 0, big)?;
+    let node_end = |at: usize, size: u64| at.checked_add(usize::try_from(size.next_multiple_of(4)).ok()?);
+    let mut end = node_end(0, first)?;
+    let (mut nodes, mut ran_out) = (1u64, false);
+    'walk: loop {
+        let mut at = end;
+        let limit = end.saturating_add(MAX_JFFS2_GAP);
+        let size = loop {
+            if at > limit || at.saturating_add(JFFS2_NODE_HEADER) > bytes.len() {
+                break 'walk;
+            }
+            if !walk.charge(4) {
+                ran_out = true;
+                break 'walk;
+            }
+            if let Some(size) = jffs2_node(bytes, at, big) {
+                break size;
+            }
+            at += 4;
+        };
+        let Some(next) = node_end(at, size) else { break };
+        nodes += 1;
+        end = next;
+    }
+    let mut candidate = Candidate::new(Kind::Jffs2).endian(big);
+    candidate.notes.push(format!("{nodes} nodes walked"));
+    if ran_out {
+        candidate.notes.push("no extent: the scan's header walk budget ran out".to_owned());
+        return Some((candidate, end.min(bytes.len())));
+    }
+    if nodes < MIN_JFFS2_NODES {
+        let reason = format!("only {nodes} JFFS2 nodes follow one another here");
+        return Some((Candidate::magic_only(Kind::Jffs2, reason), 2));
+    }
+    Some((candidate.extent(end as u64, "JFFS2 node headers"), end.min(bytes.len())))
+}
+
+/// The flags a CramFS superblock may set (the kernel's CRAMFS_SUPPORTED_FLAGS).
+const CRAMFS_FLAGS: u64 = 0xff | 0x100 | 0x200 | 0x400 | 0x800;
+const CRAMFS_FSID_V2: u64 = 1;
+
+/// A CramFS image, both byte orders, as binwalk's cramfs signature has it (MIT): the signature string, the size,
+/// and the CRC over the whole image (charged to the scan's checksum budget); the root inode must be a directory.
+fn cramfs(bytes: &[u8], sum: &mut Probe) -> Option<Candidate> {
+    let big = match read_uint(bytes, 0, 4, false)? {
+        0x28cd_3d45 => false,
+        0x453d_cd28 => true,
+        _ => return None,
+    };
+    if bytes.get(16..32)? != b"Compressed ROMFS" {
+        return None;
+    }
+    let read = |at: usize, width: usize| read_uint(bytes, at, width, big);
+    let fields =
+        || Some([read(4, 4)?, read(8, 4)?, read(32, 4)?, read(36, 4)?, read(40, 4)?, read(44, 4)?, read(64, 2)?]);
+    let Some([size, flags, crc, edition, blocks, files, root_mode]) = fields() else {
+        return Some(Candidate::magic_only(Kind::Cramfs, "CramFS superblock is truncated"));
+    };
+    if flags & !CRAMFS_FLAGS != 0 || root_mode & 0xf000 != 0x4000 || size < 76 {
+        return Some(Candidate::magic_only(Kind::Cramfs, "CramFS superblock fields are inconsistent"));
+    }
+    let mut candidate = Candidate::new(Kind::Cramfs).endian(big);
+    candidate.declared_size = Some(size);
+    if flags & CRAMFS_FSID_V2 == 0 {
+        candidate
+            .notes
+            .push("no extent: a superblock without the version 2 identifier has no CRC to confirm its size".to_owned());
+        return Some(candidate);
+    }
+    candidate.notes.push(format!("{files} files, {blocks} blocks, edition {edition}"));
+    match usize::try_from(size).ok().and_then(|size| bytes.get(..size)) {
+        None => candidate.notes.push("its CRC was not checked: the image runs past the end of the file".to_owned()),
+        Some(_) if !sum.charge(size) => {
+            let reason = "its CRC was not checked: the scan's checksum budget ran out";
+            return Some(Candidate::magic_only(Kind::Cramfs, reason));
+        }
+        Some(image) => {
+            let state = crc32_update(crc32_update(!0, &image[..32]), &[0; 4]);
+            if u64::from(!crc32_update(state, &image[36..])) != crc {
+                return Some(Candidate::magic_only(Kind::Cramfs, "CramFS image CRC does not match"));
+            }
+        }
+    }
+    Some(candidate.extent(size, "CramFS superblock size"))
+}
+
+/// A TRX firmware container (Broadcom), as binwalk's trx signature has it (MIT): version 1 or 2, partition offsets
+/// in order within the length, and the CRC from the flags word to the end (charged to the scan's checksum budget).
+fn trx(bytes: &[u8], sum: &mut Probe) -> Option<Candidate> {
+    if !bytes.starts_with(b"HDR0") {
+        return None;
+    }
+    let read = |at: usize| read_uint(bytes, at, 4, false);
+    let fields = || Some([read(4)?, read(8)?, read(12)?, read(16)?, read(20)?, read(24)?]);
+    let Some([length, crc, flags_version, first, second, third]) = fields() else {
+        return Some(Candidate::magic_only(Kind::Trx, "TRX header is truncated"));
+    };
+    let version = flags_version >> 16;
+    let header_size = match version {
+        1 => 28,
+        2 => 32,
+        _ => return None,
+    };
+    let mut partitions = vec![first, second, third];
+    if version == 2 {
+        partitions.push(read(28).unwrap_or(0));
+    }
+    partitions.retain(|&offset| offset != 0);
+    // "HDR0" is ASCII: only a header whose partitions lie in order within its length is reported.
+    if length < header_size
+        || partitions.first().is_none_or(|&offset| offset < header_size)
+        || partitions.windows(2).any(|pair| pair[0] >= pair[1])
+        || partitions.last().is_some_and(|&offset| offset > length)
+    {
+        return None;
+    }
+    let mut candidate = Candidate::new(Kind::Trx).endian(false);
+    let offsets: Vec<String> = partitions.iter().map(|offset| format!("{offset:#x}")).collect();
+    candidate.notes.push(format!("version {version}, partitions at {}", offsets.join(", ")));
+    match usize::try_from(length).ok().and_then(|length| bytes.get(12..length)) {
+        None => candidate.notes.push("its CRC was not checked: the image runs past the end of the file".to_owned()),
+        Some(_) if !sum.charge(length) => {
+            let reason = "its CRC was not checked: the scan's checksum budget ran out";
+            return Some(Candidate::magic_only(Kind::Trx, reason));
+        }
+        Some(covered) if u64::from(ubi_crc(covered)) != crc => {
+            return Some(Candidate::magic_only(Kind::Trx, "TRX CRC does not match"));
+        }
+        Some(_) => {}
+    }
+    candidate.declared_size = Some(length);
+    Some(candidate.extent(length, "TRX header length"))
+}
+
+const FDT_BEGIN_NODE: u64 = 1;
+const FDT_END: u64 = 9;
+
+/// A flattened device tree (or U-Boot FIT image), as binwalk's dtb signature has it (MIT): version 17, last
+/// compatible version 16, aligned blocks within totalsize; the structure block must also start with a node and end
+/// with the end token.
+fn dtb(bytes: &[u8]) -> Option<Candidate> {
+    if read_uint(bytes, 0, 4, true)? != 0xd00d_feed {
+        return None;
+    }
+    // The magic is also the byte-swapped constant x86 code compares with: a header that does not check out is not
+    // reported at all.
+    let read = |at: usize| read_uint(bytes, at, 4, true);
+    let [total, structs, strings, reserved, version, compatible, cpu, strings_size, structs_size] =
+        [read(4)?, read(8)?, read(12)?, read(16)?, read(20)?, read(24)?, read(28)?, read(32)?, read(36)?];
+    if version != 17
+        || compatible != 16
+        || !structs.is_multiple_of(4)
+        || !reserved.is_multiple_of(8)
+        || [structs, strings, reserved].iter().any(|&offset| offset < 40)
+        || structs_size < 8
+        || structs + structs_size > total
+        || strings + strings_size > total
+    {
+        return None;
+    }
+    let token = |at: u64| usize::try_from(at).ok().and_then(|at| read_uint(bytes, at, 4, true));
+    let (Some(begin), Some(end)) = (token(structs), token(structs + structs_size - 4)) else {
+        let reason = "device tree structure block lies past the end of the file";
+        return Some(Candidate::magic_only(Kind::Dtb, reason));
+    };
+    if begin != FDT_BEGIN_NODE || end != FDT_END {
+        return None;
+    }
+    let mut candidate = Candidate::new(Kind::Dtb).endian(true);
+    candidate.notes.push(format!("version {version}, boot CPU {cpu}"));
+    candidate.declared_size = Some(total);
+    Some(candidate.extent(total, "device tree header totalsize"))
+}
+
+/// xxHash32 of `input` with seed 0, for the LZ4 frame descriptor checksum.
+fn xxh32(input: &[u8]) -> u32 {
+    const P1: u32 = 2_654_435_761;
+    const P2: u32 = 2_246_822_519;
+    const P3: u32 = 3_266_489_917;
+    const P4: u32 = 668_265_263;
+    const P5: u32 = 374_761_393;
+    let word = |chunk: &[u8]| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    let round = |acc: u32, lane: u32| acc.wrapping_add(lane.wrapping_mul(P2)).rotate_left(13).wrapping_mul(P1);
+    let mut rest = input;
+    let mut hash = if input.len() >= 16 {
+        let mut lanes = [P1.wrapping_add(P2), P2, 0, 0u32.wrapping_sub(P1)];
+        while rest.len() >= 16 {
+            for (index, lane) in lanes.iter_mut().enumerate() {
+                *lane = round(*lane, word(&rest[index * 4..]));
+            }
+            rest = &rest[16..];
+        }
+        lanes[0]
+            .rotate_left(1)
+            .wrapping_add(lanes[1].rotate_left(7))
+            .wrapping_add(lanes[2].rotate_left(12))
+            .wrapping_add(lanes[3].rotate_left(18))
+    } else {
+        P5
+    };
+    hash = hash.wrapping_add(input.len() as u32);
+    while rest.len() >= 4 {
+        hash = hash.wrapping_add(word(rest).wrapping_mul(P3)).rotate_left(17).wrapping_mul(P4);
+        rest = &rest[4..];
+    }
+    for &byte in rest {
+        hash = hash.wrapping_add(u32::from(byte).wrapping_mul(P5)).rotate_left(11).wrapping_mul(P1);
+    }
+    hash ^= hash >> 15;
+    hash = hash.wrapping_mul(P2);
+    hash ^= hash >> 13;
+    hash = hash.wrapping_mul(P3);
+    hash ^ (hash >> 16)
+}
+
+/// An LZ4 frame, as binwalk's lz4 signature has it (MIT): the frame descriptor's version and reserved bits and its
+/// header checksum. Nothing gives an extent without walking the blocks.
+fn lz4(bytes: &[u8]) -> Option<Candidate> {
+    if !bytes.starts_with(&[0x04, 0x22, 0x4d, 0x18]) {
+        return None;
+    }
+    let (Some(&flags), Some(&descriptor)) = (bytes.get(4), bytes.get(5)) else {
+        return Some(Candidate::magic_only(Kind::Lz4, "LZ4 frame descriptor is truncated"));
+    };
+    // The magic is also a constant in programs that read LZ4: a descriptor whose version or reserved bits are wrong
+    // is not reported at all.
+    if flags >> 6 != 1 || flags & 0x02 != 0 || descriptor & 0x8f != 0 || (descriptor >> 4) < 4 {
+        return None;
+    }
+    let content_size = flags & 0x08 != 0;
+    let end = 6 + if content_size { 8 } else { 0 } + if flags & 0x01 != 0 { 4 } else { 0 };
+    let Some(&checksum) = bytes.get(end) else {
+        return Some(Candidate::magic_only(Kind::Lz4, "LZ4 frame descriptor is truncated"));
+    };
+    if checksum != (xxh32(&bytes[4..end]) >> 8) as u8 {
+        return Some(Candidate::magic_only(Kind::Lz4, "LZ4 frame descriptor checksum does not match"));
+    }
+    let mut candidate = Candidate::new(Kind::Lz4).endian(false);
+    candidate.notes.push(format!("{} KiB maximum block size", 64 << (2 * ((descriptor >> 4) - 4))));
+    if content_size {
+        candidate.uncompressed_size = read_uint(bytes, 6, 8, false);
+    }
+    Some(candidate)
+}
+
+const LZOP_MAGIC: [u8; 9] = [0x89, b'L', b'Z', b'O', 0, 0x0d, 0x0a, 0x1a, 0x0a];
+/// The newest lzop format version (lzop 1.04), as binwalk has it.
+const MAX_LZOP_VERSION: u64 = 0x1040;
+
+fn adler32(bytes: &[u8]) -> u32 {
+    let (mut low, mut high) = (1u32, 0u32);
+    for chunk in bytes.chunks(5552) {
+        for &byte in chunk {
+            low += u32::from(byte);
+            high += low;
+        }
+        low %= 65521;
+        high %= 65521;
+    }
+    (high << 16) | low
+}
+
+/// An lzop file: the header fields binwalk's lzop signature checks (MIT) and the header checksum (Adler-32, or
+/// CRC-32 when the header says so). Nothing gives an extent without walking the blocks.
+fn lzop(bytes: &[u8]) -> Option<Candidate> {
+    if !bytes.starts_with(&LZOP_MAGIC) {
+        return None;
+    }
+    let read = |at: usize, width: usize| read_uint(bytes, at, width, true);
+    let truncated = || Some(Candidate::magic_only(Kind::Lzop, "lzop header is truncated"));
+    let Some([version, needed, method, flags]) = (|| Some([read(9, 2)?, read(13, 2)?, read(15, 1)?, read(17, 4)?]))()
+    else {
+        return truncated();
+    };
+    // Headers before version 0.94 lack the fields the checksum is read past.
+    if !(0x0940..=MAX_LZOP_VERSION).contains(&version) || needed > version || !(1..=3).contains(&method) {
+        return Some(Candidate::magic_only(Kind::Lzop, "lzop header version or method is unknown"));
+    }
+    let name_at = 21 + if flags & 0x800 != 0 { 4 } else { 0 } + 12;
+    let Some(&name_len) = bytes.get(name_at) else { return truncated() };
+    let checksum_at = name_at + 1 + usize::from(name_len);
+    let Some(stored) = read(checksum_at, 4) else { return truncated() };
+    let header = &bytes[9..checksum_at];
+    let computed = if flags & 0x1000 != 0 { crc32(header) } else { adler32(header) };
+    if u64::from(computed) != stored {
+        return Some(Candidate::magic_only(Kind::Lzop, "lzop header checksum does not match"));
+    }
+    let mut candidate = Candidate::new(Kind::Lzop).endian(true);
+    let name = &bytes[name_at + 1..checksum_at];
+    let method = ["LZO1X-1", "LZO1X-1(15)", "LZO1X-999"][method as usize - 1];
+    candidate.notes.push(if name.is_empty() {
+        method.to_owned()
+    } else {
+        format!("{method}, original name {:?}", String::from_utf8_lossy(name))
+    });
+    Some(candidate)
+}
+
+const SECTOR: usize = 512;
+/// Where a boot sector's signature lies.
+const BOOT_SIGNATURE_AT: usize = 0x1fe;
+const BOOT_SIGNATURE: [u8; 2] = [0x55, 0xaa];
+const GPT_PROTECTIVE: u8 = 0xee;
+/// The largest GPT partition entry array whose CRC is checked: the usual 128 entries of 128 bytes.
+const MAX_GPT_ENTRIES_BYTES: u64 = 128 * 128;
+/// The most partition names a GPT candidate lists.
+const MAX_GPT_NAMES: usize = 16;
+
+/// An MBR-partitioned disk, or a GPT disk behind its protective MBR, at a sector-aligned offset. The boot
+/// signature alone is common, so every used partition entry must have a boot flag of 0 or 0x80, a type and a
+/// non-empty range past the MBR, the entries must not overlap, and unused ones must be all zero (binwalk's mbr
+/// signature, MIT, made stricter). The extent ends with the furthest partition.
+fn disk(bytes: &[u8]) -> Option<Candidate> {
+    if bytes.get(BOOT_SIGNATURE_AT..BOOT_SIGNATURE_AT + 2)? != BOOT_SIGNATURE {
+        return None;
+    }
+    let mut partitions = Vec::new();
+    for entry in bytes[446..510].as_chunks::<16>().0 {
+        if entry.iter().all(|&byte| byte == 0) {
+            continue;
+        }
+        let (start, count) = (read_uint(entry, 8, 4, false)?, read_uint(entry, 12, 4, false)?);
+        if !matches!(entry[0], 0 | 0x80) || entry[4] == 0 || start == 0 || count == 0 {
+            return None;
+        }
+        partitions.push((entry[4], start, count));
+    }
+    partitions.sort_by_key(|&(_, start, _)| start);
+    if partitions.is_empty() || partitions.windows(2).any(|pair| pair[0].1 + pair[0].2 > pair[1].1) {
+        return None;
+    }
+    let protective = partitions.iter().any(|&(kind, ..)| kind == GPT_PROTECTIVE);
+    if protective && let Some(candidate) = gpt(bytes) {
+        return Some(candidate);
+    }
+    let end = partitions.iter().map(|&(_, start, count)| (start + count) * SECTOR as u64).max().unwrap_or(0);
+    let mut candidate = Candidate::new(Kind::Mbr).endian(false);
+    let listed: Vec<String> = partitions
+        .iter()
+        .map(|&(kind, start, _)| format!("type {kind:#04x} at {:#x}", start * SECTOR as u64))
+        .collect();
+    candidate.notes.push(format!("{} partitions: {}", partitions.len(), listed.join(", ")));
+    if protective {
+        candidate.notes.push("a protective MBR, but the GPT header after it does not check out".to_owned());
+    }
+    Some(candidate.extent(end, "MBR partition table"))
+}
+
+/// The GPT disk whose protective MBR starts `bytes`, if the header at LBA 1 and its partition array check out
+/// (binwalk's efigpt signature, MIT, with the header CRC too). The extent ends with the backup header's LBA or the
+/// furthest partition.
+fn gpt(bytes: &[u8]) -> Option<Candidate> {
+    let header = bytes.get(SECTOR..2 * SECTOR)?;
+    if &header[..8] != b"EFI PART" {
+        return None;
+    }
+    let read = |at: usize, width: usize| read_uint(header, at, width, false);
+    let (revision, size, crc, reserved, current, backup) =
+        (read(8, 4)?, read(12, 4)?, read(16, 4)?, read(20, 4)?, read(24, 8)?, read(32, 8)?);
+    if revision != 0x0001_0000 || !(92..=SECTOR as u64).contains(&size) || reserved != 0 || current != 1 {
+        return None;
+    }
+    let mut zeroed = header[..size as usize].to_vec();
+    zeroed[16..20].fill(0);
+    if u64::from(crc32(&zeroed)) != crc {
+        return None;
+    }
+    let (entries_lba, count, entry_size, entries_crc) = (read(72, 8)?, read(80, 4)?, read(84, 4)?, read(88, 4)?);
+    if entry_size < 128 || !entry_size.is_multiple_of(8) {
+        return None;
+    }
+    let array = count.checked_mul(entry_size).filter(|&len| len <= MAX_GPT_ENTRIES_BYTES)?;
+    let at = usize::try_from(entries_lba.checked_mul(SECTOR as u64)?).ok()?;
+    let entries = bytes.get(at..at.checked_add(array as usize)?)?;
+    if u64::from(crc32(entries)) != entries_crc {
+        return None;
+    }
+    let mut candidate = Candidate::new(Kind::Gpt).endian(false);
+    let (mut used, mut names) = (0usize, Vec::new());
+    let mut end = backup.saturating_add(1).saturating_mul(SECTOR as u64);
+    for entry in entries.chunks_exact(entry_size as usize) {
+        if entry[..16].iter().all(|&byte| byte == 0) {
+            continue;
+        }
+        used += 1;
+        let (first, last) = (read_uint(entry, 32, 8, false)?, read_uint(entry, 40, 8, false)?);
+        end = end.max(last.saturating_add(1).saturating_mul(SECTOR as u64));
+        if names.len() < MAX_GPT_NAMES {
+            let units: Vec<u16> =
+                entry[56..128].as_chunks::<2>().0.iter().map(|unit| u16::from_le_bytes([unit[0], unit[1]])).collect();
+            let name = &units[..units.iter().position(|&unit| unit == 0).unwrap_or(units.len())];
+            let name = if name.is_empty() { "(unnamed)".to_owned() } else { String::from_utf16_lossy(name) };
+            names.push(format!("{name} at {:#x}", first.saturating_mul(SECTOR as u64)));
+        }
+    }
+    candidate.notes.push(format!("{used} partitions: {}", names.join(", ")));
+    Some(candidate.extent(end, "GPT backup header and partition entries"))
+}
+
+/// A FAT12, FAT16 or FAT32 file system at its boot sector: binwalk's fat signature (MIT), that is the jump, sector
+/// size, cluster size, reserved sectors, FAT count and media byte, plus the boot signature, the "FAT" file system
+/// type in the extended boot record and the layout fitting the sector count. The extent is the sector count. Also
+/// where a FAT32 volume keeps its backup boot sector, from its start (0 for none).
+fn fat_fs(bytes: &[u8]) -> Option<(Candidate, usize)> {
+    if !matches!(bytes.first()?, 0xeb | 0xe9) || bytes.get(BOOT_SIGNATURE_AT..BOOT_SIGNATURE_AT + 2)? != BOOT_SIGNATURE
+    {
+        return None;
+    }
+    let read = |at: usize, width: usize| read_uint(bytes, at, width, false);
+    let [sector, per_cluster, reserved, fats, roots, small_total, media, small_fat, total] =
+        [(11, 2), (13, 1), (14, 2), (16, 1), (17, 2), (19, 2), (21, 1), (22, 2), (32, 4)]
+            .map(|(at, width)| read(at, width).unwrap_or(0));
+    if !matches!(sector, 512 | 1024 | 2048 | 4096)
+        || !per_cluster.is_power_of_two()
+        || reserved == 0
+        || !matches!(fats, 1 | 2)
+        || !(media == 0xf0 || media >= 0xf8)
+    {
+        return None;
+    }
+    let fat32 = small_fat == 0;
+    let fat_size = if fat32 { read(36, 4)? } else { small_fat };
+    let type_at = if fat32 { 0x52 } else { 0x36 };
+    if bytes.get(type_at..type_at + 3)? != b"FAT" || (fat32 && (roots != 0 || small_total != 0)) {
+        return None;
+    }
+    let total = if small_total != 0 { small_total } else { total };
+    let metadata = reserved + fats * fat_size + (roots * 32).div_ceil(sector);
+    if fat_size == 0 || metadata >= total {
+        return None;
+    }
+    let clusters = (total - metadata) / per_cluster;
+    let version = match (fat32, clusters) {
+        (true, _) => "FAT32",
+        (false, 0..4085) => "FAT12",
+        _ => "FAT16",
+    };
+    let mut candidate = Candidate::new(Kind::Fat).endian(false);
+    let mut note = format!("{version}, {sector}-byte sectors, {clusters} clusters");
+    let label = c_string(&bytes[type_at - 11..type_at]);
+    let label = label.trim_end();
+    if !label.is_empty() && label != "NO NAME" {
+        note.push_str(&format!(", volume label {label:?}"));
+    }
+    candidate.notes.push(note);
+    candidate.declared_size = Some(total * sector);
+    let backup = if fat32 { read(50, 2)?.saturating_mul(sector) } else { 0 };
+    Some((candidate.extent(total * sector, "FAT boot sector sector count"), backup as usize))
+}
+
+/// Where a UEFI firmware volume's signature lies.
+const FV_MAGIC_AT: usize = 0x28;
+const FV_MAGIC: &[u8; 4] = b"_FVH";
+/// The most block map entries read.
+const MAX_FV_BLOCK_MAP: usize = 64;
+
+/// A UEFI (PI) firmware volume, found by its signature at 0x28: binwalk's checks (MIT), that is the revision,
+/// reserved byte and header length, plus the header's 16-bit checksum and the block map adding up to the volume
+/// length.
+fn uefi_volume(bytes: &[u8]) -> Option<Candidate> {
+    if bytes.get(FV_MAGIC_AT..FV_MAGIC_AT + 4)? != FV_MAGIC {
+        return None;
+    }
+    let read = |at: usize, width: usize| read_uint(bytes, at, width, false);
+    let (length, header_length, reserved, revision) = (read(0x20, 8)?, read(0x30, 2)?, read(0x36, 1)?, read(0x37, 1)?);
+    // "_FVH" is also the constant code compares with: a header that does not check out is not reported at all.
+    if !matches!(revision, 1 | 2)
+        || reserved != 0
+        || header_length < 0x48
+        || header_length % 2 != 0
+        || length <= header_length
+    {
+        return None;
+    }
+    let Some(header) = bytes.get(..header_length as usize) else {
+        return Some(Candidate::magic_only(Kind::UefiVolume, "UEFI firmware volume header is truncated"));
+    };
+    // The block map: (block count, block length) pairs up to a zero pair, which must cover the volume.
+    let mut covered = 0u64;
+    let mut terminated = false;
+    for entry in header[0x38..].as_chunks::<8>().0.iter().take(MAX_FV_BLOCK_MAP) {
+        let (blocks, size) = (read_uint(entry, 0, 4, false)?, read_uint(entry, 4, 4, false)?);
+        if blocks == 0 && size == 0 {
+            terminated = true;
+            break;
+        }
+        covered = covered.saturating_add(blocks * size);
+    }
+    if !terminated || covered != length {
+        return None;
+    }
+    let sum = header
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .fold(0u16, |sum, word| sum.wrapping_add(u16::from_le_bytes([word[0], word[1]])));
+    if sum != 0 {
+        return Some(Candidate::magic_only(Kind::UefiVolume, "UEFI firmware volume header checksum does not match"));
+    }
+    let mut candidate = Candidate::new(Kind::UefiVolume).endian(false);
+    let file_system = match header[0x10..0x20] {
+        [0x78, 0xe5, 0x8c, 0x8c, 0x3d, 0x8a, 0x1c, 0x4f, 0x99, 0x35, 0x89, 0x61, 0x85, 0xc3, 0x2d, 0xd3] => {
+            "FFS version 2".to_owned()
+        }
+        [0x7a, 0xc0, 0x73, 0x54, 0xcb, 0x3d, 0xca, 0x4d, 0xbd, 0x6f, 0x1e, 0x96, 0x89, 0xe7, 0x34, 0x9a] => {
+            "FFS version 3".to_owned()
+        }
+        _ => format!("file system {}", guid(&header[0x10..0x20])),
+    };
+    candidate.notes.push(format!("revision {revision}, {file_system}"));
+    candidate.declared_size = Some(length);
+    Some(candidate.extent(length, "UEFI firmware volume header length"))
+}
+
+/// A GUID in its registry form, from its mixed-endian bytes.
+fn guid(bytes: &[u8]) -> String {
+    let hex = |bytes: &[u8]| bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    format!(
+        "{:08x}-{:04x}-{:04x}-{}-{}",
+        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+        u16::from_le_bytes([bytes[4], bytes[5]]),
+        u16::from_le_bytes([bytes[6], bytes[7]]),
+        hex(&bytes[8..10]),
+        hex(&bytes[10..16])
+    )
+}
+
+/// The capsule GUIDs binwalk's uefi signature knows (MIT), and the firmware management (FMP) capsule's.
+const CAPSULE_GUIDS: [(&[u8; 16], &str); 4] = [
+    (b"\xbd\x86\x66\x3b\x76\x0d\x30\x40\xb7\x0e\xb5\x51\x9e\x2f\xc5\xa0", "EFI capsule"),
+    (b"\x8b\xa6\x3c\x4a\x23\x77\xfb\x48\x80\x3d\x57\x8c\xc1\xfe\xc4\x4d", "EFI2 capsule"),
+    (b"\xb9\x82\x91\x53\xb5\xab\x91\x43\xb6\x9a\xe3\xa9\x43\xf7\x2f\xcc", "UEFI capsule"),
+    (b"\xed\xd5\xcb\x6d\x2d\xe8\x44\x4c\xbd\xa1\x71\x94\x19\x9a\xd9\x2a", "firmware management capsule"),
+];
+
+/// A UEFI capsule: one of the capsule GUIDs, then a header size within the image size and only the defined flags
+/// above the platform-specific low half.
+fn uefi_capsule(bytes: &[u8]) -> Option<Candidate> {
+    let &(_, what) = CAPSULE_GUIDS.iter().find(|(guid, _)| bytes.starts_with(&guid[..]))?;
+    let read = |at: usize| read_uint(bytes, at, 4, false);
+    let (Some(header_size), Some(flags), Some(size)) = (read(16), read(20), read(24)) else {
+        return Some(Candidate::magic_only(Kind::UefiCapsule, "UEFI capsule header is truncated"));
+    };
+    if header_size < 28 || header_size >= size || flags & 0xfff8_0000 != 0 {
+        return Some(Candidate::magic_only(Kind::UefiCapsule, "UEFI capsule header fields are inconsistent"));
+    }
+    let mut candidate = Candidate::new(Kind::UefiCapsule).endian(false);
+    candidate.notes.push(format!("{what}, header size {header_size:#x}"));
+    candidate.declared_size = Some(size);
+    Some(candidate.extent(size, "UEFI capsule header image size"))
 }
