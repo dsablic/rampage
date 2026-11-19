@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "digests": {
     "bin/Microsoft.Bcl.HashCode.dll": "47a67c822d8b944f8f5b330d9e05ff0cdec69199ecd2aee9f48d789d95a903b5",
     "bin/auditable-arm64.macho": "c4d1fe40fe733d4a52f6ab51468a5266a741d7ee3978a32978e130fad12bb328",
@@ -89,7 +89,7 @@
     "firmware/raw-cortex-m-crc.elf": "236d0c0c4df2adf31b33b1f46255ac6cf4e4758c2d2c27c98b780cd828ecef3f",
     "firmware/raw-cortex-m-decompile.elf": "d2e2e295b1b5871282d71ca5c9cb153b49fe013108d5965094cd0baa659c7bab",
     "firmware/raw-cortex-m-locks.elf": "d998b565a4d87f2ef12ecdeccb33d7c785b27ed7008d3845339dd8b9f0faf045",
-    "firmware/raw-cortex-m-records.elf": "b152b125b30f6c29d36040db5d96ad53e08c23365fe21f5238fc04dbece551d7",
+    "firmware/raw-cortex-m-records.elf": "7a5d9d985f00d76b445facfb81c2879ab4ff3d389413654f75d7c67567de2ec7",
     "firmware/raw-cortex-m-scatter-gcc.elf": "ad86374f514e3f36374a42b20a598b1f875356596e910f04535b2636b9f23af0",
     "firmware/raw-cortex-m-scatter-table.elf": "aafd6eaecdb9ff6c1fc7a16a6304505a5c7af020a7447c9b6291564033799104",
     "firmware/raw-cortex-m-stages-lzss.elf": "ced4712a62de39262eaa8da45185803aa0331b936b8b82420c572f14a172d5ca",
@@ -104,7 +104,7 @@
     "raw:6502": "f4777a0cdea5a4db99055a1d2922b778daec951c0511d4ac248c031f8d3a628c",
     "raw:msp430": "2223e899331fdc240721aac5b6e985a28f00a6f4af31949a157552b5696b82a4",
     "raw:raw-cortex-m": "5a4cd59951228f50398fe1dff6bdba3bbb376e3af24963f6261d93c6f6bf9a11",
-    "raw:raw-cortex-m-records": "d5828a4069d79acb816cc316cbaf7c4c227edac1835feee466c8e787e0ccda61",
+    "raw:raw-cortex-m-records": "744f5d2b261b99d26f64d67564037d8814dffa3fffa8f53563f3accfc6272e98",
     "raw:raw-cortex-m-stages-srec": "06b8fba25375088a5694071e97cb829eae6d1659c8e73f08e7bed63526cc5d63",
     "raw:raw-cortex-m-tables": "b150fba7a3375e0e1e2d3ad254b42888ee5d6f758723cca68671e1722a5d517f"
   }

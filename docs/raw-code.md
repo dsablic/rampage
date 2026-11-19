@@ -39,7 +39,8 @@ session keeps the project, with its annotations, for that exact interpretation. 
 `--raw-json` ([CLI reference](cli-reference.md#raw-projects)).
 
 Only MSP430, AVR8 and Cortex-M decompile; the other Sleigh profiles disassemble. On Cortex-M, `decompile` with
-`"exact_entry": true` decompiles from an address you assert (bit 0 clear), discovered or not, with its context
+`"exact_entry": true` decompiles from an address you assert (an odd address is read as the Thumb code at the even
+one, with a `note`), discovered or not, with its context
 counts and omissions; plain `decompile` also takes any code address. Multiple regions, decoded
 regions, scatter-load and pointer tables are Cortex-M only, except a decoded primary region, which any profile
 takes.
@@ -153,7 +154,9 @@ When a Cortex-M project opens with `pointer_tables` unset (the default), a CRC r
 pointer) is looked for the way `integrity_checks` infers it: a CRC-32 polynomial literal nothing references, the
 PC-relative `ldr` of it outside every function, and a `push {..., lr}` prologue before the load. Each such start is
 seeded into discovery, so `decompile`, `lock_mechanisms` and `integrity_checks` see the routine as a function, and
-`binary_info` lists it in `raw.inferred_seeds` with that evidence.
+`binary_info` lists it in `raw.inferred_seeds` with that evidence. Code outside every discovered function that calls
+the routine with a Thumb `bl`, inside a `push {..., lr}` routine, is seeded too (and its callers, three rounds deep),
+so `xrefs` to the routine finds the check that uses it.
 
 ## Where to start reading
 

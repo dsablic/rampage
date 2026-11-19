@@ -92,6 +92,8 @@ pub struct LockReport {
 #[derive(Debug, Clone, Serialize)]
 pub struct Coverage {
     pub functions_analyzed: usize,
+    /// Every function discovery found; `functions_analyzed` are the ones the evidence selected among them.
+    pub functions_discovered: usize,
     pub instructions: usize,
     /// The instruction or function budget ran out; mechanisms may be missing.
     pub incomplete: bool,
@@ -603,6 +605,7 @@ impl Project {
         let mut limitations = Vec::new();
         let mut coverage = Coverage {
             functions_analyzed: 0,
+            functions_discovered: program.functions.len(),
             instructions: 0,
             incomplete: false,
             crypto_constants: 0,
@@ -1109,6 +1112,16 @@ impl Project {
                 } else {
                     ""
                 }
+            ));
+        } else if context.flows.len() * 10 < program.functions.len() {
+            // Seventh Haiku run: 1 function of thousands read as "no mechanisms in the firmware".
+            limitations.push(format!(
+                "Only {} of the {} discovered functions were analyzed: those referencing a crypto constant or CRC \
+                 routine, a known verify, MAC or random API, or a register with a role, their callers up to \
+                 {CALLER_DEPTH} levels and their direct callees. An empty or short list covers those only, not the \
+                 whole firmware; checks reached through undiscovered code or function pointers are not seen.",
+                context.flows.len(),
+                program.functions.len()
             ));
         }
         if context.flows.values().any(|flow| flow.overflowed) {

@@ -49,6 +49,12 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - On Raw projects `find_main` models Cortex-M reset code only, and finds a main that never returns. `decompile`
   with `exact_entry` takes Raw Cortex-M Thumb code but refuses other ARM code (A32, Thumb in ELF, PE or Mach-O);
   plain `decompile` takes any code address there.
+- Code that only a function pointer or a computed address reaches stays undiscovered on Raw Cortex-M unless a
+  pointer table, data record or inferred CRC routine seeds it; `xrefs` to a function then finds no caller and its
+  `notes` name any Thumb `bl` in undiscovered code that targets it. `lock_mechanisms` analyses only the functions
+  its evidence selects (`coverage.functions_analyzed` of `functions_discovered`).
+- A vector table the program builds in RAM at run time (VTOR set to memory with no bytes in the image) is not
+  read: `raw.scatter_load.vector_table_refused` says so, and its interrupt handlers are not seeded.
 - Raw Cortex-M discovery's record pass and pointer-table scan stop at work budgets (1,000,000 record words and
   decodes; 2,000,000 decodes per region scanned), and say so in `raw.record_seeds.truncated` and
   `walk_budget_exhausted`; `find_main` and the starting points follow at most 50,000 startup instructions.

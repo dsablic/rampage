@@ -808,6 +808,8 @@ impl Project {
         let replay = probe.and_then(|probe| probe.replay);
         let entry = match replay {
             Some((start, _)) => start,
+            // On Cortex-M a function pointer's Thumb bit names the code at the even address.
+            None if binary.m_profile() => self.thumb_code_address(self.resolve(&request.at)?).0,
             None => self.resolve(&request.at)?,
         };
         let max_steps = request.max_steps.unwrap_or(DEFAULT_MAX_STEPS);

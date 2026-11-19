@@ -999,12 +999,12 @@ impl Project {
     fn compute_starting_points(&self) -> Vec<crate::rows::StartingPoint> {
         let mut points = self.cortex_m_starting_points().unwrap_or_default();
         for seed in self.inferred_seeds.get().into_iter().flatten() {
-            crate::workflows::add_starting_point(
-                self,
-                &mut points,
-                seed.address,
-                "a CRC routine integrity_checks infers from its polynomial literal (raw.inferred_seeds)".to_owned(),
-            );
+            let reason = if seed.reason.starts_with("calls the inferred routine") {
+                "calls an inferred CRC routine directly; nothing discovered calls it (raw.inferred_seeds)"
+            } else {
+                "a CRC routine integrity_checks infers from its polynomial literal (raw.inferred_seeds)"
+            };
+            crate::workflows::add_starting_point(self, &mut points, seed.address, reason.to_owned());
         }
         points
     }
@@ -1215,6 +1215,24 @@ impl Project {
     /// (finding its stub), or `sub_<hex>`.
     pub fn resolve(&self, text: &str) -> Result<u64, ApiError> {
         self.resolve_in(&self.annotations(), text)
+    }
+
+    /// A code address as a 32-bit ARM tool needs it: an odd address whose even neighbour is executable carries the
+    /// Thumb bit (vector-table entries and function pointers do), so bit 0 is cleared, with a note saying so. Any
+    /// other address is returned unchanged, without a note.
+    pub fn thumb_code_address(&self, address: u64) -> (u64, Option<String>) {
+        let even = address & !1;
+        let thumb = self.binary.arch == rampage_arch::Arch::Arm
+            && address & 1 == 1
+            && self.binary.segment_containing(even).is_some_and(|segment| segment.perms.execute);
+        if !thumb {
+            return (address, None);
+        }
+        let note = format!(
+            "{address:#x} has bit 0 set, the Thumb bit a vector table or function pointer carries: read as the Thumb \
+             code at {even:#x}"
+        );
+        (even, Some(note))
     }
 
     pub(crate) fn resolve_in(&self, annotations: &Annotations, text: &str) -> Result<u64, ApiError> {

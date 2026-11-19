@@ -152,4 +152,107 @@ impl Project {
         }
         Ok(Page { total: page.total, offset: page.offset, items: rows })
     }
+
+    /// Why `xrefs` to `address` found nothing, and where to look instead: the start of the string `address` lies
+    /// inside when that start is referenced, and on 32-bit ARM the Thumb `bl` encodings outside every discovered
+    /// function that target it. Always ends with what the search covered.
+    pub fn xrefs_to_empty_notes(&self, address: u64) -> Result<Vec<String>, ApiError> {
+        let analysis = self.analysis()?;
+        let mut notes = Vec::new();
+        if let Some((start, text)) = self.string_start_before(address) {
+            let references = analysis.program.xrefs_to(start).len();
+            if references > 0 {
+                notes.push(format!(
+                    "{address:#x} lies {} bytes into the string {text:?} at {start:#x}, which has {references} \
+                     reference{}: pass `to` {start:#x}",
+                    address - start,
+                    if references == 1 { "" } else { "s" }
+                ));
+            }
+        }
+        if self.binary.arch == rampage_arch::Arch::Arm {
+            let target = address & !1;
+            let sites: Vec<u64> = thumb_bl_sites(self, target)
+                .into_iter()
+                .filter(|&site| analysis.function_containing(site).is_none())
+                .take(MAX_UNDISCOVERED_CALLS + 1)
+                .collect();
+            if !sites.is_empty() {
+                let listed: Vec<String> =
+                    sites.iter().take(MAX_UNDISCOVERED_CALLS).map(|site| format!("{site:#x}")).collect();
+                notes.push(format!(
+                    "Thumb `bl` encodings outside every discovered function target {target:#x}: {}{}. Discovery did \
+                     not reach that code, so it is unproven: `disassemble` there, and pass the enclosing routine's \
+                     start in `raw.seeds` to make it a function",
+                    listed.join(", "),
+                    if sites.len() > MAX_UNDISCOVERED_CALLS { ", ..." } else { "" }
+                ));
+            }
+        }
+        notes.push(
+            "No direct reference from discovered code: calls through function pointers or computed addresses, and \
+             code discovery did not reach, are not resolved."
+                .to_owned(),
+        );
+        Ok(notes)
+    }
+
+    /// When `address` lies inside a printable ASCII run (not at its start): the run's start and up to 64 bytes of
+    /// its text.
+    fn string_start_before(&self, address: u64) -> Option<(u64, String)> {
+        let printable = |at: u64| self.binary.read(at, 1).is_some_and(|byte| (0x20..0x7f).contains(&byte[0]));
+        if !printable(address) {
+            return None;
+        }
+        let mut start = address;
+        while address - start < 256 && start > 0 && printable(start - 1) {
+            start -= 1;
+        }
+        if start == address {
+            return None;
+        }
+        let mut end = address;
+        while end - start < 64 && printable(end) {
+            end += 1;
+        }
+        let bytes = self.binary.read(start, end - start)?;
+        Some((start, String::from_utf8_lossy(bytes).into_owned()))
+    }
+}
+
+/// Most undiscovered `bl` sites an empty `xrefs` note names.
+const MAX_UNDISCOVERED_CALLS: usize = 8;
+
+/// Sites of Thumb `bl` encodings at halfword boundaries of executable, file-backed segments that land on `target`.
+fn thumb_bl_sites(project: &Project, target: u64) -> Vec<u64> {
+    let mut sites = Vec::new();
+    for segment in project.binary.segments.iter().filter(|segment| segment.perms.execute && segment.file_size > 0) {
+        let Some(bytes) = project.binary.read(segment.address, segment.file_size.min(segment.size)) else { continue };
+        let skip = (segment.address % 2) as usize;
+        let base = segment.address + skip as u64;
+        let halfwords: Vec<u16> =
+            bytes[skip.min(bytes.len())..].as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
+        for (index, pair) in halfwords.windows(2).enumerate() {
+            let site = base + 2 * index as u64;
+            if thumb_bl_target(pair[0], pair[1], site) == Some(target) {
+                sites.push(site);
+            }
+        }
+    }
+    sites
+}
+
+/// Where a Thumb `bl` (halfwords `first`, `second`) at `site` lands, when the halfwords encode one.
+pub(crate) fn thumb_bl_target(first: u16, second: u16, site: u64) -> Option<u64> {
+    if first & 0xf800 != 0xf000 || second & 0xd000 != 0xd000 {
+        return None;
+    }
+    let (first, second) = (u32::from(first), u32::from(second));
+    let sign = (first >> 10) & 1;
+    let i1 = !((second >> 13) & 1 ^ sign) & 1;
+    let i2 = !((second >> 11) & 1 ^ sign) & 1;
+    let offset = (sign << 24) | (i1 << 23) | (i2 << 22) | ((first & 0x3ff) << 12) | ((second & 0x7ff) << 1);
+    // Sign-extend the 25-bit offset.
+    let offset = i64::from(((offset << 7) as i32) >> 7);
+    (site + 4).checked_add_signed(offset)
 }

@@ -98,6 +98,7 @@
     "coverage.crypto_constants",
     "coverage.firmware",
     "coverage.functions_analyzed",
+    "coverage.functions_discovered",
     "coverage.incomplete",
     "coverage.instructions",
     "coverage.svd_peripherals",

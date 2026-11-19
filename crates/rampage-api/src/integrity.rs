@@ -1449,7 +1449,65 @@ pub(crate) fn inferred_crc_starts(project: &Project) -> Vec<(u64, String)> {
             }
         }
     }
-    found.into_iter().take(MAX_INFERRED_SEEDS).collect()
+    let mut starts: Vec<(u64, String)> = found.into_iter().take(MAX_INFERRED_SEEDS).collect();
+    // The code that checks with the routine is as undiscovered as the routine itself: a direct `bl` to an inferred
+    // start from outside every discovered function, inside a `push {..., lr}` routine that decodes cleanly, seeds
+    // that routine too, and so on for its own callers, a few rounds deep.
+    let mut frontier: BTreeSet<u64> = starts.iter().map(|(start, _)| *start).collect();
+    for _ in 0..CALLER_ROUNDS {
+        if frontier.is_empty() || starts.len() >= MAX_INFERRED_SEEDS {
+            break;
+        }
+        let mut next = BTreeSet::new();
+        for (site, target) in thumb_calls_into(&blocks, &frontier) {
+            if starts.len() >= MAX_INFERRED_SEEDS {
+                break;
+            }
+            if matches!(project.function_containing(site), Ok(Some(_))) {
+                continue;
+            }
+            let Some((start, end)) = thumb_routine_around(&blocks, site) else { continue };
+            if starts.iter().any(|(known, _)| *known == start)
+                || matches!(project.function_containing(start), Ok(Some(_)))
+                || !decodes_cleanly(binary, decoder.as_mut(), start, end)
+            {
+                continue;
+            }
+            starts.push((
+                start,
+                format!(
+                    "calls the inferred routine at {target:#x} with `bl` at {site:#x} after the push {{..., lr}} \
+                     prologue at {start:#x}; no discovered code reached it"
+                ),
+            ));
+            next.insert(start);
+        }
+        frontier = next;
+    }
+    starts
+}
+
+/// Rounds of callers of inferred CRC routines seeded after the routines themselves.
+const CALLER_ROUNDS: usize = 3;
+
+/// Every Thumb `bl` at a halfword boundary of a block whose target is one of `targets`, by site; at most 64.
+fn thumb_calls_into(blocks: &[Block], targets: &BTreeSet<u64>) -> Vec<(u64, u64)> {
+    let mut calls = Vec::new();
+    for block in blocks {
+        let halfwords: Vec<u16> = block.bytes.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
+        for (index, pair) in halfwords.windows(2).enumerate() {
+            let site = block.start + 2 * index as u64;
+            if let Some(target) = crate::xrefs::thumb_bl_target(pair[0], pair[1], site)
+                && targets.contains(&target)
+            {
+                calls.push((site, target));
+                if calls.len() == 64 {
+                    return calls;
+                }
+            }
+        }
+    }
+    calls
 }
 
 /// The address ranges of the CRC tables a constants scan found.

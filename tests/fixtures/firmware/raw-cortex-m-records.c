@@ -8,8 +8,9 @@
 //     RTOS thread definitions are; nothing calls it or loads its address directly.
 //   - the worker reports errors through strings loaded three ways: a literal-pool word ("image sum err"), a
 //     movw/movt pair ("HEADER ERROR") and adr from a string placed in the code ("COMPARE ERROR").
-//   - crc32_update (reflected polynomial 0xedb88320, loaded from a literal pool) is called only through a pointer
-//     stored with a bias, so discovery cannot reach it; integrity_checks finds it from its polynomial literal.
+//   - crc32_update (reflected polynomial 0xedb88320, loaded from a literal pool) is called only by verify_image,
+//     itself called only through a pointer stored with a bias, so discovery reaches neither; integrity_checks finds
+//     the routine from its polynomial literal, and the session seeds verify_image from its direct `bl`.
 // raw-cortex-m-records.elf keeps the symbols (the truth for tests); raw-cortex-m-records.bin is the flash image at
 // 0x08000000.
 #include <stdint.h>
@@ -100,10 +101,17 @@ __attribute__((noinline)) uint32_t crc32_update(uint32_t crc, const uint8_t *dat
   return ~crc;
 }
 
-typedef uint32_t (*crc_routine)(uint32_t, const uint8_t *, uint32_t);
+// Checks the image with the CRC routine, which it calls directly.
+__attribute__((noinline)) uint32_t verify_image(void) {
+  uint32_t crc = crc32_update(0, image, sizeof image);
+  progress_tick();
+  return crc;
+}
 
-// The routine's address plus a bias, read from memory at run time: no word in the image points at it.
-const volatile uintptr_t crc_entry_biased = (uintptr_t)crc32_update + CRC_BIAS;
+typedef uint32_t (*verify_routine)(void);
+
+// The checker's address plus a bias, read from memory at run time: no word in the image points at it.
+const volatile uintptr_t crc_entry_biased = (uintptr_t)verify_image + CRC_BIAS;
 
 __attribute__((noreturn, noinline)) void start_scheduler(void) {
   SCB_ICSR = 1u << 28;
@@ -115,7 +123,7 @@ __attribute__((noreturn, noinline)) void start_scheduler(void) {
 __attribute__((noinline)) int main(void) {
   start_task(&worker_definition);
   uintptr_t entry = crc_entry_biased;
-  crc_result = ((crc_routine)(entry - CRC_BIAS))(0, image, sizeof image);
+  crc_result = ((verify_routine)(entry - CRC_BIAS))();
   start_scheduler();
 }
 

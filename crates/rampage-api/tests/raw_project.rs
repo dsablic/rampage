@@ -1006,9 +1006,14 @@ fn cortex_m_exact_entry_decompiles_an_asserted_thumb_start() {
         &registry,
         &mut project,
         "decompile",
-        json!({ "at": format!("{:#x}", crc | 1), "exact_entry": true }),
+        json!({ "at": format!("{:#x}", crc | 1), "exact_entry": true, "view": "code" }),
     );
-    assert!(failed && text.contains("bit 0 clear"), "{text}");
+    // Seventh Haiku run: an address copied with its Thumb bit was refused. It names the code at the even address.
+    assert!(!failed && text.contains("0xedb88320"), "{text}");
+    assert!(text.contains("has bit 0 set") && text.contains(&format!("Thumb code at {crc:#x}")), "{text}");
+    let (text, failed) =
+        call_shared(&registry, &mut project, "disassemble", json!({ "at": format!("{:#x}", crc | 1) }));
+    assert!(!failed && text.contains(&format!("\"address\":\"{crc:#x}\"")), "{text}");
 }
 
 /// Fifth Haiku run: integrity_checks inferred a CRC routine from its polynomial literal, but it was no function, so
@@ -1026,6 +1031,14 @@ fn cortex_m_inferred_crc_routines_are_seeded_into_discovery() {
     let seeds = &summary["raw"]["inferred_seeds"];
     assert_eq!(seeds[0]["address"], format!("{crc:#x}"), "{summary:#}");
     assert!(seeds[0]["reason"].as_str().unwrap().contains("polynomial 0xedb88320"), "{seeds:#}");
+    // Seventh Haiku run: `xrefs` to the inferred routine was empty because its caller was undiscovered too. The
+    // checker that calls it with `bl` is seeded after it, so the call is a reference now.
+    let verify = elf_symbol(CORTEX_M_RECORDS_ELF, "verify_image");
+    assert_eq!(seeds[1]["address"], format!("{verify:#x}"), "{summary:#}");
+    assert!(seeds[1]["reason"].as_str().unwrap().contains("calls the inferred routine"), "{seeds:#}");
+    let callers = project.xrefs(rampage_api::XrefQuery::To(crc), None, None).unwrap();
+    let call = callers.items.iter().find(|row| row.from >= verify && row.from < verify + 0x20);
+    assert_eq!(call.map(|row| row.from_function.clone()), Some(Some(format!("sub_{verify:x}"))), "{callers:?}");
     // The same request finds the same seeded project.
     assert!(Arc::ptr_eq(&project, &session.open_raw(&path, &records_request()).unwrap()));
     let registry = tools();
@@ -1043,6 +1056,53 @@ fn cortex_m_inferred_crc_routines_are_seeded_into_discovery() {
     // The seeded CRC routine is evidence that selects functions for analysis.
     let report: Value = serde_json::from_str(&text).unwrap();
     assert!(report["coverage"]["functions_analyzed"].as_u64().unwrap() > 0, "{report:#}");
+    assert!(
+        report["coverage"]["functions_discovered"].as_u64() >= report["coverage"]["functions_analyzed"].as_u64(),
+        "{report:#}"
+    );
+    // Seventh Haiku run: `xrefs` to an address inside a string was a bare empty list. It names the string's start.
+    let header = elf_symbol(CORTEX_M_RECORDS_ELF, "header_error");
+    let (text, failed) = call_shared(&registry, &mut project, "xrefs", json!({ "to": format!("{:#x}", header + 2) }));
+    assert!(!failed, "{text}");
+    assert!(text.contains(&format!("lies 2 bytes into the string \\\"HEADER ERROR\\\" at {header:#x}")), "{text}");
+    assert!(text.contains("pointers or computed addresses"), "{text}");
+}
+
+/// Seventh Haiku run: `search` for the functions referencing a CRC polynomial ran out of match work a tenth into a
+/// Thumb image and could not have matched anyway: ARM has no typed operands, and the polynomial sits in a literal
+/// pool. Literal-pool loads and MOVW/MOVT pairs now match as `loaded_constant`, and since no instruction can encode
+/// such a value the scan is complete.
+#[test]
+fn cortex_m_constant_search_matches_literal_pool_loads_completely() {
+    let owned = OwnedDirectory::new();
+    let path = owned.file("records.bin", CORTEX_M_RECORDS);
+    let mut project = Session::default().open_raw(&path, &records_request()).unwrap();
+    let registry = tools();
+    let search = |project: &mut Arc<rampage_api::Project>, value: u64, kind: &str| {
+        let mode = json!({ "kind": kind, "immediate": { "value": { "kind": "unsigned", "value": value } } });
+        let mode = if kind == "functions_referencing" {
+            json!({ "kind": kind, "reference": { "kind": "constant", "immediate": mode["immediate"] } })
+        } else {
+            mode
+        };
+        let (text, failed) = call_shared(&registry, project, "search", json!({ "mode": mode }));
+        assert!(!failed, "{text}");
+        serde_json::from_str::<Value>(&text).unwrap()
+    };
+    let crc = elf_symbol(CORTEX_M_RECORDS_ELF, "crc32_update");
+    let report = search(&mut project, 0xedb8_8320, "functions_referencing");
+    assert_eq!(report["hits"][0]["address"], format!("{crc:#x}"), "{report:#}");
+    assert_eq!((&report["stop_reason"], &report["total_is_exact"]), (&json!("complete"), &json!(true)), "{report:#}");
+    // A MOVW/MOVT pair builds the header string's address.
+    let header = elf_symbol(CORTEX_M_RECORDS_ELF, "header_error");
+    let report = search(&mut project, header, "immediate");
+    let report_header = elf_symbol(CORTEX_M_RECORDS_ELF, "report_header");
+    let hit = &report["hits"][0];
+    assert_eq!(hit["function"]["address"], format!("{report_header:#x}"), "{report:#}");
+    assert_eq!(hit["code"]["native"]["kind"], "loaded_constant", "{report:#}");
+    // A small value an instruction can encode stays a lower bound: ARM operands are not typed.
+    let report = search(&mut project, 0x40, "immediate");
+    assert_eq!(report["total_is_exact"], false, "{report:#}");
 }
 
 /// Fifth Haiku run: an image that starts with code was read as a vector table and its first word reported as the

@@ -261,8 +261,11 @@ early when the routine returns from several places. When a session opens a Corte
 unset (discovery then runs at open; an explicit `pointer_tables` keeps it lazy), it looks for such routines after
 discovery and, when it finds any, reopens the same interpretation with their starts as further
 seeds (at most 16), so they are functions that `lock_mechanisms`, `decompile` and `integrity_checks` see.
+A routine outside every discovered function that calls such a routine with a Thumb `bl` (inside a `push {..., lr}`
+routine that decodes cleanly) is seeded with it, and its own callers likewise, three rounds deep, so `xrefs` to
+the CRC routine shows the code that checks with it.
 `binary_info` lists them in `raw.inferred_seeds` (`address`, `reason` with the polynomial, literal slot, load
-and prologue); a reopen that is refused keeps the first project. The seeded project also answers a request that
+and prologue, or the `bl` a caller makes); a reopen that is refused keeps the first project. The seeded project also answers a request that
 states those seeds. On a Raw project mapped over a container file, a compressed stream behind a record (within 64 bytes before
 it: its compressed length, its decoded size, and a byte sum of the compressed bytes or a word holding the stream's
 own file offset) is listed in `container_streams`: offsets, sizes, `checksum` (whether a record word is the byte sum or CRC-32 of the
@@ -551,9 +554,23 @@ out. The feature guide linked for each tool is the full reference.
   separately from paging. See [search](search.md).
 - `decompile` with `exact_entry`: the entry is an analyst assertion; entry metadata and decoding are not proof of
   boundaries or completeness, and output carries context counts, omissions and preparation timings. There is no
-  silent whole-program fallback. It takes Raw Cortex-M Thumb code (an address with bit 0 clear) as well as x86,
+  silent whole-program fallback. It takes Raw Cortex-M Thumb code as well as x86,
   x86-64 and AArch64; other ARM code is refused with a pointer to plain `decompile`, which takes any code address.
   See [exact-entry decompilation](exact-entry-ui.md).
+- ARM code addresses with bit 0 set (the Thumb bit vector tables and function pointers carry): `decompile`,
+  `disassemble`, `function_graph`, `function_summary`, `xrefs` `from` and, on Cortex-M, `evaluate_function` read the
+  Thumb code at the even address; `decompile` says so in `note`.
+- `xrefs` `to` that finds nothing adds `notes`: the start of the string the address lies inside, when that start is
+  referenced; on ARM, Thumb `bl` encodings outside every discovered function that target it (code discovery did not
+  reach, to seed); and that calls through pointers are not resolved.
+- `lock_mechanisms` traces the functions its evidence selects (crypto constants, CRC routines, role registers,
+  verify/MAC/random APIs), their callers and callees, not every function: `coverage` gives `functions_analyzed` of
+  `functions_discovered`, and a limitation says so when that is under a tenth.
+- `triage` and `triage_report` on a file with no recognised executable header (and no `raw` or `image_offset`)
+  return a container-level result instead of an error: `parsed_as_executable: false`, the open error as `reason`,
+  a `file_layout` summary with the largest occupied regions, the compressed components headers describe, `carve`'s
+  first candidates, and `next`: `probe_compression` calls with each payload's offset, length and decoded size, then
+  `binary_info` with the probe's `open_as_raw`. Nothing is decoded.
 - `record_finding`: the ledger holds at most 1024 entries and 2 MiB, and a write that would leave the shared
   annotation log less than a quarter of its budget free is refused, so names and comments keep room.
 - `discard_undo`: the annotation log is not rewritten; the dropped step's edits stay.

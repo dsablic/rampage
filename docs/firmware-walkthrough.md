@@ -46,7 +46,8 @@ When all you have is a folder, `list_dir` shows what is in it, with a format sni
 ```
 
 An executable opens directly by its path, and a filesystem image with `fs_list`. A file with no recognised format,
-like this one, goes to `file_layout`.
+like this one, goes to `file_layout`; `triage` on it answers at container level too (largest regions, compressed
+components, `carve` candidates) with `next` naming the `probe_compression` call for each payload.
 
 ## 2. Find the compressed image
 
@@ -221,7 +222,8 @@ Its `next` says to run `integrity_checks` again with that selector, since the ro
 CRCs are in the decoded code. On an image with CRC routines it finds their tables and polynomial literals, and on
 Cortex-M names a routine around a polynomial literal even when discovery missed it (`inferred_range`); this sample
 has none. When the project opens with `pointer_tables` unset (the default), such a routine is also seeded into discovery (`raw.inferred_seeds` in
-`binary_info`, with the evidence), so `decompile`, `lock_mechanisms` and `integrity_checks` see it as a function. After patching, the same tool recomputes the checks; see
+`binary_info`, with the evidence), so `decompile`, `lock_mechanisms` and `integrity_checks` see it as a function;
+code that calls it directly with `bl` is seeded with it, so `xrefs` to the routine finds the check. After patching, the same tool recomputes the checks; see
 [firmware patching](firmware-patching.md).
 
 If another tool needs the decoded bytes as a file, `write_decoded_range` writes them to a new file at an absolute

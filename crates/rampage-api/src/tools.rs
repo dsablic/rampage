@@ -1980,7 +1980,7 @@ struct EntryDiagnosticsArgs {
 }
 
 fn decompile_tool(project: &Project, args: DecompileToolArgs) -> Result<Value, ApiError> {
-    let address = project.resolve(&args.at)?;
+    let (address, thumb_note) = project.thumb_code_address(project.resolve(&args.at)?);
     let value = if args.exact_entry {
         serde_json::to_value(project.decompile_entry(&crate::DecompileEntryRequest {
             address,
@@ -1993,6 +1993,9 @@ fn decompile_tool(project: &Project, args: DecompileToolArgs) -> Result<Value, A
     };
     let mut value = value.map_err(|error| ApiError::Invalid(format!("decompilation serialization: {error}")))?;
     value["decompiler"] = Value::from(decompiler_mode(project));
+    if let Some(note) = thumb_note {
+        value["note"] = Value::from(note);
+    }
     if let Some(region) = project.encrypted_region_at(address).filter(|_| args.explore_encrypted) {
         value["warning"] = Value::from(format!(
             "decompiled inside code judged encrypted or packed; the C is likely noise: {}",
@@ -2984,7 +2987,8 @@ pub fn tools() -> Vec<Tool> {
              reference_offset, callee_offset; follow *_next_offset); code adds instructions and partial structural \
              pseudocode. full (default) refuses when oversized.",
             |project, arguments: FunctionSummaryArgs| {
-                let summary = project.function_summary(project.resolve(&arguments.at)?)?;
+                let summary =
+                    project.function_summary(project.thumb_code_address(project.resolve(&arguments.at)?).0)?;
                 let entry = summary.graph.address;
                 let mut value = serde_json::to_value(summary).map_err(|error| ApiError::Invalid(error.to_string()))?;
                 if arguments.view != ToolView::Full && value["references"]["total"].as_u64() > Some(1000) {
@@ -3426,7 +3430,12 @@ pub fn tools() -> Vec<Tool> {
              oversized listing refuses: lower count.",
             |project, arguments: ViewedDisassembleArgs| {
                 let count = arguments.listing.count.unwrap_or(crate::DEFAULT_INSTRUCTIONS).min(1000);
-                let value = serde_json::to_value(project.disassemble(arguments.listing.at.as_deref(), count)?)
+                // A Thumb pointer's bit 0 is no instruction boundary: list from the code it points at.
+                let at = match arguments.listing.at.as_deref() {
+                    Some(at) => Some(format!("{:#x}", project.thumb_code_address(project.resolve(at)?).0)),
+                    None => None,
+                };
+                let value = serde_json::to_value(project.disassemble(at.as_deref(), count)?)
                     .map_err(|error| ApiError::Invalid(error.to_string()))?;
                 project_tool_view(value, ToolViewKind::Disassemble, arguments.view)
             },
@@ -3439,7 +3448,8 @@ pub fn tools() -> Vec<Tool> {
              block, with `noreturn` listed or inferred. full (default) refuses when oversized; summary and code page \
              whole blocks with their edges (block_offset; follow blocks_next_offset).",
             |project, arguments: FunctionGraphArgs| {
-                let value = serde_json::to_value(project.function_graph(project.resolve(&arguments.at)?)?)
+                let at = project.thumb_code_address(project.resolve(&arguments.at)?).0;
+                let value = serde_json::to_value(project.function_graph(at)?)
                     .map_err(|error| ApiError::Invalid(error.to_string()))?;
                 project_function_graph(value, arguments.view, arguments.block_offset)
             },
@@ -3452,10 +3462,19 @@ pub fn tools() -> Vec<Tool> {
             |project, arguments: XrefsArgs| {
                 let query = match (arguments.to, arguments.from) {
                     (Some(to), None) => project.xref_query_to(&to)?,
-                    (None, Some(from)) => XrefQuery::From(project.resolve(&from)?),
+                    (None, Some(from)) => XrefQuery::From(project.thumb_code_address(project.resolve(&from)?).0),
                     _ => return Err(ApiError::Invalid("pass exactly one of `to` and `from`".to_owned())),
                 };
-                project.xrefs(query, arguments.offset, page_limit(arguments.limit))
+                let page = project.xrefs(query, arguments.offset, page_limit(arguments.limit))?;
+                let notes = match query {
+                    XrefQuery::To(address) if page.total == 0 => project.xrefs_to_empty_notes(address)?,
+                    _ => Vec::new(),
+                };
+                let mut value = serde_json::to_value(page).map_err(|error| ApiError::Invalid(error.to_string()))?;
+                if !notes.is_empty() {
+                    value["notes"] = Value::from(notes);
+                }
+                Ok(value)
             },
         ),
         tool(
