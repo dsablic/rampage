@@ -52,6 +52,14 @@ impl CodeImmediate {
         Ok(())
     }
 
+    /// The value as a 32-bit word, when it is one (a signed value in `i32` range is taken two's-complement).
+    fn as_u32(&self) -> Option<u32> {
+        match self.value {
+            CodeValue::Unsigned(value) => u32::try_from(value).ok(),
+            CodeValue::Signed(value) => i32::try_from(value).ok().map(|value| value as u32),
+        }
+    }
+
     fn matches(&self, unsigned: Option<u64>, signed: Option<i64>, width: Option<u16>) -> bool {
         self.width_bits.is_none_or(|wanted| width == Some(wanted))
             && match self.value {
@@ -418,9 +426,12 @@ fn search_program(
         }
     };
     if !incomplete {
-        // The decoder copies the retained mode map. Charge its bounded construction before entering it.
+        // The decoder copies the retained mode map. Charge its bounded construction before entering it: the map
+        // is collected from a slice, a merge sort (one comparison per element per halving) and a linear bulk build.
+        // A B-tree descent per element would cost twelve times as much and spent half the budget on a
+        // Thumb image of 140,000 mode entries.
         let mode_work = (program.code_modes.len() as u64)
-            .saturating_mul(tree_work(program.code_modes.len()))
+            .saturating_mul(slice_search_work(program.code_modes.len()) + 1)
             .saturating_add(project.binary.thumb.len() as u64);
         if let Err(reason) = charge_work(query, control, &mut work, mode_work) {
             incomplete = true;
@@ -434,6 +445,15 @@ fn search_program(
     }
     let annotations = project.annotations();
     let reference_mode = matches!(&query.kind, CodeSearchKind::FunctionsReferencing(_));
+    // On 32-bit ARM a value no instruction can encode reaches a register only through a literal-pool load or a
+    // MOVW/MOVT pair, both of which `loaded_constant` matches: the missing typed operands cannot hide it.
+    let loads_cover_value = project.binary.arch == rampage_arch::Arch::Arm
+        && match &query.kind {
+            CodeSearchKind::Immediate(value) | CodeSearchKind::FunctionsReferencing(CodeReference::Constant(value)) => {
+                !value.include_displacements && value.as_u32().is_some_and(|word| !arm_can_encode(word))
+            }
+            _ => false,
+        };
     'blocks: for (_, (block, function)) in blocks {
         if incomplete {
             break;
@@ -454,6 +474,9 @@ fn search_program(
             invalid_blocks += 1;
             continue;
         };
+        // Literal pools are read only from read-only memory, so code in writable memory keeps the lower bound.
+        let literal_evidence = loads_cover_value
+            && project.binary.segment_containing(block.start).is_some_and(|segment| !segment.perms.write);
         decoder.begin_run();
         let mut offset = 0;
         let mut gated = false;
@@ -606,7 +629,8 @@ fn search_program(
             decoded_bytes += size as u64;
             let native = &bytes[offset..offset + size];
             offset += size;
-            if let Err(reason) = charge_work(query, control, &mut work, tree_work(program.resolved_flows.len())) {
+            if let Err(reason) = charge_work(query, control, &mut work, slice_search_work(program.resolved_flows.len()))
+            {
                 incomplete = true;
                 stop_reason = reason;
                 break 'blocks;
@@ -643,7 +667,7 @@ fn search_program(
                 CodeSearchKind::Immediate(value)
                 | CodeSearchKind::FunctionsReferencing(CodeReference::Constant(value)) => {
                     let operands = decoder.operands(native, address);
-                    if operands.is_none()
+                    if (operands.is_none() && !literal_evidence)
                         || operands
                             .as_ref()
                             .is_some_and(|items| items.iter().any(|operand| operand.kind == OperandKind::Unsupported))
@@ -662,7 +686,9 @@ fn search_program(
                     if import_targets.contains(&function) {
                         continue;
                     }
-                    if let Err(reason) = charge_work(query, control, &mut work, tree_work(xrefs_by_source.len())) {
+                    if let Err(reason) =
+                        charge_work(query, control, &mut work, slice_search_work(xrefs_by_source.len()))
+                    {
                         incomplete = true;
                         stop_reason = reason;
                         break 'blocks;
@@ -857,6 +883,19 @@ fn immediate_evidence(
             && query.matches(u64::try_from(memory.displacement).ok(), Some(memory.displacement), None)
         {
             return Some(evidence("displacement", None, Some(operand.clone())));
+        }
+    }
+    // A decoder without typed operands (32-bit ARM and Thumb) still reports the word an `ldr rN, =value` loads
+    // from a read-only literal pool, or a MOVW/MOVT pair builds: the constants firmware keeps out of encodings.
+    if operands.is_none()
+        && let Some(value) = instruction.immediate
+    {
+        let (signed, width) = match u32::try_from(value) {
+            Ok(word) => (i64::from(word as i32), 32),
+            Err(_) => (value as i64, 64),
+        };
+        if query.matches(Some(value), Some(signed), Some(width)) {
+            return Some(evidence("loaded_constant", None, None));
         }
     }
     if query.include_addresses {
@@ -1088,6 +1127,26 @@ fn tree_work(entries: usize) -> u64 {
     (u64::from(usize::BITS - entries.leading_zeros()) + 1) * 12
 }
 
+/// Whether some 32-bit ARM or Thumb instruction can carry `value` (or its complement or negation, for MVN, CMN
+/// and SUB forms) in its encoding: a 16-bit field, a rotated byte, or a Thumb replicated-byte pattern. Generous on
+/// purpose: a value judged encodable keeps the search a lower bound.
+fn arm_can_encode(value: u32) -> bool {
+    [value, !value, value.wrapping_neg()].into_iter().any(|word| {
+        let low = word & 0xff;
+        let second = (word >> 8) & 0xff;
+        word <= 0xffff
+            || word == low * 0x0001_0001
+            || word == (second << 8) * 0x0001_0001
+            || word == low * 0x0101_0101
+            || (0..32).any(|rotation| word.rotate_left(rotation) <= 0xff)
+    })
+}
+
+/// Comparisons a binary search of a sorted slice of `entries` makes: one per halving.
+fn slice_search_work(entries: usize) -> u64 {
+    u64::from(usize::BITS - entries.leading_zeros()) + 1
+}
+
 /// Only get-PC candidates need semantic context beyond the ordinary instruction window. All bytes
 /// passed here have already been charged. Link-register decoders probe four following instructions;
 /// x86 probes one following instruction. Preview decoders are independent, never the live run's state.
@@ -1110,15 +1169,22 @@ fn semantic_lookahead(
     match arch {
         rampage_arch::Arch::Aarch64 => Ok(bytes.starts_with(&[0x01, 0x00, 0x00, 0x94]).then_some(20)),
         rampage_arch::Arch::Arm => {
-            charge_work(query, control, work, tree_work(project.binary.thumb.len()) + tree_work(MAX_INSTRUCTIONS))?;
             let Some(word) = bytes.first_chunk::<4>() else { return Ok(None) };
+            let thumb_candidate = *word == [0x00, 0xf0, 0x00, 0xf8] || *word == [0xf0, 0x00, 0xf8, 0x00];
+            // Admit both instruction byte orders conservatively (BE8 differs from data order).
+            // The live decoder, with its retained target, alone decides the instruction's meaning.
+            let arm_candidate = [u32::from_le_bytes(*word), u32::from_be_bytes(*word)]
+                .into_iter()
+                .any(|word| word & 0x0fff_ffff == 0x0bff_ffff && word >> 28 != 0xf);
+            // Only a word shaped like a branch-and-link to the next instruction needs its mode looked up. Nearly
+            // every instruction is no get-PC candidate in either mode and costs nothing more here.
+            if !thumb_candidate && !arm_candidate {
+                return Ok(None);
+            }
+            charge_work(query, control, work, tree_work(project.binary.thumb.len()) + tree_work(MAX_INSTRUCTIONS))?;
             let candidate = match decoder.code_mode_at(address) {
-                Some(true) => *word == [0x00, 0xf0, 0x00, 0xf8] || *word == [0xf0, 0x00, 0xf8, 0x00],
-                // Admit both instruction byte orders conservatively (BE8 differs from data order).
-                // The live decoder, with its retained target, alone decides the instruction's meaning.
-                Some(false) => [u32::from_le_bytes(*word), u32::from_be_bytes(*word)]
-                    .into_iter()
-                    .any(|word| word & 0x0fff_ffff == 0x0bff_ffff && word >> 28 != 0xf),
+                Some(true) => thumb_candidate,
+                Some(false) => arm_candidate,
                 None => return Err(SearchStopReason::IncompleteEvidence),
             };
             Ok(candidate.then_some(20))

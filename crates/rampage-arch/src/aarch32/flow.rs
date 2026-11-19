@@ -303,7 +303,15 @@ impl Aarch32Disassembler {
         if self.is_thumb(address) { 2 } else { 4 }
     }
 
-    fn track(&mut self, decoded: &Decoded, address: u64, bytes: &[u8]) -> Found {
+    /// `memory` supplies a literal-pool word that lies past `bytes` (a caller decoding a short window); words
+    /// inside `bytes` are always read from them.
+    fn track(
+        &mut self,
+        decoded: &Decoded,
+        address: u64,
+        bytes: &[u8],
+        memory: &dyn Fn(u64, u8) -> Option<u64>,
+    ) -> Found {
         let mut found = Found::default();
         let thumb = decoded.set != Set::A32;
         let pc = address.wrapping_add(if thumb { 4 } else { 8 });
@@ -315,6 +323,9 @@ impl Aarch32Disassembler {
         let conditional = conditional(decoded);
         let literal = |at: u64| -> Option<u64> {
             let offset = usize::try_from(at.checked_sub(address)?).ok()?;
+            if offset >= bytes.len() {
+                return memory(at, 4).map(|value| value & 0xffff_ffff);
+            }
             read_u32(bytes, offset, self.target.data_big_endian).map(u64::from)
         };
         let read = |registers: &Registers, register: u64| -> Option<Value> {
@@ -529,6 +540,12 @@ fn is_non_canonical(decoded: &Decoded) -> bool {
 
 impl Disassembler for Aarch32Disassembler {
     fn decode(&mut self, bytes: &[u8], address: u64) -> Insn {
+        self.decode_with_memory(bytes, address, &|_, _| None)
+    }
+
+    /// Like `decode`, reading a literal-pool word past `bytes` through `read`, so a caller decoding a bounded
+    /// window still learns the constant an `ldr rN, [pc, #imm]` loads.
+    fn decode_with_memory(&mut self, bytes: &[u8], address: u64, read: &dyn Fn(u64, u8) -> Option<u64>) -> Insn {
         self.switches.clear();
         let invalid = Insn {
             address,
@@ -561,7 +578,7 @@ impl Disassembler for Aarch32Disassembler {
             let advanced = decoded.it.advance();
             advanced.in_block().then_some((next, advanced))
         };
-        let found = self.track(&decoded, address, bytes);
+        let found = self.track(&decoded, address, bytes, read);
         let (mut flow, mut conditional_transfer) = flow(&decoded, address);
         if decoded.mnemonic() == "LDR"
             && register(&decoded, "Rt") == Some(PC)
