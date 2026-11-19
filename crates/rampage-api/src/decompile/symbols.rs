@@ -144,8 +144,8 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
 /// every function's entry gets `$t9` as its own address (the PIC calling convention, which `_gp_disp` prologues
 /// add to) and `$gp` as the image's global pointer, so GOT loads resolve to their entries and calls through
 /// import entries to the imports' names. The local GOT entries (page addresses that the dynamic linker only
-/// relocates by the load bias) are read-only with read-only folding on, so `lw $a0, %got(page)($gp); addiu $a0,
-/// $a0, %lo(s)` reads as the string's address. Ghidra's own MIPS analysis records the same values. Other
+/// relocates by the load bias) are made read-only, with read-only folding on, so `lw $a0, %got(page)($gp); addiu
+/// $a0, $a0, %lo(s)` reads as the string's address. Ghidra's own MIPS analysis records the same values. Other
 /// architectures, and MIPS images with no global pointer, get nothing.
 pub(super) fn mips_pic_operations(binary: &rampage_loaders::Binary) -> Vec<WorkerOperation> {
     if !matches!(binary.arch, rampage_arch::Arch::Mips | rampage_arch::Arch::Mips64) {
@@ -163,6 +163,11 @@ pub(super) fn mips_pic_operations(binary: &rampage_loaders::Binary) -> Vec<Worke
     if let Some(got) = target.got.filter(|got| got.local_entries > 2) {
         let first = got.address.saturating_add(2 * width);
         let last = got.address.saturating_add(got.local_entries as u64 * width).saturating_sub(1);
+        // Ghidra folds through one switch for the whole decompile, and the same read-only property makes it print a
+        // pointer to `.rodata` text as a string literal, so the read-only mappings stay read-only (and fold) too.
+        // A MIPS Linux image's read-only segment holds its code and constants, which neither the dynamic linker nor
+        // the program writes (its GOT and relocated data are in the writable segment); folding them changed nothing
+        // but string rendering across the MIPS fixtures' 150 functions.
         operations.push(WorkerOperation::FoldReadOnly { enabled: true });
         operations.push(WorkerOperation::ReadOnlyRange { first, last, read_only: true });
     }

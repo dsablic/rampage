@@ -124,6 +124,14 @@ fn evaluation_runs_pie_code_in_page_zero() {
         assert_eq!(report["stop"], "returned", "{name}: {report}");
         assert_eq!(report["result"]["unsigned"], 16, "{name}: {report}");
     }
+    // A call through a null pointer, or into the headers before the code, still faults.
+    let project = project("router-gnu-mips");
+    for at in ["0x0", "0x40"] {
+        let request = serde_json::json!({ "at": at, "args": [] });
+        let report = project.evaluate_function(&serde_json::from_value(request).unwrap()).unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        assert_eq!(report["stop"], "unmapped_fetch", "{at}: {report}");
+    }
 }
 
 /// Router firmware often ships binaries without section headers: the dynamic section's DT_PLTGOT and
@@ -183,6 +191,23 @@ fn raw_mips_boot_rom_at_the_reset_vector() {
     let request = serde_json::json!({ "at": format!("{:#x}", boot_truth("mix")), "args": [1, 16] });
     let report = serde_json::to_value(project.evaluate_function(&serde_json::from_value(request).unwrap()).unwrap());
     assert_eq!(report.unwrap()["result"]["unsigned"], (1 << 5) + (16 >> 3) + 0x1234);
+    // The CRC routines: CRC-32 by its lui/ori polynomial, CRC-16 by `xori 0xa001` in a loop that shifts by one;
+    // uart_divisor's `xori 0x1021`, with no such loop, is no CRC.
+    let mut project = std::sync::Arc::new(project);
+    let report = rampage_api::tools::call_shared(
+        &rampage_api::tools::tools(),
+        &mut project,
+        "integrity_checks",
+        serde_json::json!({}),
+    );
+    assert!(!report.1, "{}", report.0);
+    let report: serde_json::Value = serde_json::from_str(&report.0).unwrap();
+    let routines: Vec<String> =
+        report["routines"].as_array().unwrap().iter().map(|routine| routine["address"].to_string()).collect();
+    for (symbol, expected) in [("crc32_bitwise", true), ("crc16_modbus", true), ("uart_divisor", false)] {
+        let address = format!("\"{:#x}\"", boot_truth(symbol));
+        assert_eq!(routines.contains(&address), expected, "{symbol}: {report:#}");
+    }
 }
 
 /// The CRC-32 polynomial MIPS code builds with `lui` and `ori` is found by constant search (`loaded_constant`) and
@@ -207,4 +232,53 @@ fn constants_mips_code_builds_are_searchable() {
     let (text, failed) =
         rampage_api::tools::call_shared(&registry, &mut project, "search", serde_json::json!({ "mode": mode }));
     assert!(!failed && text.contains("addiu $a2, $zero, 9"), "{text}");
+}
+
+/// Review: per-block runs (search, signatures) on GCC's `deregister_tm_clones` once took the block at `jr $t9` for a
+/// function entry, giving a jump to itself and a fake reference.
+#[test]
+fn block_runs_do_not_assume_t9() {
+    let project = project("router-gnu-mipsel");
+    let block = 0x9c8;
+    let mut decoder = project.binary.decoder().unwrap();
+    decoder.begin_run();
+    let insn = decoder.decode(project.binary.code_from(block).unwrap(), block);
+    assert_eq!(insn.flow, rampage_arch::Flow::IndirectJump);
+    let mode =
+        serde_json::json!({ "kind": "functions_referencing", "reference": { "kind": "address", "target": block } });
+    let registry = rampage_api::tools::tools();
+    let mut project = std::sync::Arc::new(project);
+    let (text, failed) =
+        rampage_api::tools::call_shared(&registry, &mut project, "search", serde_json::json!({ "mode": mode }));
+    assert!(!failed, "{text}");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&text).unwrap()["hits"], serde_json::json!([]), "{text}");
+}
+
+/// Review: a MIPS boot ROM's first instruction is usually `b reset` over the exception vectors (0x200 and 0x380); that
+/// jump is followed, and the C entry is the jump taken after the reset code sets the stack.
+#[test]
+fn raw_mips_find_main_follows_the_branch_over_the_exception_vectors() {
+    let mut image = vec![0u8; 0x600];
+    let mut word = |offset: usize, value: u32| image[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+    word(0x000, 0x1000_00ff); // b 0xbfc00400
+    word(0x380, 0x4200_0018); // eret (the general exception vector)
+    word(0x400, 0x3c1d_8001); // lui $sp, 0x8001
+    word(0x404, 0x3c08_bfc0); // lui $t0, 0xbfc0
+    word(0x408, 0x2508_0500); // addiu $t0, $t0, 0x500
+    word(0x40c, 0x0100_0008); // jr $t0
+    word(0x500, 0x1000_ffff); // b . (main)
+    let options = rampage_loaders::RawCodeOptions {
+        profile: rampage_loaders::RawProfile::Mips32Be,
+        base: 0xbfc0_0000,
+        entry: None,
+        seeds: vec![],
+        vector_table: None,
+        pointer_tables: false,
+    };
+    let project = Project::new(Binary::from_raw_code(image, options).unwrap());
+    let report = project.find_main(rampage_api::ReportLimits::default(), false).unwrap();
+    let report = serde_json::to_value(&report).unwrap();
+    let candidate = &report["sections"][0]["findings"][0];
+    assert_eq!(candidate["address"], "0xbfc00500", "{report:#}");
+    assert!(candidate["evidence"].to_string().contains("followed"), "{candidate:#}");
 }

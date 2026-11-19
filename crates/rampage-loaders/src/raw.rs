@@ -604,7 +604,8 @@ impl RawCodeImage {
         }
         // A MIPS image mapped without an entry starts at its base, as a boot ROM does at the reset vector
         // (0xbfc00000 on MIPS32).
-        if options.profile.mips() && options.entry.is_none() {
+        let entry_from_base = options.profile.mips() && options.entry.is_none();
+        if entry_from_base {
             options.entry = Some(options.base);
         }
         let check_start = |address: u64| {
@@ -614,7 +615,15 @@ impl RawCodeImage {
             Ok(())
         };
         if let Some(entry) = options.entry {
-            check_start(entry)?;
+            check_start(entry).map_err(|error| match entry_from_base {
+                true => LoadError::Malformed(format!(
+                    "Raw {} takes base_address {:#x} as the entry when none is given: it must be {alignment}-byte \
+                     aligned with code bytes there (or give `entry`)",
+                    options.profile.language_id(),
+                    options.base
+                )),
+                false => error,
+            })?;
         }
         for &seed in &options.seeds {
             check_start(seed)?;

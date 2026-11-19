@@ -492,6 +492,9 @@ struct ImageRam<'a> {
     heap: Option<Heap>,
     /// Addresses below this read as unmapped: `NULL_GUARD`, or 0 for an image linked to run at page 0.
     null_guard: u64,
+    /// Code sections inside the null page of an ELF PIE or shared object (linked at 0, as GCC links MIPS PIEs),
+    /// address 0 excluded: their instructions may be fetched, while loads, stores and other fetches there fault.
+    guarded_code: Vec<std::ops::Range<u64>>,
 }
 
 /// Whether the image is linked to run with mapped contents in page 0, as Cortex-M and other firmware images commonly
@@ -527,9 +530,23 @@ impl<'a> ImageRam<'a> {
             })
             .collect::<Vec<_>>();
         let null_guard = if runs_at_page_zero(binary, &segments) { 0 } else { NULL_GUARD };
+        let position_independent =
+            matches!(&binary.details, rampage_loaders::Details::Elf(elf) if elf.kind == "shared");
+        let guarded_code = if position_independent && null_guard > 0 {
+            binary
+                .code_ranges()
+                .iter()
+                .filter(|range| range.start < null_guard)
+                .map(|range| range.start.max(1)..range.end.min(null_guard))
+                .filter(|range| !range.is_empty())
+                .collect()
+        } else {
+            Vec::new()
+        };
         Self {
             segments,
             null_guard,
+            guarded_code,
             pages: HashMap::new(),
             regions: Vec::new(),
             pointer_bytes,
@@ -576,11 +593,11 @@ impl<'a> ImageRam<'a> {
         self.segments.iter().find(|segment| address >= segment.start && address - segment.start < segment.size)
     }
 
-    /// An instruction byte of an executable segment in the null page of an image that keeps the null-page guard
-    /// (a PIE linked at 0, whose first functions can lie in page 0): fetching there runs the code, while loads
-    /// and stores still fault as null dereferences.
+    /// An instruction byte of a code section in the null page of an ELF PIE or shared object linked at 0, whose
+    /// first functions can lie in page 0: fetching there runs the code, while loads and stores still fault as null
+    /// dereferences, and so does a fetch from address 0 or from the headers (a call through a null pointer).
     fn fetch_guarded_byte(&self, address: u64) -> Option<u8> {
-        if address >= self.null_guard {
+        if !self.guarded_code.iter().any(|range| range.contains(&address)) {
             return None;
         }
         let segment = self

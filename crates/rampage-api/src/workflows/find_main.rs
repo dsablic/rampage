@@ -52,6 +52,21 @@ fn destination(text: &str) -> Option<&str> {
     Some(operands.split(',').next()?.trim())
 }
 
+/// Puts each branch's delay-slot instruction (MIPS, SPARC) before the branch, in the order they take effect.
+fn delay_slots_first(lines: &mut [DisassemblyLine], arch: Arch) {
+    if arch.delay_slots() != 1 {
+        return;
+    }
+    let mut index = 0;
+    while index + 1 < lines.len() {
+        if lines[index].flow != Flow::Next {
+            lines.swap(index, index + 1);
+            index += 1;
+        }
+        index += 1;
+    }
+}
+
 /// The registers that carry a call's first pointer argument under the ELF ABIs modelled here.
 fn first_argument_registers(arch: Arch) -> Option<&'static [&'static str]> {
     match arch {
@@ -223,8 +238,9 @@ impl Project {
             );
         } else if raw_mips {
             report.limitation(
-                "Raw MIPS: the reset code at the entry is followed to its first jump out of it (`la $t0, f; jr $t0` \
-                 or `j f`); startup that reaches its C code by a call or through a table is not modelled.",
+                "Raw MIPS: the reset code at the entry is followed through jumps taken before $sp is set (`b reset` \
+                 over the exception vectors) to the first forward jump after it or into kseg0 (`la $t0, f; jr $t0`); \
+                 startup that reaches its C code by a call or through a table is not modelled.",
             );
         } else if self.binary.raw_code_image().is_some() {
             report.limitation("Raw projects: the startup heuristics model Cortex-M and MIPS reset code only.");
@@ -266,35 +282,49 @@ impl Project {
     /// out of the uncached kseg1 into kseg0, or `j f`): the first unconditional jump out of the reset code.
     fn mips_reset_candidate(&self) -> Result<Option<Candidate>, ApiError> {
         let Some(entry) = self.binary.entry else { return Ok(None) };
-        let mut lines = self.disassemble(Some(&format!("{entry:#x}")), STUB_INSTRUCTIONS)?;
-        let reset_end = lines.last().map_or(entry, |line| line.address);
-        // The delay slot runs before the jump.
-        let mut index = 0;
-        while index + 1 < lines.len() {
-            if lines[index].flow != Flow::Next {
-                lines.swap(index, index + 1);
-                index += 1;
-            }
-            index += 1;
-        }
+        let kseg1 = |address: u64| (0xa000_0000..0xc000_0000).contains(&address);
+        let kseg0 = |address: u64| (0x8000_0000..0xa000_0000).contains(&address);
+        let mut at = entry;
+        let mut stack_set = false;
         let mut trail = vec![format!("reset code (the entry) at {entry:#x}")];
-        for line in lines {
-            match line.flow {
-                Flow::Jump(target) if !(entry..=reset_end).contains(&target) && self.binary.is_code(target) => {
-                    trail.push(format!("{} -> {target:#x}", describe(&line)));
-                    let discovered = self.function_containing(target)? == Some(target);
-                    return Ok(Some(Candidate {
-                        address: target,
-                        confidence: if discovered { Confidence::Medium } else { Confidence::Low },
-                        source: "disassemble",
-                        observation: "the reset code's first jump out of it: a boot ROM's C entry (heuristic)"
-                            .to_owned(),
-                        evidence: trail,
-                    }));
+        // `b reset; nop` at the vector jumps over the exception vectors to the reset code itself: a jump taken
+        // before the stack is set, staying in the same segment, is followed rather than taken for the C entry.
+        for _ in 0..=STUB_DEPTH {
+            let mut lines = self.disassemble(Some(&format!("{at:#x}")), STUB_INSTRUCTIONS)?;
+            delay_slots_first(&mut lines, self.binary.arch);
+            let mut follow = None;
+            for line in lines {
+                if destination(&line.text) == Some("$sp") {
+                    stack_set = true;
                 }
-                Flow::Return | Flow::Halt | Flow::Invalid | Flow::IndirectJump => break,
-                Flow::Jump(_) => break,
-                _ => {}
+                match line.flow {
+                    // A backward jump is a loop in the reset code.
+                    Flow::Jump(target) if target <= line.address || !self.binary.is_code(target) => break,
+                    Flow::Jump(target) if stack_set || (kseg1(line.address) && kseg0(target)) => {
+                        trail.push(format!("{} -> {target:#x}", describe(&line)));
+                        let discovered = self.function_containing(target)? == Some(target);
+                        return Ok(Some(Candidate {
+                            address: target,
+                            confidence: if discovered { Confidence::Medium } else { Confidence::Low },
+                            source: "disassemble",
+                            observation: "the reset code's first jump out of it after setting the stack (or into \
+                                          cached kseg0): a boot ROM's C entry (heuristic)"
+                                .to_owned(),
+                            evidence: trail,
+                        }));
+                    }
+                    Flow::Jump(target) => {
+                        trail.push(format!("{} -> {target:#x} (followed: the stack is not set yet)", describe(&line)));
+                        follow = Some(target);
+                        break;
+                    }
+                    Flow::Return | Flow::Halt | Flow::Invalid | Flow::IndirectJump => break,
+                    _ => {}
+                }
+            }
+            match follow {
+                Some(target) => at = target,
+                None => break,
             }
         }
         Ok(None)
@@ -368,16 +398,7 @@ impl Project {
             let mut lines = self.disassemble(Some(&format!("{at:#x}")), STUB_INSTRUCTIONS)?;
             // A MIPS delay slot runs before its branch takes effect, and often sets the call's first argument
             // (`jal __libc_start_main; move $a0, $at`): read it first.
-            if self.binary.arch.delay_slots() == 1 {
-                let mut index = 0;
-                while index + 1 < lines.len() {
-                    if lines[index].flow != Flow::Next {
-                        lines.swap(index, index + 1);
-                        index += 1;
-                    }
-                    index += 1;
-                }
-            }
+            delay_slots_first(&mut lines, self.binary.arch);
             for line in lines {
                 if destination(&line.text).is_some_and(|register| registers.contains(&register)) {
                     // A load's own address is data; the value it loads (`ldr r0, =main`) may be main, as may the

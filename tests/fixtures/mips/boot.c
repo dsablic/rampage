@@ -52,6 +52,22 @@ __attribute__((noinline)) uint32_t crc32_bitwise(const uint8_t *data, uint32_t l
 
 __attribute__((noinline)) uint32_t mix(uint32_t a, uint32_t b) { return (a << 5) + (b >> 3) + 0x1234u; }
 
+/* Bitwise CRC-16/MODBUS (reflected polynomial 0xa001), over the image header; optnone keeps LLVM from turning the
+   loop into a table. */
+__attribute__((noinline, optnone)) uint16_t crc16_modbus(const uint8_t *data, uint32_t length) {
+  uint16_t crc = 0xffff;
+  while (length--) {
+    crc ^= *data++;
+    for (int bit = 0; bit < 8; bit++) {
+      crc = (crc & 1) ? (uint16_t)((crc >> 1) ^ 0xa001) : (uint16_t)(crc >> 1);
+    }
+  }
+  return crc;
+}
+
+/* A UART setting XORed with a constant that equals the CRC-16/CCITT polynomial: no CRC loop. */
+__attribute__((noinline)) uint32_t uart_divisor(uint32_t clock) { return clock ^ 0x1021u; }
+
 __attribute__((noreturn, noinline)) void boot_fail(const char *why) {
   uart_puts("boot failed: ");
   uart_puts(why);
@@ -61,7 +77,11 @@ __attribute__((noreturn, noinline)) void boot_fail(const char *why) {
 
 __attribute__((noreturn)) void boot_main(void) {
   const struct image_header *header = (const struct image_header *)IMAGE_BASE;
+  UART_THR = (uint8_t)uart_divisor(0x01000000u);
   uart_puts("MIPS boot ROM v1.2\r\n");
+  if (crc16_modbus((const uint8_t *)header, 12) == 0) {
+    boot_fail("blank header\r\n");
+  }
   if (header->magic != 0x27051956u) {
     boot_fail("bad image magic\r\n");
   }

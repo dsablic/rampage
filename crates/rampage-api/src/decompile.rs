@@ -651,7 +651,9 @@ impl Project {
 
     /// Builds a decompiler over the program's loadable segments and registers the names rampage knows, so calls
     /// render by name. Read-only segments are mapped read-only; loads from them fold into constants only on Cortex-M
-    /// firmware (`FoldReadOnly`), since another headered image's read-only sections can be written at run time.
+    /// firmware (`FoldReadOnly`), since another headered image's read-only sections can be written at run time. MIPS
+    /// position-independent ELF folds too, with its local GOT entries made read-only
+    /// (`symbols::mips_pic_operations`): its read-only segment is code and constants nothing writes.
     pub(crate) fn build_decompiler(
         &self,
         options: &DecompilerOptions,

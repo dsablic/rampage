@@ -1138,6 +1138,11 @@ impl Binary {
 
     /// Whether `address` holds code: inside a code section, or inside an executable segment when the file has
     /// no code sections. Executable segments alone are too coarse; Mach-O `__TEXT` also holds headers and strings.
+    /// The address ranges of code, ascending, as [`Binary::is_code`] reads them.
+    pub fn code_ranges(&self) -> &[Range<u64>] {
+        &self.code_ranges
+    }
+
     pub fn is_code(&self, address: u64) -> bool {
         self.code_range_containing(address).is_some()
     }
