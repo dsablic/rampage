@@ -6,7 +6,7 @@
 # no start files and no local paths enter it, stripped (--strip-all keeps the dynamic exports) with -fno-ident, and
 # the linker's .comment banner blanked in place, so nothing names the toolchain. Requires zig 0.17.x (crates/rampage-signatures/data/zig-version pins
 # the patch release the other fixtures use; any 0.17 release builds this library the same). Afterwards
-# `grep -c -a -e /Users/ -e /home/ android/*` must print 0 for every file.
+# `python3 scrub-paths.py --check android/*` must pass (the script runs it).
 #
 # android/libnet-arm64.so: net.c the same way (its socket calls stay undefined imports).
 #
@@ -38,9 +38,4 @@ PY
 }
 build libnative jni.c
 build libnet net.c
-for file in android/*; do
-    if [ "$(grep -c -a -e /Users/ -e /home/ "$file")" != 0 ]; then
-        echo "$file holds a local path" >&2
-        exit 1
-    fi
-done
+python3 -I scrub-paths.py --check android/*

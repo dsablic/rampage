@@ -87,7 +87,7 @@ jobs:
           cargo fmt --all --check
           cargo fmt --manifest-path plugins/triage-report/Cargo.toml --check
           cargo fmt --manifest-path plugins/runtime-probe/Cargo.toml --check
-      - name: No local paths in committed fixtures
+      - name: No local paths in tracked files
         timeout-minutes: 2
         run: bash tools/ci/check-fixture-paths.sh
       - name: Corpus runner and acceptance-gate regressions

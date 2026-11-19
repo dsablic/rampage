@@ -1,35 +1,32 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Fails if a committed fixture names a build machine's local directory: /Users/..., /home/<name>/... (the generic
-# /home/user/ is allowed, as invented test data) or a macOS temporary directory (/var/folders/...). Debug info,
-# Go file tables, PDB source paths and debug maps all pick these up unless a build remaps them; the build scripts
-# remap and check their own outputs (tests/fixtures/zig-env.sh), and this catches whatever slips past.
+# Fails if any tracked file names a build machine's local directory: /Users/<name>, /home/<name>/ (the generic
+# /home/user/ is allowed), /var/folders/ or /private/tmp/ (macOS temporary directories) or C:\Users\. Debug info,
+# Go file tables, PDB source paths and debug maps all pick these up unless a build remaps them. The definition is
+# tests/fixtures/scrub-paths.py --check, which the fixture build scripts also run on their own outputs.
 #
-# Checks every tracked file under tests/fixtures, crates/*/tests/fixtures and tools/*-fixture. Build and generator
-# scripts (*.sh, *.py) are allowed: they name these patterns to check for them.
+# Allowed: the files below, each of which holds a deliberate made-up path (documentation examples, test data for
+# path handling) or the patterns themselves. Add a file only for such a path, never for a leaked one.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-git ls-files -z -- tests/fixtures 'crates/*/tests/fixtures/*' 'tools/*-fixture/*' | python3 -I -c '
-import re
-import sys
-
-LOCAL = re.compile(rb"/Users/[^/\0\s]|/home/(?!user/)[a-z][a-z0-9_.-]*/|/var/folders/")
-ALLOWED = (".sh", ".py")
-found = 0
-for name in sys.stdin.buffer.read().split(b"\0"):
-    if not name or name.endswith(tuple(suffix.encode() for suffix in ALLOWED)):
-        continue
-    with open(name, "rb") as handle:
-        data = handle.read()
-    for match in LOCAL.finditer(data):
-        end = min(len(data), match.start() + 80)
-        text = data[match.start():end].split(b"\0")[0].decode("utf-8", "replace")
-        print(f"{name.decode()}: offset {match.start():#x}: {text}", file=sys.stderr)
-        found += 1
-        break
-if found:
-    print(f"{found} committed fixture(s) hold a local path; rebuild them with the prefix maps their build script "
-          "uses (see tests/fixtures/zig-env.sh)", file=sys.stderr)
-    sys.exit(1)
-print("no committed fixture holds a local path")
-'
+allowed=(
+  README.md                                               # install example: /Users/you/.local/bin
+  crates/rampage-api/src/workflows/persistence_surface.rs # test data: /home/u/.config/systemd unit paths
+  crates/rampage-api/tests/debug_debugserver.rs           # test data: /Users/op/debug-macho module path
+  crates/rampage-debug/src/fake.rs                        # fake debugger's module path, /Users/op/...
+  crates/rampage-detect/src/matcher.rs                    # test data: /home/me/zig-0.17.0 debug path
+  plugins/triage-report/src/lib.rs                        # test data: /Users/builder/source.cc
+  tests/fixtures/scrub-paths.py                           # the patterns
+  tools/agent-bench/test_claude_runner.py                 # test data: /home/u home directory
+  tools/ci/check-fixture-paths.sh                         # this file
+)
+excluded=()
+for file in "${allowed[@]}"; do
+  excluded+=(":!:$file")
+done
+if git ls-files -z -- . "${excluded[@]}" | python3 -I tests/fixtures/scrub-paths.py --check --files-from -; then
+  echo "no tracked file holds a local path"
+else
+  echo "rebuild the files above with the prefix maps their build scripts use (see tests/fixtures/zig-env.sh)" >&2
+  exit 1
+fi

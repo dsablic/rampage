@@ -4,7 +4,7 @@
 #   raw-cortex-m-scatter-gcc.bin    flash image at 0x08000000; GCC-style startup loops over linker symbols.
 #   raw-cortex-m-scatter-table.bin  the same program with an Arm-style region table walked by the startup code.
 # The .elf files keep the symbols. Needs zig and llvm-objcopy; built freestanding with -g0, so no local path is
-# recorded (`grep -c -a -e /Users/ -e /home/` on each output prints 0).
+# recorded (`python3 tests/fixtures/scrub-paths.py --check` passes on each output).
 set -euo pipefail
 cd "$(dirname "$0")"
 zig version

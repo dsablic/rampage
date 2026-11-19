@@ -68,12 +68,7 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOTOOLCHAIN=go1.27.2 go build -trimpath -l
   -o bin/hello-go-x64.elf src/hello.go
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 GOTOOLCHAIN=go1.27.2 go build -trimpath -ldflags "-s -w" \
   -o bin/hello-go-arm64.elf src/hello.go
-for file in bin/hello-go-x64.elf bin/hello-go-arm64.elf; do
-  if [ "$(grep -c -a -e /Users/ -e /home/ "$file")" != 0 ]; then
-    echo "$file holds a local path" >&2
-    exit 1
-  fi
-done
+check_paths bin/hello-go-x64.elf bin/hello-go-arm64.elf
 python3 craft.py malformed
 # Go build info and cargo-auditable `.dep-v0` fixtures.
 ./build-buildinfo.sh

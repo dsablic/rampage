@@ -74,10 +74,5 @@ cp msvc-icf-x64.exe msvc-icf-x64.pdb "$source_dir/"
     /pdbsourcepath:/rampage/msvc-cpp /debug:full /nodefaultlib /entry:ops_entry /subsystem:console /machine:x86 \
     /base:0x400000 /opt:ref /opt:noicf /safeseh:no /Brepro /timestamp:0 /noimplib
 cp msvc-ops-x86.exe msvc-ops-x86.pdb "$source_dir/"
-for file in msvc-cpp-x64.exe msvc-cpp-x64.pdb msvc-cpp-x86.exe msvc-cpp-x86.pdb msvc-icf-x64.exe msvc-icf-x64.pdb \
-    msvc-ops-x86.exe msvc-ops-x86.pdb; do
-    if [ "$(grep -c -a -e /Users/ -e /home/ "$file")" != 0 ]; then
-        echo "$file holds a local path" >&2
-        exit 1
-    fi
-done
+python3 -I "$source_dir/../scrub-paths.py" --check msvc-cpp-x64.exe msvc-cpp-x64.pdb msvc-cpp-x86.exe \
+    msvc-cpp-x86.pdb msvc-icf-x64.exe msvc-icf-x64.pdb msvc-ops-x86.exe msvc-ops-x86.pdb

@@ -7,11 +7,13 @@
 # both in place with same-length no-op runs, keeping every DWARF string offset valid, and fails if any output still
 # holds a local path.
 set -eu
-cd "$(dirname "$0")"
-repo=$(cd ../../../.. && pwd -P)
 if [ -n "${ZIG_RELEASE:-}" ]; then
+    # Resolved before the cd below, so a relative ZIG_RELEASE names what the caller meant.
+    ZIG_RELEASE=$(cd "$ZIG_RELEASE" && pwd -P)
     ZIG="$ZIG_RELEASE/zig"
 fi
+cd "$(dirname "$0")"
+repo=$(cd ../../../.. && pwd -P)
 # shellcheck source=../../../../tests/fixtures/zig-env.sh
 . "$repo/tests/fixtures/zig-env.sh"
 trap 'zig_cleanup' EXIT

@@ -32,7 +32,6 @@ zig cc -target thumb-freestanding-eabi -mcpu=cortex_m3 "${common[@]}" -ffreestan
   firmware.c hash.c pk.c test_keys.c runtime.c
 llvm-objcopy -O binary -j .text -j .rodata ../raw-cortex-m-locks.elf ../raw-cortex-m-locks.bin
 zig cc -target x86_64-linux-gnu.2.28 "${common[@]}" -o ../locks-x64-sym.elf host.c hash.c pk.c test_keys.c
-llvm-objcopy --strip-all ../locks-x64-sym.elf ../locks-x64.elf
 host=("-ffile-prefix-map=$PWD=." -target x86_64-linux-gnu.2.28 -g0 -fno-sanitize=all -Wall -Wextra -Werror -fno-unwind-tables -fno-asynchronous-unwind-tables
   -Wl,--build-id=none)
 zig cc "${host[@]}" -O0 -o ../locks-x64-O0-sym.elf host.c hash.c pk.c test_keys.c
@@ -40,7 +39,7 @@ zig cc "${host[@]}" -O2 -fno-plt -o ../locks-x64-noplt-sym.elf host.c hash.c pk.
 zig cc "${host[@]}" -O2 -o ../locks-negative-x64-sym.elf negative.c hash.c pk.c
 scrub ../raw-cortex-m-locks.elf ../locks-x64-sym.elf ../locks-x64-O0-sym.elf ../locks-x64-noplt-sym.elf \
   ../locks-negative-x64-sym.elf
-for name in locks-x64-O0 locks-x64-noplt locks-negative-x64; do
+for name in locks-x64 locks-x64-O0 locks-x64-noplt locks-negative-x64; do
   llvm-objcopy --strip-all "../$name-sym.elf" "../$name.elf"
 done
 chmod -x ../raw-cortex-m-locks.bin
