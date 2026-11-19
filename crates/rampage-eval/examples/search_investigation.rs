@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 const FIXTURE: &str = "tests/fixtures/bin/hello-x64.elf";
-const FIXTURE_SHA: &str = "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742";
+const FIXTURE_SHA: &str = "e4b265fe430d2fcd6ff649a0828d8084ba88cb9fc12b4621555ccab7891b84c8";
 const FIXTURE_SOURCE_SHA: &str = "3f06109c966ca8c3d6cf5c87a031aab612be8f871f42c704f37a41b16ca1ecf7";
 const BASELINE: &str = "target/parity/phase0-completion/accepted-scorecard.json";
 const BASELINE_SHA: &str = "28fdbdcc2077b906db0f4676550b08a4752a7b3498945923a5276d7f81a4ce90";

@@ -18,7 +18,7 @@ crates/rampage-api/src/workflows/find_main.rs and src/tools.rs register find_mai
 [fixture]
 id = "hello-x64-elf"
 path = "tests/fixtures/bin/hello-x64.elf"
-sha256 = "dd13c0fedd703a5a7ddd995e1a729ea42443ab23ec6e163c7c683263a1c62742"
+sha256 = "e4b265fe430d2fcd6ff649a0828d8084ba88cb9fc12b4621555ccab7891b84c8"
 source = "tests/fixtures/src/hello.c"
 build = "tests/fixtures/build.sh"
 
