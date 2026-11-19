@@ -7,6 +7,10 @@
 # /nodefaultlib with its own entry point, and the only runtime references are imports by name from
 # VCRUNTIME140.dll through an import library generated here from runtime-*.def. The committed PEs therefore hold
 # only code compiled from shapes.cpp; no xwin sysroot is needed to rebuild them.
+#
+# Every source is copied into the scratch directory and compiled by a relative name, so with
+# -fdebug-compilation-dir and /pdbsourcepath the PDBs name /rampage/msvc-cpp/<file> and no local directory; the
+# outputs are checked for one at the end.
 set -euo pipefail
 
 source_dir="$(cd "$(dirname "$0")" && pwd)"
@@ -19,7 +23,7 @@ trap 'rm -rf "$work"' EXIT
 
 cd "$work"
 ln -s "$linker" lld-link
-cp "$source_dir/shapes.cpp" "$source_dir"/runtime-*.def .
+cp "$source_dir/shapes.cpp" "$source_dir/icf.cpp" "$source_dir/ops.cpp" "$source_dir"/runtime-*.def .
 
 build() {
     local arch="$1" triple="$2" dll_machine="$3" machine="$4" base="$5"
@@ -55,7 +59,7 @@ build x86 i686-pc-windows-msvc i386 x86 0x400000
 # with several procedure and public records.
 "$clang_cl" --target=x86_64-pc-windows-msvc /c /O2 /GS- /Z7 /Zl /Gy -fdebug-compilation-dir=/rampage/msvc-cpp \
     -Xclang -object-file-name=/rampage/msvc-cpp/icf.obj -gno-codeview-command-line /Fo:icf.obj \
-    -- "$source_dir/icf.cpp"
+    -- icf.cpp
 ./lld-link icf.obj /out:msvc-icf-x64.exe /pdb:msvc-icf-x64.pdb /pdbaltpath:msvc-icf-x64.pdb \
     /pdbsourcepath:/rampage/msvc-cpp /debug:full /nodefaultlib /entry:icf_entry /subsystem:console /machine:x64 \
     /base:0x140000000 /opt:ref /opt:icf /Brepro /timestamp:0 /noimplib
@@ -65,8 +69,15 @@ cp msvc-icf-x64.exe msvc-icf-x64.pdb "$source_dir/"
 # that virtual call resolution must leave alone.
 "$clang_cl" --target=i686-pc-windows-msvc /c /O2 /GS- /GR /Z7 /Zl /Gy -fdebug-compilation-dir=/rampage/msvc-cpp \
     -Xclang -object-file-name=/rampage/msvc-cpp/ops.obj -gno-codeview-command-line /Fo:ops.obj \
-    -- "$source_dir/ops.cpp"
+    -- ops.cpp
 ./lld-link ops.obj /out:msvc-ops-x86.exe /pdb:msvc-ops-x86.pdb /pdbaltpath:msvc-ops-x86.pdb \
     /pdbsourcepath:/rampage/msvc-cpp /debug:full /nodefaultlib /entry:ops_entry /subsystem:console /machine:x86 \
     /base:0x400000 /opt:ref /opt:noicf /safeseh:no /Brepro /timestamp:0 /noimplib
 cp msvc-ops-x86.exe msvc-ops-x86.pdb "$source_dir/"
+for file in msvc-cpp-x64.exe msvc-cpp-x64.pdb msvc-cpp-x86.exe msvc-cpp-x86.pdb msvc-icf-x64.exe msvc-icf-x64.pdb \
+    msvc-ops-x86.exe msvc-ops-x86.pdb; do
+    if [ "$(grep -c -a -e /Users/ -e /home/ "$file")" != 0 ]; then
+        echo "$file holds a local path" >&2
+        exit 1
+    fi
+done
