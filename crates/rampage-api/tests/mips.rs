@@ -144,3 +144,43 @@ fn the_got_is_found_without_section_headers() {
     let from = referencing_functions(&project, string(&project, "ROUTER_USER"));
     assert!(from.contains(&main), "{from:?}");
 }
+
+fn boot_rom() -> Project {
+    let image = std::fs::read(format!("{DIR}boot-mips.bin")).unwrap();
+    let options = rampage_loaders::RawCodeOptions {
+        profile: rampage_loaders::RawProfile::Mips32Be,
+        base: 0xbfc0_0000,
+        entry: None,
+        seeds: vec![],
+        vector_table: None,
+        pointer_tables: false,
+    };
+    Project::new(Binary::from_raw_code(image, options).unwrap())
+}
+
+fn boot_truth(symbol: &str) -> u64 {
+    Binary::open(format!("{DIR}boot-mips.elf")).unwrap().symbol_by_name(symbol).unwrap().address
+}
+
+/// A MIPS32 boot ROM mapped at the reset vector: the entry defaults to the base, discovery finds every function
+/// from it, find_main follows the reset code's jump to its C entry, and the code decompiles and runs.
+#[test]
+fn raw_mips_boot_rom_at_the_reset_vector() {
+    let project = boot_rom();
+    assert_eq!(project.binary.entry, Some(0xbfc0_0000));
+    let functions = project.functions(&rampage_api::FunctionsQuery::default()).unwrap();
+    let starts: Vec<u64> = functions.items.iter().map(|function| function.address).collect();
+    for symbol in ["uart_putc", "uart_puts", "crc32_bitwise", "mix", "boot_fail", "boot_main"] {
+        assert!(starts.contains(&boot_truth(symbol)), "{symbol}: {starts:x?}");
+    }
+    let report = project.find_main(rampage_api::ReportLimits::default(), false).unwrap();
+    let report = serde_json::to_value(&report).unwrap();
+    assert_eq!(report["sections"][0]["findings"][0]["address"], format!("{:#x}", boot_truth("boot_main")));
+    let code = project.decompile(boot_truth("boot_main")).unwrap().code;
+    assert!(code.contains("0x27051956"), "{code}");
+    let from = referencing_functions(&project, string(&project, "MIPS boot ROM v1.2\r\n"));
+    assert_eq!(from, [format!("sub_{:x}", boot_truth("boot_main"))]);
+    let request = serde_json::json!({ "at": format!("{:#x}", boot_truth("mix")), "args": [1, 16] });
+    let report = serde_json::to_value(project.evaluate_function(&serde_json::from_value(request).unwrap()).unwrap());
+    assert_eq!(report.unwrap()["result"]["unsigned"], (1 << 5) + (16 >> 3) + 0x1234);
+}

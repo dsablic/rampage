@@ -157,6 +157,10 @@ impl Project {
         if cortex_m {
             candidates.extend(self.cortex_m_candidates(&mut walk)?);
         }
+        let raw_mips = self.binary.raw_code_image().is_some_and(|raw| raw.profile().mips());
+        if raw_mips {
+            candidates.extend(self.mips_reset_candidate()?);
+        }
         let candidates = merge(candidates);
 
         let mut found = Section::new("Candidates", limits);
@@ -217,8 +221,13 @@ impl Project {
                  starts the scheduler (svc, PendSV through ICSR). A main that returns, startup code reached only \
                  through registers, or a scheduler started another way is not found.",
             );
+        } else if raw_mips {
+            report.limitation(
+                "Raw MIPS: the reset code at the entry is followed to its first jump out of it (`la $t0, f; jr $t0` \
+                 or `j f`); startup that reaches its C code by a call or through a table is not modelled.",
+            );
         } else if self.binary.raw_code_image().is_some() {
-            report.limitation("Raw projects: the startup heuristics model Cortex-M reset code only.");
+            report.limitation("Raw projects: the startup heuristics model Cortex-M and MIPS reset code only.");
         }
         report.limitation("Symbol names are taken at face value; a binary can give any function the name main.");
         report.limitation(
@@ -251,6 +260,44 @@ impl Project {
             });
         }
         candidates
+    }
+
+    /// A MIPS boot ROM's reset code sets up the stack and caches, then jumps to its C entry (`la $t0, f; jr $t0`,
+    /// out of the uncached kseg1 into kseg0, or `j f`): the first unconditional jump out of the reset code.
+    fn mips_reset_candidate(&self) -> Result<Option<Candidate>, ApiError> {
+        let Some(entry) = self.binary.entry else { return Ok(None) };
+        let mut lines = self.disassemble(Some(&format!("{entry:#x}")), STUB_INSTRUCTIONS)?;
+        let reset_end = lines.last().map_or(entry, |line| line.address);
+        // The delay slot runs before the jump.
+        let mut index = 0;
+        while index + 1 < lines.len() {
+            if lines[index].flow != Flow::Next {
+                lines.swap(index, index + 1);
+                index += 1;
+            }
+            index += 1;
+        }
+        let mut trail = vec![format!("reset code (the entry) at {entry:#x}")];
+        for line in lines {
+            match line.flow {
+                Flow::Jump(target) if !(entry..=reset_end).contains(&target) && self.binary.is_code(target) => {
+                    trail.push(format!("{} -> {target:#x}", describe(&line)));
+                    let discovered = self.function_containing(target)? == Some(target);
+                    return Ok(Some(Candidate {
+                        address: target,
+                        confidence: if discovered { Confidence::Medium } else { Confidence::Low },
+                        source: "disassemble",
+                        observation: "the reset code's first jump out of it: a boot ROM's C entry (heuristic)"
+                            .to_owned(),
+                        evidence: trail,
+                    }));
+                }
+                Flow::Return | Flow::Halt | Flow::Invalid | Flow::IndirectJump => break,
+                Flow::Jump(_) => break,
+                _ => {}
+            }
+        }
+        Ok(None)
     }
 
     /// musl's MIPS `_start` (`crt_arch.h`): `bal 1f; move $fp, $0`, then `.gpword .` and `.gpword _start_c` (each

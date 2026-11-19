@@ -26,9 +26,16 @@ pub fn scan(binary: &Binary, min_len: usize) -> Vec<FoundString> {
     let mut found = Vec::new();
     for segment in &binary.segments {
         if let Some(bytes) = binary.read_to_segment_end(segment.address) {
+            // A line ending may come before the NUL (`"booting\r\n"`).
             let terminated = |string: &FoundString| {
                 let unit = if string.encoding == Encoding::Utf16Le { 2 } else { 1 };
-                let end = (string.address - segment.address) as usize + string.text.chars().count() * unit;
+                let mut end = (string.address - segment.address) as usize + string.text.chars().count() * unit;
+                for _ in 0..2 {
+                    match bytes.get(end..end + unit) {
+                        Some([b'\r' | b'\n', rest @ ..]) if rest.iter().all(|&byte| byte == 0) => end += unit,
+                        _ => break,
+                    }
+                }
                 bytes.get(end..end + unit).is_some_and(|terminator| terminator.iter().all(|&byte| byte == 0))
             };
             found.extend(

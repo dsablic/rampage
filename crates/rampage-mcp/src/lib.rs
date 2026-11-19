@@ -211,7 +211,8 @@ Its transient decoded preview uses decoded offsets, not source offsets or load a
 successful decoding do not authenticate content or prove stream boundaries. Tools whose schema has a `raw` \
 object open that explicit file range as a headerless Raw project with a closed profile instead of a native image \
 (never with arch/image_offset/image_length; null means absent). `raw` fields: profile (one of the Raw profiles \
-listed at the end), offset and length (original-file bytes, length up to 128 KiB, 4 MiB for ARM:LE:32:Cortex), \
+listed at the end), offset and length (original-file bytes, length up to 128 KiB, 4 MiB for ARM:LE:32:Cortex \
+and the MIPS profiles), \
 base_address, optional entry and up to 8192 seeds (internal code-space byte coordinates, even for word-addressed \
 processors; hex strings or integers). The mapping is an analyst assertion; annotations are memory-only for this \
 server and interpretation. Cortex-M flash (profile cortex-m): vector_table true reads the vector table at \
@@ -228,6 +229,9 @@ code copies to their run addresses and the RAM it zeroes: binary_info's raw.scat
 unmapped destination is mapped there (code when the copy ran and was not stored into afterwards, else RAM; zero \
 fill as unbacked RAM; a copy cut off by a skipped call or an unclean stop is reported only) and the jump into \
 the copied code is seeded; scatter_load false reports them only. \
+MIPS32 boot ROMs and bare-metal code (profile mips or mipsel): \
+the entry defaults to base_address (the reset vector, 0xbfc00000 on MIPS32 boot ROMs); find_main follows the reset \
+code's jump to its C entry, and decompile and evaluate_function run. \
 For Cortex-M, binary_info's raw.base_check judges base_address against load-address candidates (pointer words \
 landing on prologues and strings, literal constants, the vector table, a fetch outside every region by the reset \
 code) and, when it looks wrong, names the better base in next. \

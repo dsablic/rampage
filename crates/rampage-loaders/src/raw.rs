@@ -6,9 +6,10 @@ use sha2::{Digest, Sha256};
 
 use crate::{LoadError, Perms, Section, SectionKind, Segment};
 
-/// Input cap for Sleigh-decoded profiles (every profile except [`RawProfile::CortexM`]).
+/// Input cap for Sleigh-decoded profiles (every profile except the natively decoded Cortex-M and MIPS ones).
 pub const MAX_RAW_BYTES: usize = 128 * 1024;
-/// Input cap for the natively decoded Cortex-M profile: flash images are typically 256 KiB to 2 MiB.
+/// Input cap for the natively decoded profiles: Cortex-M flash images are typically 256 KiB to 2 MiB, MIPS boot
+/// ROMs and bootloaders 64 KiB to 1 MiB.
 pub const MAX_RAW_NATIVE_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_RAW_SEEDS: usize = 8192;
 /// Regions one Raw project maps, the primary one included.
@@ -38,6 +39,11 @@ pub enum RawProfile {
     /// Little-endian ARMv6-M/ARMv7-M Thumb. Decoded by rampage's native ARM decoder with every byte in Thumb
     /// mode, not by a Sleigh translator; see [`RawProfile::native_decoder`].
     CortexM,
+    /// Big-endian MIPS32 (o32), decoded by rampage's native MIPS decoder: boot ROMs, bootloaders and bare-metal
+    /// router and camera firmware.
+    Mips32Be,
+    /// Little-endian MIPS32 (o32), decoded natively, as [`RawProfile::Mips32Be`].
+    Mips32Le,
 }
 
 /// Which decoder serves a Raw profile's discovery, listing and search.
@@ -47,6 +53,8 @@ enum RawDecoder {
     Sleigh,
     /// rampage's native decoder for `arch`, with the whole mapped range in Thumb mode.
     NativeThumb,
+    /// rampage's native decoder for `arch` (MIPS32), with no mode to choose.
+    Native,
 }
 
 struct RawProfileFacts {
@@ -94,7 +102,7 @@ const HEXAGON_PARALLEL_HELPER: &str = "ghidra.app.util.viewer.field.HexagonParal
 // Indexed by discriminant. Encoded address size and word units are not C-pointer defaults or cross-translator
 // space IDs; alignments are the SLA's declared instruction alignment, not the shortest encoding.
 // The Cortex-M row's code space is ARM8_le.sla's `ram` space; no Sleigh translator decodes that profile.
-const PROFILE_FACTS: [RawProfileFacts; 17] = [
+const PROFILE_FACTS: [RawProfileFacts; 19] = [
     facts(RawProfile::Msp430, "TI_MSP430:LE:16:default", Arch::Msp430, false, space("RAM", 2, 1, 0xffff, 2)),
     facts(RawProfile::Avr8, "avr8:LE:16:default", Arch::Avr8, false, space("code", 2, 2, 0x1ffff, 2)),
     facts(RawProfile::Mos6502, "6502:LE:16:default", Arch::Mos6502, false, space("RAM", 2, 1, 0xffff, 1)),
@@ -117,6 +125,14 @@ const PROFILE_FACTS: [RawProfileFacts; 17] = [
     RawProfileFacts {
         decoder: RawDecoder::NativeThumb,
         ..facts(RawProfile::CortexM, "ARM:LE:32:Cortex", Arch::Arm, false, space("ram", 4, 1, 0xffff_ffff, 2))
+    },
+    RawProfileFacts {
+        decoder: RawDecoder::Native,
+        ..facts(RawProfile::Mips32Be, "MIPS:BE:32:default", Arch::Mips, true, space("ram", 4, 1, 0xffff_ffff, 4))
+    },
+    RawProfileFacts {
+        decoder: RawDecoder::Native,
+        ..facts(RawProfile::Mips32Le, "MIPS:LE:32:default", Arch::Mips, false, space("ram", 4, 1, 0xffff_ffff, 4))
     },
 ];
 
@@ -172,11 +188,16 @@ impl RawProfile {
         self.facts().code_space
     }
 
-    /// Whether rampage's native decoder for [`Self::arch`] serves this profile, with the whole mapped range in
-    /// Thumb mode, instead of a Sleigh translator. Such a profile has typed operands, data references and a
-    /// pointer width; the others have none of these.
+    /// Whether rampage's native decoder for [`Self::arch`] serves this profile (Cortex-M with the whole mapped range
+    /// in Thumb mode, or MIPS32) instead of a Sleigh translator. Such a profile has typed operands, data references
+    /// and a pointer width; the others have none of these.
     pub fn native_decoder(self) -> bool {
-        self.facts().decoder == RawDecoder::NativeThumb
+        self.facts().decoder != RawDecoder::Sleigh
+    }
+
+    /// Whether the profile is MIPS32: the entry defaults to the base address (a boot ROM's reset vector).
+    pub fn mips(self) -> bool {
+        matches!(self, RawProfile::Mips32Be | RawProfile::Mips32Le)
     }
 
     /// Whether the profile is an ARMv6-M/ARMv7-M(E) processor: all code Thumb, no A32 state, the M-profile
@@ -185,7 +206,7 @@ impl RawProfile {
         self == RawProfile::CortexM
     }
 
-    /// Largest admitted input: 4 MiB for the natively decoded profile, 128 KiB for Sleigh-decoded ones.
+    /// Largest admitted input: 4 MiB for the natively decoded profiles, 128 KiB for Sleigh-decoded ones.
     pub fn max_bytes(self) -> usize {
         if self.native_decoder() { MAX_RAW_NATIVE_BYTES } else { MAX_RAW_BYTES }
     }
@@ -497,7 +518,8 @@ impl RawCodeImage {
         let mut data = bytes;
         if !extra.is_empty() && !options.profile.native_decoder() {
             return Err(LoadError::Malformed(format!(
-                "Raw {} maps one code region: additional regions are defined only for ARM:LE:32:Cortex",
+                "Raw {} maps one code region: additional regions are defined only for ARM:LE:32:Cortex and the MIPS \
+                 profiles",
                 options.profile.language_id()
             )));
         }
@@ -579,6 +601,11 @@ impl RawCodeImage {
             // Thumb code pointers carry bit 0; the instruction starts at the even address.
             options.entry = options.entry.map(|entry| entry & !1);
             options.seeds.iter_mut().for_each(|seed| *seed &= !1);
+        }
+        // A MIPS image mapped without an entry starts at its base, as a boot ROM does at the reset vector
+        // (0xbfc00000 on MIPS32).
+        if options.profile.mips() && options.entry.is_none() {
+            options.entry = Some(options.base);
         }
         let check_start = |address: u64| {
             if !address.is_multiple_of(alignment) || !in_code(address) {
@@ -1078,11 +1105,12 @@ mod tests {
             assert_eq!(PROFILE_FACTS[index].profile, profile);
             assert_eq!(RawProfile::from_language_id(profile.language_id()).unwrap(), profile);
             assert_eq!(serde_json::to_value(profile).unwrap(), profile.language_id());
-            // Sleigh-decoded profiles have no legacy pointer width; the native Thumb profile is 32-bit ARM.
+            // Sleigh-decoded profiles have no legacy pointer width; the native profiles are 32-bit ARM and MIPS.
             assert_eq!(profile.arch().pointer_size(), profile.native_decoder().then_some(4));
             assert_eq!(profile.arch().native_address_width().is_some(), profile.native_decoder());
             assert_eq!(profile.max_bytes() > super::MAX_RAW_BYTES, profile.native_decoder());
-            assert!(RawProfile::ALL[..index].iter().all(|other| other.arch() != profile.arch()));
+            let identity = |profile: RawProfile| (profile.arch(), profile.big_endian());
+            assert!(RawProfile::ALL[..index].iter().all(|&other| identity(other) != identity(profile)));
         }
     }
 

@@ -35,8 +35,8 @@ pub struct RawProjectRequest {
     /// Original-file BYTE offset of the first code byte. Required for the `binary` format.
     #[serde(default)]
     pub offset: Option<FileOffset>,
-    /// Exact source byte count: 1..=131072, or 1..=4194304 for ARM:LE:32:Cortex (with `decode`, the encoded
-    /// count, at most 8 MiB). Required for the `binary` format.
+    /// Exact source byte count: 1..=131072, or 1..=4194304 for ARM:LE:32:Cortex and the MIPS profiles (with
+    /// `decode`, the encoded count, at most 8 MiB). Required for the `binary` format.
     #[serde(default)]
     pub length: Option<FileOffset>,
     /// Map a decoder provider's output over offset/length as the primary code region instead of the range itself,
@@ -49,7 +49,8 @@ pub struct RawProjectRequest {
     /// for the `binary` format.
     #[serde(default)]
     pub base_address: Option<FileOffset>,
-    /// Optional internal code-space BYTE address of the asserted entry; aligned and inside the mapped range.
+    /// Optional internal code-space BYTE address of the asserted entry; aligned and inside the mapped range. The
+    /// MIPS profiles default it to base_address (a boot ROM's reset vector).
     #[serde(default)]
     pub entry: Option<FileOffset>,
     /// At most 8192 explicit internal code-space BYTE addresses of function starts inside the mapped range.
@@ -77,8 +78,8 @@ pub struct RawProjectRequest {
     #[serde(default)]
     #[schemars(schema_with = "scatter_load_schema")]
     pub scatter_load: Option<bool>,
-    /// ARM:LE:32:Cortex only: up to 15 further regions of the same file mapped beside the primary code region, e.g.
-    /// a second stage at its RAM base, constant data, or RAM. Regions never overlap; references between them
+    /// ARM:LE:32:Cortex and MIPS only: up to 15 further regions of the same file mapped beside the primary code
+    /// region, e.g. a second stage at its RAM base, constant data, or RAM. Regions never overlap; references between them
     /// resolve, entry and seeds may lie in any code region, and binary_info reports each region with its source
     /// range and SHA-256. vector_table reads the primary region only, pointer_tables every code region. All backed regions
     /// together hold at most 4194304 bytes.
@@ -303,7 +304,7 @@ fn invalid(message: &str) -> ApiError {
 }
 
 /// Short names agents use for each Raw profile's processor, lowercased with separators removed.
-const PROFILE_ALIASES: [(RawProfile, &[&str]); 17] = [
+const PROFILE_ALIASES: [(RawProfile, &[&str]); 19] = [
     (RawProfile::Msp430, &["msp430", "timsp430"]),
     (RawProfile::Avr8, &["avr", "avr8", "atmega", "atmelavr"]),
     (RawProfile::Mos6502, &["6502", "mos6502"]),
@@ -343,12 +344,28 @@ const PROFILE_ALIASES: [(RawProfile, &[&str]); 17] = [
             "thumbv7em",
         ],
     ),
+    (RawProfile::Mips32Be, &["mips", "mips32", "mipsbe", "mips32be", "mipseb", "mips32eb", "mips32r2"]),
+    (RawProfile::Mips32Le, &["mipsel", "mips32el", "mipsle", "mips32le"]),
 ];
 
 /// Families agents name that no Raw profile covers, though a profile's name may look close (PIC32 is MIPS, not
 /// PIC-16).
-const UNPROFILED_FAMILIES: [&str; 14] = [
-    "pic10", "pic12", "pic17", "pic18", "pic24", "pic32", "dspic", "mips", "riscv", "rv32", "rv64", "ppc", "powerpc",
+const UNPROFILED_FAMILIES: [&str; 16] = [
+    "pic10",
+    "pic12",
+    "pic17",
+    "pic18",
+    "pic24",
+    "pic32",
+    "dspic",
+    "mips64",
+    "micromips",
+    "mips16",
+    "riscv",
+    "rv32",
+    "rv64",
+    "ppc",
+    "powerpc",
     "sparc",
 ];
 
@@ -556,7 +573,7 @@ impl RawProjectRequest {
         }
         if !profile.native_decoder() {
             return Err(ApiError::Invalid(format!(
-                "Raw {} maps one code region: `regions` is defined only for ARM:LE:32:Cortex",
+                "Raw {} maps one code region: `regions` is defined only for ARM:LE:32:Cortex and the MIPS profiles",
                 profile.language_id()
             )));
         }
@@ -733,8 +750,8 @@ impl RawProjectRequest {
             .collect();
         if !regions.is_empty() && !profile.native_decoder() {
             return Err(ApiError::Invalid(format!(
-                "Raw {} maps one code region, and the {} records form {} separate runs; only ARM:LE:32:Cortex maps \
-                 several regions",
+                "Raw {} maps one code region, and the {} records form {} separate runs; only ARM:LE:32:Cortex and \
+                 the MIPS profiles map several regions",
                 profile.language_id(),
                 format.name(),
                 regions.len() + 1
@@ -937,10 +954,20 @@ mod tests {
             let error = resolve_raw_profile(variant).unwrap_err();
             assert!(error.contains("no Raw profile covers this variant"), "{error}");
         }
-        for family in ["pic32", "PIC32MX", "mips32", "riscv32"] {
+        for family in ["pic32", "PIC32MX", "mips64", "microMIPS", "mips16e", "riscv32"] {
             let error = resolve_raw_profile(family).unwrap_err();
             assert!(error.contains("no Raw profile covers this processor") && !error.contains("closest"), "{error}");
         }
+        for (alias, profile) in [
+            ("mips", RawProfile::Mips32Be),
+            ("MIPS32", RawProfile::Mips32Be),
+            ("mips32r2", RawProfile::Mips32Be),
+            ("mipsel", RawProfile::Mips32Le),
+            ("MIPS:LE:32:default", RawProfile::Mips32Le),
+        ] {
+            assert_eq!(resolve_raw_profile(alias), Ok(profile), "{alias}");
+        }
+        assert!(resolve_raw_profile("MIPS:BE:64:default").unwrap_err().contains("no Raw profile covers this variant"));
         assert!(resolve_raw_profile("msp431").unwrap_err().contains("closest: TI_MSP430:LE:16:default"));
         let aliases =
             ["cortex-m3", "Cortex-M4", "CORTEX-M0+", "thumb", "armv7m", "ARMv6-M", "arm:le:32:cortex", "thumbv7em"];
