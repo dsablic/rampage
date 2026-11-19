@@ -264,6 +264,18 @@ impl Project {
         if let Some(name) = target.and_then(|target| self.name_at(target)) {
             return Some(name);
         }
+        // An Xtensa `l32r` reads its literal-pool slot (the data reference); what it loads is the value the code
+        // uses, so that names the instruction when it is a function, global or string.
+        if self.binary.arch == rampage_arch::Arch::Xtensa
+            && insn.accesses
+            && let Some(value) = insn.immediate
+        {
+            let named =
+                self.symbolic_name_at(value).or_else(|| string_at(&self.binary, value).map(|text| format!("{text:?}")));
+            if let Some(named) = named {
+                return Some(named);
+            }
+        }
         // A pointer-sized immediate (x86 `mov`/`push`) counts only when it names something or points at a string.
         let data = insn.data_ref.or(insn.immediate)?;
         // An immediate is only maybe an address: name it by symbol, never as a peripheral register (small

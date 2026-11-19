@@ -114,7 +114,7 @@ impl Workflow for FindMain {
         "Locate the program's own entry logic past the runtime startup: entry symbols (main, WinMain, \
          main.main) when present, else stated heuristics (the __libc_start_main first argument, the MinGW CRT \
          call before exit, the Mach-O LC_MAIN entry, a Cortex-M reset handler's first call that never \
-         returns) with confidence and the instructions they rest on. \
+         returns, ESP-IDF's main_task call to app_main) with confidence and the instructions they rest on. \
          Profiles the best candidate's calls and strings with a bounded decompilation preview."
     }
 
@@ -175,6 +175,10 @@ impl Project {
         let raw_mips = self.binary.raw_code_image().is_some_and(|raw| raw.profile().mips());
         if raw_mips {
             candidates.extend(self.mips_reset_candidate()?);
+        }
+        let xtensa = self.binary.arch == Arch::Xtensa;
+        if xtensa {
+            candidates.extend(self.esp_idf_main_candidates()?);
         }
         let candidates = merge(candidates);
 
@@ -242,8 +246,16 @@ impl Project {
                  over the exception vectors) to the first forward jump after it or into kseg0 (`la $t0, f; jr $t0`); \
                  startup that reaches its C code by a call or through a table is not modelled.",
             );
+        } else if xtensa {
+            report.limitation(
+                "Xtensa (ESP32, ESP8266): app_main is found from ESP-IDF's main_task, the function that logs \
+                 \"Returned from app_main()\" (the call between it and \"Calling app_main()\" whose callee is called \
+                 there only). The startup chain (call_start_cpu0, start_cpu0, the scheduler) creates that task through \
+                 a pointer and is not followed; firmware without those log lines (the ESP8266 NONOS SDK's user_init, \
+                 builds with logging off) gets no candidate.",
+            );
         } else if self.binary.raw_code_image().is_some() {
-            report.limitation("Raw projects: the startup heuristics model Cortex-M and MIPS reset code only.");
+            report.limitation("Raw projects: the startup heuristics model Cortex-M, MIPS and ESP-IDF startup only.");
         }
         report.limitation("Symbol names are taken at face value; a binary can give any function the name main.");
         report.limitation(
