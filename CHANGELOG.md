@@ -6,6 +6,23 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- MIPS position-independent Linux userland (routers, cameras): `$gp` is followed from `$t9` at each function entry
+  or from GCC's restores after calls, so GOT loads give string and data references and calls through the GOT name
+  their imports; GNU ld's lazy-binding `.MIPS.stubs` are named `<import>@plt`; the GOT and global pointer are read
+  from the dynamic section, so binaries without section headers keep them; the decompiler gets `$t9` and `$gp` at
+  each function's entry, so calls read `getenv("...")` instead of `in_t9` offsets.
+- `find_main` on MIPS: `__libc_start_main`'s first argument in `$a0` (from the GOT or a delay slot) and musl's
+  `_start` to `_start_c`.
+- Raw MIPS32 profiles (`mips`, `mipsel`; experimental) for boot ROMs and bare-metal images: natively decoded up to
+  4 MiB with further regions, `decompile` and `evaluate_function` work, the entry defaults to `base_address` (the
+  reset vector), and `find_main` follows `b reset` over the exception vectors to the jump made after `$sp` is set.
+- MIPS typed operands: constant search matches MIPS immediates and `lui`/`ori` constants (`loaded_constant`), and
+  `integrity_checks` names MIPS CRC routines by a `lui`/`ori` polynomial or a CRC-16 immediate in a shift-and-XOR
+  loop.
+- `evaluate_function` runs code in the code sections of an ELF PIE or shared object linked at 0; address 0 and the
+  headers still fault.
+- Raw string listing keeps strings whose `\r\n` comes before the NUL.
+- Decompiler worker protocol 13 (`entry_registers`); `ANALYSIS_VERSION` 9 (MIPS analysis results differ).
 - `evaluate_function` interprets the SSE, SSSE3, SSE4.1/4.2 and AVX/AVX2 operations Sleigh leaves as processor
   operations (shuffles, packs, blends, extensions, saturating and high multiplies, AVX shifts and permutes, packed
   float arithmetic, comparisons, rounding, conversions, `crc32`) and 32-bit ARM `vcvt` with its rounding modes;

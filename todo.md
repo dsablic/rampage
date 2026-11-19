@@ -39,7 +39,7 @@ Then, in order, one track at a time, each reviewed before merge:
 1. [x] (2026-11-19, except the Haiku rerun and replays before the caller's block) **Finish `evaluate_function`** (closes the measured suite v3 loss: every miss was a hand-evaluated loop): SSE/SIMD
    CALLOTHER ops, x87 and float returns, a step trace on request, models for `sprintf`/`strdup`/`operator new`,
    hints so agents reach for it; then a Haiku rerun of suite v3.
-2. **MIPS and Xtensa** for firmware: loading, discovery and decompilation (routers, cameras, ESP32).
+2. (MIPS done 2026-11-19; Xtensa/ESP32 next) **MIPS and Xtensa** for firmware: loading, discovery and decompilation (routers, cameras, ESP32).
 3. **Firmware version diffing**: two update files in, one answer out (functions, strings, endpoints, lock
    mechanisms that changed), built on unpacking, Raw loading and build diffing.
 4. **Claim verification**: check a stated claim about the binary (a function computes X over a range, a key
