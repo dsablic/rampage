@@ -4,7 +4,7 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
-## Unreleased
+## 1.8.0 (2026-11-19)
 
 - `search` on 32-bit ARM/Thumb matches constants loaded from literal pools or built by MOVW/MOVT
   (`loaded_constant`); results stay lower bounds. The work charges for the decoder's mode map, get-PC lookahead and
