@@ -2,8 +2,8 @@
 
 ## Status (2026-11-13)
 
-- Release (updated 2026-11-20; the bullets below it are as of 2026-11-13): 1.0.0 to 1.8.0 are published, 1.8.0
-  on 2026-11-19. Contract snapshots pin every stable MCP group; changes since 1.0.0 are additive.
+- Release (updated 2026-11-21; the bullets below it are as of 2026-11-13): 1.0.0 to 1.9.0 are published, 1.9.0
+  on 2026-11-21. Contract snapshots pin every stable MCP group; changes since 1.0.0 are additive.
 - Direction (2026-11-20): match or improve on IDA in everything except the interactive UI, for an agent working
   through MCP. Planning rules and the queue for after incremental analysis (both agreed that day) are in
   `docs/plans/2026-11-20-roadmap-refresh.md`; see "Planning rules" below.
