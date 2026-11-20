@@ -42,7 +42,7 @@ Then, in order, one track at a time, each reviewed before merge:
 2. [x] (MIPS 2026-11-19, Xtensa/ESP 2026-11-20; follow-ups in the CHANGELOG gaps) **MIPS and Xtensa** for firmware: loading, discovery and decompilation (routers, cameras, ESP32).
 3. [x] (2026-11-20, `diff_firmware`) **Firmware version diffing**: two update files in, one answer out (functions, strings, endpoints, lock
    mechanisms that changed), built on unpacking, Raw loading and build diffing.
-4. **Claim verification**: check a stated claim about the binary (a function computes X over a range, a key
+4. [x] (2026-11-20, `check_claim`) **Claim verification**: check a stated claim about the binary (a function computes X over a range, a key
    lives at Y) by evaluation, constants and xrefs; report verified, refuted or unknown with the evidence.
 5. **Incremental analysis and a fuller analysis store**: cache xrefs, strings and types, and re-analyse only what
    an edit touches.

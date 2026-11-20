@@ -6,6 +6,18 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- `check_claim` (MCP core, experimental): check structured claims about a binary before reporting them. Each
+  claim is answered verified, refuted (with a counterexample) or unknown (with what would decide it), with
+  evidence, method and confidence (exact, sampled, static, heuristic). Kinds: `returns` (one call's result, via
+  evaluate_function); `computes` (a parameterised CRC, checksum, hash, digest, SHA-256 block or byte transform, or
+  an integer expression with per-argument widths, on seeded generated inputs with edge cases and optional setup
+  calls); `calls` (through stubs, through callees to a depth, and call order on the CFG); `references` (xrefs,
+  through pointers in data); `constant` (an immediate, loaded literal or read-only load in a function's code; its
+  absence is never refuted); `region` (a stored checksum recomputed, or a valid check integrity_checks found);
+  `lock` (lock_mechanisms); `layout` (type library, DWARF and Go metadata). A mismatch after reading data the
+  program sets at run time is unknown, never refuted, and a refutation that relied on initialised writable data
+  says so. Batches of 32, budgeted. The server instructions ask agents to check claims before reporting them. See
+  docs/claim-checking.md.
 - `diff_firmware` (MCP `carve` group, experimental): compares two versions of a device update in one call. Each side
   is taken apart into components (an executable, a Cortex-M flash image, an LZSS/LZ4-block update container's
   decoded streams, ESP flash partitions and app images, a filesystem image, APK or directory, images `carve`
