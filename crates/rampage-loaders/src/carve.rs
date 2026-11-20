@@ -2076,13 +2076,17 @@ fn gcd(mut a: usize, mut b: usize) -> usize {
     a
 }
 
+/// OpenWrt's end-of-image marker: erase counter headers whose first padding bytes read "EOF" (its UBI patches erase
+/// every block from the first such header on first boot).
+const UBI_EOF_MARKER: &[u8; 3] = b"EOF";
+
 /// The VID header offset, data offset and image sequence number of the UBI erase counter header at `at`, if its
-/// padding and CRC check out (binwalk's ubi signature, MIT).
+/// padding and CRC check out (binwalk's ubi signature, MIT). OpenWrt's "EOF" marker in the first padding bytes counts.
 fn ubi_ec_header(bytes: &[u8], at: usize) -> Option<[u64; 3]> {
     let header = bytes.get(at..at.checked_add(UBI_HEADER)?)?;
     if &header[..4] != UBI_EC_MAGIC
         || header[4] != 1
-        || header[5..8] != [0; 3]
+        || (header[5..8] != [0; 3] && &header[5..8] != UBI_EOF_MARKER)
         || header[28..60].iter().any(|&byte| byte != 0)
         || u64::from(ubi_crc(&header[..60])) != read_uint(header, 60, 4, true)?
     {
@@ -2155,7 +2159,7 @@ fn ubi(bytes: &[u8], walk: &mut Probe) -> Option<(Candidate, usize)> {
         return Some((candidate, UBI_HEADER));
     }
     let (mut blocks, mut mapped, mut at, mut erased_run) = (0usize, 0u64, 0usize, 0usize);
-    let mut ran_out = false;
+    let (mut ran_out, mut eof_marked) = (false, 0usize);
     while at < bytes.len() && erased_run <= MAX_UBI_ERASED_RUN {
         if !walk.charge(2 * UBI_HEADER as u64) {
             ran_out = true;
@@ -2165,6 +2169,7 @@ fn ubi(bytes: &[u8], walk: &mut Probe) -> Option<(Candidate, usize)> {
             blocks = at / peb + 1;
             erased_run = 0;
             mapped += u64::from(ubi_vid_header(bytes, at + vid as usize));
+            eof_marked += usize::from(&bytes[at + 5..at + 8] == UBI_EOF_MARKER);
         } else if erased(at, peb, walk) {
             erased_run += peb;
         } else {
@@ -2180,6 +2185,12 @@ fn ubi(bytes: &[u8], walk: &mut Probe) -> Option<(Candidate, usize)> {
         "{blocks} erase blocks of {peb:#x} bytes ({mapped} with a volume header), data at {data:#x} in each, image \
          sequence {sequence:#x}"
     ));
+    if eof_marked > 0 {
+        candidate.notes.push(format!(
+            "{eof_marked} of them carry OpenWrt's end-of-image marker (\"EOF\" in the erase counter header): the \
+             flash from the first of them is erased on first boot"
+        ));
+    }
     if ran_out {
         candidate.notes.push(budget.to_owned());
         return Some((candidate, at.min(bytes.len())));

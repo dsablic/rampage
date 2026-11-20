@@ -930,6 +930,17 @@ fn carves_ubi_and_ubifs_images() {
     assert_eq!(first(&image[..40]), Some((Kind::Ubi, Confidence::MagicOnly, None)));
     assert_eq!(first(b"UBI#\x02 and so on"), None);
 
+    // Acceptance (an OpenWrt NAND factory image): its last erase blocks carry "EOF" in the erase counter header's
+    // padding, OpenWrt's end-of-image marker. They are part of the image, and the notes say what they mean.
+    let mut marked = ubi_block(b"", true);
+    marked[5..8].copy_from_slice(b"EOF");
+    let crc = crc_register(!0, &marked[..60]);
+    put32(&mut marked, 60, crc, true);
+    let image = [ubi_block(b"", false), ubi_block(b"", false), marked.clone(), marked].concat();
+    let carving = carve::scan(&image, &Limits::default());
+    assert_eq!(kinds_and_extents(&image), [(0, Kind::Ubi, Some(4 * PEB as u64))]);
+    assert!(carving.candidates[0].notes[1].starts_with("2 of them carry OpenWrt's end-of-image marker"), "{carving:?}");
+
     let superblock = ubifs_superblock(3);
     let mut fs = superblock.clone();
     fs.resize(3 * 0x3800, 0);
