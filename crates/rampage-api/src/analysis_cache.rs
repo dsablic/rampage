@@ -2,11 +2,12 @@
 //! file, so re-opening an already-analysed binary skips discovery. See "Persistent analysis store" in `docs/mcp.md`.
 //!
 //! An entry is found by a key that hashes every input discovery reads (the whole source file, the image's place in
-//! it, the loaded format and architecture, a Raw Project's interpretation and decoder binding), the store schema,
-//! [`ANALYSIS_VERSION`] and the identity of the running executable. The file is untrusted: an entry is used only when
-//! its payload's SHA-256 matches, its embedded key matches, and it decodes completely under the codec's bounds and
-//! ordering checks; anything else is a rejection that falls back to a fresh analysis. Annotations are never stored
-//! here: they stay in their own log and apply over cached and fresh analyses alike.
+//! it, the loaded format and architecture, a Raw Project's interpretation and decoder binding, record seeds carried
+//! from an earlier interpretation), the store schema, [`ANALYSIS_VERSION`] and the identity of the running
+//! executable. The file is untrusted: an entry is used only when its payload's SHA-256 matches, its embedded key
+//! matches, and it decodes completely under the codec's bounds and ordering checks; anything else is a rejection
+//! that falls back to a fresh analysis. Annotations are never stored here: they stay in their own log and apply
+//! over cached and fresh analyses alike.
 //!
 //! The key covers the bytes a [`Binary`] was loaded from, not the parsed `Binary` itself: discovery through a store
 //! assumes the project's `Binary` is exactly what its loader produced from those bytes (as every `Session` open
@@ -62,10 +63,10 @@ pub struct AnalysisStore {
 /// What the persistent store did for a project, as `binary_info` reports it under `analysis_store`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AnalysisStoreStatus {
-    /// `disabled` (no store configured), `unsupported` (runtime captures, and Raw projects carrying seeds, are
-    /// never stored), `pending` (analysis has not run in this process), `hit` (loaded from the store, discovery
-    /// skipped), `miss` (analysed fresh; `detail` says whether it was stored) or `rejected` (an entry existed but
-    /// failed validation, so the binary was analysed fresh).
+    /// `disabled` (no store configured), `unsupported` (runtime captures are never stored), `pending` (analysis
+    /// has not run in this process), `hit` (loaded from the store, discovery skipped), `miss` (analysed fresh;
+    /// `detail` says whether it was stored) or `rejected` (an entry existed but failed validation, so the binary
+    /// was analysed fresh).
     pub state: &'static str,
     /// The entry key: SHA-256 over every analysis input. Present once analysis ran with a store.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -743,15 +744,25 @@ fn create_private_dir(path: &Path, owned: bool) -> std::io::Result<()> {
     builder.create(path)
 }
 
-/// The store key for analysing `binary` under the Raw decoder `binding` (see `decoder::analysis_binding`), or
+/// The store key for analysing `binary` under the Raw decoder `binding` (see `decoder::analysis_binding`) with
+/// `carried` record seeds (see `functions::analyze_with_carried_seeds`, in the order discovery receives them), or
 /// `None` when the binary is never stored: a runtime capture, whose bytes are not a file's.
-pub(crate) fn key(binary: &Binary, binding: Option<&str>) -> Option<String> {
+///
+/// A Raw project owns the bytes it analyses (every backed region's, decoded and scatter-loaded ones included, in
+/// region order), so for it `file_bytes` is exactly the analysed image, never the opened file; the binding adds
+/// how those bytes were obtained and mapped (each region's source, a decoded region's full decode receipt).
+pub(crate) fn key(binary: &Binary, binding: Option<&str>, carried: &[u64]) -> Option<String> {
     if binary.format == Format::Snapshot {
         return None;
     }
     let file = binary.file_bytes();
     let image = binary.image_bytes();
-    let offset = (image.as_ptr() as usize).checked_sub(file.as_ptr() as usize)?;
+    // Outside captures the image is a range of the file's bytes (the whole file, a slice or an embedded image).
+    let (selected, _, _) = binary.inventory_source_context();
+    if file.get(selected.clone()).map(<[u8]>::as_ptr) != Some(image.as_ptr()) {
+        return None;
+    }
+    let offset = selected.start;
     let mut hash = Sha256::new();
     hash.update(SCHEMA.as_bytes());
     hash.update([0]);
@@ -766,6 +777,11 @@ pub(crate) fn key(binary: &Binary, binding: Option<&str>) -> Option<String> {
     hash.update((file.len() as u64).to_le_bytes());
     hash.update(Sha256::digest(file));
     hash.update(binding.unwrap_or("-").as_bytes());
+    hash.update([0]);
+    hash.update((carried.len() as u64).to_le_bytes());
+    for seed in carried {
+        hash.update(seed.to_le_bytes());
+    }
     Some(rampage_arch::hex::bytes(&hash.finalize()))
 }
 
@@ -798,6 +814,35 @@ pub(crate) fn file_stamp(path: &Path) -> String {
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |elapsed| elapsed.as_nanos());
     format!("{}\0{}\0{modified}", path.display(), metadata.len())
+}
+
+#[cfg(test)]
+mod key_tests {
+    use rampage_loaders::{RawCodeOptions, RawProfile};
+
+    use super::*;
+
+    #[test]
+    fn carried_record_seeds_are_part_of_the_key_exactly() {
+        let options = RawCodeOptions {
+            profile: RawProfile::CortexM,
+            base: 0x800_0000,
+            entry: Some(0x800_0000),
+            seeds: Vec::new(),
+            vector_table: None,
+            pointer_tables: false,
+        };
+        let binary = Binary::from_raw_code(vec![0x70, 0x47, 0x00, 0xbf], options).unwrap();
+        let none = key(&binary, Some("binding"), &[]).unwrap();
+        let one = key(&binary, Some("binding"), &[0x800_0002]).unwrap();
+        let two = key(&binary, Some("binding"), &[0x800_0000, 0x800_0002]).unwrap();
+        let swapped = key(&binary, Some("binding"), &[0x800_0002, 0x800_0000]).unwrap();
+        assert_eq!(none, key(&binary, Some("binding"), &[]).unwrap());
+        assert_eq!(two, key(&binary, Some("binding"), &[0x800_0000, 0x800_0002]).unwrap());
+        let keys: std::collections::BTreeSet<_> = [&none, &one, &two, &swapped].into_iter().collect();
+        assert_eq!(keys.len(), 4, "every seed list, in order, has its own key");
+        assert_ne!(key(&binary, Some("other"), &[]).unwrap(), none, "the binding separates entries");
+    }
 }
 
 #[cfg(all(test, unix))]

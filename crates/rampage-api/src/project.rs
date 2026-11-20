@@ -486,7 +486,7 @@ impl Project {
 
     /// The store and this project's analysis key, for facts derived over the analysis (see
     /// `crate::decompile_cache`): present once analysis ran with a store for an input it can key, so never for a
-    /// capture or carried Raw seeds.
+    /// capture.
     pub(crate) fn derived_store(&self) -> Option<(Arc<crate::AnalysisStore>, String)> {
         let key = self.analysis_store_status.get()?.key.clone()?;
         Some((self.analysis_store()?, key))
@@ -514,12 +514,8 @@ impl Project {
             let _ = self.analysis_store_status.set(Status::new("disabled", None, None));
             return fresh();
         };
-        let key = if carried.is_empty() {
-            let key = crate::analysis_cache::key(&self.binary, binding);
-            if self.patch_origin.is_some() { key.as_deref().map(crate::analysis_cache::view_key) } else { key }
-        } else {
-            None
-        };
+        let key = crate::analysis_cache::key(&self.binary, binding, carried);
+        let key = if self.patch_origin.is_some() { key.as_deref().map(crate::analysis_cache::view_key) } else { key };
         let Some(key) = key else {
             let _ = self.analysis_store_status.set(Status::new("unsupported", None, None));
             return fresh();
