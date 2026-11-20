@@ -1110,20 +1110,21 @@ so earlier steps can be undone. It refuses a step that undo could still revert u
 
 ## Persistent analysis store
 
-Function discovery (functions, blocks, switch tables, cross-references, noreturn facts) is nearly all of the time
-it takes to open and analyse a binary: loading, string scanning and triage are tens of milliseconds even on large
-binaries. rampage keeps each completed discovery in a per-user SQLite store and loads it the next time any process
-(an MCP server, a CLI call, the UI) analyses the same input, so re-opening an already-analysed binary skips
-discovery. The result is identical to a fresh analysis. Annotations are not stored there: they stay in their own
-log and apply over a stored analysis exactly as over a fresh one.
+Function discovery (functions, blocks, switch tables, cross-references, noreturn facts) is most of the time it
+takes to open and analyse a binary, and decompilation is most of the time a query takes: each decompiled function
+costs from under a second to several seconds on a large Go binary. rampage keeps each completed discovery, and
+each function it decompiles, in a per-user SQLite store, and loads them the next time any process (an MCP server, a
+CLI call, the UI) asks for the same thing, so re-opening an already-analysed binary skips discovery and asking for
+an already-decompiled function skips the decompiler. Results are identical to fresh ones. Annotations are not
+stored there: they stay in their own log and apply over stored results exactly as over fresh ones.
 
 | Setting | Effect |
 |---|---|
 | `RAMPAGE_ANALYSIS_CACHE` unset | Release builds use the default file; debug builds (tests, `cargo run`) keep the store off. |
-| `RAMPAGE_ANALYSIS_CACHE=off` (or `0`, `false`, `no`, empty) | No store: every process analyses afresh. |
+| `RAMPAGE_ANALYSIS_CACHE=off` (or `0`, `false`, `no`, empty) | No store: every process analyses and decompiles afresh. |
 | `RAMPAGE_ANALYSIS_CACHE=on` (or `1`, `true`, `yes`) | The default file, also in debug builds. |
 | `RAMPAGE_ANALYSIS_CACHE=/path/file.sqlite` | That file. |
-| `RAMPAGE_ANALYSIS_CACHE_MAX_MB=N` | Size bound in MiB (default 1024). |
+| `RAMPAGE_ANALYSIS_CACHE_MAX_MB=N` | Size bound in MiB (default 1024), for discovery and decompilations together. |
 
 The default file is `rampage/analysis/rampage-analysis-store-v1.sqlite` under `$XDG_CACHE_HOME` when set, else
 `~/.cache`, else `%LOCALAPPDATA%`. On Unix the `analysis` directory is kept private to the user (0700, also when it
@@ -1133,33 +1134,68 @@ path, a missing directory is created 0700 and an existing one keeps its mode; th
 written next to the analysed binary, which often sits in a read-only or shared directory; the store is keyed by
 content, so a copy of a binary under another path hits too. Deleting the file is always safe.
 
+`rampage server store` shows the file, its size and bound, and how many entries of each kind (`discovery`,
+`decompile`) it holds; `rampage server store --clear` deletes it (`--json` for either).
+
 `binary_info` (and `binary inspect --json`) report the store's part as `analysis_store`: `state` is `pending` (a
 store is configured but analysis has not run in this process), `hit` (discovery loaded from the store), `miss`
 (analysed fresh; `detail` says whether it was stored), `rejected` (an entry or the file failed validation, see
-`detail`; analysed fresh), `disabled`, or `unsupported` (runtime captures and byte-patched views are never stored).
-Once analysis ran with a store, `key` is the entry key.
+`detail`; analysed fresh), `disabled`, or `unsupported` (runtime captures, and Raw Projects carrying record seeds
+from an earlier interpretation, are never stored). Once analysis ran with a store, `key` is the entry key. Once a
+decompilation was looked up, `decompilations` counts `hits` (served from the store), `stored` (decompiled and
+written) and `rejected` (an entry failed validation; `last_rejection` says why).
 
-**Key.** SHA-256 over every input discovery reads: the whole source file's SHA-256, the loaded image's offset and
-length in it, format and architecture slice; for a Raw Project its decoder binding (interpretation identity:
-bytes, profile, mapping, entry, seeds, vector and pointer tables, regions; plus the bundled Sleigh manifest); the
-store schema, rampage version and `ANALYSIS_VERSION`; and the running executable's path, size and modification
-time, so a rebuilt rampage never reads what an earlier build stored. Data packs, annotations and decompiler options
-do not affect discovery and are not in the key. A golden test records each fixture's analysis digest under
-`ANALYSIS_VERSION` and fails when discovery output changes without a version bump (see
-[development](development.md#analysis-store-version)).
+**Discovery key.** SHA-256 over every input discovery reads: the whole source file's SHA-256, the loaded image's
+offset and length in it, format and architecture slice; for a Raw Project its decoder binding (interpretation
+identity: bytes, profile, mapping, entry, seeds, vector and pointer tables, regions; plus the bundled Sleigh
+manifest); the store schema, rampage version and `ANALYSIS_VERSION`; and the running executable's path, size and
+modification time, so a rebuilt rampage never reads what an earlier build stored. Data packs, annotations and
+decompiler options do not affect discovery and are not in the key. A byte-patched view (after `patch_bytes`, or
+once `integrity_checks` or another patch-aware tool has checked the image) is keyed by its own bytes, apart from
+the original: a view is loaded from its bytes without the recovery an ordinary open runs (stripped Go symbols), so
+it can analyse differently. Views over the same bytes share an entry. A golden test records each
+fixture's analysis digest under `ANALYSIS_VERSION` and fails when discovery output changes without a version bump
+(see [development](development.md#analysis-store-version)).
 
-**Untrusted file.** An entry is used only when its payload's stored SHA-256 matches, the key embedded in the
-payload equals the key looked up, and the payload decodes completely: counts bounded by the bytes left, tags and
-strings checked, no trailing bytes, sorted orders revalidated. A file with another schema is neither read nor
-written. A truncated, corrupt or foreign file or entry is reported as `rejected` and the binary is analysed fresh;
-it never fails an open or yields a partial analysis. The checksums establish consistency, not authorship.
+**Decompilation key.** SHA-256 over the discovery key, the function, the decompiler options (compiler, platform,
+BE8), where decompilation runs (in process, or the supervised worker with its limits and its executable's path,
+size and modification time), `DECOMPILE_CACHE_VERSION`, and every annotation a decompilation can read: names,
+signatures, types, type libraries, debug types, globals, local names and types, type hints, data and operand types,
+patches and peripherals. Comments and findings are left out because no decompilation reads them. Only successful
+decompilations are stored; `decompile` with `exact_entry` takes another path and is not stored. With
+`GHIDRA_INSTALL_DIR` set (external specifications, which can change without rampage knowing) decompilations are
+neither read nor stored. A second golden test ties decompiler output to
+`DECOMPILE_CACHE_VERSION` (see [development](development.md#analysis-store-version)).
+
+**Edits.** An edit never re-runs discovery: annotations do not feed it. A decompilation is invalidated by its key:
+
+| Edit | Stored decompilations |
+|---|---|
+| Comment, finding | All still used. |
+| Rename, signature, type, global, local variable, type hint, data or operand type, peripheral map, patch | None match any more: each function is decompiled afresh when next asked for, and stored under the new key. |
+| Undo or redo back to earlier annotations | The earlier key's results are used again. |
+
+The invalidation is coarse on purpose: a rename can change any function that refers to the renamed address, and
+names also select library prototypes and call fix-ups, so which functions an edit can change is not known without
+re-running the decompiler. Every edit an MCP tool makes on an image that has been through patch authority builds a
+new effective view over the same bytes; it reuses the stored discovery instead of rediscovering every function,
+and, after a comment or finding, the stored decompilations too.
+
+**Untrusted file.** An entry is used only when its payload's stored SHA-256 matches, the key (and, for a
+decompilation, the kind) embedded in the payload equals the one looked up, and the payload decodes completely:
+for discovery, counts bounded by the bytes left, tags and strings checked, no trailing bytes, sorted orders
+revalidated; for a decompilation, a strict JSON shape for exactly the function asked for, with every token span
+inside the code on a character boundary. A file with another schema is neither read nor written. A truncated,
+corrupt or foreign file or entry is reported as `rejected` and the work is done afresh; it never fails an open or a
+decompilation, nor yields a partial result. The checksums establish consistency, not authorship.
 
 **Concurrency and size.** Several processes may open the same binary at once. The store uses SQLite's write-ahead
 log; a reader reads an entry in one statement, so it sees a committed entry whole or not at all. A fresh analysis
-is written after it is already in use, and the write waits at most 200 ms for another writer before it is skipped;
-refreshing an entry's use time never waits. After each write the least
-recently used entries beyond the size bound are evicted; an entry larger than half the bound is not stored.
-Entries are delta-encoded varints, a few bytes per block and cross-reference.
+is written after it is already in use, and a decompilation after it is computed; a write waits at most 200 ms for
+another writer before it is skipped; refreshing an entry's use time never waits. After each write the least
+recently used entries of both kinds beyond the size bound are evicted; an entry larger than half the bound (or a
+decompilation over 32 MiB) is not stored. Discovery entries are delta-encoded varints, a few bytes per block and
+cross-reference; a decompilation entry is its JSON, typically 10–150 KB.
 
 ## Authorization and data disclosure
 

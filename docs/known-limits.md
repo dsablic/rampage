@@ -30,6 +30,9 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   container if you need isolation.
 - **Decompiled C is not proof** that the recovered program is correct. Results report their recovery issues.
 - Only MSP430, AVR8 and Cortex-M decompile among the Raw processor profiles; the others disassemble only.
+- A large Raw Cortex-M image can fail to decompile through the worker with "JSON wire depth/node limit exceeded":
+  the request lists one code-mode point per discovered run, and a 3.7 MB image had 413,000. Decompiling in
+  process is not affected.
 
 ## Analysis
 
@@ -117,9 +120,13 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   (CLI `--explore-encrypted`). The judgement needs both signals: high-entropy code on an architecture where nearly
   every byte sequence decodes (8-bit microcontrollers) is never judged, and runs under 8 KiB are not judged. The
   edges of a judged stretch are placed to within 512 bytes, so a little clear code next to it may be left out.
-- The [persistent analysis store](mcp.md#persistent-analysis-store) (experimental) saves function discovery
-  only (on by default in release builds): other derived results are recomputed on each open, runtime captures and
-  byte-patched views are never stored, and an annotation edit does not trigger incremental re-analysis.
+- The [persistent analysis store](mcp.md#persistent-analysis-store) (experimental, on by default in release
+  builds) saves function discovery and decompiled functions only: strings, Go and DWARF type indexes, signature
+  matches (`identify_functions`) and workflow results (`triage_report`, `integrity_checks`, `lock_mechanisms`) are
+  recomputed in each process, and runtime captures are never stored. Invalidation after an edit is coarse: a
+  comment or finding keeps every stored decompilation, but any other edit (a rename included) makes every stored
+  decompilation of that binary miss, and each is decompiled again when next asked for. With
+  `GHIDRA_INSTALL_DIR` set, decompilations are not stored.
 - Firmware filesystem images: vendor SquashFS variants, SquashFS 3.x, delta OTA payloads (they need the previous
   build), compressed tar, ZIP members that are encrypted or use a method other than stored or deflate, UBIFS
   extended attributes and fscrypt-encrypted UBIFS content are not read; UBIFS HMAC authentication is not checked,
@@ -176,7 +183,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   results. A `string_decoding` replay starts at the block holding the call, so arguments the caller set up in
   earlier blocks are not seen.
 - Not built yet: object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and
-  vftable evidence, `__CxxFrameHandler4` and Itanium exception tables, and incremental re-analysis after edits.
+  vftable evidence, `__CxxFrameHandler4` and Itanium exception tables, and per-function (rather than
+  per-binary) invalidation of stored decompilations after edits.
 
 ## Library identification
 

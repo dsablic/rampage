@@ -146,9 +146,12 @@ Unsupported instruction semantics are explicit barriers, not inferred no-ops. Pa
 also retains explicit unknowns. See the [ARM64 development track](arm64-development.md) for validation and limits.
 
 *Experimental.* Release builds keep a [persistent analysis store](mcp.md#persistent-analysis-store): each completed
-function discovery is saved in a per-user SQLite file, keyed by every analysis input and the rampage build, and
-reused when any process opens the same binary again; entries that fail verification are analysed afresh.
-Annotations stay in their own log. Limits: discovery only; no incremental re-analysis after edits.
+function discovery, and each decompiled function, is saved in a per-user SQLite file, keyed by every input it
+reads and the rampage build, and reused when any process asks for it again; entries that fail verification are
+recomputed. Annotations stay in their own log: a comment keeps every stored decompilation, any other edit makes
+the binary's stored decompilations miss until each is decompiled again. `rampage server store` shows what the
+store holds and `--clear` deletes it. Limits: strings, type indexes, signature matches and workflow results are
+not stored.
 
 ## Decompilation and persistent types
 

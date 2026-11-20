@@ -386,7 +386,10 @@ budget (fix the currently recorded timeout).
 analysed in 12.9 s (one run). An experimental persistent analysis store
 ([reference](../mcp.md#persistent-analysis-store)) saves function discovery to a per-user SQLite file keyed by
 every analysis input and the rampage build: re-opening a 26 MB Go binary takes 0.13 s instead of about 1.7 s.
-Incremental re-analysis after edits, and storing other derived results, are open. Search at scale: exact-text
+Incremental re-analysis after edits, and storing other derived results, are open. *(2026-11-20)* The store also
+keeps each decompiled function, invalidated by key on edits (comments keep them), and effective views are keyed
+by their bytes; see [incremental analysis](2026-11-20-incremental-analysis.md) for measurements and the next
+slices (per-function invalidation, workflow results, type indexes). Search at scale: exact-text
 search runs in linear time with a resume cursor; reference search decodes only the blocks holding a matching
 reference and wildcard byte patterns prefilter on their longest fixed run, so both complete on a 26 MB stripped Go
 binary where they used to stop on their work budget. `function_graph` pages oversized functions.

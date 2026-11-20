@@ -94,8 +94,10 @@ Compared with Ghidra and IDA, rampage does not have:
   MSVC `__CxxFrameHandler3` tables (experimental);
 - full version tracking: [annotation transfer](build-diffing.md) moves names, comments, signatures, types and
   globals between builds, but not local variables, data types or patches, and has no interactive review UI;
-- a full project database: the experimental [analysis store](mcp.md#persistent-analysis-store) keeps only
-  function discovery, and analysis does not run incrementally after edits;
+- a full project database: the experimental [analysis store](mcp.md#persistent-analysis-store) keeps function
+  discovery and each decompiled function, but strings, types, signature matches and workflow results are
+  recomputed in each process, and an edit other than a comment makes every stored decompilation of the binary
+  miss rather than only those it changes;
 - decompilation for most of its Sleigh processor profiles (only MSP430 and AVR8 have reviewed C models; the
   experimental Cortex-M and MIPS32 Raw profiles decompile with the ARM v8 Thumb and MIPS o32 models);
 - microMIPS or MIPS16e decoding, or ESP ROM function names (ESP32/ESP8266 calls into ROM show addresses);

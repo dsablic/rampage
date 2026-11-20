@@ -66,8 +66,8 @@ These may change or disappear in any minor release. Each is marked as experiment
 - **Local caches and UI files:** the desktop UI's project-workspace manifests, the historical function-inventory
   cache, derived analysis caches and the [persistent analysis store](mcp.md#persistent-analysis-store). They can
   be rebuilt or saved again, and a release may refuse an older one. The store's settings
-  (`RAMPAGE_ANALYSIS_CACHE`, `RAMPAGE_ANALYSIS_CACHE_MAX_MB`) and the `analysis_store` field of `binary_info` are
-  experimental too.
+  (`RAMPAGE_ANALYSIS_CACHE`, `RAMPAGE_ANALYSIS_CACHE_MAX_MB`), the `analysis_store` field of `binary_info` and the
+  `rampage server store` command are experimental too.
 - **The Rust crates as libraries.** rampage is used through MCP, the CLI and its file formats. The crates'
   public Rust APIs are internal and may change in any release.
 

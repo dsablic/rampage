@@ -78,6 +78,11 @@ changes any fixture's analysis, `analysis_cache::analysis_cache_golden` fails: i
 `RAMPAGE_UPDATE_ANALYSIS_GOLDEN=1 cargo nextest run -p rampage-api -E 'test(/analysis_cache_golden/)'`. Re-recording
 refuses changed digests until the version is bumped, so entries stored by older builds are never read as current.
 
+The store also keeps decompiled functions. When a change to the decompiler, its symbol, type or propagation plans,
+or the result shape changes a fixture function's decompilation, `decompile_cache::decompile_cache_golden` fails the
+same way: increment `DECOMPILE_CACHE_VERSION` in `crates/rampage-api/src/decompile_cache.rs`, then re-record with
+`RAMPAGE_UPDATE_DECOMPILE_GOLDEN=1 cargo nextest run -p rampage-api -E 'test(/decompile_cache_golden/)'`.
+
 ## Scope release validation
 
 For routine increments, use the full debug workspace suite and focused release checks for affected paths. Release

@@ -228,6 +228,10 @@ Global `--image-offset` and pointer-comparison peer-image options are not substi
 | `pack list` / `pack check DIR` | `packs list` / `packs check DIR` |
 | `pack export DIR -o FILE` / `pack import FILE [--into DIR]` / `pack diff FILE [--against DIR]` | `packs export` / `packs import` / `packs diff` |
 | `server serve [--all-tools]` | `mcp [--all-tools]` |
+| `server store [--clear]` | – |
+
+`server store` reports the [persistent analysis store](mcp.md#persistent-analysis-store) (its file, size, bound
+and entries per kind); `--clear` deletes it.
 
 Both serving spellings take the same debug options, `--debug-endpoint`, `--debug-writes` and `--debug-kill`, with
 their `RAMPAGE_DEBUG_*` variables; [debug control](debug-control.md#consent) lists what each allows.
