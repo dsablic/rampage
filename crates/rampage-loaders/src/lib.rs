@@ -17,6 +17,7 @@ pub mod raw_records;
 pub mod raw_scatter;
 pub mod raw_vectors;
 mod slots;
+pub use slots::GotFunction;
 pub mod snapshot;
 mod starts;
 mod text;

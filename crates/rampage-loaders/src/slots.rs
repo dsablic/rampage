@@ -57,6 +57,33 @@ fn elf(parsed: &object::File) -> Vec<ImportSlot> {
     slots
 }
 
+/// A MIPS global GOT entry whose dynamic symbol is a function the image defines: the dynamic linker fills the
+/// entry from the symbol (its value plus the load bias), so the symbol, not the entry's stored bytes, says what a
+/// call through it reaches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GotFunction {
+    pub slot: u64,
+    pub name: String,
+    /// The symbol's value: the function's address at the image's link base.
+    pub address: u64,
+}
+
+/// The global GOT entries of `parsed` whose dynamic symbol is a defined function (see [`GotFunction`]).
+pub(crate) fn mips_got_functions(parsed: &object::File) -> Vec<GotFunction> {
+    let Some(symbols) = parsed.dynamic_symbol_table() else { return Vec::new() };
+    mips_global_got(parsed)
+        .into_iter()
+        .filter_map(|(slot, index)| {
+            let symbol = symbols.symbol_by_index(index).ok()?;
+            if symbol.is_undefined() || symbol.kind() != object::SymbolKind::Text {
+                return None;
+            }
+            let name = symbol.name().ok().filter(|name| !name.is_empty())?;
+            Some(GotFunction { slot, name: name.to_owned(), address: symbol.address() })
+        })
+        .collect()
+}
+
 /// A MIPS GOT's layout, from the dynamic section: `DT_PLTGOT` holds its address; `DT_MIPS_LOCAL_GOTNO` local
 /// entries come first, then one global entry per dynamic symbol from `DT_MIPS_GOTSYM` on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -100,28 +100,41 @@ fn decompiled_pic_code_names_imports_and_strings() {
 }
 
 /// Acceptance (zlib's `deflateInit_` decompiled to `(*pcRam000300d4)(...)`): a shared library calls its own exported
-/// functions through global GOT entries that hold their addresses, and such a call renders by the function's name.
-/// The fixture is router-mips.elf with `strlen` made a definition: its dynamic symbol gets a section and the address
-/// of `decode_secret`, which its GOT entry then holds.
+/// functions through global GOT entries, and such a call renders by the function's name. The fixture is
+/// router-mips.elf with `strlen` made a definition: its dynamic symbol gets a section and a function's address, and
+/// its GOT entry a stored value. The dynamic linker fills the entry from the symbol, so a name is bound only when
+/// the symbol is a defined function and the stored value agrees with it (review: a file whose bytes and symbol
+/// disagree must not show the stored bytes' function).
 #[test]
 fn calls_through_got_entries_of_defined_functions_render_by_name() {
-    let mut bytes = std::fs::read(format!("{DIR}router-mips.elf")).unwrap();
-    let target = truth("router-mips", "decode_secret") as u32;
-    // .dynsym is at file offset 0x1f8 with 16-byte entries; strlen is entry 9. .got is at 0x31030 (file 0x1030) and
-    // strlen's global entry is at 0x31088.
+    let decode_secret = truth("router-mips", "decode_secret") as u32;
+    let check_login = truth("router-mips", "check_login") as u32;
+    // .dynsym is at file offset 0x1f8 with 16-byte entries; strlen is entry 9 (st_info at +12: binding << 4 | type).
+    // .got is at 0x31030 (file 0x1030) and strlen's global entry is at 0x31088.
     let (symbol, entry) = (0x1f8 + 9 * 16, 0x1088);
-    assert_eq!(&bytes[symbol + 4..symbol + 8], [0; 4]);
-    assert_eq!(&bytes[symbol + 14..symbol + 16], [0; 2]);
-    assert_eq!(&bytes[entry..entry + 4], [0; 4]);
-    bytes[symbol + 4..symbol + 8].copy_from_slice(&target.to_be_bytes());
-    bytes[symbol + 14..symbol + 16].copy_from_slice(&12u16.to_be_bytes());
-    bytes[entry..entry + 4].copy_from_slice(&target.to_be_bytes());
-    let project = Project::new(Binary::from_owned_native_bytes(bytes, rampage_arch::Arch::Mips).unwrap());
-    assert!(project.binary.import_slots.iter().all(|slot| slot.name != "strlen"));
-    let main = project.decompile(truth("router-mips", "main")).unwrap().code;
-    let name = project.function_name(u64::from(target));
-    assert!(main.contains(&format!("{name}(")), "{main}");
+    let main_with = |value: u32, stored: u32, kind: u8| {
+        let mut bytes = std::fs::read(format!("{DIR}router-mips.elf")).unwrap();
+        assert_eq!((&bytes[symbol + 4..symbol + 8], &bytes[entry..entry + 4]), (&[0u8; 4][..], &[0u8; 4][..]));
+        assert_eq!(&bytes[symbol + 14..symbol + 16], [0; 2]);
+        bytes[symbol + 4..symbol + 8].copy_from_slice(&value.to_be_bytes());
+        bytes[symbol + 12] = 0x10 | kind;
+        bytes[symbol + 14..symbol + 16].copy_from_slice(&12u16.to_be_bytes());
+        bytes[entry..entry + 4].copy_from_slice(&stored.to_be_bytes());
+        let project = Project::new(Binary::from_owned_native_bytes(bytes, rampage_arch::Arch::Mips).unwrap());
+        assert!(project.binary.import_slots.iter().all(|slot| slot.name != "strlen"));
+        let secret = project.function_name(u64::from(decode_secret));
+        (project.decompile(truth("router-mips", "main")).unwrap().code, secret)
+    };
+    // Symbol and entry agree: the call names the function.
+    let (main, secret) = main_with(decode_secret, decode_secret, 2);
+    assert!(main.contains(&format!("{secret}(")), "{main}");
     assert!(!main.contains("code *") && !main.contains("pcRam"), "{main}");
+    // The entry's bytes say decode_secret but its symbol says check_login: decode_secret is not shown there.
+    let (main, secret) = main_with(check_login, decode_secret, 2);
+    assert!(!main.contains(&format!("{secret}(")), "{main}");
+    // A data symbol on the slot binds no function name.
+    let (main, secret) = main_with(decode_secret, decode_secret, 1);
+    assert!(!main.contains(&format!("{secret}(")), "{main}");
 }
 
 /// main is the first argument to __libc_start_main: glibc's `__start` loads it from the GOT, and musl's `_start`

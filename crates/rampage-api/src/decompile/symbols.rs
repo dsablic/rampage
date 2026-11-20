@@ -133,8 +133,18 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
             operations.push(WorkerOperation::NoReturn { address, indirect });
         }
     }
-    operations.extend(data_names(project, annotations, &identities, &slots));
-    operations.extend(mips_got_functions(project, annotations, &identities, &slots));
+    let got_functions = mips_got_functions(project, annotations, &identities, &slots);
+    // A GOT entry bound to a function is named as that function only, never also as data.
+    let named_slots: std::collections::BTreeSet<u64> = slots
+        .iter()
+        .copied()
+        .chain(got_functions.iter().filter_map(|operation| match operation {
+            WorkerOperation::Import { slot, .. } => Some(*slot),
+            _ => None,
+        }))
+        .collect();
+    operations.extend(data_names(project, annotations, &identities, &named_slots));
+    operations.extend(got_functions);
     operations.extend(cortex_m_operations(project));
     operations.extend(mips_pic_operations(&project.binary));
     operations.extend(xtensa_operations(&project.binary));
@@ -176,10 +186,11 @@ pub(super) fn mips_pic_operations(binary: &rampage_loaders::Binary) -> Vec<Worke
     operations
 }
 
-/// A MIPS image's global GOT entries that hold one of its own functions: a shared library calls its exported
-/// functions through `lw $t9, %call16(f)($gp); jalr $t9` like imports, and the entry holds the definition's
-/// address until the dynamic linker binds it (to the same function unless another module interposes one). Each
-/// such entry is bound to its function, so the call renders by name rather than as `(*pcRam...)()`.
+/// A MIPS image's global GOT entries for functions it defines: a shared library calls its exported functions
+/// through `lw $t9, %call16(f)($gp); jalr $t9` like imports. The dynamic linker fills each entry from its dynamic
+/// symbol (`DT_MIPS_GOTSYM` on), so the target is the symbol's, never the entry's stored bytes; an entry is bound
+/// only when the symbol is a defined function rampage discovered and the stored value agrees with it (a file whose
+/// bytes and symbols disagree gets no name there). The call then renders by name rather than as `(*pcRam...)()`.
 fn mips_got_functions(
     project: &Project,
     annotations: &Annotations,
@@ -190,19 +201,17 @@ fn mips_got_functions(
     if !matches!(binary.arch, rampage_arch::Arch::Mips | rampage_arch::Arch::Mips64) {
         return Vec::new();
     }
-    let Some(got) = binary.target().got.filter(|got| got.local_entries > 0) else { return Vec::new() };
-    let width = u64::from(binary.arch.default_pointer_size().unwrap_or(4));
-    got.entries
+    let Some(got) = binary.target().got else { return Vec::new() };
+    let width = binary.arch.default_pointer_size().unwrap_or(4);
+    binary
+        .got_functions
         .iter()
-        .enumerate()
-        .skip(got.local_entries)
-        .filter_map(|(index, &target)| {
-            let slot = got.address.checked_add((index as u64).checked_mul(width)?)?;
-            (!imports.contains(&slot) && functions.contains_key(&target)).then(|| WorkerOperation::Import {
-                slot,
-                target: Some(target),
-                name: project.function_name_in(annotations, target),
-            })
+        .filter(|entry| !imports.contains(&entry.slot) && functions.contains_key(&entry.address))
+        .filter(|entry| got.entry(entry.slot, width) == Some(entry.address))
+        .map(|entry| WorkerOperation::Import {
+            slot: entry.slot,
+            target: Some(entry.address),
+            name: project.function_name_in(annotations, entry.address),
         })
         .collect()
 }

@@ -110,6 +110,9 @@ pub struct Binary {
     /// A dynamically linked MIPS ELF's GOT layout, from its dynamic section.
     #[serde(skip)]
     mips_got: Option<crate::slots::MipsGot>,
+    /// A MIPS ELF's global GOT entries whose dynamic symbol is a function it defines, by slot.
+    #[serde(skip)]
+    pub got_functions: Vec<crate::slots::GotFunction>,
     /// Mach-O chained-fixup rebases: each pointer's location and the target the loader writes there.
     #[serde(skip)]
     rebases: Vec<(u64, u64)>,
@@ -305,6 +308,7 @@ impl Binary {
             global_pointer: None,
             got: None,
             mips_got: None,
+            got_functions: Vec::new(),
             rebases: Vec::new(),
             data: Bytes::Owned(data),
             snapshot_source: None,
@@ -528,6 +532,7 @@ impl Binary {
             global_pointer: None,
             got: None,
             mips_got: None,
+            got_functions: Vec::new(),
             rebases: Vec::new(),
             data: Bytes::Owned(data),
             image: 0..len,
@@ -987,6 +992,7 @@ impl Binary {
         let details = crate::details::collect(&parsed);
         let elf_m_profile = format == Format::Elf && arch == Arch::Arm && elf_m_profile(&parsed, &mut warnings);
         let mips_got = crate::slots::mips_got(&parsed);
+        let got_functions = crate::slots::mips_got_functions(&parsed);
         let xtensa_abi_note =
             (format == Format::Elf && arch == Arch::Xtensa).then(|| elf_xtensa_call0(&parsed)).flatten();
         let xtensa_call0 = xtensa_abi_note == Some(true);
@@ -1024,6 +1030,7 @@ impl Binary {
             global_pointer: None,
             got: None,
             mips_got,
+            got_functions,
             rebases,
             data,
             snapshot_source: None,
