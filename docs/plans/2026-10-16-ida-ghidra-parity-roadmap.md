@@ -38,7 +38,7 @@ Consequences for every milestone below:
   calls against 6 on suite v3). The Phase 2 recall target becomes the metric of the flywheel's data loop
   ([plan](2026-11-20-flywheel-next.md)). The live Phase 1 reconstruction is to be run once through the current
   agent runner or retired. The Windows debugger's live run stays open until a Windows host exists.
-- **Planning.** Rules agreed on 2026-11-20 and a proposed queue for after incremental analysis are in
+- **Planning.** Rules and the queue for after incremental analysis, both agreed on 2026-11-20, are in
   [the roadmap refresh](2026-11-20-roadmap-refresh.md).
 
 ### Status (2026-11-13)

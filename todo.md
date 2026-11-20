@@ -5,7 +5,7 @@
 - Release (updated 2026-11-20; the bullets below it are as of 2026-11-13): 1.0.0 to 1.8.0 are published, 1.8.0
   on 2026-11-19. Contract snapshots pin every stable MCP group; changes since 1.0.0 are additive.
 - Direction (2026-11-20): match or improve on IDA in everything except the interactive UI, for an agent working
-  through MCP. Planning rules agreed that day, and a proposed queue for after incremental analysis, are in
+  through MCP. Planning rules and the queue for after incremental analysis (both agreed that day) are in
   `docs/plans/2026-11-20-roadmap-refresh.md`; see "Planning rules" below.
 - Parity roadmap: Phases 0–3 and 4.1 implemented; live Phase 1 sign-off, the Phase 2 recall target and the
   Phase 3.3 live improvement gate are open. 4.2 done for Cortex-M (experimental: vector and pointer tables,
@@ -48,6 +48,8 @@ Then, in order, one track at a time, each reviewed before merge:
    lives at Y) by evaluation, constants and xrefs; report verified, refuted or unknown with the evidence.
 5. **Incremental analysis and a fuller analysis store**: cache xrefs, strings and types, and re-analyse only what
    an edit touches.
+
+After item 5: see "Queue after incremental analysis (agreed 2026-11-20)" below.
 
 Done 2026-11-17 to 2026-11-19: Android 1.7.0, firmware leftovers, binwalk/unblob evaluation, carve signature waves
 1–2, UBI/UBIFS readers, housekeeping (fixture paths with a CI check, flaky UI test, read-only annotations).
@@ -438,23 +440,34 @@ Queued behind the flywheel work, one at a time; each needs its own design and go
   Samples run only in disposable QEMU or VM guests reached through the debug stubs, never on the host. Needs a
   real packed fixture.
 
-## Proposed queue after incremental analysis (2026-11-20, not agreed)
+## Queue after incremental analysis (agreed 2026-11-20)
 
-From [the roadmap refresh](docs/plans/2026-11-20-roadmap-refresh.md), which gives the reasons. One track at a
-time, each closed by its acceptance run.
+From [the roadmap refresh](docs/plans/2026-11-20-roadmap-refresh.md), which gives the reasons, with the
+maintainer's amendments of 2026-11-20. One track at a time, each reviewed before merge and closed by its
+acceptance run.
 
-1. Acceptance pass on real samples (local, never committed or named) for MIPS, Xtensa and ESP images,
+1. **Acceptance pass on real samples** (local, never committed or named) for MIPS, Xtensa and ESP images,
    `diff_firmware`, Android and `check_claim`. The set is built, not run:
-   [acceptance set](docs/plans/2026-11-20-acceptance-set.md), `tools/acceptance/`.
-2. Flywheel steps 1–3 ([plan](docs/plans/2026-11-20-flywheel-next.md)): measure headroom, then the unattended
-   code loop.
-3. Signature recall on firmware (the arms and call graph gated on the embedded set).
-4. Object files and static archives (roadmap 4.3).
-5. Analysis depth by measured headroom: parameter types and interprocedural signatures, then C++ class layout,
-   `__CxxFrameHandler4`, Swift metadata.
-6. Windows: the flywheel's Windows corpus, then a Windows host build.
+   [acceptance set](docs/plans/2026-11-20-acceptance-set.md), `tools/acceptance/`. Deterministic checks first,
+   then the eight Haiku tasks, then the maintainer's own vendor update pair.
+2. **MIPS16e (and microMIPS)** decoding and discovery. Added 2026-11-20: 76 of the 87 programs in the OpenWrt
+   root filesystem, `busybox` among them, are MIPS16, so on routers the MIPS work reaches about one program in
+   eight. A real sample needs it, so rule 2 schedules it. Check M5 of the acceptance set measures the gap first.
+3. **Flywheel steps 1–3** ([plan](docs/plans/2026-11-20-flywheel-next.md)): close row proposals, measure
+   headroom, then the unattended code loop.
+4. **Signature recall on firmware** (the arms and call graph gated on the embedded set).
+5. **Object files and static archives** (roadmap 4.3).
+6. **Analysis depth by measured headroom:** parameter types and interprocedural signatures, then C++ class
+   layout, `__CxxFrameHandler4`, Swift metadata.
+7. **Windows:** the flywheel's Windows corpus, then a Windows host build.
 
 Between tracks: the UI assessment tab, `mine-transcripts`, demoting rarely used core tools.
+
+Measurement (rule 3): the Sonnet headline of suite v4 (about $13) and one run with a second model or client come
+after the acceptance pass's fixes have landed, not straight after incremental analysis.
+
+Catalog budget (rule 6): the refresh recorded 25 bytes of room; after the `check_claim` fixes it was about 1 KB
+(103,358 of 104,400 bytes). Re-measure when incremental analysis merges; the rule stands either way.
 
 ## Planning rules (agreed 2026-11-20)
 
@@ -1028,5 +1041,5 @@ reverse-engineering roadmap" moved whole to
 [todo-archive.md](docs/plans/todo-archive.md#superseded-sections-archived-2026-11-20) with their 36 open boxes.
 The embedded Ghidra decompiler, the parity roadmap and the debugger plan replaced them, as the sections
 themselves said. Items from them that are still wanted are tracked where they now belong: Windows debugger live
-acceptance (status above), object files and class layout (the proposed queue), runtime capture follow-ups
+acceptance (status above), object files and class layout (the agreed queue), runtime capture follow-ups
 (`docs/plans/2026-10-29-debugger-control.md`).

@@ -1,6 +1,6 @@
 # Roadmap refresh (2026-11-20)
 
-Status: the rules were agreed on 2026-11-20 and apply from now. The queue is still a proposal. The cleanup at
+Status: the rules were agreed on 2026-11-20 and apply from now. The queue was agreed the same day with two amendments: MIPS16e is inserted after the acceptance pass (most OpenWrt programs are MIPS16), and the suite v4 Sonnet headline and the second-model run wait for the acceptance fixes. The agreed queue is in `todo.md`. The cleanup at
 the end was applied the same day, except where noted.
 
 ## Goal, as restated
