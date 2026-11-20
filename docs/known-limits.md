@@ -133,6 +133,15 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   image only candidates whose headers validate; each image's notes count the rest. Past 65,536 candidates left out
   inside images, the rest of the image being scanned is skipped (a limitation says where). `fs_list` does not read
   JFFS2, CramFS or the containers.
+- `diff_firmware` (experimental) analyses only changed programs: added and removed ones are listed (with the
+  endpoints they name), not analysed. It finds headerless code by itself only for Cortex-M (a vector table, or an
+  LZSS or LZ4-block payload behind a header that describes it) and ESP images; MIPS, Xtensa without an ESP header
+  and other Raw profiles need `as_raw` per side. Payloads in other codecs or encrypted ones compare by digest, and
+  secure-boot signatures are not verified. Each run is budgeted (time, 8 code images by default, 2 GiB read, 64 MiB
+  per analysed image); what a budget leaves out is listed, and one image's analysis is not interrupted once
+  started. A change that only moves code, data or padding is not reported; a change in instruction selection for
+  the same source (another register, a narrower encoding the normalisation does not cover) is. See
+  [firmware version diffing](firmware-diffing.md#limits).
 - `endpoint_inventory` matches endpoints lexically: addresses built at run time, encrypted or compressed data and
   IPv4 addresses stored as integers in code are not found. `privacy_surface` on a directory analyses only programs
   that import a capture API or name a capture device, and matches init files to programs by path; see its

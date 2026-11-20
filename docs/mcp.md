@@ -96,7 +96,7 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 that answer common first questions, such as `language_metadata` and `class_evidence` for class names and
 hierarchies, are in `core` so that a client deferring schemas still sees their names.
 
-A default session lists 47 tools: the 46 in `core` plus `enable_tools`. Enabling every group lists 104. The
+A default session lists 47 tools: the 46 in `core` plus `enable_tools`. Enabling every group lists 105. The
 `debug` group adds 14 tools (16 with `--debug-writes`), `--observations` adds `report_observation`, and a
 `--corpus` server lists `enable_tools` and the 4 `improve` tools only.
 
@@ -122,7 +122,7 @@ A default session lists 47 tools: the 46 in `core` plus `enable_tools`. Enabling
 - `dotnet`: `dotnet_metadata`, `dotnet_il`.
 - `android`: `dex_metadata`, `dex_code` ([Android APKs and DEX](android.md)).
 - `carve`: `carve`, `archive_inventory`, `fs_list`, `fs_extract`, `write_decoded_range`, `endpoint_inventory`,
-  `endpoint_blocklist`, `privacy_surface`.
+  `endpoint_blocklist`, `privacy_surface`, `diff_firmware`.
 - `formats`: `build_info`, `pe_resources`, `pe_load_config`, `exception_handlers`, `pyinstaller_archive`,
   `wasm_module`, `integrity_checks`, `export_image`.
 - `debug`, only on a server started with a debug endpoint: `debug_connect`, `debug_bind`, `debug_status`,
@@ -145,14 +145,14 @@ improve group alone; see [the flywheel](#flywheel-improve).
 Workflow reports name the `group` of suggested next tools. The [desktop assistant](desktop-ui.md) uses the same
 tools without group gating, plus the interactive `show_address`, which is not an MCP tool because the server has
 no listing to navigate. It does not offer the file tools (`carve`, `archive_inventory`, `fs_list`, `fs_extract`,
-`write_decoded_range`, `endpoint_inventory`, `endpoint_blocklist`, `dex_metadata`, `dex_code`, `list_packs`,
-`query_debugger`, `list_dir`, `inspect_data`, `decode_file_range`, `probe_compression`, `file_layout`,
+`write_decoded_range`, `endpoint_inventory`, `endpoint_blocklist`, `diff_firmware`, `dex_metadata`, `dex_code`,
+`list_packs`, `query_debugger`, `list_dir`, `inspect_data`, `decode_file_range`, `probe_compression`, `file_layout`,
 `inspect_raw_code`, `inspect_sleigh`, `pyinstaller_archive`, `wasm_module`) or the `debug` tools.
 
 File tools that only read the files they name (`list_dir`, `carve`, `fs_list`, `file_layout`, `decode_file_range`,
-`probe_compression`, `archive_inventory`, `endpoint_inventory`, `dex_metadata`, `dex_code`, `inspect_data`,
-`inspect_raw_code`, `inspect_sleigh`, `pyinstaller_archive`, `wasm_module`, `list_packs`) carry the MCP read-only
-annotation and are closed-world; `query_debugger` is read-only and open-world. `fs_extract` and
+`probe_compression`, `archive_inventory`, `endpoint_inventory`, `diff_firmware`, `dex_metadata`, `dex_code`,
+`inspect_data`, `inspect_raw_code`, `inspect_sleigh`, `pyinstaller_archive`, `wasm_module`, `list_packs`) carry the
+MCP read-only annotation (`diff_firmware` writes only to a private scratch directory it removes) and are closed-world; `query_debugger` is read-only and open-world. `fs_extract` and
 `write_decoded_range` are marked as writing new files, and `endpoint_blocklist` as replacing the file it names.
 The `debug` tools' annotations are described with those tools below.
 
@@ -526,6 +526,17 @@ capture-to-send call paths, and what reaches each capture (program start, timer,
 native libraries merged through JNI; the report has `input` instead of `target`) or a directory (one page of
 programs and APKs with init `.rc`, systemd and init.d boot starts; `cursor`, `max_files`, `timeout_ms`). See
 [privacy surface](privacy-surface.md).
+`diff_firmware` (*experimental*) compares two versions of an update: `path` (older) and `other` (newer), each a
+file or directory, with `image_offset`/`image_length`, `inner` and `as_raw` per side (`other_` forms for the newer
+one; `other_as_raw` defaults to `as_raw` only when that has no `length`). Components (an executable, a Raw image,
+decoded container streams, ESP partitions, a filesystem's changed files, embedded images) are paired and compared:
+digests and container facts, files by SHA-256, and per changed code image functions with match method and
+confidence, strings, versions, endpoints, lock mechanisms, integrity checks and capture sources added or removed.
+`component` with `list` (`changed`, `added`, `removed`, `unchanged`, `strings`, `endpoints`, `files`;
+`offset`/`limit` up to 500) pages one part, and with `function` diffs one function with addresses normalised.
+`timeout_ms` (default 60000, at most 600000) and `max_images` (default 8, at most 64) bound the work;
+`not_compared` lists what they left out. Results stay within 56,000 JSON bytes. See
+[firmware version diffing](firmware-diffing.md).
 `build_info` returns `{go, rust}`: Go build info (toolchain version, main package and module, dependency modules with
 `=>` replacements, build settings, and a cross-check of the version against the pclntab layout) and cargo-auditable
 `.dep-v0` packages. Each is `null` when absent, or has `status` `present` or `unreadable` with a `reason`. `offset`/

@@ -429,6 +429,19 @@ tree, disk, FAT volume or UEFI container, which `fs_list` does not read, every c
 container. Each image's notes count what was left out. It extracts nothing.
 See [the MCP reference](mcp.md#inputs-paging-and-decompiler-tokens) and [known limits](known-limits.md#analysis).
 
+## Firmware version diffing
+
+`diff_firmware` (MCP `carve` group, *experimental*) compares two versions of a device update: a vendor container
+whose compressed images it decodes and opens as Cortex-M code, an ESP32/ESP8266 flash dump by partition, a
+filesystem image, APK or directory by file, or two executables. Components are paired across versions (files by
+path, partitions by label, streams by order and size), files are compared by SHA-256 and changed programs taken
+apart in turn. For each changed code image it reports functions changed, added and removed with the
+`transfer_annotations` match method and confidence, completed by pairing identical and address-normalised bodies
+so that code which only moved is not reported, and the strings, version identifiers, endpoints, lock mechanisms,
+integrity checks and capture sources one version has and the other lacks. A component id pages one part or diffs
+one function instruction by instruction. Time, images analysed and bytes read are budgeted, and whatever a budget
+leaves out is listed. See [firmware version diffing](firmware-diffing.md).
+
 ## Endpoint inventory
 
 `endpoint_inventory` (MCP `carve` group) lists the network endpoints a binary, an APK or DEX file, or an extracted

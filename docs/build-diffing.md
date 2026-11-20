@@ -5,6 +5,8 @@ you have already analyzed over to another build of the same program: version N+1
 Functions are matched one-to-one across the two builds, each match with a method and a confidence, and every
 saved annotation of the source build is placed at its counterpart in the target or reported as not transferred
 with the reason. `diff_builds` remains the quick report of what changed; this is the tool that moves your work.
+To compare two whole update files (containers, flash partitions, filesystems and the programs inside them), see
+[firmware version diffing](firmware-diffing.md), which builds on this matching.
 
 ## Matching
 

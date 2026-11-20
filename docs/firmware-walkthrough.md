@@ -240,6 +240,23 @@ role. Without an SVD map only DHCSR, DAUTHCTRL and AIRCR writes are known; impor
 so that unique-ID, OTP and option-byte registers are recognised. See [lock mechanisms](lock-mechanisms.md) and
 [CMSIS-SVD peripheral maps](peripheral-maps.md).
 
+## 8. Compare with the next update
+
+When the vendor ships a new update file, `diff_firmware` (group `carve`) says what it changes without repeating
+these steps by hand. It finds the compressed image in each file, decodes the newer one with the parameters that
+decoded the older one, opens both at their load address and compares them:
+
+```json
+{"path": "/work/update/update.bin", "other": "/work/update-next/update.bin"}
+```
+
+The component `stream:0` reports the container facts that differ (payload length, decoded size, whether the
+record's checksum still verifies), then the functions changed, added and removed with how each was matched, the
+strings and version identifiers, endpoints, lock mechanisms and integrity checks one version has and the other
+lacks. Code that only moved is not reported. `next` names the call that shows the first changed function
+instruction by instruction; ask for any other with `component` and `function`. See
+[firmware version diffing](firmware-diffing.md).
+
 ## When a step does not work
 
 - **No `compressed_component_candidate` hint.** The record may be elsewhere or absent. Look at `file_layout`'s

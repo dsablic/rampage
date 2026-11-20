@@ -66,7 +66,10 @@ These are design facts, not measured advantages.
   REA waits for Ghidra's import and auto-analysis.
 - **Output shaped for context.** Every rampage tool has a size cap, pages large results with explicit cursors
   and totals, and declares a result size Claude Code will display whole. Tools are grouped, so a session lists
-  47 tools at first (104 with every group, in 1.8.0) and enables the rest on demand.
+  47 tools at first (105 with every group) and enables the rest on demand.
+- **Update diffing.** `diff_firmware` compares two vendor update files in one call, through containers, flash
+  partitions and filesystems down to the programs inside; Ghidra's Version Tracking and BinDiff compare one pair of
+  programs the user has already extracted and imported.
 - **One install.** rampage is two native executables (`rampage` and `rampage-worker`) with Ghidra's processor
   specifications bundled. Ghidra and REA need a JVM and a Ghidra install; REA also needs Node.
 - **Shared annotations.** Names, types, comments and findings go into a log beside the binary that the MCP

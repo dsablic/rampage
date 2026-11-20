@@ -194,6 +194,11 @@ Areas marked *experimental* may change in any release; see the [stability policy
   firmware tree names, `endpoint_blocklist` writes them as a router blocklist, and `privacy_surface` maps what a
   program, an Android app or a whole extracted tree can capture, where it can send it and what starts it at boot.
   See [how to check what a device records and where it sends it](docs/device-privacy-check.md).
+- **Update diffing (experimental):** `diff_firmware` compares two versions of a device update in one call, whatever
+  their form (update containers, ESP flash dumps, filesystem images, APKs, executables, directories): components
+  and files added, removed or changed, and per changed program the functions (matched, with confidence), strings,
+  versions, endpoints, lock mechanisms and integrity checks that differ, with moved code not reported as change.
+  See [firmware version diffing](docs/firmware-diffing.md).
 - **Library identification and detection:** FLIRT/FunctionID-style signatures with bundled databases, user PAT
   and Ghidra FID input, fuzzy candidates, packer/compiler detection (including signatures converted from Detect It
   Easy), encrypted or packed code detection that keeps discovery out of it, YARA, a capa subset, capability tags
