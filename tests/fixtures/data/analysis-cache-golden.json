@@ -98,6 +98,8 @@
     "firmware/raw-cortex-m-svd-volatile.elf": "703ce170d653fd412f112c95ef9caffa8a57408bc535bc67653a77f7ea1fee67",
     "firmware/raw-cortex-m-svd.elf": "8bd4b6d8d33eb6b68efca43dbefc488315e988342ce33e42db91350fcba03b0d",
     "firmware/raw-cortex-m-tables.elf": "29f9d16c285f7b1b0b4b5d0d9e7314e9d44790e37166c0a7112e4fe91022895e",
+    "firmware/raw-cortex-m-update-v1.elf": "2d7640de55f5b7e2ee8eee676dee2b3f4bb7da6a9a01d196d1802c881525dc3a",
+    "firmware/raw-cortex-m-update-v2.elf": "ba64bce63cb98e92570e3f3b8a126bfa2b423f41c73259ff459562f07d491f15",
     "firmware/raw-cortex-m.elf": "2333c917e494c8173e8678528f0b374ac0129df44910bb52b5645f82ec9c701b",
     "firmware/tail-calls-stripped.elf": "e9f682942f0375142e36e527b5c056b2de2c06a7f2e8a1778cd44ed82b489d6d",
     "firmware/tail-calls.elf": "e9f682942f0375142e36e527b5c056b2de2c06a7f2e8a1778cd44ed82b489d6d",
