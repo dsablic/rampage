@@ -7,6 +7,7 @@ use crate::args::DecodeFileArgs;
 use crate::args::ImportDebugLayoutsArgs;
 use crate::args::InspectDataArgs;
 use crate::args::InspectRawArgs;
+use crate::args::StoreArgs;
 use crate::args::{
     AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
@@ -143,6 +144,7 @@ impl RootCommand {
             Self::Pack(action) => Command::Packs { action },
             Self::Workflow(WorkflowCommand::Run(args)) => Command::Report(args),
             Self::Server(ServerCommand::Serve(args)) => Command::Mcp(args),
+            Self::Server(ServerCommand::Store(args)) => Command::Store(args),
             Self::Managed(ManagedCommand::Inspect(args)) => {
                 if args.il.is_some() {
                     return Err(
@@ -380,4 +382,7 @@ pub(crate) enum ServerCommand {
     /// Serve the Model Context Protocol over stdin/stdout for AI agents. Lists the core tools and enable_tools,
     /// which adds the other groups; RAMPAGE_MCP_TOOLS=all or a comma-separated list of groups serves more at once
     Serve(McpArgs),
+    /// Show what the persistent analysis store (RAMPAGE_ANALYSIS_CACHE) holds by kind (discovery, decompile), its
+    /// size and bound; --clear deletes it
+    Store(StoreArgs),
 }

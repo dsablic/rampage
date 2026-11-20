@@ -686,6 +686,13 @@ pub(crate) struct ImportPdbNamesArgs {
 }
 
 #[derive(Args)]
+pub(crate) struct StoreArgs {
+    /// Delete the store file (and its write-ahead log); later opens analyse afresh and start a new one
+    #[arg(long)]
+    pub(crate) clear: bool,
+}
+
+#[derive(Args)]
 pub(crate) struct McpArgs {
     /// List every tool group from the start, for clients that do not refresh their tool list
     #[arg(long)]

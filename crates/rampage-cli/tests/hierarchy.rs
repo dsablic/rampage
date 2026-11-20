@@ -1551,3 +1551,41 @@ fn primary_help_lists_only_nouns_and_all_legacy_forms_remain_accepted() {
         assert!(help.lines().any(|line| line.split_whitespace().next() == Some(verb)), "{args:?}: {help}");
     }
 }
+
+#[test]
+fn server_store_reports_and_clears_the_analysis_store() {
+    let root = FixtureDirectory::new("store");
+    let store = root.0.join("store.sqlite");
+    let with_store = |value: &str, args: &[&str]| {
+        let output = Command::cargo_bin("rampage")
+            .unwrap()
+            .env_remove("RAMPAGE_PACKS")
+            .env("RAMPAGE_ANALYSIS_CACHE", value)
+            .args(args)
+            .write_stdin("")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        output
+    };
+    let path = store.to_str().unwrap();
+    let report = |args: &[&str]| -> Value { serde_json::from_slice(&with_store(path, args).stdout).unwrap() };
+    let empty = report(&["--json", "server", "store"]);
+    assert_eq!(empty["enabled"], true);
+    assert_eq!(empty["kinds"], serde_json::json!([]));
+    let elf = fixture("hello-x64.elf");
+    with_store(path, &["function", "list", &elf]);
+    with_store(path, &["function", "decompile", &elf, "--at", "add"]);
+    let filled = report(&["--json", "server", "store"]);
+    let kinds = filled["kinds"].as_array().unwrap();
+    let entries = |kind: &str| kinds.iter().find(|row| row["kind"] == kind).map(|row| row["entries"].clone());
+    assert_eq!(entries("discovery"), Some(Value::from(1)), "{filled}");
+    assert_eq!(entries("decompile"), Some(Value::from(1)), "{filled}");
+    let text = String::from_utf8(with_store(path, &["server", "store"]).stdout).unwrap();
+    assert!(text.contains("discovery") && text.contains("decompile"), "{text}");
+    let cleared = report(&["--json", "server", "store", "--clear"]);
+    assert!(cleared["cleared_bytes"].as_u64().unwrap() > 0, "{cleared}");
+    assert!(!store.exists());
+    let disabled: Value = serde_json::from_slice(&with_store("off", &["--json", "server", "store"]).stdout).unwrap();
+    assert_eq!(disabled, serde_json::json!({ "enabled": false }));
+}

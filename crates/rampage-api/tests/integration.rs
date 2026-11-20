@@ -37,6 +37,7 @@ mod debug_writes;
 mod debugger;
 mod debugger_capture;
 mod decompile;
+mod decompile_cache;
 mod decompile_firmware;
 mod decompiler_abi;
 mod decompiler_globals;

@@ -544,6 +544,11 @@ impl Project {
         let options = slot.options.clone().unwrap_or_else(|| default_options(&self.binary));
         crate::debug_type_import::validate_replay_source(self, &annotations)?;
         crate::debug_type_import::validate_options(&annotations, &options)?;
+        // Every check above still ran: a stored result replaces only the decompilation itself.
+        let stored = crate::decompile_cache::Entry::new(self, slot.worker.as_ref(), &options, &annotations, start);
+        if let Some(hit) = stored.as_ref().and_then(crate::decompile_cache::Entry::load) {
+            return Ok(hit);
+        }
         let (annotations, automatic_limitations) =
             crate::propagation::lazy_context(self, &mut slot, &options, &annotations, start, cancellation)?;
         let name = self.function_name_in(&annotations, start);
@@ -559,6 +564,9 @@ impl Project {
                 isolated::decompile(self, &annotations, &options, &config, Some((start, name)), cancellation)?;
             crate::propagation::append_limitations(&mut result.structure, automatic_limitations);
             result.recovery_status = result.structure.recovery_status();
+            if let Some(stored) = &stored {
+                stored.store(&result);
+            }
             return Ok(result);
         }
         if cancellation.load(std::sync::atomic::Ordering::Relaxed) {
@@ -637,7 +645,7 @@ impl Project {
         crate::propagation::append_limitations(&mut structure, limitations);
         crate::propagation::append_limitations(&mut structure, automatic_limitations);
         let variables = crate::variables::descriptors(&structure);
-        Ok(Decompilation {
+        let result = Decompilation {
             address: start,
             name,
             code,
@@ -646,7 +654,12 @@ impl Project {
             recovery_status: structure.recovery_status(),
             structure,
             variables,
-        })
+        };
+        drop(slot);
+        if let Some(stored) = &stored {
+            stored.store(&result);
+        }
+        Ok(result)
     }
 
     /// Builds a decompiler over the program's loadable segments and registers the names rampage knows, so calls

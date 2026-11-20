@@ -3524,6 +3524,47 @@ pub fn packs_list(out: &mut impl Write, options: &Options) -> Result<()> {
     Ok(())
 }
 
+/// `server store`: what the persistent analysis store holds, or with `clear` deletes it.
+pub fn analysis_store(out: &mut impl Write, clear: bool, options: &Options) -> Result<()> {
+    let Some(store) = rampage_api::AnalysisStore::from_env() else {
+        if options.json {
+            return write_json(out, &serde_json::json!({ "enabled": false }));
+        }
+        writeln!(
+            out,
+            "analysis store: disabled (set {}=on or a file path; release builds use the default file)",
+            rampage_api::ANALYSIS_CACHE_VARIABLE
+        )?;
+        return Ok(());
+    };
+    if clear {
+        let removed = store.clear().map_err(anyhow::Error::msg)?;
+        if options.json {
+            return write_json(
+                out,
+                &serde_json::json!({ "enabled": true, "path": store.path(), "cleared_bytes": removed }),
+            );
+        }
+        writeln!(out, "analysis store: {} cleared ({removed} bytes removed)", store.path().display())?;
+        return Ok(());
+    }
+    let report = store.inspect().map_err(anyhow::Error::msg)?;
+    if options.json {
+        let mut value = serde_json::to_value(&report)?;
+        value["enabled"] = serde_json::Value::Bool(true);
+        return write_json(out, &value);
+    }
+    writeln!(out, "analysis store: {}", report.path)?;
+    writeln!(out, "  file:  {} bytes on disk; bound {} bytes of entries", report.file_bytes, report.max_bytes)?;
+    if report.kinds.is_empty() {
+        writeln!(out, "  empty")?;
+    }
+    for kind in &report.kinds {
+        writeln!(out, "  {:<10} {:>8} entries {:>14} bytes", kind.kind, kind.entries, kind.bytes)?;
+    }
+    Ok(())
+}
+
 pub fn packs_check(out: &mut impl Write, directory: &Path, options: &Options) -> Result<()> {
     let pack = Packs::check(directory);
     if options.json {

@@ -2476,6 +2476,74 @@ impl Annotations {
         self.addresses.get(name).copied()
     }
 
+    /// SHA-256 over every annotation a decompilation can read: all fields except comments and the findings
+    /// ledger, which no decompilation reads. Part of a stored decompilation's key (`crate::decompile_cache`), so
+    /// any other edit, anywhere, makes every stored decompilation of this binary miss. The destructuring names
+    /// every field, so a new one does not compile until it is placed in the fingerprint or knowingly left out.
+    pub(crate) fn decompile_fingerprint(&self) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let Self {
+            revision: _,
+            names_revision: _,
+            patches_revision: _,
+            names,
+            // Derived from `names`.
+            addresses: _,
+            name_owners: _,
+            comments: _,
+            signatures,
+            types,
+            type_library,
+            debug_types,
+            globals,
+            local_names,
+            local_types,
+            type_hints,
+            data_types,
+            operand_types,
+            patches,
+            findings: _,
+            finding_high: _,
+            peripherals,
+            // Derived from `peripherals`.
+            peripheral_map: _,
+            patch_validator: _,
+            patch_freezer: _,
+            unpatched_view: _,
+            done: _,
+            undone: _,
+            log: _,
+            held: _,
+            checked_reads: _,
+            managed_layouts: _,
+        } = self;
+        let mut hash = Sha256::new();
+        for (field, values) in [
+            ("names", names),
+            ("signatures", signatures),
+            ("types", types),
+            ("type_library", type_library),
+            ("debug_types", debug_types),
+            ("globals", globals),
+            ("local_names", local_names),
+            ("local_types", local_types),
+            ("type_hints", type_hints),
+            ("data_types", data_types),
+            ("operand_types", operand_types),
+            ("patches", patches),
+            ("peripherals", peripherals),
+        ] {
+            hash.update(field.as_bytes());
+            hash.update((values.len() as u64).to_le_bytes());
+            for (address, value) in values {
+                hash.update(address.to_le_bytes());
+                hash.update((value.len() as u64).to_le_bytes());
+                hash.update(value.as_bytes());
+            }
+        }
+        hash.finalize().into()
+    }
+
     pub fn names(&self) -> &BTreeMap<u64, String> {
         &self.names
     }

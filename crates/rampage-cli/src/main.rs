@@ -19,6 +19,7 @@ use rampage_arch::Arch;
 
 use crate::args::ArchiveInventoryArgs;
 use crate::args::ImportDebugLayoutsArgs;
+use crate::args::StoreArgs;
 use crate::args::{
     AnnotateBatchArgs, AtArgs, AuditArgs, CapaArgs, CarveArgs, CheckNamesArgs, CommentArgs, CompareArgs,
     ComparePointersArgs, CompareRuntimeArgs, CorrelateArgs, DebugTypesArgs, DecompileArgs, DetectArgs, DirectoryArgs,
@@ -293,6 +294,8 @@ enum Command {
     /// which adds the other groups; RAMPAGE_MCP_TOOLS=all or a comma-separated list of groups serves more at once
     #[command(hide = true)]
     Mcp(McpArgs),
+    #[command(skip)]
+    Store(StoreArgs),
     /// List code and data cross-references to or from an address, symbol or function
     #[command(hide = true)]
     Xrefs(XrefsArgs),
@@ -646,6 +649,7 @@ fn main() -> ExitCode {
             report::report(&mut out, workflow, &file, &report_options, &options)
         }
         Command::Mcp(..) => unreachable!("handled before opening stdout"),
+        Command::Store(StoreArgs { clear }) => commands::analysis_store(&mut out, clear, &options),
     }
     .and_then(|()| out.flush().map_err(Into::into));
 
@@ -679,6 +683,7 @@ fn without_one_image(command: &Command) -> Option<&'static str> {
         Command::InspectRaw(..) => "binary inspect-raw",
         Command::Packs { .. } => "packs",
         Command::Mcp(..) => "mcp (pass image_offset to each tool call instead)",
+        Command::Store(..) => "server store (does not open an image)",
         Command::QueryDebugger(..) => "runtime debugger query (does not open an image)",
         Command::Correlate(..) => "correlate",
         Command::CompareRuntime(..) => "compare-runtime",

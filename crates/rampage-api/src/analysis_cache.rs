@@ -14,6 +14,7 @@
 //! disable the store for that project with `Project::set_analysis_store(None)`.
 
 mod codec;
+mod derived;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -66,11 +67,55 @@ pub struct AnalysisStoreStatus {
     pub key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Stored decompilations this project used, wrote or refused; absent until one was looked up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decompilations: Option<DerivedCounts>,
 }
 
 impl AnalysisStoreStatus {
     pub(crate) fn new(state: &'static str, key: Option<String>, detail: Option<String>) -> Self {
-        Self { state, key, detail }
+        Self { state, key, detail, decompilations: None }
+    }
+}
+
+/// How a project's lookups of one kind of derived fact went.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct DerivedCounts {
+    /// Served from the store.
+    pub hits: u64,
+    /// Computed fresh (no entry, or a refused one) and written.
+    pub stored: u64,
+    /// An entry existed but failed validation, so it was computed fresh.
+    pub rejected: u64,
+    /// Why the latest refused entry was refused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_rejection: Option<String>,
+}
+
+/// The counts behind [`DerivedCounts`], as a project updates them.
+#[derive(Debug, Default)]
+pub(crate) struct DerivedCounters {
+    pub(crate) hits: std::sync::atomic::AtomicU64,
+    pub(crate) stored: std::sync::atomic::AtomicU64,
+    rejected: std::sync::atomic::AtomicU64,
+    last_rejection: std::sync::Mutex<Option<String>>,
+}
+
+impl DerivedCounters {
+    pub(crate) fn reject(&self, reason: String) {
+        self.rejected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        *self.last_rejection.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(reason);
+    }
+
+    pub(crate) fn counts(&self) -> Option<DerivedCounts> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let counts = DerivedCounts {
+            hits: self.hits.load(Relaxed),
+            stored: self.stored.load(Relaxed),
+            rejected: self.rejected.load(Relaxed),
+            last_rejection: self.last_rejection.lock().unwrap_or_else(|poison| poison.into_inner()).clone(),
+        };
+        (counts != DerivedCounts::default()).then_some(counts)
     }
 }
 
@@ -174,41 +219,10 @@ impl AnalysisStore {
 
     /// The entry for `key`, verified. Never writes beyond refreshing the entry's use time.
     pub(crate) fn load(&self, key: &str) -> Lookup {
-        match std::fs::symlink_metadata(&self.path) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Lookup::Absent,
-            Err(error) => return Lookup::Rejected(format!("store unreadable: {error}")),
-            Ok(metadata) if !metadata.is_file() => return Lookup::Rejected("store is not a regular file".into()),
-            Ok(_) => {}
-        }
-        let read = || -> rusqlite::Result<Result<Option<Row>, String>> {
-            let connection = self.connect(READ_TIMEOUT)?;
-            match check_schema(&connection)? {
-                Ok(()) => {}
-                // A store another process is creating right now has no entries yet.
-                Err(Schema::Missing) => return Ok(Ok(None)),
-                Err(Schema::Foreign) => return Ok(Err("store has another schema".into())),
-            }
-            // One statement reads one consistent snapshot, so a concurrent writer is seen entirely or not at all.
-            let row = connection
-                .query_row("SELECT payload, sha256 FROM analysis WHERE key = ?1", [key], |row| {
-                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
-                })
-                .optional()?;
-            if row.is_some() {
-                // Best effort and never waiting: a busy store only leaves the use time stale.
-                connection.busy_timeout(Duration::ZERO)?;
-                let _ = connection.execute(
-                    "UPDATE analysis SET last_used = ?2 WHERE key = ?1 AND last_used < ?3",
-                    params![key, now(), now() - 60_000_000_000],
-                );
-            }
-            Ok(Ok(row))
-        };
-        let (payload, digest) = match read() {
-            Ok(Ok(Some(row))) => row,
-            Ok(Ok(None)) => return Lookup::Absent,
-            Ok(Err(reason)) => return Lookup::Rejected(reason),
-            Err(error) => return Lookup::Rejected(format!("store unreadable: {error}")),
+        let (payload, digest) = match self.read_row(Table::Analysis, key) {
+            Ok(Some(row)) => row,
+            Ok(None) => return Lookup::Absent,
+            Err(reason) => return Lookup::Rejected(reason),
         };
         if payload.len() as u64 > self.max_bytes {
             return Lookup::Rejected("entry exceeds the store's size bound".into());
@@ -228,10 +242,91 @@ impl AnalysisStore {
             return Err("analysis has decode gates the store cannot represent".into());
         }
         let payload = codec::encode(key, program);
+        self.write_row(Table::Analysis, key, &payload)
+    }
+
+    /// The derived fact of `kind` stored under `key`, verified: its checksum, its framing (the embedded key and
+    /// kind) and its size bound. The body is returned undecoded; its owner decodes and validates it.
+    pub(crate) fn load_derived(&self, kind: DerivedKind, key: &str) -> DerivedLookup {
+        let (payload, digest) = match self.read_row(Table::Derived, key) {
+            Ok(Some(row)) => row,
+            Ok(None) => return DerivedLookup::Absent,
+            Err(reason) => return DerivedLookup::Rejected(reason),
+        };
+        if payload.len() as u64 > self.max_bytes || payload.len() > MAX_DERIVED_BYTES {
+            return DerivedLookup::Rejected("entry exceeds the store's size bound".into());
+        }
+        if Sha256::digest(&payload).as_slice() != digest.as_slice() {
+            return DerivedLookup::Rejected("entry checksum mismatch".into());
+        }
+        match derived::unframe(kind, key, payload) {
+            Ok(body) => DerivedLookup::Hit(body),
+            Err(codec::Malformed(reason)) => DerivedLookup::Rejected(format!("entry malformed: {reason}")),
+        }
+    }
+
+    /// Stores a derived fact's `body` of `kind` under `key`, then evicts least recently used entries (analyses and
+    /// derived facts together) beyond the size bound.
+    pub(crate) fn store_derived(&self, kind: DerivedKind, key: &str, body: &[u8]) -> Result<(), String> {
+        let payload = derived::frame(kind, key, body);
+        if payload.len() > MAX_DERIVED_BYTES {
+            return Err(format!("entry of {} bytes exceeds the derived-entry bound", payload.len()));
+        }
+        self.write_row(Table::Derived, key, &payload)
+    }
+
+    /// The stored row for `key`, read in one statement (one consistent snapshot), with its use time refreshed
+    /// without waiting. `Ok(None)` when the file or the entry is absent; `Err` when it cannot be trusted or read.
+    fn read_row(&self, table: Table, key: &str) -> Result<Option<Row>, String> {
+        match std::fs::symlink_metadata(&self.path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("store unreadable: {error}")),
+            Ok(metadata) if !metadata.is_file() => return Err("store is not a regular file".into()),
+            Ok(_) => {}
+        }
+        let read = || -> rusqlite::Result<Result<Option<Row>, String>> {
+            let connection = self.connect(READ_TIMEOUT)?;
+            match check_schema(&connection)? {
+                Ok(()) => {}
+                // A store another process is creating right now has no entries yet.
+                Err(Schema::Missing) => return Ok(Ok(None)),
+                Err(Schema::Foreign) => return Ok(Err("store has another schema".into())),
+            }
+            let name = table.name();
+            // One statement reads one consistent snapshot, so a concurrent writer is seen entirely or not at all.
+            // A store an older build created has no derived table yet, so it holds no derived entries.
+            let row = match connection
+                .query_row(&format!("SELECT payload, sha256 FROM {name} WHERE key = ?1"), [key], |row| {
+                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })
+                .optional()
+            {
+                Err(rusqlite::Error::SqliteFailure(_, Some(message))) if message.starts_with("no such table") => None,
+                other => other?,
+            };
+            if row.is_some() {
+                // Best effort and never waiting: a busy store only leaves the use time stale.
+                connection.busy_timeout(Duration::ZERO)?;
+                let _ = connection.execute(
+                    &format!("UPDATE {name} SET last_used = ?2 WHERE key = ?1 AND last_used < ?3"),
+                    params![key, now(), now() - 60_000_000_000],
+                );
+            }
+            Ok(Ok(row))
+        };
+        match read() {
+            Ok(result) => result,
+            Err(error) => Err(format!("store unreadable: {error}")),
+        }
+    }
+
+    /// Writes one row, then evicts the least recently used rows of both tables beyond the size bound, in one
+    /// immediate transaction that waits at most [`WRITE_TIMEOUT`] for another writer.
+    fn write_row(&self, table: Table, key: &str, payload: &[u8]) -> Result<(), String> {
         if payload.len() as u64 > self.max_bytes / 2 {
             return Err(format!("entry of {} bytes exceeds half the store's size bound", payload.len()));
         }
-        let digest = Sha256::digest(&payload).to_vec();
+        let digest = Sha256::digest(payload).to_vec();
         self.prepare().map_err(|error| format!("store not written: {error}"))?;
         let write = || -> rusqlite::Result<Result<(), String>> {
             let mut connection = self.connect(WRITE_TIMEOUT)?;
@@ -240,39 +335,40 @@ impl AnalysisStore {
             // WAL lets readers proceed during a write; each process sees whole transactions only.
             let _: String = connection.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
             let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            transaction.execute_batch(
-                "CREATE TABLE IF NOT EXISTS meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);
-                 CREATE TABLE IF NOT EXISTS analysis (
-                     key TEXT PRIMARY KEY,
-                     payload BLOB NOT NULL,
-                     sha256 BLOB NOT NULL,
-                     bytes INTEGER NOT NULL,
-                     last_used INTEGER NOT NULL
-                 );",
-            )?;
+            transaction.execute_batch(CREATE_TABLES)?;
             transaction.execute("INSERT OR IGNORE INTO meta (name, value) VALUES ('schema', ?1)", [SCHEMA])?;
             if check_schema(&transaction)?.is_err() {
                 return Ok(Err("store has another schema; not written".into()));
             }
             transaction.execute(
-                "INSERT OR REPLACE INTO analysis (key, payload, sha256, bytes, last_used) VALUES (?1, ?2, ?3, ?4, ?5)",
+                &format!(
+                    "INSERT OR REPLACE INTO {} (key, payload, sha256, bytes, last_used) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    table.name()
+                ),
                 params![key, payload, digest, payload.len() as i64, now()],
             )?;
             let mut evict = Vec::new();
             {
-                let mut statement = transaction
-                    .prepare("SELECT key, bytes FROM analysis ORDER BY key = ?1 DESC, last_used DESC, key")?;
-                let mut rows = statement.query([key])?;
+                // The row just written is kept first, then the rest by most recent use, across both tables.
+                let mut statement = transaction.prepare(
+                    "SELECT tab, key, bytes FROM (
+                         SELECT 'analysis' AS tab, key, bytes, last_used FROM analysis
+                         UNION ALL SELECT 'derived' AS tab, key, bytes, last_used FROM derived
+                     ) ORDER BY (tab = ?1 AND key = ?2) DESC, last_used DESC, tab, key",
+                )?;
+                let mut rows = statement.query(params![table.name(), key])?;
                 let mut total = 0u64;
                 while let Some(row) = rows.next()? {
-                    total = total.saturating_add(row.get::<_, i64>(1)?.max(0) as u64);
+                    total = total.saturating_add(row.get::<_, i64>(2)?.max(0) as u64);
                     if total > self.max_bytes {
-                        evict.push(row.get::<_, String>(0)?);
+                        let tab: String = row.get(0)?;
+                        let old: String = row.get(1)?;
+                        evict.push((if tab == "analysis" { Table::Analysis } else { Table::Derived }, old));
                     }
                 }
             }
-            for old in &evict {
-                transaction.execute("DELETE FROM analysis WHERE key = ?1", [old])?;
+            for (tab, old) in &evict {
+                transaction.execute(&format!("DELETE FROM {} WHERE key = ?1", tab.name()), [old])?;
             }
             transaction.commit()?;
             if !evict.is_empty() {
@@ -286,6 +382,185 @@ impl AnalysisStore {
             Err(error) => Err(format!("store not written: {error}")),
         }
     }
+
+    /// What the store holds: entry counts and payload bytes per kind, and the file sizes. Reads only.
+    pub fn inspect(&self) -> Result<StoreReport, String> {
+        let mut report = StoreReport {
+            path: self.path.display().to_string(),
+            max_bytes: self.max_bytes,
+            file_bytes: 0,
+            kinds: vec![],
+        };
+        for path in self.files() {
+            if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+                report.file_bytes += metadata.len();
+            }
+        }
+        match std::fs::symlink_metadata(&self.path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(report),
+            Err(error) => return Err(format!("store unreadable: {error}")),
+            Ok(metadata) if !metadata.is_file() => return Err("store is not a regular file".into()),
+            Ok(_) => {}
+        }
+        let read = || -> rusqlite::Result<Result<Vec<KindReport>, String>> {
+            let connection = self.connect(READ_TIMEOUT)?;
+            match check_schema(&connection)? {
+                Ok(()) => {}
+                Err(Schema::Missing) => return Ok(Ok(Vec::new())),
+                Err(Schema::Foreign) => return Ok(Err("store has another schema".into())),
+            }
+            let mut kinds = Vec::new();
+            let (entries, bytes): (i64, i64) =
+                connection.query_row("SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM analysis", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?;
+            kinds.push(KindReport {
+                kind: "discovery".into(),
+                entries: entries.max(0) as u64,
+                bytes: bytes.max(0) as u64,
+            });
+            let statement = connection.prepare(
+                "SELECT substr(key, 1, instr(key, ':') - 1) AS kind, COUNT(*), COALESCE(SUM(bytes), 0)
+                 FROM derived GROUP BY kind ORDER BY kind",
+            );
+            let mut statement = match statement {
+                Ok(statement) => statement,
+                Err(rusqlite::Error::SqliteFailure(_, Some(message))) if message.starts_with("no such table") => {
+                    return Ok(Ok(kinds));
+                }
+                Err(error) => return Err(error),
+            };
+            let mut rows = statement.query([])?;
+            while let Some(row) = rows.next()? {
+                let kind: String = row.get(0)?;
+                let entries: i64 = row.get(1)?;
+                let bytes: i64 = row.get(2)?;
+                kinds.push(KindReport {
+                    kind: if kind.is_empty() { "unknown".into() } else { kind },
+                    entries: entries.max(0) as u64,
+                    bytes: bytes.max(0) as u64,
+                });
+            }
+            Ok(Ok(kinds))
+        };
+        match read() {
+            Ok(Ok(kinds)) => {
+                report.kinds = kinds;
+                Ok(report)
+            }
+            Ok(Err(reason)) => Err(reason),
+            Err(error) => Err(format!("store unreadable: {error}")),
+        }
+    }
+
+    /// Deletes the store file with its write-ahead log and shared-memory index, returning the bytes removed.
+    /// Always safe: the store is a cache, and every later open analyses afresh and starts a new file.
+    pub fn clear(&self) -> Result<u64, String> {
+        let mut removed = 0;
+        for path in self.files() {
+            match std::fs::symlink_metadata(&path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("{}: {error}", path.display())),
+                Ok(metadata) if !metadata.is_file() => {
+                    return Err(format!("{} is not a regular file; not removed", path.display()));
+                }
+                Ok(metadata) => {
+                    std::fs::remove_file(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+                    removed += metadata.len();
+                }
+            }
+        }
+        Ok(removed)
+    }
+
+    /// The database file, then SQLite's `-wal` and `-shm` files beside it.
+    fn files(&self) -> [PathBuf; 3] {
+        ["", "-wal", "-shm"].map(|suffix| PathBuf::from(format!("{}{suffix}", self.path.display())))
+    }
+}
+
+/// The two kinds of rows: discovery results, and the facts derived over them.
+#[derive(Clone, Copy)]
+enum Table {
+    Analysis,
+    Derived,
+}
+
+impl Table {
+    fn name(self) -> &'static str {
+        match self {
+            Table::Analysis => "analysis",
+            Table::Derived => "derived",
+        }
+    }
+}
+
+const CREATE_TABLES: &str = "CREATE TABLE IF NOT EXISTS meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+     CREATE TABLE IF NOT EXISTS analysis (
+         key TEXT PRIMARY KEY,
+         payload BLOB NOT NULL,
+         sha256 BLOB NOT NULL,
+         bytes INTEGER NOT NULL,
+         last_used INTEGER NOT NULL
+     );
+     CREATE TABLE IF NOT EXISTS derived (
+         key TEXT PRIMARY KEY,
+         payload BLOB NOT NULL,
+         sha256 BLOB NOT NULL,
+         bytes INTEGER NOT NULL,
+         last_used INTEGER NOT NULL
+     );";
+
+/// A fact derived over discovery and kept beside it, each kind with its own version and key. A derived key is
+/// `<kind>:<hex>`, so the store can report what it holds by kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DerivedKind {
+    /// One function's decompilation (see `crate::decompile_cache`).
+    Decompile,
+}
+
+impl DerivedKind {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            DerivedKind::Decompile => "decompile",
+        }
+    }
+
+    pub(crate) fn tag(self) -> u8 {
+        match self {
+            DerivedKind::Decompile => 1,
+        }
+    }
+}
+
+pub(crate) enum DerivedLookup {
+    Hit(Vec<u8>),
+    Absent,
+    /// The entry or the file failed validation, or the store could not be read.
+    Rejected(String),
+}
+
+/// The most bytes one derived entry may hold, whatever the store's bound.
+const MAX_DERIVED_BYTES: usize = 32 * 1024 * 1024;
+
+/// What `rampage server store` reports.
+#[derive(Debug, Clone, Serialize)]
+pub struct StoreReport {
+    pub path: String,
+    pub max_bytes: u64,
+    /// The database file with its write-ahead log and shared-memory index.
+    pub file_bytes: u64,
+    pub kinds: Vec<KindReport>,
+}
+
+/// One kind of stored entry.
+#[derive(Debug, Clone, Serialize)]
+pub struct KindReport {
+    /// `discovery`, or a derived kind such as `decompile`.
+    pub kind: String,
+    pub entries: u64,
+    /// Stored payload bytes, which the size bound counts.
+    pub bytes: u64,
 }
 
 enum Schema {
@@ -392,16 +667,21 @@ pub(crate) fn key(binary: &Binary, binding: Option<&str>) -> Option<String> {
 /// earlier build wrote, even one that forgot to bump [`ANALYSIS_VERSION`].
 fn executable_stamp() -> &'static str {
     static STAMP: OnceLock<String> = OnceLock::new();
-    STAMP.get_or_init(|| {
-        let Ok(path) = std::env::current_exe() else { return "unknown".into() };
-        let Ok(metadata) = std::fs::metadata(&path) else { return format!("{}", path.display()) };
-        let modified = metadata
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0, |elapsed| elapsed.as_nanos());
-        format!("{}\0{}\0{modified}", path.display(), metadata.len())
+    STAMP.get_or_init(|| match std::env::current_exe() {
+        Ok(path) => file_stamp(&path),
+        Err(_) => "unknown".into(),
     })
+}
+
+/// A file's path, length and modification time: what changes when it is rebuilt or replaced.
+pub(crate) fn file_stamp(path: &Path) -> String {
+    let Ok(metadata) = std::fs::metadata(path) else { return format!("{}", path.display()) };
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |elapsed| elapsed.as_nanos());
+    format!("{}\0{}\0{modified}", path.display(), metadata.len())
 }
 
 #[cfg(all(test, unix))]

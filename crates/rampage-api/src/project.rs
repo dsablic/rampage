@@ -175,6 +175,8 @@ pub struct Project {
     analysis_store_status: OnceLock<crate::AnalysisStoreStatus>,
     /// A fresh analysis still to be written to the store, after the analysis itself is published.
     analysis_store_pending: std::sync::Mutex<Option<PendingStore>>,
+    /// How this project's lookups of stored decompilations went (see `crate::decompile_cache`).
+    pub(crate) decompile_counts: crate::analysis_cache::DerivedCounters,
     /// Loads and stores at constant addresses, scanned once on the first peripheral query.
     pub(crate) mmio_accesses: OnceLock<Result<Arc<crate::peripherals::AccessIndex>, String>>,
     /// Cortex-M Raw only: flash words code reads or writes through a formed address, scanned once per project for
@@ -447,6 +449,7 @@ impl Project {
             analysis_store: RwLock::new(crate::AnalysisStore::from_env()),
             analysis_store_status: OnceLock::new(),
             analysis_store_pending: std::sync::Mutex::new(None),
+            decompile_counts: Default::default(),
             mmio_accesses: OnceLock::new(),
             flash_data_accesses: OnceLock::new(),
         }
@@ -462,7 +465,9 @@ impl Project {
     /// The persistent store's part in this project's analysis, without starting it.
     pub fn analysis_store_status(&self) -> crate::AnalysisStoreStatus {
         if let Some(status) = self.analysis_store_status.get() {
-            return status.clone();
+            let mut status = status.clone();
+            status.decompilations = self.decompile_counts.counts();
+            return status;
         }
         let state = if self.analysis_store.read().unwrap_or_else(|poison| poison.into_inner()).is_none() {
             "disabled"
@@ -472,6 +477,15 @@ impl Project {
             "pending"
         };
         crate::AnalysisStoreStatus::new(state, None, None)
+    }
+
+    /// The store and this project's analysis key, for facts derived over the analysis (see
+    /// `crate::decompile_cache`): present once analysis ran with a store for an input it can key, so never for a
+    /// capture, a byte-patched view or carried Raw seeds.
+    pub(crate) fn derived_store(&self) -> Option<(Arc<crate::AnalysisStore>, String)> {
+        let key = self.analysis_store_status.get()?.key.clone()?;
+        let store = self.analysis_store.read().unwrap_or_else(|poison| poison.into_inner()).clone()?;
+        Some((store, key))
     }
 
     /// Discovery through the persistent store: a verified entry for this exact input, else a fresh analysis that

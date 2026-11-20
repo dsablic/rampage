@@ -32,6 +32,8 @@ mod decode_codecs;
 mod decode_content;
 mod decoder;
 mod decompile;
+mod decompile_cache;
+pub use decompile_cache::{DECOMPILE_CACHE_VERSION, decompilation_digest};
 pub mod derived_cache;
 mod detect;
 mod diagnostics;
@@ -110,7 +112,7 @@ use rampage_loaders::LoadError;
 
 pub use analysis_cache::{
     ANALYSIS_CACHE_MAX_VARIABLE, ANALYSIS_CACHE_VARIABLE, ANALYSIS_VERSION, AnalysisStore, AnalysisStoreStatus,
-    DEFAULT_MAX_BYTES, program_digest,
+    DEFAULT_MAX_BYTES, DerivedCounts, KindReport, StoreReport, program_digest,
 };
 pub use android::{DexMetadataQuery, MAX_DEX_PAGE, dex_metadata};
 pub use android_code::{DexCodeQuery, MAX_CODE_PAGE, dex_code};
