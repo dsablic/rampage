@@ -41,7 +41,8 @@ Raw selector for headerless code (as `raw` on `binary_info`). The `other_` forms
 Components pair by id: files by path, ESP partitions by label, compressed streams by their order in the file (a
 stream whose count changed pairs with the next one of similar size), and the only code image or filesystem left on
 each side with the other's (a plain image against the same image compressed, an extracted directory against an
-image), with the id `OLD~NEW`. A stream in the newer file is decoded with the older one's codec parameters and load
+image), with the id `OLD~NEW`. `paired_by` says which rule made each pair (`id`, `stream_order_size`,
+`only_remaining_code` or `only_remaining_tree`); a code pair whose roles differ carries a note. A stream in the newer file is decoded with the older one's codec parameters and load
 address first, so both are read alike.
 
 ## What a result says
@@ -168,12 +169,16 @@ then:
 - leftovers that alone reference one string in each version pair (`unique_string`, 0.8); strings here include the
   NUL-terminated ones firmware keeps beside its code;
 - a pair the matcher calls changed is unchanged (`same_after_normalisation`) when its normalised listings are
-  equal.
+  equal;
+- a pair the matcher calls unchanged is changed when it loads from a literal pool and its normalised listings
+  differ: a pool after the body is not part of the bytes the matcher compares, so a constant changed there (a
+  timeout, a limit, a key length) shows only through the load.
 
 A normalised listing reads the function block by block (so padding and literals between blocks are skipped),
 names call and branch targets by the older version's function names (a callee that only moved reads the same; one
-only in the newer version reads `new:NAME`), turns other mapped addresses into `<addr>`, replaces a PC-relative
-operand by what it loads, and reads a `movw`/`movt` pair that forms an address as that address with the string
+only in the newer version reads `new:NAME`), turns other mapped addresses into `<addr>`, appends to each
+literal load the value it loads (`ldr r2, <addr> = 0x54321`; a function by its label, a string by its text, another
+address as `<addr>`), and reads a `movw`/`movt` pair that forms an address as that address with the string
 there. Width suffixes (`.n`, `.w`) are dropped. Strings, endpoints and version identifiers are compared as sets, so
 moving one is no change.
 
@@ -207,12 +212,13 @@ version (a function only there is listed alone, `only_in: new`).
 
 The CRC length grew from 1020 to 1532 bytes, a debugger check was added before it, the version string changed and
 the call to `legacy_selftest` is gone; the calls to `crc32_compute` and `uart_puts` read the same although the code
-around them moved. `decompile` names both sides when they
-open by path; a program inside a filesystem image must be extracted with `fs_extract` first.
+around them moved. Each call recomputes the matching of the image pair, so it costs about what the summary spent on
+that image. `decompile` names both sides when they open by path; a program inside a filesystem image must be extracted with `fs_extract` first.
 
 ## Paging and drill-down
 
-The summary keeps 20 rows per list, each list with its total. `component` alone returns that pair in full, with
+The summary keeps 20 rows per list, each list with its total, and names at most 20 components (the rest are
+counted). `components_total` and `not_compared_total` count those lists before any cut. `component` alone returns that pair in full, with
 everything taken apart inside it as `inside`. With `list` it pages one list with `offset` and `limit` (default 100,
 at most 500): `changed`, `added`, `removed` or `unchanged` functions, `strings`, `endpoints` (with a `change` of
 `added` or `removed` on each row) or `files`. Each call recomputes just the path to that component; no state is kept
@@ -223,15 +229,18 @@ longest lists first, and says so in `truncated`.
 
 | Argument | Default | At most | What it bounds |
 | --- | --- | --- | --- |
-| `timeout_ms` | 60000 | 600000 | the call, checked between images, files and stages |
+| `timeout_ms` | 60000 | 600000 | the call, checked before each image, file, decode and stage (soft: see below) |
 | `max_images` | 8 | 64 | changed code images analysed |
 
-and fixed: 2 GiB read from the inputs (digests, decoding, listing and reading filesystem entries), the first 64 MiB
+and fixed, not arguments: 2 GiB read from the inputs (digests, decoding, listing and reading filesystem entries), the first 64 MiB
 of a file searched for components, 16 compressed streams and 16 embedded images per side, 2000 changed files read
 per filesystem pair, changed files over 256 MiB not taken apart, three filesystem levels, images over 64 MiB not
-analysed, 4000 functions per side compared by listing, 50 lock mechanisms per side. Filesystems are read through the
-same readers as `fs_list`, with one compression-ratio meter per image, so a decompression bomb stops at 1000:1. One
-image's analysis is not interrupted once it has started. Whatever a budget left out is in `not_compared`; ask for it
+analysed, 4000 functions per side compared by listing, 50 lock mechanisms per side, 20,000 scratch files and
+2,000 component pairs per call. Filesystems are read through the
+same readers as `fs_list`, with one compression-ratio meter per image, so a decompression bomb stops at 1000:1. The deadline is soft: one
+image's analysis is not interrupted once it has started, so a large image begun just before the deadline overruns it
+by its analysis time (tens of seconds for a 20 MB program in a debug build); decodes and probes get what is left of
+the deadline as their own. Whatever a budget left out is in `not_compared`; ask for it
 with `component`, or raise the budget.
 
 Files from inside an image are written to a private scratch directory (named by the tool, never by the image's
@@ -248,7 +257,10 @@ paths) and removed when the call ends.
 - Headerless code other than Cortex-M (MIPS, Xtensa without an ESP header, other Sleigh profiles) needs `as_raw`.
 - Container payloads decode with the codecs `probe_compression` tries (LZSS variants, LZ4 block); other codecs or
   encrypted payloads compare by digest. When the ring fill of an LZSS stream cannot be told apart, the decoded bytes
-  that read best as a Cortex-M image are taken, and the stream says `dictionary_fill_ambiguous`.
+  that read best as a Cortex-M image are taken; the stream says `dictionary_fill_ambiguous`, and `fill_choice`
+  lists each fill tried with its scores and the one chosen.
+- When the images differ but no compared function, string, endpoint, lock or check does, the component and the
+  summary say the change lies outside the compared functions (data, padding, or code discovery did not reach).
 - Secure-boot signatures are not verified; ESP image checksums, SHA-256 digests and the partition table MD5 are.
 - Directories compare regular files; symlinks are not followed or listed.
 

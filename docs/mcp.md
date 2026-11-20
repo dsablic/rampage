@@ -534,7 +534,8 @@ digests and container facts, files by SHA-256, and per changed code image functi
 confidence, strings, versions, endpoints, lock mechanisms, integrity checks and capture sources added or removed.
 `component` with `list` (`changed`, `added`, `removed`, `unchanged`, `strings`, `endpoints`, `files`;
 `offset`/`limit` up to 500) pages one part, and with `function` diffs one function with addresses normalised.
-`timeout_ms` (default 60000, at most 600000) and `max_images` (default 8, at most 64) bound the work;
+`timeout_ms` (default 60000, at most 600000; soft, one image's analysis is not interrupted) and `max_images`
+(default 8, at most 64) bound the work, with a fixed 2 GiB read budget;
 `not_compared` lists what they left out. Results stay within 56,000 JSON bytes. See
 [firmware version diffing](firmware-diffing.md).
 `build_info` returns `{go, rust}`: Go build info (toolchain version, main package and module, dependency modules with

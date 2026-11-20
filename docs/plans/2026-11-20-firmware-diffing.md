@@ -35,7 +35,7 @@ that differ), `components` (each pair with its `id`, `status`, `role`, facts per
 `files` or `android` as it applies), `not_compared` (what was left out and why), `budget` (what was spent and why
 work stopped) and `next` (calls for detail).
 
-Drill-down stays stateless: `component` (an `id` from a result) returns that pair in full; with `list`
+Drill-down stays stateless (a function view recomputes the matching of its image pair each time): `component` (an `id` from a result) returns that pair in full; with `list`
 (`changed`, `added`, `removed`, `unchanged`, `strings`, `endpoints`, `files`) it pages one list with
 `offset`/`limit`; with `function` (an old address or name, or `new:` and a new one) it diffs one function. Every
 drill-down call recomputes only the path to that component, so no session state is kept and results do not depend
@@ -64,7 +64,9 @@ In order, the first that applies:
 A stream on the newer side is decoded first with the older side's codec parameters and base (the probe runs only if
 they fail), so both versions are read the same way. When the probe's best candidates differ only in an exercised
 ring fill (a tie it cannot break), each is decoded and the one whose bytes read best as a Cortex-M image wins
-(plausible vector-table words, then the base-candidate score); the component says `dictionary_fill_ambiguous`.
+(plausible vector-table words, then the base-candidate score). Only a real tie (more than one candidate decoded)
+is reported: the component says `dictionary_fill_ambiguous` and `fill_choice` lists each fill with its scores and
+the one chosen; the newer side, decoded with that choice, says so too.
 
 ## Pairing components
 
@@ -72,7 +74,9 @@ By id first: filesystem entries by path (`PARENT::PATH::ID`), ESP partitions by 
 partition table and bootloader by role. Streams whose count changed pair in order with the next one of comparable
 decoded size (within 2x). Then the only code image left on each side pairs with the other (a plain image and the
 same image compressed), and likewise the only filesystem (an extracted directory and an image); such pairs get the
-id `OLD~NEW`. The rest are added or removed.
+id `OLD~NEW`. The rest are added or removed. Each pair says how it was made in `paired_by` (`id`,
+`stream_order_size`, `only_remaining_code`, `only_remaining_tree`), and a code pair whose roles differ (an embedded
+ELF against a decoded stream) carries a note saying so.
 
 ## Functions: only real changes
 
@@ -85,25 +89,34 @@ function whose literal pool now points elsewhere or one whose padding realigned 
 3. Leftovers pair by a string (six characters or more, found anywhere in the image, including NUL-terminated
    strings beside the code) that exactly one leftover function references in each version.
 4. A pair `build_match` calls changed is unchanged when its normalised listings are equal.
+5. A pair `build_match` calls unchanged is changed when its older function loads from a literal pool (a data
+   reference into code) and the normalised listings differ: a pool after the body is not part of the bytes or the
+   masked hash, so a constant changed there is seen only through the load.
 
 Normalisation reads each function block by block (padding and literals between blocks are skipped; a listing stops
 at a string discovery ran into), drops `.n`/`.w` width suffixes, names call and branch targets by the older
 version's function names (a callee that only moved reads the same), turns other mapped addresses into `<addr>`,
-replaces a PC-relative operand by what it loads (the string or name), and reads a `movw`/`movt` pair that forms an
-address as that address. The function view uses the same normalisation, so what it shows is what made a function
+replaces a PC-relative operand by `<ref>`, appends to each literal load (`ldr`, `l32r` from the image) the value it
+loads (a function's label, a string's text, `<addr>` for another address in the image, else the number), and reads a
+`movw`/`movt` pair that forms an address as that address. (The first version of this note said a PC-relative
+operand was replaced by what it loads; it named only the pool slot, so a changed pool constant read as no change.) The function view uses the same normalisation, so what it shows is what made a function
 changed.
 
 ## Bounds
 
 Every call has a time budget (`timeout_ms`, default 60 s, at most 600 s), a number of changed code images it
-analyses (`max_images`, default 8, at most 64) and a byte budget for reading (2 GiB: file digests, decoding,
-listing and reading filesystem entries). Filesystem reads go through `rampage-unpack` with one budget and one
+analyses (`max_images`, default 8, at most 64) and a fixed byte budget for reading (2 GiB: file digests, decoding,
+listing and reading filesystem entries; not an argument). The deadline is soft: it is checked before each image,
+file, decode, probe and analysis stage, and decodes and probes get what is left of it as their own deadline, but
+one image's analysis is not interrupted once started, so a large image begun just before the deadline can overrun
+it by its analysis time. Filesystem reads go through `rampage-unpack` with one budget and one
 compression-ratio meter per image, so a decompression bomb stops at the 1000:1 limit. Further caps: 16 compressed
 streams and 16 embedded images per side, 64 MiB read per side for layouts, 2000 files written to scratch space per
 filesystem pair, changed files over 256 MiB not taken apart, three filesystem levels, 64 MiB per analysed image,
-4000 functions per side compared by listing, 50 lock mechanisms per side, result JSON halved list by list until it
-fits 56,000 bytes (each list keeps its total). A single image's analysis is not interrupted; the deadline is checked
-between images, files and stages. Everything skipped is in `not_compared` with the reason, and `budget.stopped` says
+4000 functions per side compared by listing, 50 lock mechanisms per side, 20,000 scratch files and 2,000 component
+pairs per call (an empty file counts), at most 20 summary lines naming a component, and result JSON halved list
+by list until it fits 56,000 bytes (each list keeps its total; `components_total` and `not_compared_total` count
+those two lists before any cut). Everything skipped is in `not_compared` with the reason, and `budget.stopped` says
 which budget ran out.
 
 Scratch files live in a private directory created for the call (mode 0700 on Unix) and removed when it ends;
@@ -117,7 +130,8 @@ budget depends on the machine.
 
 `crates/rampage-api/tests/firmware_diff.rs`, on fixtures built for it: a Cortex-M3 pair from one source
 (`tests/fixtures/firmware/raw-cortex-m-update.c`; v2 adds an endpoint, grows the CRC-covered region, adds a debugger
-check and drops a function) as flat binaries, as ELF and wrapped in the LZSS container the triage tests use; a
+check and drops a function) as flat binaries, as ELF and wrapped in the LZSS container the triage tests use; a literal-pool pair
+(`raw-cortex-m-literals.c`, built without movw/movt; v2 changes one pool constant and no instruction byte); a
 SquashFS pair (`build-fsimages-update.sh`) and the same trees as directories; the ESP32 flash fixture and its next
 version (`esp32-app-v2.bin` placed in a copy with a new partition); an APK pair from the DEX test kit. Each is also
 compared with itself and the other way round. Hostile inputs: random bytes, mutated and truncated images, a
