@@ -7630,6 +7630,51 @@
       },
       "subcommand_required": false
     },
+    "rampage server store": {
+      "arguments": {
+        "--arch": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--clear": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--image-length": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--image-offset": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--json": {
+          "type": "flag",
+          "repeated": false,
+          "required": false
+        },
+        "--pack": {
+          "type": "value",
+          "repeated": true,
+          "required": false
+        },
+        "--raw-json": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        },
+        "--raw-request": {
+          "type": "value",
+          "repeated": false,
+          "required": false
+        }
+      },
+      "subcommand_required": false
+    },
     "rampage signatures": {
       "arguments": {
         "--arch": {

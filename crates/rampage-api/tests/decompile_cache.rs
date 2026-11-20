@@ -169,6 +169,35 @@ fn stored_decompilations_equal_fresh_ones() {
     }
 }
 
+/// The in-process engine is reused across functions while the annotations stay the same, and a stored result is
+/// served to every later process, so a decompilation must not depend on what that engine decompiled before: each
+/// function decompiled alone, in a project of its own, equals the same function decompiled after all the others.
+/// One fixture also carries a signature, which feeds callers' argument recovery and type propagation.
+#[test]
+fn a_decompilation_does_not_depend_on_what_the_engine_decompiled_before() {
+    let scratch = Scratch::new();
+    for (label, input) in inputs(&scratch) {
+        let sequential = input.open(None);
+        let addresses = functions(&sequential);
+        let signature = (label == "bin/hello-x64-dyn.elf").then(|| addresses[addresses.len() / 2]);
+        let annotate = |project: &Project| {
+            if let Some(address) = signature {
+                project.set_signature(address, Some("int4 annotated(int4 a, int4 b);")).unwrap();
+            }
+        };
+        annotate(&sequential);
+        let after_others = decompile_all(&sequential, &addresses);
+        drop(sequential);
+        for (index, &address) in addresses.iter().enumerate() {
+            scratch.forget_edits(input.path());
+            let alone = input.open(None);
+            annotate(&alone);
+            assert_eq!(decompile_all(&alone, &[address]), [after_others[index].clone()], "{label} {address:#x}");
+        }
+        scratch.forget_edits(input.path());
+    }
+}
+
 /// After each edit, a stored project answers as a fresh project with the same annotations: comments and
 /// findings keep every stored result; a rename or signature misses and recomputes; undo restores the hits.
 #[test]
@@ -332,9 +361,10 @@ fn damaged_misfiled_and_foreign_rows_are_refused_and_decompiled_afresh() {
 }
 
 /// Once an image has been through patch authority (a patch, or a check such as `integrity_checks`), tools read
-/// an effective view that is rebuilt after every edit. Each view is keyed by its own bytes, so a view without
-/// patches shares the original's discovery and decompilations, an edit reuses them instead of re-analysing, and a
-/// patched view gets entries of its own; every answer equals a storeless project's.
+/// an effective view that is rebuilt after every edit. Views are keyed by their own bytes, apart from the original
+/// (their loader skips the recovery an ordinary open runs), so the first view over some bytes analyses afresh and
+/// every later view over the same bytes, after an edit, reuses its discovery and decompilations. Every answer
+/// equals a storeless project's.
 #[test]
 fn effective_views_reuse_stored_analysis_across_edits() {
     const MAIN_PATCH: (u64, [u8; 5], [u8; 5]) = (0x100191e, [0xb8, 5, 0, 0, 0], [0xb8, 7, 0, 0, 0]);
@@ -345,10 +375,11 @@ fn effective_views_reuse_stored_analysis_across_edits() {
     let reference_copy = scratch.0.join("reference.elf");
     std::fs::copy(&path, &reference_copy).unwrap();
     let reference = Input::Native(reference_copy).open(None);
+    let digest = |project: &Project| rampage_api::program_digest(project).unwrap();
 
     let project = input.open(Some(&store));
     let main = project.resolve("main").unwrap();
-    let original_digest = rampage_api::program_digest(&project).unwrap();
+    digest(&project);
     let original_key = project.analysis_store_status().key.unwrap();
     let decompiled = |project: &Project| serde_json::to_value(project.decompile(main).unwrap()).unwrap();
     let original_main = decompiled(&project);
@@ -357,30 +388,26 @@ fn effective_views_reuse_stored_analysis_across_edits() {
     let (address, original, replacement) = MAIN_PATCH;
     let patched = project.patch_bytes(address, &original, &replacement, false).unwrap().project;
     let reference_patched = reference.patch_bytes(address, &original, &replacement, false).unwrap().project;
-    assert_eq!(
-        rampage_api::program_digest(&patched).unwrap(),
-        rampage_api::program_digest(&reference_patched).unwrap()
-    );
-    let patched_status = patched.analysis_store_status();
-    assert_ne!(patched_status.key.as_deref(), Some(original_key.as_str()));
+    assert_eq!(digest(&patched), digest(&reference_patched));
+    let patched_key = patched.analysis_store_status().key.unwrap();
+    assert_ne!(patched_key, original_key);
     assert_eq!(decompiled(&patched), decompiled(&reference_patched));
     assert!(decompiled(&patched)["code"].as_str().unwrap().contains("return 7;"));
 
-    // Undo the patch: the view has no patches but stays a view; it shares the original's entries.
+    // Undo the patch: the view has no patches but stays a view, keyed apart from the original.
     patched.undo().unwrap();
     reference_patched.undo().unwrap();
     let view = patched.effective_snapshot().unwrap();
     let reference_view = reference_patched.effective_snapshot().unwrap();
-    assert_eq!(rampage_api::program_digest(&view).unwrap(), original_digest);
+    assert_eq!(digest(&view), digest(&reference_view));
     let status = view.analysis_store_status();
-    assert_eq!((status.state, status.key.as_deref()), ("hit", Some(original_key.as_str())), "{status:?}");
-    assert_eq!(decompiled(&view), original_main);
+    assert_eq!(status.state, "miss", "{status:?}");
+    let view_key = status.key.unwrap();
+    assert_ne!(view_key, original_key, "a view never shares the original's entry");
     assert_eq!(decompiled(&view), decompiled(&reference_view));
-    assert_eq!(
-        view.analysis_store_status().decompilations.unwrap().hits,
-        2,
-        "both decompilations of the view came from the store"
-    );
+    assert_eq!(decompiled(&view), original_main, "this fixture has nothing to recover: same C as the original");
+    let counts = view.analysis_store_status().decompilations.unwrap();
+    assert_eq!((counts.stored, counts.hits), (1, 1), "{counts:?}");
 
     // A comment builds a new view over the same bytes: discovery and the decompilation come from the store.
     view.comment(main, Some("analyst note")).unwrap();
@@ -388,21 +415,19 @@ fn effective_views_reuse_stored_analysis_across_edits() {
     let next = view.effective_snapshot().unwrap();
     let reference_next = reference_view.effective_snapshot().unwrap();
     assert!(!Arc::ptr_eq(&next, &view), "an edit builds a new view");
-    assert_eq!(rampage_api::program_digest(&next).unwrap(), original_digest);
-    assert_eq!(next.analysis_store_status().state, "hit");
+    assert_eq!(digest(&next), digest(&reference_next));
+    let status = next.analysis_store_status();
+    assert_eq!((status.state, status.key.as_deref()), ("hit", Some(view_key.as_str())), "{status:?}");
     assert_eq!(decompiled(&next), decompiled(&reference_next));
     assert_eq!(next.analysis_store_status().decompilations.unwrap().hits, 1);
 
-    // Redoing the patch returns to the patched bytes, whose entries were stored above.
-    next.undo().unwrap();
-    next.redo().unwrap();
-    let repatched = next.effective_snapshot().unwrap();
-    assert_eq!(repatched.analysis_store_status().key, None, "analysis has not run on the new view yet");
-    assert_eq!(
-        rampage_api::program_digest(&repatched).unwrap(),
-        rampage_api::program_digest(&reference_patched).unwrap()
-    );
-    assert_eq!(repatched.analysis_store_status().state, "hit");
+    // Patching again returns to the patched bytes, whose entries were stored above.
+    let repatched = next.patch_bytes(address, &original, &replacement, false).unwrap().project;
+    let reference_repatched = reference_next.patch_bytes(address, &original, &replacement, false).unwrap().project;
+    assert_eq!(digest(&repatched), digest(&reference_repatched));
+    assert_eq!(decompiled(&repatched), decompiled(&reference_repatched));
+    let status = repatched.analysis_store_status();
+    assert_eq!((status.state, status.key.as_deref()), ("hit", Some(patched_key.as_str())), "{status:?}");
 }
 
 /// Where a decompilation runs is part of its key: an in-process result is never served to a project whose
@@ -496,35 +521,38 @@ fn the_size_bound_counts_stored_decompilations_with_discovery() {
 #[test]
 fn decompile_cache_golden() {
     let scratch = Scratch::new();
-    let mut digests = serde_json::Map::new();
+    let mut digests = std::collections::BTreeMap::new();
     for (label, input) in inputs(&scratch) {
         let project = input.open(None);
         for address in functions(&project) {
             if let Ok(decompilation) = project.decompile(address) {
-                digests.insert(format!("{label}@{address:#x}"), Value::from(decompilation_digest(&decompilation)));
+                digests.insert(format!("{label}@{address:#x}"), decompilation_digest(&decompilation));
             }
         }
     }
-    let document = json!({ "version": DECOMPILE_CACHE_VERSION, "digests": digests });
-    if std::env::var_os(GOLDEN_UPDATE).is_some() {
-        std::fs::write(GOLDEN, serde_json::to_string_pretty(&document).unwrap() + "\n").unwrap();
-        return;
-    }
-    let recorded: Value = serde_json::from_str(&std::fs::read_to_string(GOLDEN).unwrap()).unwrap();
-    let changed: Vec<&String> = digests
-        .iter()
-        .filter(|(name, digest)| recorded["digests"].get(name.as_str()) != Some(digest))
-        .map(|(name, _)| name)
-        .collect();
-    let recorded_version = recorded["version"].as_u64().unwrap();
+    let recorded: Value = std::fs::read(GOLDEN)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(json!({ "version": 0, "digests": {} }));
+    let recorded_version = recorded["version"].as_u64().unwrap_or(0);
+    let recorded_digests: std::collections::BTreeMap<String, String> =
+        serde_json::from_value(recorded["digests"].clone()).unwrap_or_default();
+    let changed: Vec<&String> =
+        digests.keys().filter(|name| recorded_digests.get(*name).is_some_and(|old| old != &digests[*name])).collect();
     assert!(
         changed.is_empty() || recorded_version != u64::from(DECOMPILE_CACHE_VERSION),
         "decompiler output changed for {changed:?} without a version bump: increment DECOMPILE_CACHE_VERSION in \
          crates/rampage-api/src/decompile_cache.rs, then re-record with {GOLDEN_UPDATE}=1"
     );
+    if std::env::var(GOLDEN_UPDATE).is_ok_and(|value| value == "1") {
+        let document = json!({ "version": DECOMPILE_CACHE_VERSION, "digests": digests });
+        std::fs::write(GOLDEN, serde_json::to_string_pretty(&document).unwrap() + "\n").unwrap();
+        return;
+    }
     assert_eq!(
         recorded_version,
         u64::from(DECOMPILE_CACHE_VERSION),
         "DECOMPILE_CACHE_VERSION changed: re-record the digests with {GOLDEN_UPDATE}=1"
     );
+    assert_eq!(recorded_digests, digests, "fixture set changed: re-record the digests with {GOLDEN_UPDATE}=1");
 }

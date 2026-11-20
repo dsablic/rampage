@@ -61,8 +61,8 @@ pub(crate) struct Entry<'a> {
 
 impl<'a> Entry<'a> {
     /// The entry for decompiling `address` with `options` over `annotations` in `project`, or `None` when the
-    /// project has no store entry identity (no store, a capture, a byte-patched view, carried Raw seeds) or the
-    /// decompiler reads external specifications.
+    /// project has no store entry identity (no store, a capture, carried Raw seeds) or the decompiler reads
+    /// external specifications.
     pub(crate) fn new(
         project: &'a Project,
         worker: Option<&rampage_decompiler::worker::WorkerConfig>,

@@ -1178,10 +1178,7 @@ impl Project {
         let source = Arc::downgrade(self);
         self.annotations.write().expect("annotations lock").set_patch_validator(Arc::new(move |annotations| {
             let source = source.upgrade().ok_or("original patch source is no longer retained")?;
-            if annotations.patches().is_empty() && source.patch_source_sha256.get().is_none() {
-                return Ok(());
-            }
-            source.materialize_patches(annotations).map(|_| ())
+            source.validate_patch_authority(annotations)
         }));
     }
 

@@ -489,14 +489,15 @@ impl Project {
     /// capture or carried Raw seeds.
     pub(crate) fn derived_store(&self) -> Option<(Arc<crate::AnalysisStore>, String)> {
         let key = self.analysis_store_status.get()?.key.clone()?;
-        let store = self.analysis_store.read().unwrap_or_else(|poison| poison.into_inner()).clone()?;
-        Some((store, key))
+        Some((self.analysis_store()?, key))
     }
 
     /// Discovery through the persistent store: a verified entry for this exact input, else a fresh analysis that
     /// is then stored. An effective (byte-patched) view is keyed by its own bytes, which its loader re-read
-    /// (`Project::materialize_patches`), so a view with no patches shares the original's entry and an annotation
-    /// edit, which builds a new view over the same bytes, reuses the analysis instead of rediscovering.
+    /// (`Project::materialize_patches`), under a key of its own ([`crate::analysis_cache::view_key`]): that loader
+    /// skips the recovery an ordinary open runs (stripped Go symbols), so a view's `Binary` can differ from the
+    /// original's over the same bytes. Views over the same bytes share their entry, so an annotation edit, which
+    /// builds a new view, reuses the analysis instead of rediscovering.
     fn discover_through_store(&self, binding: Option<&str>) -> Result<Program, DecoderInitializationError> {
         use crate::AnalysisStoreStatus as Status;
         use crate::analysis_cache::Lookup;
@@ -513,7 +514,12 @@ impl Project {
             let _ = self.analysis_store_status.set(Status::new("disabled", None, None));
             return fresh();
         };
-        let key = if !carried.is_empty() { None } else { crate::analysis_cache::key(&self.binary, binding) };
+        let key = if carried.is_empty() {
+            let key = crate::analysis_cache::key(&self.binary, binding);
+            if self.patch_origin.is_some() { key.as_deref().map(crate::analysis_cache::view_key) } else { key }
+        } else {
+            None
+        };
         let Some(key) = key else {
             let _ = self.analysis_store_status.set(Status::new("unsupported", None, None));
             return fresh();

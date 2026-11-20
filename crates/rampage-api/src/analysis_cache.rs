@@ -352,8 +352,8 @@ impl AnalysisStore {
                 // The row just written is kept first, then the rest by most recent use, across both tables.
                 let mut statement = transaction.prepare(
                     "SELECT tab, key, bytes FROM (
-                         SELECT 'analysis' AS tab, key, bytes, last_used FROM analysis
-                         UNION ALL SELECT 'derived' AS tab, key, bytes, last_used FROM derived
+                         SELECT 'analysis' AS tab, key, length(payload) AS bytes, last_used FROM analysis
+                         UNION ALL SELECT 'derived' AS tab, key, length(payload) AS bytes, last_used FROM derived
                      ) ORDER BY (tab = ?1 AND key = ?2) DESC, last_used DESC, tab, key",
                 )?;
                 let mut rows = statement.query(params![table.name(), key])?;
@@ -410,17 +410,18 @@ impl AnalysisStore {
                 Err(Schema::Foreign) => return Ok(Err("store has another schema".into())),
             }
             let mut kinds = Vec::new();
-            let (entries, bytes): (i64, i64) =
-                connection.query_row("SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM analysis", [], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                })?;
+            let (entries, bytes): (i64, i64) = connection.query_row(
+                "SELECT COUNT(*), COALESCE(SUM(length(payload)), 0) FROM analysis",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
             kinds.push(KindReport {
                 kind: "discovery".into(),
                 entries: entries.max(0) as u64,
                 bytes: bytes.max(0) as u64,
             });
             let statement = connection.prepare(
-                "SELECT substr(key, 1, instr(key, ':') - 1) AS kind, COUNT(*), COALESCE(SUM(bytes), 0)
+                "SELECT substr(key, 1, instr(key, ':') - 1) AS kind, COUNT(*), COALESCE(SUM(length(payload)), 0)
                  FROM derived GROUP BY kind ORDER BY kind",
             );
             let mut statement = match statement {
@@ -473,9 +474,10 @@ impl AnalysisStore {
         Ok(removed)
     }
 
-    /// The database file, then SQLite's `-wal` and `-shm` files beside it.
+    /// SQLite's `-wal` and `-shm` files, then the database file. `clear` removes them in this order, so a removal
+    /// that fails part way never leaves an old write-ahead log beside the next new database.
     fn files(&self) -> [PathBuf; 3] {
-        ["", "-wal", "-shm"].map(|suffix| PathBuf::from(format!("{}{suffix}", self.path.display())))
+        ["-wal", "-shm", ""].map(|suffix| PathBuf::from(format!("{}{suffix}", self.path.display())))
     }
 }
 
@@ -661,6 +663,16 @@ pub(crate) fn key(binary: &Binary, binding: Option<&str>) -> Option<String> {
     hash.update(Sha256::digest(file));
     hash.update(binding.unwrap_or("-").as_bytes());
     Some(rampage_arch::hex::bytes(&hash.finalize()))
+}
+
+/// The key for an effective (byte-patched) view whose `Binary` has the input key `key`. A view's loader skips the
+/// recovery an ordinary open runs (`Binary::from_owned_native_bytes` recovers no stripped Go symbols), so a view
+/// and the original over the same bytes can analyse differently and never share an entry; views share theirs.
+pub(crate) fn view_key(key: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"rampage-effective-view\0");
+    hash.update(key.as_bytes());
+    rampage_arch::hex::bytes(&hash.finalize())
 }
 
 /// The running executable's path, length and modification time, so a rebuilt binary never reads entries an
