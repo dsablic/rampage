@@ -1484,6 +1484,7 @@ impl Project {
                         }
                         steps = steps.saturating_add(cost);
                         pc = target;
+                        windows.returned_from_model();
                         continue;
                     }
                     Err(stop) => {
@@ -1771,8 +1772,16 @@ fn width_mask(width: u32) -> u64 {
 }
 
 /// User operations without effect on a single thread's results.
-const NO_EFFECT_USER_OPS: [&str; 12] = [
+const NO_EFFECT_USER_OPS: [&str; 19] = [
     "setISAMode",
+    // Xtensa memory and instruction barriers, ordered already on one thread.
+    "memw",
+    "extw",
+    "excw",
+    "isync",
+    "rsync",
+    "esync",
+    "dsync",
     "LOCK",
     "UNLOCK",
     "HintPreloadData",

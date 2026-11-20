@@ -279,7 +279,7 @@ impl Binary {
         let (raw, data) = crate::RawCodeImage::admit(image)?;
         let arch = raw.profile().arch();
         let len = data.len();
-        Ok(Self {
+        let mut binary = Self {
             format: Format::Raw,
             arch,
             entry: raw.entry(),
@@ -319,7 +319,12 @@ impl Binary {
             xtensa_call0: false,
             raw: Some(raw),
             image: 0..len,
-        })
+        };
+        // An ESP image states its chip; other Raw Xtensa code is judged by its prologues.
+        if arch == Arch::Xtensa && binary.raw.as_ref().is_some_and(|raw| raw.esp().is_none()) {
+            binary.xtensa_call0 = xtensa_prologue_vote(&binary);
+        }
+        Ok(binary)
     }
 
     /// This Raw image's interpretation over replacement owned bytes of exactly the same length (a byte patch):
@@ -366,15 +371,11 @@ impl Binary {
         self.format == Format::Raw && !self.raw.as_ref().is_some_and(|raw| raw.profile().native_decoder())
     }
 
-    /// An Xtensa image for the call0 ABI (ESP8266): an ELF whose `.xtensa.info` says so, or a Raw image whose
-    /// interpretation does (an ESP8266 app image). Otherwise Xtensa code is taken to use register windows (ESP32).
+    /// An Xtensa image for the call0 ABI (ESP8266): an ELF whose `.xtensa.info` says so, a Raw image whose
+    /// interpretation does (an ESP8266 app image), or, where neither says, code whose prologues vote for it
+    /// ([`xtensa_prologue_vote`]). Otherwise Xtensa code is taken to use register windows (ESP32).
     pub fn xtensa_call0(&self) -> bool {
         self.arch == Arch::Xtensa && (self.xtensa_call0 || self.raw.as_ref().is_some_and(|raw| raw.xtensa_call0()))
-    }
-
-    /// Sets whether this Xtensa image uses the call0 ABI, for an interpretation that decides it from the code.
-    pub fn set_xtensa_call0(&mut self, call0: bool) {
-        self.xtensa_call0 = call0;
     }
 
     /// An ARMv6-M/ARMv7-M(E)/ARMv8-M image: all Thumb, no A32 state, M-profile instruction set. A Raw project with
@@ -969,7 +970,9 @@ impl Binary {
         let details = crate::details::collect(&parsed);
         let elf_m_profile = format == Format::Elf && arch == Arch::Arm && elf_m_profile(&parsed, &mut warnings);
         let mips_got = crate::slots::mips_got(&parsed);
-        let xtensa_call0 = format == Format::Elf && arch == Arch::Xtensa && elf_xtensa_call0(&parsed);
+        let xtensa_abi_note =
+            (format == Format::Elf && arch == Arch::Xtensa).then(|| elf_xtensa_call0(&parsed)).flatten();
+        let xtensa_call0 = xtensa_abi_note == Some(true);
         let overlay = crate::details::overlay(&parsed, image_bytes, image.start as u64).unwrap_or_else(|warning| {
             warnings.push(warning);
             None
@@ -1018,6 +1021,9 @@ impl Binary {
             image,
         };
         binary.code_ranges = code_ranges(&binary.sections, &binary.segments);
+        if arch == Arch::Xtensa && xtensa_abi_note.is_none() {
+            binary.xtensa_call0 = xtensa_prologue_vote(&binary);
+        }
         if elf_m_profile {
             // An M-profile processor has no A32 state: all of its executable memory is Thumb, `$d` islands and code
             // no `$t` or odd symbol covers alike, as a Cortex-M Raw image's code regions are.
@@ -1806,15 +1812,34 @@ fn arm_mapping_symbol(name: &str) -> Option<char> {
     (matches!(kind, 'a' | 't' | 'x' | 'd') && (rest.is_empty() || rest.starts_with('.'))).then_some(kind)
 }
 
-/// Whether an Xtensa ELF was built for the call0 ABI (ESP8266's LX106 has no register windows): its `.xtensa.info`
-/// note says `ABI=` followed by a nonzero value (0 is the windowed ABI). Without the note, whether any discovered
-/// function opens with `entry` decides later ([`Binary::xtensa_call0`] stays false).
-fn elf_xtensa_call0(parsed: &object::File) -> bool {
-    let Some(data) = parsed.section_by_name(".xtensa.info").and_then(|section| section.data().ok()) else {
-        return false;
-    };
+/// What an Xtensa ELF's `.xtensa.info` note says of its ABI: `Some(true)` for call0 (`ABI=` with a nonzero value;
+/// ESP8266's LX106 has no register windows), `Some(false)` for windowed (`ABI=0`), `None` without the note or the
+/// line, when [`xtensa_prologue_vote`] decides.
+fn elf_xtensa_call0(parsed: &object::File) -> Option<bool> {
+    let data = parsed.section_by_name(".xtensa.info").and_then(|section| section.data().ok())?;
     let text = String::from_utf8_lossy(data);
-    text.split(['\n', '\0']).filter_map(|line| line.trim().strip_prefix("ABI=")).any(|value| value.trim() != "0")
+    let value = text.split(['\n', '\0']).find_map(|line| line.trim().strip_prefix("ABI="))?;
+    Some(value.trim() != "0")
+}
+
+/// Whether Xtensa code with nothing saying its ABI is call0: at 4-byte aligned addresses of its executable bytes
+/// (where both ABIs start functions), call0 frame allocations (`addi a1, a1, -N`) outnumber windowed `entry a1, N`
+/// prologues four to one. Literal-pool words can spell either, so neither count alone decides.
+pub(crate) fn xtensa_prologue_vote(binary: &Binary) -> bool {
+    let (mut windowed, mut call0) = (0usize, 0usize);
+    for segment in binary.segments.iter().filter(|segment| segment.perms.execute) {
+        let Some(bytes) = binary.read(segment.address, segment.size.min(segment.file_size)) else { continue };
+        let first = (segment.address.next_multiple_of(4) - segment.address) as usize;
+        for offset in (first..bytes.len().saturating_sub(2)).step_by(4) {
+            let [a, b, c] = [bytes[offset], bytes[offset + 1], bytes[offset + 2]];
+            if a == 0x36 && b & 0xf == 1 && ((u32::from(c) << 4) | u32::from(b >> 4)) >= 2 {
+                windowed += 1;
+            } else if a == 0x12 && b == 0xc1 && c >= 0x80 && c & 0xf == 0 {
+                call0 += 1;
+            }
+        }
+    }
+    call0 > 0 && windowed.saturating_mul(4) < call0
 }
 
 /// Whether an ARM ELF's build attributes name an M-profile CPU; an unreadable section is a warning and not M.

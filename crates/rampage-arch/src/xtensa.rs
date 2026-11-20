@@ -243,8 +243,6 @@ fn decode(bytes: &[u8], address: u32) -> Option<Decoded> {
     let t = ((word >> 4) & 0xf) as u8;
     let s = ((word >> 8) & 0xf) as u8;
     let r = ((word >> 12) & 0xf) as u8;
-    let op1 = (word >> 16) & 0xf;
-    let op2 = (word >> 20) & 0xf;
     let imm8 = (word >> 16) & 0xff;
     let (ar, as_, at) = (Operand::Ar(r), Operand::Ar(s), Operand::Ar(t));
     let pc = address;
@@ -397,8 +395,9 @@ fn decode(bytes: &[u8], address: u32) -> Option<Decoded> {
             next(3, mnemonic, vec![Operand::Fr(t), as_, Operand::Imm(offset.into())], effect)
         }
         4 => {
-            // MAC16: the load forms (op1 0 and 1 with op2 0..=3 in the LDINC/LDDEC groups) update `as`.
-            let effect = if op2 <= 1 && op1 <= 1 { Effect::Writes(s) } else { Effect::None };
+            // MAC16: only its load-and-update forms (LDINC, LDDEC and the MUL*.LDINC/LDDEC operations) write an AR
+            // register, `as`; forgetting `as` after every MAC16 operation is conservative.
+            let effect = Effect::Writes(s);
             next(3, "mac16", vec![Operand::Imm(i64::from(word))], effect)
         }
         5 => {

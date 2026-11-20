@@ -84,14 +84,19 @@ with `"format": "esp"`, which takes every address from its segment headers: give
 ```
 
 Each segment becomes a region at its load address by the chip's memory map: IRAM and flash-mapped IROM code,
-flash-mapped DROM constants, DRAM and RTC memory as RAM with their initial bytes. esptool's padding segments and
+flash-mapped DROM constants, DRAM and RTC memory as RAM with their initial bytes, and the rest of the chip's DRAM
+(`.bss`, the heap) as RAM without bytes, so globals there resolve and `evaluate_function` can use them. A valid
+image needs its checksum and, when one is appended, its SHA-256 to match. esptool's padding segments and
 addresses outside the map are reported and not mapped; segment counts above 16, lengths past the file and
 overlapping segments are refused. The header's entry (`call_start_cpu0` on ESP-IDF) is the entry. `binary_info`
 reports the image under `raw.esp`: chip, ABI, flash mode, size and frequency, every segment with its memory, the
 checksum and appended SHA-256 (each with `valid`), and `esp_app_desc` (project name, version, ESP-IDF version,
 build date and time, secure version, the ELF's SHA-256). An ESP8266 image at the start of a flash dump also maps
 the rest of the flash as IROM at 0x40200000 plus its offset, as the cache does, so its flash code (NONOS SDK
-`irom0` at flash 0x10000, 0x40210000) is in the project. ESP32-family chips without Xtensa cores (C2, C3, C6, H2,
+`irom0` at flash 0x10000, 0x40210000) is in the project; the cache maps only the first 1 MiB, and `raw.esp.notes`
+says when flash past it (or past the profile's 4 MiB) is left out. Plain `binary` bytes of Xtensa code with no
+image header are taken as call0 when their 4-byte aligned frame allocations outnumber `entry` prologues four to
+one, else as windowed. ESP32-family chips without Xtensa cores (C2, C3, C6, H2,
 P4: RISC-V) are refused.
 
 A whole flash dump is not opened as one project. `binary_info` on it (with no `raw`) names what it holds: the

@@ -200,6 +200,18 @@ __attribute__((noinline)) int classify(int code) {
   }
 }
 
+// Recursion whose code after the call is also where the base case branches to: evaluate_function must end a
+// call only on its return, not on reaching the return address.
+static volatile int visits;
+
+__attribute__((noinline)) int walk(int depth) {
+  if (depth > 0) {
+    walk(depth - 1);
+  }
+  visits = visits + depth;
+  return visits;
+}
+
 void app_main(void) {
   uint32_t state[8];
   ets_printf("%s: booting %s\n", TAG, esp_app_desc.project_name);
@@ -214,7 +226,7 @@ void app_main(void) {
   }
   dispatch("status", "now");
   dispatch("report", device_name);
-  uptime_ticks += (uint32_t)classify(scale_add(1, 2, 3));
+  uptime_ticks += (uint32_t)classify(scale_add(1, 2, 3)) + (uint32_t)walk(3);
   ets_delay_us(1000);
 }
 

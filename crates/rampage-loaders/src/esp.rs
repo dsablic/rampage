@@ -23,6 +23,10 @@ pub const DEFAULT_PARTITION_TABLE_OFFSET: u64 = 0x8000;
 const PARTITION_TABLE_BYTES: usize = 0xc00;
 const PARTITION_MAGIC: [u8; 2] = [0xaa, 0x50];
 const PARTITION_MD5_MAGIC: [u8; 2] = [0xeb, 0xeb];
+/// Most bytes one image's SHA-256 covers: no ESP flash maps more than 16 MiB.
+pub const MAX_ESP_HASHED_BYTES: u64 = 16 << 20;
+/// Longest segment a header may state: 16 MiB, the largest flash an image is mapped from.
+const MAX_ESP_SEGMENT_BYTES: u32 = 16 << 20;
 
 /// The chip an image is built for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -79,8 +83,20 @@ impl EspChip {
 
     /// The memory a load address lies in, by the chip's memory map: its name and what a Raw region of it holds.
     pub fn memory(self, address: u64) -> Option<(&'static str, RawRegionKind)> {
+        self.map()
+            .iter()
+            .find(|(start, end, ..)| (*start..*end).contains(&address))
+            .map(|(.., name, kind)| (*name, *kind))
+    }
+
+    /// The chip's main data RAM, where `.bss` and the heap lie past an image's DRAM segments.
+    pub fn dram(self) -> Option<std::ops::Range<u64>> {
+        self.map().iter().find(|(.., name, _)| *name == "dram").map(|(start, end, ..)| *start..*end)
+    }
+
+    fn map(self) -> &'static [(u64, u64, &'static str, RawRegionKind)] {
         use RawRegionKind::{Code, Data, Ram};
-        let map: &[(u64, u64, &str, RawRegionKind)] = match self {
+        match self {
             EspChip::Esp8266 => &[
                 (0x3ffe_8000, 0x4000_0000, "dram", Ram),
                 (0x4010_0000, 0x4011_0000, "iram", Code),
@@ -113,8 +129,7 @@ impl EspChip {
                 (0x600f_e000, 0x6010_0000, "rtc_fast", Code),
             ],
             EspChip::Other => &[],
-        };
-        map.iter().find(|(start, end, ..)| (*start..*end).contains(&address)).map(|(.., name, kind)| (*name, *kind))
+        }
     }
 }
 
@@ -191,6 +206,16 @@ pub struct EspImage {
     pub app_desc: Option<EspAppDesc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bootloader_desc: Option<EspBootloaderDesc>,
+    /// What the reader or the opener left out, such as flash past what the chip's cache maps.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+impl EspImage {
+    /// Whether the image's bytes agree with its checksum and, when one is appended, with its SHA-256.
+    pub fn digests_valid(&self) -> bool {
+        self.checksum.valid && self.sha256.as_ref().is_none_or(|sha| sha.valid)
+    }
 }
 
 fn u16_at(bytes: &[u8], at: usize) -> Option<u16> {
@@ -215,12 +240,22 @@ fn flash_mode(byte: u8) -> &'static str {
 }
 
 fn flash_size(chip: EspChip, code: u8) -> &'static str {
-    let sizes: &[&str] = if chip == EspChip::Esp8266 {
-        &["512KB", "256KB", "1MB", "2MB", "4MB", "2MB-c1", "4MB-c1", "8MB", "16MB"]
-    } else {
-        &["1MB", "2MB", "4MB", "8MB", "16MB", "32MB", "64MB", "128MB"]
-    };
-    sizes.get(usize::from(code)).copied().unwrap_or("unknown")
+    if chip == EspChip::Esp8266 {
+        // esptool's ESP8266 codes: 7 is unused.
+        return match code {
+            0 => "512KB",
+            1 => "256KB",
+            2 => "1MB",
+            3 => "2MB",
+            4 => "4MB",
+            5 => "2MB-c1",
+            6 => "4MB-c1",
+            8 => "8MB",
+            9 => "16MB",
+            _ => "unknown",
+        };
+    }
+    ["1MB", "2MB", "4MB", "8MB", "16MB", "32MB", "64MB", "128MB"].get(usize::from(code)).copied().unwrap_or("unknown")
 }
 
 fn flash_frequency(chip: EspChip, code: u8) -> &'static str {
@@ -233,16 +268,27 @@ fn flash_frequency(chip: EspChip, code: u8) -> &'static str {
     }
 }
 
-/// Whether `bytes` at `offset` start like an app image: the magic, 1..=16 segments, and an entry in a chip's
-/// instruction memory. Cheap enough for sniffing and carving.
+/// Whether `bytes` at `offset` start like an app image: the magic, 1..=16 segments, an entry in a chip's
+/// instruction memory, and a first segment of at most 16 MiB loading into that chip's memory. Cheap enough for
+/// sniffing and carving; it reads only the headers.
 pub fn looks_like_app_image(bytes: &[u8], offset: usize) -> bool {
     let Some(header) = bytes.get(offset..offset + 8) else { return false };
     if header[0] != ESP_IMAGE_MAGIC || header[1] == 0 || usize::from(header[1]) > MAX_ESP_SEGMENTS {
         return false;
     }
     let entry = u64::from(u32::from_le_bytes(header[4..8].try_into().unwrap_or_default()));
-    let chip = layout_chip(bytes, offset);
-    chip.is_some_and(|chip| chip.memory(entry).is_some_and(|(_, kind)| kind == RawRegionKind::Code))
+    let Some(chip) = layout_chip(bytes, offset) else { return false };
+    if !chip.memory(entry).is_some_and(|(_, kind)| kind == RawRegionKind::Code) {
+        return false;
+    }
+    let first = offset + if chip == EspChip::Esp8266 { 8 } else { 24 };
+    let (Some(load_address), Some(length)) = (u32_at(bytes, first), u32_at(bytes, first + 4)) else { return false };
+    length > 0 && length <= MAX_ESP_SEGMENT_BYTES && chip.memory(load_address.into()).is_some()
+}
+
+/// The chip an image header at `offset` names, from the headers alone.
+pub fn image_chip(bytes: &[u8], offset: usize) -> Option<EspChip> {
+    layout_chip(bytes, offset)
 }
 
 /// Which header layout the image at `offset` has: the ESP8266's (segments right after the 8-byte header) or the
@@ -261,8 +307,23 @@ fn layout_chip(bytes: &[u8], offset: usize) -> Option<EspChip> {
     Some(chip)
 }
 
-/// Reads the app image at `offset` of `bytes` (a whole file or flash dump).
+/// Reads the app image at `offset` of `bytes` (a whole file or flash dump), checking both digests.
 pub fn parse_app_image(bytes: &[u8], offset: u64) -> Result<EspImage, LoadError> {
+    let mut unlimited = u64::MAX;
+    let image = parse_app_image_within(bytes, offset, &mut unlimited, false)?;
+    image.ok_or_else(|| LoadError::Malformed("ESP app image digests were not computed".into()))
+}
+
+/// [`parse_app_image`], charging the bytes its digests read to `budget`: `None` when the budget cannot cover the
+/// checksum's bytes, or the SHA-256's once the checksum matched. With `sha_after_checksum`, a SHA-256 is computed
+/// only when the checksum matches (the image is invalid either way otherwise). At most [`MAX_ESP_HASHED_BYTES`]
+/// are hashed; a longer image's SHA-256 is not checked.
+pub fn parse_app_image_within(
+    bytes: &[u8],
+    offset: u64,
+    budget: &mut u64,
+    sha_after_checksum: bool,
+) -> Result<Option<EspImage>, LoadError> {
     let malformed = |message: String| LoadError::Malformed(format!("ESP app image at {offset:#x}: {message}"));
     let start = usize::try_from(offset).map_err(|_| malformed("offset out of range".into()))?;
     let image = bytes.get(start..).ok_or_else(|| malformed("offset past the end of the file".into()))?;
@@ -282,10 +343,10 @@ pub fn parse_app_image(bytes: &[u8], offset: u64) -> Result<EspImage, LoadError>
         (8usize, None, false)
     } else {
         let extended = image.get(8..24).ok_or_else(|| malformed("truncated extended header".into()))?;
-        (24usize, u16_at(extended, 5), extended[15] == 1)
+        // wp_pin, three drive bytes, chip_id (2), min_chip_rev (1), min_chip_rev_full (2) at 7.
+        (24usize, u16_at(extended, 7), extended[15] == 1)
     };
     let mut segments = Vec::with_capacity(count);
-    let mut checksum = 0xefu8;
     for index in 0..count {
         let (Some(load_address), Some(length)) = (u32_at(image, at), u32_at(image, at + 4)) else {
             return Err(malformed(format!("segment {index} header past the end of the file")));
@@ -295,7 +356,6 @@ pub fn parse_app_image(bytes: &[u8], offset: u64) -> Result<EspImage, LoadError>
             .checked_add(length as usize)
             .filter(|&end| end <= image.len())
             .ok_or_else(|| malformed(format!("segment {index} ({length} bytes) runs past the end of the file")))?;
-        checksum = image[data..end].iter().fold(checksum, |sum, byte| sum ^ byte);
         let memory = chip.memory(load_address.into()).filter(|_| length > 0);
         segments.push(EspSegment {
             load_address: load_address.into(),
@@ -321,19 +381,33 @@ pub fn parse_app_image(bytes: &[u8], offset: u64) -> Result<EspImage, LoadError>
     // The checksum byte ends the 16-byte block the segments end in.
     let checksum_at = at + (15 - at % 16);
     let stored = *image.get(checksum_at).ok_or_else(|| malformed("checksum byte past the end of the file".into()))?;
+    let summed: u64 = segments.iter().map(|segment| segment.length).sum();
+    if summed > *budget {
+        return Ok(None);
+    }
+    *budget -= summed;
+    let checksum = segments.iter().fold(0xefu8, |sum, segment| {
+        let start = segment.image_offset as usize;
+        image[start..start + segment.length as usize].iter().fold(sum, |sum, byte| sum ^ byte)
+    });
     let checksum =
         EspDigest { stored: format!("{stored:02x}"), computed: format!("{checksum:02x}"), valid: stored == checksum };
     let mut length = checksum_at as u64 + 1;
-    let sha256 = if hash_appended {
-        let hashed = &image[..checksum_at + 1];
-        image.get(checksum_at + 1..checksum_at + 33).map(|stored| {
-            length += 32;
-            let computed = Sha256::digest(hashed);
-            EspDigest { stored: hex(stored), computed: hex(&computed), valid: stored == computed.as_slice() }
-        })
-    } else {
-        None
-    };
+    let stored_sha = image.get(checksum_at + 1..checksum_at + 33).filter(|_| hash_appended);
+    if stored_sha.is_some() {
+        length += 32;
+    }
+    let hashed = &image[..checksum_at + 1];
+    let hash =
+        stored_sha.filter(|_| (checksum.valid || !sha_after_checksum) && (hashed.len() as u64) <= MAX_ESP_HASHED_BYTES);
+    if hash.is_some() && hashed.len() as u64 > *budget {
+        return Ok(None);
+    }
+    let sha256 = hash.map(|stored| {
+        *budget -= hashed.len() as u64;
+        let computed = Sha256::digest(hashed);
+        EspDigest { stored: hex(stored), computed: hex(&computed), valid: stored == computed.as_slice() }
+    });
     let first_data = |memory: &str| {
         segments.iter().find(|segment| segment.memory == Some(memory)).and_then(|segment| {
             let start = segment.image_offset as usize;
@@ -342,7 +416,7 @@ pub fn parse_app_image(bytes: &[u8], offset: u64) -> Result<EspImage, LoadError>
     };
     let app_desc = first_data(if chip == EspChip::Esp8266 { "irom" } else { "drom" }).and_then(app_desc);
     let bootloader_desc = first_data("dram").and_then(bootloader_desc);
-    Ok(EspImage {
+    Ok(Some(EspImage {
         chip,
         abi: if chip.call0() { "call0" } else { "windowed" },
         offset,
@@ -357,7 +431,8 @@ pub fn parse_app_image(bytes: &[u8], offset: u64) -> Result<EspImage, LoadError>
         sha256,
         app_desc,
         bootloader_desc,
-    })
+        notes: Vec::new(),
+    }))
 }
 
 fn app_desc(bytes: &[u8]) -> Option<EspAppDesc> {
@@ -400,6 +475,12 @@ pub struct EspPartition {
     pub offset: u64,
     pub size: u64,
     pub encrypted: bool,
+    #[serde(skip)]
+    kind_id: u8,
+    #[serde(skip)]
+    subtype_id: u8,
+    #[serde(skip)]
+    label_bytes: [u8; 16],
 }
 
 /// A partition table and its MD5 entry check.
@@ -410,6 +491,39 @@ pub struct EspPartitionTable {
     pub partitions: Vec<EspPartition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub md5: Option<EspDigest>,
+    /// Whether erased flash (0xff) follows the last entry (or the MD5 entry), as gen_esp32part writes it.
+    #[serde(skip)]
+    erased_after: bool,
+}
+
+impl EspPartitionTable {
+    /// Whether the table is a real one rather than bytes that happen to start `AA 50`: its MD5 entry matches, or,
+    /// without one, every entry lies on a 4 KiB boundary with a known type and subtype and a printable label, and
+    /// erased flash follows.
+    pub fn plausible(&self) -> bool {
+        if let Some(md5) = &self.md5 {
+            return md5.valid;
+        }
+        self.erased_after
+            && self.partitions.iter().all(|partition| {
+                let label_end = partition.label_bytes.iter().position(|&byte| byte == 0).unwrap_or(16);
+                let label = &partition.label_bytes[..label_end];
+                let known = match partition.kind_id {
+                    0 => matches!(partition.subtype_id, 0x00 | 0x10..=0x20),
+                    1 => matches!(partition.subtype_id, 0x00..=0x06 | 0x80..=0xfe),
+                    2 => matches!(partition.subtype_id, 0x00 | 0x01),
+                    3 => partition.subtype_id == 0,
+                    0x40..=0xfe => true,
+                    _ => false,
+                };
+                known
+                    && partition.offset.is_multiple_of(0x1000)
+                    && partition.size > 0
+                    && !label.is_empty()
+                    && label.iter().all(|&byte| byte.is_ascii_graphic() || byte == b' ')
+                    && partition.label_bytes[label_end..].iter().all(|&byte| byte == 0)
+            })
+    }
 }
 
 fn partition_names(kind: u8, subtype: u8) -> (String, String) {
@@ -442,22 +556,33 @@ fn partition_names(kind: u8, subtype: u8) -> (String, String) {
     (kind_name.to_owned(), subtype_name)
 }
 
-/// Reads the partition table at `offset`: entries up to the first that is not one (erased flash ends the table),
-/// and the MD5 entry over the entries before it when present. `None` when the first entry is not one.
+/// The partition table at `offset` when it is [`EspPartitionTable::plausible`].
 pub fn parse_partition_table(bytes: &[u8], offset: u64) -> Option<EspPartitionTable> {
+    read_partition_table(bytes, offset).filter(EspPartitionTable::plausible)
+}
+
+/// Reads the partition table at `offset`: entries up to the first that is not one (erased flash ends the table),
+/// and the MD5 entry (0xEBEB, 14 bytes of 0xff, the MD5) over the entries before it when present. `None` when the
+/// first entry is not one. Not validated: see [`parse_partition_table`].
+pub fn read_partition_table(bytes: &[u8], offset: u64) -> Option<EspPartitionTable> {
     let start = usize::try_from(offset).ok()?;
     let table = bytes.get(start..start.checked_add(PARTITION_TABLE_BYTES)?.min(bytes.len()))?;
     let mut partitions = Vec::new();
     let mut md5 = None;
-    for (index, entry) in table.as_chunks::<32>().0.iter().enumerate() {
-        if entry[..2] == PARTITION_MD5_MAGIC {
+    let entries = table.as_chunks::<32>().0;
+    let erased = |index: usize| entries.get(index).is_some_and(|entry| entry.iter().all(|&byte| byte == 0xff));
+    let mut erased_after = false;
+    for (index, entry) in entries.iter().enumerate() {
+        if entry[..2] == PARTITION_MD5_MAGIC && entry[2..16].iter().all(|&byte| byte == 0xff) {
             let computed = Md5::digest(&table[..index * 32]);
             let stored = &entry[16..32];
             md5 =
                 Some(EspDigest { stored: hex(stored), computed: hex(&computed), valid: stored == computed.as_slice() });
+            erased_after = erased(index + 1);
             break;
         }
         if entry[..2] != PARTITION_MAGIC {
+            erased_after = erased(index);
             break;
         }
         let (kind, subtype) = partition_names(entry[2], entry[3]);
@@ -468,9 +593,12 @@ pub fn parse_partition_table(bytes: &[u8], offset: u64) -> Option<EspPartitionTa
             offset: u32_at(entry, 4)?.into(),
             size: u32_at(entry, 8)?.into(),
             encrypted: u32_at(entry, 28)? & 1 != 0,
+            kind_id: entry[2],
+            subtype_id: entry[3],
+            label_bytes: entry[12..28].try_into().ok()?,
         });
     }
-    (!partitions.is_empty()).then_some(EspPartitionTable { offset, partitions, md5 })
+    (!partitions.is_empty()).then_some(EspPartitionTable { offset, partitions, md5, erased_after })
 }
 
 /// What a whole flash dump holds.
@@ -498,10 +626,11 @@ impl EspFlashLayout {
 /// partition table at 0x8000 or at another 4 KiB boundary below 0x10000 (CONFIG_PARTITION_TABLE_OFFSET). `None`
 /// when neither is there.
 pub fn flash_layout(bytes: &[u8]) -> Option<EspFlashLayout> {
+    // A bootloader counts only when its digests hold.
     let bootloader = [0x1000usize, 0]
         .into_iter()
         .filter(|&offset| looks_like_app_image(bytes, offset))
-        .find_map(|offset| parse_app_image(bytes, offset as u64).ok());
+        .find_map(|offset| parse_app_image(bytes, offset as u64).ok().filter(EspImage::digests_valid));
     let partition_table = std::iter::once(DEFAULT_PARTITION_TABLE_OFFSET)
         .chain((0x1000..0x10000).step_by(0x1000).filter(|&offset| offset != DEFAULT_PARTITION_TABLE_OFFSET))
         .find_map(|offset| parse_partition_table(bytes, offset));
@@ -559,6 +688,50 @@ mod tests {
         let apps: Vec<_> =
             layout.app_images(&flash).map(|(partition, offset)| (partition.label.clone(), offset)).collect();
         assert_eq!(apps, [("factory".to_owned(), 0x10000)]);
+    }
+
+    /// Review: min_chip_rev_full is the u16 at extended-header byte 7, and the ESP8266's flash-size codes skip 7.
+    #[test]
+    fn header_fields_are_read_where_esptool_writes_them() {
+        let mut image = fixture("esp32-app.bin");
+        image[8 + 5..8 + 9].copy_from_slice(&[0x11, 0x22, 0x2c, 0x01]);
+        assert_eq!(parse_app_image(&image, 0).unwrap().min_chip_revision, Some(300));
+        for (code, size) in [(6, "4MB-c1"), (7, "unknown"), (8, "8MB"), (9, "16MB")] {
+            assert_eq!(flash_size(EspChip::Esp8266, code), size);
+        }
+        assert_eq!(flash_size(EspChip::Esp32, 2), "4MB");
+    }
+
+    /// Review: a matching 8-bit checksum does not make an image whose appended SHA-256 mismatches valid.
+    #[test]
+    fn an_appended_sha_must_match() {
+        let mut image = fixture("esp32-app.bin");
+        let last = image.len() - 1;
+        image[last] ^= 1;
+        let parsed = parse_app_image(&image, 0).unwrap();
+        assert!(parsed.checksum.valid && !parsed.digests_valid());
+        // Under a budget the SHA-256 is computed only after the checksum matched, and a short budget says so.
+        let mut budget = 16;
+        assert!(parse_app_image_within(&image, 0, &mut budget, true).unwrap().is_none());
+    }
+
+    /// The partition table needs its MD5 entry (with its 0xff padding) to match, or else aligned entries with known
+    /// types, printable labels and erased flash after them.
+    #[test]
+    fn partition_tables_are_validated() {
+        let flash = fixture("esp32-flash.bin");
+        let table = &flash[0x8000..0x8c00];
+        assert!(parse_partition_table(table, 0).is_some());
+        let mut md5_padding = table.to_vec();
+        md5_padding[3 * 32 + 5] = 0;
+        assert!(read_partition_table(&md5_padding, 0).unwrap().md5.is_none());
+        assert!(parse_partition_table(&md5_padding, 0).is_none());
+        // Without the MD5 entry: three plausible entries then erased flash pass, a bad label does not.
+        let mut plain = table.to_vec();
+        plain[3 * 32..4 * 32].fill(0xff);
+        assert!(parse_partition_table(&plain, 0).is_some());
+        plain[12] = 0x07;
+        assert!(parse_partition_table(&plain, 0).is_none());
     }
 
     #[test]

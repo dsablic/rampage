@@ -252,7 +252,8 @@ impl Project {
                  \"Returned from app_main()\" (the call between it and \"Calling app_main()\" whose callee is called \
                  there only). The startup chain (call_start_cpu0, start_cpu0, the scheduler) creates that task through \
                  a pointer and is not followed; firmware without those log lines (the ESP8266 NONOS SDK's user_init, \
-                 builds with logging off) gets no candidate.",
+                 builds with logging off) gets no candidate, and any binary can hold those strings, so they can be \
+                 planted to point elsewhere.",
             );
         } else if self.binary.raw_code_image().is_some() {
             report.limitation("Raw projects: the startup heuristics model Cortex-M, MIPS and ESP-IDF startup only.");

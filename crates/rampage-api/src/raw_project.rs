@@ -20,6 +20,10 @@ use crate::{ApiError, FileOffset};
 const MAX_ESP_FILE_BYTES: usize = 16 * 1024 * 1024;
 /// Where the ESP8266's cache maps flash offset 0.
 const ESP8266_IROM_BASE: u64 = 0x4020_0000;
+/// Flash bytes the ESP8266's cache maps from there.
+const ESP8266_IROM_WINDOW: usize = 0x10_0000;
+/// The prefix of a file read for ESP guidance: the bootloader and the partition table lie in the first 64 KiB.
+const ESP_GUIDANCE_PREFIX: u64 = 0x1_0000;
 
 /// One Raw interpretation of a file range: closed profile, source range, code-space mapping, entry and seeds.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -721,8 +725,8 @@ impl RawProjectRequest {
     }
 
     /// The ESP app image at `offset` (default 0) of the file: each segment the chip's memory map places becomes a
-    /// region at its load address (IRAM and IROM code, DROM data, DRAM and RTC RAM with their initial bytes), the
-    /// segment holding the entry the primary one, and the header's entry the entry. An ESP8266 image at the start
+    /// region at its load address (IRAM and IROM code, DROM data, DRAM and RTC RAM with their initial bytes; the
+    /// rest of the chip's DRAM, .bss and heap, as RAM without bytes), the segment holding the entry the primary one, and the header's entry the entry. An ESP8266 image at the start
     /// of a flash dump also maps the rest of the flash as IROM, at 0x40200000 plus its offset, as the cache does.
     fn esp_image(&self, path: &Path, profile: RawProfile) -> Result<RawImage, ApiError> {
         if profile != RawProfile::Xtensa {
@@ -746,7 +750,7 @@ impl RawProjectRequest {
         let file = source.read()?;
         source.revalidate()?;
         let load = |source| ApiError::Load { path: path.to_owned(), source };
-        let image = rampage_loaders::esp::parse_app_image(&file, offset).map_err(load)?;
+        let mut image = rampage_loaders::esp::parse_app_image(&file, offset).map_err(load)?;
         if !image.chip.xtensa() {
             return Err(ApiError::Invalid(format!(
                 "the app image at {offset:#x} is for an ESP32-family chip without an Xtensa core (RISC-V: C2, C3, C5, \
@@ -776,10 +780,23 @@ impl RawProjectRequest {
         if image.chip == rampage_loaders::esp::EspChip::Esp8266 && offset == 0 {
             // The rest of the flash, past the boot image, is what the cache maps at 0x40200000 + offset.
             let from = (image.length as usize).next_multiple_of(0x1000);
-            let end = file.len() - file.iter().rev().take_while(|&&byte| byte == 0xff).count();
+            let used_end = file.len() - file.iter().rev().take_while(|&&byte| byte == 0xff).count();
+            if used_end > ESP8266_IROM_WINDOW {
+                image.notes.push(format!(
+                    "flash past {ESP8266_IROM_WINDOW:#x} (up to {used_end:#x}) is not mapped: the ESP8266's cache maps \
+                     only the first 1 MiB at 0x40200000"
+                ));
+            }
+            let end = used_end.min(ESP8266_IROM_WINDOW);
             if end > from {
                 let used: usize = regions.iter().map(|region| region.size as usize).sum();
-                let end = end.min(from + max.saturating_sub(used));
+                let room = from + max.saturating_sub(used);
+                if end > room {
+                    image.notes.push(format!(
+                        "IROM mapped only up to flash {room:#x} of {end:#x}: the profile's {max}-byte limit"
+                    ));
+                }
+                let end = end.min(room);
                 regions.push(RawRegion {
                     kind: RawRegionKind::Code,
                     base: ESP8266_IROM_BASE + from as u64,
@@ -790,7 +807,29 @@ impl RawProjectRequest {
             }
         }
         drop(file);
-        let total: usize = regions.iter().map(|region| region.size as usize).sum();
+        // The rest of the chip's DRAM (.bss, the heap) is RAM without bytes around the image's DRAM segments.
+        if let Some(dram) = image.chip.dram() {
+            let mut taken: Vec<(u64, u64)> = regions
+                .iter()
+                .map(|region| (region.base, region.base + region.size))
+                .filter(|&(start, end)| start < dram.end && dram.start < end)
+                .collect();
+            taken.sort_unstable();
+            let mut at = dram.start;
+            for (start, end) in taken.into_iter().chain([(dram.end, dram.end)]) {
+                if start > at {
+                    regions.push(RawRegion {
+                        kind: RawRegionKind::Ram,
+                        base: at,
+                        size: start - at,
+                        bytes: None,
+                        source: RawRegionSource::Unbacked,
+                    });
+                }
+                at = at.max(end);
+            }
+        }
+        let total: usize = regions.iter().filter_map(|region| region.bytes.as_ref()).map(Vec::len).sum();
         if total > max {
             return Err(ApiError::Invalid(format!(
                 "the app image's mapped segments hold {total} bytes; Raw Xtensa maps at most {max}"
@@ -1009,6 +1048,19 @@ fn file_prefix(path: &Path, limit: u64) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
+/// Application partitions whose headers ESP guidance reads.
+const MAX_ESP_GUIDANCE_PROBES: usize = 16;
+
+/// Up to `length` bytes of `path` at `offset`.
+fn file_range_prefix(path: &Path, offset: u64, length: u64) -> Option<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    file.seek(SeekFrom::Start(offset)).ok()?;
+    let mut bytes = Vec::new();
+    file.take(length).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
 /// The `raw` selector for the ESP app image at `offset`.
 fn esp_selector(offset: u64) -> String {
     format!("\"raw\":{{\"profile\":\"xtensa\",\"format\":\"esp\",\"offset\":\"{offset:#x}\"}}")
@@ -1018,7 +1070,7 @@ fn esp_selector(offset: u64) -> String {
 /// 0x1000 or 0, and a partition table), with the `raw` selector for each application image it holds.
 pub fn esp_guidance(path: &Path) -> Option<String> {
     use rampage_loaders::esp;
-    let bytes = file_prefix(path, MAX_ESP_FILE_BYTES as u64)?;
+    let bytes = file_prefix(path, ESP_GUIDANCE_PREFIX)?;
     if let Some(layout) = esp::flash_layout(&bytes) {
         let mut parts = Vec::new();
         if let Some(bootloader) = &layout.bootloader {
@@ -1034,9 +1086,17 @@ pub fn esp_guidance(path: &Path) -> Option<String> {
                 .collect();
             parts.push(format!("a partition table at {:#x}: {}", table.offset, entries.join(", ")));
         }
+        // Each application partition's header is read where the table puts it.
         let apps: Vec<String> = layout
-            .app_images(&bytes)
-            .map(|(partition, offset)| format!("{} with {}", partition.label, esp_selector(offset)))
+            .partition_table
+            .iter()
+            .flat_map(|table| &table.partitions)
+            .filter(|partition| partition.kind == "app")
+            .take(MAX_ESP_GUIDANCE_PROBES)
+            .filter(|partition| {
+                file_range_prefix(path, partition.offset, 64).is_some_and(|head| esp::looks_like_app_image(&head, 0))
+            })
+            .map(|partition| format!("{} with {}", partition.label, esp_selector(partition.offset)))
             .collect();
         let open = match (apps.is_empty(), &layout.bootloader) {
             (false, _) => format!("read each application with `raw`: {}", apps.join("; ")),
@@ -1050,7 +1110,7 @@ pub fn esp_guidance(path: &Path) -> Option<String> {
         ));
     }
     esp::looks_like_app_image(&bytes, 0).then(|| {
-        let chip = esp::parse_app_image(&bytes, 0).map_or(esp::EspChip::Other, |image| image.chip);
+        let chip = esp::image_chip(&bytes, 0).unwrap_or(esp::EspChip::Other);
         let flash = if chip == esp::EspChip::Esp8266 {
             " (an ESP8266 flash dump's boot image: the rest of the flash maps as IROM at 0x40200000 plus its offset)"
         } else {

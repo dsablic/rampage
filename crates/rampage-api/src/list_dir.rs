@@ -159,8 +159,9 @@ fn sniff_flash(path: &Path, head: &[u8]) -> Option<&'static str> {
         (&mut file).take(length as u64).read_to_end(&mut bytes).ok()?;
         Some(bytes)
     };
-    let bootloader = read_at(0x1000, 24).is_some_and(|bytes| rampage_loaders::esp::looks_like_app_image(&bytes, 0));
-    let table = read_at(0x8000, 2).is_some_and(|bytes| bytes == [0xaa, 0x50]);
+    let bootloader = read_at(0x1000, 32).is_some_and(|bytes| rampage_loaders::esp::looks_like_app_image(&bytes, 0));
+    let table =
+        read_at(0x8000, 0xc00).is_some_and(|bytes| rampage_loaders::esp::parse_partition_table(&bytes, 0).is_some());
     (bootloader || table).then_some("esp_flash")
 }
 

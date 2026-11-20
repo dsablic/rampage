@@ -426,8 +426,19 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
         while let Some(image) = enclosing.pop_if(|image| offset >= image.end) {
             image.finish(&mut candidates);
         }
-        let [tar_walk, sparse_walk, ota_walk, ubi_walk, jffs2_walk, cramfs_sum, trx_sum, ubifs_sum, gpt_sum, fv_sum] =
-            &mut walks;
+        let [
+            tar_walk,
+            sparse_walk,
+            ota_walk,
+            ubi_walk,
+            jffs2_walk,
+            cramfs_sum,
+            trx_sum,
+            ubifs_sum,
+            gpt_sum,
+            fv_sum,
+            esp_sum,
+        ] = &mut walks;
         let mut found = match bytes[0] {
             0x7f | b'M' | 0xfe | 0xce | 0xcf | 0xca => executable(bytes),
             b'P' if offset >= zip_members_until => zip(bytes).map(|(candidate, walked)| {
@@ -475,7 +486,7 @@ pub fn scan(data: &[u8], limits: &Limits) -> Carving {
                     }
                     candidate
                 })
-                .or_else(|| esp_image(bytes, offset)),
+                .or_else(|| esp_image(bytes, offset, esp_sum)),
             0xaa if offset.is_multiple_of(ESP_PARTITION_TABLE_ALIGN) => esp_partition_table(bytes),
             0xbd | 0x8b | 0xb9 | 0xed => uefi_capsule(bytes),
             _ => None,
@@ -2013,7 +2024,7 @@ fn ota_payload(bytes: &[u8], walk: &mut Probe) -> Option<Candidate> {
 }
 
 /// What running out of each walked or checksummed format's budget costs, in the order of the scan's budgets.
-const WALKS: [&str; 10] = [
+const WALKS: [&str; 11] = [
     "tar header walks ran out of their {budget}-byte budget at offset {offset}; tar archives from there on were not \
      reported",
     "Android sparse chunk walks ran out of their {budget}-byte budget at offset {offset}; sparse images from there on \
@@ -2033,6 +2044,8 @@ const WALKS: [&str; 10] = [
      their protective MBR",
     "UEFI firmware volume header checksums ran out of their {budget}-byte budget at offset {offset}; volumes from \
      there on are magic_only",
+    "ESP image checksums ran out of their {budget}-byte budget at offset {offset}; ESP images from there on are \
+     magic_only",
 ];
 
 /// The string `bytes` holds up to its first NUL, for a note.
@@ -2843,19 +2856,28 @@ const ESP_PARTITION_TABLE_ALIGN: usize = 0x1000;
 
 /// An ESP app or bootloader image whose segment headers fit, every segment loading into the chip's memory map (or
 /// esptool's padding at address 0), with a matching checksum or appended SHA-256: a magic-only match otherwise.
-fn esp_image(bytes: &[u8], offset: usize) -> Option<Candidate> {
+fn esp_image(bytes: &[u8], offset: usize, sum: &mut Probe) -> Option<Candidate> {
     use crate::esp;
     if !esp::looks_like_app_image(bytes, 0) {
         return None;
     }
-    let image = esp::parse_app_image(bytes, 0).ok()?;
+    // The checksum, then the SHA-256 only once the checksum matched, are charged to the scan's ESP budget.
+    let image = match esp::parse_app_image_within(bytes, 0, &mut sum.left, true).ok()? {
+        Some(image) => image,
+        None => {
+            sum.exhausted = true;
+            return Some(Candidate::magic_only(
+                Kind::EspImage,
+                "its checksum was not checked: the scan's ESP checksum budget ran out",
+            ));
+        }
+    };
     let mapped = image.segments.iter().all(|segment| segment.memory.is_some() || segment.load_address == 0);
     if !mapped || !image.chip.xtensa() {
         return None;
     }
-    let sha_valid = image.sha256.as_ref().is_some_and(|sha| sha.valid);
-    if !image.checksum.valid && !sha_valid {
-        return Some(Candidate::magic_only(Kind::EspImage, "ESP image checksum and SHA-256 do not match its bytes"));
+    if !image.digests_valid() {
+        return Some(Candidate::magic_only(Kind::EspImage, "ESP image checksum or SHA-256 does not match its bytes"));
     }
     let mut candidate = Candidate {
         arch: Some(Arch::Xtensa.to_string()),
@@ -2898,15 +2920,12 @@ fn esp_image(bytes: &[u8], offset: usize) -> Option<Candidate> {
 /// An ESP-IDF partition table: its entries, validated by the MD5 entry when it has one, or else by every partition
 /// lying on a 4 KiB boundary.
 fn esp_partition_table(bytes: &[u8]) -> Option<Candidate> {
-    let table = crate::esp::parse_partition_table(bytes, 0)?;
-    let aligned =
-        table.partitions.iter().all(|partition| partition.offset.is_multiple_of(0x1000) && partition.size > 0);
-    match &table.md5 {
-        Some(md5) if !md5.valid => {
-            return Some(Candidate::magic_only(Kind::EspPartitionTable, "partition table MD5 does not match"));
-        }
-        None if !aligned => return None,
-        _ => {}
+    let table = crate::esp::read_partition_table(bytes, 0)?;
+    if table.md5.as_ref().is_some_and(|md5| !md5.valid) {
+        return Some(Candidate::magic_only(Kind::EspPartitionTable, "partition table MD5 does not match"));
+    }
+    if !table.plausible() {
+        return None;
     }
     let mut candidate =
         Candidate::new(Kind::EspPartitionTable).extent((table.partitions.len() as u64 + 1) * 32, "partition entries");
@@ -2958,6 +2977,37 @@ mod tests {
         assert!(!starts_a_magic(0x55, 0xaa) && !starts_a_magic(b'U', b'X') && !starts_a_magic(0x04, 0x00));
     }
 
+    /// Review: every 0xE9 header that passed was checksummed (and hashed) over the rest of the file with no
+    /// budget. A header every 64 bytes, each claiming one segment to the end of the file, took 32 s on 16 MiB.
+    #[test]
+    fn crafted_esp_headers_stay_within_the_checksum_budget() {
+        const SIZE: usize = 4 << 20;
+        let mut data = vec![0u8; SIZE];
+        for at in (0..SIZE - 64).step_by(64) {
+            let length = (SIZE - at - 64) as u32;
+            data[at..at + 8].copy_from_slice(&[0xe9, 1, 2, 0, 0x04, 0x00, 0x08, 0x40]);
+            data[at + 8..at + 24].fill(0);
+            data[at + 8 + 15] = 1; // a SHA-256 is appended
+            data[at + 24..at + 28].copy_from_slice(&0x3ffb_0000u32.to_le_bytes());
+            data[at + 28..at + 32].copy_from_slice(&length.to_le_bytes());
+        }
+        let limits = Limits { max_walk_bytes: 8 << 20, ..Limits::default() };
+        let started = std::time::Instant::now();
+        let carving = scan(&data, &limits);
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+        assert!(carving.limitations.iter().any(|limitation| limitation.starts_with("ESP image checksums ran out")));
+        assert!(carving.candidates.iter().all(|candidate| candidate.confidence == Confidence::MagicOnly));
+    }
+
+    /// Review: `AA 50` at a 4 KiB boundary is not a partition table unless it checks out.
+    #[test]
+    fn stray_partition_magic_is_no_table() {
+        let mut bytes = vec![0x5a; 0x1000];
+        bytes[..2].copy_from_slice(&[0xaa, 0x50]);
+        assert!(esp_partition_table(&bytes).is_none());
+        assert!(crate::esp::flash_layout(&[&vec![0u8; 0x8000][..], &bytes].concat()).is_none());
+    }
+
     #[test]
     fn esp_flash_dump_carves_bootloader_partition_table_and_app() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/xtensa/esp32-flash.bin");
@@ -2976,7 +3026,9 @@ mod tests {
             ]
         );
         let app = &carving.candidates[2];
-        assert_eq!((app.arch.as_deref(), app.extent), (Some("xtensa"), Some(0x10420 + 32)));
+        let image_size =
+            std::fs::metadata(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/xtensa/esp32-app.bin"));
+        assert_eq!((app.arch.as_deref(), app.extent), (Some("xtensa"), Some(image_size.unwrap().len())));
         assert!(app.notes[0].starts_with("ESP32 application \"thermostat\" version 1.4.2"), "{:?}", app.notes);
         assert!(
             carving.candidates[1].notes[0].contains("factory app/factory at 0x10000"),
@@ -2987,7 +3039,14 @@ mod tests {
         let mut image =
             std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/xtensa/esp32-app.bin")).unwrap();
         image[0x40] ^= 1;
-        assert_eq!(esp_image(&image, 0).unwrap().confidence, Confidence::MagicOnly);
+        let mut sum = Probe { left: MAX_WALK_BYTES, exhausted: false };
+        assert_eq!(esp_image(&image, 0, &mut sum).unwrap().confidence, Confidence::MagicOnly);
+        // The checksum matches but an appended SHA-256 does not: still not valid.
+        let mut image =
+            std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/xtensa/esp32-app.bin")).unwrap();
+        let last = image.len() - 1;
+        image[last] ^= 1;
+        assert_eq!(esp_image(&image, 0, &mut sum).unwrap().confidence, Confidence::MagicOnly);
         let elf =
             std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/xtensa/esp32-app.elf")).unwrap();
         assert_eq!(executable(&elf).unwrap().arch.as_deref(), Some("xtensa"));

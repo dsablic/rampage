@@ -167,7 +167,10 @@ after calls); discovery follows both, and the decompiler is told `$t9` and `$gp`
 
 Xtensa ELF files (`EM_XTENSA`, little-endian) load like other ELF executables. The `.xtensa.info` note the GNU
 toolchain writes says which ABI the code uses: `ABI=0` is the windowed ABI (ESP32), any other value call0
-(ESP8266's LX106); without the note the code is taken to be windowed. The call0 ABI changes how the decompiler
+(ESP8266's LX106). Without the note the prologues vote: call0 when 4-byte aligned `addi a1, a1, -N` frame
+allocations outnumber windowed `entry a1, N` prologues four to one, else windowed. Literal pools are folded in
+the decompiler only for statically linked executables, not relocatable objects (whose pools hold zeros until
+linked). The call0 ABI changes how the decompiler
 models calls (a12-a15 survive them) and which prologue discovery looks for.
 
 An ESP app image (the format the ROM and the second-stage bootloader load) starts with magic 0xE9, a segment
@@ -184,7 +187,9 @@ bootloader's `esp_bootloader_desc_t` at the start of its DRAM.
 The partition table (32-byte entries with magic 0xAA50: type, subtype, offset, size, label, flags; then an entry
 with magic 0xEBEB holding the MD5 of the entries) names each partition's type and subtype (`app`/`factory`,
 `ota_0`.., `data`/`nvs`, `phy`, `ota`, `coredump`, `spiffs`, `littlefs`, `fat` and the others ESP-IDF defines)
-and whether it is encrypted. Flash encryption itself is not undone: an encrypted partition's bytes are
+and whether it is encrypted. A table counts only when its MD5 entry (with its 14 bytes of 0xff padding) matches,
+or, without one, when every entry lies on a 4 KiB boundary with a known type and subtype and a printable label and
+erased flash follows the last; the bootloader of a flash dump only when its digests hold. Flash encryption itself is not undone: an encrypted partition's bytes are
 ciphertext.
 
 ## Managed assemblies

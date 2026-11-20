@@ -136,6 +136,9 @@ fn evaluation_runs_windowed_and_call0_code() {
         assert_eq!(evaluate("check_password", serde_json::json!([text("hunter2-esp")])), 1, "{name} {view}");
         assert_eq!(evaluate("check_password", serde_json::json!([text("hunter3-esp")])), 0, "{name} {view}");
         assert_eq!(evaluate("scale_add", serde_json::json!([5, 2, 1])), 16, "{name} {view}");
+        // Each level adds its depth after its own call: 0 + 1 + 2 + 3. The base case branches to the code after
+        // the recursive call, which must not be taken for the call returning.
+        assert_eq!(evaluate("walk", serde_json::json!([3])), 6, "{name} {view}");
     }
 }
 
@@ -177,6 +180,28 @@ fn app_image_facts_are_reported() {
     // The rest of the ESP8266 flash maps as IROM at 0x40200000 plus its offset.
     assert!(esp8266.binary.is_code(truth("esp8266-app", "app_main")));
     assert!(!project.binary.xtensa_call0() && elf("esp8266-app").binary.xtensa_call0());
+}
+
+/// Review: without `.xtensa.info`, the prologues decide the ABI, of an ELF and of plain Raw bytes alike.
+#[test]
+fn the_abi_is_voted_from_prologues_without_a_note() {
+    for (name, call0) in [("esp8266-app", true), ("esp32-app", false)] {
+        let mut bytes = std::fs::read(format!("{DIR}{name}.elf")).unwrap();
+        let at = bytes.windows(12).position(|window| window == b".xtensa.info").unwrap();
+        bytes[at + 11] = b'x';
+        let path = std::env::temp_dir().join(format!("rampage-{name}-{}.elf", std::process::id()));
+        std::fs::write(&path, bytes).unwrap();
+        let binary = Binary::open(&path);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(binary.unwrap().xtensa_call0(), call0, "{name}");
+    }
+    // The ESP8266 flash's IROM as plain bytes, with no image header to name the chip.
+    let request =
+        serde_json::json!({ "profile": "xtensa", "offset": "0x10000", "length": 4096, "base_address": "0x40210000" });
+    let request: rampage_api::RawProjectRequest = serde_json::from_value(request).unwrap();
+    let path = format!("{DIR}esp8266-flash.bin");
+    let binary = rampage_api::open_raw_binary(std::path::Path::new(&path), &request).unwrap();
+    assert!(binary.xtensa_call0());
 }
 
 /// The headerless hint names the selector for each application of a flash dump, and for an app image.

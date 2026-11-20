@@ -68,11 +68,11 @@ where
     analyze_with_carried_seeds(binary, new_decoder, &[])
 }
 
-/// [`analyze_with_factory`], with `carried`: record-pass starts an earlier interpretation of the same bytes found,
-/// judged again and seeded with the first record round instead of being found again round by round.
 /// Most discovery passes Xtensa prologue seeds take to settle.
 const XTENSA_PROLOGUE_PASSES: usize = 3;
 
+/// [`analyze_with_factory`], with `carried`: record-pass starts an earlier interpretation of the same bytes found,
+/// judged again and seeded with the first record round instead of being found again round by round.
 pub fn analyze_with_carried_seeds<F, E>(binary: &Binary, new_decoder: F, carried: &[u64]) -> Result<Program, E>
 where
     F: Fn() -> Result<Box<dyn rampage_arch::Disassembler>, E> + Sync,

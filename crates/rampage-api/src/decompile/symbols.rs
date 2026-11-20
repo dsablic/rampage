@@ -182,13 +182,18 @@ const XTENSA_DEVICE_RANGES: [(u64, u64); 2] = [(0x3ff0_0000, 0x3ff7_ffff), (0x60
 /// Xtensa firmware (ESP32, ESP8266): code reaches every constant and address through an `l32r` literal pool in its
 /// read-only code mapping (flash-mapped IROM, or IRAM the bootloader loaded and nothing writes), so loads from
 /// read-only mappings fold to the values they hold and a literal reads as the string, global or function it points
-/// at. DRAM is writable and never folds. Peripheral windows are volatile. Code built for the call0 ABI (the
+/// at, in firmware (a Raw image or a statically linked executable). DRAM is writable and never folds. Peripheral windows are volatile. Code built for the call0 ABI (the
 /// ESP8266) gets the cspec's `__call0` model as its default, so a12-a15 survive calls.
 pub(super) fn xtensa_operations(binary: &rampage_loaders::Binary) -> Vec<WorkerOperation> {
     if binary.arch != rampage_arch::Arch::Xtensa {
         return Vec::new();
     }
-    let mut operations = vec![WorkerOperation::FoldReadOnly { enabled: true }];
+    let mut operations = Vec::new();
+    // Firmware only: a Raw image, or a statically linked executable. A relocatable object's literal pools hold
+    // zeros until it is linked, and a dynamic loader may rewrite another image's read-only data.
+    if binary.raw_code_image().is_some() || rampage_signatures::firmware_like(binary) {
+        operations.push(WorkerOperation::FoldReadOnly { enabled: true });
+    }
     operations.extend(XTENSA_DEVICE_RANGES.iter().map(|&(first, last)| WorkerOperation::VolatileRange { first, last }));
     if binary.xtensa_call0() {
         operations.push(WorkerOperation::DefaultPrototype { model: "__call0".to_owned() });
@@ -711,6 +716,23 @@ mod tests {
         assert!(class_type_names("<>").is_empty());
     }
     use rampage_decompiler::{DataOrganization, DecompilerOptions, Platform};
+
+    /// Review: Xtensa folds literal pools only in firmware; a relocatable object's pools hold zeros until linked.
+    #[test]
+    fn xtensa_folding_is_for_firmware() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/xtensa/esp32-app.elf");
+        let folds = |binary: &rampage_loaders::Binary| {
+            xtensa_operations(binary).iter().any(|operation| matches!(operation, WorkerOperation::FoldReadOnly { .. }))
+        };
+        assert!(folds(&rampage_loaders::Binary::open(path).unwrap()));
+        let mut bytes = std::fs::read(path).unwrap();
+        bytes[16] = 1; // ET_REL
+        let file = std::env::temp_dir().join(format!("rampage-xtensa-rel-{}.o", std::process::id()));
+        std::fs::write(&file, bytes).unwrap();
+        let relocatable = rampage_loaders::Binary::open(&file);
+        std::fs::remove_file(&file).unwrap();
+        assert!(!folds(&relocatable.unwrap()));
+    }
 
     /// Folding and callee inference are for Cortex-M images, whose mapping is flash. An MSP430/AVR8 Raw image is
     /// often RAM the program writes, where folding would read a variable as its load-time byte.

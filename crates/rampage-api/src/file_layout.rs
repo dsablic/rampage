@@ -340,6 +340,9 @@ pub fn file_layout(path: &Path, request: &FileLayoutRequest) -> Result<FileLayou
     Ok(report)
 }
 
+/// Bytes the digests of a range's ESP image hints read in all.
+const ESP_DIGEST_BUDGET: u64 = 64 << 20;
+
 /// An ESP32/ESP8266 flash dump's structure (bootloader image, partition table, application images), or an app
 /// image at the start of the file, each with the `raw` selector that opens it.
 fn esp_hints(bytes: &[u8]) -> Vec<LayoutHint> {
@@ -370,10 +373,18 @@ fn esp_hints(bytes: &[u8]) -> Vec<LayoutHint> {
         ));
         evidence
     };
+    // The digests every image hint checks share one budget, as carve's do.
+    let mut budget = ESP_DIGEST_BUDGET;
+    let mut parse = |offset: u64| match esp::parse_app_image_within(bytes, offset, &mut budget, false) {
+        Ok(Some(image)) => Some(image),
+        _ => None,
+    };
     let Some(layout) = esp::flash_layout(bytes) else {
-        return esp::parse_app_image(bytes, 0)
-            .ok()
-            .filter(|image| esp::looks_like_app_image(bytes, 0) && image.chip.xtensa())
+        if !esp::looks_like_app_image(bytes, 0) {
+            return Vec::new();
+        }
+        return parse(0)
+            .filter(|image| image.chip.xtensa())
             .map(|image| vec![hint("esp_app_image", 0, image_evidence(&image))])
             .unwrap_or_default();
     };
@@ -403,7 +414,7 @@ fn esp_hints(bytes: &[u8]) -> Vec<LayoutHint> {
         hints.push(hint("esp_partition_table", table.offset, evidence));
     }
     for (partition, offset) in layout.app_images(bytes) {
-        if let Ok(image) = esp::parse_app_image(bytes, offset) {
+        if let Some(image) = parse(offset) {
             let mut evidence = vec![format!("partition {} ({})", partition.label, partition.subtype)];
             evidence.extend(image_evidence(&image));
             hints.push(hint("esp_app_image", offset, evidence));

@@ -48,6 +48,10 @@ pub(super) enum LoopKind {
 pub(super) struct Windows {
     frames: Vec<Frame>,
     zero_loop: Option<ZeroLoop>,
+    /// Whether the instruction just run returned (`ret`, `retw` and their narrow forms, or an import's model): only
+    /// a return reaching a call's return address ends that call. Recursive code also gets there by a branch, as a
+    /// join after its own call (`if (n) walk(n - 1); count++;`).
+    returning: bool,
 }
 
 fn read_all(run: &mut Run<'_>) -> Result<[u128; 16], ApiError> {
@@ -69,6 +73,7 @@ impl Windows {
         code: Option<&[u8]>,
     ) -> Result<Pending, ApiError> {
         let mnemonic = text.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+        self.returning = matches!(mnemonic.as_str(), "ret" | "ret.n" | "retw" | "retw.n");
         let increment = match mnemonic.as_str() {
             "call4" | "callx4" => 1,
             "call8" | "callx8" => 2,
@@ -137,9 +142,14 @@ impl Windows {
         }
     }
 
+    /// An import's model ran and returned to its caller.
+    pub(super) fn returned_from_model(&mut self) {
+        self.returning = true;
+    }
+
     /// Called before the instruction at `pc`: a windowed call returning there gets the caller's registers back.
     pub(super) fn returned(&mut self, run: &mut Run<'_>, pc: u64) -> Result<(), ApiError> {
-        if self.frames.last().is_none_or(|frame| frame.returns_to != pc) {
+        if !std::mem::take(&mut self.returning) || self.frames.last().is_none_or(|frame| frame.returns_to != pc) {
             return Ok(());
         }
         let Some(frame) = self.frames.pop() else { return Ok(()) };
