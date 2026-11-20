@@ -46,7 +46,7 @@ Then, in order, one track at a time, each reviewed before merge:
    mechanisms that changed), built on unpacking, Raw loading and build diffing.
 4. [x] (2026-11-20, `check_claim`) **Claim verification**: check a stated claim about the binary (a function computes X over a range, a key
    lives at Y) by evaluation, constants and xrefs; report verified, refuted or unknown with the evidence.
-5. **Incremental analysis and a fuller analysis store**: cache xrefs, strings and types, and re-analyse only what
+5. [x] (2026-11-20, first slice: stored decompilations and effective views; later slices below) **Incremental analysis and a fuller analysis store**: cache xrefs, strings and types, and re-analyse only what
    an edit touches.
 
 After item 5: see "Queue after incremental analysis (agreed 2026-11-20)" below.
@@ -466,8 +466,21 @@ Between tracks: the UI assessment tab, `mine-transcripts`, demoting rarely used 
 Measurement (rule 3): the Sonnet headline of suite v4 (about $13) and one run with a second model or client come
 after the acceptance pass's fixes have landed, not straight after incremental analysis.
 
-Catalog budget (rule 6): the refresh recorded 25 bytes of room; after the `check_claim` fixes it was about 1 KB
-(103,358 of 104,400 bytes). Re-measure when incremental analysis merges; the rule stands either way.
+Catalog budget (rule 6): measured after incremental analysis merged, 103,358 of 104,400 bytes (1,042 free). The
+rule stands.
+
+## Incremental analysis: later slices (2026-11-20)
+
+Design and measurements in `docs/plans/2026-11-20-incremental-analysis.md`. Rule 2 applies: schedule one when a
+real workload needs it.
+- [ ] Per-function invalidation after a rename or prototype edit, from what the engine actually looked up.
+- [ ] Stored results for `triage_report`, `identify_functions`, `integrity_checks`, `lock_mechanisms`, each with an
+      audited key.
+- [ ] Persist the Go and DWARF type indexes (about 6 s per process on a 26 MB Go binary).
+- [ ] Cheaper per-call validation after patch authority (150 ms remains on 26 MB).
+- [ ] Load effective views with the same symbol recovery as a normal open, so an unpatched view shares entries.
+- [ ] Cache the annotation fingerprint per revision.
+- [ ] Record Linux digests for the decompile golden test (it checks nothing on Linux yet).
 
 ## Planning rules (agreed 2026-11-20)
 

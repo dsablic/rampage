@@ -6,6 +6,29 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- Persistent analysis store (experimental): also keeps each decompiled function. The key covers the binary's
+  analysis key, the function, the decompiler options, where decompilation runs (in process, or the worker with its
+  limits and executable), `DECOMPILE_CACHE_VERSION`, and every annotation except comments and findings. A comment
+  keeps every stored decompilation; any other edit makes them miss until each is decompiled again; undo returns to
+  the earlier results. A repeated decompilation takes 27–170 ms instead of 0.5–6.4 s, and `find_main` drops from
+  8.4 s to 67 ms on a 26 MB Go binary. Rows are checksummed (not authenticated), framed with their own key and
+  decoded strictly; anything else decompiles afresh. Nothing is read or written when `GHIDRA_INSTALL_DIR` is set or
+  the binary's file changed in place since it was opened. `binary_info`'s `analysis_store` reports
+  `decompilations` (hits, stored, rejected, last_rejection). One size bound covers discovery and decompilations,
+  kept as a running total with indexed eviction of the least recently used entries. The store file moves to
+  `rampage-analysis-store-v2.sqlite`; the v1 file in the default directory is removed.
+- `rampage server store [--clear]` (experimental): shows the store file, its size and bound, and entries per kind;
+  `--clear` deletes it after checking that it is a rampage store.
+- Fix: decompiling a large Raw Cortex-M image through the worker failed with "JSON wire depth/node limit exceeded"
+  (a 3.7 MB image has 413,000 code-mode points). Worker protocol 15 packs the points into one string, unchanged;
+  such images now decompile through the worker as in process (1.5 s, 27 ms from the store).
+- Fix: once an image had been through patch authority (`patch_bytes`, `integrity_checks`), every edit, a comment
+  included, rediscovered every function, because the effective views MCP tools read were never stored (15–19 s per
+  call on a 3.7 MB Raw Cortex-M image). Views are now stored, keyed by their own bytes, so later views reuse the
+  analysis.
+- Faster: validating an effective view with no active patch no longer copies and re-loads the image. Every tool
+  call after patch authority drops from 450 to 150 ms on a 26 MB static ELF, and from 140 to 46 ms on 7.9 MB.
+
 - `check_claim` (MCP core, experimental): check structured claims about a binary before reporting them. Each
   claim is answered verified, refuted (with a counterexample) or unknown (with what would decide it), with
   evidence, method and confidence (exact, sampled, static, heuristic). Kinds: `returns` (one call's result, via
