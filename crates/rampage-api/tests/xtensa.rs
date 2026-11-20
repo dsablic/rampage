@@ -216,3 +216,27 @@ fn headerless_hints_name_the_esp_selector() {
     let hint = rampage_api::headerless_guidance_for(std::path::Path::new(&format!("{DIR}esp32-app.bin")));
     assert!(hint.starts_with("The file starts with an ESP32 app image"), "{hint}");
 }
+
+/// Acceptance (MicroPython's ESP32 release files start at flash 0x1000; an agent looked for the application at the
+/// table's 0x10000 and found no image): on esp32-flash.bin cut to start at its bootloader, the open guidance and
+/// file_layout give the application at file 0xf000 and say the dump starts at flash 0x1000.
+#[test]
+fn a_dump_from_flash_0x1000_names_the_application_at_its_file_offset() {
+    let flash = std::fs::read(format!("{DIR}esp32-flash.bin")).unwrap();
+    let path = std::env::temp_dir().join(format!("rampage-esp32-from-0x1000-{}.bin", std::process::id()));
+    std::fs::write(&path, &flash[0x1000..]).unwrap();
+    let hint = rampage_api::headerless_guidance_for(&path);
+    let layout = rampage_api::file_layout(&path, &rampage_api::FileLayoutRequest::default());
+    std::fs::remove_file(&path).unwrap();
+    assert!(
+        hint.contains("factory with \"raw\":{\"profile\":\"xtensa\",\"format\":\"esp\",\"offset\":\"0xf000\"}"),
+        "{hint}"
+    );
+    assert!(hint.contains("starts at flash offset 0x1000"), "{hint}");
+    let hints = layout.unwrap().hints;
+    let table = hints.iter().find(|hint| hint.kind == "esp_partition_table").unwrap();
+    assert_eq!(table.offset, 0x7000);
+    assert!(table.evidence.iter().any(|line| line.contains("starts at flash offset 0x1000")), "{:?}", table.evidence);
+    let app = hints.iter().find(|hint| hint.kind == "esp_app_image").expect("an application hint");
+    assert_eq!(app.offset, 0xf000);
+}

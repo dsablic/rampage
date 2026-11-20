@@ -655,7 +655,19 @@ pub fn flash_layout(bytes: &[u8]) -> Option<EspFlashLayout> {
         return None;
     }
     let chip = bootloader.as_ref().map_or(EspChip::Esp32, |image| image.chip);
-    Some(EspFlashLayout { chip, bootloader, partition_table, flash_base })
+    let mut layout = EspFlashLayout { chip, bootloader, partition_table, flash_base };
+    // Without a bootloader whose digests hold, a table at file 0x7000 (flash 0x8000 in a dump from 0x1000) whose
+    // application partitions hold app images only 0x1000 bytes early says the same.
+    if layout.bootloader.is_none()
+        && layout.partition_table.as_ref().is_some_and(|table| table.offset == DEFAULT_PARTITION_TABLE_OFFSET - 0x1000)
+        && layout.app_images(bytes).next().is_none()
+    {
+        let shifted = EspFlashLayout { flash_base: 0x1000, ..layout.clone() };
+        if shifted.app_images(bytes).next().is_some() {
+            layout = shifted;
+        }
+    }
+    Some(layout)
 }
 
 #[cfg(test)]
@@ -718,6 +730,14 @@ mod tests {
         assert_eq!(layout.partition_table.as_ref().unwrap().offset, 0x7000);
         let apps: Vec<_> = layout.app_images(&flash).map(|(partition, offset)| (partition.offset, offset)).collect();
         assert_eq!(apps, [(0x10000, 0xf000)]);
+        // Review: with the bootloader's digest broken, the table at 0x7000 and the application 0x1000 bytes early
+        // still give the base.
+        let mut broken = flash.clone();
+        broken[0x40] ^= 0xff;
+        let layout = flash_layout(&broken).unwrap();
+        assert!(layout.bootloader.is_none());
+        assert_eq!(layout.flash_base, 0x1000);
+        assert_eq!(layout.app_images(&broken).map(|(_, offset)| offset).collect::<Vec<_>>(), [0xf000]);
     }
 
     /// Review: min_chip_rev_full is the u16 at extended-header byte 7, and the ESP8266's flash-size codes skip 7.
