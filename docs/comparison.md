@@ -6,7 +6,7 @@ far more complete than rampage.
 
 Where rampage has measured the comparison, the numbers come from its published benchmarks. Elsewhere this page
 states plain facts about features, licences and architecture; it does not claim rampage is better at things
-nobody has measured. Feature statements describe rampage 1.8.0.
+nobody has measured. Feature statements describe rampage 1.9.0.
 
 ## Architecture at a glance
 
@@ -16,7 +16,7 @@ nobody has measured. Feature statements describe rampage 1.8.0.
 | Written in | Rust, with Ghidra's C++ decompiler embedded | Java, with a C++ decompiler | C/C++ | TypeScript on Node, driving headless Ghidra (and optionally Rizin, Hopper or IDA) |
 | Primary interface | MCP server; CLI and desktop UI share its API | GUI; headless analyzer; Java and Python scripting | GUI; IDAPython and C++ SDK | MCP server |
 | Decompiler | Ghidra's, in a supervised worker process when `rampage-worker` is installed, otherwise in-process | Ghidra's | Hex-Rays (licensed per architecture) | Ghidra's (through Ghidra) |
-| Analysis state | Analysed on first use; function discovery reused from a per-user store on later opens (experimental); annotations in a JSON Lines log beside the binary | Project database | `.idb`/`.i64` database | Ghidra project, per REA session |
+| Analysis state | Analysed on first use; function discovery and decompiled functions reused from a per-user store on later opens (experimental); annotations in a JSON Lines log beside the binary | Project database | `.idb`/`.i64` database | Ghidra project, per REA session |
 | Heuristics | Data: signature JSON, data packs, YARA, capa, constants | Analyzers in Java; FunctionID databases | FLIRT signatures, type libraries, plugins | Those of the backing tool |
 | Scripting API | None by design; features land as MCP tools | Yes | Yes | Through the backing tool |
 
@@ -62,7 +62,7 @@ on fixtures built by the rampage project (function starts, CFG edges, call edges
 These are design facts, not measured advantages.
 
 - **Startup.** rampage analyses a binary on first use; there is no project import step, and release builds reuse
-  a binary's stored function discovery when it is opened again.
+  a binary's stored function discovery and decompilations when it is opened again.
   REA waits for Ghidra's import and auto-analysis.
 - **Output shaped for context.** Every rampage tool has a size cap, pages large results with explicit cursors
   and totals, and declares a result size Claude Code will display whole. Tools are grouped, so a session lists
@@ -87,7 +87,8 @@ These are design facts, not measured advantages.
 Compared with Ghidra and IDA, rampage does not have:
 
 - a scripting API (IDAPython, Ghidra scripts); new capabilities are added as MCP tools instead;
-- a mature interactive GUI: its desktop UI is experimental and has no type or struct editor;
+- a mature interactive GUI: its desktop UI is an experimental viewer for inspecting a binary and what an agent
+  found, not an editor; types, structs, patches and debugging stay with the agent through MCP;
 - Java decompilation of Android DEX code (rampage lists Dalvik bytecode and structured pseudocode), JVM class
   files, or relocation of object files and static archives;
 - Swift metadata, C++ class-layout recovery beyond RTTI and vtable evidence, or exception-table recovery beyond
@@ -99,8 +100,11 @@ Compared with Ghidra and IDA, rampage does not have:
   recomputed in each process, and an edit other than a comment makes every stored decompilation of the binary
   miss rather than only those it changes;
 - decompilation for most of its Sleigh processor profiles (only MSP430 and AVR8 have reviewed C models; the
-  experimental Cortex-M and MIPS32 Raw profiles decompile with the ARM v8 Thumb and MIPS o32 models);
+  experimental Cortex-M, MIPS32 and Xtensa Raw profiles decompile with the ARM v8 Thumb, MIPS o32 and Xtensa
+  models);
 - microMIPS or MIPS16e decoding, or ESP ROM function names (ESP32/ESP8266 calls into ROM show addresses);
+- dynamic symbols of ELF files stripped of their section headers (OpenWrt's `sstrip`), so such a shared library
+  lists no exports or functions;
 - a Windows host build;
 - process launch or attach: debugging connects only to a stub the operator started; macOS `debugserver` has
   passed one live acceptance run and Windows targets are not yet live-verified, so both stay experimental;

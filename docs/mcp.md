@@ -437,7 +437,9 @@ characters a row), the count omitted between them, and a row for each import run
 otherwise unchanged. Small functions that take arguments and return a value get a `next` from `decompile` that
 points here. Addresses below 0x1000 and segments without permissions (Mach-O
 `__PAGEZERO`) are unmapped, except in a fixed-address image linked to run there (a Raw project or an ELF
-executable with a segment in page 0, as Cortex-M firmware often is), and Apple arm64 binaries pack stack arguments at their own size. Memory starts as the file's image (zero-filled bss, copy-on-write) plus a
+executable with a segment in page 0, as Cortex-M firmware often is; in an ELF PIE or shared object linked at 0,
+code sections in page 0 run while address 0 and the headers still fault), and Apple arm64 binaries pack stack
+arguments at their own size. Memory starts as the file's image (zero-filled bss, copy-on-write) plus a
 zeroed stack and thread block; `memory` writes bytes into it first. Calls inside the image are followed; `stop`
 says why the run ended: `returned` (with `result` as hex, unsigned and signed), `step_limit`, `timeout`,
 `external_call` (an import, named), `external_read`, `unmapped_read`/`unmapped_write`/`unmapped_fetch`, `user_op`
@@ -526,10 +528,12 @@ against the DllCharacteristics that triage reports. Both return null for a non-P
 `carve` accepts any file path rather than requiring a loadable binary. Pages use `offset`/`limit` and `more`,
 not a total; scanning stops at the candidate after the page. It extracts/decompresses nothing. It recognises ELF,
 PE, Mach-O, zip, gzip, xz, zstd, LZMA, bzip2, LZ4 frames, lzop, SquashFS, ext2/3/4, UBI, UBIFS, JFFS2, CramFS, FAT,
-Android sparse and boot images, OTA payloads, cpio, tar, uImage, TRX, device trees (and FIT images), MBR and GPT
-disks (at 512-byte-aligned offsets), and UEFI firmware volumes and capsules. Inside a SquashFS, UBIFS, JFFS2,
-CramFS, Android sparse or OTA payload image whose validated extent fits the file, whose contents are compressed
-blocks or chunks, it reports only executables whose headers validate; inside such an ext, UBI, tar, cpio or ZIP
+Android sparse and boot images, OTA payloads, cpio, tar, uImage (its notes give the load address, entry, data size
+and compression by name), TRX, device trees (and FIT images), MBR and GPT disks (at 512-byte-aligned offsets), UEFI
+firmware volumes and capsules, and ESP app images and partition tables (`esp_image`, `esp_partition_table`). A UBI
+image's extent includes erase blocks that carry OpenWrt's end-of-image marker, with a note counting them. Inside a
+SquashFS, UBIFS, JFFS2, CramFS, Android sparse or OTA payload image whose validated extent fits the file, whose
+contents are compressed blocks or chunks, it reports only executables whose headers validate; inside such an ext, UBI, tar, cpio or ZIP
 image, whose files or volumes are stored whole, it reports every candidate whose header validates. The image's notes count what was
 left out inside it; `fs_list` lists the image's files (not yet for JFFS2 or CramFS). Inside a TRX, device tree,
 MBR or GPT disk, FAT volume or UEFI volume or capsule, which `fs_list` does not read, it reports every candidate,
@@ -787,7 +791,8 @@ ESP32 and ESP8266 firmware (`Xtensa:LE:32:default`, aliases `esp32`, `esp8266`, 
 `"format": "esp"` maps an app image by its segment headers, from `offset` (default 0) of the file, so an app in a
 flash dump opens with its partition's offset: `{"profile": "esp32", "format": "esp", "offset": "0x10000"}`.
 `binary_info` reports the image under `raw.esp` (chip, ABI, segments, checksum and SHA-256 checks, `esp_app_desc`),
-and on a flash dump opened without `raw` names the bootloader, the partition table and each app's selector
+and on a flash dump opened without `raw` names the bootloader, the partition table and each app's selector, with
+file offsets also for a dump that starts at flash 0x1000
 ([ESP32 and ESP8266 firmware](raw-code.md#esp32-and-esp8266-firmware)).
 
 A Cortex-M flash image (experimental `ARM:LE:32:Cortex` profile) opens in one call from path, profile and base

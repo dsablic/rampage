@@ -165,8 +165,9 @@ Areas marked *experimental* may change in any release; see the [stability policy
 - **Formats:** ELF, PE and Mach-O (including universal binaries and embedded images), .NET metadata and CIL,
   [Android APKs and DEX](docs/android.md) (manifest, permissions, components, JNI libraries, Dalvik bytecode and
   pseudocode, strings hidden behind decoder methods), Go build info, cargo-auditable data, PE resources and load
-  config, PyInstaller archives, WebAssembly module summaries, ZIP inventory, raw firmware windows, and a
-  [file layout](docs/file-layout.md) of any file (padding, entropy, string clusters, hashes and labelled hints).
+  config, PyInstaller archives, WebAssembly module summaries, ZIP inventory, ESP32/ESP8266 app images and flash
+  dumps, raw firmware windows, and a [file layout](docs/file-layout.md) of any file (padding, entropy, string
+  clusters, hashes and labelled hints).
   `carve` finds embedded executables, compressed streams, filesystem images (UBI, UBIFS, JFFS2 and CramFS among
   them) and TRX, device-tree, MBR/GPT, FAT and UEFI containers, each checked against its header. `list_dir` lists
   a folder with each file's sniffed format, and `triage` on a file with no executable header answers with its
@@ -208,8 +209,9 @@ Areas marked *experimental* may change in any release; see the [stability policy
   and Ghidra FID input, fuzzy candidates, packer/compiler detection (including signatures converted from Detect It
   Easy), encrypted or packed code detection that keeps discovery out of it, YARA, a capa subset, capability tags
   and crypto constants, all extendable with data packs.
-- **Persistent analysis store** (*experimental*): release builds save function discovery per user and reuse it
-  when the same binary is opened again with the same inputs. See [the store](docs/mcp.md#persistent-analysis-store).
+- **Persistent analysis store** (*experimental*): release builds save function discovery and each decompiled
+  function per user and reuse them when the same binary is opened again with the same inputs, across processes;
+  `rampage server store` shows what it holds. See [the store](docs/mcp.md#persistent-analysis-store).
 - **Debugging:** connect to an operator-started GDB remote stub (gdbserver, QEMU, OpenOCD), read state, control
   execution, set breakpoints by function name, and bind the session to a static project. Memory and register
   writes and kill need explicit operator flags. Apple `debugserver` and Windows-target stubs are *experimental*:
@@ -256,6 +258,8 @@ targets debugged through an RSP stub, from a macOS or Linux host.
 - Encrypted or packed code is detected, not unpacked: discovery and decompilation stay out of it unless asked.
 - Android DEX code is listed as Dalvik bytecode and structured pseudocode, not decompiled to Java; JVM class files
   are not read.
+- MIPS16e and microMIPS code is not decoded (most OpenWrt programs are MIPS16e), and the dynamic symbols of ELF
+  files stripped of their section headers are not read.
 - Not yet built: object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and vftable
   evidence, decoding of `__CxxFrameHandler4` exception tables, and incremental re-analysis after edits.
 - The benchmarks above use one model and one client; they are not general accuracy guarantees.

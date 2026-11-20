@@ -41,11 +41,14 @@ These may change or disappear in any minor release. Each is marked as experiment
   against a live target. The `debug` tools' names and arguments are stable; behaviour specific to these stubs may
   change as they are verified further.
 - **Raw processor profiles beyond the reviewed ones:** the Sleigh profiles other than MSP430 (`default`) and AVR8
-  (`gcc`), which have reviewed C models, and the Cortex-M profile (`ARM:LE:32:Cortex`) with its `vector_table`
-  and `pointer_tables` seeding, multiple `regions` and `ihex`/`srec` input. Their names, discovery behaviour and
-  results may change, and so may the `raw` selector's `vector_table`, `pointer_tables`, `regions` and `format`
-  fields. The `raw` field of `binary_info` is experimental for every Raw profile, though its fields
-  are pinned in the contract snapshots so changes are seen.
+  (`gcc`), which have reviewed C models; the Cortex-M profile (`ARM:LE:32:Cortex`) with its `vector_table`
+  and `pointer_tables` seeding, multiple `regions` and `ihex`/`srec` input; the MIPS32 profiles
+  (`MIPS:BE:32:default`, `MIPS:LE:32:default`); and the Xtensa profile (`Xtensa:LE:32:default`) with its `esp`
+  format. Their names, discovery behaviour and results may change, and so may the `raw` selector's `vector_table`,
+  `pointer_tables`, `regions` and `format` fields. The `raw` field of `binary_info` (`raw.esp` included) is
+  experimental for every Raw profile, though its fields are pinned in the contract snapshots so changes are seen.
+- **Xtensa analysis:** Xtensa ELF files, ESP app images and flash dumps, and what `binary_info`, `file_layout`,
+  `carve` (`esp_image`, `esp_partition_table`) and `list_dir` (`esp_image`, `esp_flash`) report about them.
 - **The `improve` group and the flywheel commands:** the MCP tools served with `--corpus`, the
   `--corpus`, `--flywheel-*`, `--gate`, `--require-novel-gain` and `--observations` options, the
   `report_observation` tool, and the files under `target/flywheel/`.
@@ -59,7 +62,8 @@ These may change or disappear in any minor release. Each is marked as experiment
 - **`check_claim`:** claim verification. Its name and arguments are pinned in the contract snapshot, but its claim
   kinds and fields, evidence fields and the rules that decide a verdict may change as it is used on more binaries.
 - **`evaluate_function`:** the function interpreter. Its name and arguments are pinned in the contract snapshot,
-  but its result fields, stop reasons and the conventions it chooses may change as it is verified on more code.
+  but its result fields, stop reasons and the conventions it chooses may change as it is verified on more code;
+  this includes float arguments and results (`float`, `return_float`), `trace` and the library models.
 - **`rampage-eval`:** the evaluation and benchmark harness, its commands and its report formats.
 - **Component plugins:** the WebAssembly triage-component host (`--component`) and its WIT interface, which are
   versioned separately (`0.0.1`); see [plugins](plugins.md).

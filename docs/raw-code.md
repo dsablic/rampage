@@ -66,6 +66,8 @@ Absolute `lui`/`addiu` pairs give string and data references, and `find_main` fo
 seeded on their own; add them to `seeds` when the image has handlers there. microMIPS and MIPS16e code, MIPS64
 and the vector table, pointer-table and scatter-load options of Cortex-M have no MIPS equivalent. A Linux userland
 or kernel ELF needs no Raw project: open it directly (position-independent code resolves its GOT through `$gp`).
+An ELF whose header marks MIPS16e or microMIPS code (OpenWrt builds most programs as MIPS16e) gets a `binary_info`
+warning and a `list_functions` note that only its MIPS32 code is analysed.
 
 ## ESP32 and ESP8266 firmware
 
@@ -105,6 +107,13 @@ bootloader image at 0x1000 (0 on the ESP32-S3), the partition table at 0x8000 (o
 partition's image. `file_layout` hints the same structure, `carve` reports `esp_image` and `esp_partition_table`
 candidates (the table's MD5 entry checked), and `list_dir` names `esp_image` and `esp_flash` files. Open the
 bootloader with its offset as you would an app.
+
+Some dumps start at flash 0x1000 rather than 0: a file that begins with an ESP32 or ESP32-S2 bootloader image (as
+MicroPython's ESP32 `.bin` does) is read that way, as is one whose partition table at file 0x7000 points at
+application images 0x1000 bytes early when the bootloader fails its digest. Partition offsets are then mapped
+through that base, so the `factory` app at flash 0x10000 is at file 0xf000, and the selectors `binary_info`,
+`file_layout`, `carve` and `diff_firmware` give are file offsets; the open error says that the dump starts at flash
+0x1000.
 
 Discovery seeds windowed functions from their `entry a1, N` prologue and call0 ones from their stack adjustment
 (`addi a1, a1, -N`, with the argument moves GCC schedules before it), so task entries and handlers reached only

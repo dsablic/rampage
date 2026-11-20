@@ -82,5 +82,6 @@ Left for later:
   session will update both when it lands. Replace "Next up" with the queue once the queue is agreed.
 - The audio-plugin investigation batches in `todo.md` (16 open boxes, not touched since October) were left in
   place: whether that investigation is still wanted is the maintainer's call.
-- `docs/comparison.md` and `docs/features.md` still describe the UI as lacking a type and struct editor. Both are
-  being edited by the incremental-analysis session, so the wording waits for it.
+- Done in the 1.9.0 documentation pass: `docs/comparison.md` and `docs/features.md` now describe the UI as an
+  inspection viewer that is not a type, struct or patch editor, as the UI plan says, instead of as lacking a type
+  and struct editor.

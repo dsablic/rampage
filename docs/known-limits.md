@@ -1,6 +1,6 @@
 # Known limits
 
-What rampage does not do, or does only partly, as of 1.8.0. The
+What rampage does not do, or does only partly, as of 1.9.0. The
 [comparison with Ghidra, IDA and REA](comparison.md) sets these against other tools, and the
 [stability policy](stability.md) says which areas are *experimental*.
 
@@ -50,7 +50,14 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   into the data after its last call (`halt_baddata`). Constant search on MIPS matches typed immediates and
   `lui` pairs completed in one block (`loaded_constant`); other sequences are not matched. `integrity_checks`
   takes a 16-bit CRC polynomial immediate as evidence only in a function that also shifts by one bit and XORs, so
-  a table-driven CRC-16 without a table in the image is not found.
+  a table-driven CRC-16 without a table in the image is not found. Position-independent switch tables (`.gpword`
+  entries added to `$gp`) are not recovered, so case blocks reached only through them, and functions called only
+  from those blocks, are missed.
+- ELF files without section headers (OpenWrt strips every program with `sstrip`) keep their program headers,
+  dynamic section and, on MIPS, their GOT, but their dynamic symbols are read only through the `.dynsym` section:
+  such a shared library lists no exports or imports and, with no entry point, no functions. Functions reached only
+  from `DT_INIT`, `DT_FINI` or the init and fini arrays, or only through function pointers in relocated data, are
+  not seeded on any architecture.
 - Decompiling MIPS position-independent code folds loads from read-only mappings, as on Cortex-M, besides the
   local GOT entries it marks read-only: Ghidra prints `.rodata` text as string literals only with that property,
   and one switch governs both. A program that writes its own read-only segment (through `mprotect`) would read as
@@ -80,7 +87,11 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   zero-overhead loops but not window overflow exceptions, so call chains deeper than the hardware's register file
   run as if the file were unlimited. ESP app images are read as the ESP8266 and ESP32/S2/S3 bootloaders load them:
   ESP8266 `0xEA` (rBoot, v2) images and encrypted flash are not decoded, and secure-boot signatures are not
-  checked. `find_main` finds `app_main` only through ESP-IDF's `main_task` log lines.
+  checked. `find_main` finds `app_main` only through ESP-IDF's `main_task` log lines. ESP8266 discovery finds fewer
+  functions than ESP32 discovery: on a public MicroPython build it found 61% of the symbol table's starts (91% in
+  IRAM, 60% in flash-mapped IROM), against over 99% on ESP32 builds. A flash dump is read from flash 0x1000 only when
+  it starts with an ESP32 or ESP32-S2 bootloader or its partition table at file 0x7000 points at application images
+  0x1000 bytes early; other dumps that start part-way into flash are read as if they started at flash 0.
 - On Raw projects `find_main` models Cortex-M reset code, and finds a main that never returns, and MIPS reset
   code: it follows jumps taken before `$sp` is set (`b reset` over the exception vectors) and takes the first
   forward jump after it, or a kseg1-to-kseg0 jump, as the C entry; a C entry reached by a call is not found. `decompile`
@@ -148,9 +159,11 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   and other Raw profiles need `as_raw` per side. Payloads in other codecs or encrypted ones compare by digest, and
   secure-boot signatures are not verified. Each run is budgeted (time, 8 code images by default, a fixed 2 GiB
   read, 64 MiB per analysed image); what a budget leaves out is listed. The time budget is soft: one image's analysis
-  is not interrupted once started. A change that only moves code, data or padding is not reported; a change in instruction selection for
-  the same source (another register, a narrower encoding the normalisation does not cover) is. See
-  [firmware version diffing](firmware-diffing.md#limits).
+  is not interrupted once started. On Cortex-M a change that only moves code, data or padding is not reported; a
+  change in instruction selection for the same source (another register, a narrower encoding the normalisation does
+  not cover) is. Between two ESP32 application builds, Xtensa code that only moved is still reported as changed: on
+  a public MicroPython point release 546 functions were reported changed where about a dozen changed size. MIPS16e
+  and microMIPS programs compare no functions. See [firmware version diffing](firmware-diffing.md#limits).
 - `check_claim` (experimental) can only be as certain as its method.
   - A `computes` verdict is verified on the generated inputs only (`sampled`).
   - Static kinds see discovered code and recorded references, not run time.

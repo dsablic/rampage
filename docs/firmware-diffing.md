@@ -23,7 +23,7 @@ Each side is taken apart into components, whatever form it has:
 | An executable (ELF, PE, Mach-O; any architecture a loader opens) | `image` |
 | A headerless Cortex-M flash image (vector table at offset 0) | `image`, a Raw project at the best load address |
 | An update container whose header describes compressed payloads | `stream:0`, `stream:1`, ...: each decoded (LZSS, LZ4 block) and opened as Cortex-M code at the best load address |
-| An ESP32/ESP8266 flash dump | `esp:bootloader`, `esp:partition_table`, and one `esp:LABEL` per partition; app partitions are read as Xtensa code |
+| An ESP32/ESP8266 flash dump | `esp:bootloader`, `esp:partition_table`, and one `esp:LABEL` per partition; app partitions are read as Xtensa code. A dump saved from flash 0x1000 (it starts with an ESP32 or ESP32-S2 bootloader) has its partition offsets mapped 0x1000 bytes lower in the file |
 | An ESP app image | `image` |
 | A filesystem image `fs_list` reads (SquashFS, ext2/3/4, UBI/UBIFS, Android sparse and OTA payloads, cpio, tar, ZIP) | `fs`, then each changed file inside it as `fs::PATH::ID` |
 | An APK | `fs`, with its manifest, permissions, components, native libraries, classes and capture APIs compared |
@@ -223,7 +223,8 @@ everything taken apart inside it as `inside`. With `list` it pages one list with
 at most 500): `changed`, `added`, `removed` or `unchanged` functions, `strings`, `endpoints` (with a `change` of
 `added` or `removed` on each row) or `files`. Each call recomputes just the path to that component; no state is kept
 between calls, so a page is the same whenever it is asked for. A result is cut to 56,000 JSON bytes by halving its
-longest lists first, and says so in `truncated`.
+longest lists first, and says so in `truncated`; a page cut that way gives the `next_offset` just after its last
+row, so paging on from it skips nothing.
 
 ## Budgets
 
@@ -255,6 +256,9 @@ paths) and removed when the call ends.
 - Integrity checks of medium or high confidence are compared per algorithm in address order: added, removed, and
   changed in covered length, stored field size, parameters or validity. A range that only moved is no change.
 - Headerless code other than Cortex-M (MIPS, Xtensa without an ESP header, other Sleigh profiles) needs `as_raw`.
+- Between two ESP32 application builds, Xtensa code that only moved is still reported as changed (on a public
+  MicroPython point release, 546 functions changed where about a dozen changed size), so the changed list is an
+  upper bound there. MIPS16e and microMIPS programs compare no functions, since that code is not decoded.
 - Container payloads decode with the codecs `probe_compression` tries (LZSS variants, LZ4 block); other codecs or
   encrypted payloads compare by digest. When the ring fill of an LZSS stream cannot be told apart, the decoded bytes
   that read best as a Cortex-M image are taken; the stream says `dictionary_fill_ambiguous`, and `fill_choice`

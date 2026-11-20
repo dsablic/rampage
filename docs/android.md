@@ -118,6 +118,13 @@ each capture, run [`privacy_surface`](privacy-surface.md#apks-and-dex-files) on 
 [`endpoint_inventory`](endpoint-inventory.md) reads APKs and DEX files: every DEX string pool, with the methods
 that load each string and the networking calls they make, and every native library in the APK.
 
+## Two versions of an app
+
+[`diff_firmware`](firmware-diffing.md) (group `carve`, *experimental*) compares two APKs, or two DEX files, in one
+call: manifest facts that differ (version code and name, permissions, components), files added, removed and
+replaced, classes changed, native libraries, and the capture APIs each version invokes. It also finds an APK
+inside an extracted firmware tree or filesystem image and compares it there.
+
 ## Decoded strings
 
 Apps often hide URLs and keys behind a static decoder method: `static String a(String)` that XORs each character,

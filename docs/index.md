@@ -17,7 +17,10 @@ is, then the [tutorial](getting-started.md).
 - [Compare two versions of a firmware update](firmware-diffing.md): what an update changes, from container
   layout and partitions to files, functions, endpoints, lock mechanisms and integrity checks (*experimental*).
 - [Analyse headerless code as a Raw project](raw-code.md): choose a base address, open a compressed image, map
-  further regions, scatter-load copies and pointer tables, and which tools take a `raw` selector.
+  further regions, scatter-load copies and pointer tables, open
+  [MIPS boot ROMs](raw-code.md#mips-boot-roms-and-bare-metal-mips) and
+  [ESP32/ESP8266 app images and flash dumps](raw-code.md#esp32-and-esp8266-firmware) (*experimental*), and which
+  tools take a `raw` selector.
 - [Check what a device records and where it sends it](device-privacy-check.md): unpack an update, list its
   endpoints, write a router blocklist and find capture-to-send paths in its programs and apps, and what starts each
   at boot.
@@ -52,6 +55,8 @@ Analysis and decompilation:
 - [ARM ELF unwind candidates](arm-unwind-starts.md).
 - [Decompiler reference](../crates/rampage-decompiler/README.md): compiler models, worker supervision and
   diagnostics.
+- [Persistent analysis store](mcp.md#persistent-analysis-store): stored discovery and decompilations, their keys,
+  invalidation after edits, and `rampage server store` (*experimental*).
 
 Typing:
 

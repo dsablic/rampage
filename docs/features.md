@@ -10,7 +10,7 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 
 | Area | What it covers | Section |
 | --- | --- | --- |
-| Formats and decoding | ELF, PE, Mach-O, raw windows, snapshots; x86, Arm, Capstone and Sleigh decoders | [Formats and instruction decoding](#formats-and-instruction-decoding) |
+| Formats and decoding | ELF, PE, Mach-O, ESP images, raw windows, snapshots; x86, Arm, MIPS, Xtensa, Capstone and Sleigh decoders | [Formats and instruction decoding](#formats-and-instruction-decoding) |
 | Analysis | Function discovery, names, CFGs, cross-references, Go and C++ metadata | [Function discovery, names and references](#function-discovery-names-and-references) |
 | Decompilation and typing | Embedded Ghidra decompiler, local variables, type library, data and operand types, propagation, DWARF/PDB import | [Decompilation and persistent types](#decompilation-and-persistent-types) |
 | Triage and detection | Hashes, entropy, hardening, packer/compiler detection, YARA, capa, capabilities, crypto constants | [Triage and detection](#triage-and-detection) |
@@ -83,17 +83,19 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 - AArch64 and 32-bit ARM decode natively from Arm's
   [machine-readable architecture specification][arm-spec]. AArch64 includes SVE and SME; AArch32 includes A32,
   Thumb, VFP and Advanced SIMD.
-- MIPS, PowerPC, RISC-V, SPARC, z/Architecture and m68k use
-  [Capstone](https://www.capstone-engine.org), with supported little- and big-endian variants. MIPS and SPARC
-  delay slots remain in their branch's block. MIPS position-independent code (Linux userland: routers, cameras)
-  resolves its GOT through `$gp`, computed from `$t9` at each function entry or kept by GCC: calls through the GOT
-  name their imports, GNU ld's lazy-binding `.MIPS.stubs` are named (the section header must be present), `lui`/`addiu` and GOT page loads give string
-  references, and the decompiler gets `$t9` and `$gp` at entry, so calls read `getenv("…")`; a shared library's calls to
-  its own exported functions through their global GOT entries read by the function's name. Binaries without
-  section headers keep their GOT from the dynamic section. MIPS operands are typed for constant search, and
-  `find_main` follows glibc's and musl's `__start`. MIPS32 boot ROMs and bare-metal images open as Raw
-  projects ([Raw code](raw-code.md#mips-boot-roms-and-bare-metal-mips)). Native, specification-derived decoders are the preferred direction
-  where machine-readable specifications exist.
+- MIPS, PowerPC, RISC-V, SPARC, z/Architecture and m68k use [Capstone](https://www.capstone-engine.org), with
+  supported little- and big-endian variants. MIPS and SPARC delay slots remain in their branch's block. MIPS
+  position-independent code (Linux userland: routers, cameras) resolves its GOT through `$gp`, computed from `$t9`
+  at each function entry or kept by GCC: calls through the GOT name their imports, GNU ld's lazy-binding
+  `.MIPS.stubs` are named (the section header must be present), `lui`/`addiu` and GOT page loads give string
+  references, and the decompiler gets `$t9` and `$gp` at entry, so calls read `getenv("…")`; a shared library's
+  calls to its own exported functions through their global GOT entries read by the function's name. Binaries without
+  section headers keep their GOT from the dynamic section, though not their dynamic symbols (`.dynsym` is read
+  through its section header). MIPS16e and microMIPS code is not decoded: an ELF whose header marks it gets a
+  `binary_info` warning and a `list_functions` note. MIPS operands are typed for constant search, and `find_main`
+  follows glibc's and musl's `__start`. MIPS32 boot ROMs and bare-metal images open as Raw projects ([Raw
+  code](raw-code.md#mips-boot-roms-and-bare-metal-mips)). Native, specification-derived decoders are the preferred
+  direction where machine-readable specifications exist.
 - Xtensa (*experimental*) decodes natively: the ESP32's windowed code and the ESP8266's call0 code, as ELF files
   or as [ESP app images and flash dumps](raw-code.md#esp32-and-esp8266-firmware) (`format: esp`, with the chip,
   segments, checksum, SHA-256 and `esp_app_desc` reported). `l32r` literals give string, data and call
@@ -444,7 +446,8 @@ apart in turn. For each changed code image it reports functions changed, added a
 so that code which only moved is not reported, and the strings, version identifiers, endpoints, lock mechanisms,
 integrity checks and capture sources one version has and the other lacks. A component id pages one part or diffs
 one function instruction by instruction. Time, images analysed and bytes read are budgeted, and whatever a budget
-leaves out is listed. See [firmware version diffing](firmware-diffing.md).
+leaves out is listed. Limits: between ESP32 application builds, Xtensa code that only moved is still reported as
+changed; MIPS16e programs compare no functions. See [firmware version diffing](firmware-diffing.md).
 
 ## Claim checking
 
@@ -542,9 +545,11 @@ deterministic signature generator the agent has promoted no row. See [the flywhe
 
 ## Desktop UI
 
-*Experimental.* An egui client over the same API: docked functions, strings, imports and exports, a disassembly
-listing with clickable references, hex, graph, cross-references, triage, Ghidra pseudocode, shared annotations,
-project workspaces and an optional assistant that sends questions and tool results to Anthropic's API. See the
+*Experimental.* An egui viewer over the same API, for a person to inspect a binary and what an agent established
+about it: docked functions, strings, imports and exports, a disassembly listing with clickable references, hex,
+graph, cross-references, triage, Ghidra pseudocode, shared annotations (rename, comment, undo), project workspaces
+and an optional assistant that sends questions and tool results to Anthropic's API. It is not a type or struct
+editor, a patch editor or a debugger: those stay with the agent through MCP. See the
 [desktop UI reference](desktop-ui.md).
 
 ## Measurements and development
