@@ -6,6 +6,22 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- `diff_firmware` (MCP `carve` group, experimental): compares two versions of a device update in one call. Each side
+  is taken apart into components (an executable, a Cortex-M flash image, an LZSS/LZ4-block update container's
+  decoded streams, ESP flash partitions and app images, a filesystem image, APK or directory, images `carve`
+  validates) and components are paired across versions (files by path, partitions by label, streams by order and
+  size; each pair says how in `paired_by`). Reports container facts that differ, files added, removed and changed
+  (SHA-256) with changed programs taken apart in turn, Android manifest facts, and per changed code image the
+  functions changed, added and removed (the `transfer_annotations` matcher, completed by multiset pairing of
+  identical and address-normalised bodies, with literal-pool constants compared by value, so moved code is not
+  reported and a changed constant is), strings, version identifiers, endpoints, lock mechanisms, integrity checks
+  and capture sources added or removed. `component` pages one part or diffs one function instruction by
+  instruction; a soft deadline, images analysed, scratch files and bytes read are budgeted and what is left out is
+  listed. See docs/firmware-diffing.md.
+- `integrity_checks` preview (no `fix`): a check whose stored value cannot be patched (it lies in decoded Raw bytes)
+  is now listed in `notes` and left out of the planned writes, instead of failing the whole report. With `fix` it
+  still fails.
+- `transfer_annotations`: a data reference from a block before its function's entry no longer panics.
 - Xtensa (experimental): a native decoder for ESP32 (windowed ABI) and ESP8266 (call0) code. Xtensa ELF files load
   (`.xtensa.info`, or a prologue vote, picks the ABI); `l32r` literals give string, data and call references and
   -mlongcalls' `l32r` + `callx` resolves; discovery seeds `entry` and frame-allocating prologues and resolves switch
