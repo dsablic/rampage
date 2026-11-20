@@ -34,7 +34,8 @@ what would decide an unknown.
   | `lock` | `lock_mechanisms` |
   | `layout` | The type library, DWARF and Go type metadata |
 
-  `not: true` negates any claim by swapping verified and refuted.
+  `not: true` negates any claim by swapping verified and refuted, except that a sampled or heuristic
+  verification negates to unknown: it holds no counterexample to the negation.
 - **Confidence names what the method proves:** `exact`, `sampled`, `static` or `heuristic`. A verdict is never
   stronger than its method. The two failure modes are not treated alike:
   - A wrong claim must never be verified, so every gap the method can detect makes the answer unknown.
@@ -44,12 +45,10 @@ what would decide an unknown.
 
   | Kind | When absence refutes |
   |---|---|
-  | `calls` | When no unresolved indirect transfer remains. Call instructions decode precisely, and calls through pointers are detected. |
+  | `calls` | When no unresolved indirect transfer, call into an import that calls back through a pointer (`qsort`, `pthread_create`, `__libc_start_main`, ...), or stopped search remains. Call instructions decode precisely, and calls through pointers are detected. |
   | `references` | Never. Data addresses can be formed arithmetically with no detectable sign. |
-  | `constant` | Only on x86/x86-64, for values of at least 0x10000, after a complete scan. AArch64 builds constants from 16-bit pieces, 32-bit ARM, MIPS and Xtensa results are lower bounds, and small constants fold into `lea`, shifts and division multipliers. |
+  | `constant` | Never. Compilers build constants from shifts and adds, compare against value - 1, replace a division by a multiplier, or load them from data. Loads from read-only data count as a use, so the same source answers alike on ARM (literal pools) and x86 (`.rodata`). |
 
-  A `constant` scan left incomplete only because some instructions lack typed operands still counts as complete
-  when no instruction's rendered text holds the value.
 - **Evaluation state.** `evaluate_function` gained an internal stateful entry point. It starts from the image as
   earlier runs left it (pages and a written-byte bitmap) and reports reads of writable data that no run wrote,
   split into `unset` (no file bytes) and `initial` (file values). This serves two purposes:
@@ -58,8 +57,11 @@ what would decide an unknown.
     table-driven CRC whose table is filled at boot). Initial-value reads are recorded as assumptions in the evidence.
 - **Width.** A `returns` claim without `bits` compares the whole result register. When only the low 32 bits match,
   the answer is unknown and names `bits: 32`, so a C `int` on a 64-bit target is never refuted for its undefined
-  upper bits, and a 64-bit result is never verified on its low half. Expressions default to 32 bits: most C code
-  is `int` or `uint32_t`, and the width is stated in the evidence.
+  upper bits, and a 64-bit result is never verified on its low half. A claimed value wider than the register is
+  unknown and names `bits: 64`; it is never masked. Expressions default to 32 bits, and each argument has its own
+  width (32 by default, a C `int`), so samples never exceed what the parameter holds and a 64-bit argument on a
+  32-bit target takes its pair. A checksum's register bits above the algorithm's width must be zero or a sign
+  extension, or the answer is unknown: sum32 is not sum8 because their low bytes agree.
 - **Generated inputs** are seeded with xorshift64* and deterministic. Buffer lengths run from 0 to 1024 bytes in the
   default 16 samples, with the CRC catalogue's `"123456789"`, all-zero, all-0xff, ascending and random contents.
   Expressions take edge cases first: 0, 1, all ones, the signed minimum and maximum. An input that leaves the
@@ -95,3 +97,26 @@ what would decide an unknown.
 - `before` is intra-procedural and does not check whether a path is feasible.
 - No `next` hint from `decompile` or `function_summary` points at `check_claim`. The server instruction line is the
   only prompt, to keep `decompile`'s output unchanged.
+
+## Review fixes (2026-11-20)
+
+A fresh-context review found claims a wrong answer could pass. Each fix has a regression test (`review_*` in
+`crates/rampage-api/tests/claims.rs`):
+
+1. A `returns` value wider than the result register was masked: now unknown, naming `bits: 64`.
+2. `calls … before` with `depth` searched only the first callee through callees: both sides are searched to the
+   depth, memoised per callee, and a search left incomplete marks the site unresolved.
+3. An absent `constant` was refuted on x86: never refuted now, and read-only data loads count as a use.
+4. Expression arguments took the result's width: each has its own width now.
+5. Checksum results were masked to the algorithm's width: set upper bits now give unknown. CRC widths that are not a
+   multiple of 8 round their byte count up.
+6. Callee names matched loosely (any leading underscores): names match exactly now, and a name the binary does not
+   have is invalid.
+7. `region` without `stored` ignored whether the detected check held: it must be valid, of medium or high confidence.
+8. Expected buffers compared a prefix: text includes its NUL, and hex states the whole buffer unless `prefix`.
+9. A refutation that read initialised writable data states that assumption (`assumes`); verified results list unset
+   data they read.
+10. Negating a sampled or heuristic verification gives unknown, not a refutation without a counterexample.
+11. The static searches (`calls`, `lock`, `region`) check the deadline.
+12. A claimed string's occurrences are no longer cut at 64; past 1024, `only_by` is unknown.
+13. Calls into imports that call back through a pointer count as unresolved.

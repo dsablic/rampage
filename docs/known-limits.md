@@ -146,8 +146,7 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   - A `computes` verdict is verified on the generated inputs only (`sampled`).
   - Static kinds see discovered code and recorded references, not run time.
   - `calls … before` does not check whether a path is feasible, so a mixed answer stays unknown.
-  - An absent reference is never refuted. An absent constant is refuted only on x86 and x86-64, for values of at
-    least 0x10000.
+  - An absent reference or constant is never refuted.
   - `computes` cannot yet state an end-pointer argument, a context structure or a length in words.
 
   See [checking claims](claim-checking.md#limits).

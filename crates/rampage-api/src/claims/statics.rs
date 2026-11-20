@@ -4,11 +4,11 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
 use rampage_analysis::discover::XrefKind;
-use rampage_arch::{Arch, Flow};
+use rampage_arch::Flow;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{Address, Confidence, Outcome, address, function_start};
+use super::{Address, Budget, Confidence, Outcome, address, function_start};
 use crate::search_code::{CodeImmediate, CodeSearchKind, CodeSearchQuery, CodeValue};
 use crate::{FunctionGraph, Project};
 
@@ -22,6 +22,8 @@ const MAX_STUB_HOPS: usize = 4;
 const MAX_STUB_INSTRUCTIONS: usize = 8;
 /// Rows a list in the evidence shows.
 const SHOWN: usize = 8;
+/// Occurrences of a claimed string whose references are checked.
+const MAX_STRING_TARGETS: usize = 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,12 +53,63 @@ pub(crate) struct ConstantClaim {
     bits: Option<u16>,
 }
 
-/// A name as callers write it: without the leading underscores Mach-O and some ABIs add, an `@plt` or symbol
-/// version suffix, or an import-thunk prefix.
-fn normalize(name: &str) -> String {
+/// Imports that call back through a function pointer they are given (sorting, threads, timers, exit handlers,
+/// enumerations, dispatch): a call into one may reach any function whose address was passed, so it counts as an
+/// unresolved transfer when a claim rests on a call's absence.
+const CALLBACK_IMPORTS: [&str; 40] = [
+    "qsort",
+    "qsort_r",
+    "bsearch",
+    "lfind",
+    "lsearch",
+    "tsearch",
+    "twalk",
+    "tfind",
+    "tdelete",
+    "ftw",
+    "nftw",
+    "scandir",
+    "pthread_create",
+    "pthread_once",
+    "atexit",
+    "at_quick_exit",
+    "on_exit",
+    "__cxa_atexit",
+    "__libc_start_main",
+    "signal",
+    "sigaction",
+    "thrd_create",
+    "call_once",
+    "dl_iterate_phdr",
+    "CreateThread",
+    "_beginthread",
+    "_beginthreadex",
+    "CreateRemoteThread",
+    "QueueUserWorkItem",
+    "CreateTimerQueueTimer",
+    "SetTimer",
+    "EnumWindows",
+    "EnumChildWindows",
+    "SetWindowsHookExA",
+    "SetWindowsHookExW",
+    "RegisterWaitForSingleObject",
+    "dispatch_async",
+    "dispatch_sync",
+    "dispatch_once",
+    "xTaskCreate",
+];
+
+/// A name as the binary may spell it: without an `@plt` or symbol-version suffix or an `__imp_` import-thunk prefix,
+/// and on Mach-O without the one leading underscore its C symbols carry.
+fn normalize(name: &str, macho: bool) -> String {
     let name = name.split('@').next().unwrap_or(name);
-    let name = name.strip_prefix("__imp_").or_else(|| name.strip_prefix("j_")).unwrap_or(name);
-    name.trim_start_matches('_').to_owned()
+    let name = name.strip_prefix("__imp_").unwrap_or(name);
+    let name = if macho { name.strip_prefix('_').unwrap_or(name) } else { name };
+    name.to_owned()
+}
+
+fn is_macho(project: &Project) -> bool {
+    project.binary.format == rampage_loaders::Format::MachO
 }
 
 /// What a callee claim names: an address when it resolves, and its names.
@@ -67,14 +120,25 @@ struct Callee {
 }
 
 impl Callee {
-    fn new(project: &Project, text: &str) -> Self {
+    /// The callee `text` names: an address or symbol the project resolves, or an import. Anything else is invalid,
+    /// never "not called".
+    fn new(project: &Project, text: &str) -> Result<Self, Outcome> {
+        let macho = is_macho(project);
         let address = project.resolve(text).ok().map(|address| project.thumb_code_address(address).0);
-        let mut names = BTreeSet::from([normalize(text)]);
+        let wanted = normalize(text, macho);
+        let import = project.binary.import_slots.iter().any(|import| normalize(&import.name, macho) == wanted);
+        if address.is_none() && !import {
+            return Err(Outcome::invalid(format!("{text:?} names no function, symbol or import in the binary")));
+        }
+        let mut names = BTreeSet::new();
+        if !text.trim_start().starts_with("0x") && text.parse::<u64>().is_err() {
+            names.insert(wanted);
+        }
         if let Some(name) = address.and_then(|address| project.name_at(address)) {
-            names.insert(normalize(&name));
+            names.insert(normalize(&name, macho));
         }
         names.retain(|name| !name.is_empty() && !name.starts_with("sub_"));
-        Self { text: text.to_owned(), address, names }
+        Ok(Self { text: text.to_owned(), address, names })
     }
 }
 
@@ -155,8 +219,6 @@ fn sites(project: &Project, graph: &FunctionGraph) -> Vec<Site> {
                     .collect::<BTreeSet<_>>()
                     .into_iter()
                     .collect();
-                // A slot the instruction reads that is no import: a function pointer in data, whose value the
-                // file holds (a vtable or callback table).
                 if code.is_empty() && imports.is_empty() {
                     Site { at, kind: SiteKind::Unresolved, targets: Vec::new(), imports }
                 } else {
@@ -173,12 +235,13 @@ fn sites(project: &Project, graph: &FunctionGraph) -> Vec<Site> {
 /// The addresses and names a call to `target` reaches through forwarding stubs (PLT entries, import thunks,
 /// veneers): `target` itself first.
 fn forwards(project: &Project, target: u64) -> (Vec<u64>, BTreeSet<String>) {
+    let macho = is_macho(project);
     let mut addresses = vec![target];
     let mut names = BTreeSet::new();
     let mut current = target;
     for _ in 0..MAX_STUB_HOPS {
         if let Some(name) = project.name_at(current).or_else(|| import_at(project, current)) {
-            names.insert(normalize(&name));
+            names.insert(normalize(&name, macho));
         }
         let Ok(analysis) = project.analysis() else { break };
         let Some(function) = analysis.program.function_at(current) else { break };
@@ -191,7 +254,7 @@ fn forwards(project: &Project, target: u64) -> (Vec<u64>, BTreeSet<String>) {
         if has_return || stub_sites.len() != 1 || stub_sites[0].kind == SiteKind::Call {
             break;
         }
-        names.extend(stub_sites[0].imports.iter().map(|name| normalize(name)));
+        names.extend(stub_sites[0].imports.iter().map(|name| normalize(name, macho)));
         match stub_sites[0].targets.as_slice() {
             [next] if !addresses.contains(next) => {
                 addresses.push(*next);
@@ -205,7 +268,8 @@ fn forwards(project: &Project, target: u64) -> (Vec<u64>, BTreeSet<String>) {
 }
 
 fn reaches(project: &Project, site: &Site, callee: &Callee) -> bool {
-    if site.imports.iter().any(|name| callee.names.contains(&normalize(name))) {
+    let macho = is_macho(project);
+    if site.imports.iter().any(|name| callee.names.contains(&normalize(name, macho))) {
         return true;
     }
     site.targets.iter().any(|&target| {
@@ -213,6 +277,14 @@ fn reaches(project: &Project, site: &Site, callee: &Callee) -> bool {
         callee.address.is_some_and(|wanted| addresses.contains(&wanted))
             || names.iter().any(|name| callee.names.contains(name))
     })
+}
+
+/// Whether the site calls an import that calls back through a pointer it is given.
+fn calls_back(project: &Project, site: &Site) -> bool {
+    let macho = is_macho(project);
+    let listed = |name: &str| CALLBACK_IMPORTS.contains(&name);
+    site.imports.iter().any(|name| listed(&normalize(name, macho)))
+        || site.targets.iter().any(|&target| forwards(project, target).1.iter().any(|name| listed(name)))
 }
 
 fn site_row(project: &Project, site: &Site) -> Value {
@@ -237,22 +309,31 @@ fn site_row(project: &Project, site: &Site) -> Value {
 }
 
 /// A breadth-first search for a call chain from `start` to `callee` of at most `depth` calls.
+#[derive(Debug, Clone, Default)]
 struct Search {
     /// The chain found: (function, call site) pairs, the last site reaching the callee.
     path: Option<Vec<(u64, u64)>>,
     visited: usize,
-    /// Unresolved sites in the functions searched, with their function.
+    /// Unresolved sites, and calls into imports that call back, in the functions searched, with their function.
     unresolved: Vec<(u64, u64)>,
+    /// The function budget or the deadline stopped the search.
     truncated: bool,
 }
 
-fn search(project: &Project, start: u64, callee: &Callee, depth: u32) -> Search {
+impl Search {
+    /// Whether the callee may be reached although no chain was found.
+    fn uncertain(&self) -> bool {
+        self.path.is_none() && (self.truncated || !self.unresolved.is_empty())
+    }
+}
+
+fn search(project: &Project, start: u64, callee: &Callee, depth: u32, budget: Budget) -> Search {
     let mut queue = VecDeque::from([(start, 1u32)]);
     let mut parent: HashMap<u64, (u64, u64)> = HashMap::new();
     let mut seen = BTreeSet::from([start]);
-    let mut result = Search { path: None, visited: 0, unresolved: Vec::new(), truncated: false };
+    let mut result = Search::default();
     while let Some((function, level)) = queue.pop_front() {
-        if result.visited >= MAX_VISITED {
+        if result.visited >= MAX_VISITED || budget.expired() {
             result.truncated = true;
             break;
         }
@@ -274,6 +355,9 @@ fn search(project: &Project, start: u64, callee: &Callee, depth: u32) -> Search 
                 result.path = Some(path);
                 return result;
             }
+            if calls_back(project, &site) {
+                result.unresolved.push((function, site.at));
+            }
             if level < depth {
                 for &target in &site.targets {
                     let Some(next) = forwards(project, target).0.last().copied() else { continue };
@@ -290,7 +374,7 @@ fn search(project: &Project, start: u64, callee: &Callee, depth: u32) -> Search 
     result
 }
 
-pub(crate) fn calls(project: &Project, claim: &CallsClaim) -> Outcome {
+pub(crate) fn calls(project: &Project, claim: &CallsClaim, budget: Budget) -> Outcome {
     let start = match function_start(project, &claim.function) {
         Ok(start) => start,
         Err(outcome) => return outcome,
@@ -299,18 +383,21 @@ pub(crate) fn calls(project: &Project, claim: &CallsClaim) -> Outcome {
     if !(1..=MAX_DEPTH).contains(&depth) {
         return Outcome::invalid(format!("depth must be 1..={MAX_DEPTH}"));
     }
-    let callee = Callee::new(project, &claim.callee);
-    if callee.address.is_none() && callee.names.is_empty() {
-        return Outcome::invalid(format!("{:?} names no function or import", claim.callee));
-    }
+    let callee = match Callee::new(project, &claim.callee) {
+        Ok(callee) => callee,
+        Err(outcome) => return outcome,
+    };
     match &claim.before {
-        Some(later) => before(project, start, &callee, &Callee::new(project, later), depth),
-        None => calls_within(project, start, &callee, depth),
+        Some(later) => match Callee::new(project, later) {
+            Ok(later) => before(project, start, &callee, &later, depth, budget),
+            Err(outcome) => outcome,
+        },
+        None => calls_within(project, start, &callee, depth, budget),
     }
 }
 
-fn calls_within(project: &Project, start: u64, callee: &Callee, depth: u32) -> Outcome {
-    let found = search(project, start, callee, depth);
+fn calls_within(project: &Project, start: u64, callee: &Callee, depth: u32, budget: Budget) -> Outcome {
+    let found = search(project, start, callee, depth, budget);
     let method = format!(
         "call sites in the decoded code{} of {}, following stubs (PLT entries, import thunks, veneers) and resolved \
          indirect calls",
@@ -335,7 +422,7 @@ fn calls_within(project: &Project, start: u64, callee: &Callee, depth: u32) -> O
         let rows: Vec<Value> = sites(project, &graph).iter().take(16).map(|site| site_row(project, site)).collect();
         evidence["call_sites"] = json!(rows);
     }
-    if !found.unresolved.is_empty() || found.truncated {
+    if found.uncertain() {
         let rows: Vec<Value> = found
             .unresolved
             .iter()
@@ -345,9 +432,11 @@ fn calls_within(project: &Project, start: u64, callee: &Callee, depth: u32) -> O
         evidence["unresolved"] = json!(rows);
         evidence["unresolved_total"] = json!(found.unresolved.len());
         let reason = if found.truncated {
-            format!("the search stopped at {MAX_VISITED} functions")
+            format!("the search stopped (at {MAX_VISITED} functions, or the time budget) before it was complete")
         } else {
-            "no direct call was found, but indirect calls or jumps with unknown targets remain".to_owned()
+            "no direct call was found, but indirect calls, jumps with unknown targets, or imports that call back \
+             through a pointer remain"
+                .to_owned()
         };
         return Outcome::unknown(method, evidence, reason).needs(
             "the unresolved sites' targets: run the function with evaluate_function (its calls list) or trace it in \
@@ -360,51 +449,82 @@ fn calls_within(project: &Project, start: u64, callee: &Callee, depth: u32) -> O
 /// One instruction position: block index and line index.
 type Position = (usize, usize);
 
-fn before(project: &Project, start: u64, first: &Callee, later: &Callee, depth: u32) -> Outcome {
+/// What a call site is to a `before` claim.
+#[derive(Clone, Copy, PartialEq)]
+enum Mark {
+    /// It calls the first callee (directly, or through callees within the depth), and not the later one.
+    First,
+    /// It calls the later callee, and not the first.
+    Later,
+    /// It may call either, or both in an order not known: an unresolved transfer, a call back, an incomplete search.
+    Unresolved,
+}
+
+fn before(project: &Project, start: u64, first: &Callee, later: &Callee, depth: u32, budget: Budget) -> Outcome {
     let graph = match project.function_graph(start) {
         Ok(graph) => graph,
         Err(error) => return error.into(),
     };
     let Some(entry) = graph.entry() else { return Outcome::invalid("the function has no entry block") };
     let all = sites(project, &graph);
-    let by_address: HashMap<u64, &Site> = all.iter().map(|site| (site.at, site)).collect();
-    // What each instruction is: a call of the first callee (directly or, with depth, through a callee), of the later
-    // one, or an unresolved transfer.
-    #[derive(Clone, Copy, PartialEq)]
-    enum Mark {
-        First,
-        Later,
-        Unresolved,
-    }
-    let mark = |site: &Site| -> Option<Mark> {
-        if site.kind == SiteKind::Unresolved {
-            return Some(Mark::Unresolved);
-        }
-        if reaches(project, site, first) {
-            return Some(Mark::First);
-        }
-        if depth > 1 {
-            for &target in &site.targets {
-                if let Some(&next) = forwards(project, target).0.last()
-                    && search(project, next, first, depth - 1).path.is_some()
-                {
-                    return Some(Mark::First);
-                }
-            }
-        }
-        reaches(project, site, later).then_some(Mark::Later)
+    // Transitive searches from each callee, done once per callee and side.
+    let mut cache: HashMap<(u64, bool), Search> = HashMap::new();
+    let mut transitive = |next: u64, of_first: bool| -> Search {
+        cache
+            .entry((next, of_first))
+            .or_insert_with(|| search(project, next, if of_first { first } else { later }, depth - 1, budget))
+            .clone()
     };
     let mut marks: HashMap<u64, Mark> = HashMap::new();
     for site in &all {
-        if let Some(found) = mark(site) {
-            marks.insert(site.at, found);
+        let mark = if site.kind == SiteKind::Unresolved {
+            Some(Mark::Unresolved)
+        } else {
+            let mut to_first = reaches(project, site, first);
+            let mut to_later = reaches(project, site, later);
+            let mut uncertain_first = false;
+            let mut uncertain_later = false;
+            if depth > 1 {
+                for &target in &site.targets {
+                    let Some(&next) = forwards(project, target).0.last() else { continue };
+                    let discovered =
+                        project.analysis().is_ok_and(|analysis| analysis.program.function_at(next).is_some());
+                    if !discovered {
+                        continue;
+                    }
+                    let found = transitive(next, true);
+                    to_first |= found.path.is_some();
+                    uncertain_first |= found.uncertain();
+                    let found = transitive(next, false);
+                    to_later |= found.path.is_some();
+                    uncertain_later |= found.uncertain();
+                }
+            }
+            if calls_back(project, site) {
+                uncertain_first = true;
+                uncertain_later = true;
+            }
+            match (to_first, to_later) {
+                (true, false) if !uncertain_later => Some(Mark::First),
+                (false, true) if !uncertain_first => Some(Mark::Later),
+                (false, false) if !uncertain_first && !uncertain_later => None,
+                _ => Some(Mark::Unresolved),
+            }
+        };
+        if let Some(mark) = mark {
+            marks.insert(site.at, mark);
         }
+    }
+    if budget.expired() {
+        return Outcome::unknown("", Value::Null, "the call's time budget ran out during the search")
+            .needs("a larger timeout_ms, or a smaller depth");
     }
     let successors = |block: usize| graph.edges.iter().filter(move |edge| edge.from == block).map(|edge| edge.to);
     let method = format!(
-        "paths through the control-flow graph of {} from its entry to each call of {}",
+        "paths through the control-flow graph of {} from its entry to each call of {}{}",
         project.function_name(start),
-        later.text
+        later.text,
+        if depth > 1 { format!(", either callee counted through callees to depth {depth}") } else { String::new() }
     );
     // From the entry, before any call of the first callee: the later calls reached and the unresolved transfers met.
     let mut parent: HashMap<usize, usize> = HashMap::new();
@@ -431,20 +551,17 @@ fn before(project: &Project, start: u64, first: &Callee, later: &Callee, depth: 
             }
         }
     }
-    let later_sites: Vec<u64> = marks
-        .iter()
-        .filter(|(_, mark)| **mark == Mark::Later)
-        .map(|(&at, _)| at)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let first_sites: Vec<u64> = marks
-        .iter()
-        .filter(|(_, mark)| **mark == Mark::First)
-        .map(|(&at, _)| at)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
+    let sites_of = |wanted: Mark| -> Vec<u64> {
+        marks
+            .iter()
+            .filter(|(_, mark)| **mark == wanted)
+            .map(|(&at, _)| at)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    };
+    let later_sites = sites_of(Mark::Later);
+    let first_sites = sites_of(Mark::First);
     let any_unresolved = marks.values().any(|mark| *mark == Mark::Unresolved);
     let list = |sites: &[u64]| sites.iter().take(SHOWN).map(|&at| address(at)).collect::<Vec<_>>();
     let mut evidence = json!({
@@ -461,8 +578,8 @@ fn before(project: &Project, start: u64, first: &Callee, later: &Callee, depth: 
             return Outcome::unknown(
                 method,
                 evidence,
-                "every direct call of the later callee comes after the first, but indirect calls or jumps with unknown \
-                 targets run before it on some path, and one may call the later callee",
+                "every known call of the later callee comes after the first, but calls whose targets or order are not \
+                 known run before it on some path, and one may call the later callee",
             )
             .needs(unresolved_needs);
         }
@@ -471,7 +588,7 @@ fn before(project: &Project, start: u64, first: &Callee, later: &Callee, depth: 
                 return Outcome::unknown(
                     method,
                     evidence,
-                    format!("no direct call of {} was found; unresolved indirect transfers remain", later.text),
+                    format!("no call of {} was found; unresolved calls remain", later.text),
                 )
                 .needs(unresolved_needs);
             }
@@ -520,7 +637,6 @@ fn before(project: &Project, start: u64, first: &Callee, later: &Callee, depth: 
             break;
         }
     }
-    let _ = by_address;
     if !later_after_first && !any_unresolved {
         return Outcome::refuted(
             Confidence::Static,
@@ -536,8 +652,8 @@ fn before(project: &Project, start: u64, first: &Callee, later: &Callee, depth: 
         )
     } else {
         format!(
-            "a path reaches the call of {} at {site:#x} without a direct call of {}, and unresolved indirect calls \
-             or jumps remain",
+            "a path reaches the call of {} at {site:#x} without a call of {}, and calls whose targets or order are \
+             not known remain",
             later.text, first.text
         )
     };
@@ -559,6 +675,7 @@ pub(crate) fn references(project: &Project, claim: &ReferencesClaim) -> Outcome 
         Ok(analysis) => analysis,
         Err(error) => return error.into(),
     };
+    let mut truncated = false;
     let (targets, described) = match (&claim.target, &claim.string) {
         (Some(target), None) => match target.resolve(project) {
             Ok(address) => (vec![address], format!("{address:#x}")),
@@ -572,15 +689,19 @@ pub(crate) fn references(project: &Project, claim: &ReferencesClaim) -> Outcome 
                 min_len: Some(text.chars().count().clamp(1, 4)),
                 contains: Some(text.clone()),
                 offset: None,
-                limit: Some(64),
+                limit: None,
             };
-            let found: Vec<u64> = project
+            let mut found: Vec<u64> = project
                 .strings(&query)
                 .items
                 .iter()
                 .filter(|string| string.text == *text)
                 .map(|string| string.address)
                 .collect();
+            if found.len() > MAX_STRING_TARGETS {
+                found.truncate(MAX_STRING_TARGETS);
+                truncated = true;
+            }
             if found.is_empty() {
                 return Outcome::invalid(format!(
                     "no string equal to {text:?} in the image: list_strings with contains finds the exact text"
@@ -693,6 +814,14 @@ pub(crate) fn references(project: &Project, claim: &ReferencesClaim) -> Outcome 
             if !unattributed.is_empty() {
                 return Outcome::unknown(method, evidence, unattributed_reason()).needs(unattributed_needs);
             }
+            if truncated {
+                return Outcome::unknown(
+                    method,
+                    evidence,
+                    format!("the string occurs more than {MAX_STRING_TARGETS} times; only the first were checked"),
+                )
+                .needs("a target address for each occurrence");
+            }
             if found.is_empty() {
                 return Outcome::unknown(method, evidence, "no reference was found").needs(absent_needs);
             }
@@ -702,12 +831,37 @@ pub(crate) fn references(project: &Project, claim: &ReferencesClaim) -> Outcome 
     }
 }
 
-/// Whether a missing immediate can refute: the decoder types every operand, and constants this large are encoded
-/// whole on x86 (on AArch64 they are built from 16-bit pieces, on 32-bit ARM, MIPS and Xtensa only loaded
-/// literals and movw/movt or lui pairs are seen).
-fn absence_refutes(arch: Arch, value: u64) -> bool {
-    let large = value >= 0x1_0000 && value.wrapping_neg() >= 0x1_0000;
-    large && matches!(arch, Arch::X86 | Arch::X86_64)
+/// Instruction sites in `start`'s function that load `value` from read-only data (a RIP-relative `.rodata` load on
+/// x86, a literal outside the function on other targets): what ARM's literal-pool loads already count as.
+fn read_only_loads(project: &Project, start: u64, value: u64, negative: bool) -> Vec<(u64, String)> {
+    let Ok(graph) = project.function_graph(start) else { return Vec::new() };
+    let binary = &project.binary;
+    let mut found = Vec::new();
+    for line in graph.blocks.iter().flat_map(|block| &block.lines) {
+        let Some(at) = line.data_ref.filter(|_| line.accesses) else { continue };
+        let read_only = binary.segment_containing(at).is_some_and(|segment| !segment.perms.write);
+        if !read_only {
+            continue;
+        }
+        let word = |size: u64| -> Option<u64> {
+            let bytes = binary.read(at, size)?;
+            let mut buffer = [0u8; 8];
+            if binary.big_endian {
+                buffer[8 - size as usize..].copy_from_slice(bytes);
+                Some(u64::from_be_bytes(buffer))
+            } else {
+                buffer[..size as usize].copy_from_slice(bytes);
+                Some(u64::from_le_bytes(buffer))
+            }
+        };
+        let matches32 = (value <= 0xffff_ffff || (negative && (value as i64) >= i64::from(i32::MIN)))
+            && word(4) == Some(value & 0xffff_ffff);
+        let matches64 = value > 0xffff_ffff && word(8) == Some(value);
+        if matches32 || matches64 {
+            found.push((line.address, line.text.clone()));
+        }
+    }
+    found
 }
 
 pub(crate) fn constant(project: &Project, claim: &ConstantClaim) -> Outcome {
@@ -732,8 +886,10 @@ pub(crate) fn constant(project: &Project, claim: &ConstantClaim) -> Outcome {
         forms.push(CodeValue::Signed(i64::from(value as u32 as i32)));
         forms.push(CodeValue::Unsigned(value | 0xffff_ffff_0000_0000));
     }
-    let method =
-        format!("immediate operands and loaded literals of {}'s decoded instructions", project.function_name(start));
+    let method = format!(
+        "immediate operands, loaded literals and read-only data loads of {}'s decoded instructions",
+        project.function_name(start)
+    );
     let mut sites = BTreeSet::new();
     let mut complete = true;
     let mut limitations = Vec::new();
@@ -768,6 +924,13 @@ pub(crate) fn constant(project: &Project, claim: &ConstantClaim) -> Outcome {
             sites.insert((hit.site, hit.text.clone(), hit.evidence.kind));
         }
     }
+    if claim.bits.is_none() {
+        for (site, text) in read_only_loads(project, start, value, negative) {
+            if !sites.iter().any(|(known, _, _)| *known == site) {
+                sites.insert((site, text, "read_only_load"));
+            }
+        }
+    }
     let rows: Vec<Value> = sites
         .iter()
         .take(SHOWN)
@@ -780,44 +943,14 @@ pub(crate) fn constant(project: &Project, claim: &ConstantClaim) -> Outcome {
     if !limitations.is_empty() {
         evidence["limitations"] = json!(limitations);
     }
-    // Instructions without typed operands leave the search incomplete; their rendered text still shows every
-    // operand, so when the only gap is those and no instruction's text holds the value, the scan is complete.
-    if !complete && limitations.iter().all(|limitation| limitation.contains("operand evidence")) {
-        let hex_form = format!("{value:#x}");
-        let signed_form = format!("{:#x}", value as u32 as i32);
-        let decimal = value.to_string();
-        let mentions = |text: &str| {
-            let text = text.to_ascii_lowercase();
-            text.contains(&hex_form)
-                || text.contains(&signed_form)
-                || text.split(|character: char| !character.is_ascii_digit()).any(|word| word == decimal)
-        };
-        if let Ok(graph) = project.function_graph(start) {
-            let mut lines = graph.blocks.iter().flat_map(|block| &block.lines);
-            complete = !lines.any(|line| mentions(&line.text) || line.immediates_hex.as_deref().is_some_and(mentions));
-            if complete {
-                evidence["text_checked"] = json!(true);
-            }
-        }
-    }
-    if complete && absence_refutes(project.binary.arch, value) {
-        return Outcome::refuted(
-            Confidence::Static,
-            format!("{method}: none holds it; a value computed from other constants or read from a table is not seen"),
-            evidence,
-        );
-    }
-    let reason = match project.binary.arch {
-        Arch::X86 | Arch::X86_64 if !complete => "the scan of the function was incomplete".to_owned(),
-        Arch::X86 | Arch::X86_64 => {
-            "no instruction holds it, but a small constant is often folded into other instructions (lea, shifts, \
-             a division's multiplier)"
-                .to_owned()
-        }
-        arch => format!(
-            "no instruction holds it, but on {arch:?} constants are built from pieces or loaded in ways the search \
-             does not see: its results are lower bounds"
-        ),
+    // An absent constant is never refuted: compilers build values from shifts and adds, compare against value - 1,
+    // replace a division by a multiplier, or load the value from data the code addresses indirectly.
+    let reason = if complete {
+        "no instruction holds it, but a constant's absence proves nothing: it may be built from other values \
+         (shifts and adds, a comparison with value - 1, a division's multiplier) or loaded from data"
+            .to_owned()
+    } else {
+        "no instruction found holds it, and the scan of the function was incomplete".to_owned()
     };
     Outcome::unknown(method, evidence, reason)
         .needs("a returns or computes claim that shows the value in use, or a read of the disassembly")

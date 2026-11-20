@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::reference::{AlgorithmSpec, Reference, Shape};
-use super::{Address, Confidence, Outcome, address, function_start, hex};
+use super::{Address, Budget, Confidence, Outcome, address, function_start, hex};
 use crate::{IntegrityRequest, LockQuery, Project};
 
 /// Bytes a region claim recomputes.
@@ -57,7 +57,7 @@ fn read_range(project: &Project, start: u64, end: u64) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-pub(crate) fn region(project: &std::sync::Arc<Project>, claim: &RegionClaim) -> Outcome {
+pub(crate) fn region(project: &std::sync::Arc<Project>, claim: &RegionClaim, budget: Budget) -> Outcome {
     let (start, end) = match (claim.start.resolve(project), claim.end.resolve(project)) {
         (Ok(start), Ok(end)) => (start, end),
         (Err(error), _) | (_, Err(error)) => return error.into(),
@@ -78,7 +78,7 @@ pub(crate) fn region(project: &std::sync::Arc<Project>, claim: &RegionClaim) -> 
             recompute(project, start, end, stored, &reference, claim.endian.as_deref())
         }
         (Some(_), None) => Outcome::invalid("a stored value is recomputed with an algorithm: name it"),
-        (None, reference) => detected(project, start, end, reference.as_ref()),
+        (None, reference) => detected(project, start, end, reference.as_ref(), budget),
     }
 }
 
@@ -102,7 +102,7 @@ fn recompute(
     let (computed, other_order) = match reference.shape() {
         Shape::Checksum(bits) => {
             let value = reference.checksum(&data, big_endian);
-            let little = value.to_le_bytes()[..(bits / 8) as usize].to_vec();
+            let little = value.to_le_bytes()[..bits.div_ceil(8) as usize].to_vec();
             let big: Vec<u8> = little.iter().rev().copied().collect();
             if big_endian { (big, Some(little)) } else { (little, Some(big)) }
         }
@@ -136,7 +136,16 @@ fn recompute(
     Outcome::refuted(Confidence::Exact, method, evidence)
 }
 
-fn detected(project: &std::sync::Arc<Project>, start: u64, end: u64, reference: Option<&Reference>) -> Outcome {
+fn detected(
+    project: &std::sync::Arc<Project>,
+    start: u64,
+    end: u64,
+    reference: Option<&Reference>,
+    budget: Budget,
+) -> Outcome {
+    if budget.expired() {
+        return Outcome::unknown("", Value::Null, "the call's time budget ran out").needs("a larger timeout_ms");
+    }
     let outcome = match project.integrity_checks(&IntegrityRequest::default()) {
         Ok(outcome) => outcome,
         Err(error) => return error.into(),
@@ -158,7 +167,10 @@ fn detected(project: &std::sync::Arc<Project>, start: u64, end: u64, reference: 
         })
     };
     let covering = checks.iter().find(|check| {
+        // A detected check counts only when its stored value still holds and the detection is not weak.
         check.space == "memory"
+            && check.valid
+            && matches!(check.confidence, "high" | "medium")
             && algorithm_matches(check.algorithm)
             && check.ranges.iter().any(|range| range.start <= start && end <= range.end)
     });
@@ -184,7 +196,7 @@ fn detected(project: &std::sync::Arc<Project>, start: u64, end: u64, reference: 
     .needs("stored: the address of the value with an algorithm, to recompute it exactly")
 }
 
-pub(crate) fn lock(project: &Project, claim: &LockClaim) -> Outcome {
+pub(crate) fn lock(project: &Project, claim: &LockClaim, budget: Budget) -> Outcome {
     let function = match function_start(project, &claim.function) {
         Ok(function) => function,
         Err(outcome) => return outcome,
@@ -198,6 +210,9 @@ pub(crate) fn lock(project: &Project, claim: &LockClaim) -> Outcome {
     let mut offset = 0;
     let mut supported = true;
     loop {
+        if budget.expired() {
+            return Outcome::unknown("", Value::Null, "the call's time budget ran out").needs("a larger timeout_ms");
+        }
         let report = match project.lock_mechanisms(&LockQuery { category: claim.category.clone(), offset, limit: 100 })
         {
             Ok(report) => report,

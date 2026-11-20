@@ -43,9 +43,15 @@ The rules that keep a wrong claim from being verified:
   initial value in the file (`.bss`, Raw RAM). A table-driven CRC whose table is filled at boot is the typical
   case: run the initialiser first with `setup`.
 - **Without an explicit width,** a 64-bit register whose low 32 bits match but whose upper bits differ is unknown.
-  Pass `bits: 32` for a C `int`.
+  Pass `bits: 32` for a C `int`. A claimed value wider than the result register is never compared masked: the
+  answer is unknown and names `bits: 64`, which reads the register pair.
+- **A refutation that read initialised writable data** says so in `assumes`: the run used the file's initial
+  values, which the program may change before the call. Verified results list unset data they read
+  (`reads_unset_data`).
 
-`not: true` negates a claim: verified and refuted swap, and the evidence and confidence stay. An `id` is echoed back.
+`not: true` negates a claim: verified and refuted swap, and the evidence and confidence stay. A `sampled` or
+`heuristic` verification holds no counterexample to the negation, so the negated claim is then unknown. An `id` is
+echoed back.
 `timeout_ms` bounds the whole call (default 60000, at most 300000). Claims left when it runs out are unknown.
 
 ## Claim kinds
@@ -56,8 +62,9 @@ The rules that keep a wrong claim from being verified:
 
 `args` are exactly as for `evaluate_function`. `value` is an integer (a number, or a hex or decimal string,
 negative allowed), compared at `bits` when given. Otherwise the whole result register is compared. `float` takes
-a number or `inf`/`nan`, with `bits` 32 or 64. `buffers` lists `{argument, hex | text}` and compares the final
-contents of a buffer argument.
+a number or `inf`/`nan`, with `bits` 32 or 64. `buffers` lists `{argument, hex | text, prefix?}` and compares the
+final contents of a buffer argument. `text` is a C string: its bytes and the terminating NUL. `hex` states the
+whole buffer, unless `prefix: true` compares only its first bytes.
 
 ```json
 {"kind": "returns", "function": "app_scale", "args": [2], "value": 14}
@@ -81,7 +88,7 @@ cover:
 
 - 0, 1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 63, 64, 255 and 1024 bytes;
 - the CRC catalogue's `"123456789"`;
-- with more samples, 4096 bytes and seeded lengths.
+- with more samples, 5, 17, 33, 65, 127, 128, 256 and 4096 bytes, then seeded lengths up to 512.
 
 Contents cycle through random, all-zero, all-0xff and ascending bytes.
 
@@ -156,7 +163,9 @@ unknown, not refuted:
 - **Width:** arithmetic wraps at `bits` (8, 16, 32 or 64; default 32). `/ % >> <` and the other comparisons are
   unsigned.
 - **Arguments:** `args` lists the variable names in argument order (an integer fixes one). The default is `arg0,
-  arg1, ...` or else alphabetical.
+  arg1, ...` or else alphabetical. Each argument has its own width, 32 bits (a C `int`) unless an object says
+  otherwise: `{"name": "a", "bits": 64, "signed": true}` or `{"value": 7, "bits": 8}`. Samples stay within that
+  width, and the expression sees the argument zero-extended to `bits` (sign-extended with `signed`).
 - **Inputs:** each variable takes the edge cases 0, 1, all ones, 2, the signed minimum and maximum, 0xff, 0x100 and
   others, then seeded values.
 - **Skipped inputs:** an input that leaves the expression undefined in C is not a sample. These are division by
@@ -174,10 +183,14 @@ unknown, not refuted:
 
 - **Without `before`:** verified when the function (or, with `depth` up to 8, a function it calls) has a call site
   reaching `callee`. A site reaches it directly, through a tail jump, a resolved indirect call, an import slot, or
-  forwarding stubs: PLT entries, import thunks and veneers, matched by address or name.
+  forwarding stubs: PLT entries, import thunks and veneers, matched by address or by exact name (an `@plt` or
+  version suffix and an `__imp_` prefix aside; on Mach-O, its one leading underscore). A callee that names no
+  address, symbol or import in the binary is invalid.
 - **Refuted** when the search found no such site and no unresolved indirect call or jump remains in the functions
   searched. The evidence lists the call sites.
-- **Unknown** otherwise: a call through a pointer may reach the callee. The unresolved sites are listed.
+- **Unknown** otherwise: a call through a pointer, or into an import that calls back through a pointer it is
+  given (`qsort`, `pthread_create`, `__libc_start_main`, `atexit`, `CreateThread`, ...), may reach the callee. The
+  unresolved sites are listed. A search stopped by its function budget or the deadline is unknown too.
 
 ```json
 {"kind": "calls", "function": "boot_main", "callee": "uart_putc"}
@@ -219,12 +232,12 @@ An absence of references is never refuted, since addresses can be computed at ru
 
 `{kind, function, value, bits?}`
 
-Verified when an immediate operand or a loaded literal (32-bit ARM literal pools and movw/movt pairs, MIPS
-lui/ori, Xtensa l32r) equals the value. The evidence gives the site and instruction.
+Verified when an immediate operand, a loaded literal (32-bit ARM literal pools and movw/movt pairs, MIPS lui/ori,
+Xtensa l32r) or a load from read-only data (a RIP-relative `.rodata` load on x86) equals the value. The evidence
+gives the site and instruction.
 
-An absence refutes only on x86 and x86-64, for values of at least 0x10000, after a complete scan. Smaller
-constants are often folded into `lea`, shifts or a division's multiplier. Elsewhere constants are built from
-pieces, and the search is a lower bound. Every other absence is unknown.
+An absence is never refuted, on any architecture: compilers build constants from shifts and adds, compare against
+value - 1, replace a division by a multiplier, or load the value from data addressed indirectly.
 
 ### region: a checksum covers a byte range
 
@@ -235,7 +248,8 @@ pieces, and the search is a lower bound. Every other absence is unknown.
   verified or refuted, `exact`, with both values. If the stored value matches in the other byte order, the evidence
   says so.
 - **Without `stored`:** verified when a check that `integrity_checks` found covers the range (with that algorithm,
-  when given). Otherwise unknown: detection is a search, not proof of absence.
+  when given), its stored value still holds, and its detection confidence is medium or high. Otherwise unknown:
+  detection is a search, not proof of absence.
 
 ### lock: a lock mechanism decides in or guards a function
 

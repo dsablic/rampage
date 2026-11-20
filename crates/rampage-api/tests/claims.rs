@@ -285,7 +285,8 @@ fn x86_64_calls_references_constants_and_ints() {
     assert_eq!(results[4]["evidence"]["outside"][0]["function"], "main");
     verdict(&results[5], "verified");
     verdict(&results[6], "unknown");
-    verdict(&results[7], "refuted");
+    // An absent constant is never refuted.
+    verdict(&results[7], "unknown");
     verdict(&results[8], "verified");
     verdict(&results[9], "refuted");
     assert!(matches!(results[10]["verdict"].as_str(), Some("unknown" | "verified")), "{:#}", results[10]);
@@ -416,6 +417,208 @@ fn only_the_right_algorithm_is_ever_verified() {
         let right = matches!(result["id"].as_str(), Some("crc32" | "crc32_iso_hdlc"));
         verdict(result, if right { "verified" } else { "refuted" });
     }
+}
+
+/// Review 1: a claimed value wider than the result register is never compared masked.
+#[test]
+fn review_wide_values_are_never_masked() {
+    for path in ["bench-v3/twins/semantics-x86.elf", "bench-v3/twins/semantics-arm32.elf"] {
+        let project = open(path);
+        for value in [json!("0x10024106f"), json!("-0xffdbef91")] {
+            let result =
+                check(&project, json!({"kind": "returns", "function": "walk", "args": [27, 1000], "value": value}));
+            assert_ne!(result["verdict"], "verified", "{path}: {result:#}");
+            assert!(result["needs"].as_str().unwrap_or("").contains("bits 64"), "{path}: {result:#}");
+        }
+        let claim =
+            json!({"kind": "returns", "function": "walk", "args": [27, 1000], "value": "0x10024106f", "bits": 32});
+        verdict(&check(&project, claim), "invalid");
+    }
+    // scale64 returns 64 bits in EDX:EAX: the whole value with bits 64, never EAX alone.
+    let project = open("bench-v3/twins/semantics-x86.elf");
+    let wide = (16u64 * 3).wrapping_add(16 << 21);
+    let expected = (wide ^ (wide >> 29)).wrapping_sub(3 * 0x1_0000_0001);
+    let claim = |bits: Option<u32>| {
+        let mut claim =
+            json!({"kind": "returns", "function": "scale64", "args": [16, 3], "value": format!("{expected:#x}")});
+        if let Some(bits) = bits {
+            claim["bits"] = json!(bits);
+        }
+        claim
+    };
+    verdict(&check(&project, claim(None)), "unknown");
+    verdict(&check(&project, claim(Some(64))), "verified");
+}
+
+/// Review 2: with depth, the later callee of a `before` claim is searched through callees too.
+#[test]
+fn review_before_searches_both_callees_to_the_depth() {
+    let project = cortex_m();
+    let claim = json!({"kind": "calls", "function": cm("reset_handler"), "callee": cm("crc32_compute"),
+                       "before": cm("app_scale"), "depth": 2});
+    verdict(&check(&project, claim), "verified");
+    let reversed = json!({"kind": "calls", "function": cm("reset_handler"), "callee": cm("app_scale"),
+                          "before": cm("crc32_compute"), "depth": 2});
+    verdict(&check(&project, reversed), "refuted");
+}
+
+/// Review 3: an absent constant is never refuted, whatever the architecture.
+#[test]
+fn review_absent_constants_are_unknown() {
+    let project = open("bench-v3/twins/semantics-x86.elf");
+    let result = check(&project, json!({"kind": "constant", "function": "scale64", "value": "0x100000001"}));
+    verdict(&result, "unknown");
+}
+
+/// Review 4: expression arguments have their own widths, and samples stay within them.
+#[test]
+fn review_expression_arguments_have_their_own_widths() {
+    let project = open("bench-v3/twins/semantics-x86.elf");
+    let expression = "((a*b + (a<<21)) ^ ((a*b + (a<<21)) >> 29)) - 0x100000001*(b&7)";
+    let args = json!([{"name": "a", "bits": 32}, {"name": "b", "bits": 32}]);
+    let right = json!({"kind": "computes", "function": "scale64", "expression": expression, "bits": 64, "args": args});
+    verdict(&check(&project, right), "verified");
+    let wrong = json!({"kind": "computes", "function": "scale64", "expression": "a*b + (a<<21)", "bits": 64,
+                       "args": args});
+    let result = check(&project, wrong);
+    verdict(&result, "refuted");
+    for arg in result["evidence"]["counterexample"]["args"].as_array().unwrap() {
+        let value = u64::from_str_radix(arg.as_str().unwrap().trim_start_matches("0x"), 16).unwrap();
+        assert!(value <= 0xffff_ffff, "{result:#}");
+    }
+    let bad =
+        json!({"kind": "computes", "function": "scale64", "expression": "a", "args": [{"name": "a", "bits": 12}]});
+    verdict(&check(&project, bad), "invalid");
+}
+
+/// Review 5: an FNV-1a routine still verifies; a narrower reference that agrees on the low bits would not (unit
+/// tested on the register rule, `claims::run::tests`).
+#[test]
+fn review_full_width_checksums_still_verify() {
+    let request: RawProjectRequest = serde_json::from_value(json!({
+        "profile": "cortex-m3", "offset": 0, "length": 800, "base_address": "0x8000000", "vector_table": true
+    }))
+    .unwrap();
+    let path = std::path::PathBuf::from(format!("{FIXTURES}firmware/raw-cortex-m.bin"));
+    let project = Session::default().open_raw(&path, &request).unwrap();
+    let checksum = symbol("firmware/raw-cortex-m.elf", "checksum");
+    verdict(&check(&project, json!({"kind": "computes", "function": checksum, "algorithm": "fnv1a32"})), "verified");
+    verdict(&check(&project, json!({"kind": "computes", "function": checksum, "algorithm": "fnv1_32"})), "refuted");
+}
+
+/// Review 6: callee names match exactly; a name the binary does not have is invalid, not "not called".
+#[test]
+fn review_callee_names_match_exactly() {
+    let project = open("bin/hello-x64.elf");
+    verdict(&check(&project, json!({"kind": "calls", "function": "main", "callee": "_puts"})), "invalid");
+    verdict(&check(&project, json!({"kind": "calls", "function": "main", "callee": "put"})), "invalid");
+    verdict(&check(&project, json!({"kind": "calls", "function": "main", "callee": "puts"})), "verified");
+}
+
+/// Review 13: a call into an import that calls back through a pointer leaves absence unknown.
+#[test]
+fn review_callback_imports_leave_absence_unknown() {
+    let project = open("bin/hello-x64-dyn.elf");
+    let result = check(&project, json!({"kind": "calls", "function": "_start", "callee": "main"}));
+    assert_ne!(result["verdict"], "refuted", "{result:#}");
+}
+
+/// Review 7: a detected check verifies a region only while its stored value holds.
+#[test]
+fn review_region_needs_a_valid_detected_check() {
+    use rampage_api::tools::{call_shared, tools};
+    let directory = std::env::temp_dir().join(format!("rampage-claims-region-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("raw-cortex-m-crc.bin");
+    std::fs::copy(format!("{FIXTURES}firmware/raw-cortex-m-crc.bin"), &path).unwrap();
+    let request: RawProjectRequest = serde_json::from_value(json!({
+        "profile": "cortex-m3", "offset": 0, "length": 0x800, "base_address": "0x8000000", "vector_table": true
+    }))
+    .unwrap();
+    let mut project = Session::default().open_raw(&path, &request).unwrap();
+    let mut call = |name: &str, input: Value| -> Value {
+        let (text, failed) = call_shared(&tools(), &mut project, name, input);
+        assert!(!failed, "{name}: {text}");
+        serde_json::from_str(&text).unwrap()
+    };
+    let region = json!({"kind": "region", "start": "0x8000400", "end": "0x80007fc", "algorithm": "crc32"});
+    let report = call("check_claim", json!({"claims": [region]}));
+    assert_eq!(report["results"][0]["verdict"], "verified", "{report:#}");
+    // Patch one byte of the application's table: the stored CRC no longer holds.
+    let integrity = call("integrity_checks", json!({"emulate": false}));
+    let patch = json!({
+        "at": cm("app_table"), "original_hex": "11", "replacement_hex": "42", "allow_data": false,
+        "source_sha256": integrity["receipt"]["source_sha256"],
+        "expected_revision": integrity["receipt"]["revision_sha256"],
+    });
+    call("patch_bytes", patch);
+    let mut stored = region.clone();
+    stored["stored"] = json!("0x80007fc");
+    let report = call("check_claim", json!({"claims": [region, stored]}));
+    assert_ne!(report["results"][0]["verdict"], "verified", "{report:#}");
+    assert_eq!(report["results"][1]["verdict"], "refuted", "{report:#}");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Review 8: an expected text is a C string (its NUL included); hex states the whole buffer unless `prefix`.
+#[test]
+fn review_buffers_compare_whole() {
+    let project = open("bin/hello-thumb.elf");
+    let claim = |expected: Value| {
+        json!({"kind": "returns", "function": "0x20e9e", "args": [{"buffer": {"size": 8}}, 65, 4],
+               "buffers": [expected]})
+    };
+    let results = check_all(
+        &project,
+        vec![
+            claim(json!({"argument": 0, "text": "AAA"})),
+            claim(json!({"argument": 0, "text": "AAAA"})),
+            claim(json!({"argument": 0, "hex": "41414141"})),
+            claim(json!({"argument": 0, "hex": "4141414100000000"})),
+            claim(json!({"argument": 0, "hex": "414141", "prefix": true})),
+        ],
+    );
+    verdict(&results[0], "refuted");
+    verdict(&results[1], "verified");
+    verdict(&results[2], "invalid");
+    verdict(&results[3], "verified");
+    verdict(&results[4], "verified");
+}
+
+/// Review 9: a refutation that read initialised writable data states that assumption.
+#[test]
+fn review_refutations_state_their_data_assumptions() {
+    let path = "firmware/elf-cortex-m-crc32.elf";
+    let project = open(path);
+    // app_scale returns value * 5 + blink_period, an initialised SRAM variable (0x12345 in the file).
+    let scale = symbol(path, "app_scale");
+    let right = check(&project, json!({"kind": "returns", "function": scale, "args": [1], "value": 0x1234a}));
+    verdict(&right, "verified");
+    assert!(right["evidence"]["assumes_initial_data"].is_array(), "{right:#}");
+    let wrong = check(&project, json!({"kind": "returns", "function": scale, "args": [1], "value": 6}));
+    verdict(&wrong, "refuted");
+    assert!(wrong["evidence"]["assumes"].as_str().is_some(), "{wrong:#}");
+}
+
+/// Review 10: negating a sampled verification is unknown, not a refutation without a counterexample.
+#[test]
+fn review_negated_samples_are_unknown() {
+    let project = cortex_m();
+    let claim = json!({"kind": "computes", "function": cm("crc32_compute"), "algorithm": "crc32", "samples": 4,
+                       "not": true});
+    let result = check(&project, claim);
+    verdict(&result, "unknown");
+    assert_eq!(result["negated"], true);
+}
+
+/// Review 11: a deep search under a tiny budget is unknown, never refuted.
+#[test]
+fn review_static_searches_respect_the_deadline() {
+    let project = open("bin/hello-x64.elf");
+    let claim = json!({"kind": "calls", "function": "main", "callee": "add", "before": "puts", "depth": 8});
+    let report = serde_json::to_value(project.check_claims(&[claim], Some(30)).unwrap()).unwrap();
+    assert_ne!(report["results"][0]["verdict"], "verified", "{report:#}");
 }
 
 /// The same C function on each architecture's hello fixture.

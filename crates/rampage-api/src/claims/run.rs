@@ -14,6 +14,8 @@ use crate::evaluate::{
 };
 
 pub const DEFAULT_SAMPLES: usize = 16;
+/// An expression argument's width unless the claim gives one: a C int on every supported target.
+const DEFAULT_ARGUMENT_BITS: u32 = 32;
 pub const MAX_SAMPLES: usize = 64;
 /// The seed of generated inputs when a claim gives none.
 pub const DEFAULT_SEED: u64 = 0x5eed_c1a1_0000_0001;
@@ -41,8 +43,12 @@ pub(crate) struct SetupCall {
 pub(crate) struct ExpectedBuffer {
     /// The argument index of the buffer.
     argument: usize,
+    /// The whole buffer's final bytes (or its first bytes with `prefix`).
     hex: Option<String>,
+    /// A C string: these bytes and a NUL.
     text: Option<String>,
+    #[serde(default)]
+    prefix: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,7 +262,30 @@ fn mismatch(method: String, mut counterexample: Value, reads: &DataReads, confid
         )
         .needs("run its initialiser first with setup [{at, args}], or give its bytes with memory");
     }
+    if reads.initial_count > 0 {
+        let addresses: Vec<String> = reads.initial.iter().map(|address| format!("{address:#x}")).collect();
+        counterexample["assumes"] = json!(format!(
+            "the writable data the run read ({}) held its initial values from the file; the program may change them \
+             before the call",
+            addresses.join(", ")
+        ));
+    }
     Outcome::refuted(confidence, method, counterexample)
+}
+
+/// Whether a claimed integer fits `bits`: unsigned up to all ones, negative down to the signed minimum.
+fn fits(value: u64, negative: bool, bits: u32) -> bool {
+    if bits >= 64 {
+        return true;
+    }
+    if negative { (value as i64) >= -(1i64 << (bits - 1)) } else { value < (1u64 << bits) }
+}
+
+/// The unset data a verified run read, as evidence: the result holds for that state.
+fn note_unset(evidence: &mut Value, reads: &DataReads) {
+    if reads.unset_count > 0 {
+        evidence["reads_unset_data"] = reads_evidence(reads)["unset"].clone();
+    }
 }
 
 pub(crate) fn parse_integer(text: &IntegerText) -> Result<(u64, bool), String> {
@@ -339,11 +368,19 @@ pub(crate) fn returns(project: &Project, claim: &ReturnsClaim, budget: Budget) -
                 Ok(parsed) => parsed,
                 Err(error) => return Outcome::invalid(error),
             };
-            let value = u128::from(value);
-            let fits = negative || bits >= 64 || value <= mask(bits);
-            if !fits && claim.bits.is_some() {
-                return Outcome::invalid(format!("value {value:#x} does not fit in {bits} bits"));
+            if !fits(value, negative, bits) {
+                if claim.bits.is_some() {
+                    return Outcome::invalid(format!("value {expected:?} does not fit in {bits} bits"));
+                }
+                // Never compare a wider claim with a masked register.
+                return Outcome::unknown(
+                    method,
+                    evidence,
+                    format!("the claimed value does not fit the {bits}-bit result register"),
+                )
+                .needs(format!("bits {} to read a register pair (EDX:EAX, r1:r0)", 2 * bits.min(64)));
             }
+            let value = u128::from(value);
             let expected = if negative { value | !mask(64) } else { value } & mask(bits);
             evidence["expected"] = json!(format!("{expected:#x}"));
             evidence["bits"] = json!(bits);
@@ -398,13 +435,20 @@ pub(crate) fn returns(project: &Project, claim: &ReturnsClaim, budget: Budget) -
                 Ok(bytes) => bytes,
                 Err(error) => return Outcome::invalid(format!("buffer {}: {error}", expected.argument)),
             },
-            (None, Some(text)) => text.as_bytes().to_vec(),
+            (None, Some(text)) => text.bytes().chain([0]).collect(),
             _ => return Outcome::invalid("an expected buffer takes hex or text"),
         };
         let Some(buffer) = report.buffers.iter().find(|buffer| buffer.argument == expected.argument) else {
             return Outcome::invalid(format!("argument {} is not a buffer", expected.argument));
         };
         let got = super::decode_hex(&buffer.hex).unwrap_or_default();
+        if expected.hex.is_some() && !expected.prefix && want.len() != buffer.size {
+            return Outcome::invalid(format!(
+                "hex states the whole buffer ({} bytes, {} given); pass prefix: true to compare its first bytes",
+                buffer.size,
+                want.len()
+            ));
+        }
         if want.len() > got.len() {
             let reason = if want.len() > buffer.size {
                 format!("the expected bytes are longer than the buffer ({} bytes)", buffer.size)
@@ -423,7 +467,32 @@ pub(crate) fn returns(project: &Project, claim: &ReturnsClaim, budget: Budget) -
             return mismatch(method, evidence, &reads, Confidence::Exact);
         }
     }
+    note_unset(&mut evidence, &reads);
     Outcome::verified(Confidence::Exact, method, evidence)
+}
+
+/// Whether a `register_bits` register holds more than a `bits`-wide value: its upper bits are neither zero nor the
+/// value's sign extension.
+fn wider_than(register: u128, register_bits: u32, bits: u32) -> bool {
+    if bits >= register_bits {
+        return false;
+    }
+    let upper = register >> bits;
+    let extended = upper == mask(register_bits - bits) && (register >> (bits - 1)) & 1 == 1;
+    upper != 0 && !extended
+}
+
+/// Adds one run's data reads to a claim's.
+fn merge_reads(total: &mut DataReads, reads: &DataReads) {
+    total.initial_count += reads.initial_count;
+    total.unset_count += reads.unset_count;
+    for (list, from) in [(&mut total.initial, &reads.initial), (&mut total.unset, &reads.unset)] {
+        for address in from {
+            if list.len() < 8 && !list.contains(address) {
+                list.push(*address);
+            }
+        }
+    }
 }
 
 /// Seeded inputs: xorshift64*.
@@ -638,7 +707,7 @@ fn computes_algorithm(
         let (expected_value, expected_bytes): (Option<(u64, u32)>, Vec<u8>) = match shape {
             Shape::Checksum(bits) => {
                 let value = reference.checksum(data, big_endian);
-                let bytes = value.to_le_bytes()[..(bits / 8) as usize].to_vec();
+                let bytes = value.to_le_bytes()[..bits.div_ceil(8) as usize].to_vec();
                 let bytes = if big_endian { bytes.into_iter().rev().collect() } else { bytes };
                 (Some((value, bits)), bytes)
             }
@@ -680,7 +749,7 @@ fn computes_algorithm(
             });
         }
         let return_bits = match expected_value {
-            Some((_, bits)) if to_return && bits > pointer_bits => Some(bits),
+            Some((_, bits)) if to_return && bits > pointer_bits => Some(bits.next_multiple_of(8)),
             _ => None,
         };
         let (report, reads) = match runner.run(args, return_bits, None) {
@@ -691,19 +760,27 @@ fn computes_algorithm(
         if report.stop != StopReason::Returned {
             return stopped(&report, json!({"input": input, "matched_before": index}));
         }
-        initial_reads.initial_count += reads.initial_count;
-        for address in &reads.initial {
-            if initial_reads.initial.len() < 8 && !initial_reads.initial.contains(address) {
-                initial_reads.initial.push(*address);
-            }
-        }
+        merge_reads(&mut initial_reads, &reads);
         let (actual, expected) = if to_return {
             let Some((value, bits)) = expected_value else { unreachable!("a checksum has a value") };
-            let Some((register, _)) = result_bits(&report) else {
+            let Some((register, register_bits)) = result_bits(&report) else {
                 return Outcome::unknown(&method, input, "the run returned no value");
             };
-            let width = mask(bits);
-            (json!(format!("{:#x}", register & width)), json!(format!("{value:#x}")))
+            let low = register & mask(bits);
+            // Bits above the algorithm's width must be zero or a sign extension: otherwise the function computes
+            // something wider (sum32 is not sum8 because their low bytes agree).
+            if low == u128::from(value) && wider_than(register, register_bits, bits) {
+                return Outcome::unknown(
+                    &method,
+                    json!({"input": input, "result": format!("{register:#x}"), "matched_before": index}),
+                    format!(
+                        "the low {bits} bits equal the reference, but the register's upper bits are set: the function \
+                         may compute a wider value"
+                    ),
+                )
+                .needs("a wider algorithm, or a returns claim on this input with bits");
+            }
+            (json!(format!("{low:#x}")), json!(format!("{value:#x}")))
         } else {
             let position = match shape {
                 Shape::Block => state_argument,
@@ -746,6 +823,7 @@ fn computes_algorithm(
     if initial_reads.initial_count > 0 {
         evidence["assumes_initial_data"] = reads_evidence(&initial_reads)["initial"].clone();
     }
+    note_unset(&mut evidence, &initial_reads);
     Outcome::verified(
         Confidence::Sampled,
         format!("{method}: equal on every input; another input could still differ"),
@@ -776,36 +854,72 @@ fn computes_expression(
     samples: usize,
     seed: Option<u64>,
 ) -> Outcome {
-    // Arguments: each a variable (by its index in the expression, or a free one it does not use) or a fixed value.
+    // Arguments: each a variable (by its index in the expression, or a free one it does not use) or a fixed value,
+    // with its own width: a C int (32 bits) unless the claim says otherwise.
     enum Slot {
-        Variable(Option<usize>),
-        Fixed(u64),
+        Variable { index: Option<usize>, bits: u32, signed: bool },
+        Fixed { value: u64, bits: u32 },
     }
     let order: Vec<Value> = match args {
         Some(args) => args.clone(),
         None => expression.default_order().into_iter().map(Value::String).collect(),
     };
+    let width = |value: Option<&Value>| -> Result<u32, String> {
+        match value {
+            None => Ok(DEFAULT_ARGUMENT_BITS),
+            Some(bits) => match bits.as_u64() {
+                Some(bits @ (8 | 16 | 32 | 64)) => Ok(bits as u32),
+                _ => Err(format!("argument bits {bits} is not 8, 16, 32 or 64")),
+            },
+        }
+    };
+    let integer = |value: &Value| -> Result<u64, String> {
+        match value {
+            Value::Number(number) => number
+                .as_u64()
+                .or_else(|| number.as_i64().map(|value| value as u64))
+                .ok_or_else(|| format!("argument {number} is not an integer")),
+            Value::String(text) => parse_integer(&IntegerText::Text(text.clone())).map(|(value, _)| value),
+            other => Err(format!("argument {other} is not an integer")),
+        }
+    };
+    let variable = |name: &str| expression.names.iter().position(|known| known == name);
     let mut slots = Vec::new();
     for arg in &order {
-        slots.push(match arg {
+        let slot = match arg {
             Value::String(name)
                 if name.starts_with(|character: char| character.is_ascii_alphabetic() || character == '_') =>
             {
-                Slot::Variable(expression.names.iter().position(|known| known == name))
+                Ok(Slot::Variable { index: variable(name), bits: DEFAULT_ARGUMENT_BITS, signed: false })
             }
-            Value::String(text) => match parse_integer(&IntegerText::Text(text.clone())) {
-                Ok((value, _)) => Slot::Fixed(value),
-                Err(error) => return Outcome::invalid(error),
-            },
-            Value::Number(number) => match number.as_u64().or_else(|| number.as_i64().map(|value| value as u64)) {
-                Some(value) => Slot::Fixed(value),
-                None => return Outcome::invalid(format!("argument {number} is not an integer")),
-            },
-            other => return Outcome::invalid(format!("argument {other} is not a variable name or an integer")),
-        });
+            Value::Object(fields) => {
+                let unknown = fields.keys().find(|key| !["name", "value", "bits", "signed"].contains(&key.as_str()));
+                match (unknown, fields.get("name").and_then(Value::as_str), fields.get("value")) {
+                    (Some(key), ..) => {
+                        Err(format!("an argument object takes name or value, bits and signed, not {key}"))
+                    }
+                    (None, Some(name), None) => width(fields.get("bits")).map(|bits| Slot::Variable {
+                        index: variable(name),
+                        bits,
+                        signed: fields.get("signed").and_then(Value::as_bool).unwrap_or(false),
+                    }),
+                    (None, None, Some(value)) => integer(value)
+                        .and_then(|value| width(fields.get("bits")).map(|bits| Slot::Fixed { value, bits })),
+                    _ => Err("an argument object takes a name or a value".to_owned()),
+                }
+            }
+            other => integer(other).map(|value| Slot::Fixed { value, bits: DEFAULT_ARGUMENT_BITS }),
+        };
+        match slot {
+            Ok(Slot::Fixed { value, bits }) if bits < 64 && value >> bits != 0 && (value as i64) >= 0 => {
+                return Outcome::invalid(format!("argument {value:#x} does not fit in {bits} bits"));
+            }
+            Ok(slot) => slots.push(slot),
+            Err(error) => return Outcome::invalid(error),
+        }
     }
     for (index, name) in expression.names.iter().enumerate() {
-        if !slots.iter().any(|slot| matches!(slot, Slot::Variable(Some(known)) if *known == index)) {
+        if !slots.iter().any(|slot| matches!(slot, Slot::Variable { index: Some(known), .. } if *known == index)) {
             return Outcome::invalid(format!("the expression's variable {name} is not an argument: list it in args"));
         }
     }
@@ -832,37 +946,42 @@ fn computes_expression(
             )
             .needs("fixed arguments in args for the divisor or shift count");
         }
-        let values: Vec<u64> =
-            (0..slots.len()).map(|variable| variable_value(attempt, variable, bits, &mut rng)).collect();
-        attempt += 1;
         let mut bound = vec![0u64; expression.names.len()];
         let mut call = Vec::new();
-        for (slot, &value) in slots.iter().zip(&values) {
-            let value = match slot {
-                Slot::Variable(index) => {
+        for (position, slot) in slots.iter().enumerate() {
+            let (value, arg_bits) = match slot {
+                Slot::Variable { index, bits: arg_bits, signed } => {
+                    let value = variable_value(attempt, position, *arg_bits, &mut rng);
                     if let Some(index) = index {
-                        bound[*index] = value;
+                        // The expression sees the argument at its own width, extended to the result's.
+                        let shift = 64 - arg_bits;
+                        let extended = if *signed { (((value << shift) as i64) >> shift) as u64 } else { value };
+                        bound[*index] = extended & width_mask;
                     }
-                    value
+                    (value, *arg_bits)
                 }
-                Slot::Fixed(value) => *value & width_mask,
+                Slot::Fixed { value, bits: arg_bits } => {
+                    let mask = if *arg_bits == 64 { u64::MAX } else { (1 << arg_bits) - 1 };
+                    (*value & mask, *arg_bits)
+                }
             };
-            call.push(value);
+            call.push((value, arg_bits));
         }
+        attempt += 1;
         let Ok(expected) = expression.evaluate(&bound, bits) else {
             undefined += 1;
             continue;
         };
-        let arguments = call.iter().map(|&value| fixed(value, Some(bits))).collect();
+        let arguments = call.iter().map(|&(value, arg_bits)| fixed(value, Some(arg_bits))).collect();
         let (report, reads) = match runner.run(arguments, Some(bits), None) {
             Ok(ran) => ran,
             Err(outcome) => return outcome,
         };
-        let input: Vec<String> = call.iter().map(|value| format!("{value:#x}")).collect();
+        let input: Vec<String> = call.iter().map(|(value, _)| format!("{value:#x}")).collect();
         if report.stop != StopReason::Returned {
             return stopped(&report, json!({"input": input, "matched_before": checked}));
         }
-        initial_reads.initial_count += reads.initial_count;
+        merge_reads(&mut initial_reads, &reads);
         let Some((actual, _)) = result_bits(&report) else {
             return Outcome::unknown(&method, json!({"input": input}), "the run returned no value");
         };
@@ -887,8 +1006,9 @@ fn computes_expression(
         evidence["setup"] = json!(runner.setup);
     }
     if initial_reads.initial_count > 0 {
-        evidence["reads_initial_data"] = json!(initial_reads.initial_count);
+        evidence["assumes_initial_data"] = reads_evidence(&initial_reads)["initial"].clone();
     }
+    note_unset(&mut evidence, &initial_reads);
     Outcome::verified(
         Confidence::Sampled,
         format!(
@@ -897,4 +1017,21 @@ fn computes_expression(
         ),
         evidence,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wider_than;
+
+    /// A sum32 routine is not a sum8 one although their low bytes agree: set upper register bits say so, while zero
+    /// or sign-extended upper bits are what a narrower C result leaves.
+    #[test]
+    fn upper_register_bits_tell_a_wider_result() {
+        assert!(wider_than(0x1_2345, 32, 8));
+        assert!(wider_than(0x1_2345, 32, 16));
+        assert!(!wider_than(0x45, 32, 8));
+        assert!(!wider_than(0xffff_ff85, 32, 8), "a sign-extended byte");
+        assert!(wider_than(0xffff_ff05, 32, 8), "all ones above a byte without its sign bit");
+        assert!(!wider_than(0xdead_beef, 32, 32));
+    }
 }

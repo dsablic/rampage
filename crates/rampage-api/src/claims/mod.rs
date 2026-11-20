@@ -133,8 +133,16 @@ impl Outcome {
         Self { needs: Some(needs.into()), ..self }
     }
 
-    /// The outcome of the negated claim: verified and refuted swap; the evidence and its confidence stay.
+    /// The outcome of the negated claim: verified and refuted swap; the evidence and its confidence stay. A
+    /// sampled or heuristic verification holds no counterexample to the negation, so the negation is unknown.
     fn negated(self) -> Self {
+        if self.verdict == Verdict::Verified
+            && matches!(self.confidence, Some(Confidence::Sampled | Confidence::Heuristic))
+        {
+            let reason = "the claim held on the evidence, which is not a counterexample to its negation";
+            return Self { verdict: Verdict::Unknown, confidence: None, reason: Some(reason.to_owned()), ..self }
+                .needs("an input or site that breaks the claim");
+        }
         let verdict = match self.verdict {
             Verdict::Verified => Verdict::Refuted,
             Verdict::Refuted => Verdict::Verified,
@@ -263,11 +271,11 @@ impl Project {
         let outcome = match parsed {
             Claim::Returns(claim) => run::returns(self, &claim, budget),
             Claim::Computes(claim) => run::computes(self, &claim, budget),
-            Claim::Calls(claim) => statics::calls(self, &claim),
+            Claim::Calls(claim) => statics::calls(self, &claim, budget),
             Claim::References(claim) => statics::references(self, &claim),
             Claim::Constant(claim) => statics::constant(self, &claim),
-            Claim::Region(claim) => facts::region(self, &claim),
-            Claim::Lock(claim) => facts::lock(self, &claim),
+            Claim::Region(claim) => facts::region(self, &claim, budget),
+            Claim::Lock(claim) => facts::lock(self, &claim, budget),
             Claim::Layout(claim) => facts::layout(self, &claim),
         };
         let outcome = if negated { outcome.negated() } else { outcome };

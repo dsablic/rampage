@@ -762,10 +762,8 @@ pub fn file_tools() -> Vec<FileTool> {
             description: "Find decoder parameters for a compressed stream of unknown variant in an explicit file range \
                 (at most 8 MiB), such as a file_layout compressed_component_candidate's payload: sweeps LZSS variants \
                 and LZ4 block within a work budget. Give expected_output_size when a header states it; only then can a \
-                candidate be confident. Each ranked candidate has decode_arguments to pass to decode_file_range \
-                unchanged, open_as_raw (a `raw` selector for its decoded bytes; see next), base_candidates, \
-                container_record, decoded size and SHA-256, metrics and a short preview; not_tried says what was not \
-                attempted. Evidence, not identification.",
+                candidate be confident. Each ranked candidate has decode_arguments for decode_file_range and \
+                open_as_raw (a `raw` selector for its decoded bytes). Evidence, not identification.",
             input_schema: probe_compression_schema(),
             handler: |_, mut input| {
                 if input.to_string().len() > 16_384 {
@@ -3076,7 +3074,6 @@ fn page_limit(limit: Option<usize>) -> Option<usize> {
     Some(limit.unwrap_or(DEFAULT_PAGE).min(1000))
 }
 
-/// Every tool, in the order the model sees them.
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CheckClaimArgs {
@@ -3123,6 +3120,7 @@ fn check_claim_tool() -> Tool {
     }
 }
 
+/// Every tool, in the order the model sees them.
 pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         tool(
@@ -3142,10 +3140,8 @@ pub fn tools() -> Vec<Tool> {
             "Carry the saved annotations (names, comments, signatures, types, globals) of an analyzed build `from` \
              over to this build. Functions are matched one-to-one, each with a method and confidence (see \
              min_confidence); evidence fitting several counterparts is reported as ambiguous, never guessed. Previews \
-             by default: each annotation's old -> new address, method, confidence and status. apply=true writes the \
-             transfers as undoable batches of at most 1000 with a provenance entry in the findings ledger, refusing a \
-             batch whose targets changed since matching. `list` pages transfers, matches, changed, added, removed or \
-             ambiguous functions; paging reuses the matching.",
+             by default; apply=true writes the transfers as undoable batches with a provenance entry in the findings \
+             ledger. `list` pages transfers, matches, changed, added, removed or ambiguous functions.",
             |project, request: crate::TransferRequest| project.transfer_annotations(&request),
         )
         .annotates(),
@@ -3164,12 +3160,11 @@ pub fn tools() -> Vec<Tool> {
             "search",
             "Search the image. mode.kind: bytes (hex with nibble wildcards), text (ascii, utf16_le or utf16_be; \
              literal or regex), immediate (numeric operand value), instruction (mnemonic/operand globs), references \
-             (exact target) or functions_referencing (an address, string, import or constant). Example: \
+             (exact target) or functions_referencing (an address, string, import or constant), e.g. \
              {\"mode\":{\"kind\":\"functions_referencing\",\"reference\":\
              {\"kind\":\"string\",\"text\":\"hello\",\"encoding\":\"utf8\"}}}. \
-             Addresses and range endpoints accept names; immediate values do not. offset/limit (1..1000) page hits; \
-             total_is_exact says whether the total is exact, and a scan that stopped early gives stop_reason and, for \
-             bytes/text, resume_at and unscanned_ranges to continue from.",
+             offset/limit (1..1000) page hits; a scan that stopped early gives stop_reason and, for bytes/text, \
+             resume_at to continue from.",
             |project, request: crate::SearchRequest| project.search_page(&request),
         ),
         tool(
@@ -3228,12 +3223,9 @@ pub fn tools() -> Vec<Tool> {
             "Experimental. Run a function on arguments and return its result: use it for any \"what does f return \
              for X\" question instead of working loops or bit operations out from decompiled code. A p-code \
              interpreter over the bundled Sleigh specifications (x86/x86-64 with SSE/AVX2, AArch64, ARM/Thumb, MIPS, \
-             PowerPC, RISC-V, Xtensa); nothing runs natively. Arguments follow the binary's calling convention: integers, \
-             {float}, buffers by pointer (returned). Calls inside the image are followed; common C library imports are \
-             modelled. `stop` says why the run ended (returned with result, step_limit, external_call, user_op, ...). \
-             Result width: return_bits 32 for a C int on 64-bit targets (or read low_32), 64 for a 64-bit value on \
-             32-bit targets (EDX:EAX, r1:r0); return_float 32/64 for float/double. trace N shows the first and last \
-             N instructions.",
+             PowerPC, RISC-V, Xtensa); nothing runs natively. Calls inside the image are followed; common C library \
+             imports are modelled. `stop` says why the run ended. return_bits 32 reads a C int on 64-bit targets, 64 \
+             a register pair on 32-bit ones.",
             |project, request: crate::evaluate::EvaluateRequest| {
                 let report = serde_json::to_value(project.evaluate_function(&request)?)
                     .map_err(|error| ApiError::Invalid(error.to_string()))?;

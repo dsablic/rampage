@@ -66,14 +66,12 @@ pub struct EvaluateRequest {
     /// Result width in bits (default the register width; 32 for an `int` on 64-bit targets; twice the register
     /// width reads a pair such as EDX:EAX or r1:r0).
     pub return_bits: Option<u32>,
-    /// Read a float result of 32 (float) or 64 (double) bits from the convention's float result register (XMM0,
-    /// ST0 on 32-bit x86, s0/d0, or r0/r1:r0 under ARM soft float) instead of an integer.
+    /// Read a 32-bit (float) or 64-bit (double) float result instead of an integer.
     pub return_float: Option<u32>,
     /// Up to 64 byte writes into the image (copy-on-write) before the run.
     #[serde(default)]
     pub memory: Vec<MemoryWrite>,
-    /// Up to 64 memory-mapped register values {at: address or PERIPHERAL.REGISTER, value}: each maps its 4 KiB
-    /// page as RAM, so polled status registers read as given.
+    /// Up to 64 memory-mapped registers {at, value}, each mapping its 4 KiB page as RAM.
     #[serde(default)]
     pub mmio: Vec<MmioValue>,
     /// Instruction budget (default 1000000, at most 20000000).
@@ -83,8 +81,7 @@ pub struct EvaluateRequest {
     /// Model common C library imports (memcpy, strlen, strcmp, malloc, free, ...) instead of stopping at them
     /// (default true).
     pub stubs: Option<bool>,
-    /// Return a trace of the first and last N executed instructions (1-32), each with the registers and memory it
-    /// wrote, to explain a result.
+    /// Trace the first and last N (1-32) executed instructions with what each wrote.
     pub trace: Option<u32>,
 }
 
