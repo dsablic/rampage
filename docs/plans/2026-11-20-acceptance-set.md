@@ -1,6 +1,7 @@
 # Acceptance set for the 1.6–1.8 features (2026-11-20)
 
-Status: the set is built (inputs pinned, truth derived). The acceptance run itself has not been done.
+Status: the set is built (inputs pinned, truth derived) and the first run was made on 2026-11-20: results and fixes
+in [the report](../benchmarks/acceptance-2026-11-20.md).
 
 Planning rule 1 says a track is done when it has run on an input it was not built from. This set supplies those
 inputs for the week's work: MIPS, Xtensa and ESP images, `carve` and `fs_list` on firmware containers,
@@ -57,7 +58,7 @@ A check passes at its bar or fails; "record" means the number is kept and there 
 | Id | Call | Truth | Bar |
 | --- | --- | --- | --- |
 | C1 | `carve` and `file_layout` on `openwrt-new` | SquashFS at 2338624 | Offset exact |
-| C2 | `fs_list` on it with that offset | 1051 regular files, 202 symbolic links | Counts exact |
+| C2 | `fs_list` on it with that offset | 1051 regular files, 207 symbolic links (202 until the run: `derive_truth.py` missed the five links to directories) | Counts exact |
 | C3 | `fs_extract` `bin/busybox` | SHA-256 from the `unsquashfs` tree | Identical bytes |
 | C4 | `carve` on `openwrt-ubi` | uImage at 0 (data size 2559594, load 0x80060000), UBI at 0x500000 | Both reported; `fs_list` reaches the volumes |
 | C5 | `carve` on `openwrt-trx` | TRX length 5771264, partitions at 28, 2344 and 2255872, SquashFS at 2255872 | Exact |
