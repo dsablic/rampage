@@ -1142,22 +1142,27 @@ version 1 build treats a version 2 file as foreign.
 `binary_info` (and `binary inspect --json`) report the store's part as `analysis_store`: `state` is `pending` (a
 store is configured but analysis has not run in this process), `hit` (discovery loaded from the store), `miss`
 (analysed fresh; `detail` says whether it was stored), `rejected` (an entry or the file failed validation, see
-`detail`; analysed fresh), `disabled`, or `unsupported` (runtime captures, and Raw Projects carrying record seeds
-from an earlier interpretation, are never stored). Once analysis ran with a store, `key` is the entry key. Once a
-decompilation was looked up, `decompilations` counts `hits` (served from the store), `stored` (decompiled and
-written) and `rejected` (an entry failed validation; `last_rejection` says why).
+`detail`; analysed fresh), `disabled`, or `unsupported` (runtime captures are never stored). Once analysis ran with a
+store, `key` is the entry key. Once a decompilation was looked up, `decompilations` counts `hits` (served from the
+store), `stored` (decompiled and written) and `rejected` (an entry failed validation; `last_rejection` says why).
 
 **Discovery key.** SHA-256 over every input discovery reads: the whole source file's SHA-256, the loaded image's
 offset and length in it, format and architecture slice; for a Raw Project its decoder binding (interpretation
 identity: bytes, profile, mapping, entry, seeds, vector and pointer tables, regions; plus the bundled Sleigh
-manifest); the store schema, rampage version and `ANALYSIS_VERSION`; and the running executable's path, size and
-modification time, so a rebuilt rampage never reads what an earlier build stored. Data packs, annotations and
-decompiler options do not affect discovery and are not in the key. A byte-patched view (after `patch_bytes`, or
-once `integrity_checks` or another patch-aware tool has checked the image) is keyed by its own bytes, apart from
-the original: a view is loaded from its bytes without the recovery an ordinary open runs (stripped Go symbols), so
-it can analyse differently. Views over the same bytes share an entry. A golden test records each
-fixture's analysis digest under `ANALYSIS_VERSION` and fails when discovery output changes without a version bump
-(see [development](development.md#analysis-store-version)).
+manifest) and the record seeds an automatic reopen carried over, in order; the store schema, rampage version and
+`ANALYSIS_VERSION`; and the running executable's path, size and modification time, so a rebuilt rampage never reads
+what an earlier build stored. Data packs, annotations and decompiler options do not affect discovery and are not in
+the key. A Raw Project owns the bytes it analyses, so its "source file" in the key is the analysed image itself:
+every backed region's bytes in region order, decoded and scatter-loaded ones included, not the opened file. Its
+interpretation identity binds how each region got its bytes: a decoded region's whole decode receipt (codec, every
+LZSS parameter, initial write offset, dictionary fill, expected and actual output size, encoded offset, length and
+SHA-256, output SHA-256), a slice's source, a scatter-load copy and whether `scatter_load` was followed and mapped.
+Any change to those, to the base address or to the decoded bytes is another entry; only `decode.timeout_ms`, which
+decides no byte, is left out. A byte-patched view (after `patch_bytes`, or once `integrity_checks` or another
+patch-aware tool has checked the image) is keyed by its own bytes, apart from the original: a view is loaded from its
+bytes without the recovery an ordinary open runs (stripped Go symbols), so it can analyse differently. Views over the
+same bytes share an entry. A golden test records each fixture's analysis digest under `ANALYSIS_VERSION` and fails
+when discovery output changes without a version bump (see [development](development.md#analysis-store-version)).
 
 **Decompilation key.** SHA-256 over the discovery key, the function, the decompiler options (compiler, platform,
 BE8), where decompilation runs (in process, or the supervised worker with its limits and its executable's path,
