@@ -136,36 +136,54 @@ fn stored_decompilations_equal_fresh_ones() {
     let scratch = Scratch::new();
     let store = scratch.store(rampage_api::DEFAULT_MAX_BYTES);
     for (label, input) in inputs(&scratch) {
-        let fresh = input.open(None);
-        let addresses = functions(&fresh);
-        assert!(!addresses.is_empty(), "{label}");
-        let reversed: Vec<u64> = addresses.iter().rev().copied().collect();
-        let mut expected = decompile_all(&fresh, &reversed);
-        expected.reverse();
-        assert!(fresh.analysis_store_status().decompilations.is_none(), "{label}: no store, no lookups");
-        let cold = input.open(Some(&store));
-        assert_eq!(decompile_all(&cold, &addresses), expected, "{label}: cold");
-        let succeeded = expected.iter().filter(|value| value.get("error").is_none()).count() as u64;
-        assert!(succeeded > 0, "{label}: nothing decompiled");
-        assert_eq!(counts(&cold).stored, succeeded, "{label}: {:?}", counts(&cold));
-        let warm = input.open(Some(&store));
-        assert_eq!(decompile_all(&warm, &addresses), expected, "{label}: warm");
-        let warm_counts = counts(&warm);
-        assert_eq!((warm_counts.hits, warm_counts.stored, warm_counts.rejected), (succeeded, 0, 0), "{label}");
-        // The decompile tool answers from the store exactly as it does fresh.
-        let at = format!("{:#x}", addresses[0]);
-        let tool = |project: &Arc<Project>| {
-            let mut project = Arc::clone(project);
-            rampage_api::tools::call_shared(
-                &rampage_api::tools::tools(),
-                &mut project,
-                "decompile",
-                json!({ "at": at, "view": "code" }),
-            )
-            .0
-        };
-        assert_eq!(tool(&warm), tool(&fresh), "{label}: tool");
+        assert_stored_decompilations_equal_fresh_ones(label, &input, &store);
     }
+}
+
+/// The same for Raw projects whose code a decoder provider produced: a scatter-loaded image, and one reopened with
+/// record seeds carried over.
+#[test]
+fn stored_decompilations_of_decoded_raw_projects_equal_fresh_ones() {
+    let scratch = Scratch::new();
+    let store = scratch.store(rampage_api::DEFAULT_MAX_BYTES);
+    for name in ["raw-cortex-m-scatter-gcc.bin", "raw-cortex-m-records.bin"] {
+        let (path, stream, decoded) = crate::analysis_cache::packed_cortex_m(&scratch.0, name);
+        let input = Input::Raw(path, crate::analysis_cache::packed_request(stream, decoded));
+        assert_stored_decompilations_equal_fresh_ones(name, &input, &store);
+    }
+}
+
+fn assert_stored_decompilations_equal_fresh_ones(label: &str, input: &Input, store: &Arc<AnalysisStore>) {
+    let fresh = input.open(None);
+    let addresses = functions(&fresh);
+    assert!(!addresses.is_empty(), "{label}");
+    let reversed: Vec<u64> = addresses.iter().rev().copied().collect();
+    let mut expected = decompile_all(&fresh, &reversed);
+    expected.reverse();
+    assert!(fresh.analysis_store_status().decompilations.is_none(), "{label}: no store, no lookups");
+    let cold = input.open(Some(store));
+    assert_eq!(decompile_all(&cold, &addresses), expected, "{label}: cold");
+    let succeeded = expected.iter().filter(|value| value.get("error").is_none()).count() as u64;
+    assert!(succeeded > 0, "{label}: nothing decompiled");
+    assert_eq!(counts(&cold).stored, succeeded, "{label}: {:?}", counts(&cold));
+    let warm = input.open(Some(store));
+    assert_eq!(decompile_all(&warm, &addresses), expected, "{label}: warm");
+    assert_eq!(warm.analysis_store_status().state, "hit", "{label}: warm discovery");
+    let warm_counts = counts(&warm);
+    assert_eq!((warm_counts.hits, warm_counts.stored, warm_counts.rejected), (succeeded, 0, 0), "{label}");
+    // The decompile tool answers from the store exactly as it does fresh.
+    let at = format!("{:#x}", addresses[0]);
+    let tool = |project: &Arc<Project>| {
+        let mut project = Arc::clone(project);
+        rampage_api::tools::call_shared(
+            &rampage_api::tools::tools(),
+            &mut project,
+            "decompile",
+            json!({ "at": at, "view": "code" }),
+        )
+        .0
+    };
+    assert_eq!(tool(&warm), tool(&fresh), "{label}: tool");
 }
 
 /// The in-process engine is reused across functions while the annotations stay the same, and a stored result is

@@ -252,6 +252,147 @@ fn different_raw_interpretations_of_the_same_bytes_never_share_an_entry() {
     assert_ne!(first.analysis_store_status().key, second.analysis_store_status().key);
 }
 
+/// Writes `firmware/<name>` compressed as lzss-4k (behind a 16-byte header) into `directory` and returns the file,
+/// the stream's length and the decoded size.
+pub(crate) fn packed_cortex_m(directory: &Path, name: &str) -> (PathBuf, usize, usize) {
+    let original = std::fs::read(Path::new(FIXTURES).join("firmware").join(name)).unwrap();
+    let stream = rampage_decode::encode::lzss(&rampage_decode::Lzss::classic_4k(4078, 0), &original);
+    let mut file = vec![0xa5; 16];
+    file.extend(&stream);
+    let path = directory.join(format!("packed-{name}"));
+    std::fs::write(&path, &file).unwrap();
+    (path, stream.len(), original.len())
+}
+
+/// The Raw request that decodes [`packed_cortex_m`]'s stream as the primary code region, scatter-load followed.
+pub(crate) fn packed_request(stream: usize, decoded: usize) -> RawProjectRequest {
+    raw_request(&json!({
+        "profile": "cortex-m", "offset": 16, "length": stream, "base_address": "0x8000000",
+        "vector_table": true, "scatter_load": true,
+        "decode": { "codec": "lzss-4k", "expected_output_size": decoded },
+    }))
+}
+
+/// Raw projects whose code comes from a decoder provider answer from the store exactly as fresh, also with
+/// scatter-load copies mapped and with record seeds carried into an automatic reopen.
+#[test]
+fn decoded_raw_projects_answer_identically_from_the_store() {
+    let scratch = Scratch::new();
+    let store = scratch.store(rampage_api::DEFAULT_MAX_BYTES);
+    for name in ["raw-cortex-m.bin", "raw-cortex-m-scatter-gcc.bin", "raw-cortex-m-records.bin"] {
+        let (path, stream, decoded) = packed_cortex_m(&scratch.0, name);
+        let request = packed_request(stream, decoded);
+        assert_equivalent(name, &store, |session| Some(session.open_raw(&path, &request).unwrap()));
+        let warm = Session::default().with_analysis_store(Some(Arc::clone(&store))).open_raw(&path, &request).unwrap();
+        let info: Value = serde_json::from_str(&call(&warm, "binary_info", json!({}))).unwrap();
+        assert_eq!(info["analysis_store"]["state"], "hit", "{name}: {:#}", info["analysis_store"]);
+        let raw = &info["raw"];
+        assert_eq!(raw["regions"][0]["source"]["type"], "decoded", "{name}");
+        match name {
+            // The GCC-style image's startup copies are mapped from the decoded bytes.
+            "raw-cortex-m-scatter-gcc.bin" => assert!(
+                raw["regions"].as_array().unwrap().iter().any(|region| region["source"]["type"] == "scatter_load"),
+                "{raw:#}"
+            ),
+            // The record fixture's record pass seeds functions, which an automatic reopen carries over.
+            "raw-cortex-m-records.bin" => assert!(raw["record_seeds"]["seeds"].as_u64().unwrap() > 0, "{raw:#}"),
+            _ => {}
+        }
+    }
+}
+
+/// Every parameter that decides a decoded project's bytes or layout separates its entry: the decoder selection and
+/// each decode option, the encoded range, the decoded size, the base address and scatter_load. The same file
+/// decoded two ways never shares an entry, even when the decoded bytes are identical. The decode deadline decides
+/// no byte, and an explicit default is the same interpretation, so those keep the entry.
+#[test]
+fn every_decode_and_mapping_parameter_separates_decoded_raw_entries() {
+    let scratch = Scratch::new();
+    let store = scratch.store(rampage_api::DEFAULT_MAX_BYTES);
+    let original = std::fs::read(Path::new(FIXTURES).join("firmware/raw-cortex-m.bin")).unwrap();
+    let stream = rampage_decode::encode::lzss(&rampage_decode::Lzss::classic_4k(4078, 0), &original);
+    // The stream twice, then one trailing byte: both offsets decode to the same bytes.
+    let mut file = vec![0xa5; 16];
+    file.extend(&stream);
+    file.extend(&stream);
+    file.push(0);
+    let path = scratch.0.join("packed-twice.bin");
+    std::fs::write(&path, &file).unwrap();
+    let base = json!({
+        "profile": "cortex-m", "offset": 16, "length": stream.len(), "base_address": "0x8000000",
+        "entry": "0x8000000", "pointer_tables": false,
+        "decode": { "codec": "lzss-4k", "expected_output_size": original.len() },
+    });
+    let with = |edit: &dyn Fn(&mut Value)| {
+        let mut value = base.clone();
+        edit(&mut value);
+        value
+    };
+    let lzss = json!({ "window_bits": 12, "min_match": 3, "flag_order": "lsb_first", "literal_bit": 1,
+        "reference_layout": "split_byte", "offset_mode": "ring_position" });
+    let second = 16 + stream.len();
+    let variants: Vec<(&str, Value)> = vec![
+        ("base", base.clone()),
+        (
+            "explicit lzss",
+            with(&|value| {
+                value["decode"] = json!({ "codec": "lzss", "lzss": lzss, "initial_write_offset": 4078,
+                    "expected_output_size": original.len() });
+            }),
+        ),
+        ("initial_write_offset", with(&|value| value["decode"]["initial_write_offset"] = json!(4077))),
+        ("dictionary_fill", with(&|value| value["decode"]["dictionary_fill"] = json!(1))),
+        ("offset", with(&|value| value["offset"] = json!(second))),
+        (
+            "length",
+            with(&|value| {
+                value["offset"] = json!(second);
+                value["length"] = json!(stream.len() + 1);
+            }),
+        ),
+        ("expected_output_size", with(&|value| value["decode"]["expected_output_size"] = json!(original.len() - 64))),
+        (
+            "base_address",
+            with(&|value| {
+                value["base_address"] = json!("0x8001000");
+                value["entry"] = json!("0x8001000");
+            }),
+        ),
+        ("scatter_load false", with(&|value| value["scatter_load"] = json!(false))),
+    ];
+    let session = || Session::default().with_analysis_store(Some(Arc::clone(&store)));
+    let mut keys: BTreeMap<String, &str> = BTreeMap::new();
+    let mut images: BTreeMap<&str, Value> = BTreeMap::new();
+    for (label, value) in &variants {
+        let request = raw_request(value);
+        let project = session().open_raw(&path, &request).unwrap();
+        let fresh = Session::default().with_analysis_store(None).open_raw(&path, &request).unwrap();
+        assert_eq!(program_digest(&project).unwrap(), program_digest(&fresh).unwrap(), "{label}");
+        let status = project.analysis_store_status();
+        assert_eq!(status.state, "miss", "{label}: {status:?}");
+        if let Some(other) = keys.insert(status.key.clone().unwrap(), label) {
+            panic!("{label} shares its entry with {other}");
+        }
+        let summary = serde_json::to_value(project.summary()).unwrap();
+        images.insert(label, summary["raw"]["regions"][0]["sha256"].clone());
+    }
+    // Decoded two ways to the very same bytes, yet apart.
+    for label in ["explicit lzss", "offset", "length", "scatter_load false"] {
+        assert_eq!(images[label], images["base"], "{label}");
+    }
+    // The deadline changes no byte, and scatter_load defaults to true on Cortex-M: the base entry answers both.
+    let same = [
+        ("timeout_ms", with(&|value| value["decode"]["timeout_ms"] = json!(9000))),
+        ("scatter_load true", with(&|value| value["scatter_load"] = json!(true))),
+    ];
+    for (label, value) in same {
+        let project = session().open_raw(&path, &raw_request(&value)).unwrap();
+        program_digest(&project).unwrap();
+        assert_eq!(state(&project), "hit", "{label}");
+        assert_eq!(keys[project.analysis_store_status().key.as_ref().unwrap()], "base", "{label}");
+    }
+}
+
 fn hello() -> PathBuf {
     Path::new(FIXTURES).join("bin/hello-x64.elf")
 }
