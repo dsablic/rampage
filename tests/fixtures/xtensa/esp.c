@@ -5,6 +5,8 @@
 // functions are called at their fixed ROM addresses (-mlongcalls keeps those as l32r + callx), strings and
 // constants are reached through l32r literal pools, and there is a bitwise CRC-32, the SHA-256 initial hash
 // words, a command switch, a handler table and an endpoint URL. ESP8266 builds the same code for the call0 ABI.
+// FIXTURE_V2 builds the next version of the ESP32 application for diff_firmware: version 1.5.0, an "update"
+// command that names a second endpoint, and no walk().
 #include <stdint.h>
 
 typedef unsigned int size_t;
@@ -49,7 +51,11 @@ typedef struct {
 __attribute__((section(".rodata_desc"), used)) const esp_app_desc_t esp_app_desc = {
     .magic_word = 0xabcd5432,
     .secure_version = 0,
+#ifdef FIXTURE_V2
+    .version = "1.5.0",
+#else
     .version = "1.4.2",
+#endif
     .project_name = "thermostat",
     .time = "12:00:00",
     .date = "Nov 19 2026",
@@ -61,6 +67,9 @@ __attribute__((section(".rodata_desc"), used)) const esp_app_desc_t esp_app_desc
 
 static const char TAG[] = "app";
 static const char *const endpoint = "https://telemetry.example.com/v1/report";
+#ifdef FIXTURE_V2
+static const char *const update_endpoint = "https://ota.example.com/v2/firmware";
+#endif
 
 static uint32_t uptime_ticks;
 static char device_name[24] = "thermo-0001";
@@ -159,6 +168,15 @@ static int handle_report(const char *argument) {
   return (int)crc32_le(0, (const uint8_t *)argument, str_len(argument));
 }
 
+#ifdef FIXTURE_V2
+static int handle_update(const char *argument) {
+  uart_puts("GET ");
+  uart_puts(update_endpoint);
+  uart_puts(argument);
+  return 0;
+}
+#endif
+
 typedef int (*handler_t)(const char *argument);
 static const struct {
   const char *name;
@@ -167,6 +185,9 @@ static const struct {
     {"status", handle_status},
     {"reboot", handle_reboot},
     {"report", handle_report},
+#ifdef FIXTURE_V2
+    {"update", handle_update},
+#endif
 };
 
 __attribute__((noinline)) int dispatch(const char *name, const char *argument) {
@@ -204,6 +225,7 @@ __attribute__((noinline)) int classify(int code) {
 // call only on its return, not on reaching the return address.
 static volatile int visits;
 
+#ifndef FIXTURE_V2
 __attribute__((noinline)) int walk(int depth) {
   if (depth > 0) {
     walk(depth - 1);
@@ -211,6 +233,7 @@ __attribute__((noinline)) int walk(int depth) {
   visits = visits + depth;
   return visits;
 }
+#endif
 
 void app_main(void) {
   uint32_t state[8];
@@ -226,7 +249,12 @@ void app_main(void) {
   }
   dispatch("status", "now");
   dispatch("report", device_name);
+#ifdef FIXTURE_V2
+  dispatch("update", "?channel=stable");
+  uptime_ticks += (uint32_t)classify(scale_add(1, 2, 3)) + (uint32_t)visits;
+#else
   uptime_ticks += (uint32_t)classify(scale_add(1, 2, 3)) + (uint32_t)walk(3);
+#endif
   ets_delay_us(1000);
 }
 

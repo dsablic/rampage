@@ -16,6 +16,8 @@
 #   esp32-bootloader.elf / .bin             ESP32 second-stage bootloader and its image
 #   esp32-flash.bin                         1 MiB flash: bootloader at 0x1000, partition table at 0x8000 (nvs,
 #                                           phy_init, factory app at 0x10000), the app image at 0x10000
+#   esp32-app-v2.bin                        the next version's app image (-DFIXTURE_V2), for diff_firmware; the
+#                                           tests place it in a copy of esp32-flash.bin
 #   esp8266-app.elf                         ESP8266 application, -Os -mlongcalls, call0 ABI
 #   esp8266-app-0x00000.bin / -0x10000.bin  its NONOS-style images: IRAM/DRAM image, and IROM mapped at 0x40210000
 #   esp8266-flash.bin                       1 MiB flash with both at their offsets
@@ -42,6 +44,7 @@ image=gcc:13@sha256:8c0fe724784c6d617cb582f79ddaf5dd2233aaba2fb7a14e0b9d03348fea
   flags="-Os -g0 -mlongcalls -ffreestanding -nostdlib -nostartfiles -fno-builtin -ffunction-sections \
     -fdata-sections -Wl,--gc-sections -Wl,--build-id=none"
   $esp-gcc $flags -Wl,-T,esp32.ld -o esp32-app-sym.elf esp.c
+  $esp-gcc $flags -DFIXTURE_V2 -Wl,-T,esp32.ld -o /tmp/esp32-app-v2-sym.elf esp.c
   $esp-gcc $flags -Wl,-T,boot.ld -o esp32-bootloader-sym.elf boot.c
   xtensa-lx106-elf-gcc $flags -DESP8266 -Wl,-T,esp8266.ld -o esp8266-app-sym.elf esp.c
   for name in esp32-app esp32-bootloader; do $esp-strip --strip-all -o $name.elf $name-sym.elf; done
@@ -51,6 +54,8 @@ image=gcc:13@sha256:8c0fe724784c6d617cb582f79ddaf5dd2233aaba2fb7a14e0b9d03348fea
   done
   esptool.py --chip esp32 elf2image --flash_mode dio --flash_freq 40m --flash_size 1MB --elf-sha256-offset 0xb0 \
     -o esp32-app.bin esp32-app-sym.elf >/dev/null
+  esptool.py --chip esp32 elf2image --flash_mode dio --flash_freq 40m --flash_size 1MB --elf-sha256-offset 0xb0 \
+    -o esp32-app-v2.bin /tmp/esp32-app-v2-sym.elf >/dev/null
   esptool.py --chip esp32 elf2image --flash_mode dio --flash_freq 40m --flash_size 1MB \
     -o esp32-bootloader.bin esp32-bootloader-sym.elf >/dev/null
   esptool.py --chip esp8266 elf2image --version 1 --flash_mode qio --flash_size 1MB -o esp8266-app- \
