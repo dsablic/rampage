@@ -1126,13 +1126,15 @@ stored there: they stay in their own log and apply over stored results exactly a
 | `RAMPAGE_ANALYSIS_CACHE=/path/file.sqlite` | That file. |
 | `RAMPAGE_ANALYSIS_CACHE_MAX_MB=N` | Size bound in MiB (default 1024), for discovery and decompilations together. |
 
-The default file is `rampage/analysis/rampage-analysis-store-v1.sqlite` under `$XDG_CACHE_HOME` when set, else
+The default file is `rampage/analysis/rampage-analysis-store-v2.sqlite` under `$XDG_CACHE_HOME` when set, else
 `~/.cache`, else `%LOCALAPPDATA%`. On Unix the `analysis` directory is kept private to the user (0700, also when it
 already exists; the shared `rampage` directory beside the Sleigh specifications keeps its mode), and the store file
 is created 0600 without following symbolic links, so SQLite's `-wal` and `-shm` files are 0600 too. For a custom
 path, a missing directory is created 0700 and an existing one keeps its mode; the file is created 0600. Nothing is
 written next to the analysed binary, which often sits in a read-only or shared directory; the store is keyed by
-content, so a copy of a binary under another path hits too. Deleting the file is always safe.
+content, so a copy of a binary under another path hits too. Deleting the file is always safe. Version 2 (with
+decompilations) replaced version 1; creating the default version 2 file removes a version 1 file beside it, and a
+version 1 build treats a version 2 file as foreign.
 
 `rampage server store` shows the file, its size and bound, and how many entries of each kind (`discovery`,
 `decompile`) it holds; `rampage server store --clear` deletes it (`--json` for either).
@@ -1164,8 +1166,10 @@ signatures, types, type libraries, debug types, globals, local names and types, 
 patches and peripherals. Comments and findings are left out because no decompilation reads them. Only successful
 decompilations are stored; `decompile` with `exact_entry` takes another path and is not stored. With
 `GHIDRA_INSTALL_DIR` set (external specifications, which can change without rampage knowing) decompilations are
-neither read nor stored. A second golden test ties decompiler output to
-`DECOMPILE_CACHE_VERSION` (see [development](development.md#analysis-store-version)).
+neither read nor stored, and neither are they when the binary's file changed in place after it was opened: its
+bytes are no longer the ones the key hashed, so the decompilation runs as without a store (and may refuse the
+changed source). A second golden test ties the decompiled C to `DECOMPILE_CACHE_VERSION` (see
+[development](development.md#analysis-store-version)).
 
 **Edits.** An edit never re-runs discovery: annotations do not feed it. A decompilation is invalidated by its key:
 
@@ -1187,14 +1191,18 @@ for discovery, counts bounded by the bytes left, tags and strings checked, no tr
 revalidated; for a decompilation, a strict JSON shape for exactly the function asked for, with every token span
 inside the code on a character boundary. A file with another schema is neither read nor written. A truncated,
 corrupt or foreign file or entry is reported as `rejected` and the work is done afresh; it never fails an open or a
-decompilation, nor yields a partial result. The checksums establish consistency, not authorship.
+decompilation, nor yields a partial result. A payload longer than the bound is refused without being read. The
+checksums establish consistency, not authorship: they are not a MAC, so anyone who can write the store file
+(0600, the user's own) can change what a later open or decompilation returns. `server store --clear` deletes the
+file only after checking that it is an SQLite database whose `meta` names a rampage store layout.
 
 **Concurrency and size.** Several processes may open the same binary at once. The store uses SQLite's write-ahead
 log; a reader reads an entry in one statement, so it sees a committed entry whole or not at all. A fresh analysis
 is written after it is already in use, and a decompilation after it is computed; a write waits at most 200 ms for
-another writer before it is skipped; refreshing an entry's use time never waits. After each write the least
-recently used entries of both kinds beyond the size bound are evicted; an entry larger than half the bound (or a
-decompilation over 32 MiB) is not stored. Discovery entries are delta-encoded varints, a few bytes per block and
+another writer before it is skipped; refreshing an entry's use time never waits. Each write keeps a running total
+of the payload bytes in the same transaction; when it passes the size bound, the least recently used entries of
+either kind (found through an index on their use time) are evicted until it fits. An entry larger than half the
+bound (or a decompilation over 32 MiB) is not stored. Discovery entries are delta-encoded varints, a few bytes per block and
 cross-reference; a decompilation entry is its JSON, typically 10–150 KB.
 
 ## Authorization and data disclosure

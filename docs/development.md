@@ -81,7 +81,10 @@ refuses changed digests until the version is bumped, so entries stored by older 
 The store also keeps decompiled functions. When a change to the decompiler, its symbol, type or propagation plans,
 or the result shape changes a fixture function's decompilation, `decompile_cache::decompile_cache_golden` fails the
 same way: increment `DECOMPILE_CACHE_VERSION` in `crates/rampage-api/src/decompile_cache.rs`, then re-record with
-`RAMPAGE_UPDATE_DECOMPILE_GOLDEN=1 cargo nextest run -p rampage-api -E 'test(/decompile_cache_golden/)'`.
+`RAMPAGE_UPDATE_DECOMPILE_GOLDEN=1 cargo nextest run -p rampage-api -E 'test(/decompile_cache_golden/)'`. Its
+digests are of the decompiled C only and recorded per operating system (the engine builds against libc++ on macOS
+and libstdc++ on Linux); on an OS with no recording the test only says so, and re-recording on one OS keeps the
+others' digests under the same version. A fixture function that fails to decompile is recorded as an error.
 
 ## Scope release validation
 

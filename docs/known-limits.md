@@ -30,9 +30,6 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   container if you need isolation.
 - **Decompiled C is not proof** that the recovered program is correct. Results report their recovery issues.
 - Only MSP430, AVR8 and Cortex-M decompile among the Raw processor profiles; the others disassemble only.
-- A large Raw Cortex-M image can fail to decompile through the worker with "JSON wire depth/node limit exceeded":
-  the request lists one code-mode point per discovered run, and a 3.7 MB image had 413,000. Decompiling in
-  process is not affected.
 
 ## Analysis
 
@@ -126,7 +123,9 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   recomputed in each process, and runtime captures are never stored. Invalidation after an edit is coarse: a
   comment or finding keeps every stored decompilation, but any other edit (a rename included) makes every stored
   decompilation of that binary miss, and each is decompiled again when next asked for. With
-  `GHIDRA_INSTALL_DIR` set, decompilations are not stored.
+  `GHIDRA_INSTALL_DIR` set, decompilations are not stored. Entries are checksummed, not authenticated: the checksum
+  is not a MAC, so anyone who can write the store file (mode 0600, so the user or root) can change what a later
+  open or decompilation returns.
 - Firmware filesystem images: vendor SquashFS variants, SquashFS 3.x, delta OTA payloads (they need the previous
   build), compressed tar, ZIP members that are encrypted or use a method other than stored or deflate, UBIFS
   extended attributes and fscrypt-encrypted UBIFS content are not read; UBIFS HMAC authentication is not checked,

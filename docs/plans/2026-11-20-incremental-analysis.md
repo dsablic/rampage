@@ -78,12 +78,11 @@ the Go and ELF f0 rows also end in a response-size error, after the full decompi
   18 s, because the view rediscovered every function; so does the next call after every edit.
 - **Every Raw Cortex-M decompile failed.** The request listed 413,022 code-mode points (one per discovered run;
   one was ARM, the end of the Thumb range), 1.2 M JSON nodes against the worker's 1 M bound, after 2.5 s (18 s
-  through an unstored view) of preparation. A prototype that kept only each executable segment's start when every
-  point inside is Thumb made it work (1.1 s cold, 40 ms from the store) and left the fixture golden digests
-  unchanged, but it was withdrawn: a request at an undiscovered even address can still be ARM (`mode_at` falls
+  through an unstored view) of preparation. A first fix that kept only each executable segment's start when every
+  point inside is Thumb was withdrawn: a request at an undiscovered even address can still be ARM (`mode_at` falls
   back to `Target::is_thumb`), and the in-process engine keeps a request's `TMode` up to the next point, so with
-  fewer points later requests could decode differently. The exact fix is a compact wire encoding of the points (a
-  protocol change), recorded under later slices.
+  fewer points later requests could decode differently. Worker protocol 15 instead packs the points, unchanged,
+  into one string (below).
 - Then, in order: `list_types` 6.2 s on Go (building the Go type index, once per process), `triage_report` 1.7 s,
   `identify_functions` 1.6 s, `integrity_checks` 0.9 s, `lock_mechanisms` 0.85 s (3 s on the Raw image).
 - **A per-call cost after patch authority:** every tool call validates the effective view, which copied the whole
@@ -95,7 +94,7 @@ the Go and ELF f0 rows also end in a response-size error, after the full decompi
 |---|---|---|---|
 | Per-function decompilations | 0.8–6.2 s per call, repeated by agents and inside `find_main`, `function_frame` | Key must cover every decompiler input; results must equal fresh ones | **Done** |
 | Key effective views by their own bytes | 1–18 s per call and per edit on firmware and static ELF | A view's `Binary` is a function of its bytes, but not the same function as an ordinary open's (no Go symbol recovery), so views are keyed apart from the original | **Done** |
-| Code-mode points on large M-profile images | Decompilation of large Raw Cortex-M images through the worker at all | Must not change any decompilation | **Not in this slice** (below) |
+| Code-mode points on large M-profile images | Decompilation of large Raw Cortex-M images through the worker at all | Must not change any decompilation | **Done:** worker protocol 15 packs the same points into one string |
 | Skip re-loading a view with no active patch | 300 ms per tool call on Go 26 MB (450 to 151 ms), 90 ms on the ELF | Patch-authority code: keep every check that can fail | **Done** |
 | Store inspection and clearing | Operability | Small | **Done:** `rampage server store [--clear]` (CLI only; the default MCP catalog has ~1 KB left) |
 | Xref index, string table | ≤0.1 s | – | Not needed (xrefs are already in the discovery entry) |
@@ -107,14 +106,19 @@ the Go and ELF f0 rows also end in a response-size error, after the full decompi
 
 Kept in a new `derived` table of the same SQLite file, beside `analysis`, sharing its size bound and its LRU
 eviction (one ordered pass over both tables). A derived key is `<kind>:<hex>`, so `server store` can count per kind.
-The schema name and file stay `rampage-analysis-store-v1`: an older build ignores the new table, and a newer build
-reading a file without it sees no derived entries.
+The schema (and file name) moves to `rampage-analysis-store-v2`, so a version 1 build, whose eviction would not
+count decompilations, never writes this file; creating the default v2 file removes the v1 file beside it. Each
+write keeps a running total of payload bytes in `meta`, in the same transaction, and evicts only when it passes
+the bound, oldest first through an index on `last_used` in each table: a write that fits costs one row update,
+not a scan (a cold pass that decompiles every function was O(N² log N) with a scan per write). A missing or
+unreadable total is recounted from the rows.
 
 **Key** (`crates/rampage-api/src/decompile_cache.rs`): SHA-256 over
 
-- `DECOMPILE_CACHE_VERSION`, golden-tested like `ANALYSIS_VERSION`: decompilation digests of six functions from each
-  of seven fixtures (x86-64, AArch64, Thumb, MIPS, Cortex-M ELF and Raw) fail the suite when they change without a
-  bump;
+- `DECOMPILE_CACHE_VERSION`, golden-tested like `ANALYSIS_VERSION`: digests of the decompiled C of six functions
+  from each of seven fixtures (x86-64, AArch64, Thumb, MIPS, Cortex-M ELF and Raw), recorded per operating system
+  (libc++ and libstdc++ builds need not print identical C), fail the suite when they change without a bump; a
+  function that fails to decompile is recorded as an error, and an OS without a recording is only reported;
 - the discovery key (input bytes, image, format, Raw interpretation, rampage version, executable), which fixes the
   analysis the decompiler reads (function bounds, code modes);
 - the function's start;
@@ -124,6 +128,10 @@ reading a file without it sees no derived entries.
 - `Annotations::decompile_fingerprint`: names, signatures, types, type libraries, debug types, globals, local
   names and types, type hints, data and operand types, patches and peripherals. It destructures `Annotations`
   field by field, so a new annotation field fails to compile until someone decides whether it belongs.
+
+Also checked before every lookup and write: the binary's file has not changed in place since it was opened
+(`validate_available_backing_source`). The key hashed the bytes as loaded; a changed file is decompiled as without
+a store, which refuses it where a fresh decompilation would.
 
 Not in the key, on purpose: comments and the findings ledger (no decompiler input reads them; checked by
 grepping the planners and by the equivalence tests) and data packs (no decompiler input reads them).
@@ -218,6 +226,19 @@ An incremental result must equal a from-scratch analysis with the same annotatio
   decompiled alone in a fresh project equals the same function decompiled after all the others in one engine,
   also with a signature on one of them. A stored result is served to every later process, so a history-dependent
   engine would spread its first answer.
+- Review fixes: `a_file_changed_in_place_is_decompiled_as_without_a_store` (with and without a signature),
+  `an_oversized_row_is_refused_unread`, `a_damaged_running_total_is_recounted`, the running total equal to the
+  rows after writes and eviction, `clear_refuses_a_file_that_is_not_a_rampage_store`, and
+  `history_validation_projects_never_use_the_analysis_store` (patch history validation builds a throwaway
+  project over materialized bytes; it no longer files its analysis under the plain key of those bytes).
+- Worker path (`crates/rampage-worker/tests/decompile_store.rs`, always run: the crate's tests have this build's
+  worker): cold then warm stores through the supervised worker equal a storeless worker project on an ELF and a
+  Raw Cortex-M image, the warm one entirely from the store, and an in-process project never reads the worker's
+  entries.
+- Protocol 15 (`worker::packed_code_mode_tests`, `crates/rampage-worker/tests/raw_code_modes.rs`): any point list,
+  in order and with repeats, decodes back to exactly itself; malformed packing is refused; a 500,000-point request
+  passes the preflight; the worker decompiles with 400,000 points exactly as the engine does in process. An ignored
+  test runs the same comparison on a large Raw image named by `RAMPAGE_TEST_LARGE_RAW`.
 - `the_worker_setting_and_decompiler_options_are_part_of_the_key`: an in-process result is never served to a
   project whose worker cannot start, and other options never reuse the default options' result.
 - Corruption: `damaged_misfiled_and_foreign_rows_are_refused_and_decompiled_afresh` (a flipped byte, truncated or
@@ -239,54 +260,58 @@ rows over 32 MiB or half the bound are not stored. `rampage server store` report
 
 ## Results
 
-After this slice, same method and functions, all commits in (the "edit" rows are new):
+After this slice, same method and functions, all commits in, worker protocol 15 included (the "edit" rows are
+new; "(err)" on f0 is the response-size limit after a full decompilation, and `function_summary` on Go is refused
+for that address before and after):
 
 | Stage | Go 26 MB: cold / warm (ms) | ELF 7.9 MB: cold / warm (ms) | Cortex-M Raw 3.7 MB: cold / warm (ms) |
 |---|---|---|---|
-| load (binary_info) | 46 / 44 | 7 / 7 | 15,014 / 282 |
-| discovery (list_functions) | 951 / 63 | 175 / 12 | 11 / 11 |
+| load (binary_info) | 45 / 45 | 6 / 6 | 15,344 / 285 |
+| discovery (list_functions) | 942 / 64 | 166 / 11 | 11 / 11 |
 | xrefs to a function | 0 / 0 | 0 / 0 | 9 / 9 |
-| strings (first page) | 106 / 105 | 7 / 7 | 24 / 24 |
+| strings (first page) | 106 / 105 | 6 / 6 | 24 / 24 |
 | strings contains | 5 / 5 | 0 / 0 | 7 / 7 |
-| identify_functions | 1,623 / 1,614 | 378 / 370 | 689 / 678 |
-| capabilities | 25 / 24 | 2 / 2 | 9 / 9 |
-| find_main | 8,373 / 69 | 1,065 / 33 | 2,670 / 2,610 |
-| triage_report | 1,731 / 1,726 | 356 / 334 | 689 / 681 |
-| lock_mechanisms | 846 / 821 | 211 / 206 | 3,094 / 3,126 |
-| integrity_checks | 899 / 897 | 660 / 626 | 898 / 885 |
-| function_summary | 214 (err) / 158 (err) | 219 / 62 | 14,632 / 89 |
-| endpoint_inventory | 400 / 397 | 25 / 25 | – |
-| list_types | 5,702 / 6,114 | 542 / 550 | – |
-| decompile f0 | 5,782 (err) / 176 (err) | 774 (err) / 68 (err) | 2,563 (err) / 2,570 (err) |
-| decompile f1 | 6,066 / 171 | 552 / 60 | 2,554 (err) / 2,559 (err) |
-| decompile f2 | 6,086 / 171 | 559 / 58 | 2,594 (err) / 2,590 (err) |
-| decompile f0 again | 176 / 174 | 68 / 66 | 2,531 (err) / 2,586 (err) |
-| edit: set_comment f1 | 256 / 257 | 80 / 81 | 14 / 14 |
-| decompile f1 after comment | 166 / 168 | 58 / 60 | 2,535 (err) / 2,540 (err) |
-| edit: rename f2 | 264 / 262 | 82 / 86 | 14 / 15 |
-| decompile f1 after rename | 6,340 / 167 | 574 / 60 | 2,633 (err) / 2,593 (err) |
-| edit: undo rename | 267 / 268 | 86 / 86 | 15 / 15 |
-| decompile f1 after undo | 167 / 167 | 61 / 60 | 2,523 (err) / 2,702 (err) |
-| binary_info (store status) | 153 / 151 | 48 / 48 | 15 / 16 |
+| identify_functions | 1,582 / 1,592 | 355 / 361 | 688 / 678 |
+| capabilities | 22 / 22 | 2 / 2 | 9 / 9 |
+| find_main | 8,392 / 67 | 978 / 32 | 1,466 / 75 |
+| triage_report | 1,699 / 1,722 | 330 / 323 | 671 / 687 |
+| lock_mechanisms | 820 / 816 | 190 / 191 | 3,031 / 3,074 |
+| integrity_checks | 909 / 895 | 615 / 616 | 893 / 898 |
+| function_summary | 217 (err) / 158 (err) | 213 / 60 | 15,089 / 91 |
+| endpoint_inventory | 395 / 392 | 24 / 24 | – |
+| list_types | 5,954 / 5,800 | 544 / 534 | – |
+| decompile f0 | 6,106 (err) / 170 (err) | 724 (err) / 67 (err) | 1,503 / 30 |
+| decompile f1 | 6,390 / 166 | 544 / 59 | 1,577 / 27 |
+| decompile f2 | 6,397 / 166 | 538 / 56 | 1,489 / 27 |
+| decompile f0 again | 176 / 170 | 65 / 63 | 31 / 29 |
+| edit: set_comment f1 | 255 / 256 | 79 / 79 | 13 / 13 |
+| decompile f1 after comment | 173 / 171 | 58 / 58 | 28 / 27 |
+| edit: rename f2 | 262 / 269 | 82 / 82 | 13 / 13 |
+| decompile f1 after rename | 5,995 / 168 | 573 / 57 | 1,506 / 27 |
+| edit: undo rename | 265 / 261 | 84 / 82 | 14 / 13 |
+| decompile f1 after undo | 167 / 166 | 58 / 57 | 29 / 27 |
+| binary_info (store status) | 150 / 152 | 46 / 45 | 14 / 14 |
 
 In short:
 
-- **A repeated decompilation**, in this process or a later one, costs 60 ms (ELF) and 170 ms (Go) instead of
-  0.6–6.3 s, and `find_main` drops from 8.4 s to 69 ms on Go, 1.1 s to 33 ms on the ELF. Most of what remains is
-  the per-call validation of the effective view that `integrity_checks` switched on earlier in the run (the
-  closing `binary_info` costs 48 ms and 151 ms alone); the lookup itself is a few milliseconds.
-- **Edits:** a comment keeps every stored decompilation; a rename recomputes the one asked for (6.3 s on Go) and
-  stores it; undo returns to the stored results. In the warm run every post-edit decompilation was already
-  stored. With the store off, every decompile in these rows costs 5.7–5.8 s (Go), 0.7 s (ELF) and 18 s (Raw).
-- **Effective views:** with the store off, every call after `integrity_checks` on the Raw image rediscovers (15.6 s
-  for `function_summary`, 18 s per failing decompile). With the store, the first view analyses once (14.6 s,
-  stored) and every later view, after each edit, hits (89 ms; the failing decompile costs 2.5 s instead of 18 s).
-- **Per-call validation after patch authority** fell from 450 ms to 151 ms on the Go binary and from 140 ms to
-  48 ms on the ELF (`binary_info` at the end of the run), from the two no-patch shortcuts. Edits there fell from
-  760–810 ms to 260 ms (Go) and 235–250 ms to 80–86 ms (ELF). Raw images validate by interpretation identity and
-  pay almost nothing (15 ms).
-- Unchanged, and next in line: `list_types` (5.7–6.1 s on Go), `triage_report` (1.7 s), `identify_functions`
-  (1.6 s), `lock_mechanisms` (0.8 s, 3.1 s on Raw), `integrity_checks` (0.9 s), and the Raw worker failure.
+- **A repeated decompilation**, in this process or a later one, costs 27–30 ms (Raw), 57–67 ms (ELF) and 166–176 ms
+  (Go) instead of 0.5–6.4 s; `find_main` drops from 8.4 s to 67 ms on Go, 1.0 s to 32 ms on the ELF and 1.5 s to
+  75 ms on the Raw image. On the ELF and Go inputs most of what remains is the per-call validation of the effective
+  view that `integrity_checks` switched on earlier in the run (the closing `binary_info` costs 45 ms and 150 ms
+  alone); the lookup itself is a few milliseconds.
+- **Raw Cortex-M decompilation works through the worker** (protocol 15): 1.5 s cold, 27 ms from the store, where
+  every call failed before. With the store off, each still costs 19 s, because every call after `integrity_checks`
+  builds an effective view that rediscovers.
+- **Edits:** a comment keeps every stored decompilation; a rename recomputes the one asked for (6.0 s on Go, 1.5 s
+  on Raw) and stores it; undo returns to the stored results. In the warm run every post-edit decompilation was
+  already stored. With the store off, every decompile in these rows costs 5.8 s (Go), 0.7 s (ELF), 19 s (Raw).
+- **Effective views:** with the store, the first view over the original bytes analyses once (15.1 s for
+  `function_summary` on Raw, stored) and every later view, after each edit, hits (91 ms).
+- **Per-call validation after patch authority** fell from 450 ms to 150 ms on the Go binary and from 140 ms to
+  46 ms on the ELF, from the two no-patch shortcuts. Edits there fell from 760–810 ms to 255–270 ms (Go) and
+  235–250 ms to 79–84 ms (ELF). Raw images validate by interpretation identity and pay almost nothing (14 ms).
+- Unchanged, and next in line: `list_types` (5.8–6.0 s on Go), `triage_report` (1.7 s), `identify_functions`
+  (1.6 s), `lock_mechanisms` (0.8 s; 3.0 s on Raw), `integrity_checks` (0.9 s).
 
 ## Later slices
 
@@ -303,11 +328,10 @@ In short:
 5. **A cheaper first decompilation on Go:** the worker request carries every Go type and prototype each time
    (6 s); a persistent worker, or a request that sends only what the function references, would cut the cold
    cost that the store cannot.
-6. **Large Raw Cortex-M images through the worker** (a firmware-track bug found here, not caused by this work):
-   encode the request's code-mode points compactly (a protocol version bump, with the wire preflight's string
-   bound raised for that field only), so the point count no longer meets the 1 M-node bound and no point is lost.
-7. **Views that share the original's entries:** load views with the same recovery as an ordinary open (which
+6. **Views that share the original's entries:** load views with the same recovery as an ordinary open (which
    also gives patched stripped-Go views their recovered names), then key a view with no active patch like the
    original. Until then the first view over some bytes analyses once per store.
-8. **Per-revision annotation fingerprints:** `decompile_fingerprint` hashes every decompiler-relevant annotation
+7. **Per-revision annotation fingerprints:** `decompile_fingerprint` hashes every decompiler-relevant annotation
    on each lookup; cache it per annotation revision if large annotation sets make that visible.
+8. **Linux decompile digests:** record `decompile_cache_golden` on Linux (CI or the gcc image) so the version
+   discipline is checked there too; today only the macOS digests are recorded.
