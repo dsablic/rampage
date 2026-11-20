@@ -84,6 +84,7 @@ async fn lists_all_tools_with_instructions() {
         "capa_detect",
         "capabilities",
         "carve",
+        "check_claim",
         "check_names",
         "class_evidence",
         "compare_pointer_observations",

@@ -44,7 +44,7 @@ fn json_of(tool: &str, result: &CallToolResult) -> Value {
 }
 
 /// Tools outside the experimental groups whose results are experimental (docs/stability.md).
-const EXPERIMENTAL_TOOLS: [&str; 3] = ["evaluate_function", "exception_handlers", "lock_mechanisms"];
+const EXPERIMENTAL_TOOLS: [&str; 4] = ["check_claim", "evaluate_function", "exception_handlers", "lock_mechanisms"];
 
 /// Every tool `client` lists once all its groups are enabled, with its group and argument summary.
 async fn listed_tools(client: Client, tools: &mut BTreeMap<String, Value>) {
@@ -196,6 +196,15 @@ async fn contract_mcp_core_results() {
     exercise(c, o, "evaluate_function", json!({"path": thumb, "at": "add", "args": [1, 2]})).await;
     exercise(c, o, "evaluate_function", json!({"path": elf, "at": "main"})).await;
     exercise(c, o, "evaluate_function", json!({"path": elf, "at": "add", "args": [1, -3]})).await;
+    // check_claim: a verified, a refuted (with a counterexample) and an unknown claim, and an invalid one.
+    let claims = json!([
+        {"kind": "computes", "function": "add", "expression": "a+b", "samples": 4, "id": "sum"},
+        {"kind": "returns", "function": "add", "args": [1, 2], "value": 4, "bits": 32},
+        {"kind": "references", "string": "rampage fixture greeting", "by": "add"},
+        {"kind": "calls", "function": "main", "callee": "puts", "not": true},
+        {"kind": "layout"}
+    ]);
+    exercise(c, o, "check_claim", json!({"path": elf, "claims": claims})).await;
     exercise(c, o, "disassemble", json!({"path": elf, "at": "main", "count": 4})).await;
     exercise(c, o, "function_graph", json!({"path": elf, "at": "main"})).await;
     exercise(c, o, "function_summary", json!({"path": elf, "at": "main"})).await;
