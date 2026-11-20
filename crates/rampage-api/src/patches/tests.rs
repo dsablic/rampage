@@ -358,6 +358,24 @@ fn replaced_original_source_refuses_snapshot_history_and_export_without_creating
     assert_eq!(fs::read(&files.log).unwrap(), before);
 }
 
+/// With every patch undone, validating the view skips materializing but still checks the original source.
+#[test]
+fn a_replaced_source_is_refused_when_no_patch_is_active() {
+    let files = Files::new("hello-x64.elf");
+    let project = files.project();
+    let patched = project.patch_bytes(0x100191e, &[0xb8, 5, 0, 0, 0], &[0xb8, 7, 0, 0, 0], false).unwrap().project;
+    patched.undo().unwrap();
+    let view = patched.effective_snapshot().unwrap();
+    assert!(view.list_patches().unwrap().is_empty());
+    assert!(view.effective_snapshot().is_ok());
+    let mut replacement = fs::read(&files.source).unwrap();
+    replacement[0x91f] = 9;
+    let path = files.directory.join("replacement.elf");
+    fs::write(&path, replacement).unwrap();
+    fs::rename(&path, &files.source).unwrap();
+    assert!(view.effective_snapshot().is_err());
+}
+
 #[test]
 fn unsupported_sources_are_explicitly_rejected() {
     for fixture in [

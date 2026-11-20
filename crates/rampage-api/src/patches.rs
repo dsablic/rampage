@@ -963,6 +963,13 @@ impl Project {
         if annotations.patches().is_empty() && source.patch_source_sha256.get().is_none() {
             return Ok(());
         }
+        if annotations.patches().is_empty() {
+            // With no patch to apply, materializing would copy the source's bytes, re-load them and compare the
+            // result with the source itself: only the source's own checks can fail. This runs on every tool call
+            // of an MCP session once patch authority was used, so skip the copy and the re-load.
+            source.validate_patch_source()?;
+            return source.check_patch_backing();
+        }
         source.materialize_patches(annotations).map(|_| ())
     }
 
