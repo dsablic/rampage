@@ -671,6 +671,44 @@ fn many_changed_components_stay_within_the_result_cap() {
     assert!(result["not_compared_total"].is_u64(), "{}", &text[..2000]);
 }
 
+/// Acceptance (an ESP32 pair's 546 changed functions): a page cut to fit the result continues where its rows end,
+/// not at offset + limit, so paging reads every row.
+#[test]
+fn a_page_cut_to_fit_continues_after_its_last_row() {
+    let scratch = Scratch::new("rampage-diff-page-cut");
+    let names: Vec<String> = (0..500)
+        .map(|index| format!("etc/a/rather/long/directory/path/to/one/config/file/number-{index:04}.conf"))
+        .collect();
+    for (version, text) in [("v1", "first"), ("v2", "second")] {
+        let members: Vec<(&str, &[u8])> = names.iter().map(|name| (name.as_str(), text.as_bytes())).collect();
+        scratch.write(&format!("{version}.tar"), &tar(&members));
+    }
+    let (old, new) = (scratch.0.join("v1.tar"), scratch.0.join("v2.tar"));
+    let id = diff(&old, &new)["components"][0]["id"].as_str().unwrap().to_owned();
+    let mut drill = query(&old, &new);
+    drill.component = Some(id);
+    drill.list = Some("files".to_owned());
+    drill.limit = Some(500);
+    let mut seen = BTreeSet::new();
+    let mut pages = 0;
+    loop {
+        let page = run(&drill);
+        let rows = page["rows"].as_array().unwrap();
+        pages += 1;
+        assert!(!rows.is_empty() && pages < 20, "{page:#}");
+        seen.extend(values(&page["rows"], "path"));
+        match page["next_offset"].as_u64() {
+            Some(next) => {
+                assert_eq!(next as usize, drill.offset + rows.len(), "{}", page["truncated"]);
+                drill.offset = next as usize;
+            }
+            None => break,
+        }
+    }
+    assert!(pages > 1, "one page: either it was not cut or paging stopped after it");
+    assert_eq!(seen.len(), 500);
+}
+
 /// The integrity_checks preview change: a check whose stored value cannot be patched (it lies in decoded bytes)
 /// is noted, and the report still comes back.
 #[test]

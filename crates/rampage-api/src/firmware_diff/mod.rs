@@ -337,7 +337,13 @@ pub fn diff_firmware(query: &FirmwareDiffQuery, packs: Arc<Packs>) -> Result<Val
         let value = drill_down(query, id, old_layout, new_layout, &mut run, limit)?;
         output.extend(value);
         output.insert("budget".to_owned(), run.budget.report(max_images, timeout_ms));
-        return Ok(fitted(Value::Object(output)));
+        let mut value = fitted(Value::Object(output));
+        // A page cut to fit continues after its last row, not at offset + limit.
+        if let (Some(rows), Some(total)) = (value["rows"].as_array().map(Vec::len), value["total"].as_u64()) {
+            let end = query.offset + rows;
+            value["next_offset"] = json!((end < total as usize).then_some(end));
+        }
+        return Ok(value);
     }
 
     if identical {
