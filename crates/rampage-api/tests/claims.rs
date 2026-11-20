@@ -354,6 +354,25 @@ fn checksum_claims_without_args_try_the_running_value_layouts() {
     verdict(&check(&project, claim), "refuted");
 }
 
+/// Review: when the right layout `(0, data, length)` runs out of steps, another layout's quick mismatch must not
+/// refute a true claim: the answer is unknown and still says to raise max_steps.
+#[test]
+fn an_undecided_layout_keeps_a_checksum_claim_unknown() {
+    let path = "xtensa/esp32-app-sym.elf";
+    let project = open(path);
+    let crc = symbol(path, "crc32_le");
+    let claim = json!({"kind": "computes", "function": crc, "algorithm": "crc32", "samples": 8, "max_steps": 200});
+    let result = check(&project, claim);
+    verdict(&result, "unknown");
+    assert!(result["needs"].as_str().unwrap().contains("max_steps"), "{result:#}");
+    assert!(result["method"].as_str().unwrap().contains("[0x0, data, length]"), "{result:#}");
+    assert_eq!(result["evidence"]["tried"].as_array().unwrap().len(), 3, "{result:#}");
+    // An invalid claim is answered once, not run again with other layouts.
+    let invalid = json!({"kind": "computes", "function": crc, "algorithm": "crc32", "samples": 0});
+    let result = check(&project, invalid);
+    verdict(&result, "invalid");
+}
+
 #[test]
 fn layout_reads_debug_information() {
     let project = open("bin/debug-x64.elf");

@@ -684,11 +684,44 @@ fn layout_text(roles: &[Role]) -> String {
     format!("[{}]", names.join(", "))
 }
 
+/// How one argument layout's run of a checksum claim ended, for choosing among the layouts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayoutEnd {
+    Verified,
+    Refuted,
+    /// The layout may be the function's but the run could not decide: a step, time or memory limit, the call's
+    /// budget, a mismatch or fault after reading data the program sets at run time, an import without a model, or
+    /// an instruction the interpreter cannot run.
+    Undecided,
+    /// The run faulted (unmapped access, invalid instruction, division by zero) without reading unset data: the
+    /// layout passed an integer where the function takes a pointer, or the reverse.
+    Faulted,
+    Invalid,
+}
+
+fn layout_end(outcome: &Outcome) -> LayoutEnd {
+    match outcome.verdict {
+        Verdict::Verified => return LayoutEnd::Verified,
+        Verdict::Refuted => return LayoutEnd::Refuted,
+        Verdict::Invalid => return LayoutEnd::Invalid,
+        Verdict::Unknown => {}
+    }
+    let evidence = &outcome.evidence;
+    let unset = evidence.get("data_reads").is_some_and(|reads| reads.get("unset").is_some())
+        || evidence.get("counterexample").is_some();
+    let fault = matches!(
+        evidence.get("stop").and_then(Value::as_str),
+        Some("unmapped_read" | "unmapped_write" | "unmapped_fetch" | "invalid_instruction" | "division_by_zero")
+    );
+    if fault && !unset { LayoutEnd::Faulted } else { LayoutEnd::Undecided }
+}
+
 /// A checksum claim without `args`: the default `(data, length)`, then the running-value layouts checksum APIs
 /// commonly take, `(seed, data, length)` as zlib's `crc32` and `adler32` do and `(data, length, seed)`, the seed
-/// being the checksum of no bytes (0 for CRC-32, 1 for Adler-32). The first layout that verifies is reported.
-/// Otherwise a layout whose run returned decides: a mismatch left unknown (unset data) before a refutation; a run
-/// that faulted or did not return says only that its layout is not the function's.
+/// being the checksum of no bytes (0 for CRC-32, 1 for Adler-32). The first layout that verifies is reported. A
+/// layout whose run could not decide (a limit, the budget, unset data) may be the function's, so the claim is then
+/// unknown, with that run's reason and what would decide it. Only when every layout either gave a counterexample
+/// or faulted the way a wrong layout does, and at least one gave a counterexample, is the claim refuted.
 fn computes_default_layouts(
     project: &Project,
     runner: &Runner<'_>,
@@ -698,7 +731,9 @@ fn computes_default_layouts(
     seed: Option<u64>,
 ) -> Outcome {
     let first = computes_algorithm(project, runner, reference, roles, samples, seed);
-    if first.verdict == Verdict::Verified || !matches!(reference.shape(), Shape::Checksum(_)) {
+    if matches!(layout_end(&first), LayoutEnd::Verified | LayoutEnd::Invalid)
+        || !matches!(reference.shape(), Shape::Checksum(_))
+    {
         return first;
     }
     let initial = reference.checksum(&[], project.binary.big_endian);
@@ -708,7 +743,7 @@ fn computes_default_layouts(
     let mut outcomes = vec![first];
     for layout in layouts {
         let outcome = computes_algorithm(project, runner, reference, &layout, samples, seed);
-        if outcome.verdict == Verdict::Verified {
+        if layout_end(&outcome) == LayoutEnd::Verified {
             let mut outcome = outcome;
             outcome.method = format!(
                 "no args were given and {} did not match; with args {}: {}",
@@ -723,11 +758,11 @@ fn computes_default_layouts(
         tried.push(json!({"args": layout_text(&layout), "verdict": outcome.verdict}));
         outcomes.push(outcome);
     }
-    let compared = |outcome: &Outcome| outcome.evidence.get("counterexample").is_some();
-    let pick = outcomes
+    let ends: Vec<LayoutEnd> = outcomes.iter().map(layout_end).collect();
+    let pick = ends
         .iter()
-        .position(|outcome| outcome.verdict == Verdict::Unknown && compared(outcome))
-        .or_else(|| outcomes.iter().position(|outcome| outcome.verdict == Verdict::Refuted))
+        .position(|end| *end == LayoutEnd::Undecided)
+        .or_else(|| ends.iter().position(|end| *end == LayoutEnd::Refuted))
         .unwrap_or(0);
     let mut chosen = outcomes.swap_remove(pick);
     chosen.method = format!(
@@ -739,6 +774,8 @@ fn computes_default_layouts(
     );
     if chosen.evidence.is_object() {
         chosen.evidence["tried"] = json!(tried);
+    } else {
+        chosen.evidence = json!({"tried": tried});
     }
     chosen
 }
@@ -834,7 +871,11 @@ fn computes_algorithm(
         };
         let input = json!({"length": data.len(), "data": hex_prefix(data, SHOWN_INPUT)});
         if report.stop != StopReason::Returned {
-            return stopped(&report, json!({"input": input, "matched_before": index}));
+            let mut context = json!({"input": input, "matched_before": index});
+            if reads.unset_count > 0 {
+                context["data_reads"] = reads_evidence(&reads);
+            }
+            return stopped(&report, context);
         }
         merge_reads(&mut initial_reads, &reads);
         let (actual, expected) = if to_return {

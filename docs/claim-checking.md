@@ -124,8 +124,10 @@ The default roles are:
 A checksum claim without `args` that the default does not verify is run again with the running-value layouts
 checksum APIs commonly take: `[seed, "data", "length"]` (zlib's `crc32(crc, buf, len)` and `adler32`) and
 `["data", "length", seed]`, the seed being the checksum of no bytes (0 for CRC-32, 1 for Adler-32). The first
-layout that verifies is reported, with `evidence.args` naming it; otherwise the outcome comes from a layout whose run
-returned (a mismatch left unknown before a refutation; a run that faulted shows only that its layout is wrong), and
+layout that verifies is reported, with `evidence.args` naming it. A layout whose run could not decide (a step,
+time or memory limit, the call's budget, or a mismatch or fault after reading data the program sets at run time)
+makes the claim unknown, with that run's `needs`. The claim is refuted only when every layout gave a counterexample
+or faulted as a wrong layout does (an unmapped access without unset data), and at least one gave a counterexample.
 `evidence.tried` lists each layout's verdict. Given `args` are taken as stated.
 
 Without a `length`, the input is passed as a NUL-terminated string, as string hashes take it.
