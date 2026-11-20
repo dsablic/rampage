@@ -108,7 +108,8 @@ def openwrt(inputs: Path, work: Path) -> dict[str, object]:
         roots[key] = work / f"openwrt-{key}-root"
         unsquash(image, offset, roots[key])
         trees[key] = tree_hashes(roots[key])
-        links = sum(1 for d, _, fs in os.walk(roots[key]) for f in fs if (Path(d) / f).is_symlink())
+        # os.walk lists a symbolic link to a directory among the directories, so both lists are counted.
+        links = sum(1 for d, ds, fs in os.walk(roots[key]) for f in ds + fs if (Path(d) / f).is_symlink())
         out[key] = {"squashfs_offset": offset, "regular_files": len(trees[key]), "symlinks": links}
     old, new = trees["old"], trees["new"]
     changed = sorted(p for p in old if p in new and old[p] != new[p])
