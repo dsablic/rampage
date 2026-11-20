@@ -182,7 +182,9 @@ fn read(run: &mut Run, tree: &Tree, entries: &[&Entry], sink: &mut Sink) -> (BTr
                     break;
                 }
                 let Some(disk) = &entry.disk else { continue };
-                let Ok(mut file) = std::fs::File::open(disk) else { continue };
+                // Never more than was charged, should the file have grown since it was listed.
+                let Ok(file) = std::fs::File::open(disk) else { continue };
+                let mut file = file.take(entry.size);
                 let mut buffer = vec![0u8; 1 << 16];
                 let mut whole = true;
                 loop {
@@ -236,6 +238,14 @@ fn materialise(run: &mut Run, tree: &Tree, entries: &[&Entry]) -> (BTreeMap<Stri
         let files = entries.iter().filter_map(|entry| Some((entry.path.clone(), entry.disk.clone()?))).collect();
         return (files, None);
     }
+    // Every file written counts against the call's scratch budget, an empty one too.
+    let mut allowed = 0;
+    while allowed < entries.len() && run.budget.take_scratch_file() {
+        allowed += 1;
+    }
+    let refused = (allowed < entries.len())
+        .then(|| format!("{} files were not read: the call's scratch-file budget ran out", entries.len() - allowed));
+    let entries = &entries[..allowed];
     let targets: Vec<PathBuf> = entries.iter().map(|entry| run.scratch.file(&entry.path)).collect();
     let mut open: Vec<Option<std::fs::File>> = entries.iter().map(|_| None).collect();
     let (done, stopped) = read(run, tree, entries, &mut |position, chunk| {
@@ -265,7 +275,7 @@ fn materialise(run: &mut Run, tree: &Tree, entries: &[&Entry]) -> (BTreeMap<Stri
         }
         files.insert(entry.path.clone(), targets[position].clone());
     }
-    (files, stopped)
+    (files, stopped.or(refused))
 }
 
 /// The content of the one file at `path` in `tree` as a file, or `None` when the tree has no such file.
@@ -408,8 +418,11 @@ pub(crate) fn compare_trees(run: &mut Run, id: &str, old: &Tree, new: &Tree, dif
             format!("{left_out} changed, added or removed files were not read (more than {MAX_MATERIALISED})"),
         );
     }
-    let (old_files, _) = materialise(run, old, &want_old);
-    let (new_files, _) = materialise(run, new, &want_new);
+    let (old_files, old_stop) = materialise(run, old, &want_old);
+    let (new_files, new_stop) = materialise(run, new, &want_new);
+    if let Some(why) = old_stop.or(new_stop) {
+        run.skip(format!("{id}: changed files"), format!("not every changed file was read: {why}"));
+    }
     let format_of = |files: &BTreeMap<String, PathBuf>, path: &str| files.get(path).map(|file| sniff(file));
 
     let mut changed_rows = Vec::new();
@@ -505,8 +518,8 @@ pub(crate) fn compare_trees(run: &mut Run, id: &str, old: &Tree, new: &Tree, dif
             }
             components
         };
-        for (sub, a, b) in super::inputs::pair(mark(old_layout.components), mark(new_layout.components)) {
-            super::compare(run, format!("{id}::{}::{sub}", y.path), a, b, depth + 1);
+        for (sub, paired_by, a, b) in super::inputs::pair(mark(old_layout.components), mark(new_layout.components)) {
+            super::compare(run, format!("{id}::{}::{sub}", y.path), paired_by, a, b, depth + 1);
         }
     }
 }

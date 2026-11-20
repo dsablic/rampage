@@ -136,6 +136,8 @@ impl Opener {
 pub(crate) struct StreamReuse {
     decode: Value,
     base: Option<u64>,
+    /// The fill choice the older side made between tied probe candidates, carried so both sides say so.
+    fill_choice: Option<Value>,
 }
 
 /// One part of a side.
@@ -590,23 +592,37 @@ fn stream_component(
     }
     // The compressed bytes identify the stream until it is decoded.
     let charged = run.budget.charge(stream.payload_length);
-    let read = std::fs::File::open(path).ok().filter(|_| charged).and_then(|file| {
+    component.digest = std::fs::File::open(path).ok().filter(|_| charged).and_then(|file| {
         use std::io::{Seek, SeekFrom};
         let mut file = file;
         file.seek(SeekFrom::Start(stream.payload_offset)).ok()?;
-        let mut payload = Vec::new();
-        file.take(stream.payload_length).read_to_end(&mut payload).ok()?;
-        Some(payload)
+        let mut hasher = Sha256::new();
+        let mut payload = file.take(stream.payload_length);
+        let mut buffer = vec![0u8; 1 << 16];
+        loop {
+            let read = payload.read(&mut buffer).ok()?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        Some(rampage_arch::hex::bytes(&hasher.finalize()))
     });
-    component.digest = read.as_deref().map(sha256_of);
     let Ok(length) = usize::try_from(stream.payload_length) else { return component };
     let mut decoded: Option<(Value, Vec<u8>, usize)> = None;
-    if let (Some(reuse), Some(size)) = (reuse, expected) {
+    let mut fill_choice = None;
+    if let (Some(reuse), Some(size)) = (reuse, expected)
+        && run.budget.time_left()
+    {
         let mut decode = reuse.decode.clone();
         decode["expected_output_size"] = json!(size);
-        if let Ok(bytes) = decode_bytes(path, stream.payload_offset, length, &decode) {
+        if let Ok(bytes) = decode_bytes(path, stream.payload_offset, length, &decode, run) {
             decoded = Some((decode, bytes.0, bytes.1));
             component.facts.insert("decoded_with".to_owned(), json!("the other version's parameters"));
+            if let Some(choice) = &reuse.fill_choice {
+                component.facts.insert("dictionary_fill_ambiguous".to_owned(), json!(true));
+                fill_choice = Some(choice.clone());
+            }
         }
     }
     if decoded.is_none() && run.budget.time_left() {
@@ -630,8 +646,12 @@ fn stream_component(
                 // probe. Each is decoded, and the one whose bytes read best as an image is taken: the most
                 // plausible Cortex-M vector words, then the strongest base candidate; else the probe's order.
                 let mut best: Option<Decoded> = None;
+                let mut tried = Vec::new();
                 for candidate in report.candidates.iter().filter(usable) {
                     let Some(first) = first else { break };
+                    if !run.budget.time_left() {
+                        break;
+                    }
                     let alternative = first.dictionary_fill_exercised == Some(true)
                         && candidate.output_size == first.output_size
                         && candidate.input_consumed == first.input_consumed;
@@ -640,21 +660,32 @@ fn stream_component(
                     }
                     let Some(raw) = &candidate.open_as_raw else { continue };
                     let decode = raw["decode"].clone();
-                    let Ok((bytes, consumed)) = decode_bytes(path, stream.payload_offset, length, &decode) else {
+                    let Ok((bytes, consumed)) = decode_bytes(path, stream.payload_offset, length, &decode, run) else {
                         continue;
                     };
                     let base =
                         candidate.base_candidates.as_ref().and_then(|bases| bases.first()).map_or(0, |b| b.score);
                     let score = (plausible_vector_words(&bytes), base);
+                    tried.push(json!({
+                        "dictionary_fill": decode["dictionary_fill"],
+                        "vector_words": score.0,
+                        "base_score": score.1,
+                    }));
                     if best.as_ref().is_none_or(|best| score > best.score) {
                         best = Some(Decoded { decode, bytes, consumed, verdict: candidate.verdict, score });
                     }
                 }
-                if first.is_some_and(|first| first.dictionary_fill_exercised == Some(true)) {
-                    component.facts.insert("dictionary_fill_ambiguous".to_owned(), json!(true));
-                }
                 match best {
                     Some(best) => {
+                        // Only a real tie is reported: more than one candidate decoded the same tokens.
+                        if tried.len() > 1 {
+                            component.facts.insert("dictionary_fill_ambiguous".to_owned(), json!(true));
+                            fill_choice = Some(json!({
+                                "candidates": tried,
+                                "chosen": best.decode["dictionary_fill"],
+                                "by": "plausible Cortex-M vector words, then the base-candidate score",
+                            }));
+                        }
                         component.facts.insert("probe_verdict".to_owned(), json!(best.verdict));
                         decoded = Some((best.decode, best.bytes, best.consumed));
                     }
@@ -666,6 +697,9 @@ fn stream_component(
             }
             Err(error) => run.skip(&id, format!("probe_compression: {error}")),
         }
+    }
+    if let Some(choice) = &fill_choice {
+        component.facts.insert("fill_choice".to_owned(), choice.clone());
     }
     let Some((decode, bytes, consumed)) = decoded else { return component };
     component.digest = Some(sha256_of(&bytes));
@@ -681,7 +715,8 @@ fn stream_component(
         .iter()
         .find(|candidate| Some(candidate.base_address) == preferred)
         .or(found.candidates.first());
-    component.reuse = Some(StreamReuse { decode: decode.clone(), base: base.map(|base| base.base_address) });
+    component.reuse =
+        Some(StreamReuse { decode: decode.clone(), base: base.map(|base| base.base_address), fill_choice });
     let Some(base) = base else {
         component.facts.insert("base_address".to_owned(), json!(null));
         run.skip(&id, "decoded, but no Cortex-M load address fits the bytes; compared by digest (pass as_raw)");
@@ -720,7 +755,18 @@ fn plausible_vector_words(bytes: &[u8]) -> usize {
 }
 
 /// Decodes `length` bytes at `offset` with a Raw region's `decode` parameters: the bytes and the input consumed.
-fn decode_bytes(path: &Path, offset: u64, length: usize, decode: &Value) -> Result<(Vec<u8>, usize), String> {
+fn decode_bytes(
+    path: &Path,
+    offset: u64,
+    length: usize,
+    decode: &Value,
+    run: &mut Run,
+) -> Result<(Vec<u8>, usize), String> {
+    if !run.budget.time_left() {
+        return Err("the time budget ran out".to_owned());
+    }
+    // The decoder's own deadline is what is left of the call's, and at most its default.
+    let remaining = (run.budget.remaining().as_millis() as u64).clamp(1, 3000);
     let decode: crate::raw_project::RawRegionDecode =
         serde_json::from_value(decode.clone()).map_err(|error| error.to_string())?;
     let expected = usize::try_from(decode.expected_output_size.0).map_err(|_| "decoded size too large".to_owned())?;
@@ -734,10 +780,13 @@ fn decode_bytes(path: &Path, offset: u64, length: usize, decode: &Value) -> Resu
             .initial_write_offset
             .unwrap_or_else(|| crate::default_initial_write_offset(decode.codec)),
         dictionary_fill: decode.dictionary_fill.unwrap_or(0),
-        timeout_ms: decode.timeout_ms.unwrap_or(3000),
+        timeout_ms: decode.timeout_ms.unwrap_or(3000).min(remaining),
         preview_offset: 0,
         preview_size: 0,
     };
+    if !run.budget.charge(length as u64) {
+        return Err("the byte budget ran out".to_owned());
+    }
     let decoded = crate::decode_file_range(path, &request).map_err(|error| error.to_string())?;
     Ok((decoded.bytes().to_vec(), decoded.receipt.input_consumed))
 }
@@ -797,6 +846,10 @@ pub(crate) fn fact_changes(old: &Component, new: &Component) -> Vec<String> {
     changes
 }
 
+/// Facts about how a side was read rather than what it holds: they differ between versions without anything in
+/// the update changing, so they are not reported as changes.
+const PROVENANCE_FACTS: [&str; 4] = ["decoded_with", "probe_verdict", "path", "fill_choice"];
+
 fn differing(old: &Map<String, Value>, new: &Map<String, Value>) -> Vec<String> {
     let mut keys: Vec<&String> = old.keys().chain(new.keys()).collect();
     keys.sort();
@@ -812,7 +865,7 @@ fn differing(old: &Map<String, Value>, new: &Map<String, Value>) -> Vec<String> 
         if text.len() > 200 { format!("{}...", &text[..text.floor_char_boundary(200)]) } else { text }
     };
     keys.into_iter()
-        .filter(|key| !matches!(key.as_str(), "decoded_with" | "probe_verdict" | "path" | "dictionary_fill_ambiguous"))
+        .filter(|key| !PROVENANCE_FACTS.contains(&key.as_str()))
         .filter(|key| old.get(*key) != new.get(*key))
         .map(|key| format!("{key}: {} -> {}", text(old.get(key)), text(new.get(key))))
         .collect()
@@ -820,7 +873,9 @@ fn differing(old: &Map<String, Value>, new: &Map<String, Value>) -> Vec<String> 
 
 /// Pairs components across the versions: by id, then compressed streams in order by similar size, then the only
 /// remaining code image on each side. Sorted by id.
-pub(crate) fn pair(old: Vec<Component>, new: Vec<Component>) -> Vec<(String, Option<Component>, Option<Component>)> {
+pub(crate) type Paired = (String, &'static str, Option<Component>, Option<Component>);
+
+pub(crate) fn pair(old: Vec<Component>, new: Vec<Component>) -> Vec<Paired> {
     let mut new: Vec<Option<Component>> = new.into_iter().map(Some).collect();
     let mut pairs = Vec::new();
     let mut left = Vec::new();
@@ -828,7 +883,7 @@ pub(crate) fn pair(old: Vec<Component>, new: Vec<Component>) -> Vec<(String, Opt
         match new.iter().position(|other| other.as_ref().is_some_and(|other| other.id == component.id)) {
             Some(index) => {
                 let other = new[index].take();
-                pairs.push((component.id.clone(), Some(component), other));
+                pairs.push((component.id.clone(), "id", Some(component), other));
             }
             None => left.push(component),
         }
@@ -852,7 +907,12 @@ pub(crate) fn pair(old: Vec<Component>, new: Vec<Component>) -> Vec<(String, Opt
             if let Some((index, _)) = found {
                 let other = new.remove(index);
                 cursor = index;
-                pairs.push((format!("{}~{}", component.id, other.id), Some(component), Some(other)));
+                pairs.push((
+                    format!("{}~{}", component.id, other.id),
+                    "stream_order_size",
+                    Some(component),
+                    Some(other),
+                ));
                 continue;
             }
         }
@@ -860,19 +920,22 @@ pub(crate) fn pair(old: Vec<Component>, new: Vec<Component>) -> Vec<(String, Opt
     }
     // The only code image, or the only filesystem, left on each side: the same part in another form (a plain
     // image and a compressed one, an extracted directory and an image).
-    let kinds: [fn(&Component) -> bool; 2] =
-        [|component| component.open.is_code(), |component| matches!(component.open, Opener::Tree(_))];
-    for kind in kinds {
+    type Kind = (&'static str, fn(&Component) -> bool);
+    let kinds: [Kind; 2] = [
+        ("only_remaining_code", |component| component.open.is_code()),
+        ("only_remaining_tree", |component| matches!(component.open, Opener::Tree(_))),
+    ];
+    for (paired_by, kind) in kinds {
         let count = |components: &[Component]| components.iter().filter(|component| kind(component)).count();
         if count(&old_left) == 1 && count(&new) == 1 {
             let a = old_left.iter().position(kind).expect("one");
             let b = new.iter().position(kind).expect("one");
             let (a, b) = (old_left.remove(a), new.remove(b));
-            pairs.push((format!("{}~{}", a.id, b.id), Some(a), Some(b)));
+            pairs.push((format!("{}~{}", a.id, b.id), paired_by, Some(a), Some(b)));
         }
     }
-    pairs.extend(old_left.into_iter().map(|component| (component.id.clone(), Some(component), None)));
-    pairs.extend(new.into_iter().map(|component| (component.id.clone(), None, Some(component))));
+    pairs.extend(old_left.into_iter().map(|component| (component.id.clone(), "id", Some(component), None)));
+    pairs.extend(new.into_iter().map(|component| (component.id.clone(), "id", None, Some(component))));
     pairs.sort_by(|a, b| a.0.cmp(&b.0));
     pairs
 }

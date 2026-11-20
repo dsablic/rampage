@@ -276,7 +276,17 @@ fn an_lzss_update_container_is_decoded_on_both_sides_and_compared() {
     assert_cortex_m_update(&stream["code"], false);
     // The decoded images are the plain flash images.
     let plain = diff(&fixture("firmware/raw-cortex-m-update-v1.bin"), &old);
-    assert_eq!(component(&plain, "image~stream:0")["status"], "unchanged", "{plain:#}");
+    let paired = component(&plain, "image~stream:0");
+    assert_eq!(paired["status"], "unchanged", "{plain:#}");
+    assert_eq!(paired["paired_by"], "only_remaining_code", "{plain:#}");
+    assert_eq!(stream["paired_by"], "id", "{stream:#}");
+    // The probe could not tell the ring fill apart; the choice is recorded, and the newer side reused it.
+    let choice = &stream["old"]["fill_choice"];
+    assert!(choice["candidates"].as_array().unwrap().len() > 1, "{stream:#}");
+    assert_eq!(choice["chosen"], 0, "{stream:#}");
+    assert_eq!(stream["old"]["dictionary_fill_ambiguous"], true, "{stream:#}");
+    assert_eq!(stream["new"]["dictionary_fill_ambiguous"], true, "{stream:#}");
+    assert!(!changes.iter().any(|change| change.as_str().unwrap().contains("dictionary_fill")), "{stream:#}");
     let backward = diff(&new, &old);
     assert_inverse(&stream["code"], &component(&backward, "stream:0")["code"]);
     assert_unchanged(&diff(&old, &old));
@@ -476,6 +486,17 @@ fn budgets_bound_the_work_and_say_what_was_left_out() {
     assert_eq!(result["budget"]["stopped"], "time", "{result:#}");
     assert!(!result["not_compared"].as_array().unwrap().is_empty(), "{result:#}");
 
+    // A container's decodes and probes stop at the deadline too.
+    let scratch = Scratch::new("rampage-diff-hurried");
+    let (a, b) =
+        (scratch.write("v1.upd", &container(&update("v1"))), scratch.write("v2.upd", &container(&update("v2"))));
+    let mut hurried = query(&a, &b);
+    hurried.timeout_ms = Some(1);
+    let started = Instant::now();
+    let result = run(&hurried);
+    assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+    assert_eq!(result["budget"]["stopped"], "time", "{result:#}");
+
     let mut starved = query(&old, &new);
     starved.max_bytes = Some(10_000);
     let result = run(&starved);
@@ -546,6 +567,104 @@ fn hostile_and_unrelated_inputs_never_panic() {
             }
         }
     }
+}
+
+/// Review: a constant that changed only in a literal pool was reported as no change.
+#[test]
+fn a_constant_changed_in_a_literal_pool_is_a_changed_function() {
+    let (old, new) =
+        (fixture("firmware/raw-cortex-m-literals-v1.bin"), fixture("firmware/raw-cortex-m-literals-v2.bin"));
+    let result = diff(&old, &new);
+    let code = &component(&result, "image")["code"];
+    let functions = &code["functions"];
+    assert_eq!(
+        (functions["changed"].as_u64(), functions["added"].as_u64(), functions["removed"].as_u64()),
+        (Some(1), Some(0), Some(0)),
+        "{code:#}"
+    );
+    let changed = code["changed"][0]["old"].as_str().unwrap().to_owned();
+    let mut drill = query(&old, &new);
+    drill.component = Some("image".to_owned());
+    drill.function = Some(changed);
+    let view = run(&drill);
+    let texts: Vec<&str> = view["rows"].as_array().unwrap().iter().filter_map(|row| row["text"].as_str()).collect();
+    assert!(texts.iter().any(|text| text.ends_with("= 0x12345")), "{view:#}");
+    assert!(texts.iter().any(|text| text.ends_with("= 0x54321")), "{view:#}");
+    // Bytes that change outside every compared function are said to, not left unexplained.
+    let scratch = Scratch::new("rampage-diff-padding");
+    let mut padded = std::fs::read(&old).unwrap();
+    padded.extend([0x5a; 16]);
+    let padded = scratch.write("padded.bin", &padded);
+    let result = diff(&old, &padded);
+    let image = component(&result, "image");
+    assert_eq!(image["status"], "changed", "{result:#}");
+    assert!(image["notes"].to_string().contains("outside the compared functions"), "{result:#}");
+    assert!(result["summary"].to_string().contains("outside the compared functions"), "{result:#}");
+}
+
+/// A ustar archive holding `members` (name, content).
+fn tar(members: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (name, content) in members {
+        let mut header = [0u8; 512];
+        header[..name.len()].copy_from_slice(name.as_bytes());
+        header[100..108].copy_from_slice(b"0000644\0");
+        header[108..116].copy_from_slice(b"0000000\0");
+        header[116..124].copy_from_slice(b"0000000\0");
+        header[124..136].copy_from_slice(format!("{:011o}\0", content.len()).as_bytes());
+        header[136..148].copy_from_slice(b"00000000000\0");
+        header[156] = b'0';
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+        header[148..156].fill(b' ');
+        let sum: u32 = header.iter().map(|&byte| u32::from(byte)).sum();
+        header[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+        out.extend(header);
+        out.extend(*content);
+        out.resize(out.len().div_ceil(512) * 512, 0);
+    }
+    out.extend([0u8; 1024]);
+    out
+}
+
+/// Review: with one summary line per component, hundreds of changed archives overflowed the result cap.
+#[test]
+fn many_changed_components_stay_within_the_result_cap() {
+    let scratch = Scratch::new("rampage-diff-many");
+    for index in 0..300 {
+        for (version, text) in [("v1", "first"), ("v2", "second")] {
+            let archive = tar(&[("member.txt", text.as_bytes()), ("same.txt", b"unchanged")]);
+            scratch.write(&format!("{version}/archive-{index:03}.tar"), &archive);
+        }
+    }
+    let result = diff(&scratch.0.join("v1"), &scratch.0.join("v2"));
+    let text = serde_json::to_string(&result).unwrap();
+    assert!(text.len() <= 56_000, "{} bytes", text.len());
+    assert_eq!(result["components_total"], 301, "{}", &text[..2000]);
+    let summary = result["summary"].as_array().unwrap();
+    assert!(summary.len() <= 23, "{summary:#?}");
+    assert!(summary.iter().any(|line| line.as_str().unwrap().contains("more changed components")), "{summary:#?}");
+    assert!(result["not_compared_total"].is_u64(), "{}", &text[..2000]);
+}
+
+/// The integrity_checks preview change: a check whose stored value cannot be patched (it lies in decoded bytes)
+/// is noted, and the report still comes back.
+#[test]
+fn an_integrity_preview_notes_a_stored_value_it_cannot_patch() {
+    let scratch = Scratch::new("rampage-diff-integrity");
+    let plain = update("v2");
+    let path = scratch.write("v2.upd", &container(&plain));
+    let packed = std::fs::metadata(&path).unwrap().len() - 256 - 16 - 512;
+    // The wrong ring fill decodes the stored CRC's range differently, so the check is invalid and a fix is planned.
+    let request: rampage_api::RawProjectRequest = serde_json::from_value(json!({
+        "profile": "cortex-m", "offset": "0x110", "length": packed, "base_address": "0x8000000", "vector_table": true,
+        "decode": {"codec": "lzss-4k", "expected_output_size": plain.len(), "dictionary_fill": 255}}))
+    .unwrap();
+    let project = rampage_api::Session::default().open_raw(&path, &request).unwrap();
+    let report = project.integrity_checks(&rampage_api::IntegrityRequest::default()).unwrap().report;
+    let notes = report.notes.join("\n");
+    assert!(notes.contains("the stored value cannot be patched"), "{notes}");
+    assert!(report.fix.writes.iter().all(|write| write.action != "patch"), "{:?}", report.fix.writes);
 }
 
 #[test]

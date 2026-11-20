@@ -41,6 +41,12 @@ const MAX_PAGE: usize = 500;
 const RESULT_BYTES: usize = 56_000;
 /// Filesystem nesting levels taken apart below the inputs (an image file inside an image).
 const MAX_TREE_DEPTH: usize = 3;
+/// Files written to scratch space per call, over every filesystem pair (an empty file counts too).
+const MAX_SCRATCH_FILES: usize = 20_000;
+/// Component pairs compared per call, nested ones included.
+const MAX_COMPONENTS: usize = 2_000;
+/// Summary lines naming one component each.
+const SUMMARY_COMPONENT_LINES: usize = 20;
 
 /// What `diff_firmware` compares and how much of it to return.
 #[derive(Debug, Clone, Default)]
@@ -74,7 +80,9 @@ pub(crate) struct Budget {
     pub(crate) bytes_read: u64,
     pub(crate) files_hashed: usize,
     pub(crate) functions_matched: usize,
-    /// Why work stopped early: `time`, `images` or `bytes`.
+    pub(crate) scratch_files_left: usize,
+    pub(crate) components_left: usize,
+    /// Why work stopped early: `time`, `images`, `bytes`, `scratch_files` or `components`.
     pub(crate) stopped: Option<&'static str>,
     pub(crate) packs: Arc<Packs>,
     /// Raw projects of this call; dropped with it.
@@ -94,6 +102,8 @@ impl Budget {
             bytes_read: 0,
             files_hashed: 0,
             functions_matched: 0,
+            scratch_files_left: MAX_SCRATCH_FILES,
+            components_left: MAX_COMPONENTS,
             stopped: None,
             session: crate::Session::default().with_packs(Arc::clone(&packs)),
             packs,
@@ -121,6 +131,16 @@ impl Budget {
         }
         self.bytes_left -= count;
         self.bytes_read += count;
+        true
+    }
+
+    /// Takes one scratch file from the budget; false (and a recorded stop) when none is left.
+    pub(crate) fn take_scratch_file(&mut self) -> bool {
+        if self.scratch_files_left == 0 {
+            self.stopped.get_or_insert("scratch_files");
+            return false;
+        }
+        self.scratch_files_left -= 1;
         true
     }
 
@@ -226,6 +246,11 @@ pub(crate) struct ComponentDiff {
     /// `unchanged`, `changed`, `added`, `removed` or `not_compared`.
     pub(crate) status: &'static str,
     pub(crate) role: &'static str,
+    /// How the pair was made: `id` (the same id on both sides), `stream_order_size` (compressed streams in order,
+    /// by similar size), `only_remaining_code` or `only_remaining_tree` (the only code image, or filesystem, left
+    /// on each side); absent for a component on one side only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) paired_by: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) old: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -328,8 +353,8 @@ pub fn diff_firmware(query: &FirmwareDiffQuery, packs: Arc<Packs>) -> Result<Val
     }
     let container = inputs::container_changes(&old_layout, &new_layout);
     let pairs = inputs::pair(old_layout.components, new_layout.components);
-    for (id, old, new) in pairs {
-        compare(&mut run, id, old, new, 0);
+    for (id, paired_by, old, new) in pairs {
+        compare(&mut run, id, paired_by, old, new, 0);
     }
     run.components.sort_by(|a, b| a.id.cmp(&b.id));
     output.insert("identical".to_owned(), json!(false));
@@ -339,18 +364,34 @@ pub fn diff_firmware(query: &FirmwareDiffQuery, packs: Arc<Packs>) -> Result<Val
     }
     output.insert("next".to_owned(), json!(next_steps(query, &run)));
     let components = std::mem::take(&mut run.components);
+    output.insert("components_total".to_owned(), json!(components.len()));
     output.insert("components".to_owned(), serde_json::to_value(&components).unwrap_or_default());
+    output.insert("not_compared_total".to_owned(), json!(run.not_compared.len()));
     output.insert("not_compared".to_owned(), serde_json::to_value(&run.not_compared).unwrap_or_default());
     output.insert("budget".to_owned(), run.budget.report(max_images, timeout_ms));
     Ok(fitted(Value::Object(output)))
 }
 
 /// Compares one component pair, appending its result (and those of components found inside it) to `run`.
-pub(crate) fn compare(run: &mut Run, id: String, old: Option<Component>, new: Option<Component>, depth: usize) {
+pub(crate) fn compare(
+    run: &mut Run,
+    id: String,
+    paired_by: &'static str,
+    old: Option<Component>,
+    new: Option<Component>,
+    depth: usize,
+) {
+    if run.budget.components_left == 0 {
+        run.budget.stopped.get_or_insert("components");
+        run.skip(&id, format!("more than {MAX_COMPONENTS} component pairs in one call; ask for it with `component`"));
+        return;
+    }
+    run.budget.components_left -= 1;
     let role = old.as_ref().or(new.as_ref()).map_or("data", |component| component.role);
     let mut diff = ComponentDiff {
         id: id.clone(),
         role,
+        paired_by: (old.is_some() && new.is_some()).then_some(paired_by),
         old: old.as_ref().map(Component::facts_value),
         new: new.as_ref().map(Component::facts_value),
         ..ComponentDiff::default()
@@ -399,9 +440,27 @@ pub(crate) fn compare(run: &mut Run, id: String, old: Option<Component>, new: Op
         }
         (Opener::Dex, Opener::Dex) => diff.android = tree::android_changes(&old, &new),
         (old_open, new_open) if old_open.is_code() && new_open.is_code() => {
+            if old.role != new.role {
+                diff.notes.push(format!(
+                    "paired as {paired_by} although the roles differ ({} and {}): read it as a comparison of two \
+                     code images, not of one component across versions",
+                    old.role, new.role
+                ));
+            }
             if run.budget.take_image() {
                 match code::compare_code(run, &old, &new) {
-                    Ok(value) => diff.code = Some(value),
+                    Ok(value) => {
+                        // Stages the deadline cut are part of what was not compared.
+                        for note in value["notes"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                            if note.contains("ran out") {
+                                run.skip(&id, note);
+                            }
+                        }
+                        if code_quiet(&value) {
+                            diff.notes.push(UNEXPLAINED.to_owned());
+                        }
+                        diff.code = Some(value);
+                    }
                     Err(error) => {
                         diff.status = "not_compared";
                         diff.notes.push(format!("code not compared: {error}"));
@@ -416,6 +475,25 @@ pub(crate) fn compare(run: &mut Run, id: String, old: Option<Component>, new: Op
         _ => diff.notes.push("the two versions hold different kinds of content; compared by digest only".to_owned()),
     }
     run.components.push(diff);
+}
+
+/// What a code comparison that found the images different but nothing in them says.
+const UNEXPLAINED: &str = "the bytes differ, but no compared function, string, version, endpoint, lock or integrity \
+                           check does: the change is outside the compared functions (data, padding, or code that \
+                           discovery did not reach)";
+
+/// Whether a code comparison found no change in anything it compares.
+fn code_quiet(code: &Value) -> bool {
+    let functions = &code["functions"];
+    let none = |key: &str| functions[key].as_u64().unwrap_or(0) == 0;
+    let empty = |key: &str| {
+        let delta = &code[key];
+        ["added_total", "removed_total", "changed_total"].iter().all(|total| delta[*total].as_u64().unwrap_or(0) == 0)
+    };
+    none("changed")
+        && none("added")
+        && none("removed")
+        && ["strings", "versions", "endpoints", "locks", "integrity", "capture"].iter().all(|key| empty(key))
 }
 
 fn budget_reason(budget: &Budget) -> String {
@@ -445,7 +523,18 @@ fn summary(run: &Run, container: &[String]) -> Vec<String> {
     if !container.is_empty() {
         lines.push(format!("Container: {}.", container.join("; ")));
     }
+    let mut named = 0;
+    let mut unnamed = 0;
     for component in &run.components {
+        if component.notes.iter().any(|note| note == UNEXPLAINED) {
+            if named < SUMMARY_COMPONENT_LINES {
+                lines.push(format!("`{}` ({}): {UNEXPLAINED}.", component.id, component.status));
+                named += 1;
+            } else {
+                unnamed += 1;
+            }
+            continue;
+        }
         let mut parts = Vec::new();
         if let Some(code) = &component.code {
             let functions = &code["functions"];
@@ -491,8 +580,16 @@ fn summary(run: &Run, container: &[String]) -> Vec<String> {
             }
         }
         if !parts.is_empty() {
-            lines.push(format!("`{}` ({}): {}.", component.id, component.status, parts.join("; ")));
+            if named < SUMMARY_COMPONENT_LINES {
+                lines.push(format!("`{}` ({}): {}.", component.id, component.status, parts.join("; ")));
+                named += 1;
+            } else {
+                unnamed += 1;
+            }
         }
+    }
+    if unnamed > 0 {
+        lines.push(format!("{unnamed} more changed components; `components` lists them."));
     }
     if !run.not_compared.is_empty() {
         lines.push(format!("{} items were not compared; `not_compared` says why.", run.not_compared.len()));
@@ -530,7 +627,7 @@ fn next_steps(query: &FirmwareDiffQuery, run: &Run) -> Vec<Value> {
             break;
         }
     }
-    for component in run.components.iter().filter(|component| component.files.is_some()) {
+    for component in run.components.iter().filter(|component| component.files.is_some()).take(2) {
         let total = component.files.as_ref().map_or(0, |files| {
             ["changed_total", "added_total", "removed_total"]
                 .iter()
@@ -579,8 +676,7 @@ fn drill_down(
     }
     // The whole comparison of this pair, with every list at least a page long.
     run.rows = (query.offset + limit).max(SUMMARY_ROWS);
-    run.budget.images_left = run.budget.images_left.max(1);
-    compare(run, id.to_owned(), old, new, 0);
+    compare(run, id.to_owned(), "id", old, new, 0);
     let mut components = std::mem::take(&mut run.components);
     let index = components.iter().position(|component| component.id == id).unwrap_or(0);
     let found = components.remove(index);

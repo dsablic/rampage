@@ -179,7 +179,11 @@ impl Side {
                 continue;
             };
             let function = &mut functions[*owner];
-            function.data_refs.push((xref.from - function.address, xref.to));
+            // A function's blocks may lie before its entry (code shared with, or jumped to from, the entry); a
+            // reference there has no offset into the body, but its string still identifies the function.
+            if let Some(offset) = xref.from.checked_sub(function.address) {
+                function.data_refs.push((offset, xref.to));
+            }
             if let Some(text) = texts.get(&xref.to) {
                 function.strings.insert((*text).to_owned());
             }

@@ -163,6 +163,14 @@ impl<'a> Code<'a> {
     /// `lines` normalised (see [`normalise`]), with `movw`/`movt` pairs that form an address read as that address.
     pub(crate) fn normalised(&self, lines: &[DisassemblyLine], label: &dyn Fn(u64) -> Option<String>) -> Vec<String> {
         let mut texts: Vec<String> = lines.iter().map(|line| normalise(line, label, &self.project.binary)).collect();
+        // A literal load reads as what it loads: a constant that changed in a pool is a change, one that is the
+        // address of something that only moved is not.
+        for (text, line) in texts.iter_mut().zip(lines) {
+            if let Some(value) = self.loaded(line) {
+                text.push_str(" = ");
+                text.push_str(&self.describe(value, label));
+            }
+        }
         for (index, line) in lines.iter().enumerate() {
             let Some((register, low)) = wide_move(&line.text, "movw") else { continue };
             // The movt that completes it, before anything else writes the register.
@@ -192,6 +200,56 @@ impl<'a> Code<'a> {
             texts[other] = format!("movt {register}, #hi({what})");
         }
         texts
+    }
+}
+
+impl Code<'_> {
+    /// The value a literal load (`ldr` from a PC-relative or literal-pool slot in the image) reads, when the slot's
+    /// bytes are in the image.
+    fn loaded(&self, line: &DisassemblyLine) -> Option<u64> {
+        let slot = line.data_ref.filter(|_| line.accesses)?;
+        let (mnemonic, operands) = line.text.split_once(' ')?;
+        let mnemonic = mnemonic.to_ascii_lowercase();
+        if !mnemonic.starts_with("ldr") && !mnemonic.starts_with("l32r") {
+            return None;
+        }
+        let binary = &self.project.binary;
+        let size: u64 = if mnemonic.starts_with("ldrb") || mnemonic.starts_with("ldrsb") {
+            1
+        } else if mnemonic.starts_with("ldrh") || mnemonic.starts_with("ldrsh") {
+            2
+        } else if mnemonic.starts_with("ldrd")
+            || operands.trim_start().starts_with('x')
+            || operands.trim_start().starts_with('d')
+        {
+            8
+        } else {
+            4
+        };
+        let bytes = binary.read(slot, size)?;
+        let mut word = [0u8; 8];
+        if binary.big_endian {
+            word[8 - bytes.len()..].copy_from_slice(bytes);
+            Some(u64::from_be_bytes(word))
+        } else {
+            word[..bytes.len()].copy_from_slice(bytes);
+            Some(u64::from_le_bytes(word))
+        }
+    }
+
+    /// A loaded value as the comparison reads it: a function by its label (a Thumb bit ignored), a string by its
+    /// text, another address in the image as `<addr>`, anything else as the number.
+    fn describe(&self, value: u64, label: &dyn Fn(u64) -> Option<String>) -> String {
+        if let Some(name) = label(value).or_else(|| (value & 1 == 1).then(|| label(value & !1)).flatten()) {
+            return name;
+        }
+        if let Some(text) = self.strings.get(&value).or_else(|| strings_at(self.project, value)) {
+            return format!("{text:?}");
+        }
+        if value >= 0x100 && self.project.binary.read(value, 1).is_some() {
+            return "<addr>".to_owned();
+        }
+        format!("{value:#x}")
     }
 }
 
@@ -488,6 +546,27 @@ pub(crate) fn match_pair(old: &Project, new: &Project) -> Result<Matched, String
             _ => unchecked += 1,
         }
     }
+    // Pairs equal in their bodies may still load different constants: a literal pool after the body is not part of
+    // it. Each pair whose older function loads from a pool (a data reference into code) is compared by listing,
+    // where each load reads as the value it loads.
+    let pooled = literal_loaders(old);
+    let mut unread = 0;
+    for pair in pairs.iter_mut().filter(|pair| !pair.changed && pooled.contains(&pair.old)) {
+        match (listings.text(true, pair.old, &labels), listings.text(false, pair.new, &labels)) {
+            (Some(a), Some(b)) if a != b => {
+                pair.changed = true;
+                pair.normalised = false;
+            }
+            (Some(_), Some(_)) => {}
+            _ => unread += 1,
+        }
+    }
+    if unread > 0 {
+        notes.push(format!(
+            "{unread} unchanged pairs that load literal-pool constants were not read past the listing budget; a \
+             constant changed in their pools would not be seen"
+        ));
+    }
     if unchecked > 0 {
         notes.push(format!(
             "{unchecked} changed pairs were not checked against address normalisation (listing budget); they may \
@@ -513,6 +592,18 @@ pub(crate) fn match_pair(old: &Project, new: &Project) -> Result<Matched, String
         sizes_new,
         notes,
     })
+}
+
+/// The functions that load from a literal pool: a data reference made from inside them to an address in code.
+fn literal_loaders(project: &Project) -> BTreeSet<u64> {
+    let Ok(analysis) = project.analysis() else { return BTreeSet::new() };
+    analysis
+        .program
+        .xrefs
+        .iter()
+        .filter(|xref| xref.kind == XrefKind::Data && project.binary.is_code(xref.to))
+        .filter_map(|xref| analysis.function_containing(xref.from))
+        .collect()
 }
 
 /// A function's name for a report: the newer version's symbol when it has one, else the older one's.
