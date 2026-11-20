@@ -156,6 +156,10 @@ pub struct Binary {
     /// An Xtensa image built for the call0 ABI ([`Binary::xtensa_call0`]).
     #[serde(skip)]
     xtensa_call0: bool,
+    /// A MIPS ELF whose header marks a compressed instruction set rampage does not decode
+    /// ([`Binary::undecoded_isa`]).
+    #[serde(skip)]
+    undecoded_isa: Option<&'static str>,
 }
 
 #[derive(Debug)]
@@ -317,6 +321,7 @@ impl Binary {
             raw_identity: std::sync::OnceLock::new(),
             elf_m_profile: false,
             xtensa_call0: false,
+            undecoded_isa: None,
             raw: Some(raw),
             image: 0..len,
         };
@@ -369,6 +374,17 @@ impl Binary {
     /// without retained admission facts counts too, so nothing native is trusted for it.
     pub fn is_sleigh_raw(&self) -> bool {
         self.format == Format::Raw && !self.raw.as_ref().is_some_and(|raw| raw.profile().native_decoder())
+    }
+
+    /// The compressed MIPS instruction set (MIPS16e or microMIPS) the ELF header says the image holds, which rampage
+    /// does not decode: functions in it are not discovered, disassembled or decompiled.
+    pub fn undecoded_isa(&self) -> Option<&'static str> {
+        self.undecoded_isa
+    }
+
+    /// [`Self::undecoded_isa`] as a sentence for results that list or read code.
+    pub fn undecoded_isa_note(&self) -> Option<String> {
+        self.undecoded_isa.map(undecoded_isa_note)
     }
 
     /// An Xtensa image for the call0 ABI (ESP8266): an ELF whose `.xtensa.info` says so, a Raw image whose
@@ -529,6 +545,7 @@ impl Binary {
             raw_identity: std::sync::OnceLock::new(),
             elf_m_profile: false,
             xtensa_call0: false,
+            undecoded_isa: None,
             raw: None,
         })
     }
@@ -973,6 +990,12 @@ impl Binary {
         let xtensa_abi_note =
             (format == Format::Elf && arch == Arch::Xtensa).then(|| elf_xtensa_call0(&parsed)).flatten();
         let xtensa_call0 = xtensa_abi_note == Some(true);
+        let undecoded_isa = (format == Format::Elf && matches!(arch, Arch::Mips | Arch::Mips64))
+            .then(|| elf_mips_compressed_isa(&parsed))
+            .flatten();
+        if let Some(isa) = undecoded_isa {
+            warnings.push(undecoded_isa_note(isa));
+        }
         let overlay = crate::details::overlay(&parsed, image_bytes, image.start as u64).unwrap_or_else(|warning| {
             warnings.push(warning);
             None
@@ -1017,6 +1040,7 @@ impl Binary {
             raw_identity: std::sync::OnceLock::new(),
             elf_m_profile,
             xtensa_call0,
+            undecoded_isa,
             raw: None,
             image,
         };
@@ -1840,6 +1864,30 @@ pub(crate) fn xtensa_prologue_vote(binary: &Binary) -> bool {
         }
     }
     call0 > 0 && windowed.saturating_mul(4) < call0
+}
+
+/// `e_flags` bits of a MIPS ELF holding MIPS16e (`EF_MIPS_ARCH_ASE_M16`) or microMIPS (`EF_MIPS_MICROMIPS`) code.
+const EF_MIPS_ARCH_ASE_M16: u32 = 0x0400_0000;
+const EF_MIPS_MICROMIPS: u32 = 0x0200_0000;
+
+/// The compressed instruction set a MIPS ELF header marks, if any.
+fn elf_mips_compressed_isa(parsed: &object::File) -> Option<&'static str> {
+    let object::FileFlags::Elf { e_flags, .. } = parsed.flags() else { return None };
+    if e_flags.0 & EF_MIPS_MICROMIPS != 0 {
+        Some("microMIPS")
+    } else if e_flags.0 & EF_MIPS_ARCH_ASE_M16 != 0 {
+        Some("MIPS16e")
+    } else {
+        None
+    }
+}
+
+fn undecoded_isa_note(isa: &str) -> String {
+    format!(
+        "the ELF header marks {isa} code, which rampage does not decode: functions compiled as {isa} (entered \
+         through jalx or an odd address) are not discovered, listed, disassembled or decompiled, and calls into them \
+         are not followed. Only the MIPS32 code is analysed, so function lists, call graphs and diffs are incomplete"
+    )
 }
 
 /// Whether an ARM ELF's build attributes name an M-profile CPU; an unreadable section is a warning and not M.

@@ -43,7 +43,9 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   (very large shared libraries with several GOTs) resolve only through their primary GOT. `$t9` is known only in
   runs that start at a function's entry, so `disassemble` from an arbitrary address shows no GOT references a
   function's prologue sets up. microMIPS and MIPS16e (ISA-mode bit set) code is not decoded, and MIPS64 has no Raw
-  profile. A function that only spins (`j .`) is not inferred to never return, so a decompiled caller can run on
+  profile. An ELF whose header marks MIPS16e or microMIPS gets a `binary_info` warning and a `list_functions` note
+  saying so (OpenWrt builds most programs as MIPS16e, so their function lists hold only the MIPS32 startup code);
+  `jalx` calls into the other instruction set are kept as calls whose target is not followed. A function that only spins (`j .`) is not inferred to never return, so a decompiled caller can run on
   into the data after its last call (`halt_baddata`). Constant search on MIPS matches typed immediates and
   `lui` pairs completed in one block (`loaded_constant`); other sequences are not matched. `integrity_checks`
   takes a 16-bit CRC polynomial immediate as evidence only in a function that also shifts by one bit and XORs, so

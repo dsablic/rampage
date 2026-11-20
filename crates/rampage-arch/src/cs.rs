@@ -136,7 +136,10 @@ const INDIRECT_JUMP: Kind = Kind::Jump { direct: false };
 fn mips(mnemonic: &str, operands: &str, is_branch: bool) -> Option<Branch> {
     let kind = match mnemonic {
         "jr" | "jr.hb" | "jrc" if operands == "$ra" => Kind::Return,
-        "jal" | "bal" | "jalx" | "balc" => CALL,
+        "jal" | "bal" | "balc" => CALL,
+        // jalx switches to the other instruction set (MIPS16e or microMIPS), which is not decoded: the call is kept,
+        // its target is not followed, so its bytes are never read as MIPS32 code.
+        "jalx" => INDIRECT_CALL,
         "bgezal" | "bltzal" | "bgezall" | "bltzall" => return branch(CALL, true),
         "jalr" | "jalr.hb" | "jalrc" | "jialc" => INDIRECT_CALL,
         "j" | "b" | "bc" => JUMP,

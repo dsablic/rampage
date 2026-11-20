@@ -153,6 +153,31 @@ fn the_got_is_found_without_section_headers() {
     assert!(from.contains(&main), "{from:?}");
 }
 
+/// OpenWrt builds most programs as MIPS16e, which rampage does not decode: an ELF header that marks MIPS16e
+/// (`EF_MIPS_ARCH_ASE_M16`) or microMIPS makes `binary_info` warn and `list_functions` say so, rather than leaving a
+/// short function list to read as the whole program. The fixture is router-mips.elf with only that flag set.
+#[test]
+fn compressed_instruction_sets_are_reported_as_not_decoded() {
+    let plain = project("router-mips");
+    assert_eq!(plain.binary.undecoded_isa(), None);
+    assert!(plain.functions_page(&rampage_api::FunctionsQuery::default()).unwrap().note.is_none());
+    let bytes = std::fs::read(format!("{DIR}router-mips.elf")).unwrap();
+    for (flag, isa) in [(0x0400_0000u32, "MIPS16e"), (0x0200_0000, "microMIPS")] {
+        let mut flagged = bytes.clone();
+        // e_flags of a big-endian ELF32 header.
+        let flags = u32::from_be_bytes(flagged[0x24..0x28].try_into().unwrap()) | flag;
+        flagged[0x24..0x28].copy_from_slice(&flags.to_be_bytes());
+        let project = Project::new(Binary::from_owned_native_bytes(flagged, rampage_arch::Arch::Mips).unwrap());
+        assert_eq!(project.binary.undecoded_isa(), Some(isa));
+        let warning = format!("marks {isa} code, which rampage does not decode");
+        assert!(project.binary.warnings.iter().any(|text| text.contains(&warning)), "{:?}", project.binary.warnings);
+        let page = project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap();
+        assert!(page.note.as_deref().is_some_and(|note| note.contains(&warning)), "{:?}", page.note);
+        // The MIPS32 code is still analysed.
+        assert!(page.page.total > 0);
+    }
+}
+
 fn boot_rom() -> Project {
     let image = std::fs::read(format!("{DIR}boot-mips.bin")).unwrap();
     let options = rampage_loaders::RawCodeOptions {

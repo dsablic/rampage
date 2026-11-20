@@ -200,6 +200,7 @@ fn mips() {
             ("0000000d", Next),                    // break
             ("08000402", Jump(0x1008)),            // j
             ("00800008", IndirectJump),            // jr $4
+            ("74000402", IndirectCall),            // jalx 0x1008: MIPS16e or microMIPS, not followed
         ],
     );
 }

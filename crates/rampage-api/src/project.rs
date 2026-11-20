@@ -1094,7 +1094,10 @@ impl Project {
             page,
             unexplored_code,
             next: self.raw_discovery_hint(),
-            note: self.pointer_tables_note(),
+            note: match (self.binary.undecoded_isa_note(), self.pointer_tables_note()) {
+                (Some(isa), Some(tables)) => Some(format!("{isa}. {tables}")),
+                (isa, tables) => isa.or(tables),
+            },
         })
     }
 
