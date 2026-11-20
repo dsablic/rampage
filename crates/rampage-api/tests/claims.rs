@@ -332,6 +332,28 @@ fn xtensa_crc_is_verified() {
     verdict(&check(&project, claim), "verified");
 }
 
+/// Acceptance (zlib's `crc32(crc, buf, len)` on MIPS was refuted as CRC-32): a checksum claim without args also tries
+/// the running-value layouts `(seed, data, length)` and `(data, length, seed)` before refuting. ESP-IDF's
+/// `crc32_le(crc, buf, len)` has zlib's shape.
+#[test]
+fn checksum_claims_without_args_try_the_running_value_layouts() {
+    let path = "xtensa/esp32-app-sym.elf";
+    let project = open(path);
+    let crc = symbol(path, "crc32_le");
+    let result = check(&project, json!({"kind": "computes", "function": crc, "algorithm": "crc32", "samples": 8}));
+    verdict(&result, "verified");
+    assert_eq!(result["evidence"]["args"], "[0x0, data, length]", "{result:#}");
+    assert!(result["method"].as_str().unwrap().contains("no args were given"), "{result:#}");
+    // Another algorithm fails every layout and stays refuted, naming the layouts tried.
+    let result = check(&project, json!({"kind": "computes", "function": crc, "algorithm": "crc32c", "samples": 8}));
+    verdict(&result, "refuted");
+    assert_eq!(result["evidence"]["tried"].as_array().unwrap().len(), 3, "{result:#}");
+    // Given args are taken as stated.
+    let claim = json!({"kind": "computes", "function": crc, "algorithm": "crc32", "args": ["data", "length"],
+                       "samples": 8});
+    verdict(&check(&project, claim), "refuted");
+}
+
 #[test]
 fn layout_reads_debug_information() {
     let project = open("bin/debug-x64.elf");

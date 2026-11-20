@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::expr::Expression;
 use super::reference::{AlgorithmSpec, Reference, Shape, sha256_block};
-use super::{Address, Budget, Confidence, Outcome, hex, hex_prefix};
+use super::{Address, Budget, Confidence, Outcome, Verdict, hex, hex_prefix};
 use crate::Project;
 use crate::evaluate::{
     Convention, DataReads, EvaluateArgument, EvaluateReport, EvaluateRequest, FloatText, ImageState, IntegerText,
@@ -645,6 +645,9 @@ pub(crate) fn computes(project: &Project, claim: &ComputesClaim, budget: Budget)
                 Err(error) => return Outcome::invalid(error),
             };
             match runner(budget) {
+                Ok(runner) if claim.args.is_none() => {
+                    computes_default_layouts(project, &runner, &reference, &roles, samples, claim.seed)
+                }
                 Ok(runner) => computes_algorithm(project, &runner, &reference, &roles, samples, claim.seed),
                 Err(outcome) => outcome,
             }
@@ -665,6 +668,79 @@ pub(crate) fn computes(project: &Project, claim: &ComputesClaim, budget: Budget)
         }
         _ => Outcome::invalid("a computes claim states an algorithm or an expression"),
     }
+}
+
+fn layout_text(roles: &[Role]) -> String {
+    let names: Vec<String> = roles
+        .iter()
+        .map(|role| match role {
+            Role::Data => "data".to_owned(),
+            Role::Length => "length".to_owned(),
+            Role::Out => "out".to_owned(),
+            Role::State => "state".to_owned(),
+            Role::Fixed(value) => format!("{value:#x}"),
+        })
+        .collect();
+    format!("[{}]", names.join(", "))
+}
+
+/// A checksum claim without `args`: the default `(data, length)`, then the running-value layouts checksum APIs
+/// commonly take, `(seed, data, length)` as zlib's `crc32` and `adler32` do and `(data, length, seed)`, the seed
+/// being the checksum of no bytes (0 for CRC-32, 1 for Adler-32). The first layout that verifies is reported.
+/// Otherwise a layout whose run returned decides: a mismatch left unknown (unset data) before a refutation; a run
+/// that faulted or did not return says only that its layout is not the function's.
+fn computes_default_layouts(
+    project: &Project,
+    runner: &Runner<'_>,
+    reference: &Reference,
+    roles: &[Role],
+    samples: usize,
+    seed: Option<u64>,
+) -> Outcome {
+    let first = computes_algorithm(project, runner, reference, roles, samples, seed);
+    if first.verdict == Verdict::Verified || !matches!(reference.shape(), Shape::Checksum(_)) {
+        return first;
+    }
+    let initial = reference.checksum(&[], project.binary.big_endian);
+    let layouts =
+        [vec![Role::Fixed(initial), Role::Data, Role::Length], vec![Role::Data, Role::Length, Role::Fixed(initial)]];
+    let mut tried = vec![json!({"args": layout_text(roles), "verdict": first.verdict})];
+    let mut outcomes = vec![first];
+    for layout in layouts {
+        let outcome = computes_algorithm(project, runner, reference, &layout, samples, seed);
+        if outcome.verdict == Verdict::Verified {
+            let mut outcome = outcome;
+            outcome.method = format!(
+                "no args were given and {} did not match; with args {}: {}",
+                layout_text(roles),
+                layout_text(&layout),
+                outcome.method
+            );
+            outcome.evidence["args"] = json!(layout_text(&layout));
+            outcome.evidence["tried"] = json!(tried);
+            return outcome;
+        }
+        tried.push(json!({"args": layout_text(&layout), "verdict": outcome.verdict}));
+        outcomes.push(outcome);
+    }
+    let compared = |outcome: &Outcome| outcome.evidence.get("counterexample").is_some();
+    let pick = outcomes
+        .iter()
+        .position(|outcome| outcome.verdict == Verdict::Unknown && compared(outcome))
+        .or_else(|| outcomes.iter().position(|outcome| outcome.verdict == Verdict::Refuted))
+        .unwrap_or(0);
+    let mut chosen = outcomes.swap_remove(pick);
+    chosen.method = format!(
+        "{}; no args were given, and none of the argument layouts tried ({}) matched; this outcome is for {}. A \
+         function taking other arguments needs args",
+        chosen.method,
+        tried.iter().filter_map(|row| row["args"].as_str()).collect::<Vec<_>>().join(", "),
+        tried[pick]["args"].as_str().unwrap_or_default()
+    );
+    if chosen.evidence.is_object() {
+        chosen.evidence["tried"] = json!(tried);
+    }
+    chosen
 }
 
 fn computes_algorithm(

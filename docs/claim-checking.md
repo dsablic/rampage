@@ -121,6 +121,13 @@ The default roles are:
 | Digests | `["data", "length", "out"]` |
 | `sha256_block` | `["state", "data"]` |
 
+A checksum claim without `args` that the default does not verify is run again with the running-value layouts
+checksum APIs commonly take: `[seed, "data", "length"]` (zlib's `crc32(crc, buf, len)` and `adler32`) and
+`["data", "length", seed]`, the seed being the checksum of no bytes (0 for CRC-32, 1 for Adler-32). The first
+layout that verifies is reported, with `evidence.args` naming it; otherwise the outcome comes from a layout whose run
+returned (a mismatch left unknown before a refutation; a run that faulted shows only that its layout is wrong), and
+`evidence.tried` lists each layout's verdict. Given `args` are taken as stated.
+
 Without a `length`, the input is passed as a NUL-terminated string, as string hashes take it.
 
 The output compared depends on the type:
