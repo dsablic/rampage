@@ -161,7 +161,7 @@ pub fn encode_code_modes(modes: &[WorkerCodeMode]) -> String {
 /// odd-length hex, a varint over 64 bits or not in its shortest form, a mode byte other than 0 or 1, a cut point.
 pub fn decode_code_modes(text: &str) -> Result<Vec<WorkerCodeMode>, String> {
     let digits = text.as_bytes();
-    if digits.len() % 2 != 0 {
+    if !digits.len().is_multiple_of(2) {
         return Err("packed code modes have an odd number of hexadecimal digits".into());
     }
     let nibble = |digit: u8| match digit {
@@ -170,7 +170,7 @@ pub fn decode_code_modes(text: &str) -> Result<Vec<WorkerCodeMode>, String> {
         _ => Err("packed code modes are not lowercase hexadecimal".to_owned()),
     };
     let mut bytes = Vec::with_capacity(digits.len() / 2);
-    for pair in digits.chunks_exact(2) {
+    for pair in digits.as_chunks::<2>().0 {
         bytes.push(nibble(pair[0])? << 4 | nibble(pair[1])?);
     }
     let mut modes = Vec::new();
