@@ -57,10 +57,10 @@ pub struct AnalysisStore {
 /// What the persistent store did for a project, as `binary_info` reports it under `analysis_store`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AnalysisStoreStatus {
-    /// `disabled` (no store configured), `unsupported` (captures and byte-patched views are never stored),
-    /// `pending` (analysis has not run in this process), `hit` (loaded from the store, discovery skipped), `miss`
-    /// (analysed fresh; `detail` says whether it was stored) or `rejected` (an entry existed but failed validation,
-    /// so the binary was analysed fresh).
+    /// `disabled` (no store configured), `unsupported` (runtime captures, and Raw projects carrying seeds, are
+    /// never stored), `pending` (analysis has not run in this process), `hit` (loaded from the store, discovery
+    /// skipped), `miss` (analysed fresh; `detail` says whether it was stored) or `rejected` (an entry existed but
+    /// failed validation, so the binary was analysed fresh).
     pub state: &'static str,
     /// The entry key: SHA-256 over every analysis input. Present once analysis ran with a store.
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -1211,6 +1211,8 @@ impl Project {
         project.byte_patches = snapshot.patches().clone();
         let _ = project.frozen_annotations.set(RwLock::new(snapshot.read_snapshot()));
         project.patch_origin = Some(Arc::clone(source));
+        // The view's own bytes key its analysis, so it uses the original's store (see `discover_through_store`).
+        project.set_analysis_store(source.analysis_store());
         if let Some(auto) = source.pointer_tables_auto.get() {
             let _ = project.pointer_tables_auto.set(auto.clone());
         }

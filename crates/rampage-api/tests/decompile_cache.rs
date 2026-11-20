@@ -331,6 +331,80 @@ fn damaged_misfiled_and_foreign_rows_are_refused_and_decompiled_afresh() {
     assert_eq!((counts.hits, counts.stored), (0, 0), "{counts:?}");
 }
 
+/// Once an image has been through patch authority (a patch, or a check such as `integrity_checks`), tools read
+/// an effective view that is rebuilt after every edit. Each view is keyed by its own bytes, so a view without
+/// patches shares the original's discovery and decompilations, an edit reuses them instead of re-analysing, and a
+/// patched view gets entries of its own; every answer equals a storeless project's.
+#[test]
+fn effective_views_reuse_stored_analysis_across_edits() {
+    const MAIN_PATCH: (u64, [u8; 5], [u8; 5]) = (0x100191e, [0xb8, 5, 0, 0, 0], [0xb8, 7, 0, 0, 0]);
+    let scratch = Scratch::new();
+    let store = scratch.store(rampage_api::DEFAULT_MAX_BYTES);
+    let path = scratch.copy("bin/hello-x64.elf");
+    let input = Input::Native(path.clone());
+    let reference_copy = scratch.0.join("reference.elf");
+    std::fs::copy(&path, &reference_copy).unwrap();
+    let reference = Input::Native(reference_copy).open(None);
+
+    let project = input.open(Some(&store));
+    let main = project.resolve("main").unwrap();
+    let original_digest = rampage_api::program_digest(&project).unwrap();
+    let original_key = project.analysis_store_status().key.unwrap();
+    let decompiled = |project: &Project| serde_json::to_value(project.decompile(main).unwrap()).unwrap();
+    let original_main = decompiled(&project);
+
+    // A patched view: its own bytes, its own entry, answers as a storeless patched view.
+    let (address, original, replacement) = MAIN_PATCH;
+    let patched = project.patch_bytes(address, &original, &replacement, false).unwrap().project;
+    let reference_patched = reference.patch_bytes(address, &original, &replacement, false).unwrap().project;
+    assert_eq!(
+        rampage_api::program_digest(&patched).unwrap(),
+        rampage_api::program_digest(&reference_patched).unwrap()
+    );
+    let patched_status = patched.analysis_store_status();
+    assert_ne!(patched_status.key.as_deref(), Some(original_key.as_str()));
+    assert_eq!(decompiled(&patched), decompiled(&reference_patched));
+    assert!(decompiled(&patched)["code"].as_str().unwrap().contains("return 7;"));
+
+    // Undo the patch: the view has no patches but stays a view; it shares the original's entries.
+    patched.undo().unwrap();
+    reference_patched.undo().unwrap();
+    let view = patched.effective_snapshot().unwrap();
+    let reference_view = reference_patched.effective_snapshot().unwrap();
+    assert_eq!(rampage_api::program_digest(&view).unwrap(), original_digest);
+    let status = view.analysis_store_status();
+    assert_eq!((status.state, status.key.as_deref()), ("hit", Some(original_key.as_str())), "{status:?}");
+    assert_eq!(decompiled(&view), original_main);
+    assert_eq!(decompiled(&view), decompiled(&reference_view));
+    assert_eq!(
+        view.analysis_store_status().decompilations.unwrap().hits,
+        2,
+        "both decompilations of the view came from the store"
+    );
+
+    // A comment builds a new view over the same bytes: discovery and the decompilation come from the store.
+    view.comment(main, Some("analyst note")).unwrap();
+    reference_view.comment(main, Some("analyst note")).unwrap();
+    let next = view.effective_snapshot().unwrap();
+    let reference_next = reference_view.effective_snapshot().unwrap();
+    assert!(!Arc::ptr_eq(&next, &view), "an edit builds a new view");
+    assert_eq!(rampage_api::program_digest(&next).unwrap(), original_digest);
+    assert_eq!(next.analysis_store_status().state, "hit");
+    assert_eq!(decompiled(&next), decompiled(&reference_next));
+    assert_eq!(next.analysis_store_status().decompilations.unwrap().hits, 1);
+
+    // Redoing the patch returns to the patched bytes, whose entries were stored above.
+    next.undo().unwrap();
+    next.redo().unwrap();
+    let repatched = next.effective_snapshot().unwrap();
+    assert_eq!(repatched.analysis_store_status().key, None, "analysis has not run on the new view yet");
+    assert_eq!(
+        rampage_api::program_digest(&repatched).unwrap(),
+        rampage_api::program_digest(&reference_patched).unwrap()
+    );
+    assert_eq!(repatched.analysis_store_status().state, "hit");
+}
+
 /// Where a decompilation runs is part of its key: an in-process result is never served to a project whose
 /// decompilations run in a worker (here one that cannot start, so a served result would hide the failure), and
 /// decompiler options are part of it too.

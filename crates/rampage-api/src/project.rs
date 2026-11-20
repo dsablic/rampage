@@ -462,6 +462,11 @@ impl Project {
         *self.analysis_store.write().unwrap_or_else(|poison| poison.into_inner()) = store;
     }
 
+    /// The persistent store selected for this project's analyses, if any.
+    pub(crate) fn analysis_store(&self) -> Option<Arc<crate::AnalysisStore>> {
+        self.analysis_store.read().unwrap_or_else(|poison| poison.into_inner()).clone()
+    }
+
     /// The persistent store's part in this project's analysis, without starting it.
     pub fn analysis_store_status(&self) -> crate::AnalysisStoreStatus {
         if let Some(status) = self.analysis_store_status.get() {
@@ -471,7 +476,7 @@ impl Project {
         }
         let state = if self.analysis_store.read().unwrap_or_else(|poison| poison.into_inner()).is_none() {
             "disabled"
-        } else if self.patch_origin.is_some() || self.binary.format == rampage_loaders::Format::Snapshot {
+        } else if self.binary.format == rampage_loaders::Format::Snapshot {
             "unsupported"
         } else {
             "pending"
@@ -481,7 +486,7 @@ impl Project {
 
     /// The store and this project's analysis key, for facts derived over the analysis (see
     /// `crate::decompile_cache`): present once analysis ran with a store for an input it can key, so never for a
-    /// capture, a byte-patched view or carried Raw seeds.
+    /// capture or carried Raw seeds.
     pub(crate) fn derived_store(&self) -> Option<(Arc<crate::AnalysisStore>, String)> {
         let key = self.analysis_store_status.get()?.key.clone()?;
         let store = self.analysis_store.read().unwrap_or_else(|poison| poison.into_inner()).clone()?;
@@ -489,7 +494,9 @@ impl Project {
     }
 
     /// Discovery through the persistent store: a verified entry for this exact input, else a fresh analysis that
-    /// is then stored. Byte-patched views are never stored; their bytes are not the file's.
+    /// is then stored. An effective (byte-patched) view is keyed by its own bytes, which its loader re-read
+    /// (`Project::materialize_patches`), so a view with no patches shares the original's entry and an annotation
+    /// edit, which builds a new view over the same bytes, reuses the analysis instead of rediscovering.
     fn discover_through_store(&self, binding: Option<&str>) -> Result<Program, DecoderInitializationError> {
         use crate::AnalysisStoreStatus as Status;
         use crate::analysis_cache::Lookup;
@@ -506,11 +513,7 @@ impl Project {
             let _ = self.analysis_store_status.set(Status::new("disabled", None, None));
             return fresh();
         };
-        let key = if self.patch_origin.is_some() || !carried.is_empty() {
-            None
-        } else {
-            crate::analysis_cache::key(&self.binary, binding)
-        };
+        let key = if !carried.is_empty() { None } else { crate::analysis_cache::key(&self.binary, binding) };
         let Some(key) = key else {
             let _ = self.analysis_store_status.set(Status::new("unsupported", None, None));
             return fresh();
