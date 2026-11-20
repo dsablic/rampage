@@ -6,6 +6,7 @@ mod cli;
 mod debug_cpp_layout_acceptance;
 mod debug_cpp_virtuals;
 mod debug_layout_acceptance;
+mod decompile_store;
 mod entry_measurements;
 mod entry_scope;
 mod local_variables;

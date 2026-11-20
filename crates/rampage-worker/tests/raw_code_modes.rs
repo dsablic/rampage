@@ -96,7 +96,12 @@ fn a_large_raw_image_decompiles_the_same_through_the_worker_and_in_process() {
     for row in functions.iter().step_by(10).take(40) {
         let native = in_process.decompile(row.address).map(|result| result.code).map_err(|error| error.to_string());
         let worker = isolated.decompile(row.address).map(|result| result.code).map_err(|error| error.to_string());
-        assert_eq!(worker, native, "{:#x}", row.address);
+        match (&worker, &native) {
+            (Ok(worker), Ok(native)) => assert_eq!(worker, native, "{:#x}", row.address),
+            // The worker prefixes its errors with where they happened; the refusal itself must be the same.
+            (Err(worker), Err(native)) => assert!(worker.ends_with(native.as_str()), "{:#x}: {worker}", row.address),
+            _ => panic!("{:#x}: worker {worker:?}, in process {native:?}", row.address),
+        }
         compared += usize::from(native.is_ok());
     }
     eprintln!("compared {compared} decompilations of {} functions", functions.len());
