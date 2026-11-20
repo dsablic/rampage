@@ -39,7 +39,7 @@ Then, in order, one track at a time, each reviewed before merge:
 1. [x] (2026-11-19, except the Haiku rerun and replays before the caller's block) **Finish `evaluate_function`** (closes the measured suite v3 loss: every miss was a hand-evaluated loop): SSE/SIMD
    CALLOTHER ops, x87 and float returns, a step trace on request, models for `sprintf`/`strdup`/`operator new`,
    hints so agents reach for it; then a Haiku rerun of suite v3.
-2. (MIPS done 2026-11-19; Xtensa/ESP32 next) **MIPS and Xtensa** for firmware: loading, discovery and decompilation (routers, cameras, ESP32).
+2. [x] (MIPS 2026-11-19, Xtensa/ESP 2026-11-20; follow-ups in the CHANGELOG gaps) **MIPS and Xtensa** for firmware: loading, discovery and decompilation (routers, cameras, ESP32).
 3. **Firmware version diffing**: two update files in, one answer out (functions, strings, endpoints, lock
    mechanisms that changed), built on unpacking, Raw loading and build diffing.
 4. **Claim verification**: check a stated claim about the binary (a function computes X over a range, a key
@@ -61,6 +61,16 @@ both earlier passes, so it is likely model variance. Tool errors seen, as small 
       `size`), `class_evidence` `class_name`. Consider unambiguous aliases, or name the closest tool for filters.
 - [ ] `get_type` on a Go type by its full import path (`github.com/.../restic.Snapshot`) fails; accept the full
       path as well as the package-qualified name.
+
+## MIPS and Xtensa follow-ups (2026-11-20)
+
+- [ ] MIPS: microMIPS/MIPS16e; multi-GOT shared libraries; MIPS library signatures (static libc stays unnamed);
+      BEV exception vectors not seeded; `disassemble` from an arbitrary address doesn't know `$t9`.
+- [ ] Xtensa: zero-overhead loops in decompiled C; ROM function names (from a verified ROM symbol table, not
+      memory); partitions in `fs_list` and SPIFFS/LittleFS/NVS contents; rBoot 0xEA images, encrypted flash and
+      secure-boot signatures; `find_main` for ESP8266 NONOS `user_init` and builds without logging; MAC16,
+      ESP32-S3 vector ops, FLIX, LITBASE; window-overflow exceptions in `evaluate_function`.
+- [ ] Test both on real firmware (a router userland, an ESP-IDF app) before calling them more than experimental.
 
 ## Small hints (from the 1.7.0 docs audit)
 

@@ -6,6 +6,20 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- Xtensa (experimental): a native decoder for ESP32 (windowed ABI) and ESP8266 (call0) code. Xtensa ELF files load
+  (`.xtensa.info`, or a prologue vote, picks the ABI); `l32r` literals give string, data and call references and
+  -mlongcalls' `l32r` + `callx` resolves; discovery seeds `entry` and frame-allocating prologues and resolves switch
+  tables; `decompile` uses Ghidra's Xtensa model with literals folded in firmware (call0 code with `__call0`, worker
+  protocol 14); `evaluate_function` runs both ABIs with register windows and zero-overhead loops (convention
+  `xtensa`); `find_main` takes `app_main` from ESP-IDF's `main_task`; constant search and `integrity_checks` read
+  `l32r` constants. The Raw Xtensa profile is natively decoded (4 MiB, further regions, decompile).
+- ESP app images and flash dumps: Raw `format: "esp"` maps an app image (magic 0xE9) by its segment headers, with
+  aliases `esp32`/`esp8266`; `binary_info` reports `raw.esp` (chip, ABI, segments, checksum and SHA-256 checks,
+  `esp_app_desc`). `binary_info`, `file_layout`, `carve` (`esp_image`, `esp_partition_table`) and `list_dir`
+  (`esp_image`, `esp_flash`) name a flash dump's bootloader, partition table and each app's selector; partition
+  tables count only with a matching MD5 entry or fully plausible entries, and image checks share a scan budget.
+- Xtensa firmware lists NUL-terminated strings in executable flash; Xtensa `disassemble` comments each `l32r` with
+  what it loads.
 - MIPS position-independent Linux userland (routers, cameras): `$gp` is followed from `$t9` at each function entry
   or from GCC's restores after calls, so GOT loads give string and data references and calls through the GOT name
   their imports; GNU ld's lazy-binding `.MIPS.stubs` are named `<import>@plt`; the GOT and global pointer are read
