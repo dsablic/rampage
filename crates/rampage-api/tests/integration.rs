@@ -51,6 +51,7 @@ mod embedded;
 mod endpoints;
 mod ergonomics;
 mod findings;
+mod firmware_diff;
 mod firmware_integrity;
 mod go_types;
 mod jumptable;

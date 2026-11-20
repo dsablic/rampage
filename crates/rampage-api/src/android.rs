@@ -379,6 +379,72 @@ fn native_rows(libs: &[(&NativeLib, JniExports)]) -> Vec<Value> {
         .collect()
 }
 
+/// What `diff_firmware` compares of an APK or DEX file, as sorted sets of strings: the manifest's version and SDK
+/// levels (`version`), requested permissions, components (`kind name`, marked when exported or started at boot),
+/// native libraries, defined classes, capture APIs invoked (`medium api`) and DEX files with their sizes.
+pub(crate) fn diff_facts(path: &Path) -> Result<BTreeMap<&'static str, Vec<String>>, String> {
+    let opened = open(path, false)?;
+    let mut facts: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+    if let Some(manifest) = opened.manifest() {
+        let summary = summary(path, &opened, 0);
+        let mut version = Vec::new();
+        for key in ["package", "version_name", "version_code", "sdk"] {
+            if !summary[key].is_null() {
+                version.push(format!("{key} {}", summary[key]));
+            }
+        }
+        facts.insert("version", version);
+        facts.insert("permissions", manifest.uses_permissions.iter().map(|uses| uses.name.clone()).collect());
+        facts.insert(
+            "components",
+            manifest
+                .components
+                .iter()
+                .map(|component| {
+                    let kind = serde_json::to_value(component.kind).ok();
+                    let kind = kind.as_ref().and_then(Value::as_str).unwrap_or("component");
+                    let exported = if component.exported { " (exported)" } else { "" };
+                    let boot = if component.start_at_boot { " (starts at boot)" } else { "" };
+                    format!("{kind} {}{exported}{boot}", component.name)
+                })
+                .collect(),
+        );
+    }
+    if let Some(apk) = &opened.apk {
+        facts.insert("native_libs", apk.native_libs.iter().map(|lib| lib.path.clone()).collect());
+    }
+    facts.insert("classes", defined_classes(&opened).iter().map(|class| class_name(class)).collect());
+    let mut calls: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+    for (_, dex) in opened.parsed() {
+        for (caller, callees) in rampage_dex::scan::index(dex).calls {
+            calls.entry(caller).or_default().extend(callees);
+        }
+    }
+    facts.insert(
+        "capture_apis",
+        rampage_dex::scan::capture_uses(&calls)
+            .iter()
+            .map(|capture| format!("{} {}", capture.medium, capture.api))
+            .collect(),
+    );
+    facts.insert(
+        "dex_files",
+        opened
+            .dexes
+            .iter()
+            .map(|(name, dex, size)| match dex {
+                Ok(_) => format!("{name} ({size} bytes)"),
+                Err(error) => format!("{name} (unreadable: {error})"),
+            })
+            .collect(),
+    );
+    for values in facts.values_mut() {
+        values.sort();
+        values.dedup();
+    }
+    Ok(facts)
+}
+
 /// JNI rows listed per kind.
 const MAX_JNI_ROWS: usize = 100;
 

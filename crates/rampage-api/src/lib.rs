@@ -41,6 +41,7 @@ mod fid_signatures;
 pub mod file_layout;
 mod files;
 mod findings;
+mod firmware_diff;
 pub mod flywheel;
 mod frame;
 mod fs_image;
@@ -192,6 +193,7 @@ pub use findings::{
     LedgerRequest, LedgerStatus, MAX_LEDGER_BYTES, MAX_LEDGER_ENTRIES, MAX_LEDGER_EVIDENCE, MAX_LEDGER_PAGE,
     MAX_LEDGER_RESOLUTION, MAX_LEDGER_TEXT,
 };
+pub use firmware_diff::{FirmwareDiffQuery, SideInput, diff_firmware};
 pub use frame::{
     FrameCategory, FrameCoordinate, FrameLocation, FrameQuery, FrameRow, FrameSource, FrameTrackerSlot,
     FunctionFrameReport, MAX_FRAME_PAGE, MAX_FRAME_WORK, NativeFrameEvidence, TrackerFrameEvidence,

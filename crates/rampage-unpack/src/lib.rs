@@ -151,6 +151,21 @@ pub fn read_chosen(
     Ok(Selected { layers: opened.layers, entries, contents })
 }
 
+/// Opens the image `at` selects in `path` (or the one `inner` names inside it) and runs `work` on it with one
+/// budget under `limits` and one compression-ratio meter, so several reads of one image share both.
+pub fn with_image<T>(
+    path: &Path,
+    at: At,
+    inner: &[String],
+    limits: Limits,
+    work: impl FnOnce(&dyn Image, &mut Budget) -> T,
+) -> Result<T> {
+    let mut budget = Budget::new(limits);
+    let _meter = limits::MeterScope::new(budget.limits.max_ratio);
+    let opened = open_chain(file_source(path, at)?, inner, &mut budget)?;
+    Ok(work(&*opened.image, &mut budget))
+}
+
 /// The image format at the start of the file at `path`, if it is one this crate recognises.
 pub fn sniff(path: &Path) -> Option<Format> {
     let source = file_source(path, At::default()).ok()?;

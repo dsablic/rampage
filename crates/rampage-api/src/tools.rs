@@ -283,7 +283,7 @@ pub(crate) fn arguments<A: DeserializeOwned>(input: Value) -> Result<A, String> 
     serde_json::from_value(input).map_err(|error| format!("invalid arguments: {error}"))
 }
 
-fn error_chain(error: &ApiError) -> String {
+pub(crate) fn error_chain(error: &ApiError) -> String {
     let mut text = error.to_string();
     let mut source = std::error::Error::source(error);
     while let Some(cause) = source {
@@ -440,6 +440,40 @@ struct FsListArgs {
     /// Entries per page, 1..=1000 (default 200).
     #[schemars(range(min = 1, max = 1000))]
     limit: Option<usize>,
+}
+
+#[derive(serde::Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DiffFirmwareArgs {
+    /// The older version: an update file, image, executable or directory.
+    path: std::path::PathBuf,
+    /// The newer version; "added" means only here.
+    other: std::path::PathBuf,
+    /// An embedded image in path, as fs_list or binary_info take it.
+    image_offset: Option<crate::FileOffset>,
+    image_length: Option<crate::FileOffset>,
+    /// Nested image chain in path, as fs_list's inner.
+    inner: Option<Vec<String>>,
+    other_image_offset: Option<crate::FileOffset>,
+    other_image_length: Option<crate::FileOffset>,
+    other_inner: Option<Vec<String>>,
+    /// Raw selector (as `raw`) for headerless code in path.
+    as_raw: Option<Value>,
+    /// Raw selector for other; defaults to as_raw when that has no length.
+    other_as_raw: Option<Value>,
+    /// An id from a previous result: that pair in full, or with list or function.
+    component: Option<String>,
+    /// changed, added, removed, unchanged, strings, endpoints or files, paged by offset/limit.
+    list: Option<String>,
+    /// Old address or name (new:NAME for the newer side): an instruction diff.
+    function: Option<String>,
+    offset: Option<usize>,
+    /// Rows per page, 1..=500 (default 100).
+    limit: Option<usize>,
+    /// Default 60000, at most 600000.
+    timeout_ms: Option<u64>,
+    /// Changed code images analysed, default 8, at most 64.
+    max_images: Option<usize>,
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -898,6 +932,65 @@ pub fn file_tools() -> Vec<FileTool> {
                     max_file_bytes: args.max_file_bytes.map(|bytes| bytes.0),
                     max_ratio: args.max_ratio,
                 })
+            },
+        },
+        FileTool {
+            effect: Effect::None,
+            group: Group::Carve,
+            name: "diff_firmware",
+            description: "What changed between two versions of a device update (files, filesystem images, APKs, \
+                          executables, ESP flash, LZSS containers, Raw images or directories): components and \
+                          files added, removed or changed, and per changed code image its functions (matched, with \
+                          confidence), strings, versions, endpoints, lock mechanisms, integrity checks and capture \
+                          sources. Budgeted; not_compared says what was skipped. component with list pages one \
+                          part; with function, an instruction diff.",
+            input_schema: schema::<DiffFirmwareArgs>(),
+            handler: |packs, input| {
+                if input.to_string().len() > 65_536 {
+                    return Err("diff arguments exceed the input budget".into());
+                }
+                let args: DiffFirmwareArgs = arguments(input)?;
+                let side = |path,
+                            offset: Option<crate::FileOffset>,
+                            length: Option<crate::FileOffset>,
+                            inner: Option<Vec<String>>,
+                            raw| {
+                    crate::SideInput {
+                        path,
+                        image_offset: offset.map(|offset| offset.0),
+                        image_length: length.map(|length| length.0),
+                        inner: inner.unwrap_or_default(),
+                        raw,
+                    }
+                };
+                let other_raw = match (args.other_as_raw, &args.as_raw) {
+                    (Some(raw), _) => Some(raw),
+                    (None, Some(raw)) if raw.get("length").is_none_or(Value::is_null) => Some(raw.clone()),
+                    (None, Some(_)) => {
+                        return Err("other_as_raw is required when as_raw has a length: the two files differ in \
+                                    size, so give each its own range"
+                            .into());
+                    }
+                    (None, None) => None,
+                };
+                let query = crate::FirmwareDiffQuery {
+                    old: side(args.path, args.image_offset, args.image_length, args.inner, args.as_raw),
+                    new: side(
+                        args.other,
+                        args.other_image_offset,
+                        args.other_image_length,
+                        args.other_inner,
+                        other_raw,
+                    ),
+                    component: args.component,
+                    list: args.list,
+                    function: args.function,
+                    offset: args.offset.unwrap_or(0),
+                    limit: args.limit,
+                    timeout_ms: args.timeout_ms,
+                    max_images: args.max_images,
+                };
+                crate::diff_firmware(&query, std::sync::Arc::new(packs.reopened()))
             },
         },
         FileTool {

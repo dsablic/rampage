@@ -1772,10 +1772,16 @@ impl Project {
                 }
                 notes.push(message);
             }
-            if receipt.is_some() {
-                source.check_patch_admission(check.field, width(check), true).map_err(|error| {
-                    ApiError::Invalid(format!("check {index}: the stored value cannot be patched: {error}"))
-                })?;
+            if receipt.is_some()
+                && let Err(error) = source.check_patch_admission(check.field, width(check), true)
+            {
+                let message = format!("check {index}: the stored value cannot be patched: {error}");
+                // A preview reports what it cannot write instead of failing the whole report.
+                if request.fix {
+                    return Err(ApiError::Invalid(message));
+                }
+                notes.push(message);
+                continue;
             }
             planned.push((index, original, previous.cloned()));
         }

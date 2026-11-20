@@ -200,6 +200,11 @@ impl Packs {
         Self { directories: directories.to_vec(), loaded: OnceLock::new() }
     }
 
+    /// The same pack directories, loaded again when first consulted: for work that needs packs it owns.
+    pub(crate) fn reopened(&self) -> Self {
+        Self::lazy(&self.directories)
+    }
+
     /// The packs in `directories`, then those [`PACKS_VARIABLE`] lists, loaded when first consulted.
     pub fn lazy_with_env(directories: &[PathBuf]) -> Self {
         let mut all = directories.to_vec();
