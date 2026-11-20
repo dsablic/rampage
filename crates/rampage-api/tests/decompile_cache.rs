@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use rampage_api::{
     AnalysisStore, DECOMPILE_CACHE_VERSION, DerivedCounts, FunctionsQuery, Project, RawProjectRequest, Session,
-    decompilation_digest,
 };
 use serde_json::{Value, json};
 
@@ -466,6 +465,58 @@ fn the_worker_setting_and_decompiler_options_are_part_of_the_key() {
     assert_eq!(counts(&project).hits, 1, "other options never reuse the default options' result");
 }
 
+/// A file rewritten in place after it was opened is not the bytes the key hashed: the store is neither read nor
+/// written, and the answer (result or refusal) is a storeless project's, also with a signature, which makes a
+/// fresh decompilation check its source.
+#[test]
+fn a_file_changed_in_place_is_decompiled_as_without_a_store() {
+    use std::io::{Seek, SeekFrom, Write};
+    for signature in [false, true] {
+        let scratch = Scratch::new();
+        let store = scratch.store(rampage_api::DEFAULT_MAX_BYTES);
+        let path = scratch.copy("bin/hello-x64-dyn.elf");
+        let input = Input::Native(path.clone());
+        let (address, _) = populate(&store, &input);
+        let annotate = |project: &Project| {
+            if signature {
+                project.set_signature(address, Some("int4 changed(int4 a);")).unwrap();
+            }
+        };
+        let seed = input.open(Some(&store));
+        annotate(&seed);
+        seed.decompile(address).unwrap();
+        drop(seed);
+        // Both projects analyse the original bytes, then the file changes under them.
+        let stored = input.open(Some(&store));
+        let fresh = input.open(None);
+        for project in [&stored, &fresh] {
+            project.functions(&FunctionsQuery::default()).unwrap();
+        }
+        let segment = stored
+            .binary
+            .segments
+            .iter()
+            .find(|segment| segment.file_size > 0 && segment.contains(address))
+            .unwrap()
+            .clone();
+        let offset = segment.file_offset + (address - segment.address);
+        let mut file = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(offset)).unwrap();
+        file.write_all(&[0xc3]).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        let answer = |project: &Project| {
+            project
+                .decompile(address)
+                .map(|value| serde_json::to_value(value).unwrap())
+                .map_err(|error| error.to_string())
+        };
+        assert_eq!(answer(&stored), answer(&fresh), "signature: {signature}");
+        let counts = counts(&stored);
+        assert_eq!((counts.hits, counts.stored), (0, 0), "signature: {signature}: {counts:?}");
+    }
+}
+
 #[test]
 fn truncated_and_garbage_store_files_fall_back_to_fresh_decompilation() {
     let scratch = Scratch::new();
@@ -509,46 +560,146 @@ fn the_size_bound_counts_stored_decompilations_with_discovery() {
     let expected = decompile_all(&input.open(None), &addresses);
     assert_eq!(decompile_all(&project, &addresses), expected);
     assert!(total(&bounded) <= everything / 2, "{} > {}", total(&bounded), everything / 2);
+    // Every write keeps the running total that eviction checks equal to what the rows hold.
+    for store in [&unbounded, &bounded] {
+        let connection = rusqlite::Connection::open(store.path()).unwrap();
+        let kept: String =
+            connection.query_row("SELECT value FROM meta WHERE name = 'bytes'", [], |row| row.get(0)).unwrap();
+        assert_eq!(kept.parse::<u64>().unwrap(), total(store));
+    }
     // Clearing removes the file; the next open works afresh.
     assert!(bounded.clear().unwrap() > 0);
     assert!(!bounded.path().exists());
     assert_eq!(decompile_all(&input.open(Some(&bounded)), &addresses), expected);
 }
 
-/// Decompilation digests per fixture function, recorded under `DECOMPILE_CACHE_VERSION`. When the decompiler
-/// pipeline changes any of them, this fails until the version is bumped (so results stored by an older build
-/// are never served as this build's) and the digests are re-recorded with `RAMPAGE_UPDATE_DECOMPILE_GOLDEN=1`.
+/// A lost or damaged running total is recounted from the rows rather than trusted: eviction still keeps the bound.
+#[test]
+fn a_damaged_running_total_is_recounted() {
+    let scratch = Scratch::new();
+    let input = Input::Native(scratch.copy("bin/eval-types-x86_64.elf"));
+    let probe = scratch.store(rampage_api::DEFAULT_MAX_BYTES);
+    let project = input.open(Some(&probe));
+    let addresses = functions(&project);
+    decompile_all(&project, &addresses);
+    let everything: u64 = probe.inspect().unwrap().kinds.iter().map(|kind| kind.bytes).sum();
+    drop(project);
+    let other = Scratch::new();
+    let bounded = other.store(everything / 2);
+    let project = input.open(Some(&bounded));
+    decompile_all(&project, &addresses[..1]);
+    sql(&bounded, "UPDATE meta SET value = 'not a number' WHERE name = 'bytes'", []);
+    decompile_all(&project, &addresses);
+    let held: u64 = bounded.inspect().unwrap().kinds.iter().map(|kind| kind.bytes).sum();
+    assert!(held <= everything / 2, "{held} > {}", everything / 2);
+}
+
+/// A payload longer than the bound is refused without being read, and decompiled afresh.
+#[test]
+fn an_oversized_row_is_refused_unread() {
+    let scratch = Scratch::new();
+    let input = Input::Native(scratch.copy("bin/hello-x64-dyn.elf"));
+    let store = scratch.store(1 << 20);
+    let (address, expected) = populate(&store, &input);
+    let (key, _) = derived_rows(&store).remove(0);
+    let huge = vec![0u8; 2 << 20];
+    sql(
+        &store,
+        "UPDATE derived SET payload = ?1, sha256 = ?2 WHERE key = ?3",
+        rusqlite::params![huge, sha256(&huge), key],
+    );
+    let (value, counts) = again(&store, &input, address);
+    assert_eq!(value, expected);
+    assert_eq!(counts.hits, 0);
+    assert!(counts.last_rejection.unwrap().contains("size bound"));
+}
+
+/// `clear` deletes only a rampage store: a mistyped `RAMPAGE_ANALYSIS_CACHE` naming another file leaves it alone.
+#[test]
+fn clear_refuses_a_file_that_is_not_a_rampage_store() {
+    let scratch = Scratch::new();
+    let text = scratch.0.join("notes.txt");
+    std::fs::write(&text, b"not a database").unwrap();
+    assert!(AnalysisStore::at(&text, 1 << 30).clear().is_err());
+    assert!(text.exists());
+    let other = scratch.0.join("other.sqlite");
+    let connection = rusqlite::Connection::open(&other).unwrap();
+    connection
+        .execute_batch("CREATE TABLE meta (name TEXT, value TEXT); INSERT INTO meta VALUES ('schema', 'x');")
+        .unwrap();
+    drop(connection);
+    assert!(AnalysisStore::at(&other, 1 << 30).clear().is_err());
+    assert!(other.exists());
+    let plain = scratch.0.join("plain.sqlite");
+    rusqlite::Connection::open(&plain).unwrap().execute_batch("CREATE TABLE t (x);").unwrap();
+    assert!(AnalysisStore::at(&plain, 1 << 30).clear().is_err());
+    assert!(plain.exists());
+    let input = Input::Native(scratch.copy("bin/hello-x64-dyn.elf"));
+    let store = scratch.store(rampage_api::DEFAULT_MAX_BYTES);
+    populate(&store, &input);
+    assert!(store.clear().unwrap() > 0);
+    assert!(!store.path().exists());
+}
+
+/// Decompiled C per fixture function, recorded per operating system under `DECOMPILE_CACHE_VERSION`. When the
+/// decompiler pipeline changes any function's C, this fails until the version is bumped (so results stored by an
+/// older build are never served as this build's; the executable's own stamp in the key already covers a rebuild)
+/// and the digests are re-recorded with `RAMPAGE_UPDATE_DECOMPILE_GOLDEN=1`.
+///
+/// Digests are of the C text only, and kept per OS: the engine is built against libc++ on macOS and libstdc++ on
+/// Linux, and nothing guarantees identical text across them. On an OS with no recorded digests the test only
+/// reports that, so CI on another OS never fails on a recording made here. A function that fails to decompile is
+/// recorded as an error, so a platform difference in what decompiles shows as a change too.
 #[test]
 fn decompile_cache_golden() {
+    use sha2::Digest;
     let scratch = Scratch::new();
     let mut digests = std::collections::BTreeMap::new();
     for (label, input) in inputs(&scratch) {
         let project = input.open(None);
         for address in functions(&project) {
-            if let Ok(decompilation) = project.decompile(address) {
-                digests.insert(format!("{label}@{address:#x}"), decompilation_digest(&decompilation));
-            }
+            let value = match project.decompile(address) {
+                Ok(decompilation) => rampage_arch::hex::bytes(&sha2::Sha256::digest(decompilation.code.as_bytes())),
+                Err(error) => format!("error: {error}"),
+            };
+            digests.insert(format!("{label}@{address:#x}"), value);
         }
     }
+    let errors = digests.values().filter(|value| value.starts_with("error: ")).count();
+    assert!(errors < digests.len() / 4, "{errors} of {} fixture functions fail to decompile", digests.len());
+    let os = std::env::consts::OS;
     let recorded: Value = std::fs::read(GOLDEN)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or(json!({ "version": 0, "digests": {} }));
     let recorded_version = recorded["version"].as_u64().unwrap_or(0);
-    let recorded_digests: std::collections::BTreeMap<String, String> =
-        serde_json::from_value(recorded["digests"].clone()).unwrap_or_default();
-    let changed: Vec<&String> =
-        digests.keys().filter(|name| recorded_digests.get(*name).is_some_and(|old| old != &digests[*name])).collect();
+    let recorded_digests: Option<std::collections::BTreeMap<String, String>> =
+        serde_json::from_value(recorded["digests"][os].clone()).ok();
+    let changed: Vec<&String> = digests
+        .keys()
+        .filter(|name| {
+            recorded_digests.as_ref().and_then(|recorded| recorded.get(*name)).is_some_and(|old| old != &digests[*name])
+        })
+        .collect();
     assert!(
         changed.is_empty() || recorded_version != u64::from(DECOMPILE_CACHE_VERSION),
-        "decompiler output changed for {changed:?} without a version bump: increment DECOMPILE_CACHE_VERSION in \
+        "decompiled C changed for {changed:?} without a version bump: increment DECOMPILE_CACHE_VERSION in \
          crates/rampage-api/src/decompile_cache.rs, then re-record with {GOLDEN_UPDATE}=1"
     );
     if std::env::var(GOLDEN_UPDATE).is_ok_and(|value| value == "1") {
-        let document = json!({ "version": DECOMPILE_CACHE_VERSION, "digests": digests });
+        let mut document = if recorded_version == u64::from(DECOMPILE_CACHE_VERSION) {
+            recorded.clone()
+        } else {
+            json!({ "version": DECOMPILE_CACHE_VERSION, "digests": {} })
+        };
+        document["digests"][os] = json!(digests);
         std::fs::write(GOLDEN, serde_json::to_string_pretty(&document).unwrap() + "\n").unwrap();
         return;
     }
+    let Some(recorded_digests) = recorded_digests else {
+        eprintln!("no decompile digests recorded for {os}; record them with {GOLDEN_UPDATE}=1 to check this OS");
+        return;
+    };
     assert_eq!(
         recorded_version,
         u64::from(DECOMPILE_CACHE_VERSION),

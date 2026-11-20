@@ -981,6 +981,10 @@ impl Project {
         project.frozen_annotations = Arc::new(std::sync::OnceLock::new());
         let _ = project.frozen_annotations.set(RwLock::new(annotations.read_snapshot()));
         project.set_packs(self.packs());
+        // A throwaway project over materialized bytes, loaded without the recovery an ordinary open runs: it is not
+        // a view (no `patch_origin`), so the store would file its analysis under the plain key of those bytes,
+        // where an ordinary open of the same bytes would later read it.
+        project.set_analysis_store(None);
         Ok(project)
     }
 

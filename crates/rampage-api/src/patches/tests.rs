@@ -358,6 +358,25 @@ fn replaced_original_source_refuses_snapshot_history_and_export_without_creating
     assert_eq!(fs::read(&files.log).unwrap(), before);
 }
 
+/// History validation builds a throwaway project over the candidate's bytes. It is not a view, and its loader skips
+/// an ordinary open's recovery, so it must never read or write the persistent store.
+#[test]
+fn history_validation_projects_never_use_the_analysis_store() {
+    let files = Files::new("hello-x64.elf");
+    let project = files.project();
+    let store = Arc::new(crate::AnalysisStore::at(files.directory.join("store.sqlite"), 1 << 30));
+    project.set_analysis_store(Some(Arc::clone(&store)));
+    let patched = project.patch_bytes(0x100191e, &[0xb8, 5, 0, 0, 0], &[0xb8, 7, 0, 0, 0], false).unwrap().project;
+    let annotations = patched.annotations().snapshot();
+    let validation = project.patch_validation_project(&annotations).unwrap();
+    validation.analysis().unwrap();
+    assert_eq!(validation.analysis_store_status().state, "disabled");
+    let _ = fs::remove_file(store.path());
+    for suffix in ["-wal", "-shm"] {
+        let _ = fs::remove_file(format!("{}{suffix}", store.path().display()));
+    }
+}
+
 /// With every patch undone, validating the view skips materializing but still checks the original source.
 #[test]
 fn a_replaced_source_is_refused_when_no_patch_is_active() {

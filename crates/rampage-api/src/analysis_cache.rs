@@ -31,7 +31,12 @@ use sha2::{Digest, Sha256};
 /// version and fails when the output changes but the version did not.
 pub const ANALYSIS_VERSION: u32 = 9;
 /// The store's table layout and payload encoding; part of the file name, so other layouts never share a file.
-const SCHEMA: &str = "rampage-analysis-store-v1";
+/// Version 2 added stored decompilations: a version 1 build's eviction does not count them, so it never writes a
+/// version 2 file (another schema is foreign).
+const SCHEMA: &str = "rampage-analysis-store-v2";
+/// Earlier layouts. [`AnalysisStore::clear`] accepts their files, and the default directory's are removed when a
+/// file of the current layout is first created there, since nothing reads them any more.
+const EARLIER_SCHEMAS: [&str; 1] = ["rampage-analysis-store-v1"];
 /// The default bound on stored payload bytes; the least recently used entries are evicted beyond it.
 pub const DEFAULT_MAX_BYTES: u64 = 1024 * 1024 * 1024;
 /// How long a read waits for a lock; WAL readers wait only during recovery or a checkpoint.
@@ -207,6 +212,9 @@ impl AnalysisStore {
         if !metadata.is_file() {
             return Err(std::io::Error::other("store is not a regular file"));
         }
+        if self.owns_directory {
+            self.remove_superseded_files();
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -217,9 +225,23 @@ impl AnalysisStore {
         Ok(())
     }
 
+    /// In rampage's own directory, the files of earlier layouts beside the current one: no build of this layout
+    /// reads them. Best effort; only regular files are removed.
+    fn remove_superseded_files(&self) {
+        let Some(directory) = self.path.parent() else { return };
+        for schema in EARLIER_SCHEMAS {
+            for suffix in ["-wal", "-shm", ""] {
+                let path = directory.join(format!("{schema}.sqlite{suffix}"));
+                if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+    }
+
     /// The entry for `key`, verified. Never writes beyond refreshing the entry's use time.
     pub(crate) fn load(&self, key: &str) -> Lookup {
-        let (payload, digest) = match self.read_row(Table::Analysis, key) {
+        let (payload, digest) = match self.read_row(Table::Analysis, key, self.max_bytes) {
             Ok(Some(row)) => row,
             Ok(None) => return Lookup::Absent,
             Err(reason) => return Lookup::Rejected(reason),
@@ -248,7 +270,7 @@ impl AnalysisStore {
     /// The derived fact of `kind` stored under `key`, verified: its checksum, its framing (the embedded key and
     /// kind) and its size bound. The body is returned undecoded; its owner decodes and validates it.
     pub(crate) fn load_derived(&self, kind: DerivedKind, key: &str) -> DerivedLookup {
-        let (payload, digest) = match self.read_row(Table::Derived, key) {
+        let (payload, digest) = match self.read_row(Table::Derived, key, self.max_bytes.min(MAX_DERIVED_BYTES as u64)) {
             Ok(Some(row)) => row,
             Ok(None) => return DerivedLookup::Absent,
             Err(reason) => return DerivedLookup::Rejected(reason),
@@ -276,8 +298,9 @@ impl AnalysisStore {
     }
 
     /// The stored row for `key`, read in one statement (one consistent snapshot), with its use time refreshed
-    /// without waiting. `Ok(None)` when the file or the entry is absent; `Err` when it cannot be trusted or read.
-    fn read_row(&self, table: Table, key: &str) -> Result<Option<Row>, String> {
+    /// without waiting. `Ok(None)` when the file or the entry is absent; `Err` when it cannot be trusted or read,
+    /// or when its payload is longer than `bound` (which is then never read into memory).
+    fn read_row(&self, table: Table, key: &str, bound: u64) -> Result<Option<Row>, String> {
         match std::fs::symlink_metadata(&self.path) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(format!("store unreadable: {error}")),
@@ -295,14 +318,25 @@ impl AnalysisStore {
             let name = table.name();
             // One statement reads one consistent snapshot, so a concurrent writer is seen entirely or not at all.
             // A store an older build created has no derived table yet, so it holds no derived entries.
+            // `length` reads a blob's size from its header, so an oversized payload is never loaded.
+            let bound = i64::try_from(bound).unwrap_or(i64::MAX);
             let row = match connection
-                .query_row(&format!("SELECT payload, sha256 FROM {name} WHERE key = ?1"), [key], |row| {
-                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
-                })
+                .query_row(
+                    &format!(
+                        "SELECT CASE WHEN length(payload) <= ?2 THEN payload END, sha256 FROM {name} WHERE key = ?1"
+                    ),
+                    params![key, bound],
+                    |row| Ok((row.get::<_, Option<Vec<u8>>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                )
                 .optional()
             {
                 Err(rusqlite::Error::SqliteFailure(_, Some(message))) if message.starts_with("no such table") => None,
                 other => other?,
+            };
+            let row = match row {
+                None => None,
+                Some((None, _)) => return Ok(Err("entry exceeds the store's size bound".into())),
+                Some((Some(payload), digest)) => Some((payload, digest)),
             };
             if row.is_some() {
                 // Best effort and never waiting: a busy store only leaves the use time stale.
@@ -340,6 +374,12 @@ impl AnalysisStore {
             if check_schema(&transaction)?.is_err() {
                 return Ok(Err("store has another schema; not written".into()));
             }
+            let previous: i64 = transaction.query_row(
+                &format!("SELECT COALESCE((SELECT length(payload) FROM {} WHERE key = ?1), 0)", table.name()),
+                [key],
+                |row| row.get(0),
+            )?;
+            let mut total = stored_total(&transaction)?;
             transaction.execute(
                 &format!(
                     "INSERT OR REPLACE INTO {} (key, payload, sha256, bytes, last_used) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -347,31 +387,39 @@ impl AnalysisStore {
                 ),
                 params![key, payload, digest, payload.len() as i64, now()],
             )?;
-            let mut evict = Vec::new();
-            {
-                // The row just written is kept first, then the rest by most recent use, across both tables.
-                let mut statement = transaction.prepare(
-                    "SELECT tab, key, bytes FROM (
-                         SELECT 'analysis' AS tab, key, length(payload) AS bytes, last_used FROM analysis
-                         UNION ALL SELECT 'derived' AS tab, key, length(payload) AS bytes, last_used FROM derived
-                     ) ORDER BY (tab = ?1 AND key = ?2) DESC, last_used DESC, tab, key",
-                )?;
-                let mut rows = statement.query(params![table.name(), key])?;
-                let mut total = 0u64;
-                while let Some(row) = rows.next()? {
-                    total = total.saturating_add(row.get::<_, i64>(2)?.max(0) as u64);
-                    if total > self.max_bytes {
-                        let tab: String = row.get(0)?;
-                        let old: String = row.get(1)?;
-                        evict.push((if tab == "analysis" { Table::Analysis } else { Table::Derived }, old));
+            total = total.saturating_sub(previous.max(0) as u64).saturating_add(payload.len() as u64);
+            // Evict the least recently used rows of either table, never the one just written, until the total fits.
+            // Each step is one indexed lookup per table, so a write that fits costs nothing more.
+            let mut evicted = false;
+            while total > self.max_bytes {
+                let mut oldest: Option<(i64, Table, String, u64)> = None;
+                for candidate in [Table::Analysis, Table::Derived] {
+                    let row = transaction
+                        .query_row(
+                            &format!(
+                                "SELECT last_used, key, length(payload) FROM {} WHERE NOT (?1 AND key = ?2)
+                                 ORDER BY last_used, key LIMIT 1",
+                                candidate.name()
+                            ),
+                            params![candidate.name() == table.name(), key],
+                            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)),
+                        )
+                        .optional()?;
+                    if let Some((used, old, bytes)) = row
+                        && oldest.as_ref().is_none_or(|(oldest_used, ..)| used < *oldest_used)
+                    {
+                        oldest = Some((used, candidate, old, bytes.max(0) as u64));
                     }
                 }
+                let Some((_, candidate, old, bytes)) = oldest else { break };
+                transaction.execute(&format!("DELETE FROM {} WHERE key = ?1", candidate.name()), [&old])?;
+                total = total.saturating_sub(bytes);
+                evicted = true;
             }
-            for (tab, old) in &evict {
-                transaction.execute(&format!("DELETE FROM {} WHERE key = ?1", tab.name()), [old])?;
-            }
+            transaction
+                .execute("INSERT OR REPLACE INTO meta (name, value) VALUES ('bytes', ?1)", [total.to_string()])?;
             transaction.commit()?;
-            if !evict.is_empty() {
+            if evicted {
                 // Best effort: a reader holding the WAL only delays reclaiming space until a later write.
                 let _ = connection.execute_batch("PRAGMA incremental_vacuum");
             }
@@ -457,6 +505,7 @@ impl AnalysisStore {
     /// Deletes the store file with its write-ahead log and shared-memory index, returning the bytes removed.
     /// Always safe: the store is a cache, and every later open analyses afresh and starts a new file.
     pub fn clear(&self) -> Result<u64, String> {
+        self.verify_is_store()?;
         let mut removed = 0;
         for path in self.files() {
             match std::fs::symlink_metadata(&path) {
@@ -472,6 +521,42 @@ impl AnalysisStore {
             }
         }
         Ok(removed)
+    }
+
+    /// Refuses unless the file at the store's path is absent, empty (created, no table yet), or an SQLite database
+    /// whose `meta` names this or an earlier rampage store layout: `clear` must never delete another file that a
+    /// mistyped `RAMPAGE_ANALYSIS_CACHE` names.
+    fn verify_is_store(&self) -> Result<(), String> {
+        let metadata = match std::fs::symlink_metadata(&self.path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(format!("{}: {error}", self.path.display())),
+            Ok(metadata) => metadata,
+        };
+        if !metadata.is_file() {
+            return Err(format!("{} is not a regular file; not removed", self.path.display()));
+        }
+        if metadata.len() == 0 {
+            return Ok(());
+        }
+        let not_store = || format!("{} is not a rampage analysis store; not removed", self.path.display());
+        let mut header = [0u8; 16];
+        let mut file = std::fs::File::open(&self.path).map_err(|error| format!("{}: {error}", self.path.display()))?;
+        std::io::Read::read_exact(&mut file, &mut header).map_err(|_| not_store())?;
+        if &header != b"SQLite format 3\0" {
+            return Err(not_store());
+        }
+        let flags =
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_NOFOLLOW;
+        let path = self.resolved_path().map_err(|_| not_store())?;
+        let connection = Connection::open_with_flags(path, flags).map_err(|_| not_store())?;
+        let schema: Option<String> = connection
+            .query_row("SELECT value FROM meta WHERE name = 'schema'", [], |row| row.get(0))
+            .optional()
+            .map_err(|_| not_store())?;
+        match schema.as_deref() {
+            Some(schema) if schema == SCHEMA || EARLIER_SCHEMAS.contains(&schema) => Ok(()),
+            _ => Err(not_store()),
+        }
     }
 
     /// SQLite's `-wal` and `-shm` files, then the database file. `clear` removes them in this order, so a removal
@@ -511,7 +596,9 @@ const CREATE_TABLES: &str = "CREATE TABLE IF NOT EXISTS meta (name TEXT PRIMARY 
          sha256 BLOB NOT NULL,
          bytes INTEGER NOT NULL,
          last_used INTEGER NOT NULL
-     );";
+     );
+     CREATE INDEX IF NOT EXISTS analysis_by_use ON analysis (last_used);
+     CREATE INDEX IF NOT EXISTS derived_by_use ON derived (last_used);";
 
 /// A fact derived over discovery and kept beside it, each kind with its own version and key. A derived key is
 /// `<kind>:<hex>`, so the store can report what it holds by kind.
@@ -584,6 +671,23 @@ fn check_schema(connection: &Connection) -> rusqlite::Result<Result<(), Schema>>
         Some(_) => Err(Schema::Foreign),
         None => Err(Schema::Missing),
     })
+}
+
+/// The payload bytes both tables hold, as kept in `meta` by every write; recounted when missing or unreadable (a
+/// file created before the count existed, or a damaged row), which costs one pass over the rows.
+fn stored_total(connection: &Connection) -> rusqlite::Result<u64> {
+    let kept: Option<String> =
+        connection.query_row("SELECT value FROM meta WHERE name = 'bytes'", [], |row| row.get(0)).optional()?;
+    if let Some(total) = kept.and_then(|value| value.parse::<u64>().ok()) {
+        return Ok(total);
+    }
+    let total: i64 = connection.query_row(
+        "SELECT (SELECT COALESCE(SUM(length(payload)), 0) FROM analysis)
+              + (SELECT COALESCE(SUM(length(payload)), 0) FROM derived)",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(total.max(0) as u64)
 }
 
 fn now() -> i64 {
@@ -715,8 +819,11 @@ mod tests {
         let own = shared.join("analysis");
         std::fs::create_dir(&own).unwrap();
         std::fs::set_permissions(&own, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let superseded = own.join("rampage-analysis-store-v1.sqlite");
+        std::fs::write(&superseded, b"an earlier layout's file").unwrap();
         let store = AnalysisStore { path: own.join("store.sqlite"), max_bytes: 1 << 30, owns_directory: true };
         store.store("k", &Program::default()).unwrap();
+        assert!(!superseded.exists(), "the default directory drops an earlier layout's file");
         assert_eq!(mode(&shared), 0o755, "a shared directory keeps its mode");
         assert_eq!(mode(&own), 0o700);
         for suffix in ["", "-wal", "-shm"] {

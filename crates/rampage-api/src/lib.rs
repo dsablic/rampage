@@ -33,7 +33,7 @@ mod decode_content;
 mod decoder;
 mod decompile;
 mod decompile_cache;
-pub use decompile_cache::{DECOMPILE_CACHE_VERSION, decompilation_digest};
+pub use decompile_cache::DECOMPILE_CACHE_VERSION;
 pub mod derived_cache;
 mod detect;
 mod diagnostics;

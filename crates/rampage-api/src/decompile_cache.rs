@@ -25,8 +25,8 @@ use crate::decompile::{Decompilation, DecompiledToken};
 use crate::{AnalysisStore, Project};
 
 /// Bump whenever the decompilation pipeline (the engine, the symbol, type and propagation plans, or the result
-/// shape) changes for the same key inputs. `decompile_cache_golden` (tests/integration) records decompilation
-/// digests per fixture under this version and fails when they change but the version did not.
+/// shape) changes for the same key inputs. `decompile_cache_golden` (tests/integration) records digests of the
+/// decompiled C per fixture function and OS under this version and fails when they change but the version did not.
 pub const DECOMPILE_CACHE_VERSION: u32 = 1;
 
 /// A stored decompilation as kept in the store: everything [`Decompilation`] holds except what is recomputed from
@@ -71,6 +71,11 @@ impl<'a> Entry<'a> {
         address: u64,
     ) -> Option<Self> {
         if std::env::var_os("GHIDRA_INSTALL_DIR").is_some() {
+            return None;
+        }
+        // The key hashed the file as loaded; a file changed in place since then is not those bytes any more, so
+        // neither read nor write, and decompile exactly as without a store (which may refuse the changed source).
+        if project.binary.validate_available_backing_source().is_err() {
             return None;
         }
         let (store, analysis_key) = project.derived_store()?;
@@ -208,12 +213,6 @@ fn worker_stamp(config: &rampage_decompiler::worker::WorkerConfig) -> String {
         },
     };
     executable.map_or_else(|| "unknown".to_owned(), |path| crate::analysis_cache::file_stamp(&path))
-}
-
-/// The digest `decompile_cache_golden` records per decompilation: SHA-256 of its stored encoding.
-#[doc(hidden)]
-pub fn decompilation_digest(decompilation: &Decompilation) -> String {
-    rampage_arch::hex::bytes(&Sha256::digest(encode(decompilation)))
 }
 
 #[cfg(test)]
