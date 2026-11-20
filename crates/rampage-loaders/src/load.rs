@@ -1892,8 +1892,9 @@ fn elf_mips_compressed_isa(parsed: &object::File) -> Option<&'static str> {
 fn undecoded_isa_note(isa: &str) -> String {
     format!(
         "the ELF header marks {isa} code, which rampage does not decode: functions compiled as {isa} (entered \
-         through jalx or an odd address) are not discovered, listed, disassembled or decompiled, and calls into them \
-         are not followed. Only the MIPS32 code is analysed, so function lists, call graphs and diffs are incomplete"
+         through jalx or an odd address) are not discovered, listed, disassembled or decompiled, symbols at odd \
+         addresses keep their names but seed no function, and calls into them are not followed. Only the MIPS32 \
+         code is analysed, so function lists, call graphs and diffs are incomplete"
     )
 }
 

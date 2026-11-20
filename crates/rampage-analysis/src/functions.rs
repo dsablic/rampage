@@ -42,8 +42,11 @@ pub fn from_symbols(binary: &Binary) -> Vec<Function> {
     let exports = binary.exports.iter().map(|export| (export.address, 0, export.name.as_str()));
     let entry = binary.entry.map(|entry| (entry, 0, "entry"));
 
+    // MIPS32 code is 4-byte aligned; a MIPS symbol, export or entry with the low bits set (the ISA bit GNU tools
+    // set) names MIPS16e or microMIPS code, which is not decoded, so it seeds nothing rather than MIPS32 garbage.
+    let mips = matches!(binary.arch, rampage_arch::Arch::Mips | rampage_arch::Arch::Mips64);
     for (address, size, name) in symbols.chain(exports).chain(entry) {
-        if !binary.is_code(address) {
+        if !binary.is_code(address) || (mips && address & 3 != 0) {
             continue;
         }
         by_address

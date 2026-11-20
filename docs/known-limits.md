@@ -45,7 +45,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   function's prologue sets up. microMIPS and MIPS16e (ISA-mode bit set) code is not decoded, and MIPS64 has no Raw
   profile. An ELF whose header marks MIPS16e or microMIPS gets a `binary_info` warning and a `list_functions` note
   saying so (OpenWrt builds most programs as MIPS16e, so their function lists hold only the MIPS32 startup code);
-  `jalx` calls into the other instruction set are kept as calls whose target is not followed. A function that only spins (`j .`) is not inferred to never return, so a decompiled caller can run on
+  `jalx` calls into the other instruction set are kept as calls whose target is not followed, and MIPS symbols, exports
+  or entries at addresses that are not 4-byte aligned (the ISA bit of MIPS16e and microMIPS code) seed no function. A function that only spins (`j .`) is not inferred to never return, so a decompiled caller can run on
   into the data after its last call (`halt_baddata`). Constant search on MIPS matches typed immediates and
   `lui` pairs completed in one block (`loaded_constant`); other sequences are not matched. `integrity_checks`
   takes a 16-bit CRC polynomial immediate as evidence only in a function that also shifts by one bit and XORs, so

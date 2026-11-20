@@ -216,6 +216,24 @@ fn compressed_instruction_sets_are_reported_as_not_decoded() {
     }
 }
 
+/// Review: a MIPS16e or microMIPS function symbol carries the ISA bit (an odd address). It must not seed a function
+/// whose bytes are then decoded as MIPS32. The fixture is router-mips-sym.elf with `scale_add`'s symbol made odd.
+#[test]
+fn odd_mips_symbols_seed_no_function() {
+    let mut bytes = std::fs::read(format!("{DIR}router-mips-sym.elf")).unwrap();
+    let scale_add = truth("router-mips", "scale_add") as u32;
+    // .symtab is at file offset 0x108c with 16-byte entries; scale_add is entry 30, st_value at +4.
+    let value = 0x108c + 30 * 16 + 4;
+    assert_eq!(&bytes[value..value + 4], scale_add.to_be_bytes());
+    bytes[value..value + 4].copy_from_slice(&(scale_add | 1).to_be_bytes());
+    let project = Project::new(Binary::from_owned_native_bytes(bytes, rampage_arch::Arch::Mips).unwrap());
+    let functions = project.functions(&rampage_api::FunctionsQuery::default()).unwrap();
+    let starts: Vec<u64> = functions.items.iter().map(|function| function.address).collect();
+    assert!(starts.iter().all(|start| start & 3 == 0), "{starts:x?}");
+    // The real, even start is still found from its caller.
+    assert!(starts.contains(&u64::from(scale_add)), "{starts:x?}");
+}
+
 fn boot_rom() -> Project {
     let image = std::fs::read(format!("{DIR}boot-mips.bin")).unwrap();
     let options = rampage_loaders::RawCodeOptions {

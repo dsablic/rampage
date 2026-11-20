@@ -136,10 +136,11 @@ under 0.1 s. **Fail**, on both halves of the bar:
   MIPS32 startup code) as if that were the program. After, `binary_info` warns and `list_functions` notes "the
   ELF header marks MIPS16e code, which rampage does not decode: … Only the MIPS32 code is analysed". The listed
   functions are genuine MIPS32 code. `jalx` calls into the other instruction set are now calls whose target is
-  not followed, so its bytes cannot be decoded as MIPS32. This half now meets the bar.
-- **The 11 programs without MIPS16e.** The six executables list functions (`dropbear` 472, `usign` 79, `px5g` 74,
-  `jffs2reset` 31, `mount_root` 22). The five shared libraries list none (`libfstools.so`, `libgcc_s.so.1`,
-  `libmbedcrypto`, `libmbedtls`, `libmbedx509`) and `libc.so` lists two. OpenWrt strips every program with
+  not followed, and (after review) symbols, exports and entries at odd addresses, the ISA bit of MIPS16e code in
+  an unstripped file, seed no function, so MIPS16e bytes are not decoded as MIPS32. This half now meets the bar.
+- **The 11 programs without MIPS16e.** The five executables list functions (`dropbear` 472, `usign` 79, `px5g` 74,
+  `jffs2reset` 31, `mount_root` 22). Of the six shared libraries, five list none (`libfstools.so`,
+  `libgcc_s.so.1`, `libmbedcrypto`, `libmbedtls`, `libmbedx509`) and `libc.so` lists two. OpenWrt strips every program with
   `sstrip`, which removes the section headers. rampage reads dynamic symbols only through the `.dynsym` section,
   so these libraries have no exports and no imports, and with no entry point nothing seeds discovery. Recorded:
   reading the dynamic symbol table from `PT_DYNAMIC` is a loader feature, not a small fix.
@@ -267,12 +268,16 @@ Cost: $0.0908 for the eight tasks and $0.0232 for the two reruns, $0.114 in all,
 Each has a regression test on a committed or self-built fixture; none uses the downloaded inputs.
 - MIPS16e and microMIPS ELF files are reported as not decoded (`binary_info` warning, `list_functions` note);
   `jalx` targets are not followed (M5).
-- `check_claim`: a checksum claim without `args` tries the running-value layouts before refuting (M4).
+- `check_claim`: a checksum claim without `args` tries the running-value layouts before refuting (M4). After
+  review, a layout that could not decide (a step or time limit, unset data) keeps the claim unknown, so a quick
+  mismatch of a wrong layout cannot refute a true claim.
 - ESP flash dumps that start at the ESP32 bootloader are read at flash 0x1000 by `diff_firmware`,
   `file_layout` and the open guidance (X1, F2, task 5).
 - `carve`: OpenWrt's UBI end-of-image marker is accepted and noted; a uImage's load address, entry, data size and
   compression are reported (C4).
-- Decompiler: MIPS calls through GOT entries of the image's own functions render by name (M2).
+- Decompiler: MIPS calls through GOT entries of the image's own functions render by name (M2). After review, the
+  binding comes from the entry's dynamic symbol, as the dynamic linker fills it, and only when the stored value
+  agrees.
 - `diff_firmware`: a page cut to fit the result continues after its last row (F2).
 - MCP: a `diff_builds` open error points at `diff_firmware` (task 6).
 - `derive_truth.py` counts symbolic links to directories (C2).
