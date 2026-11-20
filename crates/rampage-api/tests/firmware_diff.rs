@@ -1,9 +1,13 @@
 //! diff_firmware on version pairs of each input kind: a Cortex-M flash image as a plain binary, as ELF and wrapped
-//! in an LZSS update container; a SquashFS tree; an ESP32 flash dump; an APK; and the unchanged and swapped cases.
+//! in an LZSS update container; a SquashFS tree and the same trees as directories; an ESP32 flash dump; an APK.
+//! Each pair is also compared with itself (no change) and the other way round (the inverse), and hostile inputs
+//! stay within the budgets.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use rampage_api::{FirmwareDiffQuery, Packs, SideInput, diff_firmware};
 use serde_json::{Value, json};
@@ -31,6 +35,9 @@ impl Scratch {
 
     fn write(&self, name: &str, bytes: &[u8]) -> PathBuf {
         let path = self.0.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
         std::fs::write(&path, bytes).unwrap();
         path
     }
@@ -67,14 +74,22 @@ fn component<'a>(result: &'a Value, id: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no component {id}: {result:#}"))
 }
 
-fn texts(rows: &Value, key: &str) -> Vec<String> {
-    rows.as_array()
-        .unwrap()
+/// The `key` field of each row (the row itself for plain strings), sorted.
+fn values(rows: &Value, key: &str) -> Vec<String> {
+    let mut found: Vec<String> = rows
+        .as_array()
+        .unwrap_or_else(|| panic!("not a list: {rows}"))
         .iter()
         .map(
             |row| if key.is_empty() { row.as_str().unwrap().to_owned() } else { row[key].as_str().unwrap().to_owned() },
         )
-        .collect()
+        .collect();
+    found.sort();
+    found
+}
+
+fn update(version: &str) -> Vec<u8> {
+    std::fs::read(fixture(&format!("firmware/raw-cortex-m-update-{version}.bin"))).unwrap()
 }
 
 /// `plain` wrapped as the update container the triage tests use: a load address, the packed and plain sizes and a
@@ -126,98 +141,426 @@ fn esp_flash_v2() -> Vec<u8> {
     flash
 }
 
-#[test]
-#[ignore]
-fn explore_esp() {
-    let scratch = Scratch::new("rampage-diff-explore-esp");
-    let new = scratch.write("flash-v2.bin", &esp_flash_v2());
-    let mut result = diff(&fixture("xtensa/esp32-flash.bin"), &new);
-    for component in result["components"].as_array_mut().unwrap() {
-        if let Some(code) = component.get_mut("code") {
-            code["unchanged"] = json!("...");
+/// The sample APK and its next version: one more permission (CAMERA) and a native library.
+fn apk_pair() -> (Vec<u8>, Vec<u8>) {
+    use rampage_dex::testkit::{
+        XmlNode, XmlValue, sample_apk, sample_classes, sample_manifest, sample_resources, sample_secondary_classes,
+        write_axml, write_dex, write_zip,
+    };
+    let old = sample_apk(None);
+    let camera = XmlNode::new("uses-permission").android("name", XmlValue::Str("android.permission.CAMERA".to_owned()));
+    let manifest = write_axml(&sample_manifest().child(camera), false);
+    let classes = write_dex(&sample_classes(), 35);
+    let secondary = write_dex(&sample_secondary_classes(), 35);
+    let resources = sample_resources();
+    let lib = std::fs::read(fixture("android/libnet-arm64.so")).unwrap();
+    let new = write_zip(&[
+        ("AndroidManifest.xml", &manifest, true),
+        ("classes.dex", &classes, true),
+        ("classes2.dex", &secondary, false),
+        ("resources.arsc", &resources, false),
+        ("lib/arm64-v8a/libnet.so", &lib, false),
+    ]);
+    (old, new)
+}
+
+/// The SquashFS update pair's trees as directories.
+fn tree_dirs(scratch: &Scratch) -> (PathBuf, PathBuf) {
+    for version in ["v1", "v2"] {
+        let root = format!("{version}/");
+        scratch.write(&format!("{root}etc/hostname"), b"demo-device\n");
+        scratch.write(&format!("{root}etc/device.conf"), b"telemetry=off\nmicrophone=push-to-talk\n");
+        scratch.write(&format!("{root}bin/hello"), &std::fs::read(fixture("bin/hello-mips.elf")).unwrap());
+        let controller = std::fs::read(fixture(&format!("firmware/raw-cortex-m-update-{version}.elf"))).unwrap();
+        scratch.write(&format!("{root}bin/controller"), &controller);
+        if version == "v1" {
+            scratch.write(&format!("{root}etc/legacy.conf"), b"legacy_port=8080\n");
+        } else {
+            scratch.write(&format!("{root}etc/cloud.conf"), b"upload_endpoint=https://cloud.example.net/v2/ingest\n");
         }
     }
-    println!("{}", serde_json::to_string_pretty(&result).unwrap());
-    let mut q = query(&fixture("xtensa/esp32-flash.bin"), &new);
-    q.component = Some("esp:factory".to_owned());
-    q.function = Some("0x400d0130".to_owned());
-    println!("{}", serde_json::to_string_pretty(&run(&q)["rows"]).unwrap());
+    (scratch.0.join("v1"), scratch.0.join("v2"))
+}
+
+/// What the Cortex-M update pair changes, function by function, read from a code component.
+fn assert_cortex_m_update(code: &Value, named: bool) {
+    let functions = &code["functions"];
+    assert_eq!(
+        (functions["changed"].as_u64(), functions["added"].as_u64(), functions["removed"].as_u64()),
+        (Some(2), Some(2), Some(1)),
+        "{code:#}"
+    );
+    if named {
+        assert_eq!(values(&code["changed"], "name"), ["report_status", "reset_handler"], "{code:#}");
+        assert_eq!(values(&code["added"], "name"), ["debugger_attached", "halt"], "{code:#}");
+        assert_eq!(values(&code["removed"], "name"), ["legacy_selftest"], "{code:#}");
+    }
+    // boot_fail's string moved: the same instructions once addresses are normalised.
+    assert_eq!(functions["unchanged"], 6, "{code:#}");
+    assert_eq!(values(&code["versions"]["added"], ""), ["fw-version 2.1.0"], "{code:#}");
+    assert_eq!(values(&code["versions"]["removed"], ""), ["fw-version 2.0.7"], "{code:#}");
+    assert_eq!(values(&code["endpoints"]["added"], "value"), ["https://telemetry.example.net/v2/upload"], "{code:#}");
+    assert_eq!(code["endpoints"]["removed_total"], 0, "{code:#}");
+    let strings = values(&code["strings"]["removed"], "");
+    assert!(strings.contains(&"selftest passed".to_owned()), "{code:#}");
+    assert_eq!(values(&code["locks"]["added"], "category"), ["debug_lock"], "{code:#}");
+    assert_eq!(code["locks"]["removed_total"], 0, "{code:#}");
+    assert_eq!(code["integrity"]["changed_total"], 1, "{code:#}");
+    assert_eq!(code["integrity"]["added_total"], 0, "{code:#}");
+    assert_eq!(code["integrity"]["changed"][0]["what"], json!(["covered bytes 1020 -> 1532"]), "{code:#}");
+    assert_eq!(code["capture"]["applies"], false, "{code:#}");
+}
+
+/// The other direction of the same pair reports the inverse.
+fn assert_inverse(forward: &Value, backward: &Value) {
+    let functions = |code: &Value| {
+        let f = &code["functions"];
+        (f["changed"].as_u64(), f["added"].as_u64(), f["removed"].as_u64())
+    };
+    let (changed, added, removed) = functions(forward);
+    assert_eq!(functions(backward), (changed, removed, added), "{forward:#}\n{backward:#}");
+    for key in ["strings", "versions", "endpoints", "locks"] {
+        assert_eq!(forward[key]["added"], backward[key]["removed"], "{key}: {forward:#}\n{backward:#}");
+        assert_eq!(forward[key]["removed"], backward[key]["added"], "{key}: {forward:#}\n{backward:#}");
+    }
+    assert_eq!(forward["integrity"]["changed_total"], backward["integrity"]["changed_total"]);
+}
+
+fn assert_unchanged(result: &Value) {
+    assert_eq!(result["identical"], true, "{result:#}");
+    assert_eq!(result["components"], json!([]), "{result:#}");
 }
 
 #[test]
-#[ignore]
-fn explore() {
-    let scratch = Scratch::new("rampage-diff-explore");
-    let v1 = std::fs::read(fixture("firmware/raw-cortex-m-update-v1.bin")).unwrap();
-    let v2 = std::fs::read(fixture("firmware/raw-cortex-m-update-v2.bin")).unwrap();
-    let (a, b) = (scratch.write("v1.upd", &container(&v1)), scratch.write("v2.upd", &container(&v2)));
-    let pairs = [
-        (fixture("firmware/raw-cortex-m-update-v1.bin"), fixture("firmware/raw-cortex-m-update-v2.bin")),
-        (a, b),
-        (fixture("fsimages/update-v1.sqfs"), fixture("fsimages/update-v2.sqfs")),
+fn a_raw_cortex_m_update_pair_reports_its_functions_strings_endpoints_locks_and_checks() {
+    let (old, new) = (fixture("firmware/raw-cortex-m-update-v1.bin"), fixture("firmware/raw-cortex-m-update-v2.bin"));
+    let result = diff(&old, &new);
+    assert_eq!((&result["old"]["kind"], &result["new"]["kind"]), (&json!("raw_image"), &json!("raw_image")));
+    let image = component(&result, "image");
+    assert_eq!(image["status"], "changed");
+    assert_eq!(image["old"]["base_address"], "0x8000000", "{image:#}");
+    assert_cortex_m_update(&image["code"], false);
+    assert_eq!(result["not_compared"], json!([]), "{result:#}");
+    assert!(result["summary"][2].as_str().unwrap().contains("lock mechanisms +1"), "{result:#}");
+    let backward = diff(&new, &old);
+    assert_inverse(&image["code"], &component(&backward, "image")["code"]);
+    assert_unchanged(&diff(&old, &old));
+}
+
+#[test]
+fn an_elf_update_pair_names_what_changed() {
+    let (old, new) = (fixture("firmware/raw-cortex-m-update-v1.elf"), fixture("firmware/raw-cortex-m-update-v2.elf"));
+    let result = diff(&old, &new);
+    let image = component(&result, "image");
+    assert_eq!(image["changes"], json!(["entry: 0x80002e8 -> 0x80002a0"]), "{image:#}");
+    assert_cortex_m_update(&image["code"], true);
+    let backward = diff(&new, &old);
+    assert_inverse(&image["code"], &component(&backward, "image")["code"]);
+}
+
+#[test]
+fn an_lzss_update_container_is_decoded_on_both_sides_and_compared() {
+    let scratch = Scratch::new("rampage-diff-container");
+    let old = scratch.write("v1.upd", &container(&update("v1")));
+    let new = scratch.write("v2.upd", &container(&update("v2")));
+    let result = diff(&old, &new);
+    assert_eq!(result["old"]["kind"], "container", "{result:#}");
+    let stream = component(&result, "stream:0");
+    assert_eq!(stream["status"], "changed");
+    let changes = stream["changes"].as_array().unwrap();
+    assert!(changes.contains(&json!("decoded_size: 3072 -> 3584")), "{stream:#}");
+    assert_eq!(stream["old"]["checksum"], "byte_sum32", "{stream:#}");
+    assert_eq!(stream["new"]["checksum"], "byte_sum32", "{stream:#}");
+    assert_eq!(stream["new"]["decoded_with"], "the other version's parameters", "{stream:#}");
+    assert_eq!(stream["old"]["base_address"], "0x8000000", "{stream:#}");
+    assert_cortex_m_update(&stream["code"], false);
+    // The decoded images are the plain flash images.
+    let plain = diff(&fixture("firmware/raw-cortex-m-update-v1.bin"), &old);
+    assert_eq!(component(&plain, "image~stream:0")["status"], "unchanged", "{plain:#}");
+    let backward = diff(&new, &old);
+    assert_inverse(&stream["code"], &component(&backward, "stream:0")["code"]);
+    assert_unchanged(&diff(&old, &old));
+}
+
+#[test]
+fn a_squashfs_update_lists_files_and_takes_the_changed_executable_apart() {
+    let (old, new) = (fixture("fsimages/update-v1.sqfs"), fixture("fsimages/update-v2.sqfs"));
+    let result = diff(&old, &new);
+    let files = &component(&result, "fs")["files"];
+    assert_eq!(values(&files["changed"], "path"), ["bin/controller"], "{files:#}");
+    assert_eq!(values(&files["added"], "path"), ["etc/cloud.conf"], "{files:#}");
+    assert_eq!(values(&files["removed"], "path"), ["etc/legacy.conf"], "{files:#}");
+    assert_eq!(files["unchanged"], 4, "{files:#}");
+    assert_eq!(files["changed"][0]["format"], "elf", "{files:#}");
+    assert_eq!(values(&files["endpoints"]["added"], "value"), ["https://cloud.example.net/v2/ingest"], "{files:#}");
+    let controller = component(&result, "fs::bin/controller::image");
+    assert_cortex_m_update(&controller["code"], true);
+    // The nested pair can be asked for alone, and one of its functions diffed.
+    let mut drill = query(&old, &new);
+    drill.component = Some("fs::bin/controller::image".to_owned());
+    drill.list = Some("changed".to_owned());
+    let page = run(&drill);
+    assert_eq!(page["total"], 2, "{page:#}");
+    drill.list = None;
+    drill.function = Some("reset_handler".to_owned());
+    let function = run(&drill);
+    assert_eq!(function["function"]["changed"], true, "{function:#}");
+    assert!(function["decompile"].is_string(), "files inside an image are not openable by path: {function:#}");
+    let backward = diff(&new, &old);
+    let back_files = &component(&backward, "fs")["files"];
+    assert_eq!(back_files["added"][0]["path"], "etc/legacy.conf", "{backward:#}");
+    assert_eq!(back_files["removed"][0]["path"], "etc/cloud.conf", "{backward:#}");
+    assert_inverse(&controller["code"], &component(&backward, "fs::bin/controller::image")["code"]);
+    assert_unchanged(&diff(&old, &old));
+}
+
+#[test]
+fn directories_are_compared_like_filesystem_images() {
+    let scratch = Scratch::new("rampage-diff-dirs");
+    let (old, new) = tree_dirs(&scratch);
+    let result = diff(&old, &new);
+    let files = &component(&result, "tree")["files"];
+    assert_eq!(values(&files["changed"], "path"), ["bin/controller"], "{files:#}");
+    assert_eq!(values(&files["added"], "path"), ["etc/cloud.conf"], "{files:#}");
+    assert_eq!(values(&files["removed"], "path"), ["etc/legacy.conf"], "{files:#}");
+    let controller = component(&result, "tree::bin/controller::image");
+    assert_cortex_m_update(&controller["code"], true);
+    // Files in a directory are real paths, so decompile can open both sides.
+    let mut drill = query(&old, &new);
+    drill.component = Some("tree::bin/controller::image".to_owned());
+    drill.function = Some("report_status".to_owned());
+    let function = run(&drill);
+    assert_eq!(function["decompile"].as_array().map(Vec::len), Some(2), "{function:#}");
+    let texts: Vec<&str> = function["rows"].as_array().unwrap().iter().filter_map(|row| row["text"].as_str()).collect();
+    assert!(texts.iter().any(|text| text.contains("telemetry.example.net")), "{function:#}");
+    // A directory has no digest: its files decide, and none changed.
+    let same = diff(&old, &old);
+    assert_eq!(component(&same, "tree")["status"], "unchanged", "{same:#}");
+    let files = &component(&same, "tree")["files"];
+    assert_eq!((files["changed_total"].as_u64(), files["added_total"].as_u64()), (Some(0), Some(0)), "{same:#}");
+    assert_eq!(files["removed_total"], 0, "{same:#}");
+    let backward = diff(&new, &old);
+    let back_files = &component(&backward, "tree")["files"];
+    assert_eq!(values(&back_files["added"], "path"), ["etc/legacy.conf"], "{backward:#}");
+    assert_inverse(&controller["code"], &component(&backward, "tree::bin/controller::image")["code"]);
+}
+
+#[test]
+fn an_esp32_flash_update_compares_partitions_and_the_application() {
+    let scratch = Scratch::new("rampage-diff-esp");
+    let (old, new) = (fixture("xtensa/esp32-flash.bin"), scratch.write("flash-v2.bin", &esp_flash_v2()));
+    let result = diff(&old, &new);
+    assert_eq!(result["old"]["kind"], "esp_flash");
+    assert_eq!(component(&result, "esp:bootloader")["status"], "unchanged");
+    assert_eq!(component(&result, "esp:nvs")["status"], "unchanged");
+    assert_eq!(component(&result, "esp:storage")["status"], "added");
+    let table = component(&result, "esp:partition_table");
+    assert_eq!(
+        table["changes"],
+        json!([
+            "partition changed: factory app/factory at 0x10000, 0xf0000 bytes -> factory app/factory at 0x10000, \
+             0xc0000 bytes",
+            "partition added: storage data/spiffs at 0xd0000, 0x30000 bytes"
+        ]),
+        "{table:#}"
+    );
+    let app = component(&result, "esp:factory");
+    assert!(app["changes"].as_array().unwrap().contains(&json!("version: 1.4.2 -> 1.5.0")), "{app:#}");
+    assert_eq!(app["new"]["sha256_valid"], true, "{app:#}");
+    let code = &app["code"];
+    let functions = &code["functions"];
+    // dispatch and app_main change, handle_update is new and walk is gone; crc32_le only moved and was realigned.
+    assert_eq!(
+        (functions["changed"].as_u64(), functions["added"].as_u64(), functions["removed"].as_u64()),
+        (Some(2), Some(1), Some(1)),
+        "{code:#}"
+    );
+    assert_eq!(values(&code["endpoints"]["added"], "value"), ["https://ota.example.com/v2/firmware"], "{code:#}");
+    assert_eq!(values(&code["versions"]["added"], ""), ["1.5.0"], "{code:#}");
+    let backward = diff(&new, &old);
+    assert_eq!(component(&backward, "esp:storage")["status"], "removed");
+    assert_inverse(code, &component(&backward, "esp:factory")["code"]);
+    assert_unchanged(&diff(&old, &old));
+}
+
+#[test]
+fn an_apk_update_reports_permissions_and_native_libraries() {
+    let scratch = Scratch::new("rampage-diff-apk");
+    let (old, new) = apk_pair();
+    let (old, new) = (scratch.write("v1.apk", &old), scratch.write("v2.apk", &new));
+    let result = diff(&old, &new);
+    assert_eq!(result["old"]["kind"], "android_package", "{result:#}");
+    let package = component(&result, "fs");
+    let android = &package["android"];
+    assert_eq!(android["permissions"]["added"], json!(["android.permission.CAMERA"]), "{android:#}");
+    assert_eq!(android["native_libs"]["added"], json!(["lib/arm64-v8a/libnet.so"]), "{android:#}");
+    let files = &package["files"];
+    assert_eq!(values(&files["changed"], "path"), ["AndroidManifest.xml"], "{files:#}");
+    assert_eq!(values(&files["added"], "path"), ["lib/arm64-v8a/libnet.so"], "{files:#}");
+    let backward = diff(&new, &old);
+    assert_eq!(component(&backward, "fs")["android"]["permissions"]["removed"], json!(["android.permission.CAMERA"]));
+    assert_unchanged(&diff(&old, &old));
+}
+
+#[test]
+fn a_component_pages_its_lists_and_unknown_ids_are_refused() {
+    let (old, new) = (fixture("firmware/raw-cortex-m-update-v1.bin"), fixture("firmware/raw-cortex-m-update-v2.bin"));
+    let mut drill = query(&old, &new);
+    drill.component = Some("image".to_owned());
+    drill.list = Some("unchanged".to_owned());
+    drill.limit = Some(2);
+    let first = run(&drill);
+    assert_eq!(first["rows"].as_array().unwrap().len(), 2, "{first:#}");
+    assert_eq!(first["next_offset"], 2, "{first:#}");
+    assert_eq!(first["total"], 6, "{first:#}");
+    drill.offset = 2;
+    let second = run(&drill);
+    let addresses = |page: &Value| values(&page["rows"], "old").into_iter().collect::<BTreeSet<_>>();
+    assert!(addresses(&first).is_disjoint(&addresses(&second)), "{first:#}\n{second:#}");
+    drill.list = Some("endpoints".to_owned());
+    drill.offset = 0;
+    let endpoints = run(&drill);
+    assert_eq!(endpoints["rows"][0]["change"], "added", "{endpoints:#}");
+    drill.component = Some("nothing".to_owned());
+    assert!(diff_firmware(&drill, Arc::new(Packs::default())).unwrap_err().contains("no component `nothing`"));
+    let mut no_component = query(&old, &new);
+    no_component.list = Some("changed".to_owned());
+    assert!(diff_firmware(&no_component, Arc::new(Packs::default())).is_err());
+}
+
+#[test]
+fn the_function_view_shows_the_changed_instructions_with_addresses_normalised() {
+    let (old, new) = (fixture("firmware/raw-cortex-m-update-v1.elf"), fixture("firmware/raw-cortex-m-update-v2.elf"));
+    let mut drill = query(&old, &new);
+    drill.component = Some("image".to_owned());
+    drill.function = Some("reset_handler".to_owned());
+    let result = run(&drill);
+    let rows = result["rows"].as_array().unwrap();
+    let texts = |op: &str| -> Vec<&str> {
+        rows.iter().filter(|row| row["op"] == op).filter_map(|row| row["text"].as_str()).collect()
+    };
+    assert!(texts("+").iter().any(|text| text.contains("new:debugger_attached")), "{result:#}");
+    assert!(texts("-").iter().any(|text| text.contains("\"fw-version 2.0.7\"")), "{result:#}");
+    assert!(texts("+").iter().any(|text| text.contains("\"fw-version 2.1.0\"")), "{result:#}");
+    // Calls to functions that only moved read the same on both sides.
+    assert!(!texts("-").iter().any(|text| text.contains("crc32_compute")), "{result:#}");
+    // An unchanged function reads the same throughout.
+    drill.function = Some("boot_fail".to_owned());
+    let same = run(&drill);
+    assert_eq!(same["function"]["changed"], false, "{same:#}");
+    assert_eq!(same["differing_rows"], 0, "{same:#}");
+    // A function only in the newer version.
+    drill.function = Some("new:halt".to_owned());
+    let added = run(&drill);
+    assert_eq!(added["function"]["only_in"], "new", "{added:#}");
+}
+
+#[test]
+fn budgets_bound_the_work_and_say_what_was_left_out() {
+    let (old, new) = (fixture("fsimages/update-v1.sqfs"), fixture("fsimages/update-v2.sqfs"));
+    let mut limited = query(&old, &new);
+    limited.max_images = Some(0);
+    let result = run(&limited);
+    assert_eq!(result["budget"]["stopped"], "images", "{result:#}");
+    let skipped: Vec<&str> =
+        result["not_compared"].as_array().unwrap().iter().filter_map(|row| row["what"].as_str()).collect();
+    assert_eq!(skipped, ["fs::bin/controller::image"], "{result:#}");
+    assert!(component(&result, "fs::bin/controller::image").get("code").is_none());
+
+    let mut hurried =
+        query(&fixture("firmware/raw-cortex-m-update-v1.bin"), &fixture("firmware/raw-cortex-m-update-v2.bin"));
+    hurried.timeout_ms = Some(1);
+    let started = Instant::now();
+    let result = run(&hurried);
+    assert!(started.elapsed() < Duration::from_secs(30));
+    assert_eq!(result["budget"]["stopped"], "time", "{result:#}");
+    assert!(!result["not_compared"].as_array().unwrap().is_empty(), "{result:#}");
+
+    let mut starved = query(&old, &new);
+    starved.max_bytes = Some(10_000);
+    let result = run(&starved);
+    assert_eq!(result["budget"]["stopped"], "bytes", "{result:#}");
+    assert!(result["budget"]["bytes_read"].as_u64().unwrap() <= 10_000, "{result:#}");
+
+    for bad in [Some(0), Some(600_001)] {
+        let mut wrong = query(&old, &new);
+        wrong.timeout_ms = bad;
+        assert!(diff_firmware(&wrong, Arc::new(Packs::default())).is_err());
+    }
+}
+
+#[test]
+fn a_decompression_bomb_in_a_changed_file_stops_at_the_ratio_limit() {
+    // repeat-xz.sqfs holds repeat.bin, 200 MiB of one byte; the directory holds a sparse file of the same name and
+    // size, so the contents must be hashed to compare them.
+    let scratch = Scratch::new("rampage-diff-bomb");
+    let file = std::fs::File::create(scratch.0.join("repeat.bin")).unwrap();
+    file.set_len(200 << 20).unwrap();
+    drop(file);
+    let started = Instant::now();
+    let result = diff(&scratch.0, &fixture("fsimages/repeat-xz.sqfs"));
+    assert!(started.elapsed() < Duration::from_secs(60), "{:?}", started.elapsed());
+    let notes = serde_json::to_string(&result["not_compared"]).unwrap();
+    assert!(notes.contains("ratio") || notes.contains("bomb"), "{result:#}");
+}
+
+#[test]
+fn hostile_and_unrelated_inputs_never_panic() {
+    let scratch = Scratch::new("rampage-diff-hostile");
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let random: Vec<u8> = (0..8192).map(|_| next() as u8).collect();
+    let noise = scratch.write("noise.bin", &random);
+    let result = diff(&noise, &fixture("fsimages/update-v1.sqfs"));
+    assert_eq!(result["old"]["kind"], "opaque", "{result:#}");
+    assert_eq!(component(&result, "file")["status"], "removed", "{result:#}");
+    let originals = [
+        std::fs::read(fixture("fsimages/update-v2.sqfs")).unwrap(),
+        container(&update("v2")),
+        std::fs::read(fixture("xtensa/esp32-flash.bin")).unwrap()[..0x30000].to_vec(),
     ];
-    for (old, new) in &pairs {
-        let mut result = diff(old, new);
-        for component in result["components"].as_array_mut().unwrap() {
-            if let Some(code) = component.get_mut("code") {
-                code["unchanged"] = json!("...");
+    for (index, original) in originals.iter().enumerate() {
+        let old = scratch.write(&format!("original-{index}"), original);
+        for round in 0..6 {
+            let mut mutated = original.clone();
+            for _ in 0..(1 << round) {
+                let at = (next() as usize) % mutated.len();
+                mutated[at] = next() as u8;
+            }
+            if round == 5 {
+                mutated.truncate(mutated.len() / 3);
+            }
+            let new = scratch.write(&format!("mutated-{index}-{round}"), &mutated);
+            let mut bounded = query(&old, &new);
+            bounded.timeout_ms = Some(20_000);
+            let started = Instant::now();
+            let outcome = diff_firmware(&bounded, Arc::new(Packs::default()));
+            assert!(started.elapsed() < Duration::from_secs(90), "{index}/{round}: {:?}", started.elapsed());
+            if let Ok(result) = outcome {
+                assert!(serde_json::to_string(&result).unwrap().len() < 60_000);
             }
         }
-        println!("{}", serde_json::to_string_pretty(&result["components"]).unwrap());
-        println!("{}", serde_json::to_string_pretty(&result["summary"]).unwrap());
     }
-    let (old, new) = &pairs[0];
-    let mut q = query(old, new);
-    q.component = Some("image".to_owned());
-    q.function = Some("entry".to_owned());
-    println!("{}", serde_json::to_string_pretty(&run(&q)).unwrap());
 }
 
 #[test]
-#[ignore]
-fn explore_integrity() {
-    let scratch = Scratch::new("rampage-diff-explore-int");
-    for name in ["v1", "v2"] {
-        let plain = std::fs::read(fixture(&format!("firmware/raw-cortex-m-update-{name}.bin"))).unwrap();
-        let path = scratch.write("u.upd", &container(&plain));
-        let packed = std::fs::metadata(&path).unwrap().len() - 256 - 16 - 512;
-        let probe = rampage_api::probe_compression(
-            &path,
-            &rampage_api::ProbeCompressionRequest {
-                offset: rampage_api::FileOffset(0x110),
-                length: rampage_api::FileOffset(packed),
-                expected_output_size: Some(rampage_api::FileOffset(plain.len() as u64)),
-                candidate_limit: Some(8),
-                timeout_ms: None,
-                preview_size: Some(0),
-            },
-        )
-        .unwrap();
-        for candidate in &probe.candidates {
-            println!(
-                "{name} candidate {} {} fill {:?} exercised {:?} size {} consumed {} bases {:?}",
-                candidate.rank,
-                candidate.verdict,
-                candidate.decode_arguments.dictionary_fill,
-                candidate.dictionary_fill_exercised,
-                candidate.output_size,
-                candidate.input_consumed,
-                candidate
-                    .base_candidates
-                    .as_ref()
-                    .map(|b| b.iter().map(|b| (b.base_address, b.score)).collect::<Vec<_>>())
-            );
-        }
-        for fill in [0, 255] {
-            let request: rampage_api::RawProjectRequest = serde_json::from_value(json!({"profile":"cortex-m","offset":"0x110","length":packed,"decode":{"codec":"lzss","expected_output_size":plain.len(),"lzss":{"window_bits":12,"min_match":3,"flag_order":"lsb_first","literal_bit":1,"reference_layout":"split_byte","offset_mode":"ring_position"},"initial_write_offset":4078,"dictionary_fill":fill},"base_address":"0x8000000","vector_table":true})).unwrap();
-            let session = rampage_api::Session::default();
-            let project = session.open_raw(&path, &request).unwrap();
-            let report = project.integrity_checks(&rampage_api::IntegrityRequest::default()).unwrap().report;
-            println!(
-                "{name} fill {fill}: {:?} {}",
-                report.checks.iter().map(|c| (c.algorithm, c.confidence)).collect::<Vec<_>>(),
-                serde_json::to_string(&report.search).unwrap()
-            );
-        }
-    }
+fn a_selector_for_each_side_reads_headerless_code_the_detection_would_miss() {
+    let (old, new) = (fixture("firmware/raw-cortex-m-update-v1.bin"), fixture("firmware/raw-cortex-m-update-v2.bin"));
+    let mut selected = query(&old, &new);
+    let raw = |length: usize| {
+        json!({"profile": "cortex-m3", "offset": 0, "length": length, "base_address": "0x8000000",
+               "vector_table": true})
+    };
+    selected.old.raw = Some(raw(update("v1").len()));
+    selected.new.raw = Some(raw(update("v2").len()));
+    let result = run(&selected);
+    assert_eq!(result["old"]["kind"], "raw", "{result:#}");
+    assert_cortex_m_update(&component(&result, "image")["code"], false);
+    selected.old.image_offset = Some(4);
+    assert!(diff_firmware(&selected, Arc::new(Packs::default())).is_err(), "a Raw selector takes no image_offset");
 }

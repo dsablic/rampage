@@ -227,12 +227,12 @@ struct Listings<'a> {
 impl Listings<'_> {
     fn text(&mut self, old: bool, address: u64, labels: &Labels) -> Option<Vec<String>> {
         let (code, cache) = if old { (&self.old, &mut self.lines_old) } else { (&self.new, &mut self.lines_new) };
-        if !cache.contains_key(&address) {
+        if let std::collections::hash_map::Entry::Vacant(slot) = cache.entry(address) {
             if self.budget == 0 {
                 return None;
             }
             self.budget -= 1;
-            cache.insert(address, code.listing(address).unwrap_or_default());
+            slot.insert(code.listing(address).unwrap_or_default());
         }
         let lines = cache.get(&address)?;
         if lines.is_empty() {

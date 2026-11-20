@@ -118,14 +118,15 @@ fn list(run: &mut Run, tree: &Tree) -> Result<Vec<Entry>, String> {
     }
 }
 
+/// Receives each chunk of content with the position of its entry.
+type Sink<'a> = dyn FnMut(usize, &[u8]) -> Result<(), String> + 'a;
+
+/// A file whose content differs: its old and new entries, and their digests when sizes alone did not tell.
+type Changed<'a> = (&'a Entry, &'a Entry, Option<(&'a String, &'a String)>);
+
 /// Reads the content of `entries` from `tree`, handing each chunk to `sink` with the entry's position in `entries`;
 /// stops when time or the byte budget runs out. Returns the positions read whole and why reading stopped early.
-fn read(
-    run: &mut Run,
-    tree: &Tree,
-    entries: &[&Entry],
-    sink: &mut dyn FnMut(usize, &[u8]) -> Result<(), String>,
-) -> (BTreeSet<usize>, Option<String>) {
+fn read(run: &mut Run, tree: &Tree, entries: &[&Entry], sink: &mut Sink) -> (BTreeSet<usize>, Option<String>) {
     let mut done = BTreeSet::new();
     let mut stopped = None;
     match tree {
@@ -169,6 +170,9 @@ fn read(
                     run.budget.charge(bytes);
                 }
                 Err(error) => stopped = Some(error.to_string()),
+            }
+            if stopped.as_deref().is_some_and(|reason| reason.contains("max_bytes")) {
+                run.budget.stopped.get_or_insert("bytes");
             }
         }
         Tree::Dir(_) => {
@@ -368,8 +372,7 @@ pub(crate) fn compare_trees(run: &mut Run, id: &str, old: &Tree, new: &Tree, dif
     let news: Vec<&Entry> = same_size.iter().map(|(_, y)| *y).collect();
     let (old_digests, old_stop) = hashes(run, old, &olds);
     let (new_digests, new_stop) = hashes(run, new, &news);
-    let mut changed: Vec<(&Entry, &Entry, Option<(&String, &String)>)> =
-        by_size.into_iter().map(|(x, y)| (x, y, None)).collect();
+    let mut changed: Vec<Changed> = by_size.into_iter().map(|(x, y)| (x, y, None)).collect();
     let mut unchanged = 0;
     let mut not_hashed = Vec::new();
     for (x, y) in same_size {

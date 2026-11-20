@@ -96,6 +96,7 @@ async fn lists_all_tools_with_instructions() {
         "dex_code",
         "dex_metadata",
         "diff_builds",
+        "diff_firmware",
         "disassemble",
         "discard_undo",
         "dotnet_il",

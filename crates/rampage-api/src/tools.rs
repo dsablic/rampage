@@ -161,7 +161,7 @@ impl Group {
                 "standalone ZIP32 metadata without extraction, and list and extract firmware filesystem images ",
                 "(SquashFS, ext2/3/4, Android sparse and OTA payloads, cpio, tar, UBI/UBIFS), inventory the network endpoints of a ",
                 "binary or extracted tree as a router blocklist, and map what a binary can capture (microphone, camera, ",
-                "screen, input) and send (privacy_surface)."
+                "screen, input) and send (privacy_surface), and diff two versions of an update (diff_firmware)."
             ),
             Group::Formats => {
                 "Toolchain and container metadata: Go build info, Rust dependency audit data, PE resources and load config, PyInstaller archives and WebAssembly modules; firmware integrity checks (CRC/checksum fields, recomputed after patches) and patched-image export in the original container."
@@ -989,6 +989,7 @@ pub fn file_tools() -> Vec<FileTool> {
                     limit: args.limit,
                     timeout_ms: args.timeout_ms,
                     max_images: args.max_images,
+                    max_bytes: None,
                 };
                 crate::diff_firmware(&query, std::sync::Arc::new(packs.reopened()))
             },

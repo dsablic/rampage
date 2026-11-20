@@ -273,3 +273,37 @@ async fn endpoints_of_an_extracted_tree_become_a_blocklist() {
     assert!(text(&relative).contains("absolute"), "{}", text(&relative));
     client.cancel().await.unwrap();
 }
+
+/// diff_firmware is carve-gated, compares the SquashFS update pair, drills into the changed executable and takes a
+/// Raw selector per side (the newer side's defaulting to the older one's only when it names no length).
+#[tokio::test]
+async fn diff_firmware_compares_two_update_images() {
+    let client = connect(RampageServer::default()).await;
+    let (old, new) = (fsimage("update-v1.sqfs"), fsimage("update-v2.sqfs"));
+    let refused = call(&client, "diff_firmware", json!({"path": old, "other": new})).await;
+    assert_eq!(refused.is_error, Some(true));
+    assert!(text(&refused).contains("carve"), "{}", text(&refused));
+    client.cancel().await.unwrap();
+
+    let client = connect(RampageServer::with_groups([Group::Carve])).await;
+    let result = json_of(&call(&client, "diff_firmware", json!({"path": old, "other": new})).await);
+    let ids: Vec<&str> = result["components"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["fs", "fs::bin/controller::image"], "{result:#}");
+    let next = &result["next"][0];
+    assert_eq!(next["tool"], "diff_firmware", "{result:#}");
+    let drill = json_of(&call(&client, "diff_firmware", next["arguments"].clone()).await);
+    assert_eq!(drill["function"]["changed"], true, "{drill:#}");
+
+    let firmware = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware");
+    let (v1, v2) = (firmware.join("raw-cortex-m-update-v1.bin"), firmware.join("raw-cortex-m-update-v2.bin"));
+    let raw = json!({"profile": "cortex-m3", "offset": 0, "length": 3072, "base_address": "0x8000000"});
+    let missing = call(&client, "diff_firmware", json!({"path": v1, "other": v2, "as_raw": raw})).await;
+    assert_eq!(missing.is_error, Some(true));
+    assert!(text(&missing).contains("other_as_raw"), "{}", text(&missing));
+    let mut other = raw.clone();
+    other["length"] = json!(3584);
+    let arguments = json!({"path": v1, "other": v2, "as_raw": raw, "other_as_raw": other, "max_images": 1});
+    let selected = json_of(&call(&client, "diff_firmware", arguments).await);
+    assert_eq!(selected["components"][0]["code"]["functions"]["removed"], 1, "{selected:#}");
+    client.cancel().await.unwrap();
+}

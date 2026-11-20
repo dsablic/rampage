@@ -474,7 +474,8 @@ async fn contract_mcp_carve_results() {
     std::fs::write(tree.join("init.rc"), "on boot\n    class_start main\n").unwrap();
     std::fs::copy(&watch, tree.join("system/watch.apk")).unwrap();
     exercise(c, o, "privacy_surface", json!({"path": tree, "max_files": 1})).await;
-    check_group(client, "carve", &observed, &[]).await;
+    // diff_firmware is experimental (docs/stability.md): its name and arguments are pinned, its result fields are not.
+    check_group(client, "carve", &observed, &["diff_firmware"]).await;
 }
 
 /// The result fields of the `formats` group, each on a fixture that has the structure it reads.

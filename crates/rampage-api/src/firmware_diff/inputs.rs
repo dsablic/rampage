@@ -589,11 +589,11 @@ fn stream_component(
         component = component.fact("decoded_size_field", size);
     }
     // The compressed bytes identify the stream until it is decoded.
-    let start = usize::try_from(stream.payload_offset).unwrap_or(usize::MAX);
-    let read = std::fs::File::open(path).ok().and_then(|file| {
+    let charged = run.budget.charge(stream.payload_length);
+    let read = std::fs::File::open(path).ok().filter(|_| charged).and_then(|file| {
         use std::io::{Seek, SeekFrom};
         let mut file = file;
-        file.seek(SeekFrom::Start(start as u64)).ok()?;
+        file.seek(SeekFrom::Start(stream.payload_offset)).ok()?;
         let mut payload = Vec::new();
         file.take(stream.payload_length).read_to_end(&mut payload).ok()?;
         Some(payload)
@@ -629,7 +629,7 @@ fn stream_component(
                 // Alternatives that read the same tokens into different bytes (an exercised ring fill) tie in the
                 // probe. Each is decoded, and the one whose bytes read best as an image is taken: the most
                 // plausible Cortex-M vector words, then the strongest base candidate; else the probe's order.
-                let mut best: Option<(Value, Vec<u8>, usize, &str, (usize, u64))> = None;
+                let mut best: Option<Decoded> = None;
                 for candidate in report.candidates.iter().filter(usable) {
                     let Some(first) = first else { break };
                     let alternative = first.dictionary_fill_exercised == Some(true)
@@ -646,17 +646,17 @@ fn stream_component(
                     let base =
                         candidate.base_candidates.as_ref().and_then(|bases| bases.first()).map_or(0, |b| b.score);
                     let score = (plausible_vector_words(&bytes), base);
-                    if best.as_ref().is_none_or(|(.., best_score)| score > *best_score) {
-                        best = Some((decode, bytes, consumed, candidate.verdict, score));
+                    if best.as_ref().is_none_or(|best| score > best.score) {
+                        best = Some(Decoded { decode, bytes, consumed, verdict: candidate.verdict, score });
                     }
                 }
                 if first.is_some_and(|first| first.dictionary_fill_exercised == Some(true)) {
                     component.facts.insert("dictionary_fill_ambiguous".to_owned(), json!(true));
                 }
                 match best {
-                    Some((decode, bytes, consumed, verdict, _)) => {
-                        component.facts.insert("probe_verdict".to_owned(), json!(verdict));
-                        decoded = Some((decode, bytes, consumed));
+                    Some(best) => {
+                        component.facts.insert("probe_verdict".to_owned(), json!(best.verdict));
+                        decoded = Some((best.decode, best.bytes, best.consumed));
                     }
                     None => {
                         component.facts.insert("decoded".to_owned(), json!(false));
@@ -699,6 +699,15 @@ fn stream_component(
     });
     component.open = Opener::Raw { path: path.to_owned(), request };
     component
+}
+
+/// A probe candidate decoded: its parameters, bytes, input consumed, verdict and how well the bytes read as an image.
+struct Decoded {
+    decode: Value,
+    bytes: Vec<u8>,
+    consumed: usize,
+    verdict: &'static str,
+    score: (usize, u64),
 }
 
 /// Words 2..16 of a Cortex-M vector table at the start of `bytes` that are zero or an odd (Thumb) code address.
@@ -747,7 +756,15 @@ pub(crate) fn container_changes(old: &Layout, new: &Layout) -> Vec<String> {
     changes.extend(differing(&old.facts, &new.facts));
     let ids = |layout: &Layout| layout.components.iter().map(|component| component.id.clone()).collect::<Vec<_>>();
     if ids(old) != ids(new) {
-        changes.push(format!("components: {} -> {}", ids(old).len(), ids(new).len()));
+        let list = |ids: Vec<String>| {
+            let total = ids.len();
+            let mut shown: Vec<String> = ids.into_iter().take(12).collect();
+            if total > shown.len() {
+                shown.push(format!("{} more", total - shown.len()));
+            }
+            shown.join(", ")
+        };
+        changes.push(format!("components: {} -> {}", list(ids(old)), list(ids(new))));
     }
     changes
 }
@@ -841,12 +858,18 @@ pub(crate) fn pair(old: Vec<Component>, new: Vec<Component>) -> Vec<(String, Opt
         }
         old_left.push(component);
     }
-    let code = |components: &[Component]| components.iter().filter(|component| component.open.is_code()).count();
-    if code(&old_left) == 1 && code(&new) == 1 {
-        let a = old_left.iter().position(|component| component.open.is_code()).expect("one code image");
-        let b = new.iter().position(|component| component.open.is_code()).expect("one code image");
-        let (a, b) = (old_left.remove(a), new.remove(b));
-        pairs.push((format!("{}~{}", a.id, b.id), Some(a), Some(b)));
+    // The only code image, or the only filesystem, left on each side: the same part in another form (a plain
+    // image and a compressed one, an extracted directory and an image).
+    let kinds: [fn(&Component) -> bool; 2] =
+        [|component| component.open.is_code(), |component| matches!(component.open, Opener::Tree(_))];
+    for kind in kinds {
+        let count = |components: &[Component]| components.iter().filter(|component| kind(component)).count();
+        if count(&old_left) == 1 && count(&new) == 1 {
+            let a = old_left.iter().position(kind).expect("one");
+            let b = new.iter().position(kind).expect("one");
+            let (a, b) = (old_left.remove(a), new.remove(b));
+            pairs.push((format!("{}~{}", a.id, b.id), Some(a), Some(b)));
+        }
     }
     pairs.extend(old_left.into_iter().map(|component| (component.id.clone(), Some(component), None)));
     pairs.extend(new.into_iter().map(|component| (component.id.clone(), None, Some(component))));
@@ -876,8 +899,10 @@ pub(crate) fn resolve(
             };
             let Some(file) = super::tree::materialise_one(run, tree, path)? else { return Ok(None) };
             let mut layout = layout(&SideInput::of(file), run, &[])?;
+            // A directory's files are real paths; an image's are scratch copies.
+            let ephemeral = matches!(tree, Tree::Image { .. });
             for component in &mut layout.components {
-                component.ephemeral = true;
+                component.ephemeral = ephemeral;
             }
             Ok(Some(layout))
         };

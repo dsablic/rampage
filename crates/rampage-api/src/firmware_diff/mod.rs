@@ -59,6 +59,8 @@ pub struct FirmwareDiffQuery {
     pub limit: Option<usize>,
     pub timeout_ms: Option<u64>,
     pub max_images: Option<usize>,
+    /// Bytes read from the inputs (hashing, decoding, taking images apart); default 2 GiB.
+    pub max_bytes: Option<u64>,
 }
 
 /// The work one call may still do, and what it did.
@@ -80,13 +82,13 @@ pub(crate) struct Budget {
 }
 
 impl Budget {
-    fn new(timeout_ms: u64, max_images: usize, packs: Arc<Packs>) -> Self {
+    fn new(timeout_ms: u64, max_images: usize, max_bytes: u64, packs: Arc<Packs>) -> Self {
         let started = Instant::now();
         Self {
             started,
             deadline: started + Duration::from_millis(timeout_ms),
             images_left: max_images,
-            bytes_left: DEFAULT_MAX_BYTES,
+            bytes_left: max_bytes,
             images_diffed: 0,
             images_skipped: 0,
             bytes_read: 0,
@@ -293,7 +295,7 @@ pub fn diff_firmware(query: &FirmwareDiffQuery, packs: Arc<Packs>) -> Result<Val
         side.validate()?;
     }
     let mut run = Run {
-        budget: Budget::new(timeout_ms, max_images, packs),
+        budget: Budget::new(timeout_ms, max_images, query.max_bytes.unwrap_or(DEFAULT_MAX_BYTES), packs),
         scratch: Scratch::new()?,
         components: Vec::new(),
         not_compared: Vec::new(),
@@ -377,13 +379,25 @@ pub(crate) fn compare(run: &mut Run, id: String, old: Option<Component>, new: Op
             if depth >= MAX_TREE_DEPTH {
                 run.skip(&id, format!("filesystems nested deeper than {MAX_TREE_DEPTH} levels are not taken apart"));
             } else {
+                let before = run.components.len();
                 tree::compare_trees(run, &id, old_tree, new_tree, &mut diff, depth);
+                // A tree without a digest (a directory) whose files all match is unchanged.
+                let files = diff.files.as_ref();
+                let quiet = files.is_some_and(|files| {
+                    ["changed_total", "added_total", "removed_total", "metadata_changed_total"]
+                        .iter()
+                        .all(|key| files[key].as_u64() == Some(0))
+                        && files.get("not_hashed").is_none()
+                });
+                if quiet && run.components.len() == before {
+                    diff.status = "unchanged";
+                }
             }
             if old.android || new.android {
                 diff.android = tree::android_changes(&old, &new);
             }
         }
-        (Opener::Dex { .. }, Opener::Dex { .. }) => diff.android = tree::android_changes(&old, &new),
+        (Opener::Dex, Opener::Dex) => diff.android = tree::android_changes(&old, &new),
         (old_open, new_open) if old_open.is_code() && new_open.is_code() => {
             if run.budget.take_image() {
                 match code::compare_code(run, &old, &new) {
@@ -579,8 +593,8 @@ fn drill_down(
             }
         }
         Some(list) => {
-            let rows = list_rows(&found, list)?;
-            let total = rows.len();
+            // Each list holds at least offset + limit rows, so the first of them are exact; the totals count all.
+            let (rows, total) = list_rows(&found, list)?;
             let page: Vec<Value> = rows.into_iter().skip(query.offset).take(limit).collect();
             let next = (query.offset + page.len() < total).then_some(query.offset + page.len());
             output.insert("list".to_owned(), json!(list));
@@ -593,8 +607,11 @@ fn drill_down(
     Ok(output)
 }
 
-/// The rows of `list` in one component's result.
-fn list_rows(found: &ComponentDiff, list: &str) -> Result<Vec<Value>, String> {
+/// The rows of `list` in one component's result, and how many the list holds in all.
+fn list_rows(found: &ComponentDiff, list: &str) -> Result<(Vec<Value>, usize), String> {
+    let total = |value: &Value, keys: &[&str]| -> usize {
+        keys.iter().map(|key| value[format!("{key}_total")].as_u64().unwrap_or(0) as usize).sum()
+    };
     let rows = |value: &Value, key: &str| value[key].as_array().cloned().unwrap_or_default();
     let tagged = |value: &Value, keys: &[&str]| -> Vec<Value> {
         keys.iter()
@@ -613,22 +630,24 @@ fn list_rows(found: &ComponentDiff, list: &str) -> Result<Vec<Value>, String> {
     match list {
         "changed" | "added" | "removed" | "unchanged" => {
             let code = found.code.as_ref().ok_or_else(|| format!("`{}` has no function comparison", found.id))?;
-            Ok(rows(code, list))
+            Ok((rows(code, list), code["functions"][list].as_u64().unwrap_or(0) as usize))
         }
         "strings" | "endpoints" => {
             if let Some(code) = &found.code {
-                return Ok(tagged(&code[list], &["added", "removed"]));
+                return Ok((tagged(&code[list], &["added", "removed"]), total(&code[list], &["added", "removed"])));
             }
             if list == "endpoints"
                 && let Some(files) = &found.files
             {
-                return Ok(tagged(&files["endpoints"], &["added", "removed"]));
+                let endpoints = &files["endpoints"];
+                return Ok((tagged(endpoints, &["added", "removed"]), total(endpoints, &["added", "removed"])));
             }
             Err(format!("`{}` has no {list} comparison", found.id))
         }
         "files" => {
             let files = found.files.as_ref().ok_or_else(|| format!("`{}` is not a filesystem", found.id))?;
-            Ok(tagged(files, &["changed", "added", "removed", "metadata_changed"]))
+            let keys = ["changed", "added", "removed", "metadata_changed"];
+            Ok((tagged(files, &keys), total(files, &keys)))
         }
         other => Err(format!(
             "unknown list `{other}` (expected changed, added, removed, unchanged, strings, endpoints or files)"
