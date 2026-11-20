@@ -1,0 +1,255 @@
+{
+  "version": 1,
+  "created": "2026-11-20",
+  "note": "Public, independently built inputs for acceptance runs. Fetched into target/acceptance/inputs by fetch.py; never committed.",
+  "inputs": [
+    {
+      "id": "openwrt-new",
+      "file": "openwrt-23.05.5-ath79-generic-tplink_archer-c7-v2-squashfs-sysupgrade.bin",
+      "url": "https://downloads.openwrt.org/releases/23.05.5/targets/ath79/generic/openwrt-23.05.5-ath79-generic-tplink_archer-c7-v2-squashfs-sysupgrade.bin",
+      "sha256": "4e22524a1a59090d8f316ad48b13a61ab46f748d9b6215ec0926f9747369fcd5",
+      "size": 6422853,
+      "origin": "OpenWrt release build (GPL-2.0 and others; built by the OpenWrt project)",
+      "used_for": [
+        "mips",
+        "carve",
+        "fs_list",
+        "diff_firmware",
+        "endpoint_inventory",
+        "privacy_surface"
+      ],
+      "truth": "unsquashfs file tree and hashes; llvm-readelf on its programs; the release manifest"
+    },
+    {
+      "id": "openwrt-old",
+      "file": "openwrt-23.05.4-ath79-generic-tplink_archer-c7-v2-squashfs-sysupgrade.bin",
+      "url": "https://downloads.openwrt.org/releases/23.05.4/targets/ath79/generic/openwrt-23.05.4-ath79-generic-tplink_archer-c7-v2-squashfs-sysupgrade.bin",
+      "sha256": "25fee2547d466dfdf66f4ce5434f7623e39daa804e44e7c356f36dc38807f687",
+      "size": 6422853,
+      "origin": "OpenWrt release build (GPL-2.0 and others; built by the OpenWrt project)",
+      "used_for": [
+        "diff_firmware"
+      ],
+      "truth": "as openwrt-new"
+    },
+    {
+      "id": "openwrt-new-manifest",
+      "file": "openwrt-23.05.5-ath79-generic.manifest",
+      "url": "https://downloads.openwrt.org/releases/23.05.5/targets/ath79/generic/openwrt-23.05.5-ath79-generic.manifest",
+      "sha256": "b5f62e6ec3ef970a8ec8e6e37389df8335c3702df759bfd4f6873d9863febcf8",
+      "size": 4360,
+      "origin": "OpenWrt release build (GPL-2.0 and others; built by the OpenWrt project)",
+      "used_for": [
+        "truth"
+      ],
+      "truth": "package versions, published by the builder"
+    },
+    {
+      "id": "openwrt-old-manifest",
+      "file": "openwrt-23.05.4-ath79-generic.manifest",
+      "url": "https://downloads.openwrt.org/releases/23.05.4/targets/ath79/generic/openwrt-23.05.4-ath79-generic.manifest",
+      "sha256": "5c5b1f8b0a0816ebcb37efc141c0869f3fc8efb75588d15fe0c1d62afa1a6ec4",
+      "size": 4355,
+      "origin": "OpenWrt release build (GPL-2.0 and others; built by the OpenWrt project)",
+      "used_for": [
+        "truth"
+      ],
+      "truth": "package versions, published by the builder"
+    },
+    {
+      "id": "openwrt-ubi",
+      "file": "openwrt-23.05.5-ath79-nand-aerohive_hiveap-121-squashfs-factory.bin",
+      "url": "https://downloads.openwrt.org/releases/23.05.5/targets/ath79/nand/openwrt-23.05.5-ath79-nand-aerohive_hiveap-121-squashfs-factory.bin",
+      "sha256": "7b0605cc54229a38433e7587de37f7bb17ae2b3b7bae4c4db39151cdd3383f5e",
+      "size": 10092544,
+      "origin": "OpenWrt release build (GPL-2.0 and others; built by the OpenWrt project)",
+      "used_for": [
+        "carve",
+        "fs_list"
+      ],
+      "truth": "uImage and UBI headers parsed by derive_truth.py"
+    },
+    {
+      "id": "openwrt-trx",
+      "file": "openwrt-23.05.5-bcm47xx-generic-standard-squashfs.trx",
+      "url": "https://downloads.openwrt.org/releases/23.05.5/targets/bcm47xx/generic/openwrt-23.05.5-bcm47xx-generic-standard-squashfs.trx",
+      "sha256": "081fa544291e80e735a24b0b28ae6ee4ccdc896b25e8e7ba30b4532e186a700c",
+      "size": 5771264,
+      "origin": "OpenWrt release build (GPL-2.0 and others; built by the OpenWrt project)",
+      "used_for": [
+        "carve",
+        "fs_list"
+      ],
+      "truth": "TRX header parsed by derive_truth.py"
+    },
+    {
+      "id": "openwrt-fit",
+      "file": "openwrt-23.05.5-mediatek-filogic-bananapi_bpi-r3-squashfs-sysupgrade.itb",
+      "url": "https://downloads.openwrt.org/releases/23.05.5/targets/mediatek/filogic/openwrt-23.05.5-mediatek-filogic-bananapi_bpi-r3-squashfs-sysupgrade.itb",
+      "sha256": "0f44eaf9bdcfd761b6e855f5c38112abf72646762cff5128dd88344807953d4e",
+      "size": 11010653,
+      "origin": "OpenWrt release build (GPL-2.0 and others; built by the OpenWrt project)",
+      "used_for": [
+        "carve",
+        "fs_list"
+      ],
+      "truth": "device-tree header and SquashFS offset parsed by derive_truth.py"
+    },
+    {
+      "id": "esp32-new",
+      "file": "ESP32_GENERIC-20241129-v1.24.1.bin",
+      "url": "https://micropython.org/resources/firmware/ESP32_GENERIC-20241129-v1.24.1.bin",
+      "sha256": "21d61b5241b2e00f9a774a797079fc287b66beb071dfaf4b6b340bf84d15f048",
+      "size": 1691664,
+      "origin": "MicroPython release build (MIT; built by the MicroPython project)",
+      "used_for": [
+        "xtensa",
+        "esp-image",
+        "diff_firmware",
+        "evaluate_function",
+        "check_claim"
+      ],
+      "truth": "the ELF and map in esp32-new-meta"
+    },
+    {
+      "id": "esp32-new-meta",
+      "file": "ESP32_GENERIC-20241129-v1.24.1.meta.zip",
+      "url": "https://micropython.org/resources/firmware/ESP32_GENERIC-20241129-v1.24.1.meta.zip",
+      "sha256": "7e9cfc6ab58a78d1b50bec41481a4c742862f1ba10be6feb36057c54cbbe3f07",
+      "size": 8141343,
+      "origin": "MicroPython release build (MIT; built by the MicroPython project)",
+      "used_for": [
+        "truth",
+        "xtensa-elf"
+      ],
+      "truth": "function symbols of the ELF the image was made from"
+    },
+    {
+      "id": "esp32-old",
+      "file": "ESP32_GENERIC-20241025-v1.24.0.bin",
+      "url": "https://micropython.org/resources/firmware/ESP32_GENERIC-20241025-v1.24.0.bin",
+      "sha256": "648e655fdaa8c31ece4e8f2a5c7815b015a7bca1c8db56246287799164ad9bff",
+      "size": 1691408,
+      "origin": "MicroPython release build (MIT; built by the MicroPython project)",
+      "used_for": [
+        "diff_firmware"
+      ],
+      "truth": "the ELF and map in esp32-old-meta"
+    },
+    {
+      "id": "esp32-old-meta",
+      "file": "ESP32_GENERIC-20241025-v1.24.0.meta.zip",
+      "url": "https://micropython.org/resources/firmware/ESP32_GENERIC-20241025-v1.24.0.meta.zip",
+      "sha256": "7ddbaf74303f6b6b0febc2e690daacf331e9c84f809ec6009245ca187dc6b182",
+      "size": 8140869,
+      "origin": "MicroPython release build (MIT; built by the MicroPython project)",
+      "used_for": [
+        "truth"
+      ],
+      "truth": "function symbols"
+    },
+    {
+      "id": "esp8266",
+      "file": "ESP8266_GENERIC-20241129-v1.24.1.bin",
+      "url": "https://micropython.org/resources/firmware/ESP8266_GENERIC-20241129-v1.24.1.bin",
+      "sha256": "05fb2a29ce4351632972a4c9812bd8055fe7e4dd793f71b1fd86296e90d5c3ab",
+      "size": 635956,
+      "origin": "MicroPython release build (MIT; built by the MicroPython project)",
+      "used_for": [
+        "xtensa",
+        "esp-image"
+      ],
+      "truth": "the ELF and map in esp8266-meta"
+    },
+    {
+      "id": "esp8266-meta",
+      "file": "ESP8266_GENERIC-20241129-v1.24.1.meta.zip",
+      "url": "https://micropython.org/resources/firmware/ESP8266_GENERIC-20241129-v1.24.1.meta.zip",
+      "sha256": "3e524f69754231303dc826a2bc305646c44d472c1fa75e822fc483b29668cfa3",
+      "size": 1991828,
+      "origin": "MicroPython release build (MIT; built by the MicroPython project)",
+      "used_for": [
+        "truth",
+        "xtensa-elf"
+      ],
+      "truth": "function symbols"
+    },
+    {
+      "id": "zlib-new",
+      "file": "zlib1g_1.2.13.dfsg-1_mipsel.deb",
+      "url": "https://snapshot.debian.org/file/f06d6256df0d8219cb381fc6c549a0975f383074",
+      "sha256": "f00f85c33e27d954d4659463852e0fd60d473d6eb5a5dba639652b26ae35f25a",
+      "size": 77784,
+      "origin": "Debian package (zlib licence; built by Debian buildd)",
+      "used_for": [
+        "mips",
+        "evaluate_function",
+        "check_claim",
+        "diff_firmware"
+      ],
+      "truth": "the matching debug file in zlib-new-dbg (same build ID) and zlib's documented behaviour"
+    },
+    {
+      "id": "zlib-new-dbg",
+      "file": "zlib1g-dbgsym_1.2.13.dfsg-1_mipsel.deb",
+      "url": "https://snapshot.debian.org/file/1fbe3b5929c033efcb6e1c5d030109addc3c06d2",
+      "sha256": "c54c395ac5a897401d716c7fc39b70ae520efa3b3b42cbb43ce12ff7f0ec4b6d",
+      "size": 109288,
+      "origin": "Debian package (zlib licence; built by Debian buildd)",
+      "used_for": [
+        "truth"
+      ],
+      "truth": "symbols and DWARF"
+    },
+    {
+      "id": "zlib-old",
+      "file": "zlib1g_1.2.11.dfsg-2+deb11u2_mipsel.deb",
+      "url": "https://snapshot.debian.org/file/4e124f5983f4f71c6f965dd960ce37d6a18d75c2",
+      "sha256": "48546c15a413c696cb62fc1874754ee23ce7865450997ce58f069a697cb79df3",
+      "size": 88748,
+      "origin": "Debian package (zlib licence; built by Debian buildd)",
+      "used_for": [
+        "diff_firmware"
+      ],
+      "truth": "the matching debug file in zlib-old-dbg"
+    },
+    {
+      "id": "zlib-old-dbg",
+      "file": "zlib1g-dbgsym_1.2.11.dfsg-2+deb11u2_mipsel.deb",
+      "url": "https://snapshot.debian.org/file/9352b86ff293440f25e51044d4ed7225e3b0d562",
+      "sha256": "559d1352500e075983db765f4e264360e605637682b95d5235a0635ebeb2ba6e",
+      "size": 101224,
+      "origin": "Debian package (zlib licence; built by Debian buildd)",
+      "used_for": [
+        "truth"
+      ],
+      "truth": "symbols and DWARF"
+    },
+    {
+      "id": "apk-new",
+      "file": "com.simplemobiletools.flashlight_66.apk",
+      "url": "https://f-droid.org/repo/com.simplemobiletools.flashlight_66.apk",
+      "sha256": "b4cd07c40a3d5711461670a2f460a1447acf3836c0e90471b7ba5c8b4c2f9bb3",
+      "size": 9960893,
+      "origin": "F-Droid build of Simple Flashlight (GPL-3.0)",
+      "used_for": [
+        "android",
+        "diff_firmware",
+        "privacy_surface"
+      ],
+      "truth": "ZIP entries; version from F-Droid; manifest fields need aapt2 or apkanalyzer"
+    },
+    {
+      "id": "apk-old",
+      "file": "com.simplemobiletools.flashlight_65.apk",
+      "url": "https://f-droid.org/repo/com.simplemobiletools.flashlight_65.apk",
+      "sha256": "551b00eab45623e40602ac49971eccca1a2b581bd9178545e5d2c9b0642127bb",
+      "size": 9768608,
+      "origin": "F-Droid build of Simple Flashlight (GPL-3.0)",
+      "used_for": [
+        "diff_firmware"
+      ],
+      "truth": "as apk-new"
+    }
+  ]
+}
