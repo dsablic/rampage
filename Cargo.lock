@@ -4992,6 +4992,7 @@ name = "rampage-worker"
 version = "1.8.0"
 dependencies = [
  "rampage-api",
+ "rampage-arch",
  "rampage-decompiler",
  "rampage-loaders",
  "serde",

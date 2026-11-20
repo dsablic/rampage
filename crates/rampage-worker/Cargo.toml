@@ -12,6 +12,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 rampage-api.workspace = true
+rampage-arch.workspace = true
 rampage-loaders.workspace = true
 
 [[test]]

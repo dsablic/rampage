@@ -34,7 +34,7 @@ pub use metrics::{
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 /// Parent-owned cleanup proof, independent of result category and diagnostic metrics. Confirmed covers
 /// the supported owned group and direct-root reap, not descendants outside the supervisor's group boundary.
@@ -70,7 +70,9 @@ pub struct WorkerRequest {
     #[serde(default)]
     pub options: WorkerOptions,
     pub mappings: Vec<WorkerMapping>,
-    #[serde(default)]
+    /// On the wire, one packed string ([`encode_code_modes`]), not a JSON node per point: a large Cortex-M image
+    /// has hundreds of thousands of points, past the request's node bound.
+    #[serde(default, with = "packed_code_modes")]
     pub code_modes: Vec<WorkerCodeMode>,
     /// Applied in order, so a later type/prototype can depend on an earlier declaration or symbol.
     #[serde(default)]
@@ -119,11 +121,201 @@ pub struct WorkerMapping {
     pub executable: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerCodeMode {
     pub address: u64,
     pub thumb: bool,
+}
+
+/// Packs code-mode points, in order, as lowercase hexadecimal: per point, the zig-zag LEB128 varint of its
+/// address minus the previous point's (wrapping, from 0), then one byte, 1 for Thumb and 0 for ARM. Any list, in
+/// any order and with repeats, decodes back to exactly itself ([`decode_code_modes`]).
+pub fn encode_code_modes(modes: &[WorkerCodeMode]) -> String {
+    let mut bytes = Vec::with_capacity(modes.len() * 4);
+    let mut previous = 0u64;
+    for mode in modes {
+        let delta = mode.address.wrapping_sub(previous) as i64;
+        let mut zigzag = ((delta << 1) ^ (delta >> 63)) as u64;
+        loop {
+            let byte = (zigzag & 0x7f) as u8;
+            zigzag >>= 7;
+            if zigzag == 0 {
+                bytes.push(byte);
+                break;
+            }
+            bytes.push(byte | 0x80);
+        }
+        bytes.push(u8::from(mode.thumb));
+        previous = mode.address;
+    }
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        text.push(char::from_digit(u32::from(byte >> 4), 16).expect("nibble"));
+        text.push(char::from_digit(u32::from(byte & 0xf), 16).expect("nibble"));
+    }
+    text
+}
+
+/// The points [`encode_code_modes`] packed into `text`. Refuses anything it would not have written: uppercase or
+/// odd-length hex, a varint over 64 bits or not in its shortest form, a mode byte other than 0 or 1, a cut point.
+pub fn decode_code_modes(text: &str) -> Result<Vec<WorkerCodeMode>, String> {
+    let digits = text.as_bytes();
+    if digits.len() % 2 != 0 {
+        return Err("packed code modes have an odd number of hexadecimal digits".into());
+    }
+    let nibble = |digit: u8| match digit {
+        b'0'..=b'9' => Ok(digit - b'0'),
+        b'a'..=b'f' => Ok(digit - b'a' + 10),
+        _ => Err("packed code modes are not lowercase hexadecimal".to_owned()),
+    };
+    let mut bytes = Vec::with_capacity(digits.len() / 2);
+    for pair in digits.chunks_exact(2) {
+        bytes.push(nibble(pair[0])? << 4 | nibble(pair[1])?);
+    }
+    let mut modes = Vec::new();
+    let mut previous = 0u64;
+    let mut at = 0;
+    while at < bytes.len() {
+        let mut zigzag = 0u64;
+        let mut shift = 0u32;
+        loop {
+            let byte = *bytes.get(at).ok_or("packed code mode cut inside its address")?;
+            at += 1;
+            let bits = u64::from(byte & 0x7f);
+            if (shift == 63 && bits > 1) || shift > 63 {
+                return Err("packed code mode address exceeds 64 bits".into());
+            }
+            zigzag |= bits << shift;
+            if byte & 0x80 == 0 {
+                if byte == 0 && shift > 0 {
+                    return Err("packed code mode address is not in its shortest form".into());
+                }
+                break;
+            }
+            shift += 7;
+        }
+        let delta = ((zigzag >> 1) as i64) ^ -((zigzag & 1) as i64);
+        let address = previous.wrapping_add(delta as u64);
+        let thumb = match bytes.get(at) {
+            Some(0) => false,
+            Some(1) => true,
+            Some(_) => return Err("packed code mode is neither ARM (0) nor Thumb (1)".into()),
+            None => return Err("packed code mode cut before its mode".into()),
+        };
+        at += 1;
+        modes.push(WorkerCodeMode { address, thumb });
+        previous = address;
+    }
+    Ok(modes)
+}
+
+mod packed_code_modes {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use super::WorkerCodeMode;
+
+    pub(super) fn serialize<S: Serializer>(modes: &[WorkerCodeMode], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&super::encode_code_modes(modes))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<WorkerCodeMode>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        super::decode_code_modes(&text).map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod packed_code_mode_tests {
+    use super::*;
+
+    fn points(pairs: &[(u64, bool)]) -> Vec<WorkerCodeMode> {
+        pairs.iter().map(|&(address, thumb)| WorkerCodeMode { address, thumb }).collect()
+    }
+
+    #[test]
+    fn any_point_list_decodes_back_to_exactly_itself() {
+        let mut lists = vec![
+            Vec::new(),
+            points(&[(0, false)]),
+            points(&[(u64::MAX, true), (0, false), (u64::MAX, true), (1 << 63, false), ((1 << 63) - 1, true)]),
+            points(&[(0x8000_0000, true), (0x8000_0000, true), (0x10, false), (0xffff_ffff, true)]),
+        ];
+        // Pseudo-random lists: sorted runs like a Raw image's, unsorted jumps, repeats and every mode mix.
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..64 {
+            let length = (next() % 2000) as usize;
+            let mut address = next();
+            let list = (0..length)
+                .map(|_| {
+                    address = match next() % 4 {
+                        0 => next(),
+                        1 => address,
+                        _ => address.wrapping_add(next() % 64),
+                    };
+                    WorkerCodeMode { address, thumb: next() % 2 == 0 }
+                })
+                .collect();
+            lists.push(list);
+        }
+        for list in lists {
+            let packed = encode_code_modes(&list);
+            assert_eq!(decode_code_modes(&packed).unwrap(), list);
+        }
+    }
+
+    #[test]
+    fn malformed_packing_is_refused() {
+        let good = encode_code_modes(&points(&[(0x1000, true), (0x0800, false)]));
+        assert!(decode_code_modes(&good).is_ok());
+        for bad in [
+            format!("{good}0"),
+            good.to_uppercase(),
+            good[..good.len() - 2].to_owned(),
+            "800001".to_owned(), // a varint whose last byte is zero: not the shortest form
+            "0002".to_owned(),   // a mode byte that is neither 0 nor 1
+            "ffffffffffffffffff7f01".to_owned(), // more than 64 bits
+            "80".to_owned(),     // cut inside the address
+            "zz".to_owned(),
+        ] {
+            assert!(decode_code_modes(&bad).is_err(), "{bad}");
+        }
+        // From 0, u64::MAX is a step of -1: zig-zag 1.
+        assert_eq!(decode_code_modes("0101").unwrap(), points(&[(u64::MAX, true)]));
+    }
+
+    /// 500,000 points used to be 1.5 M JSON nodes, past the request's 1 M-node preflight; packed they are one
+    /// string, and the request decodes to the same points.
+    #[test]
+    fn a_request_with_hundreds_of_thousands_of_points_passes_the_wire_preflight() {
+        let code_modes: Vec<_> =
+            (0..500_000u64).map(|index| WorkerCodeMode { address: 0x10000 + 6 * index, thumb: true }).collect();
+        let request = WorkerRequest {
+            version: PROTOCOL_VERSION,
+            arch: "arm".into(),
+            big_endian: false,
+            options: WorkerOptions::default(),
+            mappings: Vec::new(),
+            code_modes: code_modes.clone(),
+            operations: Vec::new(),
+            decompile: WorkerFunction { address: 0x10000, name: "f".into(), thumb: true },
+            tokens: true,
+            validate_only: false,
+            type_query: None,
+        };
+        let bytes = serde_json::to_vec(&request).unwrap();
+        let decoded: WorkerRequest = crate::layout_wire::decode_worker(&bytes, |bytes| {
+            serde_json::from_slice(bytes).map_err(|error| error.to_string())
+        })
+        .unwrap();
+        assert_eq!(decoded.code_modes, code_modes);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

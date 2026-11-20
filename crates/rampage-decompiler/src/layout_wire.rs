@@ -163,7 +163,7 @@ impl<'a> Scanner<'a> {
             return MAX_TAG_BYTES;
         }
         if matches!(self.policy, Policy::Worker)
-            && (key.is(b"hex_bytes") || key.is(b"declaration") || key.is(b"declarations"))
+            && (key.is(b"hex_bytes") || key.is(b"code_modes") || key.is(b"declaration") || key.is(b"declarations"))
         {
             return MAX_REQUEST_BYTES;
         }

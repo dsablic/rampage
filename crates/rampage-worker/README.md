@@ -7,6 +7,15 @@ cancellation, resource limits, and child reaping without initializing Ghidra in 
 The executable is resolved from `WorkerConfig::executable`, then `RAMPAGE_WORKER`, then `rampage-worker` beside the
 calling application's executable. Missing workers are explicit errors; there is no in-process fallback.
 
+## Protocol version 15
+
+Version 15 packs `code_modes` into one lowercase hexadecimal string instead of an array of objects: per point, the
+zig-zag LEB128 varint of its address minus the previous point's (wrapping, from 0), then one byte, `01` for Thumb
+and `00` for ARM. A large Raw Cortex-M image has hundreds of thousands of points, which as one JSON object each
+passed the request's 1 M-node bound. The packing decodes back to exactly the list it was made from, in order and
+with repeats; anything else (uppercase or odd-length hex, an over-long or not-shortest varint, another mode byte, a
+cut point) is refused. An empty list is `""`.
+
 ## Protocol version 14
 
 Version 14 adds `default_prototype`: the compiler specification's prototype model functions without their own get
@@ -120,14 +129,14 @@ consecutive hexadecimal pairs with no prefix. Mapping permissions and zero-fill 
     "writable": false,
     "executable": true
   }],
-  "code_modes": [],
+  "code_modes": "",
   "operations": [],
   "decompile": { "address": 4096, "name": "fixture", "thumb": false },
   "tokens": true
 }
 ```
 
-The worker installs initial `code_modes`, then replays `operations` in their supplied order:
+The worker installs initial `code_modes` (packed, see version 15), then replays `operations` in their supplied order:
 
 | `op` | Fields |
 | --- | --- |
