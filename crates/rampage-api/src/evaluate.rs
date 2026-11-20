@@ -471,6 +471,8 @@ struct Segment<'a> {
     size: u64,
     file: &'a [u8],
     execute: bool,
+    /// Writable data (not code): what a run reads there may have been changed by earlier code.
+    data: bool,
 }
 
 /// The image's segments (copy-on-write), the regions, and stand-in addresses for import slots.
@@ -496,6 +498,65 @@ struct ImageRam<'a> {
     /// Code sections inside the null page of an ELF PIE or shared object (linked at 0, as GCC links MIPS PIEs),
     /// address 0 excluded: their instructions may be fetched, while loads, stores and other fetches there fault.
     guarded_code: Vec<std::ops::Range<u64>>,
+    /// For a stateful run ([`Project::evaluate_stateful`]): which image bytes were written, and the reads of writable
+    /// data no write set.
+    track: Option<Tracking>,
+}
+
+/// Image bytes written in a stateful run (by its setup runs or itself), and reads of writable data that none wrote.
+#[derive(Debug, Default)]
+struct Tracking {
+    /// Per image page, a bit per byte.
+    written: HashMap<u64, Box<[u64; 64]>>,
+    reads: DataReads,
+}
+
+/// Reads of writable data (not code) that no write of the run or its setup set, by kind: `unset` bytes have no
+/// file contents (`.bss`, Raw RAM), so the program sets them at run time; `initial` bytes hold the file's initial
+/// values, which the program may have changed before the call.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DataReads {
+    /// The first distinct addresses (8-byte granules) of each kind.
+    pub unset: Vec<u64>,
+    pub initial: Vec<u64>,
+    pub unset_count: u64,
+    pub initial_count: u64,
+}
+
+/// Distinct read addresses [`DataReads`] keeps of each kind.
+const MAX_DATA_READS: usize = 8;
+
+/// The image as a stateful run left it: its written pages and which bytes were written, to start a later run from.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ImageState {
+    pages: HashMap<u64, Box<[u8]>>,
+    written: HashMap<u64, Box<[u64; 64]>>,
+}
+
+impl Tracking {
+    fn set(&mut self, address: u64) {
+        let bits = self.written.entry(address / PAGE).or_insert_with(|| Box::new([0; 64]));
+        let offset = (address % PAGE) as usize;
+        bits[offset / 64] |= 1 << (offset % 64);
+    }
+
+    fn is_set(&self, address: u64) -> bool {
+        let offset = (address % PAGE) as usize;
+        self.written.get(&(address / PAGE)).is_some_and(|bits| bits[offset / 64] & (1 << (offset % 64)) != 0)
+    }
+
+    fn note(&mut self, address: u64, unset: bool) {
+        let (list, count) = if unset {
+            (&mut self.reads.unset, &mut self.reads.unset_count)
+        } else {
+            (&mut self.reads.initial, &mut self.reads.initial_count)
+        };
+        *count += 1;
+        let granule = address & !7;
+        if list.len() < MAX_DATA_READS && !list.contains(&granule) {
+            list.push(granule);
+        }
+    }
 }
 
 /// Whether the image is linked to run with mapped contents in page 0, as Cortex-M and other firmware images commonly
@@ -527,6 +588,7 @@ impl<'a> ImageRam<'a> {
                     size: segment.size,
                     file: &image[start..end],
                     execute: segment.perms.execute,
+                    data: segment.perms.write && !segment.perms.execute,
                 }
             })
             .collect::<Vec<_>>();
@@ -559,6 +621,20 @@ impl<'a> ImageRam<'a> {
             page_limit: MAX_WRITTEN_PAGES,
             last_fault: None,
             heap: None,
+            track: None,
+        }
+    }
+
+    /// Notes a read of the image byte at `address`, which `segment` holds, in a stateful run.
+    fn track_read(&mut self, address: u64) {
+        let Some(track) = &self.track else { return };
+        if track.is_set(address) {
+            return;
+        }
+        let Some(segment) = self.segment(address).filter(|segment| segment.data) else { return };
+        let unset = address - segment.start >= segment.file.len() as u64;
+        if let Some(track) = &mut self.track {
+            track.note(address, unset);
         }
     }
 
@@ -657,7 +733,12 @@ impl Ram for ImageRam<'_> {
         for (index, byte) in out.iter_mut().enumerate() {
             let at = address.wrapping_add(index as u64);
             match self.read_image_byte(at) {
-                Some(value) => *byte = value,
+                Some(value) => {
+                    *byte = value;
+                    if self.track.is_some() {
+                        self.track_read(at);
+                    }
+                }
                 None => {
                     if let Some(name) = self.stand_in(at) {
                         return Err(Fault::ExternalRead { address: at, name: name.clone() });
@@ -694,6 +775,9 @@ impl Ram for ImageRam<'_> {
         }
         for (index, &byte) in bytes.iter().enumerate() {
             let at = address.wrapping_add(index as u64);
+            if let Some(track) = &mut self.track {
+                track.set(at);
+            }
             for slot in at.saturating_sub(u64::from(self.pointer_bytes) - 1)..=at {
                 if self.slots.contains_key(&slot) {
                     self.written_slots.insert(slot);
@@ -1021,6 +1105,9 @@ pub(crate) struct Probed {
     pub texts: Vec<ProbedText>,
     /// Imports without a model that a replay skipped (returning 0) before the replayed call, with call counts.
     pub skipped: Vec<(String, u64)>,
+    /// A stateful run's image as it ended, and its reads of writable data nothing in it wrote.
+    pub state: Option<ImageState>,
+    pub reads: DataReads,
 }
 
 #[derive(Debug)]
@@ -1049,6 +1136,27 @@ impl Project {
         &self,
         request: &EvaluateRequest,
         probe: Option<Probe>,
+    ) -> Result<(EvaluateReport, Probed), ApiError> {
+        self.evaluate_with(request, probe, None)
+    }
+
+    /// `evaluate_function` starting from `state` (the image as an earlier stateful run left it, or the file's for a
+    /// default state), returning the image as this run leaves it and the reads of writable data that neither run
+    /// wrote: a result that depends on them depends on what the program did before the call.
+    pub(crate) fn evaluate_stateful(
+        &self,
+        request: &EvaluateRequest,
+        state: &ImageState,
+    ) -> Result<(EvaluateReport, ImageState, DataReads), ApiError> {
+        let (report, probed) = self.evaluate_with(request, None, Some(state))?;
+        Ok((report, probed.state.unwrap_or_default(), probed.reads))
+    }
+
+    fn evaluate_with(
+        &self,
+        request: &EvaluateRequest,
+        probe: Option<Probe>,
+        carried: Option<&ImageState>,
     ) -> Result<(EvaluateReport, Probed), ApiError> {
         let binary = &self.binary;
         let replay = probe.and_then(|probe| probe.replay);
@@ -1142,6 +1250,10 @@ impl Project {
         };
 
         let mut ram = ImageRam::new(binary, width);
+        if let Some(state) = carried {
+            ram.pages = state.pages.clone();
+            ram.track = Some(Tracking { written: state.written.clone(), reads: DataReads::default() });
+        }
         let bases = candidates(width);
         let stack_base = ram.free_range(&bases, STACK_BYTES).ok_or_else(|| invalid("no free range for the stack"))?;
         ram.map(stack_base, vec![0; STACK_BYTES as usize]);
@@ -1619,7 +1731,7 @@ impl Project {
             })
             .collect();
         skipped.truncate(MAX_CALL_ROWS);
-        let mut probed = Probed { arguments: replay_arguments, texts: Vec::new(), skipped };
+        let mut probed = Probed { arguments: replay_arguments, texts: Vec::new(), skipped, ..Probed::default() };
         // A replay that returned without reaching its call ran past it some other way: nothing to probe.
         let reached = replay.is_none() || replay_return.is_some();
         if probe.is_some() && stop == StopReason::Returned && reached {
@@ -1683,6 +1795,11 @@ impl Project {
                 }
             }),
         };
+        if let Some(track) = run.machine.ram.track.take() {
+            probed.state =
+                Some(ImageState { pages: std::mem::take(&mut run.machine.ram.pages), written: track.written });
+            probed.reads = track.reads;
+        }
         Ok((report, probed))
     }
 
