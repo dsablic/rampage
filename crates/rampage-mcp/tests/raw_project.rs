@@ -101,6 +101,10 @@ async fn headerless_files_and_unknown_profiles_say_what_to_use_instead() {
     let (text, failed) = call(&client, "binary_info", json!({ "path": path })).await;
     assert!(failed && text.contains("Unknown file magic"), "{text}");
     assert!(text.contains("inspect_raw_code") && text.contains("\"profile\":\"msp430\""), "{text}");
+    // Acceptance pass: an agent asked what changed between two ESP32 flash dumps called diff_builds, whose error did
+    // not name diff_firmware, and never found it.
+    let (text, failed) = call(&client, "diff_builds", json!({ "path": path, "other": path })).await;
+    assert!(failed && text.contains("Unknown file magic") && text.contains("use diff_firmware"), "{text}");
     // Seventh Haiku run: `triage` answers such a file at container level instead of with the error.
     for tool in ["triage", "triage_report"] {
         let (text, failed) = call(&client, tool, json!({ "path": path })).await;

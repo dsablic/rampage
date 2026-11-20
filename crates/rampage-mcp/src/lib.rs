@@ -997,6 +997,10 @@ impl RampageServer {
                         .map(|value| (value.to_string(), false))
                         .map_err(|_| reason);
                 }
+                // Agents reach for the core diff_builds on two firmware files; the comparison they need is in a group.
+                if name == "diff_builds" && matches!(error, rampage_api::ApiError::Load { .. }) {
+                    return Err(format!("{}. {DIFF_FIRMWARE_HINT}", open_error(&error)));
+                }
                 Err(open_error(&error))
             };
             let mut project = if tool.reads_annotations {
@@ -1071,6 +1075,11 @@ impl RampageServer {
         self.session.open_raw(path, &request).map_err(|error| format!("`raw`: {}", error_text(&error)))
     }
 }
+
+/// Appended to a diff_builds open error: it compares two executables, and firmware has its own comparison.
+const DIFF_FIRMWARE_HINT: &str = "diff_builds compares two executables; to compare two versions of firmware (a \
+    flash dump, update file, filesystem image, APK or Raw image), use diff_firmware (enable_tools group carve), \
+    which finds their components, files and code and compares each";
 
 /// Why a native open failed; for a file without a recognised header, also how to read it as headerless code.
 fn open_error(error: &rampage_api::ApiError) -> String {
