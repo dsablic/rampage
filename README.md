@@ -194,6 +194,11 @@ Areas marked *experimental* may change in any release; see the [stability policy
   firmware tree names, `endpoint_blocklist` writes them as a router blocklist, and `privacy_surface` maps what a
   program, an Android app or a whole extracted tree can capture, where it can send it and what starts it at boot.
   See [how to check what a device records and where it sends it](docs/device-privacy-check.md).
+- **Claim checking (experimental):** `check_claim` checks what an agent states before it is reported, such as
+  "sub_1234 computes CRC-32", "main calls decrypt_config before connect", "this returns x*3+1", or "this string is
+  only used by the updater". Each claim is answered verified, refuted with a counterexample, or unknown with what
+  would decide it, by running the function on generated inputs against Rust reference algorithms, recomputing
+  checksums, and reading the call graph, references and types. See [checking claims](docs/claim-checking.md).
 - **Update diffing (experimental):** `diff_firmware` compares two versions of a device update in one call, whatever
   their form (update containers, ESP flash dumps, filesystem images, APKs, executables, directories): components
   and files added, removed or changed, and per changed program the functions (matched, with confidence), strings,

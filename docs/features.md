@@ -442,6 +442,27 @@ integrity checks and capture sources one version has and the other lacks. A comp
 one function instruction by instruction. Time, images analysed and bytes read are budgeted, and whatever a budget
 leaves out is listed. See [firmware version diffing](firmware-diffing.md).
 
+## Claim checking
+
+`check_claim` (MCP core group, *experimental*) checks structured claims about a binary and answers each verified,
+refuted (with a counterexample) or unknown (with what would decide it), with the evidence, the method and a
+confidence: `exact`, `sampled`, `static` or `heuristic`.
+
+- **`returns`:** one call's result, run with `evaluate_function`.
+- **`computes`:** an algorithm or an integer expression, run on seeded generated inputs (empty, single-byte, the CRC
+  catalogue's check string, block boundaries, long buffers, and integer edge cases) and compared with Rust reference
+  implementations: parameterised CRCs of 8 to 64 bits with catalogue presets, Adler/Fletcher/FNV/djb2 and sums,
+  SHA-256, SHA-1, MD5, one SHA-256 block, and byte transforms.
+- **`calls`:** directly, through stubs, through callees to a depth, and one call before another on every CFG path.
+- **`references`:** who references an address or a string, through pointers in data.
+- **`constant`:** an immediate or loaded literal in a function's code.
+- **`region`:** a stored checksum recomputed over a range, or a check `integrity_checks` found.
+- **`lock`:** a lock mechanism deciding in or guarding a function.
+- **`layout`:** a type's member offset and size.
+
+Setup calls run an initialiser first. A mismatch that may come from data the program sets at run time is unknown,
+never refuted. Batches of up to 32 claims are budgeted. See [checking claims](claim-checking.md).
+
 ## Endpoint inventory
 
 `endpoint_inventory` (MCP `carve` group) lists the network endpoints a binary, an APK or DEX file, or an extracted

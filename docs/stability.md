@@ -56,6 +56,8 @@ These may change or disappear in any minor release. Each is marked as experiment
   but its categories, result fields and confidence rules may change as it is measured on more firmware.
 - **`diff_firmware`:** firmware version diffing. Its name and arguments are pinned in the contract snapshot, but
   its component ids, result fields and pairing rules may change as it is used on more updates.
+- **`check_claim`:** claim verification. Its name and arguments are pinned in the contract snapshot, but its claim
+  kinds and fields, evidence fields and the rules that decide a verdict may change as it is used on more binaries.
 - **`evaluate_function`:** the function interpreter. Its name and arguments are pinned in the contract snapshot,
   but its result fields, stop reasons and the conventions it chooses may change as it is verified on more code.
 - **`rampage-eval`:** the evaluation and benchmark harness, its commands and its report formats.

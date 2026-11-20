@@ -12,6 +12,8 @@ is, then the [tutorial](getting-started.md).
 
 - [Read the code in a firmware update file](firmware-walkthrough.md): from a vendor container to a compressed
   Cortex-M image opened at its load address, with startup copies mapped, decompiled and its checksums checked.
+- [Check a claim about a binary](claim-checking.md): verify, refute or leave unknown what an agent states about
+  a function, a call, a reference, a checksum or a layout, with evidence and a counterexample (*experimental*).
 - [Compare two versions of a firmware update](firmware-diffing.md): what an update changes, from container
   layout and partitions to files, functions, endpoints, lock mechanisms and integrity checks (*experimental*).
 - [Analyse headerless code as a Raw project](raw-code.md): choose a base address, open a compressed image, map

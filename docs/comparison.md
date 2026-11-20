@@ -66,7 +66,11 @@ These are design facts, not measured advantages.
   REA waits for Ghidra's import and auto-analysis.
 - **Output shaped for context.** Every rampage tool has a size cap, pages large results with explicit cursors
   and totals, and declares a result size Claude Code will display whole. Tools are grouped, so a session lists
-  47 tools at first (105 with every group) and enables the rest on demand.
+  48 tools at first (106 with every group) and enables the rest on demand.
+- **Claims checked, not trusted.** `check_claim` takes a structured claim ("this computes CRC-32", "main calls
+  decrypt_config before connect", "this string is only used by the updater") and answers verified, refuted with a
+  counterexample, or unknown with what would decide it, by running the code, recomputing bytes and reading the
+  call graph and references. Neither IDA, Ghidra nor REA checks an agent's claim mechanically.
 - **Update diffing.** `diff_firmware` compares two vendor update files in one call, through containers, flash
   partitions and filesystems down to the programs inside; Ghidra's Version Tracking and BinDiff compare one pair of
   programs the user has already extracted and imported.

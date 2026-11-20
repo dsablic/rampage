@@ -96,12 +96,12 @@ By default the server lists `core` plus `enable_tools`, keeping the initial tool
 that answer common first questions, such as `language_metadata` and `class_evidence` for class names and
 hierarchies, are in `core` so that a client deferring schemas still sees their names.
 
-A default session lists 47 tools: the 46 in `core` plus `enable_tools`. Enabling every group lists 105. The
+A default session lists 48 tools: the 47 in `core` plus `enable_tools`. Enabling every group lists 106. The
 `debug` group adds 14 tools (16 with `--debug-writes`), `--observations` adds `report_observation`, and a
 `--corpus` server lists `enable_tools` and the 4 `improve` tools only.
 
 - `core`: `triage`, `binary_info`, `list_functions`, `disassemble`, `decompile`, `evaluate_function`,
-  `function_graph`,
+  `check_claim`, `function_graph`,
   `assemble`, `patch_bytes`, `revert_patch`, `list_patches`, `export_patched`,
   `function_summary`, `xrefs`, `search`, `list_strings`, `list_imports`, `list_exports`, `rename`, `set_comment`,
   `annotate_batch`, `batch`, `check_names`, `undo`, `redo`, `discard_undo`, `list_annotations`, `record_finding`,
@@ -469,6 +469,32 @@ also lists where every argument went and the functions called. Limits: `max_step
 operations, x87 transcendental functions (`fsin`, `fcos`, ...) and NEON arithmetic left as processor operations
 stop with `user_op`; a fused multiply-add rounds twice, as Sleigh's p-code describes it.
 
+`check_claim` (core, experimental, raw-capable) takes `claims`, 1-32 objects each with a `kind`. It returns
+`results`, one per claim in order, with:
+
+- `index`, `id` (when given) and `kind`;
+- `verdict`: `verified`, `refuted`, `unknown` or `invalid`;
+- `confidence`: `exact`, `sampled`, `static` or `heuristic`, absent for unknown and invalid;
+- `negated` (for `not: true`), `method` and `evidence`;
+- `reason` and `needs` for an unknown;
+- `elapsed_ms`.
+
+The report adds counts per verdict, `elapsed_ms` and `timeout_ms`. The kinds are:
+
+- `returns`: `evaluate_function` against a stated `value`, `float` or `buffers`;
+- `computes`: an `algorithm` (CRC presets or `{crc: {...}}`, checksums, hashes, digests, `sha256_block`,
+  transforms) or an `expression` at `bits`, run on `samples` seeded generated inputs, with argument roles in
+  `args` and `setup` calls first;
+- `calls`: `callee` within `depth`, or before another call;
+- `references`: a `target` or `string`, with `by` or `only_by`;
+- `constant`;
+- `region`: recompute at `stored`, or a detected check;
+- `lock`;
+- `layout`.
+
+The bounds: `timeout_ms` (default 60000, at most 300000) covers the whole call, and each evaluation also stops at
+`max_steps`. The grammar, verdict rules and examples are in [checking claims](claim-checking.md).
+
 `string_decoding` with `evaluate: true` also runs each candidate decoder on the blobs passed to it (at most 16
 pairs, 200,000 steps and 500 ms per run, 5 s in all): it replays the caller's block holding the call through the
 call's return (imports before the call without a model return 0, except on 32-bit PE, where the replay
@@ -703,7 +729,7 @@ section is the reference.
 
 Raw-capable tools (`binary_info`, `list_functions`, `disassemble`, `function_graph`, `xrefs`, `search`,
 `list_strings`, `analysis_diagnostics`, `entry_diagnostics`, `capabilities`, `rename`, `set_comment`,
-`annotate_batch`, `list_annotations`, `undo`, `redo`, `decompile`, `evaluate_function`, `import_svd`,
+`annotate_batch`, `list_annotations`, `undo`, `redo`, `decompile`, `evaluate_function`, `check_claim`, `import_svd`,
 `peripheral_access`, `list_patches`, `patch_bytes`, `revert_patch`, `integrity_checks`, `export_image`,
 `identify_functions`, `lock_mechanisms`, `function_summary`, `find_crypto`, `triage`, `triage_report`,
 `find_main`, and the file tool `inspect_data`) take an optional `raw` object in place of a native image. `find_crypto`, `triage` and

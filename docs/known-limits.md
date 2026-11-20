@@ -142,6 +142,15 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   is not interrupted once started. A change that only moves code, data or padding is not reported; a change in instruction selection for
   the same source (another register, a narrower encoding the normalisation does not cover) is. See
   [firmware version diffing](firmware-diffing.md#limits).
+- `check_claim` (experimental) can only be as certain as its method.
+  - A `computes` verdict is verified on the generated inputs only (`sampled`).
+  - Static kinds see discovered code and recorded references, not run time.
+  - `calls … before` does not check whether a path is feasible, so a mixed answer stays unknown.
+  - An absent reference is never refuted. An absent constant is refuted only on x86 and x86-64, for values of at
+    least 0x10000.
+  - `computes` cannot yet state an end-pointer argument, a context structure or a length in words.
+
+  See [checking claims](claim-checking.md#limits).
 - `endpoint_inventory` matches endpoints lexically: addresses built at run time, encrypted or compressed data and
   IPv4 addresses stored as integers in code are not found. `privacy_surface` on a directory analyses only programs
   that import a capture API or name a capture device, and matches init files to programs by path; see its
