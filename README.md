@@ -217,10 +217,12 @@ Areas marked *experimental* may change in any release; see the [stability policy
   rampage never launches or attaches to a process itself.
 - **Findings ledger:** `record_finding` and `list_findings` keep what an agent established, what it does not know
   and its open questions, with evidence and confidence, in the annotation log beside the binary.
-- **Heuristic flywheel** (*experimental*): an agent proposes library signatures through a restricted MCP server,
-  gated against held-out ground truth, and promoted rows ship as `.rpack` data packs. See
-  [the flywheel](docs/flywheel.md) for what it has and has not shown.
-- **Desktop UI** (*experimental*): listings, graphs, decompilation and shared annotations in one window.
+- **Heuristic flywheel** (*experimental*): a corpus built from pinned open-source libraries, a gate on held-out
+  ground truth, and `.rpack` data packs for what passes. Its deterministic signature generator and call-graph
+  naming ship in the bundled databases; an agent proposing signature rows through the restricted MCP server has
+  not beaten that generator. See [the flywheel](docs/flywheel.md) for what it has and has not shown.
+- **Desktop UI** (*experimental*): a viewer for a person to inspect a binary, with listings, graphs,
+  decompilation and shared annotations in one window. Editing types and driving a debugger stay with the agent.
 
 The [feature overview](docs/features.md) and [MCP reference](docs/mcp.md) describe each area and its limits.
 

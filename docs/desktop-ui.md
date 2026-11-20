@@ -3,6 +3,11 @@
 The desktop client is an egui app over the same API as the CLI and MCP server. It is *experimental*: its views,
 keys and local files may change in any release (see the [stability policy](stability.md)).
 
+Its role is to let a person inspect and assess a binary and follow what an agent has done; rampage's analysis
+work is done through MCP. The views below are kept as they are. Planned additions are an assessment page, the
+guided reports on request and a view of the findings ledger ([plan](plans/2026-11-20-ui-inspection.md)); a type
+editor and execution control in the UI are not planned.
+
 ```sh
 cargo run --release -p rampage-ui -- sample.elf
 cargo run --release -p rampage-ui -- module.dylib --arch aarch64

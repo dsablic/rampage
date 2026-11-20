@@ -25,6 +25,22 @@ Consequences for every milestone below:
 
 ## Where we are
 
+### Update (2026-11-20, at 1.8.0)
+
+- **Direction.** The goal above stands, with one clarification from the maintainer: the desktop UI is not part
+  of parity. It is a way for a person to inspect and assess a binary
+  ([UI plan](2026-11-20-ui-inspection.md)); Phase 8 below is rewritten to match.
+- **Since the status below.** 1.0.0 to 1.8.0 shipped. Phase 4: Android APK and DEX (4.4), MIPS userland and boot
+  ROMs, Xtensa and ESP images, firmware filesystem images and `carve` signatures. Outside the phase order:
+  `evaluate_function`, `check_claim`, `diff_firmware`, the device-privacy tools. Phase 6.2's second half
+  (incremental analysis and a fuller store) is in progress.
+- **Gates.** The Phase 3.3 live improvement gate is retired: the head-to-head runs answer it (median 2 server
+  calls against 6 on suite v3). The Phase 2 recall target becomes the metric of the flywheel's data loop
+  ([plan](2026-11-20-flywheel-next.md)). The live Phase 1 reconstruction is to be run once through the current
+  agent runner or retired. The Windows debugger's live run stays open until a Windows host exists.
+- **Planning.** Rules agreed on 2026-11-20 and a proposed queue for after incremental analysis are in
+  [the roadmap refresh](2026-11-20-roadmap-refresh.md).
+
 ### Status (2026-11-13)
 
 Taken from `todo.md`, the plans and the published benchmarks; the 2026-10-16 assessment below is kept as written.
@@ -308,8 +324,10 @@ plus function/import/export structure first).
 **Acceptance:** each new processor has an owned fixture (compiled where a compiler exists, else hand-assembled
 bytes compared with Ghidra's disassembly); discovery recall vs Ghidra recorded in the scorecard.
 
-*Status (2026-11-05):* 4.3 is open. 4.4 is partial: `wasm_module` (summary, imports, exports, functions) shipped
-in the `formats` group; WebAssembly disassembly and DEX/JVM are open.
+*Status (2026-11-20):* 4.3 is open. 4.4 is partial: `wasm_module` (summary, imports, exports, functions) shipped
+in the `formats` group, and Android APK and DEX shipped in 1.7.0 natively, without an external decompiler
+(manifest, Dalvik bytecode and structured pseudocode; see [Android](../android.md)). WebAssembly disassembly, Java
+decompilation of DEX and JVM class files are open.
 
 ---
 
@@ -393,13 +411,15 @@ pairing.*
 
 ---
 
-## Phase 8: desktop UI catch-up (~2 milestones)
+## Phase 8: desktop UI for inspection (rewritten 2026-11-20)
 
-The UI follows MCP; it exposes what Phases 1-7 built: rename/retype in the pseudocode view (keyboard
-`N`/`Y` like IDA), type library and struct editor, frame view, search panel, patch view, synchronized
-listing/pseudocode highlighting, bookmarks. Use `egui_kittest` snapshot tests as today.
+The UI is not a second analyst workbench. It lets a person open a binary and quickly see what it is, what it can
+do, where to start reading and what an agent has found. The slices (an assessment tab, surfaces on request, the
+findings ledger, files that are not executables, export) are in the [UI plan](2026-11-20-ui-inspection.md).
+Existing views are kept without new features. The original scope (retyping in the pseudocode view, a type and
+struct editor, a patch view) is dropped: those stay with the agent through MCP.
 
-*Status (2026-11-05): not started.*
+*Status (2026-11-20): not started; queued behind the functionality tracks.*
 
 ---
 
@@ -430,7 +450,7 @@ the design is approved.
 | 5 | Analysis depth (C++, ObjC/Swift, Rust, data typing) | Driven by Phase 0 task failures |
 | 6 | Scale and persistence | Real-world binaries are large |
 | 7 | Build diffing and annotation transfer | High agent value once 1-6 exist |
-| 8 | Desktop UI catch-up | Secondary client |
+| 8 | Desktop UI for inspection | Secondary client; a viewer, not a workbench |
 | 9 | Debugger control | Needs separate approved design |
 
 At the end of each phase: update the scorecard, re-run one real investigation (audio plugin or firmware)

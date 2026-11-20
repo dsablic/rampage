@@ -13,8 +13,16 @@ The flywheel is *experimental*. Results on a 360-binary corpus of zlib, LZ4 and 
   between library versions.
 - The deterministic arm alone adds 7,114 held-out true positives. Gated against it, the agent ran six rounds for
   $1.28 and promoted nothing: every candidate passed the fast gate and moved held-out F1 by zero.
-- For libid, then, the arm captures the recognisable gain, and the loop is infrastructure for families that have
-  no deterministic generator. The plan names compiler and tool identification as the next families.
+- For libid, then, the arm captures the recognisable gain. Compiler and optimisation identification, the family
+  planned next, was checked before it was built and a one-feature miner already solves it. An agent proposing rows
+  is therefore a measured null result for families a generator can enumerate, and no further row runs are planned.
+- What shipped from this work is deterministic and was written in agent sessions against the same gate: the arm
+  (exact rows and operand wildcarding) and call-graph propagation are in the bundled databases.
+
+The tools on this page stay as the judge and the delivery path: the corpus, the gate, the ledgered final split,
+`.rpack` and `bundle`. [How to proceed](plans/2026-11-20-flywheel-next.md) describes the next steps: measure where
+heuristic code can win, run an unattended agent that proposes source changes against this gate, and grow the
+corpus.
 
 The design is in [the fast-loop plan](plans/2026-11-05-flywheel-fast-loop.md); the guardrails are in
 [the flywheel strategy](plans/2026-10-12-heuristic-self-improvement-flywheel.md).

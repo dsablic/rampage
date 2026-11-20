@@ -1483,3 +1483,314 @@ was public.
   clean ARM64 container. Done: installed in `ubuntu:24.04` (`linux/arm64`); `--version`, `server serve --help`, an
   MCP `initialize` and `--uninstall` work.
 - [x] Update the README support table, `docs/known-limits.md`, `docs/getting-started.md` and the changelog.
+
+## Superseded sections (archived 2026-11-20)
+
+Moved whole from todo.md on 2026-11-20. Unlike the sections above, their open boxes are not tracked in todo.md
+any more: the embedded Ghidra decompiler, the [parity roadmap](2026-10-16-ida-ghidra-parity-roadmap.md) and the
+[debugger plan](2026-10-29-debugger-control.md) superseded this work. Headings are one level deeper than they
+were.
+
+### Current status (native analysis track, now complementary)
+
+Deep ARM64 support is **in progress**, not IDA/Ghidra parity or complete typed-source recovery.
+Checked items below describe bounded, tested capabilities; sections marked partial still have acceptance work remaining.
+
+#### Darwin narrow inputs and aggregate-verification bridge
+
+Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#darwin-narrow-inputs-and-aggregate-verification-bridge).
+
+- [ ] Full-workspace release gate: interrupted during compilation after an excessive optimized test-link rebuild;
+  this is neither a suite pass nor an assertion failure. Focused release validation above passed with unchanged
+  profiles.
+
+#### Verified-DWARF layout batch — initial bounded scope
+
+Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#verified-dwarf-layout-batch--initial-bounded-scope).
+
+- [ ] Initial layout-batch optimized acceptance: the selected API/worker fixture build hit its five-minute cap
+  while linking, before assertions. No optimized-suite success is claimed;
+  release ThinLTO/codegen settings are unchanged.
+
+#### Usable typed-decompilation push
+
+Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#usable-typed-decompilation-push).
+
+- [ ] Broader matched-setting C/C++ differential decompilation corpus and runtime/memory metrics. These initial
+  independent compiler/source oracles are not that benchmark or general class-layout/virtual-dispatch acceptance.
+
+#### Bounded virtual-method evidence
+
+Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#bounded-virtual-method-evidence).
+
+- [ ] Broad C++ differential/corpus/performance acceptance, typed virtual dispatch, inheritance and adjusting thunks.
+  The owned source/compiler oracles and exact slot correlations do not earn these broader capabilities.
+
+#### Exact-entry analysis and local debugger workspace
+
+Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#exact-entry-analysis-and-local-debugger-workspace).
+
+- [ ] New live end-to-end LLDB workspace acceptance, broader ABI/platform coverage and performance measurements.
+  Owned protocol mocks and image fixtures do not establish arbitrary-host or third-party-runtime acceptance.
+  The owned x86-64 live gate compiled but Apple LLDB refused launch with `Bad CPU type in executable` on the
+  arm64 host, before UI observations. No Rosetta installation or ARM64 data-order guess bypassed that blocker.
+- [ ] Larger matched-setting corpora; bounded host context does not promise constant latency, complete discovery
+  context or cropped-image behavior.
+- [ ] Windows debugging (9.6a): implemented through RSP stubs; live acceptance on a Windows host is open. The GDB
+  remote backend is done (9.1).
+
+#### Deferred exact-entry UI and reviewed static workspaces
+
+Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#deferred-exact-entry-ui-and-reviewed-static-workspaces).
+
+- [ ] Broader derived analysis caches and runtime cross-module resolution; the historical inventory and static PE
+  declaration slices below do not complete these. Broader ABI/type recovery and affirmative
+  ARM64 runtime DATA-order evidence remain open. The GDB backend and execution control landed in Phase 9.1–9.4 and
+  Windows (live acceptance pending) in 9.6a; see `docs/plans/2026-10-29-debugger-control.md`.
+
+#### Static references, responsive file operations and historical inventory
+
+Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#static-references-responsive-file-operations-and-historical-inventory).
+
+- [ ] Runtime/converted executable plugins, broader recovery and remaining TODOs are not part of this milestone.
+
+#### Validation and external blockers
+
+Done items and notes are archived in [todo-archive.md](docs/plans/todo-archive.md#validation-and-external-blockers).
+
+- [ ] Resolve the local `rust-objcopy` missing-`libLLVM.dylib` stripping warning; release tests still execute.
+  - Command-local `DYLD_LIBRARY_PATH=<rustc-sysroot>/lib` resolves the installed tool's library lookup;
+    permanent managed-toolchain repair remains open rather than patching rustup-owned executables.
+
+### Deep ARM64 track and remaining work
+
+#### 1. Instruction semantics — partial
+
+- [x] Immediate, shifted and extended ADD/SUB; logical operations; wide moves; multiply/divide; variable shifts.
+- [x] NZCV, B.cond, CBZ/CBNZ/TBZ/TBNZ, CSEL/CSINC/CSINV/CSNEG, ADR/ADRP and plain BL/BLR/BR/RET.
+- [x] Common non-wrapping bitfield aliases; 8/16/32/64-bit scalar memory with separate result/access widths.
+- [x] Literal/register/unsigned/unscaled/pre/post addressing; 32/64-bit pairs and signed LDPSW.
+- [x] Remaining common integer families: carry arithmetic (ADC/ADCS/SBC/SBCS, NGC/NGCS), conditional compares
+  (CCMP/CCMN register/immediate), wrapping bitfields (SBFIZ/UBFIZ/BFI/BFXIL/BFC), long/high multiply
+  (S/UMADDL, S/UMSUBL, SMULH/UMULH), EXTR/ROR immediate, CLZ/CLS/RBIT/REV/REV16/REV32, each with native
+  boundary regressions (all 16 NZCV inputs for flag-dependent families, also through SSA/dataflow) and
+  natively recorded expected values that replay on any host. FEAT_CSSC, RMIF and SETF8/16 remain barriers.
+- [x] Valid no-writeback pair loads with base/destination overlap; capture both original addresses before
+  assignments for LDP X/W and LDPSW. Writeback overlaps and duplicate destinations remain barriers.
+- [ ] FP/SIMD, atomic/exclusive and selected system semantics, with effects and memory ordering explicit.
+- [ ] PAC/authenticated flow, exceptions and platform-specific behavior; unsupported forms must remain barriers.
+
+#### 2. Stack, memory and signatures — partial
+
+- [x] Integer AAPCS64 caller clobbers/callee preservation; X8 result-buffer and SP call dependencies.
+- [x] Entry-SP-relative slots, conflicting-path unknowns, per-RET X0/X1 candidates and input-use argument evidence.
+- [x] Exact-width constant-store forwarding with source IDs and all-path agreement; conservative alias boundaries.
+- [x] Exact-width nonconstant entry-SP spill/reload aliases when all reaching paths agree. Original load
+  observations and recovered-load provenance remain explicit; recovered pointers cannot restart stack-memory
+  inference. Source clobbers, width/sign extension, aliases and budgets have behavioral regressions.
+- [ ] Partial-width overlap reconstruction, safe cyclic-memory fixpoints and broader alias proofs. Calls,
+  unknown aliases, conflicting paths and cyclic proofs remain unresolved.
+- [ ] Stack-frame boundaries, outgoing stack arguments, saved-register roles and escaped-stack alias handling.
+- [ ] Interprocedural signatures: argument count/types, void versus value, aggregate returns, varargs and FP/SIMD ABI.
+- [ ] Propagate type constraints and reconstruct pointer/struct/class layouts; local operand roles alone are not types.
+
+#### 3. SSA and pseudocode — partial
+
+- [x] Bounded register/memory SSA, predecessor-indexed phis, constants/affine stack reasoning and semantic gaps.
+- [x] Redundant phi aliases, dominators, natural-loop evidence and conservative sequence/branch/single-body regions.
+- [x] Labeled and `--structured` SSA pseudocode with explicit predecessor tokens and simultaneous phi bindings.
+- [x] Execution comparisons cover both diamond arms, repeated loops and both loop-condition polarities.
+- [ ] Minimal phi placement, dead-definition elimination and broader expression simplification without amplification.
+- [x] Bounded non-fall-through switch regions with retained table entries and guard evidence; unsupported
+  switch shapes preserve labelled SSA diagnostics rather than invented structure.
+- [ ] Nested/multi-block loops, broader branch joins, fall-through switch regions and irreducible-flow handling.
+- [ ] Typed variables, source-level expressions/returns and readable decompiler output distinct from SSA diagnostics.
+
+#### 4. Jump tables and indirect flow — partial
+
+- [x] Conservative ADR/ADRP/ADD/MOV/LDR/BR/BLR discovery; calls/stores invalidate captured-memory assumptions.
+- [x] Explicit bounded absolute64/signed-relative32 table inspection, without guessed dispatch bounds.
+- [x] Image-validated SSA target evidence, including a spilled constant target.
+- [x] Bounded AArch64 and x86/x86-64 dispatch recognition with proven unsigned bounds, read-only backed tables,
+  validated destinations and branch-site evidence. Cross-block facts are revalidated after graph expansion.
+- [x] Proven immutable switch cases feed discovery/CFG/xrefs as case edges, not function seeds, retaining table
+  order and guard evidence. Other indirect-flow forms remain separate acceptance work.
+- [ ] Mutable pointers only after alias/reaching-store proof; authenticated or unmapped targets remain unresolved.
+- [ ] Fixtures for relative tables, duplicate targets, joins, loops, truncation, overflow and hostile index bounds.
+
+#### 5. Controlled runtime capture — initial gate complete
+
+- [x] Successful permitted stopped-process capture, module UUIDs/bases, register provenance and original correlation.
+- [x] Mapping-aware snapshot identity and durable identity-scoped annotation persistence, including addresses,
+  permissions and endianness. Per-file provenance/register observations are not conflated by identity reuse.
+- [x] Persist explicit decompiler configuration, module/source identities and navigation in reviewed workspace files.
+- [ ] Persist derived analysis caches and broader reproducible analysis state; the manifest is not an engine cache.
+- [ ] Multiple modules/threads and stripped/relocated images; module-qualified navigation and cross-module references.
+- [ ] Broader debugger/platform integration, capture failure handling and provenance validation on larger fixtures.
+
+#### 6. Accuracy benchmark — partial
+
+- [x] Synthetic snapshots, native instruction oracles, compiled fixtures and malformed-input/resource regressions.
+- [x] Versioned, hash-/architecture-matched function-start reference imports; snapshot comparisons reject
+  ambiguous identity.
+- [x] Versioned x86-64/AArch64 matched-pair corpus for library ID, discovery, tool detection and DWARF-backed
+  signature recovery. The committed 13-slice baseline gate passes at `6122f64`.
+- [ ] Broader compiler/optimization/ABI coverage with instruction/stack/semantic and time/memory metrics.
+- [x] Pinned read-only CI workflow: format, warnings-denied Clippy, ordinary macOS workspace/UI tests and selected
+  opt-ins, the 13-slice evaluation gate, an explicit Linux core subset, and redacted HEAD/full merge-history
+  secret scans that cannot silently inherit repository allowlists. Hosted gates passed at `ffc84e7`.
+- [ ] Quantitative unsupported-coverage and per-analysis time/memory gates; CI job/step timeouts are not substitutes.
+  - [x] Explicit corpus recovery-status/flag/count assertions and configurable elapsed-time assertions, with missing
+    diagnostics/measurements and identity mismatches retained as unavailable. Controlled fixture recovery gates
+    and runner regressions are wired into CI; these do not measure unsupported coverage or per-case peak memory.
+  - [x] Three owned compiled-switch fixtures are included in tool-ID truth. The expanded slice measures 129/163
+    correct expected tools (recall 0.791411, precision 1.0); its floor is raised to 0.7914, not weakened. This is a
+    corpus-denominator change, not a detector improvement or a rewrite of historical measurements.
+- [x] Ghidra exports compare function starts, blocks, CFG edges and calls on 18 fixtures; reference output is
+  not ground truth, and normalized chain agreement is not decompiler or semantic equivalence.
+- [ ] IDA exports/comparisons once an installation is available.
+- [ ] Expand beyond current CFG/call and signature metrics to dispatch truth, stack evidence and semantics.
+
+#### Next execution order
+
+1. [x] Resolve the earlier full-debug timeout and complete debug/release workspace validation.
+2. Extend common integer semantics and nonconstant spill recovery, keeping alias boundaries conservative.
+3. Recover bounded dispatch tables and integrate proven targets into CFG/discovery with regression fixtures.
+4. Broaden structuring and type/signature propagation; keep SSA diagnostics separate from recovered source.
+5. Build the versioned accuracy corpus/CI gates and complete persistence/cross-module runtime work.
+
+Native IR/SSA remains complementary to the embedded Ghidra decompiler above. Vendored Ghidra implementation
+and specifications retain their Apache-2.0 license and attribution; any additional copied/ported components
+require their applicable license and attribution.
+
+### General-purpose reverse-engineering roadmap
+
+#### Transformed static code and runtime analysis
+
+Successful loading, discovery and C emission do not establish usable recovery. High entropy, invalid decoding,
+unresolved wrapper jumps, missing debug types and absent named vtables need explicit diagnostics. These are
+evidence and limitations, not proof of encryption or verified function counts.
+
+Work in this order, with synthetic regressions and independent review for each increment:
+
+1. [x] Structured recovery diagnostics: export engine warnings, bad-data/unimplemented flags and unresolved
+   calls/jump tables. Surface warnings in CLI/API/MCP/UI and separate successful output from usable recovery in
+   benchmarks; no unqualified "complete" or "clean implies correct" label.
+2. [x] Discovery-confidence summaries: relate candidates to bounded sampled regions and preserve evidence for
+   suspicious tiny fragments, invalid decode and code/data ambiguity. Do not silently delete candidate functions
+   or infer encryption from entropy alone. Use cached discovery modes; whole-program discovery is an explicit
+   opt-in (`audit --include-discovery` / MCP `include_discovery`), not a hidden prerequisite for sampling.
+3. [ ] Authorized capture workflow: bounded module/range selection and actual memory-permission checks in the
+   stopped-process LLDB exporter, capture failures and provenance. No automatic plugin launch, installation,
+   debugger attachment or target-memory writes; controlled live tests use our own fixtures.
+   - [x] Exact mapping permissions, bounded inspection, complete reads, expression-stop identity checks and
+     atomic no-clobber publication; breakpoint normalization recorded in provenance.
+   - [x] Explicit UUID/original-address range and seed selection with checked slides, section coverage and
+     conflicting-mapping rejection; controlled live fixture validation.
+   - [ ] Broader multi-thread/module capture acceptance and module-specific byte-order context.
+   - [x] Explicit bounded thread selectors/all-thread register capture, stop-context and module-provenance
+     revalidation; controlled live acceptance covers two owned modules and two threads.
+4. [ ] Runtime target identity: persist platform/compiler context, mapping-aware capture identity and module/
+   thread provenance so an ARM64 macOS capture does not silently use generic AAPCS64 decompilation defaults.
+   - [x] Validated optional platform/compiler context, exported by LLDB and used by native/worker defaults.
+   - [x] Canonical mapping-aware triage identity and normalized UUID-duplicate validation.
+   - [ ] Broader thread/module provenance consistency checks, module-specific code/data endian validation
+     (including ARM BE8), and persisted session reuse by capture identity.
+   - [x] Identity-scoped annotation persistence and snapshot revalidation; equal captures can share logs without
+     conflating per-file provenance/register observations. Legacy unscoped logs are reported, not migrated.
+5. [ ] UUID-validated static/runtime comparison: compare explicit matching captured ranges, retain byte-change
+   and unavailable-range evidence, transfer only justified symbol/type information with checked ASLR slides.
+   - [x] Bounded API/CLI byte comparison with equal/changed/unavailable spans and capture/original identities;
+     annotation-free explicit inputs and controlled live comparison.
+   - [ ] Reviewed symbol/type-transfer policy and runtime comparison navigation/agent integration.
+   - [x] Shared agent/MCP byte comparisons with paginated spans, full-range totals and identities;
+     fresh explicit MCP inputs bypass annotation sidecars and discovery.
+6. [ ] Captured indirect-call evidence: show wrapper slot/value/target observations separately from proven flow;
+   writable, authenticated, unmapped or incomplete pointers remain unresolved without additional evidence.
+   - [x] Explicit API/CLI/MCP pointer-slot observations with raw values, permissions and mapping identity;
+     no edge insertion, no authentication/high-bit stripping and checked ARM mode tags.
+   - [ ] Link observations to decoded branch sites, module-qualified targets and before/after capture evidence.
+   - [x] Bounded explicit ARM64 branch-window links to decoded slot loads, retaining indirect flow and
+     raw observations; unsupported/control-flow/authenticated/incomplete cases remain explicit.
+   - [x] Explicit API/CLI/MCP paired-slot comparisons across captures with raw equal/changed/unavailable outcomes,
+     independent mapping/target assessments and capture identities; no inferred chronology or module ownership.
+7. [ ] Authorized runtime acceptance: an analyst supplies an already-loaded/stopped instance in a legitimate host;
+   capture selected code and referenced data, correlate the original UUID, rerun diagnostics/decompilation and
+   report before/after warning/coverage metrics. This is blocked on an authorized host capture, not static parsing.
+
+Third-party plugin bytes and captured process contents are local investigation inputs, not committed fixtures.
+Patching is not part of this work.
+
+Acceptance gate for each milestone: behavioral regressions, malformed-input tests, `cargo fmt --check`,
+`cargo clippy --all-targets -- -D warnings`, workspace tests, and independent review. Third-party samples are
+read-only triage inputs, never patch fixtures. Runtime tests use programs we build ourselves.
+
+- [x] Initial runtime images: validated sparse snapshot format, CLI/API/UI loading, explicit code seeds, provenance,
+  virtual-address handling and controlled LLDB export/correlation. Persistence and cross-module work remain above.
+- [ ] Indirect flow: the conservative AArch64 ADR/ADRP/ADD/MOV/LDR/BR/BLR foundation is done (below). Remaining:
+  other architectures, and proven targets feeding discovery/CFG (Deep ARM64 track 4). Unknown, authenticated,
+  mutable and unmapped targets must remain unresolved.
+- [x] Analysis confidence: `audit`/`analysis_diagnostics` explain decode coverage and unreliable-code evidence over
+  sparse memory without asserting encryption (below).
+- [x] Language metadata: C++/Rust demangling with original lookup names, named/stripped Itanium/MSVC RTTI,
+  and bounded Objective-C classes/categories/methods/ivars/properties/protocols with malformed-pointer tests.
+  Objective-C metadata handles relative methods and static chained-fixup rebases; it is not runtime PAC recovery
+  or automatic C++ object-layout reconstruction.
+- [x] Data-flow/decompilation: structured function summaries shipped, and decompilation comes from the embedded
+  Ghidra decompiler. The native IR/SSA work continues as diagnostics in the Deep ARM64 track; it is never
+  labelled a decompiler.
+- [ ] Containers and workspaces: bundle discovery and inventory of already-extracted packages are done (below).
+  Remaining: nested-archive inspection with extraction budgets (never executing installers) and cross-module
+  navigation with address/module identities.
+
+#### Next acceptance-driven milestones
+
+1. **Runtime integration:** extend the verified controlled capture to persistence, mapping-aware identities,
+   multiple modules/threads and module-qualified navigation.
+2. **Data-flow:** extend exact constant-store forwarding to nonconstant values, partial overlaps and safe loops;
+   establish alias proofs before enabling mutable snapshot pointer inference.
+3. **IR and SSA:** extend semantics/calling conventions, minimal phi placement and expression simplification;
+   compare lifted execution with native fixtures at overflow, width, zero-register and flag boundaries.
+4. **Language recovery:** stripped Itanium/MSVC vtables, class layouts, Objective-C method/class references,
+   relative/authenticated pointers, DWARF/PDB integration and fixture-based malformed metadata validation.
+5. **Decompilation:** expressions, conditions, loops, returns and typed variables over SSA; output must explicitly
+   show semantic gaps and must not present unsupported paths as recovered source.
+6. **Containers/workspaces:** safe archive indexing/extraction budgets, module-qualified names/addresses,
+   dependencies, cross-module references and UI/MCP navigation; never execute installer scripts.
+7. **CLI batch workflow:** first-class multi-architecture analysis reports with bounded function selection,
+   per-command timeouts, recovery diagnostics and comparison summaries; avoid external orchestration for routine
+   static/runtime retests. Keep candidate counts, weak signature proposals and recovered code distinct.
+   - [x] Single-image guided reports through `rampage report` and the shared workflow registry, with bounded
+     findings, evidence/confidence, explicit truncation and next-step tool calls.
+   - [x] `rampage binary analyze` composes selected workflows and supervised function decompilations across supported
+     declared architectures; slice failures, identities, warnings and output-limit outcomes are retained in
+     bounded valid JSON. Text output includes workflow findings and failed previews, not just query completion.
+   - [ ] Runtime comparison report composition and workflow-wide wall-clock/memory supervision. The current
+     deadline bounds each supervised decompilation request; workflows retain their existing work/output budgets.
+   - [x] Noun/verb command hierarchy with shared argument definitions and typed normalization; flat spellings
+     remain hidden compatibility commands. Nested pack ordering and cross-level image dependencies are validated.
+8. **Debugger integration:** plan an LLDB-first read-only bridge after static acceptance, with explicit session/
+   stop identities, module/thread navigation, quiescent capture manifests and agent/UI queries. Attach, resume,
+   breakpoint insertion and target writes require separately reviewed controls; no automatic host or plugin launch.
+   Superseded for execution control by Phase 9 (`docs/plans/2026-10-29-debugger-control.md`): resume, step,
+   breakpoints and writes now go through the reviewed `debug` tools; rampage still never attaches or launches.
+   - [x] In-session `rampage-query` foundation for session/module/thread, fresh-register and raw-memory queries,
+     with bounded JSON, stale stop tokens, exact known permissions and honest endian/stop evidence. Controlled
+     owned-fixture acceptance covers Apple LLDB; no command passthrough, attach/resume/evaluation/writes/listener.
+    - [x] Explicit local Unix transport, typed API/CLI/MCP and local-only UI window, with reviewed cancellation safety;
+      EOF before querying, bounded framing/I/O, stale tokens and structured errors retained. Endpoint paths remain
+      for operator cleanup; no automatic attach/resume/expression/target-write controls.
+     - [x] Stop-pinned UUID-qualified image/load address observations via bounded section/ancestor evidence,
+       surfaced in typed queries and a manual local UI template. No basename/slide fallback or automatic navigation.
+     - [x] Explicit local navigation to an already-open matching static Mach-O's file address, with typed
+       request/result/workspace bindings, UUID/variant/width/endian/backing/permission gates and input invalidation.
+       Original mapping-descriptor identity guards observable source changes; debugger painting avoids mapped reads.
+       This is neither atomic source reading nor equal-byte/current-stop/flow/layout proof.
+     - [ ] Broader static-format navigation and SDK/platform acceptance.
+      Query observations remain non-atomic. A disposable-host experiment subsequently exercised live read-only
+      queries; broader external-plugin runtime acceptance remains open (see the active investigation queue above).
+
+Committed-foundation validation includes full debug/release suites, warnings-denied Clippy, UI snapshots,
+CLI/API/MCP regressions, malformed-input bounds, native/compiled fixtures, exporter tests, the opt-in live
+capture test, debugger-cleanup regressions, Ruff/ty and independent reviews. The earlier full-debug timeout
+was the one-time vendored C++ build; subsequent debug/release workspace suites passed.

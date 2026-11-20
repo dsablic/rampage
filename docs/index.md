@@ -136,5 +136,9 @@ use rampage.
 - [Debugger design](plans/2026-10-29-debugger-control.md) and [Windows debugger design](plans/2026-11-05-debugger-windows.md).
 - [Flywheel fast loop](plans/2026-11-05-flywheel-fast-loop.md) and the
   [flywheel strategy](plans/2026-10-12-heuristic-self-improvement-flywheel.md).
+- [Roadmap refresh](plans/2026-11-20-roadmap-refresh.md) (planning rules and the proposed queue),
+  [how to proceed with the flywheel](plans/2026-11-20-flywheel-next.md) and the
+  [desktop UI plan](plans/2026-11-20-ui-inspection.md), and the
+  [acceptance set](plans/2026-11-20-acceptance-set.md) for the 1.6–1.8 features.
 - [Open work](../todo.md) and the [archive of done items](plans/todo-archive.md).
 - Older plans in [docs/plans](plans/) are marked historical at the top.
