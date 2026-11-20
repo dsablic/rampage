@@ -1246,7 +1246,7 @@ fn sleigh_file_schema() -> Value {
 
 /// Project tools that serve a Raw Project opened with [`crate::Session::open_raw`]: each returns a result or an
 /// explicit typed refusal on Raw input. Clients offer the `raw` selector only on these.
-pub const RAW_CAPABLE_TOOLS: [&str; 32] = [
+pub const RAW_CAPABLE_TOOLS: [&str; 33] = [
     "binary_info",
     "list_functions",
     "disassemble",
@@ -1265,6 +1265,7 @@ pub const RAW_CAPABLE_TOOLS: [&str; 32] = [
     "redo",
     "decompile",
     "evaluate_function",
+    "check_claim",
     "import_svd",
     "peripheral_access",
     "list_patches",
@@ -1856,6 +1857,22 @@ fn get_type(project: &crate::Project, args: TypeNameArgs) -> Result<Value, ApiEr
         "{}. Next: list_types (contains=...) to browse names, or declare_types to define the type",
         missing.join("; ")
     )))
+}
+
+/// One member of a named type from embedded DWARF or Go type metadata, as get_type selects it.
+pub(crate) fn type_member(project: &crate::Project, name: &str, member: &str) -> Result<Value, ApiError> {
+    get_type(
+        project,
+        TypeNameArgs {
+            name: name.to_owned(),
+            source: None,
+            member: Some(member.to_owned()),
+            byte_offset: None,
+            depth: None,
+            offset: None,
+            limit: None,
+        },
+    )
 }
 
 #[derive(serde::Deserialize, JsonSchema)]
@@ -3060,6 +3077,52 @@ fn page_limit(limit: Option<usize>) -> Option<usize> {
 }
 
 /// Every tool, in the order the model sees them.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckClaimArgs {
+    claims: Vec<Value>,
+    timeout_ms: Option<u64>,
+}
+
+/// check_claim's input schema, written out compactly: the claim grammar is one description, and each claim is
+/// read (strictly) by its kind.
+fn check_claim_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "claims": {
+                "type": "array",
+                "items": {"type": "object", "required": ["kind"]},
+                "description": "1-32 {kind, ...; not?: true}. returns {function, args, value|float|buffers, bits?, \
+                    setup?}; computes {function, algorithm (crc32, crc16_arc, adler32, sha256, ...; {crc: {...}}) or \
+                    expression (\"a*3+b\"), args (data/length/out roles, or names), samples?}; calls {function, \
+                    callee, depth?, before?}; references {target|string, by?|only_by?}; constant {function, value}; \
+                    region {start, end, algorithm?, stored?}; lock {function}; layout {type, member, offset?}."
+            },
+            "timeout_ms": {"type": ["integer", "null"], "description": "Default 60000."}
+        },
+        "required": ["claims"]
+    })
+}
+
+fn check_claim_tool() -> Tool {
+    Tool {
+        group: Group::Core,
+        name: "check_claim",
+        description: "Experimental. Check claims before reporting them: verified, refuted (counterexample) or unknown \
+                      (what would decide it), with evidence, method and confidence. Grammar: docs/claim-checking.md.",
+        input_schema: check_claim_schema(),
+        interactive: false,
+        effect: Effect::None,
+        reads_annotations: true,
+        handler: Handler::Shared(Box::new(|project, input| {
+            let args: CheckClaimArgs = arguments(input)?;
+            let report = project.check_claims(&args.claims, args.timeout_ms).map_err(|error| error_chain(&error))?;
+            serde_json::to_value(report).map(SharedResult::read).map_err(|error| error.to_string())
+        })),
+    }
+}
+
 pub fn tools() -> Vec<Tool> {
     let mut tools = vec![
         tool(
@@ -3183,6 +3246,7 @@ pub fn tools() -> Vec<Tool> {
                 Ok(with_note(report, note))
             },
         ),
+        check_claim_tool(),
         tool(
             Group::Core,
             "language_metadata",

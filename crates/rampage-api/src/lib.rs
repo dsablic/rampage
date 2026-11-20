@@ -14,6 +14,7 @@ mod build_info;
 pub mod build_match;
 mod capabilities;
 mod carve;
+pub mod claims;
 mod compression_probe;
 mod container_record;
 mod correlation;
