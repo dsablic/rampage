@@ -189,8 +189,11 @@ with magic 0xEBEB holding the MD5 of the entries) names each partition's type an
 `ota_0`.., `data`/`nvs`, `phy`, `ota`, `coredump`, `spiffs`, `littlefs`, `fat` and the others ESP-IDF defines)
 and whether it is encrypted. A table counts only when its MD5 entry (with its 14 bytes of 0xff padding) matches,
 or, without one, when every entry lies on a 4 KiB boundary with a known type and subtype and a printable label and
-erased flash follows the last; the bootloader of a flash dump only when its digests hold. Flash encryption itself is not undone: an encrypted partition's bytes are
-ciphertext.
+erased flash follows the last; the bootloader of a flash dump only when its digests hold. Partition offsets are
+flash offsets. A dump that starts with an ESP32 or ESP32-S2 bootloader (as release files written to flash at 0x1000
+do) starts at flash 0x1000, so its partition table is read at file 0x7000 and each partition 0x1000 bytes before
+its flash offset; `file_layout`, `diff_firmware` and the open error's guidance say so. Flash encryption itself is not
+undone: an encrypted partition's bytes are ciphertext.
 
 ## Managed assemblies
 

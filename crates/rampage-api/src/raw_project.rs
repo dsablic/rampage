@@ -1086,6 +1086,13 @@ pub fn esp_guidance(path: &Path) -> Option<String> {
                 .collect();
             parts.push(format!("a partition table at {:#x}: {}", table.offset, entries.join(", ")));
         }
+        if layout.flash_base != 0 {
+            parts.push(format!(
+                "it starts at flash offset {:#x}, so each partition lies {:#x} bytes before its flash offset in the \
+                 file",
+                layout.flash_base, layout.flash_base
+            ));
+        }
         // Each application partition's header is read where the table puts it.
         let apps: Vec<String> = layout
             .partition_table
@@ -1093,10 +1100,11 @@ pub fn esp_guidance(path: &Path) -> Option<String> {
             .flat_map(|table| &table.partitions)
             .filter(|partition| partition.kind == "app")
             .take(MAX_ESP_GUIDANCE_PROBES)
-            .filter(|partition| {
-                file_range_prefix(path, partition.offset, 64).is_some_and(|head| esp::looks_like_app_image(&head, 0))
+            .filter_map(|partition| Some((partition, layout.file_offset(partition.offset)?)))
+            .filter(|&(_, offset)| {
+                file_range_prefix(path, offset, 64).is_some_and(|head| esp::looks_like_app_image(&head, 0))
             })
-            .map(|partition| format!("{} with {}", partition.label, esp_selector(partition.offset)))
+            .map(|(partition, offset)| format!("{} with {}", partition.label, esp_selector(offset)))
             .collect();
         let open = match (apps.is_empty(), &layout.bootloader) {
             (false, _) => format!("read each application with `raw`: {}", apps.join("; ")),

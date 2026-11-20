@@ -610,36 +610,52 @@ pub struct EspFlashLayout {
     pub bootloader: Option<EspImage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub partition_table: Option<EspPartitionTable>,
+    /// The flash offset of the dump's first byte: 0x1000 for an ESP32 or ESP32-S2 dump that starts with the
+    /// bootloader (written to flash at 0x1000), else 0. Partition offsets are flash offsets; the bootloader's and
+    /// the partition table's `offset` are file offsets.
+    pub flash_base: u64,
 }
 
 impl EspFlashLayout {
+    /// Where the byte at `flash_offset` lies in the dump, if the dump reaches back that far.
+    pub fn file_offset(&self, flash_offset: u64) -> Option<u64> {
+        flash_offset.checked_sub(self.flash_base)
+    }
+
     /// The application partitions holding an app image, with that image's offset in the dump.
     pub fn app_images<'a>(&'a self, bytes: &'a [u8]) -> impl Iterator<Item = (&'a EspPartition, u64)> + 'a {
         self.partition_table.iter().flat_map(|table| &table.partitions).filter_map(move |partition| {
-            let offset = usize::try_from(partition.offset).ok()?;
-            (partition.kind == "app" && looks_like_app_image(bytes, offset)).then_some((partition, partition.offset))
+            let offset = self.file_offset(partition.offset)?;
+            (partition.kind == "app" && looks_like_app_image(bytes, usize::try_from(offset).ok()?))
+                .then_some((partition, offset))
         })
     }
 }
 
 /// Reads a flash dump's layout: a bootloader image at 0x1000 (ESP32, ESP32-S2) or 0 (ESP32-S3, ESP8266), and a
-/// partition table at 0x8000 or at another 4 KiB boundary below 0x10000 (CONFIG_PARTITION_TABLE_OFFSET). `None`
-/// when neither is there.
+/// partition table at 0x8000 or at another 4 KiB boundary below 0x10000 (CONFIG_PARTITION_TABLE_OFFSET). A dump
+/// whose first byte is an ESP32 or ESP32-S2 bootloader starts at flash 0x1000 ([`EspFlashLayout::flash_base`]), so
+/// its partition table is looked for 0x1000 bytes earlier in the file. `None` when neither is there.
 pub fn flash_layout(bytes: &[u8]) -> Option<EspFlashLayout> {
     // A bootloader counts only when its digests hold.
     let bootloader = [0x1000usize, 0]
         .into_iter()
         .filter(|&offset| looks_like_app_image(bytes, offset))
         .find_map(|offset| parse_app_image(bytes, offset as u64).ok().filter(EspImage::digests_valid));
-    let partition_table = std::iter::once(DEFAULT_PARTITION_TABLE_OFFSET)
-        .chain((0x1000..0x10000).step_by(0x1000).filter(|&offset| offset != DEFAULT_PARTITION_TABLE_OFFSET))
+    let flash_base = match &bootloader {
+        Some(image) if image.offset == 0 && matches!(image.chip, EspChip::Esp32 | EspChip::Esp32S2) => 0x1000,
+        _ => 0,
+    };
+    let default_table = DEFAULT_PARTITION_TABLE_OFFSET - flash_base;
+    let partition_table = std::iter::once(default_table)
+        .chain((0x1000..0x10000).step_by(0x1000).filter(|&offset| offset != default_table))
         .find_map(|offset| parse_partition_table(bytes, offset));
     // An image at 0 alone is an app image (or an ESP8266 boot image), not evidence of a flash layout.
     if partition_table.is_none() && bootloader.as_ref().is_none_or(|image| image.offset != 0x1000) {
         return None;
     }
     let chip = bootloader.as_ref().map_or(EspChip::Esp32, |image| image.chip);
-    Some(EspFlashLayout { chip, bootloader, partition_table })
+    Some(EspFlashLayout { chip, bootloader, partition_table, flash_base })
 }
 
 #[cfg(test)]
@@ -688,6 +704,20 @@ mod tests {
         let apps: Vec<_> =
             layout.app_images(&flash).map(|(partition, offset)| (partition.label.clone(), offset)).collect();
         assert_eq!(apps, [("factory".to_owned(), 0x10000)]);
+        assert_eq!(layout.flash_base, 0);
+    }
+
+    /// Acceptance: an ESP32 dump written from flash 0x1000 starts with the bootloader; its partition table is at file
+    /// 0x7000 and the application partition at flash 0x10000 is at file 0xf000.
+    #[test]
+    fn a_dump_that_starts_with_the_esp32_bootloader_starts_at_flash_0x1000() {
+        let flash = fixture("esp32-flash.bin")[0x1000..].to_vec();
+        let layout = flash_layout(&flash).unwrap();
+        assert_eq!(layout.flash_base, 0x1000);
+        assert_eq!(layout.bootloader.as_ref().unwrap().offset, 0);
+        assert_eq!(layout.partition_table.as_ref().unwrap().offset, 0x7000);
+        let apps: Vec<_> = layout.app_images(&flash).map(|(partition, offset)| (partition.offset, offset)).collect();
+        assert_eq!(apps, [(0x10000, 0xf000)]);
     }
 
     /// Review: min_chip_rev_full is the u16 at extended-header byte 7, and the ESP8266's flash-size codes skip 7.

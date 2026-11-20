@@ -393,6 +393,30 @@ fn an_esp32_flash_update_compares_partitions_and_the_application() {
     assert_unchanged(&diff(&old, &old));
 }
 
+/// Acceptance (MicroPython's ESP32 release files start at flash 0x1000, with the bootloader): the same update with
+/// both dumps cut to start at the bootloader. Partition offsets are flash offsets, so the application is still found
+/// and compared, not hashed from 0x1000 bytes too far.
+#[test]
+fn esp32_dumps_that_start_at_the_bootloader_are_read_at_flash_offset_0x1000() {
+    let scratch = Scratch::new("rampage-diff-esp-base");
+    let old = std::fs::read(fixture("xtensa/esp32-flash.bin")).unwrap()[0x1000..].to_vec();
+    let new = esp_flash_v2()[0x1000..].to_vec();
+    let (old, new) = (scratch.write("old.bin", &old), scratch.write("new.bin", &new));
+    let result = diff(&old, &new);
+    assert_eq!(result["old"]["kind"], "esp_flash", "{result:#}");
+    assert_eq!(component(&result, "esp:partition_table")["old"]["offset"], "0x7000", "{result:#}");
+    assert_eq!(component(&result, "esp:phy_init")["status"], "unchanged", "{result:#}");
+    let app = component(&result, "esp:factory");
+    assert_eq!(app["old"]["offset"], "0xf000", "{app:#}");
+    assert_eq!(app["old"]["partition_offset"], "0x10000", "{app:#}");
+    let functions = &app["code"]["functions"];
+    assert_eq!(
+        (functions["changed"].as_u64(), functions["added"].as_u64(), functions["removed"].as_u64()),
+        (Some(2), Some(1), Some(1)),
+        "{app:#}"
+    );
+}
+
 #[test]
 fn an_apk_update_reports_permissions_and_native_libraries() {
     let scratch = Scratch::new("rampage-diff-apk");

@@ -416,6 +416,9 @@ fn esp_layout(path: &Path, bytes: &[u8], layout: &mut Layout) -> bool {
     };
     layout.kind = "esp_flash";
     layout.facts.insert("chip".to_owned(), json!(flash.chip.name()));
+    if flash.flash_base != 0 {
+        layout.facts.insert("flash_base".to_owned(), json!(format!("{:#x}", flash.flash_base)));
+    }
     if let Some(bootloader) = &flash.bootloader
         && let Some(component) = app("esp:bootloader".to_owned(), "esp_bootloader", bootloader.offset)
     {
@@ -444,16 +447,27 @@ fn esp_layout(path: &Path, bytes: &[u8], layout: &mut Layout) -> bool {
         *count += 1;
         let id =
             if *count == 1 { format!("esp:{}", partition.label) } else { format!("esp:{}#{count}", partition.label) };
+        // Partition offsets are flash offsets; a dump that starts at flash 0x1000 holds each 0x1000 bytes earlier.
+        let file_offset = flash.file_offset(partition.offset);
         let is_app = partition.kind == "app"
-            && usize::try_from(partition.offset).is_ok_and(|offset| esp::looks_like_app_image(bytes, offset));
-        let found = if is_app { app(id.clone(), "esp_app", partition.offset) } else { None };
+            && file_offset
+                .and_then(|offset| usize::try_from(offset).ok())
+                .is_some_and(|offset| esp::looks_like_app_image(bytes, offset));
+        let found = match file_offset {
+            Some(offset) if is_app => app(id.clone(), "esp_app", offset),
+            _ => None,
+        };
         let mut component = found.unwrap_or_else(|| {
             let mut component = Component::new(id.clone(), "partition", Opener::Data);
-            let begin = usize::try_from(partition.offset).unwrap_or(usize::MAX).min(bytes.len());
-            let end =
-                usize::try_from(partition.offset.saturating_add(partition.size)).unwrap_or(usize::MAX).min(bytes.len());
+            let Some(offset) = file_offset else {
+                component.digest = Some(sha256_of(&[]));
+                component.facts.insert("note".to_owned(), json!("lies before the start of the dump"));
+                return component;
+            };
+            let begin = usize::try_from(offset).unwrap_or(usize::MAX).min(bytes.len());
+            let end = usize::try_from(offset.saturating_add(partition.size)).unwrap_or(usize::MAX).min(bytes.len());
             component.digest = Some(sha256_of(&bytes[begin..end.max(begin)]));
-            if end < usize::try_from(partition.offset.saturating_add(partition.size)).unwrap_or(usize::MAX) {
+            if end < usize::try_from(offset.saturating_add(partition.size)).unwrap_or(usize::MAX) {
                 component.facts.insert("note".to_owned(), json!("runs past the end of the dump"));
             }
             component

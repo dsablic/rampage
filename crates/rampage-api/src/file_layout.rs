@@ -411,6 +411,13 @@ fn esp_hints(bytes: &[u8]) -> Vec<LayoutHint> {
         if let Some(md5) = &table.md5 {
             evidence.push(format!("MD5 entry {}", if md5.valid { "valid" } else { "mismatch" }));
         }
+        if layout.flash_base != 0 {
+            evidence.push(format!(
+                "the dump starts at flash offset {:#x}: partition offsets are flash offsets, each {:#x} past its file \
+                 offset",
+                layout.flash_base, layout.flash_base
+            ));
+        }
         hints.push(hint("esp_partition_table", table.offset, evidence));
     }
     for (partition, offset) in layout.app_images(bytes) {
