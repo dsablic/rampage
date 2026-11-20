@@ -1520,7 +1520,22 @@ fn uimage(bytes: &[u8]) -> Option<Candidate> {
     });
     let name = &header[32..64];
     let name = &name[..name.iter().position(|&byte| byte == 0).unwrap_or(name.len())];
-    candidate.notes.push(format!("image name {:?}, compression type {}", String::from_utf8_lossy(name), header[31]));
+    let compression = match header[31] {
+        0 => "none".to_owned(),
+        1 => "gzip".to_owned(),
+        2 => "bzip2".to_owned(),
+        3 => "lzma".to_owned(),
+        4 => "lzo".to_owned(),
+        5 => "lz4".to_owned(),
+        6 => "zstd".to_owned(),
+        other => format!("type {other}"),
+    };
+    let [load, entry] = [16, 20].map(|at| read_uint(header, at, 4, true).unwrap_or(0));
+    candidate.notes.push(format!(
+        "image name {:?}, load address {load:#x}, entry {entry:#x}, data size {} bytes, compression {compression}",
+        String::from_utf8_lossy(name),
+        size - 64
+    ));
     candidate.declared_size = Some(size);
     Some(candidate.extent(size, "uImage header data size"))
 }

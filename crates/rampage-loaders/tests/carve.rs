@@ -158,7 +158,10 @@ fn uimage() -> Vec<u8> {
     let mut bytes = vec![0u8; 64 + 16];
     bytes[..4].copy_from_slice(&0x2705_1956u32.to_be_bytes());
     bytes[12..16].copy_from_slice(&16u32.to_be_bytes());
+    bytes[16..20].copy_from_slice(&0x8006_0000u32.to_be_bytes());
+    bytes[20..24].copy_from_slice(&0x8006_0040u32.to_be_bytes());
     bytes[29] = 2;
+    bytes[31] = 3;
     bytes[32..38].copy_from_slice(b"kernel");
     let crc = crc32(&bytes[..64]);
     bytes[4..8].copy_from_slice(&crc.to_be_bytes());
@@ -255,6 +258,10 @@ fn carves_fixtures_and_containers_at_odd_offsets_inside_junk() {
     assert_eq!(by_kind(Kind::Zstd).uncompressed_size, Some(42));
     assert_eq!(by_kind(Kind::Squashfs).declared_size, Some(200));
     assert_eq!(by_kind(Kind::UImage).declared_size, Some(80));
+    assert_eq!(
+        by_kind(Kind::UImage).notes[0],
+        r#"image name "kernel", load address 0x80060000, entry 0x80060040, data size 16 bytes, compression lzma"#
+    );
     assert!(by_kind(Kind::Gzip).notes.iter().any(|note| note.contains("inner.bin")));
     assert_eq!(by_kind(Kind::Pe).extent_source, Some("PE headers, section table and certificate table"));
 }
