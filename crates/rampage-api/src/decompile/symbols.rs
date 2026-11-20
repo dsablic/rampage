@@ -134,6 +134,7 @@ pub(super) fn plan(project: &Project, annotations: &Annotations) -> Result<Vec<W
         }
     }
     operations.extend(data_names(project, annotations, &identities, &slots));
+    operations.extend(mips_got_functions(project, annotations, &identities, &slots));
     operations.extend(cortex_m_operations(project));
     operations.extend(mips_pic_operations(&project.binary));
     operations.extend(xtensa_operations(&project.binary));
@@ -173,6 +174,37 @@ pub(super) fn mips_pic_operations(binary: &rampage_loaders::Binary) -> Vec<Worke
         operations.push(WorkerOperation::ReadOnlyRange { first, last, read_only: true });
     }
     operations
+}
+
+/// A MIPS image's global GOT entries that hold one of its own functions: a shared library calls its exported
+/// functions through `lw $t9, %call16(f)($gp); jalr $t9` like imports, and the entry holds the definition's
+/// address until the dynamic linker binds it (to the same function unless another module interposes one). Each
+/// such entry is bound to its function, so the call renders by name rather than as `(*pcRam...)()`.
+fn mips_got_functions(
+    project: &Project,
+    annotations: &Annotations,
+    functions: &BTreeMap<u64, String>,
+    imports: &std::collections::BTreeSet<u64>,
+) -> Vec<WorkerOperation> {
+    let binary = &project.binary;
+    if !matches!(binary.arch, rampage_arch::Arch::Mips | rampage_arch::Arch::Mips64) {
+        return Vec::new();
+    }
+    let Some(got) = binary.target().got.filter(|got| got.local_entries > 0) else { return Vec::new() };
+    let width = u64::from(binary.arch.default_pointer_size().unwrap_or(4));
+    got.entries
+        .iter()
+        .enumerate()
+        .skip(got.local_entries)
+        .filter_map(|(index, &target)| {
+            let slot = got.address.checked_add((index as u64).checked_mul(width)?)?;
+            (!imports.contains(&slot) && functions.contains_key(&target)).then(|| WorkerOperation::Import {
+                slot,
+                target: Some(target),
+                name: project.function_name_in(annotations, target),
+            })
+        })
+        .collect()
 }
 
 /// Memory-mapped peripherals of the ESP chips: ESP32's DPORT and APB peripherals, and the ESP8266's, ESP32-S2's and

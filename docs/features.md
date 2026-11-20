@@ -88,7 +88,8 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   delay slots remain in their branch's block. MIPS position-independent code (Linux userland: routers, cameras)
   resolves its GOT through `$gp`, computed from `$t9` at each function entry or kept by GCC: calls through the GOT
   name their imports, GNU ld's lazy-binding `.MIPS.stubs` are named (the section header must be present), `lui`/`addiu` and GOT page loads give string
-  references, and the decompiler gets `$t9` and `$gp` at entry, so calls read `getenv("…")`. Binaries without
+  references, and the decompiler gets `$t9` and `$gp` at entry, so calls read `getenv("…")`; a shared library's calls to
+  its own exported functions through their global GOT entries read by the function's name. Binaries without
   section headers keep their GOT from the dynamic section. MIPS operands are typed for constant search, and
   `find_main` follows glibc's and musl's `__start`. MIPS32 boot ROMs and bare-metal images open as Raw
   projects ([Raw code](raw-code.md#mips-boot-roms-and-bare-metal-mips)). Native, specification-derived decoders are the preferred direction
