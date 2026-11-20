@@ -35,6 +35,9 @@ see the [stability policy](docs/stability.md) for what the version promises.
   `decompilations` (hits, stored, rejected, last_rejection). One size bound covers discovery and decompilations,
   kept as a running total with indexed eviction of the least recently used entries. The store file moves to
   `rampage-analysis-store-v2.sqlite`; the v1 file in the default directory is removed.
+- Analysis store: Raw projects reopened automatically with carried record seeds (common for decoded Cortex-M
+  update images) are now stored, with the seeds in the key, instead of being `unsupported`. On a 3.5 MB decoded
+  Cortex-M image a repeated decompilation drops from 1.2 s to 0.12 s, across processes too.
 - `rampage server store [--clear]` (experimental): shows the store file, its size and bound, and entries per kind;
   `--clear` deletes it after checking that it is a rampage store.
 - Fix: decompiling a large Raw Cortex-M image through the worker failed with "JSON wire depth/node limit exceeded"
