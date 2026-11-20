@@ -480,6 +480,7 @@ From [the acceptance report](docs/benchmarks/acceptance-2026-11-20.md).
 - [ ] Seed `DT_INIT`, `DT_FINI` and the init/fini arrays, plus function pointers in relocated data (M1: 90.7%
       against a 95% bar).
 - [ ] `diff_firmware` on Xtensa: code that only moved counts as changed (F2: 546 against 12).
+      Check first whether the 4000-functions-per-side listing cap is the cause (the ESP32 app has ~8700).
 - [ ] ESP8266 IROM function recall, 61% (X6).
 - [ ] `privacy_surface`: AndroidX `AccessibilityNodeInfo.getText` is not screen capture (A3).
 - [ ] `dex_metadata`: declared-permission protection level shows as `"2"` instead of a name; a reference run with
