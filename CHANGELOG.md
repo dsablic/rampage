@@ -6,6 +6,24 @@ see the [stability policy](docs/stability.md) for what the version promises.
 
 ## Unreleased
 
+- Acceptance pass on public firmware (OpenWrt MIPS images, MicroPython ESP32/ESP8266, Debian mipsel zlib, an
+  F-Droid APK pair): report in `docs/benchmarks/acceptance-2026-11-20.md`. Fixes from it below.
+- `check_claim`: a checksum claim without `args` also tries the `(seed, data, length)` and `(data, length, seed)`
+  layouts (zlib's `crc32` was refuted). It is refuted only when every layout gives a counterexample or crashes as
+  a wrong layout does; a layout stopped by a limit or by data set at run time keeps the claim unknown, with what
+  would decide it.
+- Decompiler: MIPS calls through a global GOT entry render by the name of the function its dynamic symbol
+  defines, when the entry holds that symbol's value.
+- MIPS: an ELF whose header marks MIPS16e or microMIPS gets a `binary_info` warning and a `list_functions` note
+  that it is not decoded. `jalx` targets, and symbols, exports or entries at addresses that are not 4-byte
+  aligned, start no function.
+- ESP: flash dumps that start at flash 0x1000 are read correctly by `diff_firmware`, `file_layout` and the open
+  guidance, when the dump starts with an ESP32 or ESP32-S2 bootloader or, if that fails its digest, when the
+  partition table at file 0x7000 points at application images 0x1000 bytes early.
+- `carve`: OpenWrt's UBI end-of-image marker is accepted and noted; uImage notes give load address, entry, data
+  size and compression by name.
+- `diff_firmware`: a page cut to fit the result continues after its last row (it skipped rows).
+- MCP: a `diff_builds` open error points at `diff_firmware`.
 - Persistent analysis store (experimental): also keeps each decompiled function. The key covers the binary's
   analysis key, the function, the decompiler options, where decompilation runs (in process, or the worker with its
   limits and executable), `DECOMPILE_CACHE_VERSION`, and every annotation except comments and findings. A comment

@@ -74,7 +74,8 @@ both earlier passes, so it is likely model variance. Tool errors seen, as small 
       memory); partitions in `fs_list` and SPIFFS/LittleFS/NVS contents; rBoot 0xEA images, encrypted flash and
       secure-boot signatures; `find_main` for ESP8266 NONOS `user_init` and builds without logging; MAC16,
       ESP32-S3 vector ops, FLIX, LITBASE; window-overflow exceptions in `evaluate_function`.
-- [ ] Test both on real firmware (a router userland, an ESP-IDF app) before calling them more than experimental.
+- [x] (2026-11-20, acceptance pass) Test both on real firmware (a router userland, an ESP-IDF app). ESP-IDF passed
+      X1–X5; router userland gaps are listed in "Acceptance pass follow-ups".
 
 ## Small hints (from the 1.7.0 docs audit)
 
@@ -446,7 +447,8 @@ From [the roadmap refresh](docs/plans/2026-11-20-roadmap-refresh.md), which give
 maintainer's amendments of 2026-11-20. One track at a time, each reviewed before merge and closed by its
 acceptance run.
 
-1. **Acceptance pass on real samples** (local, never committed or named) for MIPS, Xtensa and ESP images,
+1. [x] (2026-11-20, open-source inputs: [report](docs/benchmarks/acceptance-2026-11-20.md); the maintainer has no
+   second vendor version, so the vendor step was a single-file run) **Acceptance pass on real samples** (local, never committed or named) for MIPS, Xtensa and ESP images,
    `diff_firmware`, Android and `check_claim`. The set is built, not run:
    [acceptance set](docs/plans/2026-11-20-acceptance-set.md), `tools/acceptance/`. Deterministic checks first,
    then the eight Haiku tasks, then the maintainer's own vendor update pair.
@@ -468,6 +470,24 @@ after the acceptance pass's fixes have landed, not straight after incremental an
 
 Catalog budget (rule 6): measured after incremental analysis merged, 103,358 of 104,400 bytes (1,042 free). The
 rule stands.
+
+## Acceptance pass follow-ups (2026-11-20)
+
+From [the acceptance report](docs/benchmarks/acceptance-2026-11-20.md).
+- [ ] Read dynamic symbols of section-less ELF files from `PT_DYNAMIC` (M5: five OpenWrt libraries list 0
+      functions). Goes with the MIPS16e track: both are needed on a real router.
+- [ ] MIPS position-independent switch tables (M1: zlib's `inflate` and `inflateBack`).
+- [ ] Seed `DT_INIT`, `DT_FINI` and the init/fini arrays, plus function pointers in relocated data (M1: 90.7%
+      against a 95% bar).
+- [ ] `diff_firmware` on Xtensa: code that only moved counts as changed (F2: 546 against 12).
+- [ ] ESP8266 IROM function recall, 61% (X6).
+- [ ] `privacy_surface`: AndroidX `AccessibilityNodeInfo.getText` is not screen capture (A3).
+- [ ] `dex_metadata`: declared-permission protection level shows as `"2"` instead of a name; a reference run with
+      aapt2 (A2).
+- [ ] `binary_info`: report the MIPS ISA revision (agent task 3).
+- [ ] Rerun agent task 6 to confirm the `diff_builds` hint leads to `diff_firmware`.
+- [ ] `check_claim` on a Cortex-M function whose table lives in SRAM it fills lazily comes back unknown (the
+      table address is unmapped); consider a documented way to supply zeroed RAM, without assuming it silently.
 
 ## Incremental analysis: later slices (2026-11-20)
 
