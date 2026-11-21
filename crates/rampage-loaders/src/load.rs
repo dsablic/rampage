@@ -405,6 +405,11 @@ impl Binary {
     /// the first from the link register to get that base, and calls `_start_c` through `$t9`. Returns `_start_c`
     /// when it lies in code.
     pub fn musl_mips_start_c(&self) -> Option<u64> {
+        self.musl_mips_start_c_pointer().map(|pointer| pointer & !1)
+    }
+
+    /// [`Binary::musl_mips_start_c`] as the word gives it: odd when `_start_c` is MIPS16e code.
+    fn musl_mips_start_c_pointer(&self) -> Option<u64> {
         if self.arch != Arch::Mips || self.format != Format::Elf {
             return None;
         }
@@ -426,7 +431,9 @@ impl Binary {
         }
         let base = (link as u32).wrapping_sub(word(link)?);
         let start_c = u64::from(word(link.checked_add(4)?)?.wrapping_add(base));
-        (start_c & 3 == 0 && self.is_code(start_c)).then_some(start_c)
+        // A MIPS16e `_start_c` is an odd address in a MIPS16e image; MIPS32 code is 4-byte aligned.
+        let aligned = start_c & 3 == 0 || (self.mips16 && start_c & 1 == 1);
+        (aligned && self.is_code(start_c & !1)).then_some(start_c)
     }
 
     /// Whether code runs in two instruction sets whose mode discovery learns per address: 32-bit ARM (A32 and
@@ -1072,9 +1079,21 @@ impl Binary {
         let marked_constructors = dynamic.as_ref().map_or(&[][..], |dynamic| dynamic.constructors.as_slice());
         // MIPS16e code dispatches through tables of odd function pointers (busybox's applet table) that no
         // instruction references directly.
-        let pointer_tables =
-            if mips16 { mips16_pointer_tables(&segments, image_bytes, !parsed.is_little_endian()) } else { Vec::new() };
-        let marked_starts: Vec<u64> = macho_starts.iter().copied().chain(dynamic_functions.map(marked)).collect();
+        let pointer_tables = if mips16 {
+            let (headers_end, tables) = dynamic.as_ref().map_or_else(
+                || (crate::dynsym::program_headers_end(image_bytes).unwrap_or(u64::MAX), Vec::new()),
+                |dynamic| (dynamic.headers_end, dynamic.tables.clone()),
+            );
+            let scan = PointerTableScan { segments: &segments, image: image_bytes, headers_end, tables: &tables };
+            scan.mips16_pointers(!parsed.is_little_endian())
+        } else {
+            Vec::new()
+        };
+        // A Thumb constructor in an ARM image is odd too; on MIPS16e an unsized one marks only its first
+        // instruction (below).
+        let arm_constructors = marked_constructors.iter().copied().filter(|_| arch == Arch::Arm);
+        let marked_starts: Vec<u64> =
+            macho_starts.iter().copied().chain(dynamic_functions.map(marked)).chain(arm_constructors).collect();
         let thumb = match arch {
             Arch::Arm => thumb_ranges(&parsed, raw_entry, &segments, &sections, &marked_starts),
             _ => Vec::new(),
@@ -1223,7 +1242,14 @@ impl Binary {
         function_starts.extend(crate::msvc::code_targets(&binary, &msvc));
         binary.msvc = (binary.format == Format::Pe).then_some(msvc);
         // musl's MIPS `_start` reaches `_start_c` only through a word after its `bal`, which discovery cannot follow.
-        function_starts.extend(binary.musl_mips_start_c());
+        if let Some(pointer) = binary.musl_mips_start_c_pointer() {
+            function_starts.push(pointer & !1);
+            if pointer & 1 == 1 {
+                let start = pointer & !1;
+                binary.mips16_ranges =
+                    merged(binary.mips16_ranges.drain(..).chain(std::iter::once(start..start + 2)).collect());
+            }
+        }
         let (starts, warning) = starts::eh_frame(&binary);
         function_starts.extend(starts);
         binary.warnings.extend(warning);
@@ -2010,59 +2036,111 @@ pub(crate) fn xtensa_prologue_vote(binary: &Binary) -> bool {
     call0 > 0 && windowed.saturating_mul(4) < call0
 }
 
-/// Most pointers [`mips16_pointer_tables`] returns.
+/// Most pointers [`PointerTableScan::mips16_pointers`] returns.
 const MAX_MIPS16_TABLE_POINTERS: usize = 1 << 16;
-/// Fewest consecutive odd code pointers that make a table.
+/// Fewest consecutive, distinct odd code pointers that make a table.
 const MIN_MIPS16_TABLE_RUN: usize = 4;
+/// Least span of a table's targets: a table whose targets all lie this close together is a switch's label table
+/// inside one function (`.word L|1`), not a table of functions.
+const MIN_MIPS16_TABLE_SPAN: u64 = 0x80;
 
-/// MIPS16e function pointers in tables: runs of at least [`MIN_MIPS16_TABLE_RUN`] consecutive aligned words in the
-/// segments' file data, each an odd address (the MIPS16e ISA bit) inside file-backed executable memory where no
-/// string starts. Returned with the ISA bit, deduplicated.
-fn mips16_pointer_tables(segments: &[Segment], image: &[u8], big_endian: bool) -> Vec<u64> {
-    let executable = |address: u64| {
-        segments.iter().any(|segment| {
-            segment.perms.execute
-                && address >= segment.address
-                && address - segment.address < segment.file_size.min(segment.size)
-        })
-    };
-    // Read-only data shares the executable segment, so a table of string pointers would pass for code pointers: a
-    // target that starts a NUL-terminated printable run is a string. At the even address, where code would start,
-    // a single printable byte before a NUL is also a MIPS16e instruction (`li $v0, 0` is `6a 00`).
-    let starts_text = |address: u64, minimum: usize| {
-        let Some(segment) = segments.iter().find(|segment| segment.contains(address)) else { return false };
-        let offset = segment.file_offset.saturating_add(address - segment.address);
-        let Some(bytes) = usize::try_from(offset).ok().and_then(|offset| image.get(offset..)) else { return false };
+/// What a scan for MIPS16e function-pointer tables must leave alone.
+struct PointerTableScan<'a> {
+    segments: &'a [Segment],
+    image: &'a [u8],
+    /// File offset just past the program headers: the ELF header and program headers are not code, though the
+    /// first executable segment of an image based at 0 covers them.
+    headers_end: u64,
+    /// Address ranges of the dynamic section's tables (hash, symbol, string and relocation tables): data whose
+    /// small odd words (hash buckets, symbol indices) would otherwise pass for pointers into code at 0.
+    tables: &'a [Range<u64>],
+}
+
+impl PointerTableScan<'_> {
+    fn file_offset(&self, address: u64) -> Option<u64> {
+        let segment = self.segments.iter().find(|segment| {
+            address >= segment.address && address - segment.address < segment.file_size.min(segment.size)
+        })?;
+        segment.file_offset.checked_add(address - segment.address)
+    }
+
+    fn in_tables(&self, address: u64) -> bool {
+        self.tables.iter().any(|range| range.contains(&address))
+    }
+
+    /// The file bytes from `address` on.
+    fn bytes(&self, address: u64) -> Option<&[u8]> {
+        self.image.get(usize::try_from(self.file_offset(address)?).ok()?..)
+    }
+
+    /// Whether `address` starts a NUL-terminated run of at least `minimum` printable bytes.
+    fn starts_text(&self, address: u64, minimum: usize) -> bool {
+        let Some(bytes) = self.bytes(address) else { return false };
         let printable = |byte: u8| byte.is_ascii_graphic() || matches!(byte, b' ' | b'\t' | b'\n' | b'\r');
         let run = bytes.iter().take(256).take_while(|&&byte| printable(byte)).count();
         run >= minimum && bytes.get(run) == Some(&0)
-    };
-    let mut found = std::collections::BTreeSet::new();
-    for segment in segments {
-        let Some(start) = usize::try_from(segment.file_offset).ok() else { continue };
-        let length = usize::try_from(segment.file_size).unwrap_or(usize::MAX);
-        let Some(bytes) = image.get(start..start.saturating_add(length).min(image.len())) else { continue };
-        let skip = (segment.address.next_multiple_of(4) - segment.address) as usize;
-        let mut run = Vec::new();
-        for &word in bytes.get(skip..).unwrap_or_default().as_chunks::<4>().0 {
-            let value = u64::from(if big_endian { u32::from_be_bytes(word) } else { u32::from_le_bytes(word) });
-            if value & 1 == 1 && executable(value & !1) && !starts_text(value, 1) && !starts_text(value & !1, 2) {
-                run.push(value);
-                continue;
-            }
-            if run.len() >= MIN_MIPS16_TABLE_RUN {
-                found.extend(run.iter().copied());
+    }
+
+    /// Whether `value` may point at a MIPS16e function: odd, inside file-backed executable memory past the headers
+    /// and outside the dynamic tables, at no string (read-only data shares the executable segment, and a table of
+    /// string pointers would pass for code pointers), and at bytes that decode as a MIPS16e instruction.
+    fn plausible(&self, value: u64, big_endian: bool) -> bool {
+        let code = value & !1;
+        let executable = self.segments.iter().any(|segment| {
+            segment.perms.execute
+                && code >= segment.address
+                && code - segment.address < segment.file_size.min(segment.size)
+        });
+        // At the even address, where code starts, a short printable run before a NUL can be instructions
+        // (`li $v0, 0` is `6a 00`), so only a longer one counts as a string there.
+        value & 1 == 1
+            && executable
+            && self.file_offset(code).is_some_and(|offset| offset >= self.headers_end)
+            && !self.in_tables(code)
+            && !self.starts_text(value, 1)
+            && !self.starts_text(code, 3)
+            && self.bytes(code).is_some_and(|bytes| rampage_arch::decodes_as_mips16(bytes, big_endian))
+    }
+
+    /// MIPS16e function pointers in tables: runs of at least [`MIN_MIPS16_TABLE_RUN`] consecutive aligned words in
+    /// the segments' file data outside the headers and dynamic tables, each [`Self::plausible`], with that many
+    /// distinct targets spread over at least [`MIN_MIPS16_TABLE_SPAN`]. Returned with the ISA bit, deduplicated.
+    fn mips16_pointers(&self, big_endian: bool) -> Vec<u64> {
+        let mut found = std::collections::BTreeSet::new();
+        let accept = |run: &mut Vec<u64>, found: &mut std::collections::BTreeSet<u64>| {
+            let distinct: std::collections::BTreeSet<u64> = run.iter().copied().collect();
+            let span = distinct.last().zip(distinct.first()).map_or(0, |(last, first)| last - first);
+            if distinct.len() >= MIN_MIPS16_TABLE_RUN && span >= MIN_MIPS16_TABLE_SPAN {
+                found.extend(distinct);
             }
             run.clear();
+        };
+        for segment in self.segments {
+            let Some(start) = usize::try_from(segment.file_offset).ok() else { continue };
+            let length = usize::try_from(segment.file_size).unwrap_or(usize::MAX);
+            let Some(bytes) = self.image.get(start..start.saturating_add(length).min(self.image.len())) else {
+                continue;
+            };
+            let skip = segment.address.next_multiple_of(4) - segment.address;
+            let mut run = Vec::new();
+            let words = bytes.get(skip as usize..).unwrap_or_default().as_chunks::<4>().0;
+            for (index, &word) in words.iter().enumerate() {
+                let at = segment.address.saturating_add(skip + 4 * index as u64);
+                let offset = segment.file_offset.saturating_add(skip + 4 * index as u64);
+                let value = u64::from(if big_endian { u32::from_be_bytes(word) } else { u32::from_le_bytes(word) });
+                if offset >= self.headers_end && !self.in_tables(at) && self.plausible(value, big_endian) {
+                    run.push(value);
+                } else {
+                    accept(&mut run, &mut found);
+                }
+            }
+            accept(&mut run, &mut found);
+            if found.len() >= MAX_MIPS16_TABLE_POINTERS {
+                break;
+            }
         }
-        if run.len() >= MIN_MIPS16_TABLE_RUN {
-            found.extend(run);
-        }
-        if found.len() >= MAX_MIPS16_TABLE_POINTERS {
-            break;
-        }
+        found.into_iter().take(MAX_MIPS16_TABLE_POINTERS).collect()
     }
-    found.into_iter().take(MAX_MIPS16_TABLE_POINTERS).collect()
 }
 
 /// `e_flags` bits of a MIPS ELF holding MIPS16e (`EF_MIPS_ARCH_ASE_M16`) or microMIPS (`EF_MIPS_MICROMIPS`) code.
@@ -2268,7 +2346,7 @@ mod tests {
             }
         };
         // Data at 0x2000 (file 0x100): a table of four, a run of three, and a run broken by a string pointer.
-        words(&mut image, 0x100, &[0x1001, 0x1011, 0x1021, 0x1031, 0]);
+        words(&mut image, 0x100, &[0x1001, 0x1031, 0x1061, 0x1091, 0]);
         words(&mut image, 0x120, &[0x1041, 0x1051, 0x1061, 0]);
         words(&mut image, 0x140, &[0x1071, 0x1081, 0x10f1, 0x1091, 0x10a1, 0]);
         words(&mut image, 0x160, &[0x3001, 0x3011, 0x3021, 0x3031, 0]);
@@ -2282,7 +2360,46 @@ mod tests {
             perms: perms(execute),
         };
         let segments = [segment(0x1000, 0, true), segment(0x2000, 0x100, false)];
-        assert_eq!(mips16_pointer_tables(&segments, &image, true), [0x1001, 0x1011, 0x1021, 0x1031]);
+        let scan = PointerTableScan { segments: &segments, image: &image, headers_end: 0, tables: &[] };
+        assert_eq!(scan.mips16_pointers(true), [0x1001, 0x1031, 0x1061, 0x1091]);
+        // A table of repeated or close-together targets (a switch's labels) is no function table.
+        let mut repeated = image.clone();
+        words(&mut repeated, 0x100, &[0x1001, 0x1001, 0x1011, 0x1011, 0]);
+        let close = PointerTableScan { segments: &segments, image: &repeated, headers_end: 0, tables: &[] };
+        assert!(close.mips16_pointers(true).is_empty());
+    }
+
+    /// Review: in an image based at 0 the first executable segment covers the ELF header, program headers and the
+    /// dynamic tables, whose small odd words (hash buckets {1, 3, 5, 7}) would otherwise seed functions at 0..8.
+    #[test]
+    fn mips16_pointer_tables_skip_headers_and_dynamic_tables_at_base_zero() {
+        let mut image = vec![0u8; 0x400];
+        for at in (0..0x400).step_by(2) {
+            image[at..at + 2].copy_from_slice(&0x6500u16.to_be_bytes());
+        }
+        let words = |image: &mut Vec<u8>, at: usize, values: &[u32]| {
+            for (index, value) in values.iter().enumerate() {
+                image[at + index * 4..at + index * 4 + 4].copy_from_slice(&value.to_be_bytes());
+            }
+        };
+        // Headers end at 0x80; a hash table at 0x100 holds buckets 1, 3, 5, 7 and chains 9, 0xb, 0xd, 0xf; data at
+        // 0x40 (inside the headers) and a real table at 0x200 point at code past the headers.
+        words(&mut image, 0x40, &[0x301, 0x311, 0x351, 0x391, 0]);
+        words(&mut image, 0x100, &[1, 3, 5, 7, 9, 0xb, 0xd, 0xf, 0]);
+        words(&mut image, 0x180, &[1, 3, 5, 7, 0]);
+        words(&mut image, 0x200, &[0x301, 0x311, 0x351, 0x3a1, 0]);
+        let segment = Segment {
+            name: String::new(),
+            address: 0,
+            size: 0x400,
+            file_offset: 0,
+            file_size: 0x400,
+            perms: Perms { read: true, write: false, execute: true },
+        };
+        let segments = [segment];
+        let tables = vec![Range { start: 0x100, end: 0x124 }];
+        let scan = PointerTableScan { segments: &segments, image: &image, headers_end: 0x80, tables: &tables };
+        assert_eq!(scan.mips16_pointers(true), [0x301, 0x311, 0x351, 0x3a1]);
     }
 
     #[test]

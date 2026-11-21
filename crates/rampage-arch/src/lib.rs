@@ -582,6 +582,12 @@ pub trait Disassembler {
     fn format(&mut self, bytes: &[u8], address: u64) -> String;
 }
 
+/// Whether `bytes` start with a MIPS16e instruction rampage decodes (an `EXTEND` prefix with its instruction counts
+/// as one), as a check that a candidate MIPS16e function pointer points at code.
+pub fn decodes_as_mips16(bytes: &[u8], big_endian: bool) -> bool {
+    mips16::decode(bytes, 0, big_endian, None).is_some()
+}
+
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 #[error("unsupported architecture: {0}")]
 pub struct UnsupportedArch(pub Arch);

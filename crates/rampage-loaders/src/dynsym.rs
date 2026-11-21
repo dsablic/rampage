@@ -76,9 +76,26 @@ pub(crate) struct Image<'data> {
     machine: u16,
     loads: Vec<Load>,
     entries: Vec<(u64, u64)>,
+    /// The file offset just past the program header table.
+    headers_end: u64,
+    /// The address and size of `PT_DYNAMIC`.
+    dynamic_range: Option<(u64, u64)>,
 }
 
 impl<'data> Image<'data> {
+    fn empty() -> Self {
+        Self {
+            data: &[],
+            is_64: false,
+            big_endian: false,
+            machine: 0,
+            loads: Vec::new(),
+            entries: Vec::new(),
+            headers_end: 0,
+            dynamic_range: None,
+        }
+    }
+
     /// The image's loadable segments and dynamic entries, or `None` for a file that is not ELF or has no
     /// `PT_DYNAMIC` within its bytes.
     pub(crate) fn parse(data: &'data [u8]) -> Option<Self> {
@@ -95,7 +112,16 @@ impl<'data> Image<'data> {
             2 => true,
             _ => return None,
         };
-        let mut image = Self { data, is_64, big_endian, machine: 0, loads: Vec::new(), entries: Vec::new() };
+        let mut image = Self {
+            data,
+            is_64,
+            big_endian,
+            machine: 0,
+            loads: Vec::new(),
+            entries: Vec::new(),
+            headers_end: 0,
+            dynamic_range: None,
+        };
         image.machine = image.uint(18, 2)? as u16;
         let (phoff, phentsize, phnum) = if is_64 {
             (image.uint(32, 8)?, image.uint(54, 2)?, image.uint(56, 2)?)
@@ -106,6 +132,7 @@ impl<'data> Image<'data> {
         if phentsize < minimum || phoff == 0 {
             return None;
         }
+        image.headers_end = phentsize.checked_mul(phnum).and_then(|size| phoff.checked_add(size)).unwrap_or(u64::MAX);
         let mut dynamic = None;
         for index in 0..usize::try_from(phnum).ok()?.min(MAX_PROGRAM_HEADERS) {
             let Some(at) = phoff.checked_add(phentsize.checked_mul(index as u64)?) else { break };
@@ -123,7 +150,10 @@ impl<'data> Image<'data> {
             match kind as u32 {
                 PT_LOAD if sound => image.loads.push(Load { address, offset, file_size }),
                 PT_LOAD => {}
-                PT_DYNAMIC if dynamic.is_none() => dynamic = Some((offset, file_size)),
+                PT_DYNAMIC if dynamic.is_none() => {
+                    dynamic = Some((offset, file_size));
+                    image.dynamic_range = Some((address, file_size));
+                }
                 _ => {}
             }
         }
@@ -200,6 +230,17 @@ impl<'data> Image<'data> {
     }
 }
 
+/// The file offset just past an ELF file's program header table, for files with no dynamic section.
+pub(crate) fn program_headers_end(data: &[u8]) -> Option<u64> {
+    let image = Image { data, is_64: data.get(4)? == &2, big_endian: data.get(5)? == &2, ..Image::empty() };
+    let (phoff, phentsize, phnum) = if image.is_64 {
+        (image.uint(32, 8)?, image.uint(54, 2)?, image.uint(56, 2)?)
+    } else {
+        (image.uint(28, 4)?, image.uint(42, 2)?, image.uint(44, 2)?)
+    };
+    phoff.checked_add(phentsize.checked_mul(phnum)?)
+}
+
 /// `base + index * scale`, or `None` when it would wrap around 2^64.
 fn element(base: u64, index: u64, scale: u64) -> Option<u64> {
     base.checked_add(index.checked_mul(scale)?)
@@ -262,6 +303,11 @@ pub(crate) struct Dynamic {
     pub(crate) constructors: Vec<u64>,
     pub(crate) warnings: Vec<String>,
     pub(crate) is_64: bool,
+    /// The file offset just past the program header table.
+    pub(crate) headers_end: u64,
+    /// The address ranges of the tables the dynamic section names (itself, the hash tables, the symbol and string
+    /// tables, the relocation tables): data, never code.
+    pub(crate) tables: Vec<std::ops::Range<u64>>,
     /// The MIPS GOT layout, which the loader completes with [`Dynamic::symbols`]'s count.
     pub(crate) mips_got: Option<crate::slots::MipsGot>,
 }
@@ -281,7 +327,44 @@ pub(crate) fn read(data: &[u8], symbols: bool) -> Option<Dynamic> {
     }
     dynamic.relocations = relocations(&image, &mut dynamic.warnings);
     dynamic.constructors = constructors(&image, &dynamic.relocations);
+    dynamic.headers_end = image.headers_end;
+    dynamic.tables = tables(&image);
     Some(dynamic)
+}
+
+/// The address ranges of the dynamic section and the tables it names, as far as their sizes are known.
+fn tables(image: &Image) -> Vec<std::ops::Range<u64>> {
+    let range = |start: u64, size: Option<u64>| Some(start..start.checked_add(size?)?);
+    let mut found: Vec<Option<std::ops::Range<u64>>> = Vec::new();
+    found.push(image.dynamic_range.and_then(|(address, size)| range(address, Some(size))));
+    let count = symbol_count(image).ok().flatten().map(|count| count as u64);
+    let entry = if image.is_64 { 24 } else { 16 };
+    if let Some(table) = image.value(DT_SYMTAB) {
+        found.push(range(table, count.and_then(|count| count.checked_mul(entry))));
+    }
+    if let (Some(strings), Some(size)) = (image.value(DT_STRTAB), image.value(DT_STRSZ)) {
+        found.push(range(strings, Some(size)));
+    }
+    if let Some(hash) = image.value(DT_HASH) {
+        let words = |index| element(hash, index, 4).and_then(|at| image.read(at, 4));
+        let size = words(0).zip(words(1)).and_then(|(buckets, chains)| element(8, buckets.checked_add(chains)?, 4));
+        found.push(range(hash, size));
+    }
+    if let Some(hash) = image.value(DT_GNU_HASH) {
+        let words = |index| element(hash, index, 4).and_then(|at| image.read(at, 4));
+        let size = (|| {
+            let (buckets, first, bloom) = (words(0)?, words(1)?, words(2)?);
+            let chains = count?.checked_sub(first)?;
+            element(16, bloom, image.pointer_size())?.checked_add(buckets.checked_add(chains)?.checked_mul(4)?)
+        })();
+        found.push(range(hash, size));
+    }
+    for (tag, size_tag) in [(DT_REL, DT_RELSZ), (DT_RELA, DT_RELASZ), (DT_JMPREL, DT_PLTRELSZ)] {
+        if let Some(table) = image.value(tag) {
+            found.push(range(table, image.value(size_tag)));
+        }
+    }
+    found.into_iter().flatten().filter(|range| range.start < range.end).collect()
 }
 
 /// How many entries the dynamic symbol table has: `DT_MIPS_SYMTABNO`, `DT_HASH`'s chain count, or one past the

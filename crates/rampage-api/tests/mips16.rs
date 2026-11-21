@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use object::{Object, ObjectSymbol, SymbolFlags, SymbolKind};
+use object::{Object, ObjectSection, ObjectSymbol, SymbolFlags, SymbolKind};
 use rampage_api::{Project, XrefQuery};
 use rampage_loaders::Binary;
 
@@ -32,6 +32,29 @@ fn truth(file: &str) -> BTreeMap<String, (Range<u64>, bool)> {
         functions.insert(name, (start..start + symbol.size().max(2), mips16));
     }
     functions
+}
+
+/// The address range of the -sym copy's `.MIPS.stubs`, GNU ld's lazy-binding stubs, which have no symbols.
+fn stubs(file: &str) -> Range<u64> {
+    let data = std::fs::read(format!("{DIR}{file}")).unwrap();
+    let parsed = object::File::parse(&*data).unwrap();
+    parsed.section_by_name(".MIPS.stubs").map_or(0..0, |section| section.address()..section.address() + section.size())
+}
+
+/// Review: every function listed is a truth function or a lazy-binding stub, so nothing is seeded from data that
+/// only looks like code pointers (hash buckets, symbol indices, small integer arrays).
+fn assert_precise(project: &Project, sym_file: &str) {
+    let truth = truth(sym_file);
+    let stubs = stubs(sym_file);
+    let starts: Vec<u64> = truth.values().map(|(range, _)| range.start).collect();
+    let functions = project.functions(&rampage_api::FunctionsQuery::default()).unwrap();
+    for function in &functions.items {
+        assert!(
+            starts.contains(&function.address) || stubs.contains(&function.address),
+            "{sym_file}: {:#x} is no function of the truth",
+            function.address
+        );
+    }
 }
 
 fn address(truth: &BTreeMap<String, (Range<u64>, bool)>, name: &str) -> u64 {
@@ -72,6 +95,7 @@ fn functions_are_found_and_decoded_in_their_own_instruction_set() {
             }
         }
         assert!(checked > 100, "{name}: only {checked} instructions checked");
+        assert_precise(&project, &format!("{name}-sym.elf"));
         // Both instruction sets are present.
         assert!(truth.values().any(|(_, mips16)| *mips16) && truth.values().any(|(_, mips16)| !*mips16));
     }
@@ -158,6 +182,7 @@ fn a_sectionless_mips16e_library_lists_its_functions() {
     }
     let page = project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap();
     assert!(page.note.is_none(), "{:?}", page.note);
+    assert_precise(&project, "libmips16-gnu-mipsel-sym.so");
     // lib_length calls the MIPS32 export and the MIPS16e one through their GOT entries.
     for callee in ["lib_mul32", "lib_add"] {
         let rows = project.xrefs(XrefQuery::To(address(&truth, callee)), None, None).unwrap();
@@ -180,4 +205,41 @@ fn mips16e_functions_evaluate() {
             assert_eq!(report["result"]["unsigned"], result, "{name} {function}: {report}");
         }
     }
+}
+
+/// Review: a MIPS16e function known only from an unsized pointer (here the constructor `setup`, named only by
+/// DT_INIT_ARRAY) has a loader range of one instruction; discovery, decompilation and evaluation still read all of
+/// it as MIPS16e.
+#[test]
+fn a_function_seeded_by_a_bare_pointer_decompiles_and_evaluates_as_mips16e() {
+    for name in PROGRAMS {
+        let project = open(&format!("{name}.elf"));
+        let truth = truth(&format!("{name}-sym.elf"));
+        let setup = address(&truth, "setup");
+        assert!(project.binary.target().is_thumb(setup) && !project.binary.target().is_thumb(setup + 2), "{name}");
+        let listing = project.function_listing(setup).unwrap();
+        assert!(listing.blocks.iter().flatten().all(|line| line.flow != rampage_arch::Flow::Invalid), "{name}");
+        let code = project.decompile(setup).unwrap().code;
+        assert!(code.contains("= 1;"), "{name}: {code}");
+        let request = serde_json::json!({ "at": format!("{setup:#x}"), "args": [] });
+        let report = project.evaluate_function(&serde_json::from_value(request).unwrap()).unwrap();
+        let report = serde_json::to_value(report).unwrap();
+        assert_eq!(report["stop"], "returned", "{name}: {report}");
+    }
+}
+
+/// Review: fuzzy feature extraction treats MIPS16e functions as it treats MIPS32 ones (both refused today, for their
+/// delay slots), never with a mode or profile error of their own.
+#[test]
+fn fuzzy_signatures_treat_mips16e_functions_as_mips32_ones() {
+    let project = open("router16-gnu-mips-sym.elf");
+    let request: rampage_api::FuzzyBuildRequest = serde_json::from_value(serde_json::json!({
+        "owned_names": ["crc32_init", "handle_request", "crc32_update"],
+        "provenance": {"library": "owned", "source": "router16.c", "cohort": "source"}
+    }))
+    .unwrap();
+    let build = project.build_fuzzy_signatures(&request).unwrap();
+    let reasons: Vec<&str> = build.rejected.iter().map(|rejection| rejection.reason.as_str()).collect();
+    assert_eq!(build.references + reasons.len(), 3, "{:?}", build.rejected);
+    assert!(reasons.iter().all(|reason| *reason == reasons[0] && !reason.contains("mode")), "{reasons:?}");
 }

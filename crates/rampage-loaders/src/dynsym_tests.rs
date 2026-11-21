@@ -321,3 +321,34 @@ fn tables_at_the_top_of_the_address_space_do_not_overflow() {
     );
     assert!(read(&data, false).unwrap().constructors.is_empty());
 }
+
+/// Review: a constructor whose pointer has the Thumb bit, in an ARM image whose entry is A32, is Thumb code. The
+/// fixture is hello-arm.elf with its DT_DEBUG entry turned into a DT_INIT naming 0x20370 as Thumb.
+#[test]
+fn an_odd_arm_constructor_is_thumb_code() {
+    let mut data = fixture("bin/hello-arm.elf");
+    let (at, ..) = entries(&data).into_iter().find(|&(_, tag, _)| tag == 21).unwrap();
+    put(&mut data, at, 4, DT_INIT);
+    put(&mut data, at + 4, 4, 0x20371);
+    let binary = load(data);
+    assert!(!binary.target().is_thumb(binary.entry.unwrap()));
+    assert!(binary.function_starts.contains(&0x20370), "{:x?}", binary.function_starts);
+    assert!(binary.target().is_thumb(0x20370), "{:x?}", binary.thumb);
+}
+
+/// Review: musl's `_start` in a MIPS16e image may name a MIPS16e `_start_c` (an odd word); it is seeded at the even
+/// address as MIPS16e code. The fixture is router16-gnu-mips.elf with its entry rewritten as musl's `_start`.
+#[test]
+fn a_mips16e_musl_start_c_is_seeded_in_its_mode() {
+    let mut data = fixture("mips/router16-gnu-mips.elf");
+    // __start, in the first segment, which maps file offset 0 at address 0.
+    let entry = 0x840usize;
+    // bal entry+0x14; nop; .word entry+8 (no base); .word 0x741 (an odd target); pad; lw $gp, 0($ra)
+    for (index, word) in [0x0411_0004u32, 0, entry as u32 + 8, 0x741, 0, 0x8ffc_0000].into_iter().enumerate() {
+        data[entry + index * 4..entry + index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+    }
+    let binary = load(data);
+    assert_eq!(binary.musl_mips_start_c(), Some(0x740));
+    assert!(binary.function_starts.contains(&0x740), "{:x?}", binary.function_starts);
+    assert!(binary.target().is_thumb(0x740));
+}
