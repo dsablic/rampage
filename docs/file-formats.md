@@ -150,6 +150,9 @@ strings and data through the GOT, addressed from `$gp`. rampage reads:
 
 - **The global pointer**: the `_gp` symbol, else `.got` plus 0x7ff0, else `DT_PLTGOT` plus 0x7ff0, so a binary
   without section headers (many firmware images strip them) keeps it.
+- **Dynamic symbols without section headers**: `DT_SYMTAB` and `DT_STRTAB`, counted by `DT_MIPS_SYMTABNO`,
+  `DT_HASH` or `DT_GNU_HASH`, give the exports, imports and import slots of a file `sstrip` left without sections
+  (on every architecture, not only MIPS), and complete the GOT layout below.
 - **The GOT layout** from the dynamic section: `DT_PLTGOT` (its address), `DT_MIPS_LOCAL_GOTNO` local entries, then
   one global entry per dynamic symbol from `DT_MIPS_GOTSYM` on. Local entries hold addresses (a 64 KiB page that a
   `%lo` offset completes, or a local symbol's own address) even when zero, the first page of a PIE; the first two

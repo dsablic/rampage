@@ -63,11 +63,12 @@ jumps to code in cached kseg0 (0x80000000 up). Map the image where it runs:
 
 Absolute `lui`/`addiu` pairs give string and data references, and `find_main` follows the reset code to its C entry
 (see [find main](#find-main)). The exception vectors at 0xbfc00200 and 0xbfc00380 (BEV set) are not
-seeded on their own; add them to `seeds` when the image has handlers there. microMIPS and MIPS16e code, MIPS64
-and the vector table, pointer-table and scatter-load options of Cortex-M have no MIPS equivalent. A Linux userland
-or kernel ELF needs no Raw project: open it directly (position-independent code resolves its GOT through `$gp`).
-An ELF whose header marks MIPS16e or microMIPS code (OpenWrt builds most programs as MIPS16e) gets a `binary_info`
-warning and a `list_functions` note that only its MIPS32 code is analysed.
+seeded on their own; add them to `seeds` when the image has handlers there. A Raw MIPS image is read as MIPS32
+only: microMIPS and MIPS16e code, MIPS64 and the vector table, pointer-table and scatter-load options of Cortex-M
+have no MIPS equivalent. A Linux userland or kernel ELF needs no Raw project: open it directly
+(position-independent code resolves its GOT through `$gp`, and MIPS16e code is decoded when the ELF header marks
+it, as OpenWrt's programs do). An ELF whose header marks microMIPS code gets a `binary_info` warning and a
+`list_functions` note that only its MIPS32 code is analysed.
 
 ## ESP32 and ESP8266 firmware
 

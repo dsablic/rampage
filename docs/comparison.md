@@ -102,9 +102,8 @@ Compared with Ghidra and IDA, rampage does not have:
 - decompilation for most of its Sleigh processor profiles (only MSP430 and AVR8 have reviewed C models; the
   experimental Cortex-M, MIPS32 and Xtensa Raw profiles decompile with the ARM v8 Thumb, MIPS o32 and Xtensa
   models);
-- microMIPS or MIPS16e decoding, or ESP ROM function names (ESP32/ESP8266 calls into ROM show addresses);
-- dynamic symbols of ELF files stripped of their section headers (OpenWrt's `sstrip`), so such a shared library
-  lists no exports or functions;
+- microMIPS decoding (MIPS16e is decoded), or ESP ROM function names (ESP32/ESP8266 calls into ROM show
+  addresses);
 - a Windows host build;
 - process launch or attach: debugging connects only to a stub the operator started; macOS `debugserver` has
   passed one live acceptance run and Windows targets are not yet live-verified, so both stay experimental;

@@ -801,7 +801,8 @@ A MIPS32 boot ROM or bare-metal image opens with `MIPS:BE:32:default` (alias `mi
 (`mipsel`), decoded natively as Cortex-M is: up to 4 MiB, further `regions`, and `decompile` and
 `evaluate_function` with the o32 model. Without `entry` the entry is `base_address`, the reset vector of a boot ROM
 mapped at 0xbfc00000 ([MIPS boot ROMs](raw-code.md#mips-boot-roms-and-bare-metal-mips)). MIPS64, microMIPS and
-MIPS16e have no Raw profile.
+MIPS16e have no Raw profile; MIPS16e code in an ELF whose header marks it is decoded when the ELF is opened
+directly.
 
 ESP32 and ESP8266 firmware (`Xtensa:LE:32:default`, aliases `esp32`, `esp8266`, `xtensa`) is decoded natively too.
 `"format": "esp"` maps an app image by its segment headers, from `offset` (default 0) of the file, so an app in a

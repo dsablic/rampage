@@ -176,7 +176,8 @@ Areas marked *experimental* may change in any release; see the [stability policy
   sparse images, full Android OTA payloads, cpio, tar and ZIP (APKs included) in pure Rust, with hostile-input
   limits. See [firmware filesystem images](docs/firmware-images.md).
 - **Processors:** x86 and x86-64; AArch64, ARM and Thumb from Arm's machine-readable specification; MIPS
-  (position-independent Linux userland with GOT and `$gp` resolution, and MIPS32 boot ROMs as Raw projects),
+  (position-independent Linux userland with GOT and `$gp` resolution, MIPS16e decoded natively beside MIPS32 as
+  OpenWrt builds it, and MIPS32 boot ROMs as Raw projects),
   PowerPC, RISC-V, SPARC, s390x and m68k through Capstone; Xtensa natively (ESP32 and ESP8266: ELF files, app
   images and flash dumps, windowed and call0 code, *experimental*); fifteen more families (MSP430, AVR8, 8051, Z80,
   eBPF, LoongArch and others) as Raw Projects through Ghidra's Sleigh. Sleigh profiles other than MSP430
@@ -258,8 +259,7 @@ targets debugged through an RSP stub, from a macOS or Linux host.
 - Encrypted or packed code is detected, not unpacked: discovery and decompilation stay out of it unless asked.
 - Android DEX code is listed as Dalvik bytecode and structured pseudocode, not decompiled to Java; JVM class files
   are not read.
-- MIPS16e and microMIPS code is not decoded (most OpenWrt programs are MIPS16e), and the dynamic symbols of ELF
-  files stripped of their section headers are not read.
+- microMIPS code is not decoded; MIPS16e is, in 32-bit ELF files whose header marks it (most OpenWrt programs).
 - Not yet built: object-file relocation, Swift metadata, C++ class-layout recovery beyond RTTI and vftable
   evidence, decoding of `__CxxFrameHandler4` exception tables, and incremental re-analysis after edits.
 - The benchmarks above use one model and one client; they are not general accuracy guarantees.

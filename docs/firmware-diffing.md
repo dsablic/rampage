@@ -258,7 +258,7 @@ paths) and removed when the call ends.
 - Headerless code other than Cortex-M (MIPS, Xtensa without an ESP header, other Sleigh profiles) needs `as_raw`.
 - Between two ESP32 application builds, Xtensa code that only moved is still reported as changed (on a public
   MicroPython point release, 546 functions changed where about a dozen changed size), so the changed list is an
-  upper bound there. MIPS16e and microMIPS programs compare no functions, since that code is not decoded.
+  upper bound there. microMIPS programs compare no functions, since that code is not decoded.
 - Container payloads decode with the codecs `probe_compression` tries (LZSS variants, LZ4 block); other codecs or
   encrypted payloads compare by digest. When the ring fill of an LZSS stream cannot be told apart, the decoded bytes
   that read best as a Cortex-M image are taken; the stream says `dictionary_fill_ambiguous`, and `fill_choice`

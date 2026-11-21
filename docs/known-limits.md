@@ -42,22 +42,28 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - MIPS: the global pointer is the image's `_gp` (or the GOT plus 0x7ff0), one per image; multi-GOT objects
   (very large shared libraries with several GOTs) resolve only through their primary GOT. `$t9` is known only in
   runs that start at a function's entry, so `disassemble` from an arbitrary address shows no GOT references a
-  function's prologue sets up. microMIPS and MIPS16e (ISA-mode bit set) code is not decoded, and MIPS64 has no Raw
-  profile. An ELF whose header marks MIPS16e or microMIPS gets a `binary_info` warning and a `list_functions` note
-  saying so (OpenWrt builds most programs as MIPS16e, so their function lists hold only the MIPS32 startup code);
-  `jalx` calls into the other instruction set are kept as calls whose target is not followed, and MIPS symbols, exports
-  or entries at addresses that are not 4-byte aligned (the ISA bit of MIPS16e and microMIPS code) seed no function. A function that only spins (`j .`) is not inferred to never return, so a decompiled caller can run on
+  function's prologue sets up. MIPS16e code is decoded only in a 32-bit ELF whose header marks it
+  (`EF_MIPS_ARCH_ASE_M16`, as every OpenWrt MIPS16e program's does): a Raw MIPS image, or a file whose header does
+  not say so, is read as MIPS32 only, and 64-bit MIPS16e instructions are not decoded. microMIPS is not decoded at
+  all, and MIPS64 has no Raw profile. An ELF whose header marks microMIPS, or MIPS16e on MIPS64, gets a
+  `binary_info` warning and a `list_functions` note saying so; there `jalx` calls into the other instruction set are
+  kept as calls whose target is not followed, and symbols, exports or entries at addresses that are not 4-byte
+  aligned (the ISA bit) seed no function. In MIPS16e code, `addiu rx, $pc, imm` and `lw rx, imm($pc)` are shown with
+  their encoded offsets, and the instruction-set mode of a MIPS16e function reached only through a function pointer
+  in relocated data is not known. A function that only spins (`j .`) is not inferred to never return, so a decompiled caller can run on
   into the data after its last call (`halt_baddata`). Constant search on MIPS matches typed immediates and
   `lui` pairs completed in one block (`loaded_constant`); other sequences are not matched. `integrity_checks`
   takes a 16-bit CRC polynomial immediate as evidence only in a function that also shifts by one bit and XORs, so
   a table-driven CRC-16 without a table in the image is not found. Position-independent switch tables (`.gpword`
   entries added to `$gp`) are not recovered, so case blocks reached only through them, and functions called only
   from those blocks, are missed.
-- ELF files without section headers (OpenWrt strips every program with `sstrip`) keep their program headers,
-  dynamic section and, on MIPS, their GOT, but their dynamic symbols are read only through the `.dynsym` section:
-  such a shared library lists no exports or imports and, with no entry point, no functions. Functions reached only
-  from `DT_INIT`, `DT_FINI` or the init and fini arrays, or only through function pointers in relocated data, are
-  not seeded on any architecture.
+- ELF files without section headers (OpenWrt strips every program with `sstrip`) have their dynamic symbols,
+  imports, exports and import slots read through `PT_DYNAMIC`. The symbol count comes from `DT_MIPS_SYMTABNO`,
+  `DT_HASH` or `DT_GNU_HASH`; a file with none of them lists no dynamic symbols (the count is not guessed), and on
+  64-bit MIPS import slots come only from the GOT, not from relocations. Without sections, `.MIPS.stubs` lazy-binding
+  stubs stay unnamed and symbols of the static symbol table are gone. Functions reached only through function
+  pointers in relocated data are not seeded on any architecture; `DT_INIT`, `DT_FINI` and the init and fini arrays
+  are.
 - Decompiling MIPS position-independent code folds loads from read-only mappings, as on Cortex-M, besides the
   local GOT entries it marks read-only: Ghidra prints `.rodata` text as string literals only with that property,
   and one switch governs both. A program that writes its own read-only segment (through `mprotect`) would read as
@@ -162,8 +168,8 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
   is not interrupted once started. On Cortex-M a change that only moves code, data or padding is not reported; a
   change in instruction selection for the same source (another register, a narrower encoding the normalisation does
   not cover) is. Between two ESP32 application builds, Xtensa code that only moved is still reported as changed: on
-  a public MicroPython point release 546 functions were reported changed where about a dozen changed size. MIPS16e
-  and microMIPS programs compare no functions. See [firmware version diffing](firmware-diffing.md#limits).
+  a public MicroPython point release 546 functions were reported changed where about a dozen changed size.
+  microMIPS programs compare no functions. See [firmware version diffing](firmware-diffing.md#limits).
 - `check_claim` (experimental) can only be as certain as its method.
   - A `computes` verdict is verified on the generated inputs only (`sampled`).
   - Static kinds see discovered code and recorded references, not run time.

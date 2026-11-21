@@ -89,11 +89,13 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
   at each function entry or kept by GCC: calls through the GOT name their imports, GNU ld's lazy-binding
   `.MIPS.stubs` are named (the section header must be present), `lui`/`addiu` and GOT page loads give string
   references, and the decompiler gets `$t9` and `$gp` at entry, so calls read `getenv("…")`; a shared library's
-  calls to its own exported functions through their global GOT entries read by the function's name. Binaries without
-  section headers keep their GOT from the dynamic section, though not their dynamic symbols (`.dynsym` is read
-  through its section header). MIPS16e and microMIPS code is not decoded: an ELF whose header marks it gets a
-  `binary_info` warning and a `list_functions` note. MIPS operands are typed for constant search, and `find_main`
-  follows glibc's and musl's `__start`. MIPS32 boot ROMs and bare-metal images open as Raw projects ([Raw
+  calls to its own exported functions through their global GOT entries read by the function's name. MIPS16e, the
+  compressed instruction set most OpenWrt programs are built in, is decoded natively beside MIPS32 in a 32-bit ELF
+  whose header marks it: odd code addresses, `jalx` and jumps through registers holding odd addresses select it,
+  `EXTEND`ed and PC-relative instructions decode, `$gp` and GOT entries resolve in both modes, and `disassemble`,
+  `list_functions`, `xrefs`, `decompile` (Ghidra's `ISA_MODE`) and `evaluate_function` work on it. microMIPS is not
+  decoded: an ELF whose header marks it gets a `binary_info` warning and a `list_functions` note. MIPS operands are
+  typed for constant search, and `find_main` follows glibc's and musl's `__start`. MIPS32 boot ROMs and bare-metal images open as Raw projects ([Raw
   code](raw-code.md#mips-boot-roms-and-bare-metal-mips)). Native, specification-derived decoders are the preferred
   direction where machine-readable specifications exist.
 - Xtensa (*experimental*) decodes natively: the ESP32's windowed code and the ESP8266's call0 code, as ELF files
@@ -121,8 +123,10 @@ Decoder accuracy against `llvm-mc` and real arm64 code is recorded in the
 
 ## Function discovery, names and references
 
-Recursive-descent discovery builds functions, control-flow graphs and cross-references. Names come from symbols
-and exports, then import stubs and thunks (`puts`, or `puts@plt` on ELF). A bare import name resolves to its stub;
+Recursive-descent discovery builds functions, control-flow graphs and cross-references; ELF constructors and
+destructors (`DT_INIT`, `DT_FINI` and the init and fini arrays) seed it too. Names come from symbols and exports,
+then import stubs and thunks (`puts`, or `puts@plt` on ELF). An ELF file without section headers (OpenWrt's
+`sstrip`) still has its dynamic symbols, imports and exports, read through `PT_DYNAMIC`. A bare import name resolves to its stub;
 import slots such as GOT entries, Mach-O symbol pointers and the PE import address table are `__imp_<name>`.
 Disassembly comments branches and data references with the name or string they target. Stripped Go function
 names are recovered from the embedded pclntab, including binaries built with `-ldflags "-s -w"`. Decompiling
@@ -447,7 +451,7 @@ so that code which only moved is not reported, and the strings, version identifi
 integrity checks and capture sources one version has and the other lacks. A component id pages one part or diffs
 one function instruction by instruction. Time, images analysed and bytes read are budgeted, and whatever a budget
 leaves out is listed. Limits: between ESP32 application builds, Xtensa code that only moved is still reported as
-changed; MIPS16e programs compare no functions. See [firmware version diffing](firmware-diffing.md).
+changed; microMIPS programs compare no functions. See [firmware version diffing](firmware-diffing.md).
 
 ## Claim checking
 
