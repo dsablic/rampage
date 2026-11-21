@@ -948,8 +948,14 @@ async fn per_tool_aliases_are_taken_and_misplaced_arguments_name_the_right_call(
     let path = fixture("hello-x64.elf");
     let xrefs = call(&client, "xrefs", json!({ "path": path, "target": "main" })).await;
     assert_ne!(xrefs.is_error, Some(true), "{}", text(&xrefs));
+    // Both given: `to` wins and `target` is refused as unknown, nothing guessed.
+    let both = call(&client, "xrefs", json!({ "path": path, "target": "main", "to": "main" })).await;
+    assert!(text(&both).contains("unknown field `target`"), "{}", text(&both));
+    // inspect_data's `count` counts bytes, or words of word_size bytes when that is given.
     let inspected = call(&client, "inspect_data", json!({ "path": path, "at": "main", "count": "16" })).await;
     assert_eq!(json_of(&inspected)["size"], 16, "{}", text(&inspected));
+    let words = call(&client, "inspect_data", json!({ "path": path, "at": "main", "count": 4, "word_size": 8 })).await;
+    assert_eq!(json_of(&words)["size"], 32, "{}", text(&words));
     // `count` is no alias where it is not this tool's: disassemble has a `count` of its own, list_functions none.
     let functions = call(&client, "list_functions", json!({ "path": path, "count": 5 })).await;
     assert!(text(&functions).contains("unknown field `count`"), "{}", text(&functions));

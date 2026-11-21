@@ -81,6 +81,7 @@ const ALIASES: [(&str, &str); 9] = [
 const TOOL_ALIASES: [(&str, &str, &str); 3] = [
     // References to a target; `from` lists the references a function makes.
     ("xrefs", "target", "to"),
+    // A count of bytes, or of words when word_size is given (see [`normalize_arguments`]).
     ("inspect_data", "count", "size"),
     // `peripheral` takes a name or any address inside the peripheral.
     ("peripheral_access", "at", "peripheral"),
@@ -90,7 +91,9 @@ const TOOL_ALIASES: [(&str, &str, &str); 3] = [
 /// name in [`ALIASES`], or in [`TOOL_ALIASES`] for the tool `name`, becomes its admitted argument when that one is
 /// not also given, and a string holding a decimal or `0x` hex number becomes that number where the schema admits
 /// only numbers. Booleans stay strict: they gate writes (`apply`, `force`). Aliases add nothing to the schema.
+/// inspect_data's `count` counts words of `word_size` bytes when that is given, bytes otherwise.
 pub fn normalize_arguments(name: &str, schema: &Value, arguments: &mut Map<String, Value>) {
+    let words = name == "inspect_data" && arguments.contains_key("count") && !arguments.contains_key("size");
     if let Some(admitted) = admitted_arguments(schema) {
         let tool_aliases =
             TOOL_ALIASES.iter().filter(|(tool, ..)| *tool == name).map(|&(_, alias, meant)| (alias, meant));
@@ -126,6 +129,12 @@ pub fn normalize_arguments(name: &str, schema: &Value, arguments: &mut Map<Strin
         if let Some(number) = parsed {
             *value = number;
         }
+    }
+    if words
+        && let Some(word_size) = arguments.get("word_size").and_then(Value::as_u64)
+        && let Some(count) = arguments.get("size").and_then(Value::as_u64)
+    {
+        arguments.insert("size".to_owned(), Value::from(count.saturating_mul(word_size)));
     }
 }
 
