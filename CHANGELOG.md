@@ -4,7 +4,7 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
-## Unreleased
+## 1.10.0 (2026-11-21)
 
 - `integrity_checks` gives each check's stored and computed values, and each fix write's current and replacement
   values, as integers read at the field's width and byte order, beside the hex (a `0x` string above 2^53-1; none
