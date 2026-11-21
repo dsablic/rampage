@@ -214,10 +214,15 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - Bundled signatures recognise the library builds they were made from, not every version of a library.
 - The bundled corpus's recall on matched library versions is below the 80% the project aims for; see the
   [signature corpus](signature-corpus.md).
-- On firmware built with a GCC release the embedded set was not trained on, identification names 61% (Cortex-M4F)
-  and 46% (Cortex-M0) of library functions on the held-out fixtures, with no wrong name. Library functions only the
+- On firmware built with a GCC release the embedded set was not trained on, identification names 60% (Cortex-M4F)
+  and 45% (Cortex-M0) of library functions on the held-out fixtures, with no wrong name. Library functions only the
   firmware's own code calls (such as `qsort` there) need a signature match, since the call graph names only
   callees of named library functions; see the [embedded firmware set](signature-corpus.md#embedded-firmware-set).
+- The embedded call graph leaves out weak functions that are empty in some reference (the HAL's `*Callback` and
+  `*_MspInit` defaults, `__aeabi_idiv0`), so they stay unnamed even where the firmware links the library's default.
+  Weak library functions with a real body that an application may override (`HAL_InitTick`,
+  `vPortSetupTimerInterrupt`) keep their library name as a callee, so an application's own override of one can be
+  named after the library's.
 
 ## Annotations
 

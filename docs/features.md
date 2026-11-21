@@ -366,7 +366,7 @@ STM32F4 HAL/LL, from several GCC releases, cores and optimisation levels. It has
 accessors unnamed. `identify_functions` takes a Cortex-M Raw project's `raw` selector, so a headerless flash image
 gets the same names as its ELF. An embedded call graph built from the same references then names the callees of
 named library functions (source `rampage-builtin call graph`). Limits: on owned firmware built with a held-out GCC
-the two name 46–61% of library functions with no wrong name; FreeRTOS matches only configurations laid out like a trained one. Build an
+the two name 45–60% of library functions with no wrong name; FreeRTOS matches only configurations laid out like a trained one. Build an
 overlay database from a binary with named functions using `function build-signatures` (legacy `signatures`).
 A database hashes each function over both its symbol size and discovered extent. A function cut short at an
 unresolved jump table can match when discovery stops at the same place in the target.

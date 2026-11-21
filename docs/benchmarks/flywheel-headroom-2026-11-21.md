@@ -174,8 +174,9 @@ Cortex-M0 at -O1, scored against their library truth (`tests/fixtures/data/eval-
 - **The call graph, never run on firmware, is the first deterministic step:** it lifts recall from 51.3% to
   61.4% (M4F) and from 31.3% to 45.8% (M0) with no wrong name. That is the firmware slice of the plan's step 5.
   *Shipped after this measurement:* the embedded call graph (`data/embedded-callgraph.json.gz`, built from the same
-  training references) now runs in `identify_functions` on firmware, and the product reaches exactly these figures
-  (97 of 158 and 104 of 227, 0 wrong or spurious); see the
+  training references) now runs in `identify_functions` on firmware. It leaves out the references' link stubs
+  and weak override points (application hooks, the HAL's weak defaults, `__aeabi_idiv0`), which this measurement
+  counted, so the product reaches 95 of 158 (60.1%) and 103 of 227 (45.4%), 0 wrong or spurious; see the
   [embedded firmware set](../signature-corpus.md#embedded-firmware-set). Run on that build, this example's
   baseline already includes those names.
 - **Fuzzy matching cannot run on this firmware:** of about 120,000 reference functions none gets a descriptor

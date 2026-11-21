@@ -112,14 +112,23 @@ target/release/examples/embedded_call_graph \
   --output crates/rampage-signatures/data/embedded-callgraph.json.gz WORK/refs/*.elf
 ```
 
-**Embedded call graph.** `data/embedded-callgraph.json.gz` (69 KB gzip; 4,732 caller names, 8,002 distinct call
+**Embedded call graph.** `data/embedded-callgraph.json.gz` (65 KB gzip; 4,486 caller names, 7,707 distinct call
 sequences) holds the same training references' call sequences: each reference function's direct calls and tail
 jumps in call-site order, as the callees' symbol names. Firmware that gets the embedded set propagates names with
 it after the signatures, under the bundled call graph's rule (source `rampage-builtin call graph`): a named
 library caller whose sequence fits training names its unnamed callees, two-sided and anchored (see the
 [call graph](#recognition-policy) below). Other targets keep the host-library call graph. The build is
-deterministic; its `source` records the references' count and a digest of their names and contents. The held-out
-14.3 builds are never inputs.
+deterministic; its `source` records the training compilers, the references' count and a digest of their names and
+contents. It refuses a reference built by a held-out toolchain (GCC 14.3, clang 23).
+
+Override points are left out. A name that is weak with a one-instruction `bx lr` body in some reference and
+non-weak in none is never a caller and is no callee name. That covers the link stubs `build.py` gives symbols
+nothing defines (application hooks such as `vApplicationGetIdleTaskMemory`, linker symbols), the HAL's weak
+`*_MspInit` and `*Callback` defaults, and libgcc's `__aeabi_idiv0`. An application overrides such a function with
+its own code, so propagation must not name that code after the library. A stub of a routine another reference
+defines (`memset` in a FreeRTOS reference) keeps the routine's name as a callee. On the held-out fixtures this costs
+names the fixtures happen to take from the library unchanged: 10 on M4F (the weak HAL defaults it links, and
+`__aeabi_idiv0`) and `__aeabi_idiv0` on M0.
 
 **Held-out measurement.** Arm GNU Toolchain 14.3.rel1 (GCC 14.3.1, newlib 4.5.0 as that release built it) is not
 used for training. `build.py fixture` builds two owned FreeRTOS applications with it
@@ -131,10 +140,10 @@ fixture's own objects), so any name on the fixture's own code counts as spurious
 
 | Fixture | Library functions | Signatures | With the call graph | Wrong or spurious | Precision | Recall |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `embedded-libs-m4f` (ELF) | 158 | 81 | 97 | 0 | 100% | 61.4% (was 51.3%) |
-| `embedded-libs-m4f` (Raw, vector table) | 158 | 81 | 97 | 0 | 100% | 61.4% (was 51.3%) |
-| `embedded-libs-m0` (ELF) | 227 | 71 | 104 | 0 | 100% | 45.8% (was 31.3%) |
-| `embedded-libs-m0` (Raw, vector table) | 227 | 71 | 104 | 0 | 100% | 45.8% (was 31.3%) |
+| `embedded-libs-m4f` (ELF) | 158 | 81 | 95 | 0 | 100% | 60.1% (was 51.3%) |
+| `embedded-libs-m4f` (Raw, vector table) | 158 | 81 | 95 | 0 | 100% | 60.1% (was 51.3%) |
+| `embedded-libs-m0` (ELF) | 227 | 71 | 103 | 0 | 100% | 45.4% (was 31.3%) |
+| `embedded-libs-m0` (Raw, vector table) | 227 | 71 | 103 | 0 | 100% | 45.4% (was 31.3%) |
 
 The `libid-embedded-m4f` and `libid-embedded-m0` slices of `tests/fixtures/data/eval-manifest.json` gate the
 signature database alone on the ELF rows; `crates/rampage-api/tests/bundled_signatures.rs` gates identification
