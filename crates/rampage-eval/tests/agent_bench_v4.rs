@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use rampage_eval::agent_bench::{
-    FailureKind, NeutralSuite, RunnerResult, contamination, mark_contaminated, score, score_with_artifact,
+    FailureKind, NeutralSuite, RunnerResult, contamination, contamination_beside, mark_contaminated, score,
+    score_with_artifact,
 };
 use rampage_eval::parity_tasks::{ParityTask, TaskKind, TaskOutcome, load_tasks};
 use serde_json::{Value, json};
@@ -191,6 +192,25 @@ fn runs_that_reach_the_suites_own_files_are_scored_wrong() {
     mark_contaminated(&mut row, "transcript line 3 mentions \"twins\"".into());
     assert_eq!((row.outcome, row.failure), (TaskOutcome::AnswerMismatch, Some(FailureKind::Contaminated)));
     assert!(!row.lenient && row.contamination.is_some());
+}
+
+#[test]
+fn a_fragment_the_staged_files_hold_themselves_is_not_contamination() {
+    let root = root();
+    let svd = std::fs::read(root.join("tests/fixtures/bench-v4/companions/benchm4.svd")).unwrap();
+    // A hexdump of the companion shows its own comment, which names its source directory.
+    let dump = json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "1",
+        "content": "0x000000c0  6573 2f62 656e 6368 2d76 342f 7372 632f  es/bench-v4/src/"}]}})
+    .to_string();
+    assert!(contamination(&dump, &root).is_some());
+    assert_eq!(contamination_beside(&dump, &root, &[b"fixture bytes", &svd]), None);
+    // Other fragments and the repository path still count.
+    let truth = json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "open_file",
+        "input": {"file_path": "/x/bench-v4/truth/patch-export-bin-cm4-raw.bin"}}]}})
+    .to_string();
+    assert!(contamination_beside(&truth, &root, &[&svd]).is_some());
+    let repository = format!("{{\"type\":\"user\",\"text\":{:?}}}", root.join("README.md").to_string_lossy());
+    assert!(contamination_beside(&repository, &root, &[&svd]).is_some());
 }
 
 #[test]

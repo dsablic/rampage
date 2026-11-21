@@ -225,7 +225,9 @@ pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
                     }),
                 )
             }
-            "r2mcp" => r2mcp_server(&args, &absolute)?,
+            "r2mcp" => {
+                r2mcp_server(&args, &absolute(args.r2mcp_install_record.as_ref(), "target/bench/r2mcp/install.json")?)?
+            }
             _ => {
                 let entry = absolute(args.rea_entry.as_ref(), "target/bench/rea/src/scripts/rea.mjs")?;
                 let node = which(&args.node)?;
@@ -510,10 +512,7 @@ pub fn run(mut args: AgentBenchArgs) -> Result<ExitCode, String> {
 
 /// radare2's MCP server as shipped (its default tool set: no `-r` run_* tools, not read-only, plugins and
 /// radare2rc loaded, default sandbox grain) with only the decompiler chosen, and the versions it runs with.
-fn r2mcp_server(
-    args: &AgentBenchArgs,
-    absolute: &dyn Fn(Option<&PathBuf>, &str) -> Result<PathBuf, String>,
-) -> Result<(Value, Value), String> {
+fn r2mcp_server(args: &AgentBenchArgs, record: &Path) -> Result<(Value, Value), String> {
     let binary = match &args.r2mcp_bin {
         Some(path) => path.clone(),
         None => {
@@ -533,8 +532,7 @@ fn r2mcp_server(
     };
     let arguments = ["-d", args.r2mcp_decompiler.as_str()];
     let config = json!({"mcpServers": {"r2mcp": {"type": "stdio", "command": binary, "args": arguments}}});
-    let record = absolute(args.r2mcp_install_record.as_ref(), "target/bench/r2mcp/install.json")?;
-    let install: Value = serde_json::from_str(&read(&record)?).map_err(|error| error.to_string())?;
+    let install: Value = serde_json::from_str(&read(record)?).map_err(|error| error.to_string())?;
     let version = json!({
         "install": install,
         "r2mcp_version": first_line(&binary, &["-v"]),
@@ -647,7 +645,14 @@ fn run_one(setup: &RunSetup<'_>) -> Result<RunRow, String> {
 fn screened(setup: &RunSetup<'_>, run_dir: &Path, mut row: RunRow) -> Result<RunRow, String> {
     let path = run_dir.join("transcript.jsonl");
     let transcript = read(&path).unwrap_or_default();
-    if let Some(reason) = rampage_eval::agent_bench::contamination(&transcript, setup.root) {
+    let mut staged =
+        vec![std::fs::read(setup.fixture).map_err(|error| format!("{}: {error}", setup.fixture.display()))?];
+    for companion in &setup.task.fixture.companions {
+        let source = setup.root.join(&companion.path);
+        staged.push(std::fs::read(&source).map_err(|error| format!("{}: {error}", source.display()))?);
+    }
+    let staged: Vec<&[u8]> = staged.iter().map(Vec::as_slice).collect();
+    if let Some(reason) = rampage_eval::agent_bench::contamination_beside(&transcript, setup.root, &staged) {
         rampage_eval::agent_bench::mark_contaminated(&mut row, reason);
     }
     Ok(row)

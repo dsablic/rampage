@@ -442,10 +442,19 @@ const CONTAMINATION_MARKERS: [&str; 4] = ["bench-v4/", "/twins/", "truth/", "der
 /// Where a recorded transcript (the runner's stream-JSON lines) reaches the suite's own files or `root`, the
 /// repository: tool calls, tool results and the agent's text. The client's own setup lines are left out.
 pub fn contamination(transcript: &str, root: &std::path::Path) -> Option<String> {
+    contamination_beside(transcript, root, &[])
+}
+
+/// [`contamination`] for a run whose staged files (the fixture and its companions, as copied for the agent) are
+/// `staged`: a path fragment one of them holds itself, such as a companion's comment naming its source directory,
+/// is what the agent was given to read, so only the other fragments and the repository path count.
+pub fn contamination_beside(transcript: &str, root: &std::path::Path, staged: &[&[u8]]) -> Option<String> {
     let root = root.to_string_lossy();
     let root = root.trim_end_matches('/');
-    let markers = CONTAMINATION_MARKERS.iter().copied().chain((root.len() > 1).then_some(root));
-    let markers: Vec<&str> = markers.collect();
+    let given =
+        |marker: &str| staged.iter().any(|bytes| bytes.windows(marker.len()).any(|window| window == marker.as_bytes()));
+    let markers = CONTAMINATION_MARKERS.iter().copied().filter(|marker| !given(marker));
+    let markers: Vec<&str> = markers.chain((root.len() > 1).then_some(root)).collect();
     for (number, line) in transcript.lines().enumerate() {
         let Ok(event) = serde_json::from_str::<Value>(line) else { continue };
         if event.get("type").and_then(Value::as_str) == Some("system") {
