@@ -480,7 +480,10 @@ acceptance run.
    root filesystem, `busybox` among them, are MIPS16, so on routers the MIPS work reaches about one program in
    eight. A real sample needs it, so rule 2 schedules it. Check M5 of the acceptance set measures the gap first.
 3. **Flywheel steps 1–3** ([plan](docs/plans/2026-11-20-flywheel-next.md)): close row proposals, measure
-   headroom, then the unattended code loop.
+   headroom, then the unattended code loop. Steps 1–2 done 2026-11-21
+   ([headroom](docs/benchmarks/flywheel-headroom-2026-11-21.md)): library identification picked (20,497 reachable
+   misses no miner takes); parameter types second (pointers recovered as 8-byte integers: 1,350 of 1,771 misses);
+   call graph on firmware takes M4F 51→61% and M0 31→46% recall with no wrong names (step 5 / item 4).
 4. **Signature recall on firmware** (the arms and call graph gated on the embedded set).
 5. **Object files and static archives** (roadmap 4.3).
 6. **Analysis depth by measured headroom:** parameter types and interprocedural signatures, then C++ class
