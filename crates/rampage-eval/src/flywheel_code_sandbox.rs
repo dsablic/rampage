@@ -435,7 +435,7 @@ mod tests {
     fn the_profile_denies_then_carves_back_in_order() {
         let sandbox = Sandbox {
             deny: vec![PathBuf::from("/data/flywheel")],
-            protect: vec![PathBuf::from("/Users/u")],
+            protect: vec![PathBuf::from("/home/user")],
             deny_all_writes: true,
             read_only: vec![PathBuf::from("/data/flywheel/code-runs/x/views/v1")],
             allow: vec![PathBuf::from("/data/flywheel/code-runs/x/out"), PathBuf::from("/odd\"path")],
@@ -444,7 +444,7 @@ mod tests {
         let profile = sandbox.profile();
         let at = |needle: &str| profile.find(needle).unwrap_or_else(|| panic!("{needle} missing:\n{profile}"));
         let deny = at("(deny file-read* file-write* (subpath \"/data/flywheel\"))");
-        let protect = at("(deny file-write* (subpath \"/Users/u\"))");
+        let protect = at("(deny file-write* (subpath \"/home/user\"))");
         let all_writes = at("(deny file-write*)\n");
         let read = at("(allow file-read* (subpath \"/data/flywheel/code-runs/x/views/v1\"))");
         let write = at("(allow file-read* file-write* (subpath \"/data/flywheel/code-runs/x/out\"))");
