@@ -41,7 +41,7 @@ Everything the loop writes lives under `target/flywheel/`:
 | `runs/<label>/` | Run reports (`report.json`, `report.md`), and each round's transcript, prompt and server events |
 | `bundle/<label>/` | A bundle's `summary.md`, `summary.json` and `change.patch` |
 | `code-runs/<label>/` | A code run ([the code loop](#the-code-loop)): `report.md`, `run.json`, `candidate.diff`, the session transcript, every gate's results, and the final read's ledger entry or dry run |
-| `code-runs/target/` | The code loop's gate builds (a cargo target directory kept across runs) |
+| `code-runs/gate/` | The code loop's gate worktree and cargo target directory, kept across runs so builds stay incremental |
 
 Nothing under `target/` is committed. The repository holds the recipe (`tools/flywheel/corpus.json`), the driver
 programs (`tools/flywheel/drivers/`), the build script and a reference build's digests
@@ -441,7 +441,7 @@ The same gate answers the session and, after it, decides. It applies the change 
 so a session cannot alter what is measured. It runs:
 
 1. **Policy:** the allowlist and the added-line check.
-2. **Build:** `cargo build --release -p rampage-eval`, in `code-runs/target/`.
+2. **Build:** `cargo build --release -p rampage-eval`, in `code-runs/gate/` (kept across runs, one run at a time).
 3. **Tests:** the family crate's tests (`rampage-signatures`).
 4. **Names:** the candidate build names every binary of training, dev and the negatives, inside the same sandbox,
    from a view holding only that split's stripped binaries (training also gets its truth, for the call graph). It
@@ -490,7 +490,7 @@ whose gate fails never reads the final split.
 | `final-dry-run.json` | What a dry run would have read |
 
 The worktrees, the session directory, the views and the binaries are removed at the end (`--keep-workspace` keeps
-them). The gate's target directory stays for the next run.
+them). The gate's worktree and target directory stay for the next run.
 
 ## Use and revert a promotion
 

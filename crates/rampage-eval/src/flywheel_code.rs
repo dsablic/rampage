@@ -142,9 +142,11 @@ pub struct CodeRunArgs {
     /// It must lie outside the corpus and the flywheel directory, which the session cannot read.
     #[arg(long)]
     session_root: Option<PathBuf>,
-    /// The gate's cargo target directory, kept across runs (default: <flywheel>/code-runs/target).
+    /// The gate's directory, kept across runs so builds stay incremental: its worktree (`worktree/`, reset to the
+    /// base at every run) and cargo target directory (`target/`). One run holds it at a time (default:
+    /// <flywheel>/code-runs/gate).
     #[arg(long)]
-    gate_target_dir: Option<PathBuf>,
+    gate_dir: Option<PathBuf>,
     /// The runner command, split on whitespace; a relative script path resolves against the repository root.
     #[arg(long, default_value = DEFAULT_RUNNER)]
     runner: String,
@@ -759,6 +761,23 @@ fn session_settings(deny: &[PathBuf], environment: &BTreeMap<String, String>) ->
     })
 }
 
+/// The gate's worktree at `base`: the one earlier runs left, reset, when it is still a worktree of `repository`
+/// (so an unchanged file keeps its timestamp and cargo its build), else a new one.
+fn reuse_or_add_worktree(repository: &Path, worktree: &Path, base: &str) -> Result<(), String> {
+    let common = |directory: &Path| {
+        output(git(directory).args(["rev-parse", "--path-format=absolute", "--git-common-dir"]))
+            .map(|text| canonical(Path::new(text.trim())))
+    };
+    if worktree.join(".git").exists() && common(worktree).ok() == common(repository).ok() {
+        return apply_diff(worktree, base, &Diff::default(), Path::new("/dev/null"));
+    }
+    let _ = remove_worktree(repository, worktree);
+    if worktree.exists() {
+        std::fs::remove_dir_all(worktree).map_err(|error| format!("{}: {error}", worktree.display()))?;
+    }
+    add_worktree(repository, worktree, base)
+}
+
 /// Removes what a run made outside its run directory (and the large parts inside), even when it fails.
 struct Cleanup {
     repository: PathBuf,
@@ -1143,7 +1162,8 @@ pub fn run(args: CodeRunArgs) -> Result<ExitCode, String> {
     let session_root = canonical(
         &args.session_root.clone().unwrap_or_else(|| std::env::temp_dir().join("rampage-code-run")).join(&label),
     );
-    let gate_target = canonical(&args.gate_target_dir.clone().unwrap_or_else(|| flywheel.join("code-runs/target")));
+    let gate_dir = canonical(&args.gate_dir.clone().unwrap_or_else(|| flywheel.join("code-runs/gate")));
+    let gate_target = gate_dir.join("target");
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
     let uid = output(Command::new("id").arg("-u")).unwrap_or_default().trim().to_owned();
     // What no agent-influenced process may read: the corpus, the flywheel directory (caches, runs, the ledger, this
@@ -1186,12 +1206,15 @@ pub fn run(args: CodeRunArgs) -> Result<ExitCode, String> {
 
     std::fs::create_dir_all(&run_dir).map_err(|error| format!("{}: {error}", run_dir.display()))?;
     let started = Instant::now();
-    let gate_worktree = run_dir.join("worktree");
+    // One run at a time uses the gate's worktree and target directory.
+    let _gate_lock =
+        rampage_api::flywheel::FileLock::acquire(&gate_dir.join("lock")).map_err(|error| error.to_string())?;
+    let gate_worktree = gate_dir.join("worktree");
     let session_worktree = session_root.join("worktree");
     let views = run_dir.join("views");
     let mut cleanup = Cleanup {
         repository: repository.clone(),
-        worktrees: vec![session_worktree.clone(), gate_worktree.clone()],
+        worktrees: vec![session_worktree.clone()],
         directories: vec![session_root.clone(), views.clone(), run_dir.join("base/bin")],
         keep: args.keep_workspace,
     };
@@ -1212,7 +1235,7 @@ pub fn run(args: CodeRunArgs) -> Result<ExitCode, String> {
     }
 
     // The base build, in the gate worktree, and its names: the baseline every gate compares with.
-    add_worktree(&repository, &gate_worktree, &base)?;
+    reuse_or_add_worktree(&repository, &gate_worktree, &base)?;
     std::fs::create_dir_all(run_dir.join("base/bin")).map_err(|error| error.to_string())?;
     let base_harness = Harness {
         base: base.clone(),
