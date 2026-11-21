@@ -253,6 +253,11 @@ only through constants a function forms itself. See [peripheral maps](peripheral
 `integrity_checks` (group `formats`) finds checksum, CRC and digest fields and the ranges they cover in the
 original image, by bounded brute force, CRC code evidence and, with `emulate` (default), the image's own routine
 run on the range; each check reports stored and computed values on the patched image, evidence and confidence.
+The values are given as `stored_hex`/`computed_hex` (the bytes as they lie in memory) and as `stored_value`/
+`computed_value`, the integer the device reads at the field's width and byte order (`stored.endian`), so no byte
+swapping is left to the caller. An integer is a JSON number up to 2^53-1 and a `0x` hex string above it (no
+current algorithm stores more than 32 bits); digests (SHA-256, MD5) have no integer value. Fix writes give
+`current_value` and `replacement_value` the same way.
 `fix: true` with the receipt's tokens writes corrected values as patch records in dependency order, by default
 only for checks confirmed by emulation or referenced by code (others by `ids`).
 `export_image` writes the patched image to a new file in its original container (HEX/S-record records, the binary
@@ -767,10 +772,16 @@ changes image bytes, `mmio` maps a page for each value it sets, and imported SVD
 ```
 
 `profile` is a closed Raw language ID, listed in the server instructions, in any letter case, or a processor
-alias such as `msp430`, `avr`, `8051`, `z80` or `cortex-m4`. An unknown name gets the closest profiles; an
-A-profile ARM, AArch64 or x86 name is pointed to `inspect_raw_code` with an example, since those have no Raw
-profile; `offset`/`length` select original-file bytes (1..=131072, or up to 4 MiB for `ARM:LE:32:Cortex`, the
-MIPS32 profiles and Xtensa);
+alias such as `msp430`, `avr`, `8051`, `z80` or `cortex-m4` (`cortex-m0`, `cortex-m0+`, `cortex-m3`, `cortex-m7`,
+`arm-cortex-m` and `thumb` too, also with `arm`/`thumb` around them, as in `arm_cortex_m4_thumb`). An unknown name
+gets the closest profiles; an ARMv8-M core (`cortex-m33`, `cortex-m23`, `cortex-m55`, ...) is told that the
+Cortex-M profile decodes ARMv6-M/ARMv7-M and can be chosen explicitly; an A-profile ARM, AArch64 or x86 name is
+pointed to `inspect_raw_code` with an example, since those have no Raw profile; `offset`/`length` select
+original-file bytes (1..=131072, or up to 4 MiB for `ARM:LE:32:Cortex`, the MIPS32 profiles and Xtensa). `offset`
+defaults to 0 and `length` to the rest of the file from `offset`; `base_address` has no default. A range past the
+end of the file is refused with the range asked for, the file's size and the longest length that fits.
+`"format": "binary"` is the default (`"bin"` and `"raw"` mean the same), and a `raw` sent as a JSON string holding
+one object is parsed as that object;
 `base_address`, `entry` and `seeds` (at most 8192) are internal code-space byte offsets, also for word-addressed
 processors, and tool addresses use the same coordinates. The mapping is an analyst assertion, not header admission.
 `raw` cannot be combined with `arch`, `image_offset` or `image_length`, and other tools refuse it with "tool X does not

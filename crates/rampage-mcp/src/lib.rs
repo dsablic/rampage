@@ -212,7 +212,8 @@ Its transient decoded preview uses decoded offsets, not source offsets or load a
 successful decoding do not authenticate content or prove stream boundaries. Tools whose schema has a `raw` \
 object open that explicit file range as a headerless Raw project with a closed profile instead of a native image \
 (never with arch/image_offset/image_length; null means absent). `raw` fields: profile (one of the Raw profiles \
-listed at the end), offset and length (original-file bytes, length up to 128 KiB, 4 MiB for ARM:LE:32:Cortex, \
+listed at the end), offset (default 0) and length (default the rest of the file; original-file bytes, up to \
+128 KiB, 4 MiB for ARM:LE:32:Cortex, \
 the MIPS profiles and Xtensa), \
 base_address, optional entry and up to 8192 seeds (internal code-space byte coordinates, even for word-addressed \
 processors; hex strings or integers). The mapping is an analyst assertion; annotations are memory-only for this \
@@ -907,7 +908,10 @@ impl RampageServer {
                 "this server was started with --corpus and serves only the improve group; `{name}` is not served"
             ))]);
         }
-        let raw = arguments.remove(RAW).filter(|raw| !raw.is_null());
+        let raw = match arguments.remove(RAW).filter(|raw| !raw.is_null()).map(raw_object).transpose() {
+            Ok(raw) => raw,
+            Err(message) => return CallToolResult::error(vec![ContentBlock::text(message)]),
+        };
         if let (Some(registry), Some(tool)) = (&self.debug, self.debug_tools.iter().find(|tool| tool.name == name)) {
             if raw.is_some() {
                 return CallToolResult::error(vec![ContentBlock::text(raw_refusal(name))]);
@@ -1073,6 +1077,18 @@ impl RampageServer {
             serde_json::from_value(raw).map_err(|error| format!("`raw`: invalid Raw project selector: {error}"))?;
         // Raw annotations are memory-only and shared through the session, so there is no log to refresh.
         self.session.open_raw(path, &request).map_err(|error| format!("`raw`: {}", error_text(&error)))
+    }
+}
+
+/// The `raw` selector as an object: a JSON string holding one object (as some clients send nested arguments) is
+/// parsed once, strictly; any other string is refused.
+fn raw_object(raw: Value) -> Result<Value, String> {
+    let Value::String(text) = raw else { return Ok(raw) };
+    match serde_json::from_str::<Value>(&text) {
+        Ok(object @ Value::Object(_)) => Ok(object),
+        _ => Err("`raw` must be a JSON object such as {\"profile\":\"cortex-m\",\"base_address\":\"0x8000000\"}, \
+                  not a string; a string is accepted only when it holds exactly one such object; nothing was run"
+            .to_owned()),
     }
 }
 

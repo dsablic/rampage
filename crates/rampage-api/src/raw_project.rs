@@ -41,11 +41,11 @@ pub struct RawProjectRequest {
     #[serde(default, deserialize_with = "format")]
     #[schemars(schema_with = "format_schema")]
     pub format: RawInputFormat,
-    /// Original-file BYTE offset of the first code byte. Required for the `binary` format.
+    /// Original-file BYTE offset of the first code byte (default 0).
     #[serde(default)]
     pub offset: Option<FileOffset>,
     /// Exact source byte count: 1..=131072, or 1..=4194304 for ARM:LE:32:Cortex, MIPS and Xtensa (with
-    /// `decode`, the encoded count, at most 8 MiB). Required for the `binary` format.
+    /// `decode`, the encoded count, at most 8 MiB). Default: the rest of the file from offset.
     #[serde(default)]
     pub length: Option<FileOffset>,
     /// Map a decoder provider's output over offset/length as the primary code region instead of the range itself,
@@ -109,12 +109,14 @@ pub enum RawInputFormat {
 }
 
 fn format<'de, D: Deserializer<'de>>(deserializer: D) -> Result<RawInputFormat, D::Error> {
-    match Option::<String>::deserialize(deserializer)?.as_deref() {
-        None | Some("binary") => Ok(RawInputFormat::Binary),
+    let name = Option::<String>::deserialize(deserializer)?;
+    // `raw` and `bin` are what agents call a flat binary.
+    match name.as_deref().map(str::to_ascii_lowercase).as_deref() {
+        None | Some("binary" | "raw" | "bin") => Ok(RawInputFormat::Binary),
         Some("ihex") => Ok(RawInputFormat::Ihex),
         Some("srec") => Ok(RawInputFormat::Srec),
         Some("esp") => Ok(RawInputFormat::Esp),
-        Some(other) => Err(serde::de::Error::custom(format!("format {other:?}: binary, ihex, srec or esp"))),
+        _ => Err(serde::de::Error::custom(format!("format {:?}: binary, ihex, srec or esp", name.unwrap_or_default()))),
     }
 }
 
@@ -361,6 +363,14 @@ const PROFILE_ALIASES: [(RawProfile, &[&str]); 19] = [
     (RawProfile::Mips32Le, &["mipsel", "mips32el", "mipsle", "mips32le"]),
 ];
 
+/// The alias keys of the Cortex-M profile.
+fn cortex_m_aliases() -> &'static [&'static str] {
+    PROFILE_ALIASES.iter().find(|(profile, _)| *profile == RawProfile::CortexM).map_or(&[], |(_, aliases)| aliases)
+}
+
+/// ARMv8-M cores as alias keys: the Cortex-M profile decodes ARMv6-M/ARMv7-M, so none of them is its alias.
+const ARMV8M_CORES: [&str; 6] = ["cortexm23", "cortexm33", "cortexm35", "cortexm52", "cortexm55", "cortexm85"];
+
 /// Families agents name that no Raw profile covers, though a profile's name may look close (PIC32 is MIPS, not
 /// PIC-16).
 const UNPROFILED_FAMILIES: [&str; 16] = [
@@ -401,7 +411,23 @@ pub fn resolve_raw_profile(name: &str) -> Result<RawProfile, String> {
     if let Some((profile, _)) = PROFILE_ALIASES.iter().find(|(_, aliases)| aliases.contains(&key.as_str())) {
         return Ok(*profile);
     }
+    // A Cortex-M core spelled with `arm` and `thumb` around it (`arm-thumb-cortex-m`, `arm_cortex_m4_thumb`).
+    let core = key.strip_prefix("arm").unwrap_or(&key);
+    let core = core.strip_prefix("thumb").or_else(|| core.strip_suffix("thumb")).unwrap_or(core);
+    if core.starts_with("cortexm") && cortex_m_aliases().contains(&core) {
+        return Ok(RawProfile::CortexM);
+    }
     let profiles: Vec<&str> = RawProfile::ALL.iter().map(|profile| profile.language_id()).collect();
+    if ARMV8M_CORES.iter().any(|core| key.contains(core)) {
+        return Err(format!(
+            "unsupported Raw profile {name:?}: ARMv8-M cores (Cortex-M23, M33, M35P, M52, M55, M85) have no Raw \
+             profile. ARM:LE:32:Cortex decodes ARMv6-M/ARMv7-M Thumb (aliases cortex-m, cortex-m0, cortex-m0+, \
+             cortex-m3, cortex-m4, cortex-m7, thumb); to read ARMv8-M code as that, leaving the instructions only \
+             ARMv8-M has undecoded, pass profile \"cortex-m\" explicitly. inspect_raw_code decodes headerless bytes \
+             of A-profile ARM, AArch64 and x86. Raw profiles: {}",
+            profiles.join(", ")
+        ));
+    }
     // Another variant, byte order or size of a profiled processor is not covered: say so rather than offer the
     // profile, which would decode different instructions.
     let language_prefix = name.split(':').next().unwrap_or(name);
@@ -688,21 +714,46 @@ impl RawProjectRequest {
     }
 
     fn binary_image(&self, path: &Path, profile: RawProfile) -> Result<RawImage, ApiError> {
-        let (Some(offset), Some(length), Some(base)) = (self.offset, self.length, self.base_address) else {
+        let Some(base) = self.base_address else {
             return Err(invalid(
-                "Raw needs offset, length and base_address (or format ihex/srec, whose records state the addresses)",
+                "Raw format binary needs base_address, the code-space address of the byte at offset (offset defaults \
+                 to 0, length to the rest of the file); format ihex or srec takes the addresses from the records \
+                 instead",
             ));
         };
+        let offset = self.offset.unwrap_or(FileOffset(0));
         let max = profile.max_bytes();
         let options = self.options(profile, base.0)?;
         // With decode, `length` counts encoded bytes (the decoder provider's input cap) and the decoded size is the
         // mapped one, under the profile's cap.
         let limit = if self.decode.is_some() { crate::MAX_DECODE_INPUT_BYTES } else { max };
-        let length = usize::try_from(length.0).ok().filter(|length| (1..=limit).contains(length)).ok_or_else(|| {
+        // The file's size, for an omitted length (the rest of the file) and to say what fits; the range itself is
+        // checked again on the opened descriptor.
+        let size = std::fs::metadata(path)
+            .map_err(|error| ApiError::Unavailable(format!("file-range source: {error}")))?
+            .len();
+        let length = match self.length {
+            Some(length) => length.0,
+            None => size
+                .checked_sub(offset.0)
+                .filter(|&rest| rest > 0)
+                .ok_or_else(|| ApiError::Invalid(format!("Raw {}", crate::range_source::outside(offset.0, 0, size))))?,
+        };
+        if offset.0.checked_add(length).is_none_or(|end| end > size) {
+            return Err(ApiError::Invalid(format!(
+                "Raw {}, or omit length to read from offset to the end of the file",
+                crate::range_source::outside(offset.0, length, size)
+            )));
+        }
+        let length = usize::try_from(length).ok().filter(|length| (1..=limit).contains(length)).ok_or_else(|| {
             let what = if self.decode.is_some() { "encoded bytes with decode" } else { "bytes" };
-            ApiError::Invalid(format!("Raw length must be 1..={limit} {what} for {}", profile.language_id()))
+            let omitted = if self.length.is_none() {
+                format!(" (the file holds {length} bytes from offset {}: give a length)", offset.0)
+            } else {
+                String::new()
+            };
+            ApiError::Invalid(format!("Raw length must be 1..={limit} {what} for {}{omitted}", profile.language_id()))
         })?;
-        offset.0.checked_add(length as u64).ok_or_else(|| invalid("Raw source range overflows"))?;
         let (bytes, source) = match &self.decode {
             None => file_range(path, offset.0, length)?,
             Some(decode) => {
@@ -1236,5 +1287,39 @@ mod tests {
             let error = resolve_raw_profile(other).unwrap_err();
             assert!(error.contains("inspect_raw_code") && error.contains("ARM:LE:32:Cortex"), "{error}");
         }
+    }
+
+    /// Haiku suite v4: Cortex-M spellings the agents used, and `format` names for a flat binary.
+    #[test]
+    fn cortex_m_spellings_select_the_profile_and_armv8m_cores_are_named() {
+        let spellings = [
+            "cortex-m0",
+            "Cortex-M0+",
+            "cortex-m3",
+            "CORTEX-M4",
+            "cortex-m7",
+            "arm-cortex-m",
+            "thumb",
+            "arm_thumb",
+            "arm-thumb-cortex-m",
+            "arm_cortex_m4_thumb",
+        ];
+        for spelling in spellings {
+            assert_eq!(resolve_raw_profile(spelling), Ok(RawProfile::CortexM), "{spelling}");
+        }
+        for core in ["cortex-m33", "Cortex-M23", "arm_cortex_m33_thumb", "cortex-m85"] {
+            let error = resolve_raw_profile(core).unwrap_err();
+            assert!(error.contains("ARMv8-M cores") && error.contains("pass profile \"cortex-m\""), "{error}");
+        }
+        for (name, format) in
+            [("bin", RawInputFormat::Binary), ("RAW", RawInputFormat::Binary), ("ihex", RawInputFormat::Ihex)]
+        {
+            let request: RawProjectRequest =
+                serde_json::from_value(serde_json::json!({ "profile": "cortex-m", "format": name })).unwrap();
+            assert_eq!(request.format, format, "{name}");
+        }
+        let refused =
+            serde_json::from_value::<RawProjectRequest>(serde_json::json!({ "profile": "x", "format": "elf" }));
+        assert!(refused.unwrap_err().to_string().contains("binary, ihex, srec or esp"));
     }
 }

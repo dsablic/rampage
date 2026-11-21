@@ -255,6 +255,64 @@ fn cortex_m_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/firmware/raw-cortex-m.bin")
 }
 
+/// Haiku suite v4 (1.9.0): 41 tool errors, most of them the `raw` selector. Omitted offset and length now read the
+/// whole file, `format` "bin"/"raw" mean binary, decorated Cortex-M spellings select the profile, and a selector sent
+/// as a JSON string is parsed once: each opens the same project as the explicit form.
+#[tokio::test]
+async fn raw_defaults_spellings_and_a_stringified_selector_open_the_explicit_project() {
+    let client = connect().await;
+    let path = cortex_m_fixture();
+    let length = std::fs::metadata(&path).unwrap().len();
+    let explicit = json!({
+        "profile": "ARM:LE:32:Cortex", "format": "binary", "offset": 0, "length": length, "base_address": "0x8000000",
+        "vector_table": true,
+    });
+    let (expected, failed) = call(&client, "binary_info", json!({ "path": path, "raw": explicit })).await;
+    assert!(!failed, "{expected}");
+    let short = json!({ "profile": "cortex-m4", "base_address": "0x8000000", "vector_table": true });
+    let spelled = json!({ "profile": "arm-thumb-cortex-m", "format": "bin", "base_address": "0x8000000",
+                          "vector_table": true });
+    let raw_format = json!({ "profile": "arm_cortex_m4_thumb", "format": "RAW", "offset": 0,
+                             "base_address": "0x8000000", "vector_table": true });
+    for selector in [short.clone(), spelled, raw_format, Value::String(short.to_string())] {
+        let (text, failed) = call(&client, "binary_info", json!({ "path": path, "raw": selector })).await;
+        assert!(!failed, "{selector}: {text}");
+        assert_eq!(text, expected, "{selector}");
+    }
+    // A file tool reads the stringified selector too.
+    let stringified = Value::String(short.to_string());
+    let (text, failed) =
+        call(&client, "inspect_data", json!({ "path": path, "raw": stringified, "at": "0x8000000", "size": 8 })).await;
+    assert!(!failed && text.contains("0x20005000"), "{text}");
+    // A string that is not exactly one object is refused, not guessed at.
+    for bad in ["cortex-m4", "[1]", "{\"profile\":\"cortex-m4\"} trailing"] {
+        let (text, failed) = call(&client, "binary_info", json!({ "path": path, "raw": bad })).await;
+        assert!(failed && text.contains("`raw` must be a JSON object"), "{bad}: {text}");
+    }
+    // base_address is never guessed.
+    let (text, failed) = call(&client, "binary_info", json!({ "path": path, "raw": { "profile": "cortex-m" } })).await;
+    assert!(failed && text.contains("needs base_address"), "{text}");
+    client.cancel().await.unwrap();
+}
+
+/// Suite v4: "file range is outside the regular source" (12 times) said neither the file's size nor the range.
+#[tokio::test]
+async fn a_range_past_the_end_names_the_file_size_the_range_and_the_fix() {
+    let client = connect().await;
+    let path = cortex_m_fixture();
+    let size = std::fs::metadata(&path).unwrap().len();
+    let selector = json!({ "profile": "cortex-m4", "offset": 0, "length": 0x10_0000, "base_address": 0 });
+    let (text, failed) = call(&client, "binary_info", json!({ "path": path, "raw": selector })).await;
+    assert!(failed, "{text}");
+    assert!(text.contains("0x0..0x100000 (offset 0, length 1048576)"), "{text}");
+    assert!(text.contains(&format!("holds {size} bytes ({size:#x})")), "{text}");
+    assert!(text.contains(&format!("the length can be at most {size}")) && text.contains("omit length"), "{text}");
+    let past = json!({ "profile": "cortex-m4", "offset": size, "base_address": 0 });
+    let (text, failed) = call(&client, "binary_info", json!({ "path": path, "raw": past })).await;
+    assert!(failed && text.contains(&format!("offset must be below {size}")), "{text}");
+    client.cancel().await.unwrap();
+}
+
 /// One `raw` selector with path, profile alias and base address opens a headerless Cortex-M image: the vector
 /// table seeds the entry and handlers, and listing, cross-references and decompilation answer from there.
 #[tokio::test]

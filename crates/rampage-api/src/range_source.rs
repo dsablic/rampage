@@ -60,7 +60,7 @@ mod platform {
             let stamp = stamp(&metadata)?;
             let length = length(metadata.len())?;
             if offset.checked_add(length as u64).is_none_or(|end| end > metadata.len()) {
-                return Err(invalid("file range is outside the regular source"));
+                return Err(ApiError::Invalid(super::outside(offset, length as u64, metadata.len())));
             }
             let source = Self { file, path: path.to_owned(), stamp, offset, length };
             source.revalidate()?;
@@ -92,6 +92,20 @@ mod platform {
     fn io_error(error: std::io::Error) -> ApiError {
         ApiError::Unavailable(format!("file-range source I/O: {error}"))
     }
+}
+
+/// The refusal of a range that does not lie inside a file of `size` bytes: the range asked for, the file's size and
+/// the longest length that fits at `offset`.
+pub(crate) fn outside(offset: u64, length: u64, size: u64) -> String {
+    let asked = match offset.checked_add(length) {
+        Some(end) => format!("{offset:#x}..{end:#x} (offset {offset}, length {length})"),
+        None => format!("at offset {offset} with length {length}"),
+    };
+    let fix = match size.checked_sub(offset) {
+        Some(0) | None => format!("offset must be below {size}"),
+        Some(rest) => format!("at offset {offset} the length can be at most {rest}"),
+    };
+    format!("file range {asked} is outside the file, which holds {size} bytes ({size:#x}); {fix}")
 }
 
 #[cfg(not(unix))]
