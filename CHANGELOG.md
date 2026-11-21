@@ -4,6 +4,16 @@ All notable changes to rampage are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org);
 see the [stability policy](docs/stability.md) for what the version promises.
 
+## Unreleased
+
+- `identify_functions` runs call-graph propagation on Cortex-M firmware, from a new embedded call graph
+  (`data/embedded-callgraph.json.gz`, 65 KB) built from the embedded set's training references. On the held-out
+  GCC 14.3 fixtures recall rises from 51.3% to 60.1% (Cortex-M4F) and from 31.3% to 45.4% (Cortex-M0), with no
+  wrong or spurious name; added names carry source `rampage-builtin call graph`. Link stubs and weak override
+  points (application hooks, the HAL's weak defaults) are never propagated.
+- `crates/rampage-eval/examples/embedded_call_graph.rs` rebuilds the embedded call graph reproducibly and refuses
+  held-out builds. The flywheel engine chooses the call graph as production identification does.
+
 ## 1.10.0 (2026-11-21)
 
 - `integrity_checks` gives each check's stored and computed values, and each fix write's current and replacement

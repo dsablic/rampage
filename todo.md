@@ -483,7 +483,8 @@ acceptance run.
    headroom, then the unattended code loop. Steps 1–2 done 2026-11-21
    ([headroom](docs/benchmarks/flywheel-headroom-2026-11-21.md)): library identification picked (20,497 reachable
    misses no miner takes); parameter types second (pointers recovered as 8-byte integers: 1,350 of 1,771 misses);
-   call graph on firmware takes M4F 51→61% and M0 31→46% recall with no wrong names (step 5 / item 4).
+   call graph on firmware shipped 2026-11-21: M4F 51→60%, M0 31→45% recall, no wrong names (`qsort` stays
+   unnamed: only application code calls it).
 4. **Signature recall on firmware** (the arms and call graph gated on the embedded set).
 5. **Object files and static archives** (roadmap 4.3).
 6. **Analysis depth by measured headroom:** parameter types and interprocedural signatures, then C++ class
