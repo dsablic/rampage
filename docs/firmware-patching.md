@@ -27,7 +27,8 @@ Raw patches live in memory for the session, like other Raw annotations, so run t
 ## Finding checks
 
 Checks are found in the original image, where a stored value matches its range by construction; each is then
-measured on the patched image (`valid`, `stored_hex`, `computed_hex`).
+measured on the patched image (`valid`, `stored_hex`, `computed_hex`, and `stored_value`/`computed_value`: the
+same values as the integers read at the field's width and byte order, absent for digests).
 
 - **Algorithms.** CRC-32 (IEEE `crc32`, `crc32_bzip2`, `crc32_mpeg2`, `crc32_jamcrc`, `crc32c`, and
   `crc32_mpeg2_words`: 32-bit words fed most significant byte first, as STM32-style CRC units compute it), CRC-16
