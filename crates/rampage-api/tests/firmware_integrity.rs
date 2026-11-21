@@ -120,6 +120,14 @@ fn integrity_checks_find_fix_and_export_the_application_crc() {
     assert_eq!(report["fix"]["applied"], false);
     assert_eq!(report["fix"]["writes"][0]["action"], "patch");
     assert!(report["fix"]["writes"][0].get("device_check").is_none(), "{report:#}");
+    // Each value is also given as the integer the device reads (little-endian here), beside its hex.
+    let little = |hex: &Value| u32::from_str_radix(hex.as_str().unwrap(), 16).unwrap().swap_bytes();
+    assert_eq!(check["stored_value"], little(&check["stored_hex"]), "{check:#}");
+    assert_eq!(check["computed_value"], little(&check["computed_hex"]), "{check:#}");
+    assert_ne!(check["stored_value"], check["computed_value"]);
+    let write = &report["fix"]["writes"][0];
+    assert_eq!(write["current_value"], little(&write["current_hex"]), "{write:#}");
+    assert_eq!(write["replacement_value"], check["computed_value"], "{write:#}");
     // With emulation (the default), the boot code's own routine computes the corrected value over the patched range.
     let checked = call(&mut project, "integrity_checks", json!({}));
     let device = &checked["fix"]["writes"][0]["device_check"];

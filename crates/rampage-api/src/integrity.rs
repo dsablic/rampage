@@ -96,6 +96,13 @@ pub struct IntegrityCheck {
     pub stored_hex: String,
     /// Hex of the value computed over the effective image, in the stored byte order.
     pub computed_hex: String,
+    /// The stored bytes read as an integer at the field's width and byte order (`stored.endian`); absent for a
+    /// digest. A JSON number up to 2^53-1, a `0x` hex string above it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stored_value: Option<Value>,
+    /// The computed value as an integer, read like `stored_value`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub computed_value: Option<Value>,
     pub valid: bool,
     pub confidence: &'static str,
     pub score: f64,
@@ -156,6 +163,11 @@ pub struct FixWrite {
     pub address: u64,
     pub current_hex: String,
     pub replacement_hex: String,
+    /// `current_hex` and `replacement_hex` read as integers like a check's `stored_value`; absent for a digest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_value: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replacement_value: Option<Value>,
     /// `patch` (a patch record over the original bytes), `revert` (the original bytes are correct again) or
     /// `unsupported` with the reason in `detail`, `preview_only` (no independent evidence; pass its id), or
     /// `blocked` (its range covers another check's stale value that is not being fixed; named in `detail`).
@@ -1331,6 +1343,20 @@ fn hex(bytes: &[u8]) -> String {
     rampage_arch::hex::bytes(bytes)
 }
 
+/// A stored field's bytes as the integer the device reads at their width and byte order: a JSON number up to
+/// 2^53-1 (exact in every JSON reader), a `0x` hex string above it. `None` for a digest or no bytes.
+fn field_value(bytes: &[u8], endian: Endian) -> Option<Value> {
+    if bytes.is_empty() || bytes.len() > 8 || (endian == Endian::Bytes && bytes.len() > 1) {
+        return None;
+    }
+    let mut ordered = bytes.to_vec();
+    if endian == Endian::Little {
+        ordered.reverse();
+    }
+    let value = ordered.iter().fold(0u64, |value, &byte| (value << 8) | u64::from(byte));
+    Some(if value < 1 << 53 { Value::from(value) } else { Value::from(format!("{value:#x}")) })
+}
+
 fn unhex(text: &str) -> Vec<u8> {
     (0..text.len() / 2).filter_map(|at| u8::from_str_radix(&text[2 * at..2 * at + 2], 16).ok()).collect()
 }
@@ -1825,6 +1851,8 @@ impl Project {
                     address: check.field,
                     current_hex: hex(&current),
                     replacement_hex: hex(&desired),
+                    current_value: field_value(&current, check.endian),
+                    replacement_value: field_value(&desired, check.endian),
                     action: "blocked",
                     detail: Some(format!(
                         "its range covers {inner}, which no longer matches its own range and is not being corrected; \
@@ -1872,6 +1900,8 @@ impl Project {
                 address: check.field,
                 current_hex: hex(&current),
                 replacement_hex: hex(&desired),
+                current_value: field_value(&current, check.endian),
+                replacement_value: field_value(&desired, check.endian),
                 action: if revert { "revert" } else { "patch" },
                 detail: None,
                 device_check: device,
@@ -1948,6 +1978,8 @@ impl Project {
                     address: check.field,
                     current_hex: hex(&current),
                     replacement_hex: hex(&desired),
+                    current_value: field_value(&current, check.endian),
+                    replacement_value: field_value(&desired, check.endian),
                     action: "preview_only",
                     detail: Some(
                         "not confirmed by emulation and no code references its value or range; pass its id to fix it"
@@ -1986,6 +2018,8 @@ impl Project {
                 valid: stored == computed,
                 stored_hex: hex(&stored),
                 computed_hex: hex(&computed),
+                stored_value: field_value(&stored, check.endian),
+                computed_value: field_value(&computed, check.endian),
                 confidence: confidence(check.score),
                 score: (check.score * 100.0).round() / 100.0,
                 confirmed_by_emulation: check.emulated,
@@ -2011,6 +2045,8 @@ impl Project {
                 valid: stored == computed || stored == [0; 4],
                 stored_hex: hex(stored),
                 computed_hex: hex(&computed),
+                stored_value: field_value(stored, Endian::Little),
+                computed_value: field_value(&computed, Endian::Little),
                 confidence: "high",
                 score: 0.95,
                 confirmed_by_emulation: false,

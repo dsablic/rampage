@@ -283,3 +283,17 @@ fn device_checks_agree_disagree_or_stay_unconfirmed() {
     assert_eq!(result.status, "unconfirmed", "{result:?}");
     assert!(result.detail.contains("could not run") || result.detail.contains("did not return"), "{result:?}");
 }
+
+/// Suite v4 (1.9.0): an agent converted little-endian `computed_hex` to the wrong integer by hand; the report gives
+/// the integer at the field's byte order, exact as a JSON number, and a `0x` string past 2^53-1.
+#[test]
+fn field_values_read_the_bytes_at_their_width_and_byte_order() {
+    let bytes = [0xa1, 0x0f, 0x98, 0xc2];
+    assert_eq!(field_value(&bytes, Endian::Little), Some(Value::from(0xc298_0fa1_u64)));
+    assert_eq!(field_value(&bytes, Endian::Big), Some(Value::from(0xa10f_98c2_u64)));
+    assert_eq!(field_value(&[0x7f], Endian::Bytes), Some(Value::from(0x7f)));
+    assert_eq!(field_value(&[0x12, 0x34], Endian::Little), Some(Value::from(0x3412)));
+    assert_eq!(field_value(&[0xff; 8], Endian::Big), Some(Value::from("0xffffffffffffffff")));
+    assert_eq!(field_value(&[0; 16], Endian::Bytes), None);
+    assert_eq!(field_value(&[], Endian::Little), None);
+}
