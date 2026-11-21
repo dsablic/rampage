@@ -54,6 +54,15 @@ After item 5: see "Queue after incremental analysis (agreed 2026-11-20)" below.
 Done 2026-11-17 to 2026-11-19: Android 1.7.0, firmware leftovers, binwalk/unblob evaluation, carve signature waves
 1–2, UBI/UBIFS readers, housekeeping (fixture paths with a CI check, flaky UI test, read-only annotations).
 
+## Haiku suite v4 pass for 1.10.0 (2026-11-21)
+
+rampage only, 1 rep, label haiku-v4-1.10.0: 17/20 strict, 18/20 lenient, $0.31, 19 tool errors (41 at 1.9.0).
+Misses: emulate-libc-arm64-elf answered `{"status":"ok","result":<right value>}` (the same slip as at 1.9.0);
+svd-status-readers-cm4-raw answered `[200,200,200,200]` (model slip); libid-names-m0-elf got four of five names
+but `identify_functions` did not name `qsort` on the M0 held-out build, so the agent guessed (queue item 4).
+- [ ] The `"status"` slip has now recurred on two releases: consider having `evaluate_function` put the value
+      first and drop `"status": "ok"` from successful results (when the next pass shows it again).
+
 ## Haiku suite v4 pass for 1.9.0 (2026-11-21)
 
 rampage only, 1 rep, label v4-haiku-1.9.0-2026-11-21 (target/bench/h2h), the first model run of suite v4: 17/20
