@@ -727,11 +727,19 @@ impl RawProjectRequest {
         // With decode, `length` counts encoded bytes (the decoder provider's input cap) and the decoded size is the
         // mapped one, under the profile's cap.
         let limit = if self.decode.is_some() { crate::MAX_DECODE_INPUT_BYTES } else { max };
-        // The file's size, for an omitted length (the rest of the file) and to say what fits; the range itself is
-        // checked again on the opened descriptor.
-        let size = std::fs::metadata(path)
-            .map_err(|error| ApiError::Unavailable(format!("file-range source: {error}")))?
-            .len();
+        let what = if self.decode.is_some() { "encoded bytes with decode" } else { "bytes" };
+        let refuse_length = |omitted: String| {
+            ApiError::Invalid(format!("Raw length must be 1..={limit} {what} for {}{omitted}", profile.language_id()))
+        };
+        let in_limit = |length: u64| usize::try_from(length).ok().filter(|length| (1..=limit).contains(length));
+        // An explicit length is checked before the file is read.
+        if let Some(length) = self.length {
+            in_limit(length.0).ok_or_else(|| refuse_length(String::new()))?;
+            offset.0.checked_add(length.0).ok_or_else(|| invalid("Raw source range overflows"))?;
+        }
+        // The file's size, observed through the checked range source, for an omitted length (the rest of the file)
+        // and to say what fits; the range itself is checked again when it is read.
+        let size = RangeSource::open(path, 0, 0)?.size();
         let length = match self.length {
             Some(length) => length.0,
             None => size
@@ -745,14 +753,8 @@ impl RawProjectRequest {
                 crate::range_source::outside(offset.0, length, size)
             )));
         }
-        let length = usize::try_from(length).ok().filter(|length| (1..=limit).contains(length)).ok_or_else(|| {
-            let what = if self.decode.is_some() { "encoded bytes with decode" } else { "bytes" };
-            let omitted = if self.length.is_none() {
-                format!(" (the file holds {length} bytes from offset {}: give a length)", offset.0)
-            } else {
-                String::new()
-            };
-            ApiError::Invalid(format!("Raw length must be 1..={limit} {what} for {}{omitted}", profile.language_id()))
+        let length = in_limit(length).ok_or_else(|| {
+            refuse_length(format!(" (the file holds {length} bytes from offset {}: give a length)", offset.0))
         })?;
         let (bytes, source) = match &self.decode {
             None => file_range(path, offset.0, length)?,
