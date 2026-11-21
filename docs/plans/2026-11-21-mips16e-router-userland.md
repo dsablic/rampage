@@ -111,6 +111,14 @@ microMIPS mode would need its own port of the tracker. microMIPS images keep the
 and their odd symbols seed nothing. 64-bit MIPS16e (MIPS64 with the ASE flag) is also left out: its 64-bit
 opcodes are not decoded, and it keeps the warning.
 
+### Added during acceptance
+
+`busybox` listed 38 functions with decoding alone. Its applets are reached only through `applet_main`, a table of
+odd function pointers, and musl's dynamic `_start` reaches `_start_c` only through a word after its `bal`. So: runs
+of at least four odd code pointers (none at a string) seed MIPS16e functions, each marking only its first
+instruction as MIPS16e; straight-line MIPS code keeps its mode whatever the ranges say (unlike ARM, a mode changes
+only at a jump); every code pointer in a MIPS16e image names its mode; and `_start_c` is seeded from the entry.
+
 ## Versions and tests
 
 - `ANALYSIS_VERSION` is bumped: constructor seeds change function lists of existing fixtures.
