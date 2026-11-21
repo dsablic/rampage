@@ -176,6 +176,11 @@ fn constructors_and_destructors_seed_functions() {
 /// A small ELF64 little-endian image: one PT_LOAD over the whole file at address 0 and a PT_DYNAMIC with
 /// `dynamic`'s entries at 0x100; `extra` is copied to 0x200.
 fn image64(dynamic: &[(u64, u64)], extra: &[u8]) -> Vec<u8> {
+    image64_at(0, dynamic, extra)
+}
+
+/// [`image64`] with the PT_LOAD mapped at `base` instead of 0.
+fn image64_at(base: u64, dynamic: &[(u64, u64)], extra: &[u8]) -> Vec<u8> {
     let mut data = vec![0u8; 0x200 + extra.len()];
     data[..4].copy_from_slice(b"\x7fELF");
     data[4] = 2;
@@ -189,7 +194,7 @@ fn image64(dynamic: &[(u64, u64)], extra: &[u8]) -> Vec<u8> {
         let at = 0x40 + index * 56;
         put(&mut data, at, 4, u64::from(kind));
         put(&mut data, at + 8, 8, offset);
-        put(&mut data, at + 16, 8, offset);
+        put(&mut data, at + 16, 8, if kind == PT_LOAD { base } else { base.wrapping_add(offset) });
         put(&mut data, at + 32, 8, size);
         put(&mut data, at + 40, 8, size);
     }
@@ -286,4 +291,33 @@ fn hostile_dynamic_sections_never_panic() {
             let _ = read(&original[..length], true);
         }
     }
+}
+
+/// Review: a PT_LOAD near the top of the address space, one that wraps around 2^64 and tables placed at its end
+/// must not overflow address arithmetic (a debug-build panic) or wrap into another segment.
+#[test]
+fn tables_at_the_top_of_the_address_space_do_not_overflow() {
+    for base in [0u64.wrapping_sub(0x210), 0u64.wrapping_sub(0x400), 0u64.wrapping_sub(0x240)] {
+        let top = |offset: u64| base.wrapping_add(offset);
+        let mut extra = vec![0xffu8; 0x40];
+        extra[..16].copy_from_slice(&[1, 0, 0, 0, 1, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0, 0, 0]);
+        for dynamic in [
+            vec![(DT_INIT_ARRAY, top(0x208)), (DT_INIT_ARRAYSZ, 0x1000)],
+            vec![(DT_GNU_HASH, top(0x200)), (DT_SYMTAB, top(0x230)), (DT_STRTAB, top(0x200)), (DT_STRSZ, 0x10)],
+            vec![(DT_HASH, top(0x200)), (DT_SYMTAB, top(0x238)), (DT_STRTAB, top(0x200)), (DT_STRSZ, 0x40)],
+            vec![(DT_RELA, top(0x220)), (DT_RELASZ, 24 * 100), (DT_RELAENT, 24), (DT_INIT_ARRAY, top(0x220))],
+            vec![(DT_JMPREL, top(0x238)), (DT_PLTRELSZ, 16 * 8), (DT_INIT, top(0x200)), (DT_FINI_ARRAY, u64::MAX - 3)],
+        ] {
+            let data = image64_at(base, &dynamic, &extra);
+            let _ = read(&data, true);
+            let _ = Binary::from_owned_native_bytes(data, rampage_arch::Arch::X86_64);
+        }
+    }
+    // A segment that wraps maps nothing, so nothing is read through it.
+    let data = image64_at(
+        0u64.wrapping_sub(0x210),
+        &[(DT_INIT_ARRAY, 0u64.wrapping_sub(0x10)), (DT_INIT_ARRAYSZ, 8)],
+        &[1; 0x40],
+    );
+    assert!(read(&data, false).unwrap().constructors.is_empty());
 }

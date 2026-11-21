@@ -111,14 +111,18 @@ impl<'data> Image<'data> {
             let Some(at) = phoff.checked_add(phentsize.checked_mul(index as u64)?) else { break };
             let Ok(at) = usize::try_from(at) else { break };
             let Some(kind) = image.uint(at, 4) else { break };
+            let field = |delta: usize, size: usize| at.checked_add(delta).and_then(|at| image.uint(at, size));
             let header = if is_64 {
-                (image.uint(at + 8, 8), image.uint(at + 16, 8), image.uint(at + 32, 8))
+                (field(8, 8), field(16, 8), field(32, 8))
             } else {
-                (image.uint(at + 4, 4), image.uint(at + 8, 4), image.uint(at + 16, 4))
+                (field(4, 4), field(8, 4), field(16, 4))
             };
             let (Some(offset), Some(address), Some(file_size)) = header else { break };
+            // A segment whose addresses or file range would wrap around 2^64 maps nothing.
+            let sound = address.checked_add(file_size).is_some() && offset.checked_add(file_size).is_some();
             match kind as u32 {
-                PT_LOAD => image.loads.push(Load { address, offset, file_size }),
+                PT_LOAD if sound => image.loads.push(Load { address, offset, file_size }),
+                PT_LOAD => {}
                 PT_DYNAMIC if dynamic.is_none() => dynamic = Some((offset, file_size)),
                 _ => {}
             }
@@ -128,9 +132,11 @@ impl<'data> Image<'data> {
         let start = usize::try_from(offset).ok()?;
         let available = data.len().checked_sub(start)?.min(usize::try_from(size).unwrap_or(usize::MAX));
         for index in 0..(available / entry).min(MAX_DYNAMIC_ENTRIES) {
-            let at = start + index * entry;
+            let Some(at) = index.checked_mul(entry).and_then(|delta| start.checked_add(delta)) else { break };
             let half = entry / 2;
-            let (Some(tag), Some(value)) = (image.uint(at, half), image.uint(at + half, half)) else { break };
+            let tag = image.uint(at, half);
+            let value = at.checked_add(half).and_then(|at| image.uint(at, half));
+            let (Some(tag), Some(value)) = (tag, value) else { break };
             if tag == DT_NULL {
                 break;
             }
@@ -192,6 +198,11 @@ impl<'data> Image<'data> {
         let in_file = (self.data.len() as u64).saturating_sub(offset);
         usize::try_from(in_segment.min(in_file) / entry.max(1)).unwrap_or(usize::MAX).min(limit)
     }
+}
+
+/// `base + index * scale`, or `None` when it would wrap around 2^64.
+fn element(base: u64, index: u64, scale: u64) -> Option<u64> {
+    base.checked_add(index.checked_mul(scale)?)
 }
 
 /// One entry of the dynamic symbol table.
@@ -287,17 +298,18 @@ pub(crate) fn symbol_count(image: &Image) -> Result<Option<usize>, String> {
         return checked(chains).map(Some);
     }
     let Some(hash) = image.value(DT_GNU_HASH) else { return Ok(None) };
-    let header = |index: u64| hash.checked_add(index * 4).and_then(|at| image.read(at, 4));
+    let header = |index: u64| element(hash, index, 4).and_then(|at| image.read(at, 4));
     let (Some(buckets), Some(first), Some(bloom)) = (header(0), header(1), header(2)) else {
         return Err("DT_GNU_HASH is outside the file".into());
     };
     if buckets > MAX_GNU_HASH_WORDS || bloom > MAX_GNU_HASH_WORDS || first > MAX_SYMBOLS as u64 {
         return Err("DT_GNU_HASH header is implausible".into());
     }
-    let buckets_at = hash + 16 + bloom * image.pointer_size();
+    let outside = "DT_GNU_HASH buckets are outside the file";
+    let buckets_at = hash.checked_add(16).and_then(|at| element(at, bloom, image.pointer_size())).ok_or(outside)?;
     let mut highest = None;
     for index in 0..buckets {
-        let bucket = image.read(buckets_at + index * 4, 4).ok_or("DT_GNU_HASH buckets are outside the file")?;
+        let bucket = element(buckets_at, index, 4).and_then(|at| image.read(at, 4)).ok_or(outside)?;
         if bucket != 0 {
             highest = highest.max(Some(bucket));
         }
@@ -306,13 +318,15 @@ pub(crate) fn symbol_count(image: &Image) -> Result<Option<usize>, String> {
     if index < first {
         return Err("DT_GNU_HASH bucket below its first symbol".into());
     }
-    let chains_at = buckets_at + buckets * 4;
+    let chains_at = element(buckets_at, buckets, 4).ok_or("DT_GNU_HASH chains are outside the file")?;
     // The last chain ends at the entry whose hash has the low bit set.
     loop {
         if index >= MAX_SYMBOLS as u64 {
             return Err("DT_GNU_HASH chain does not end".into());
         }
-        let value = image.read(chains_at + (index - first) * 4, 4).ok_or("DT_GNU_HASH chain is outside the file")?;
+        let value = element(chains_at, index - first, 4)
+            .and_then(|at| image.read(at, 4))
+            .ok_or("DT_GNU_HASH chain is outside the file")?;
         if value & 1 == 1 {
             return checked(index + 1).map(Some);
         }
@@ -342,8 +356,8 @@ fn symbol_table(image: &Image, warnings: &mut Vec<String>) -> Result<Vec<Dynamic
         .ok_or("DT_STRTAB is outside the file")?;
     let mut symbols = Vec::with_capacity(readable);
     for index in 0..readable {
-        let at = table + index as u64 * entry;
-        let field = |offset: u64, size: usize| image.read(at + offset, size);
+        let Some(at) = element(table, index as u64, entry) else { break };
+        let field = |offset: u64, size: usize| at.checked_add(offset).and_then(|at| image.read(at, size));
         let fields = if image.is_64 {
             (field(0, 4), field(4, 1), field(5, 1), field(6, 2), field(8, 8), field(16, 8))
         } else {
@@ -406,10 +420,11 @@ fn relocations(image: &Image, warnings: &mut Vec<String>) -> Vec<Relocation> {
         }
         let word = image.pointer_size() as usize;
         for index in 0..count {
-            let at = address + index as u64 * entry;
-            let (Some(offset), Some(info)) = (image.read(at, word), image.read(at + word as u64, word)) else { break };
+            let Some(at) = element(address, index as u64, entry) else { break };
+            let field = |index: u64| element(at, index, word as u64).and_then(|at| image.read(at, word));
+            let (Some(offset), Some(info)) = (field(0), field(1)) else { break };
             let addend = (entry == rela)
-                .then(|| image.read(at + 2 * word as u64, word))
+                .then(|| field(2))
                 .flatten()
                 .map(|addend| if image.is_64 { addend as i64 } else { i64::from(addend as u32 as i32) });
             let (symbol, kind) =
@@ -437,7 +452,7 @@ fn constructors(image: &Image, relocations: &[Relocation]) -> Vec<u64> {
         let (Some(array), Some(bytes)) = (image.value(tag), image.value(size_tag)) else { continue };
         let wanted = usize::try_from(bytes / size).unwrap_or(usize::MAX).min(MAX_ARRAY_ENTRIES);
         for index in 0..image.readable(array, size, wanted) {
-            let slot = array + index as u64 * size;
+            let Some(slot) = element(array, index as u64, size) else { break };
             let Some(stored) = image.read(slot, size as usize) else { break };
             let value = if stored == 0 { addends.get(&slot).copied().unwrap_or(0) } else { stored };
             if value != 0 && value != all_ones {
