@@ -230,6 +230,8 @@ pub struct Engine {
     /// The build whose cached discovery (function extents, call sequences, loader names) is used in place of this
     /// build's: a source-change gate identifies with the candidate's matcher on the base build's discovery.
     discovery_key: Option<String>,
+    /// Where that discovery is cached, when not in this engine's own cache directory (read only).
+    discovery_dir: Option<PathBuf>,
 }
 
 /// Counters of one engine's cache use, for timing reports.
@@ -254,6 +256,7 @@ impl Engine {
             training: OnceLock::new(),
             novelty,
             discovery_key: None,
+            discovery_dir: None,
         }
     }
 
@@ -261,6 +264,13 @@ impl Engine {
     /// that build has not analysed is then an error, never analysed again.
     pub fn with_discovery_key(mut self, key: &str) -> Engine {
         self.discovery_key = Some(key.to_owned());
+        self
+    }
+
+    /// Reads the discovery from the cache directory `dir` (another engine's [`Paths::cache`]) instead of this
+    /// engine's own; truth is still cached in this engine's directory.
+    pub fn with_discovery_dir(mut self, dir: PathBuf) -> Engine {
+        self.discovery_dir = Some(dir);
         self
     }
 
@@ -487,7 +497,8 @@ impl Engine {
             hasher.update(part.as_bytes());
             hasher.update([0]);
         }
-        Ok(self.paths.cache().join("baseline").join(format!("{}.json", hex(&hasher.finalize()))))
+        let cache = self.discovery_dir.clone().unwrap_or_else(|| self.paths.cache());
+        Ok(cache.join("baseline").join(format!("{}.json", hex(&hasher.finalize()))))
     }
 
     /// Discovery and bundled-only identification of the stripped binary, through the same project analysis and

@@ -359,11 +359,12 @@ def attempt(path):
 
 final = attempt(os.environ["FAKE_FINAL"])
 train = attempt(os.environ["FAKE_TRAIN"])
+settings = attempt(sys.argv[sys.argv.index("--settings") + 1])
 sys.stdin.read()
 print("stand-in started", file=sys.stderr, flush=True)
 model = sys.argv[sys.argv.index("--model") + 1]
 added = [sys.argv[index + 1] for index, part in enumerate(sys.argv) if part == "--add-dir"]
-text = f"final={final} train={train}"
+text = f"final={final} train={train} settings={settings}"
 for event in (
     {"type": "system", "subtype": "init", "tools": ["Bash", "Edit", "Glob", "Grep", "Read", "Write"],
      "mcp_servers": [], "model": model, "plugins": [], "slash_commands": [], "agents": [],
@@ -465,8 +466,12 @@ class CodeProfileTest(unittest.TestCase):
             arguments.workdir = workdir
             arguments.claude_bin = str(fake)
             arguments.add_dir = [train]
-            # The transcript lies where the sandboxed session may not write, as the harness keeps it.
+            # The transcript lies where the sandboxed session may not write, as the harness keeps it; the settings
+            # lie in the session root, where the sandboxed claude must read them.
             arguments.transcript = flywheel / "session" / "transcript.jsonl"
+            settings = root / "session" / "settings.json"
+            settings.write_text('{"permissions": {}}')
+            arguments.settings = settings
             (root / "prompt.md").write_text("task")
             (root / "session.sb").write_text(
                 f'(version 1)\n(allow default)\n(deny file-read* file-write* (subpath "{flywheel}"))\n'
@@ -476,9 +481,17 @@ class CodeProfileTest(unittest.TestCase):
             self.assertIn("final=denied:PermissionError", result["answer"])
             self.assertNotIn("final truth", result["answer"])
             self.assertIn("train=read:training truth", result["answer"])
+            self.assertIn('settings=read:{"permissions": {}}', result["answer"])
             self.assertEqual(result["profile"], "code")
             stderr = (flywheel / "session" / "transcript.jsonl.stderr").read_text()
             self.assertIn("stand-in started", stderr)
+            # Settings kept in the denied run directory (where the harness first wrote them) are unreadable to the
+            # session: this test would have caught that.
+            hidden = flywheel / "session" / "settings.json"
+            hidden.write_text("{}")
+            arguments.settings = hidden
+            self.assertIn("settings=denied:PermissionError", runner.run(arguments)["answer"])
+            arguments.settings = settings
             # Without the sandbox profile's rule the same stand-in reads the file: the denial is the sandbox's.
             (root / "session.sb").write_text("(version 1)\n(allow default)\n")
             self.assertIn("final=read:final truth", runner.run(arguments)["answer"])

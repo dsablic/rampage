@@ -101,6 +101,39 @@ pub fn training_graph(engine: &Engine) -> Result<CallGraph, FlywheelError> {
     Ok(graph)
 }
 
+/// The training split as a heuristics generator receives it ([`rampage_signatures::heuristics::generate`]): every
+/// discovered function's bytes, call targets and truth. Only the training split is read.
+pub fn training_inputs(engine: &Engine) -> Result<Vec<rampage_signatures::heuristics::TrainingBinary>, FlywheelError> {
+    use rampage_signatures::heuristics::{TrainingBinary, TrainingFunction};
+    let train = engine.corpus.indices(Split::Train);
+    engine.load_all(&train)?;
+    let mut out = Vec::new();
+    for index in train {
+        let loaded = engine.get(index)?;
+        let functions = loaded
+            .functions
+            .iter()
+            .filter_map(|&(start, end)| {
+                let bytes = loaded.binary.read(start, end.checked_sub(start)?)?.to_vec();
+                let truth = loaded.truth.get(&start);
+                Some(TrainingFunction {
+                    address: start,
+                    bytes,
+                    name: truth.map(|truth| truth.name.clone()),
+                    library: truth.is_some_and(|truth| truth.origin != super::engine::RUNTIME),
+                    calls: loaded.calls.get(&start).cloned().unwrap_or_default(),
+                })
+            })
+            .collect();
+        out.push(TrainingBinary {
+            id: engine.binary(index).id.clone(),
+            arch: loaded.binary.arch.to_string(),
+            functions,
+        });
+    }
+    Ok(out)
+}
+
 /// `names` as the proposals [`super::evaluation::compare`] scores, by corpus index. A binary of the split that
 /// `names` lacks is an error: a names file from another corpus or split must not score as "named nothing".
 pub fn proposals(engine: &Engine, split: Split, names: &SplitNames) -> Result<Proposals, FlywheelError> {

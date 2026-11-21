@@ -12,6 +12,7 @@ use serde::Deserialize;
 mod agent_bench_run;
 mod bundle;
 mod flywheel_code;
+mod flywheel_code_sandbox;
 mod flywheel_code_workspace;
 mod flywheel_run;
 mod parity;
@@ -111,11 +112,18 @@ enum Command {
     /// clear. Reports bundled-only and bundled-plus-arm metrics, overall and for novel and recognised held-out
     /// functions.
     FlywheelBaseline(Box<flywheel_run::FlywheelBaselineArgs>),
-    /// Run the code loop once (docs/flywheel.md, "The code loop"): an agent changes a family's matcher source in a
-    /// fresh worktree at --base, inside a sandbox that cannot read the corpus or the flywheel directory, with a gate
-    /// it can call (dev verdict only); then the gate runs authoritatively, and a full pass earns one ledgered final
-    /// read and, when that passes, a branch for review. Spends model usage unless --session-script stands in.
+    /// Run the code loop once (docs/flywheel.md, "The code loop"): an agent changes a family's matcher source in an
+    /// exported tree of --base, inside a sandbox with no network that cannot read the corpus or the flywheel
+    /// directory, with a gate it can call (dev verdict only); then the gate runs authoritatively and the run stops. A
+    /// full pass earns a final read, made only by flywheel-code-final. Spends model usage unless --session-script
+    /// stands in.
     FlywheelCodeRun(Box<flywheel_code::CodeRunArgs>),
+    /// The one ledgered read of the final split for a code run whose gate passed, after the operator reviewed its
+    /// change; a final pass commits the change on a branch for review. A second read of the same change is refused.
+    FlywheelCodeFinal(Box<flywheel_code::CodeFinalArgs>),
+    /// The code loop's generation step: this build's heuristics data from the training view.
+    #[command(hide = true)]
+    FlywheelCodeGenerate(Box<flywheel_code::CodeGenerateArgs>),
     /// The code loop's identification step: this build names every binary of one split of a corpus view.
     #[command(hide = true)]
     FlywheelCodeNames(Box<flywheel_code::CodeNamesArgs>),
@@ -290,6 +298,8 @@ fn main() -> ExitCode {
         Command::FlywheelBaseline(args) => flywheel_run::baseline(*args),
         Command::FlywheelCodeRun(args) => flywheel_code::run(*args),
         Command::FlywheelCodeNames(args) => flywheel_code::names(*args),
+        Command::FlywheelCodeFinal(args) => flywheel_code::final_read(*args),
+        Command::FlywheelCodeGenerate(args) => flywheel_code::generate(*args),
         Command::Bundle(args) => bundle::run(*args),
     };
     match result {

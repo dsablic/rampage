@@ -40,8 +40,8 @@ Everything the loop writes lives under `target/flywheel/`:
 | `promoted/libid/` | The promoted pack (`rampage-pack.toml`, `sigs/`) and `entries.json` with provenance |
 | `runs/<label>/` | Run reports (`report.json`, `report.md`), and each round's transcript, prompt and server events |
 | `bundle/<label>/` | A bundle's `summary.md`, `summary.json` and `change.patch` |
-| `code-runs/<label>/` | A code run ([the code loop](#the-code-loop)): `report.md`, `run.json`, `candidate.diff`, the session transcript, every gate's results, and the final read's ledger entry or dry run |
-| `code-runs/gate/` | The code loop's gate worktree and cargo target directory, kept across runs so builds stay incremental |
+| `code-runs/<label>/` | A code run ([the code loop](#the-code-loop)): `report.md`, `run.json`, `candidate.diff`, the session transcript, every gate's results, and the final read's plan or, after `flywheel-code-final`, its ledger entry |
+| `code-runs/gate/` | The code loop's gate worktree, build target and vendored dependencies, kept across runs so builds stay incremental |
 
 Nothing under `target/` is committed. The repository holds the recipe (`tools/flywheel/corpus.json`), the driver
 programs (`tools/flywheel/drivers/`), the build script and a reference build's digests
@@ -376,36 +376,68 @@ unattended, and the gate judges the change. Only library identification is a fam
 cargo build --release -p rampage-eval
 target/release/rampage-eval flywheel-code-run --family libid --corpus target/flywheel/corpus/<version> \
     --budget-usd 5
+# after a full pass, and after reading candidate.diff:
+target/release/rampage-eval flywheel-code-final --corpus target/flywheel/corpus/<version> --label <label> \
+    --reason "why this read is made"
 ```
 
-This spends model usage: one Claude Code session through `tools/agent-bench/claude-runner.py --profile code`
-(`claude-sonnet-5-5`, `--budget-usd` at most $5 per family per run, `--timeout-s` wall clock, default 90 minutes).
-`--session-script FILE` runs a shell script in the session's place, in the same sandbox and worktree, and spends
-nothing; it implies `--final-dry-run`. The command needs macOS: the isolation is `sandbox-exec`.
+`flywheel-code-run` spends model usage: one Claude Code session through `tools/agent-bench/claude-runner.py
+--profile code` (`claude-sonnet-5-5`, `--budget-usd` at most $5 per family per run, `--timeout-s` wall clock, default
+90 minutes; the harness stops the runner 15 minutes after that at the latest). `--session-script FILE` runs a shell
+script in the session's place, in the same sandbox and tree, and spends nothing. The commands need macOS: the
+isolation is `sandbox-exec`.
+
+A run never reads the final split. A full pass stops with a report saying what the read would be; the operator reviews
+the change and runs `flywheel-code-final`, which makes the one ledgered read.
 
 ### What the agent may change
 
-The run starts a fresh worktree at `--base` (default `HEAD`) with a private `CARGO_TARGET_DIR`. Afterwards the
-change is the worktree's whole difference from the base, untracked files included. It fails the run when it touches
-a path outside the family's allowlist. For libid that is:
+The session's tree is an export of `--base` (default `HEAD`) with a git history of its own and no tie to the
+repository: the harness never runs git, or anything else, in it. After the session the harness compares it file by
+file with its own reference export; every path that differs counts. The change fails the run when it touches a path
+outside the family's allowlist. For libid that is:
 
 - `crates/rampage-signatures/src/lib.rs`: masking, hash lookup and callee keys, and `identify_program_sources`;
 - `pat.rs` (PAT rows), `compressed.rs` (the bundled database format and lookup), `callgraph.rs` (propagation),
   `fuzzy.rs` and `operands.rs`, all in `crates/rampage-signatures/src/`;
-- new modules under `crates/rampage-signatures/src/heuristics/`;
+- `crates/rampage-signatures/src/heuristics/` (the generator below, and new modules);
 - `crates/rampage-signatures/tests/`.
 
-Left out on purpose: `Cargo.toml` (no new dependency), `data/` (the shipped databases change only through
-`bundle`), `bundled.rs` and `catalog.rs` (which assets load), `fid.rs` and `diagnostics.rs`.
+Left out on purpose: `Cargo.toml` (no new dependency), `data/` (the shipped databases change only through `bundle`;
+the heuristics data is generated), `heuristics_data.rs` (the generator's fixed inputs), `bundled.rs` and `catalog.rs`
+(which assets load), `fid.rs` and `diagnostics.rs`.
 
-It also fails on any symlink, mode change or binary file, and on any added line with a marker of file, environment,
-process or network access, such as `std::fs`, `env!`, `include_str!`, `unsafe` or `#[path`. The build, the tests and
-identification run the agent's code outside the session, so this check comes on top of the sandbox below. It is
-lexical, so a comment naming one of these fails too.
+It also fails on:
+
+- any symlink, special file or mode change, and any binary file;
+- more than `--max-added-lines` (800) added lines, or more than `--max-literal-lines` (40) added lines that are mostly
+  literal data (four or more number or string literals, or a string over 64 characters): a table of names or hashes
+  does not fit in source;
+- an added line with a marker of file, environment, process or network access, such as `std::fs`, `env!`,
+  `include_str!`, `unsafe` or `#[path` (whitespace normalised first). This check is advisory: it is lexical, a comment
+  naming one of these fails too, and the sandbox, not the check, is what keeps the agent's code from reading what it
+  may not.
+
+### Data from the training split
+
+A heuristic that needs data derived from training (references, tables, sequences) writes
+`rampage_signatures::heuristics::generate(&[TrainingBinary]) -> Vec<u8>` and reads the result with
+`heuristics::data()`. The inputs (each training binary's discovered functions with their bytes, calls and truth)
+are built by the harness's code in `heuristics_data.rs`, which the agent may not change. The gate runs the
+candidate's `generate` itself, inside the sandbox, with a view of the training split only (no dev, negative or
+final binary), writes the result (at most 4 MiB) to `data/heuristics/heuristics.bin` and builds again. A data file the
+agent leaves in its tree is ignored. So the compiled-in data is a function of the training split and of code that
+passed the allowlist and the literal cap. Like the bundled databases, it is in-sample for the training check.
 
 ### What the agent sees
 
-- **The worktree,** and Bash, Read, Edit, Write, Glob and Grep. No other tool, no MCP server, no web.
+- **Its tree,** and Bash, Read, Edit, Write, Glob and Grep. No other tool and no MCP server.
+- **No network.** The session's sandbox reaches only a loopback proxy run by the harness, which tunnels to the
+  model's API host (`api.anthropic.com:443`; `--allow-host` adds others) and refuses and logs everything else. Bash
+  inherits the same sandbox. Builds run offline from dependencies the harness vendors into the session's root, with a
+  private `CARGO_HOME`.
+- **No corpus recipe.** `tools/flywheel/` (recipe, build script, drivers, reference digests) is left out of the
+  tree, so the final split's library versions cannot be rebuilt from it.
 - **The training split and the negatives,** with their truth, as a corpus view:
   `<session>/flywheel/corpus/<version>-train` holds copies of the stripped binaries, the symbolized twins, the
   objects and a manifest of only those binaries. `flywheel-eval --split train` works on it, with cases.
@@ -414,49 +446,77 @@ lexical, so a comment naming one of these fails too.
   - every stage's verdict;
   - training and negative deltas with up to 40 changed cases;
   - for dev, the verdict, which rules passed and the overall delta (TP, FP, FN, F1), as the corpus server answers
-    today: no slice, case or per-library figure, and dev slice names are left out of the slice stage.
+    today: no slice, case, per-library figure or timing; the slice, time and naming stages say pass or fail only;
+  - the end of the build or test log when the agent's code fails to build or its tests fail.
 
   `--max-session-gates` (default 8) bounds how often the agent can ask.
 
-**The final split is unreadable from the session.** The session runs `claude` (or the script) under a
-`sandbox-exec` profile that denies reading and writing:
+### Isolation, and what it does not cover
 
-- the corpus directory and the flywheel directory, which hold the binaries, twins, caches, gate results and the
-  ledger;
-- the repositories' `target/` directories;
-- `~/.claude/projects` and `/tmp/claude-<uid>`, where other sessions' transcripts and scratch files live;
-- every `--deny-read` path.
+Every process the agent's code runs in is under a `sandbox-exec` profile:
 
-It also denies writing the repository's checkouts, except git objects and the session worktree's own git directory.
-Claude Code's path rules in the session's settings repeat the denial for the file tools, its own sandbox is
-off (a sandbox cannot be nested), and the runner checks the init event for exactly the code tools and directories.
-Two tests check the isolation with a scripted session that tries to read final files:
-`flywheel_code_workspace::tests::a_scripted_session_cannot_read_final_files` (Rust) and
-`CodeProfileTest.test_a_scripted_session_in_the_sandbox_cannot_read_the_final_split` (the runner, with a fake
-`claude`).
+| Process | Cannot read | Cannot write | Network |
+|---|---|---|---|
+| The session (`claude`, its Bash, or the script) | the corpus, the flywheel directory, both repository checkouts (target directories, other worktrees, the git object store), `~/.claude` except Claude Code's own state files, `/tmp/claude-<uid>`, `--deny-read` paths | the home directory, except Claude Code's own state files and the session root | the proxy only |
+| The candidate's build | the same | everything but the gate's build target, its log directory and a private cargo home and temp directory | none |
+| The candidate's tests | the same | everything but a fresh test target of their own and their log directory | none |
+| Generation and naming with the candidate | the same, but a view of one split's stripped binaries (training: with its truth) and the base's discovery, read only | everything but their own cache and output | none |
+
+- **Writes:** no agent-influenced process can write the operator's home (shell, git and cargo configuration),
+  repository, git object store, corpus or flywheel directory. The gate's build target is written only by builds;
+  tests get a fresh target directory, so they cannot plant anything in the build the authoritative gate or the next
+  run uses.
+- **The harness's git** runs with no global or system configuration, no hooks, no fsmonitor and no external diff or
+  textconv, with its git directory and work tree given explicitly as recorded when it made them. It runs only in its
+  own worktree (the gate's) and the operator's repository, which no agent-influenced process can write.
+- **Neutral views:** a candidate names dev, the negatives and the final split from views with random directory names,
+  neutral binary ids (`b0001`...), the same role and no library version, so its arguments, paths and manifest do not
+  say which split it is. The number of binaries still differs between splits.
+- **Interrupts:** Ctrl-C or TERM stops every child process and removes the session root and views. A session script's
+  descendants are stopped when it ends, even ones that left its process group.
+- **Tested:** scripted sessions that try to read final files, list the corpus or write the checkout fail
+  (`flywheel_code_sandbox` and `CodeProfileTest` with a fake `claude`, which also reads its settings from the session
+  root); from inside the session's sandbox a TCP connection anywhere but the proxy fails, and the proxy refuses
+  hosts not allowed; a candidate test cannot write the gate's build target or the home directory; an fsmonitor hook
+  set in `~/.gitconfig` runs under plain git but not under the harness's git; the session tree has no
+  `tools/flywheel/corpus.json`; a naming failure reaches the session as "naming a split failed" and nothing else.
+
+What it does not cover:
+
+- **Claude Code's minimal home set is a guess.** The paths the session may write under the home directory
+  (`~/.claude.json`, parts of `~/.claude`, `~/Library/Caches/claude-cli-nodejs`, `~/.local/state/claude`) were not
+  confirmed with a live session; `--claude-allow` adds paths. The first live run may need that.
+- **The model's API host is reachable** from the session's shell through the proxy, as Claude Code needs it.
+- **Counts:** a candidate could tell splits apart by how many binaries a view holds.
+- **Other channels:** the session can read the rest of the machine that is not denied (system files, the toolchain,
+  the documentation in its tree, which gives aggregate final figures and the final split's library versions, but no
+  sources or binaries of them). The sandbox is a macOS seatbelt profile, not a separate user or VM.
 
 ### The gate
 
-The same gate answers the session and, after it, decides. It applies the change to its own worktree at the base,
-so a session cannot alter what is measured. It runs:
+The same gate answers the session and, after it, decides. The change goes into the harness's own worktree of the base
+(reset first), so what is measured is the change as the allowlist admits it, built and run by the harness. It runs:
 
-1. **Policy:** the allowlist and the added-line check.
-2. **Build:** `cargo build --release -p rampage-eval`, in `code-runs/gate/` (kept across runs, one run at a time).
-3. **Tests:** the family crate's tests (`rampage-signatures`).
-4. **Names:** the candidate build names every binary of training, dev and the negatives, inside the same sandbox,
-   from a view holding only that split's stripped binaries (training also gets its truth, for the call graph). It
-   identifies as the product does: the compiled-in databases, then call-graph propagation. It reuses the base build's
-   discovery, so both builds identify the same bodies. This trusted harness process scores the names against truth.
-5. **Train, leaving one build out:** no new false positive on the training split. The call graph is regenerated
+1. **Policy:** the allowlist, special files, the size caps and the added-line check.
+2. **Build:** `cargo build --release -p rampage-eval` in `code-runs/gate/` (kept across runs, one run at a time),
+   offline from vendored dependencies.
+3. **Generate:** the candidate's heuristics generator on the training split; when its output differs from the
+   compiled-in data, a second build with it.
+4. **Tests:** the family crate's tests (`rampage-signatures`), in a fresh target directory.
+5. **Names:** the candidate build names every binary of training, dev and the negatives from the neutral views. It
+   identifies as the product does: the compiled-in databases, then call-graph propagation, on the base build's
+   discovery, so both builds identify the same bodies. The harness scores the names against truth.
+6. **Train, leaving one build out:** no new false positive on the training split. The call graph is regenerated
    from the training truth with each binary's own library build left out, since the shipped graph is that split's
-   sequences. The signature databases stay as shipped, in-sample for base and candidate alike.
-6. **Negatives:** no name added on the negative binaries.
-7. **Dev, with the allowance:** overall F1 up by at least 0.001, false positives up by at most one per 100 correct
+   sequences. The signature databases and generated data stay as they are, in-sample for base and candidate alike.
+7. **Negatives:** no name added on the negative binaries.
+8. **Dev, with the allowance:** overall F1 up by at least 0.001, false positives up by at most one per 100 correct
    names gained (`tp_per_fp`); `--gate FILE` overrides these as in [the gate](#the-gate).
-8. **Slices:** no gated slice (architecture, compiler, optimisation, library, cell) loses F1 on the fast slice,
+9. **Slices:** no gated slice (architecture, compiler, optimisation, library, cell) loses F1 on the fast slice,
    training or dev.
-9. **Time:** on every binary, identification with the change takes at most `--time-ratio` (4) times the base's,
-   or the base's plus `--time-floor-ms` (1000), whichever is more.
+10. **Time:** naming each split with the change takes at most `--time-ratio` (4) times the base's, or the base's plus
+    `--time-floor-s` (30), whichever is more. The harness times each naming process from outside, and the base's time
+    comes from a second pass that reads its own discovery the way the candidate does.
 
 The baseline is the base commit's build, that is, the bundled databases as shipped. Beside it the report gives
 fuzzy matching at 0.95/0.05 over the base on dev and the negatives, the best matcher that failed final
@@ -464,14 +524,16 @@ fuzzy matching at 0.95/0.05 over the base on dev and the negatives, the best mat
 
 ### The final read
 
-A full pass earns one read of the final split, recorded in the corpus's `final-ledger.jsonl` like every other read.
-The entry gives the reason (the run, the change's hash, the base) and a `code_run` field. The candidate and the base
-then name the final split in the sandbox, and the held-out rules are applied to it. The result is metrics only. A
-final pass commits the change on a branch `flywheel/code-<label>` and the report says so. Nothing merges or pushes.
+`flywheel-code-final --corpus C --label L --reason TEXT` reads the final split once for run `L`:
 
-With `--final-dry-run`, or a session script, the run writes `final-dry-run.json` instead. It says what would be read
-(the split, its size, the ledger and the read number) without naming a final binary or writing the ledger. A run
-whose gate fails never reads the final split.
+- It refuses a run whose gate did not pass, a `candidate.diff` that is not the one the run gated, and a change already
+  read on the same base (it looks for the change's hash and the base in the ledger).
+- It builds the base and the candidate again first, so a change that no longer builds does not use up the read.
+- It then appends the read to the corpus's `final-ledger.jsonl` with the reason and a `code_run` field (label,
+  family, base, change hash), names the final split with both builds in the sandbox from a neutral view, and applies
+  the held-out rules to it.
+- The result is metrics only (`final.json`). A final pass commits the change and its generated data on a branch
+  `flywheel/code-<label>`. Nothing merges or pushes.
 
 ### The run directory
 
@@ -479,18 +541,18 @@ whose gate fails never reads the final split.
 
 | Path | What it holds |
 |---|---|
-| `report.md` | The change, the session's gate calls, the authoritative stages, base against candidate per split, the fuzzy reference, and the final read |
-| `run.json` | The same data with the session's cost and the sandbox's paths |
+| `report.md` | The change, the session's gate calls, the authoritative stages, base against candidate per split, naming times, the fuzzy reference, and what a final read would be |
+| `run.json` | The same data with the session's cost, the proxy's hosts and the sandbox's paths |
 | `candidate.diff` | The change |
-| `session/` | The prompt, the settings, the sandbox profile, the transcript and the runner's result |
+| `session/` | The prompt, the sandbox profile, the proxy's log, the transcript and the runner's result |
 | `session-gates/N/` | Each session gate call: the full results (operator-only) and the answer the session got |
 | `gate/` | The authoritative gate: `gate.json` with every split's evaluation, logs and names |
 | `base/` | The base build's log and names |
-| `ledger-entry.json`, `final.json` | The final read's ledger entry and metrics, when one was made |
-| `final-dry-run.json` | What a dry run would have read |
+| `final-plan.json` | After a pass: the split, its size, the ledger and the read number a final read would use |
+| `ledger-entry.json`, `final.json`, `final/` | After `flywheel-code-final`: the ledger entry, the metrics and the logs |
 
-The worktrees, the session directory, the views and the binaries are removed at the end (`--keep-workspace` keeps
-them). The gate's worktree and target directory stay for the next run.
+The session root, the views, the reference export and the binaries are removed at the end (`--keep-workspace` keeps
+them). The gate's worktree, build target and vendored dependencies stay for the next run.
 
 ### Checked without an agent (2026-11-21)
 

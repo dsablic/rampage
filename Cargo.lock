@@ -4855,6 +4855,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "gimli 0.34.0",
+ "libc",
  "object 0.40.0",
  "rampage-agent",
  "rampage-analysis",

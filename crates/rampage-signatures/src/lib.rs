@@ -45,6 +45,8 @@ mod compressed;
 mod diagnostics;
 pub mod fid;
 pub mod fuzzy;
+pub mod heuristics;
+mod heuristics_data;
 mod operands;
 mod pat;
 
