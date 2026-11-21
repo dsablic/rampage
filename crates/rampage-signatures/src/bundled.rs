@@ -187,13 +187,17 @@ mod tests {
         Binary::open(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(path)).unwrap()
     }
 
-    /// The embedded firmware set is consulted for statically linked firmware only, never for a dynamically linked
-    /// armhf Linux program, whose Thumb code is no microcontroller's.
+    /// The embedded firmware set and call graph are consulted for statically linked firmware only, never for a
+    /// dynamically linked armhf Linux program, whose Thumb code is no microcontroller's.
     #[test]
     fn the_embedded_set_applies_to_firmware_only() {
         let firmware = fixture("firmware/embedded-libs-m4f.elf");
         assert!(firmware_like(&firmware));
         assert!(bundled_embedded_for(&firmware).is_some());
+        // So is the embedded call graph, in place of the host-library one.
+        let embedded = crate::bundled_embedded_call_graph().map(std::ptr::from_ref);
+        assert!(embedded.is_some());
+        assert_eq!(crate::bundled_call_graph_for(&firmware).map(std::ptr::from_ref), embedded);
         // A dynamically linked armhf program (interpreter, DT_NEEDED, .dynamic). Its fixture is A32; built for Thumb
         // (the armhf default) only its code ranges differ, so mark them Thumb.
         let mut linux = fixture("bin/hello-arm.elf");
@@ -203,6 +207,8 @@ mod tests {
         assert!(!firmware_like(&linux));
         assert!(bundled_embedded_for(&linux).is_none());
         assert!(bundled_ref(Arch::Arm).is_some(), "the corpus still applies");
+        let host = crate::bundled_call_graph().map(std::ptr::from_ref);
+        assert_eq!(crate::bundled_call_graph_for(&linux).map(std::ptr::from_ref), host);
     }
 
     /// Every notice the index names exists with its recorded digest, and every file beside it is named.

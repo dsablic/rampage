@@ -35,3 +35,36 @@ fn bundled_database_names_musl_functions_x86_64() {
 fn bundled_database_names_musl_functions_aarch64() {
     assert_bundled_names_library_code("musl-static-aarch64.elf");
 }
+
+/// The held-out GCC 14.3 firmware fixtures (`tools/embedded-signatures/build.py fixture`, never used to build the
+/// embedded set or its call graph): the embedded signatures name `signatures` library functions and the embedded
+/// call graph `call_graph` more, and every name is the library function the truth holds there.
+fn assert_embedded_firmware_names(core: &str, signatures: usize, call_graph: usize, propagated: &[&str]) {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let project = Session::default().open(&root.join(format!("firmware/embedded-libs-{core}.elf")), None).unwrap();
+    let truth = std::fs::read_to_string(root.join(format!("data/eval-truth-embedded-{core}.json"))).unwrap();
+    let truth: std::collections::BTreeMap<String, String> = serde_json::from_str(&truth).unwrap();
+    let result = project.apply_signatures_default(None, false).unwrap();
+    for found in &result.matches {
+        let address = format!("{:#x}", found.address);
+        assert_eq!(truth.get(&address), Some(&found.name), "{core} {address}: {}", found.source);
+    }
+    let count = |source: &str| result.matches.iter().filter(|found| found.source == source).count();
+    assert_eq!(count(rampage_api::EMBEDDED_SIGNATURES), signatures, "{core}");
+    assert_eq!(count(rampage_api::CALL_GRAPH), call_graph, "{core}");
+    assert_eq!(result.matched, signatures + call_graph, "{core}");
+    for name in propagated {
+        let found = result.matches.iter().find(|found| found.name == *name);
+        assert_eq!(found.map(|found| found.source.as_str()), Some(rampage_api::CALL_GRAPH), "{core} {name}");
+    }
+}
+
+#[test]
+fn embedded_call_graph_names_more_library_code_in_held_out_firmware_m4f() {
+    assert_embedded_firmware_names("m4f", 81, 16, &[]);
+}
+
+#[test]
+fn embedded_call_graph_names_more_library_code_in_held_out_firmware_m0() {
+    assert_embedded_firmware_names("m0", 71, 33, &["memset", "memmove"]);
+}

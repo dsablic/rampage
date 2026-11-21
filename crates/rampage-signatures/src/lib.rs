@@ -56,7 +56,7 @@ pub use bundled::{
     BundledMetadata, BundledProfile, FLYWHEEL_PROFILE_PREFIX, bundled, bundled_counts, bundled_embedded_for,
     bundled_embedded_ref, bundled_ref, firmware_like,
 };
-pub use callgraph::{CallGraph, CallSequence, bundled_call_graph};
+pub use callgraph::{CallGraph, CallSequence, bundled_call_graph, bundled_call_graph_for, bundled_embedded_call_graph};
 pub use compressed::{CombineError, SignatureDbError};
 pub use diagnostics::{
     CalleeNameInput, CalleeNameSource, FingerprintStatus, GateDiagnostics, KeyDiagnostics, LookupState,

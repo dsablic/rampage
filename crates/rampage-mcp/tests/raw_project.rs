@@ -412,7 +412,8 @@ async fn identify_embedded_raw_image(fixture: &str, profile: &str, names: &[&str
     for found in matches {
         let address = found["address"].as_str().unwrap();
         assert_eq!(found["name"], truth[address], "{address}: every name is the library function there");
-        assert_eq!(found["source"], "rampage-builtin embedded");
+        let source = found["source"].as_str().unwrap();
+        assert!(source == "rampage-builtin embedded" || source == "rampage-builtin call graph", "{address}: {source}");
     }
     for name in names {
         assert!(matches.iter().any(|found| found["name"] == *name), "{name}: {text}");
@@ -439,9 +440,10 @@ async fn identify_functions_names_library_code_in_a_cortex_m0_raw_image() {
     assert_eq!(identify_embedded_raw_image("m0", "cortex-m0", &names).await, EMBEDDED_M0_RAW);
 }
 
-/// Correct names the Raw rows of docs/signature-corpus.md report (no wrong or spurious name is allowed above).
-const EMBEDDED_M4F_RAW: usize = 81;
-const EMBEDDED_M0_RAW: usize = 71;
+/// Correct names the Raw rows of docs/signature-corpus.md report, signatures and call graph together (no wrong or
+/// spurious name is allowed above).
+const EMBEDDED_M4F_RAW: usize = 97;
+const EMBEDDED_M0_RAW: usize = 104;
 
 /// A CMSIS-SVD map imported once over MCP names a Cortex-M Raw project's registers in later calls with the same
 /// `raw` selector: decompiled C, xrefs by peripheral name and the per-register access listing.

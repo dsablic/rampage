@@ -16,7 +16,9 @@ use crate::{ApiError, Project};
 pub const USER_SIGNATURES: &str = "user database";
 
 /// The [`SignatureMatch::source`] of a name the bundled call graph gave: where an already-named caller calls the
-/// function, as training builds of the same library do (`rampage_signatures::callgraph`).
+/// function, as training builds of the same library do (`rampage_signatures::callgraph`). Firmware that gets the
+/// embedded signature set propagates with the embedded firmware call graph instead of the host-library one
+/// (`rampage_signatures::bundled_call_graph_for`).
 pub const CALL_GRAPH: &str = "rampage-builtin call graph";
 
 /// The [`SignatureMatch::source`] of a name the bundled embedded firmware set gave (newlib, libgcc, compiler-rt,
@@ -222,7 +224,7 @@ impl Project {
                     .to_owned(),
             ));
         }
-        let call_graph = if bundled { rampage_signatures::bundled_call_graph() } else { None };
+        let call_graph = if bundled { rampage_signatures::bundled_call_graph_for(&self.binary) } else { None };
         // The corpus, then (firmware) the embedded set: different hash schemes, so layered.
         let corpus = bundled.then(|| rampage_signatures::bundled_ref(self.binary.arch)).flatten();
         let embedded = bundled.then(|| rampage_signatures::bundled_embedded_for(&self.binary)).flatten();

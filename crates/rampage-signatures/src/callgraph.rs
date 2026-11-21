@@ -208,6 +208,29 @@ pub fn bundled_call_graph() -> Option<&'static CallGraph> {
     BUNDLED.get_or_init(|| CallGraph::from_gzip(BUNDLED_BYTES)).as_ref().ok().filter(|graph| graph.callers() > 0)
 }
 
+/// The compressed embedded firmware call graph shipped with rampage (`data/embedded-callgraph.json.gz`): the call
+/// sequences of the embedded signature set's training references (newlib, libgcc, compiler-rt, FreeRTOS, STM32F4
+/// HAL), built by `crates/rampage-eval/examples/embedded_call_graph.rs`.
+pub const EMBEDDED_BYTES: &[u8] = include_bytes!("../data/embedded-callgraph.json.gz");
+
+static EMBEDDED: OnceLock<Result<CallGraph, SignatureDbError>> = OnceLock::new();
+
+/// The embedded firmware call graph shipped with rampage, or `None` when it does not load or holds no sequence.
+pub fn bundled_embedded_call_graph() -> Option<&'static CallGraph> {
+    EMBEDDED.get_or_init(|| CallGraph::from_gzip(EMBEDDED_BYTES)).as_ref().ok().filter(|graph| graph.callers() > 0)
+}
+
+/// The call graph identification propagates with on `binary`: the embedded firmware graph where the embedded
+/// signature set applies (firmware-like Thumb, [`crate::bundled_embedded_for`]), else the host-library graph. The
+/// host graph holds no 32-bit ARM sequences, so firmware loses nothing by the choice, and Linux ARM programs never
+/// meet firmware library sequences.
+pub fn bundled_call_graph_for(binary: &rampage_loaders::Binary) -> Option<&'static CallGraph> {
+    match crate::bundled_embedded_for(binary) {
+        Some(_) => bundled_embedded_call_graph(),
+        None => bundled_call_graph(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +293,10 @@ mod tests {
         assert!(graph.arches["x86_64"]["outer"][0].builds.is_empty());
         assert_eq!(CallGraph::from_gzip(&graph.to_gzip()).unwrap(), graph);
         assert!(CallGraph::from_gzip(BUNDLED_BYTES).is_ok());
+        let embedded = CallGraph::from_gzip(EMBEDDED_BYTES).unwrap();
+        // Firmware sequences only: 32-bit ARM, which the host graph never holds.
+        assert!(embedded.arches.keys().all(|arch| arch == "arm"), "{:?}", embedded.arches.keys());
+        assert!(embedded.callers() > 0);
+        assert!(!CallGraph::from_gzip(BUNDLED_BYTES).unwrap().arches.contains_key("arm"));
     }
 }
