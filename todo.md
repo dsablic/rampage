@@ -494,7 +494,12 @@ acceptance run.
 Between tracks: the UI assessment tab, `mine-transcripts`, demoting rarely used core tools.
 
 Competitors looked at 2026-11-21:
-- [ ] radare2: `radare2-mcp` as a third agent-bench server, Haiku v4 pass (in progress).
+- [x] radare2: `radare2-mcp` 1.9.0 (r2ghidra, default tools, no `-r`) as a third agent-bench server. Haiku v4:
+      10/20 against rampage's 17/20, $0.50 ([report](docs/benchmarks/r2mcp-haiku-2026-11-21.md)). 8 of 10 misses
+      are tools its default set lacks (emulation, signatures, file writes). r2mcp was right on
+      svd-status-readers where rampage's run was wrong, with 1 tool error to rampage's 19.
+- [ ] A pass with r2mcp `-r` (raw commands: ESIL emulation, writes, zignatures), about $1, when a comparison
+      needs r2 at full breadth.
 - [ ] kuna (Noelo-Lab, Apache-2.0 Rust port of Ghidra's decompiler, about IDA-level structure on DecBench): spike
       it as an alternate decompiler backend behind a flag, measured on the goldens and suite v4. Its crackme
       friction loop is now flywheel step 6 (revised plan): probes first, after the step 3 harness lands.
