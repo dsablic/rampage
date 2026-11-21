@@ -206,6 +206,7 @@ fn run(
         }
     }));
     let querying_types = type_query.is_some();
+    let getting_type = matches!(type_query, Some(rampage_decompiler::worker::TypeQuery::Get { .. }));
     let request = WorkerRequest {
         version: PROTOCOL_VERSION,
         arch: binary.arch.to_string(),
@@ -236,6 +237,13 @@ fn run(
             if super::hint_context_error(&message).is_some() =>
         {
             super::hint_context_error(&message).expect("classified native context refusal")
+        }
+        // An unknown name is not found, as in the in-process engine, so get_type goes on to DWARF and Go metadata.
+        rampage_decompiler::worker::WorkerError::Decompile(message)
+            if getting_type
+                && message.strip_prefix("decompiler: ").unwrap_or(&message).starts_with("Unknown named type: ") =>
+        {
+            ApiError::NotFound(message)
         }
         rampage_decompiler::worker::WorkerError::Decompile(message) if querying_types => ApiError::Invalid(message),
         error => ApiError::Unavailable(error.to_string()),

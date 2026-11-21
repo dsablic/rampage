@@ -1825,11 +1825,6 @@ fn get_type(project: &crate::Project, args: TypeNameArgs) -> Result<Value, ApiEr
             Err(ApiError::NotFound(_)) if source == TypeSource::Auto => {
                 Some(format!("the project type library has no type named {:?}", args.name))
             }
-            // A Go import path (`github.com/org/repo/pkg.Type`) is no C type name, which the native parser refuses
-            // outright; DWARF and the Go runtime metadata know it.
-            Err(_) if source == TypeSource::Auto && args.name.contains('/') => {
-                Some(format!("the project type library has no type named {:?}", args.name))
-            }
             Err(error) => return Err(error),
         }
     };

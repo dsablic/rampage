@@ -1,5 +1,6 @@
 use rampage_api::{DecompilerWorkerConfig, Project};
 use rampage_loaders::Binary;
+use serde_json::json;
 
 #[test]
 fn generated_go_result_dependencies_replay_before_analyst_signatures_in_both_engines() {
@@ -191,4 +192,28 @@ fn decompile_results_name_the_decompiler_and_a_required_worker_is_never_bypassed
     let (text, failed) = decompile(&missing);
     assert!(failed, "{text}");
     assert!(!text.contains("\"decompiler\""), "{text}");
+}
+
+/// Review of the suite v4 slice: with a worker, an unknown native type name came back as an invalid request, which
+/// ended get_type's search before DWARF and the Go runtime metadata. It is not found, as in the in-process engine.
+#[test]
+fn worker_get_type_falls_back_to_go_runtime_metadata_for_unknown_native_names() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bin/gotypes-go1.20-x64.elf");
+    let project = Project::new(Binary::open(path).unwrap());
+    project.set_decompiler_worker(Some(DecompilerWorkerConfig {
+        executable: Some(env!("CARGO_BIN_EXE_rampage-worker").into()),
+        ..Default::default()
+    }));
+    let mut project = std::sync::Arc::new(project);
+    let tools = rampage_api::tools::tools();
+    let mut get =
+        |name: &str| rampage_api::tools::call_shared(&tools, &mut project, "get_type", json!({ "name": name }));
+    let (text, failed) = get("main.Record");
+    assert!(!failed && text.contains("\"source\":\"go_runtime\""), "{text}");
+    let (text, failed) = get("main.Recor");
+    assert!(failed && text.contains("no Go runtime type named") && !text.contains("Unknown named type"), "{text}");
+    // A full import path is not a C name either; the Go metadata answers it (package main's path is `main`, so a
+    // longer path is not found there, but the search reaches it).
+    let (text, failed) = get("example.com/app/main.Record");
+    assert!(failed && text.contains("no Go runtime type named") && !text.contains("Unknown named type"), "{text}");
 }
