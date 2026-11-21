@@ -19,8 +19,8 @@ The flywheel is *experimental*. Results on a 360-binary corpus of zlib, LZ4 and 
 - What shipped from this work is deterministic and was written in agent sessions against the same gate: the arm
   (exact rows and operand wildcarding) and call-graph propagation are in the bundled databases.
 
-The tools on this page stay as the judge and the delivery path: the corpus, the gate, the ledgered final split,
-`.rpack` and `bundle`. [How to proceed](plans/2026-11-20-flywheel-next.md) describes the next steps: measure where
+AI row proposals are infrastructure with a measured null result, not the mechanism. The tools on this page stay as
+the judge and the delivery path: the corpus, the gate, the ledgered final split, `.rpack` and `bundle`. [How to proceed](plans/2026-11-20-flywheel-next.md) describes the next steps: measure where
 heuristic code can win, run an unattended agent that proposes source changes against this gate, and grow the
 corpus.
 

@@ -79,8 +79,8 @@ These are design facts, not measured advantages.
 - **Shared annotations.** Names, types, comments and findings go into a log beside the binary that the MCP
   server, CLI and desktop UI all replay, with undo and redo.
 - **Heuristics as data.** Library signatures and detection rules are data packs that can be added, exported as
-  `.rpack` archives and checked, without rebuilding rampage. The experimental [flywheel](flywheel.md) lets an
-  agent propose signature rows gated on held-out truth.
+  `.rpack` archives and checked, without rebuilding rampage. The experimental [flywheel](flywheel.md) gates
+  heuristic changes on held-out truth; agent-proposed signature rows are a measured null result there.
 
 ## What rampage does not do
 

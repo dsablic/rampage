@@ -159,7 +159,9 @@ The `debug` tools' annotations are described with those tools below.
 ## Flywheel (improve)
 
 `rampage server serve --corpus target/flywheel/corpus/<version>` starts a server for the flywheel ([how-to](flywheel.md)),
-through which an agent improves rampage's library-identification signatures on a prebuilt corpus.
+through which an agent proposes library-identification signature rows on a prebuilt corpus. Gated against the
+deterministic signature generator, such proposals have promoted nothing; the group is kept as infrastructure, not
+as the way heuristics improve.
 
 **What the server exposes.** It serves `enable_tools` and the `improve` group, and nothing else: no analysis tool,
 and no other group can be enabled. Every tool argument naming a file under the corpus or the flywheel directory is

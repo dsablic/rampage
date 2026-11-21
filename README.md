@@ -222,8 +222,10 @@ Areas marked *experimental* may change in any release; see the [stability policy
   and its open questions, with evidence and confidence, in the annotation log beside the binary.
 - **Heuristic flywheel** (*experimental*): a corpus built from pinned open-source libraries, a gate on held-out
   ground truth, and `.rpack` data packs for what passes. Its deterministic signature generator and call-graph
-  naming ship in the bundled databases; an agent proposing signature rows through the restricted MCP server has
-  not beaten that generator. See [the flywheel](docs/flywheel.md) for what it has and has not shown.
+  naming ship in the bundled databases. An agent proposing signature rows through the restricted MCP server has
+  not beaten that generator, so row proposals are kept as infrastructure, not as the mechanism; the gate, the
+  held-out splits, `.rpack` and `bundle` judge and deliver heuristic changes. See [the flywheel](docs/flywheel.md)
+  for what it has and has not shown.
 - **Desktop UI** (*experimental*): a viewer for a person to inspect a binary, with listings, graphs,
   decompilation and shared annotations in one window. Editing types and driving a debugger stay with the agent.
 

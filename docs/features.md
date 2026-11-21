@@ -23,7 +23,7 @@ Areas marked *experimental* are outside the [stability policy](stability.md).
 | Guided reports | Triage, main, network, persistence, string decoding, build diffing, crypto | [Guided reports and batch analysis](#guided-reports-and-batch-analysis) |
 | File formats | ZIP inventory, Go and Rust build info, PyInstaller, WebAssembly, PE resources, .NET, Android APK/DEX | [Archive metadata](#archive-metadata) and [File formats](#file-formats) |
 | Debugging | GDB remote stubs; `debugserver` and Windows stubs are *experimental* | [Debugging](#debugging) |
-| Heuristic flywheel | Agent-proposed signatures gated on held-out truth (*experimental*) | [Heuristic flywheel](#heuristic-flywheel) |
+| Heuristic flywheel | A held-out gate and delivery path for heuristic changes (*experimental*) | [Heuristic flywheel](#heuristic-flywheel) |
 | Desktop UI | Listings, graphs, decompilation and shared annotations (*experimental*) | [Desktop UI](#desktop-ui) |
 | Measurements | Evaluation harness, benchmarks, crates | [Measurements and development](#measurements-and-development) |
 
@@ -545,7 +545,9 @@ and [runtime snapshots](runtime-snapshots.md) are separate.
 *Experimental.* A server started with `--corpus` serves only the `improve` group, through which an agent proposes
 library-signature rows from a training split; candidates must pass a fast gate and a held-out gate before
 promotion, and promoted rows leave as `.rpack` data packs. Limits: libid is the only family, and against the
-deterministic signature generator the agent has promoted no row. See [the flywheel](flywheel.md).
+deterministic signature generator the agent has promoted no row. Row proposals are therefore infrastructure with a
+measured null result, not the mechanism; the gate, the ledgered final split, `.rpack` and `bundle` stay as the judge
+and delivery path. See [the flywheel](flywheel.md).
 
 ## Desktop UI
 
