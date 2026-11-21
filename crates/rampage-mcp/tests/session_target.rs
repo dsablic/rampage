@@ -31,6 +31,15 @@ async fn call(client: &Client, tool: &str, arguments: Value) -> (String, bool) {
     (text, result.is_error == Some(true))
 }
 
+/// Calls `tool`, returning every content block's text and whether it failed.
+async fn call_blocks(client: &Client, tool: &str, arguments: Value) -> (Vec<String>, bool) {
+    let arguments = arguments.as_object().unwrap().clone();
+    let result: CallToolResult =
+        client.call_tool(CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments)).await.unwrap();
+    let texts = result.content.iter().map(|content| content.as_text().unwrap().text.clone()).collect();
+    (texts, result.is_error == Some(true))
+}
+
 /// `tool`'s result as JSON, asserting it succeeded.
 async fn ok(client: &Client, tool: &str, arguments: Value) -> Value {
     let (text, failed) = call(client, tool, arguments).await;
@@ -169,6 +178,7 @@ async fn record_files_with_a_cortex_m_vector_table_open_by_path_alone() {
         assert!(info["entry"].is_null(), "{info}");
         let from_reset = ok(&client, "disassemble", json!({ "path": stripped, "raw": selector, "count": 4 })).await;
         assert_eq!(from_reset[0]["address"], lines[0]["address"], "{from_reset}");
+        assert!(from_reset[0]["comment"].as_str().unwrap().contains("Reset handler"), "{from_reset}");
     }
 
     // Records without a vector table (an initial SP outside RAM): the error names the selector to pass.
@@ -192,6 +202,10 @@ async fn short_buffers_and_oversized_reads_are_clamped_instead_of_refused() {
     let strlen =
         |size: u64| json!({ "path": thumb, "at": "0x20e8c", "args": [{"buffer": {"text": "four", "size": size}}] });
     let report = ok(&client, "evaluate_function", strlen(4)).await;
+    assert_eq!(
+        (report["buffers"][0]["size"].as_u64(), report["buffers"][0]["requested_size"].as_u64()),
+        (Some(5), Some(4))
+    );
     assert_eq!(report["result"]["unsigned"], 4, "{report}");
     let (text, failed) = call(&client, "evaluate_function", strlen(2 << 20)).await;
     assert!(failed && text.contains("buffer size must be"), "{text}");
@@ -208,7 +222,9 @@ async fn short_buffers_and_oversized_reads_are_clamped_instead_of_refused() {
     let report = ok(&client, "inspect_data", json!({ "path": arm64, "at": "main", "size": 4096 })).await;
     assert_eq!((report["size"].as_u64(), report["requested_size"].as_u64()), (Some(1024), Some(4096)), "{report}");
     assert_eq!(report["truncated"], true);
-    let report = ok(&client, "inspect_data", json!({ "path": arm64, "at": "main", "size": 33, "word_size": 1 })).await;
+    // `count` with a width it does not read counts bytes, not words of that width.
+    let report = ok(&client, "inspect_data", json!({ "path": arm64, "at": "main", "count": 33, "word_size": 1 })).await;
+    assert_eq!(report["size"], 33, "{report}");
     assert_eq!((report["word_size"].as_u64(), report["requested_word_size"].as_u64()), (Some(8), Some(1)));
     assert!(report.get("truncated").is_none(), "{report}");
     client.cancel().await.unwrap();
@@ -229,5 +245,72 @@ async fn guessed_groups_and_an_svd_path_get_a_way_forward() {
     let (text, failed) = call(&client, "import_svd", json!({ "path": svd })).await;
     assert!(failed && text.contains("no binary is open") && text.contains("svd=`"), "{text}");
     assert!(Path::new(&svd).exists());
+    client.cancel().await.unwrap();
+}
+
+/// Only a successful project-tool call records a target, results say which target filled them in, and `raw: null`
+/// asks for the native image instead.
+#[tokio::test]
+async fn only_successful_project_calls_record_targets_and_results_name_the_one_used() {
+    let client = connect().await;
+    let path = fixtures().join("firmware/raw-cortex-m-svd.bin");
+    // A call that fails records nothing, and nor does a file tool.
+    let refused = json!({ "profile": "cortex-m", "base_address": "0x8000000", "entry": "0x1" });
+    let (text, failed) = call(&client, "binary_info", json!({ "path": path, "raw": refused })).await;
+    assert!(failed, "{text}");
+    ok(&client, "file_layout", json!({ "path": path })).await;
+    let (text, failed) = call(&client, "binary_info", json!({})).await;
+    assert!(failed && text.contains("no binary is open"), "{text}");
+
+    let selector = json!({ "profile": "cortex-m", "base_address": "0x8000000", "vector_table": true });
+    let explicit = ok(&client, "list_functions", json!({ "path": path, "raw": selector })).await;
+    assert!(explicit.get("session_target").is_none(), "{explicit}");
+    let defaulted = ok(&client, "list_functions", json!({})).await;
+    let named = defaulted["session_target"].as_str().unwrap();
+    assert!(named.contains("raw-cortex-m-svd.bin with raw="), "{named}");
+    // The path alone fails to open natively, so it reuses the target's selector and says so.
+    let reused = ok(&client, "list_functions", json!({ "path": path })).await;
+    assert_eq!(reused["session_target"], named, "{reused}");
+    // A result that is not a JSON object names the target in a second content block.
+    let (blocks, failed) = call_blocks(&client, "disassemble", json!({ "count": 2 })).await;
+    assert!(!failed && blocks.len() == 2 && blocks[1].starts_with("session_target: "), "{blocks:?}");
+    // `raw: null` is the native image: no selector is reused, with or without the path.
+    for arguments in [json!({ "raw": null }), json!({ "path": path, "raw": null })] {
+        let (text, failed) = call(&client, "binary_info", arguments).await;
+        assert!(failed && text.contains("Unknown file magic"), "{text}");
+    }
+    client.cancel().await.unwrap();
+}
+
+/// A file a native loader opens stays native when named by path, even after a Raw slice of it was opened.
+#[tokio::test]
+async fn an_explicit_path_that_opens_natively_never_reuses_a_raw_selector() {
+    let client = connect().await;
+    let elf = fixtures().join("firmware/cortex-m3.elf");
+    let slice = json!({ "profile": "cortex-m", "offset": 0, "length": 64, "base_address": "0x0" });
+    let raw = ok(&client, "binary_info", json!({ "path": elf, "raw": slice })).await;
+    assert_eq!(raw["format"], "raw", "{raw}");
+    let native = ok(&client, "binary_info", json!({ "path": elf })).await;
+    assert_eq!(native["format"], "elf", "{native}");
+    assert!(native.get("session_target").is_none(), "{native}");
+    client.cancel().await.unwrap();
+}
+
+/// A HEX file opened by path is recorded with the selector it was read with: inspect_data reads its records with
+/// or without the path, and byte-level file tools do not default to its text.
+#[tokio::test]
+async fn a_hex_target_opened_by_path_serves_inspect_data_but_not_byte_level_file_tools() {
+    let client = connect().await;
+    let scratch = Scratch::new();
+    let path = scratch.copy("firmware/raw-cortex-m-crc.hex", "fixture.hex");
+    let triage = ok(&client, "triage_report", json!({ "path": path })).await;
+    assert_eq!(triage["target"]["format"], "raw", "{triage}");
+    let data = ok(&client, "inspect_data", json!({ "at": "0x8000000", "size": 8 })).await;
+    assert_eq!(data["spans"][0]["status"], "stored", "{data}");
+    assert!(data["session_target"].as_str().unwrap().contains("\"format\":\"ihex\""), "{data}");
+    let data = ok(&client, "inspect_data", json!({ "path": path, "at": "0x8000000", "size": 8 })).await;
+    assert_eq!(data["spans"][0]["status"], "stored", "{data}");
+    let (text, failed) = call(&client, "file_layout", json!({})).await;
+    assert!(failed && text.contains("record text"), "{text}");
     client.cancel().await.unwrap();
 }

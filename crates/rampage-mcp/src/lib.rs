@@ -3,6 +3,7 @@
 //! connection has opened). Tools are grouped: the server lists the groups it was started with (by default only core)
 //! and an `enable_tools` meta-tool that adds the others.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -610,6 +611,8 @@ struct Target {
     path: String,
     selectors: Map<String, Value>,
     identity: (PathBuf, String),
+    /// An Intel HEX or S-record file: its `raw` reads the records, not the file's bytes.
+    records: bool,
 }
 
 impl Target {
@@ -632,6 +635,35 @@ fn raw_identity(project: &Project) -> String {
         Ok(Some(identity)) => format!("raw:{}", identity.sha256),
         _ => format!("raw:{:p}", std::ptr::from_ref(project)),
     }
+}
+
+/// The targets as an error lists them.
+fn target_listing(targets: &[Target]) -> String {
+    let names: Vec<String> = targets.iter().map(|target| format!("`{}`", target.summary())).collect();
+    names.join("; ")
+}
+
+/// Whether inspect_data cannot read the file at `path` as a native image (no executable header it admits), so it
+/// would fail without a Raw selector.
+fn native_headerless(path: &str) -> bool {
+    rampage_loaders::Binary::open_image_metadata(path, None, None).is_err()
+}
+
+/// `result` naming the session target its call was filled from: a `session_target` field on a JSON object, or a
+/// second content block for any other result.
+fn with_session_target(mut result: CallToolResult, target: &str) -> CallToolResult {
+    if result.is_error == Some(true) {
+        return result;
+    }
+    let text = result.content.first().and_then(|content| content.as_text()).map(|text| text.text.clone());
+    match text.as_deref().map(serde_json::from_str::<Value>) {
+        Some(Ok(Value::Object(mut object))) => {
+            object.insert("session_target".to_owned(), Value::String(target.to_owned()));
+            result.content[0] = ContentBlock::text(Value::Object(object).to_string());
+        }
+        _ => result.content.push(ContentBlock::text(format!("session_target: {target}"))),
+    }
+    result
 }
 
 /// The canonical form of `path`, or `path` itself when it cannot be resolved.
@@ -747,9 +779,9 @@ fn enable_tools_schema(debug: bool, improve: bool) -> Map<String, Value> {
     schema.as_object().cloned().unwrap_or_default()
 }
 
-/// One MCP connection's server. The loaded binaries are shared with its clones; the enabled groups are not, so a
-/// clone serving another connection starts from the groups enabled when it was cloned. Debug sessions and the
-/// session's targets belong to the connection: clones share them, and debug sessions detach when the server and its
+/// One MCP connection's server. The loaded binaries are shared with its clones; the enabled groups and the session's
+/// targets are not, so a clone serving another connection starts from the groups enabled when it was cloned and with
+/// no target. Debug sessions belong to the connection: clones share them, and they detach when the server and its
 /// clones are dropped.
 pub struct RampageServer {
     session: Arc<Session>,
@@ -765,7 +797,7 @@ pub struct RampageServer {
     guarded: Arc<Vec<PathBuf>>,
     enabled: Mutex<BTreeSet<Group>>,
     /// The binaries this connection has opened, oldest first: a call without `path` works on the only one.
-    /// Shared with clones, as each call runs on one.
+    /// Shared only with the per-call copy each call runs on ([`RampageServer::for_call`]).
     targets: Arc<Mutex<Vec<Target>>>,
 }
 
@@ -783,7 +815,7 @@ impl Clone for RampageServer {
             observation_tool: Arc::clone(&self.observation_tool),
             guarded: Arc::clone(&self.guarded),
             enabled: Mutex::new(self.enabled()),
-            targets: Arc::clone(&self.targets),
+            targets: Arc::default(),
         }
     }
 }
@@ -1000,7 +1032,29 @@ impl RampageServer {
     }
 
     /// Runs a tool on the binary its arguments name. Failures are results the caller sees, not protocol errors.
-    fn run(&self, name: &str, mut arguments: Map<String, Value>, cancel: &DebugCancel) -> CallToolResult {
+    /// `used` is the session target the call's arguments were filled from, if any; the result names it.
+    fn run(
+        &self,
+        name: &str,
+        arguments: Map<String, Value>,
+        cancel: &DebugCancel,
+        used: Option<String>,
+    ) -> CallToolResult {
+        let used = RefCell::new(used);
+        let result = self.dispatch(name, arguments, cancel, &used);
+        match used.into_inner() {
+            Some(target) => with_session_target(result, &target),
+            None => result,
+        }
+    }
+
+    fn dispatch(
+        &self,
+        name: &str,
+        mut arguments: Map<String, Value>,
+        cancel: &DebugCancel,
+        used: &RefCell<Option<String>>,
+    ) -> CallToolResult {
         if let Some(path) = self.guarded_argument(&arguments) {
             return CallToolResult::error(vec![ContentBlock::text(format!(
                 "`{path}` is inside the flywheel corpus or its working directory, which no tool may read on this \
@@ -1012,6 +1066,8 @@ impl RampageServer {
                 "this server was started with --corpus and serves only the improve group; `{name}` is not served"
             ))]);
         }
+        // `raw: null` asks for the native image: no Raw selector is reused for it.
+        let native_asked = arguments.get(RAW).is_some_and(Value::is_null);
         let raw = match arguments.remove(RAW).filter(|raw| !raw.is_null()).map(raw_object).transpose() {
             Ok(raw) => raw,
             Err(message) => return CallToolResult::error(vec![ContentBlock::text(message)]),
@@ -1076,10 +1132,10 @@ impl RampageServer {
             }
             let path = path.as_ref().and_then(Value::as_str).ok_or("`path` is required")?;
             // Runs the tool, remembering what it opened as a session target once the call succeeds.
-            let call = |project: &mut Arc<Project>, selectors: Map<String, Value>, identity: String| {
+            let call = |project: &mut Arc<Project>, selectors: Map<String, Value>, identity: String, records: bool| {
                 let (output, failed) = tools::call_shared(&self.tools, project, name, Value::Object(arguments.clone()));
                 if !failed {
-                    self.record_target(path, selectors, identity);
+                    self.record_target(path, selectors, identity, records);
                 }
                 (output, failed)
             };
@@ -1087,7 +1143,11 @@ impl RampageServer {
                 let mut project =
                     self.open_raw(name, Path::new(path), raw.clone(), [&arch, &image_offset, &image_length])?;
                 let identity = raw_identity(&project);
-                return Ok(call(&mut project, Map::from_iter([(RAW.to_owned(), raw)]), identity));
+                let records = raw
+                    .get("format")
+                    .and_then(Value::as_str)
+                    .is_some_and(|format| matches!(format.to_ascii_lowercase().as_str(), "ihex" | "srec"));
+                return Ok(call(&mut project, Map::from_iter([(RAW.to_owned(), raw)]), identity, records));
             }
             let mut selectors = Map::new();
             for (key, value) in [("arch", &arch), ("image_offset", &image_offset), ("image_length", &image_length)] {
@@ -1127,19 +1187,33 @@ impl RampageServer {
                 }
                 Err(open_error(&error))
             };
-            // An Intel HEX or S-record file whose records show what they hold (a Cortex-M vector table) opens as
-            // that Raw project, every address from the records; otherwise its open error names the selector.
+            // A file with no executable header, named with no selector: the Raw project the connection opened it as
+            // (when only one), or else an Intel HEX or S-record file whose records show what they hold (a Cortex-M
+            // vector table) as that Raw project, every address from the records. Otherwise its open error stands,
+            // which for a record file names the selector.
             let records = |error: rampage_api::ApiError| -> Result<(String, bool), String> {
-                let request = (tools::raw_capable(name) && image.is_none() && arch.is_none() && headerless(&error))
-                    .then(|| rampage_api::record_file_request(Path::new(path)))
-                    .flatten();
-                let Some(request) = request else { return container(error) };
+                if !(tools::raw_capable(name) && image.is_none() && arch.is_none() && headerless(&error)) {
+                    return container(error);
+                }
+                if !native_asked && let Some(target) = self.only_raw_target(path) {
+                    let raw = target.selectors.get(RAW).cloned().unwrap_or_default();
+                    let mut project = self.open_raw(name, Path::new(path), raw.clone(), [&None, &None, &None])?;
+                    let identity = raw_identity(&project);
+                    *used.borrow_mut() = Some(target.summary());
+                    return Ok(call(&mut project, Map::from_iter([(RAW.to_owned(), raw)]), identity, target.records));
+                }
+                let selector = rampage_api::record_file_selector(Path::new(path));
+                let Some(request) = selector.clone().and_then(|selector| serde_json::from_value(selector).ok()) else {
+                    return container(error);
+                };
                 let mut project = self
                     .session
                     .open_raw(Path::new(path), &request)
                     .map_err(|error| format!("{path}: {}", error_text(&error)))?;
                 let identity = raw_identity(&project);
-                Ok(call(&mut project, Map::new(), identity))
+                // Recorded with the selector it was read with, so file tools such as inspect_data read it alike.
+                let selectors = Map::from_iter(selector.map(|selector| (RAW.to_owned(), selector)));
+                Ok(call(&mut project, selectors, identity, true))
             };
             let mut project = if tool.reads_annotations {
                 let project = match self.session.open_at(&PathBuf::from(path), arch, image) {
@@ -1158,7 +1232,7 @@ impl RampageServer {
                 Arc::new(project)
             };
             let identity = format!("native:{arch:?}:{offset:?}:{length:?}");
-            Ok(call(&mut project, selectors, identity))
+            Ok(call(&mut project, selectors, identity, false))
         })();
         match outcome {
             Ok((output, false)) => CallToolResult::success(vec![ContentBlock::text(output)]),
@@ -1188,109 +1262,137 @@ impl RampageServer {
         }
     }
 
+    /// The copy one call runs on: this server, sharing its targets (unlike [`Clone`], whose copy serves another
+    /// connection).
+    fn for_call(&self) -> Self {
+        Self { targets: Arc::clone(&self.targets), ..self.clone() }
+    }
+
     fn targets(&self) -> Vec<Target> {
         self.targets.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
     /// Remembers that a call opened `path` with `selectors`, identified by `identity`; a target already known keeps
-    /// its place and the selectors first used.
-    fn record_target(&self, path: &str, selectors: Map<String, Value>, identity: String) {
+    /// its place and the selectors first used. `records` marks an Intel HEX or S-record file.
+    fn record_target(&self, path: &str, selectors: Map<String, Value>, identity: String, records: bool) {
         let identity = (canonical(path), identity);
         let mut targets = self.targets.lock().unwrap_or_else(PoisonError::into_inner);
         if targets.iter().any(|target| target.identity == identity) {
             return;
         }
-        targets.push(Target { path: path.to_owned(), selectors, identity });
+        targets.push(Target { path: path.to_owned(), selectors, identity, records });
         if targets.len() > MAX_TARGETS {
             targets.remove(0);
         }
     }
 
-    /// Fills in what a call to `name` leaves out from the session's targets, before its arguments are checked:
+    /// The Raw target `path` was opened as, when the connection has opened that path once only and as Raw.
+    fn only_raw_target(&self, path: &str) -> Option<Target> {
+        let path = canonical(path);
+        let targets = self.targets();
+        let same: Vec<&Target> = targets.iter().filter(|target| target.identity.0 == path).collect();
+        match same.as_slice() {
+            [target] if target.selectors.contains_key(RAW) => Some((*target).clone()),
+            _ => None,
+        }
+    }
+
+    /// import_svd given the .svd file as `path` and no `svd`: that file becomes `svd`, and the session's only
+    /// target the image (filled in by [`Self::default_target`]); with none or several, an error saying which is
+    /// which.
+    fn svd_as_path(&self, name: &str, arguments: &mut Map<String, Value>) -> Result<(), String> {
+        if name != "import_svd" || arguments.get("svd").is_some_and(|svd| !svd.is_null()) {
+            return Ok(());
+        }
+        let Some(path) = arguments.get("path").and_then(Value::as_str) else { return Ok(()) };
+        if !Path::new(path).extension().is_some_and(|extension| extension.eq_ignore_ascii_case("svd")) {
+            return Ok(());
+        }
+        let targets = self.targets();
+        if targets.len() != 1 {
+            let opened = match targets.len() {
+                0 => "no binary is open in this session yet".to_owned(),
+                count => format!("this session has opened {count} binaries: {}", target_listing(&targets)),
+            };
+            return Err(format!(
+                "`path` names the .svd file `{path}`, but import_svd takes the firmware image as `path` and the .svd \
+                 file as `svd`, and {opened}; call import_svd with svd=`{path}` and path=<the image> (with its raw \
+                 selector); nothing was run"
+            ));
+        }
+        let svd = arguments.remove("path").unwrap_or_default();
+        arguments.insert("svd".to_owned(), svd);
+        Ok(())
+    }
+
+    /// Fills in what a call to `name` leaves out from the session's targets, once its arguments are checked, and
+    /// returns the target it used, if any, for the result to name:
     /// - without `path`, the only target this connection has opened, with its selectors unless the call gives its
-    ///   own; with none or several, an error saying to pass `path` (listing the targets);
-    /// - with a `path` the connection has opened only as one Raw project, and no selector, that project's `raw`;
-    /// - import_svd given the .svd file as `path` and no `svd`: that file as `svd`, the target as `path`.
+    ///   own (`raw: null` among them: the native image); with none or several, an error saying to pass `path`
+    ///   (listing the targets). A byte-level file tool does not default to a record file, whose bytes are text.
+    /// - inspect_data with a `path` the connection opened only as one Raw project, no selector, and no native image
+    ///   there: that project's `raw`. Project tools do the same in [`Self::dispatch`], when the native open fails.
     ///
     /// An explicit `path` always wins. Tools that take no binary path are left alone.
-    fn default_target(&self, name: &str, arguments: &mut Map<String, Value>) -> Result<(), String> {
+    fn default_target(&self, name: &str, arguments: &mut Map<String, Value>) -> Result<Option<String>, String> {
         let project_tool = self.improve.is_none() && self.tools.iter().any(|tool| tool.name == name);
         let file_tool = self.improve.is_none()
             && SESSION_PATH_FILE_TOOLS.contains(&name)
             && self.file_tools.iter().any(|tool| tool.name == name);
         if !project_tool && !file_tool {
-            return Ok(());
-        }
-        let given =
-            |arguments: &Map<String, Value>, key: &str| arguments.get(key).is_some_and(|value| !value.is_null());
-        let targets = self.targets();
-        let listing = |targets: &[Target]| -> String {
-            let names: Vec<String> = targets.iter().map(|target| format!("`{}`", target.summary())).collect();
-            names.join("; ")
-        };
-        if name == "import_svd"
-            && !given(arguments, "svd")
-            && let Some(path) = arguments.get("path").and_then(Value::as_str)
-            && Path::new(path).extension().is_some_and(|extension| extension.eq_ignore_ascii_case("svd"))
-        {
-            if targets.len() != 1 {
-                let opened = match targets.len() {
-                    0 => "no binary is open in this session yet".to_owned(),
-                    count => format!("this session has opened {count} binaries: {}", listing(&targets)),
-                };
-                return Err(format!(
-                    "`path` names the .svd file `{path}`, but import_svd takes the firmware image as `path` and the \
-                     .svd file as `svd`, and {opened}; call import_svd with svd=`{path}` and path=<the image> (with \
-                     its raw selector); nothing was run"
-                ));
-            }
-            let svd = arguments.remove("path").unwrap_or_default();
-            arguments.insert("svd".to_owned(), svd);
+            return Ok(None);
         }
         // The selectors this tool takes: a project tool's (and inspect_data's) native and Raw selectors; other file
         // tools read the target's file by their own arguments.
         let selectors: &[&str] = if project_tool || tools::raw_capable(name) { &SELECTORS } else { &[] };
-        let own_selector = selectors.iter().any(|key| given(arguments, key));
-        match arguments.get("path").and_then(Value::as_str) {
-            Some(path) => {
-                if !own_selector && selectors.contains(&RAW) {
-                    let path = canonical(path);
-                    let same: Vec<&Target> = targets.iter().filter(|target| target.identity.0 == path).collect();
-                    if let [target] = same.as_slice()
-                        && let Some(raw) = target.selectors.get(RAW)
-                    {
-                        arguments.insert(RAW.to_owned(), raw.clone());
-                    }
-                }
+        let native_asked = selectors.contains(&RAW) && arguments.get(RAW).is_some_and(Value::is_null);
+        let own_selector =
+            native_asked || selectors.iter().any(|key| arguments.get(*key).is_some_and(|value| !value.is_null()));
+        if let Some(path) = arguments.get("path").and_then(Value::as_str) {
+            if name == "inspect_data"
+                && !own_selector
+                && let Some(target) = self.only_raw_target(path)
+                && native_headerless(path)
+            {
+                arguments.insert(RAW.to_owned(), target.selectors.get(RAW).cloned().unwrap_or_default());
+                return Ok(Some(target.summary()));
             }
-            None => {
-                let target = match targets.as_slice() {
-                    [] => {
-                        return Err("`path` is required: no binary is open in this session yet, so there is no \
-                                    session target to default to; pass `path` (and `raw` for a headerless image)"
-                            .to_owned());
-                    }
-                    [target] => target,
-                    _ => {
-                        return Err(format!(
-                            "`path` was omitted, but this session has opened {} binaries, so there is no single \
-                             target to default to; pass `path` (with the same selector) for one of: {}",
-                            targets.len(),
-                            listing(&targets)
-                        ));
-                    }
-                };
-                arguments.insert("path".to_owned(), Value::String(target.path.clone()));
-                if !own_selector {
-                    for (key, value) in &target.selectors {
-                        if selectors.contains(&key.as_str()) {
-                            arguments.insert(key.clone(), value.clone());
-                        }
-                    }
+            return Ok(None);
+        }
+        let targets = self.targets();
+        let target = match targets.as_slice() {
+            [] => {
+                return Err("`path` is required: no binary is open in this session yet, so there is no session \
+                            target to default to; pass `path` (and `raw` for a headerless image)"
+                    .to_owned());
+            }
+            [target] => target,
+            _ => {
+                return Err(format!(
+                    "`path` was omitted, but this session has opened {} binaries, so there is no single target to \
+                     default to; pass `path` (with the same selector) for one of: {}",
+                    targets.len(),
+                    target_listing(&targets)
+                ));
+            }
+        };
+        if target.records && file_tool && !tools::raw_capable(name) {
+            return Err(format!(
+                "`path` was omitted, and the session's target `{}` is an Intel HEX or S-record file, whose bytes are \
+                 record text; {name} reads file bytes, so it does not default to it: pass `path` to read the text, or \
+                 use inspect_data (which reads the records) or a project tool; nothing was run",
+                target.summary()
+            ));
+        }
+        arguments.insert("path".to_owned(), Value::String(target.path.clone()));
+        if !own_selector {
+            for (key, value) in &target.selectors {
+                if selectors.contains(&key.as_str()) {
+                    arguments.insert(key.clone(), value.clone());
                 }
             }
         }
-        Ok(())
+        Ok(Some(target.summary()))
     }
 
     /// The session's Raw Project for the `raw` selector of a call to `name`, refused for tools that cannot serve one
@@ -1506,21 +1608,28 @@ impl ServerHandler for RampageServer {
             // sent as strings rather than refusing the call.
             tools::normalize_arguments(&name, schema, &mut arguments);
         }
-        let checked = self.default_target(&name, &mut arguments).and_then(|()| match &schema {
-            Some(schema) => tools::check_arguments(&name, schema, &arguments),
-            None => Ok(()),
-        });
-        if let Err(message) = checked {
-            // The import tools answer every failure with their own JSON receipt.
-            let apply_requested = arguments.get("apply").map_or(Some(false), Value::as_bool);
-            let message = match name.as_str() {
-                "import_pdb_names" => tools::pdb_import_error(&message, apply_requested),
-                "import_debug_layouts" => tools::debug_layout_import_error(&message, apply_requested),
-                _ => message,
-            };
-            return Ok(CallToolResult::error(vec![ContentBlock::text(message)]).into());
-        }
-        let server = self.clone();
+        // Unknown arguments are refused before the session's target fills in `path` (optional in every schema).
+        let checked = self
+            .svd_as_path(&name, &mut arguments)
+            .and_then(|()| match &schema {
+                Some(schema) => tools::check_arguments(&name, schema, &arguments),
+                None => Ok(()),
+            })
+            .and_then(|()| self.default_target(&name, &mut arguments));
+        let used = match checked {
+            Ok(used) => used,
+            Err(message) => {
+                // The import tools answer every failure with their own JSON receipt.
+                let apply_requested = arguments.get("apply").map_or(Some(false), Value::as_bool);
+                let message = match name.as_str() {
+                    "import_pdb_names" => tools::pdb_import_error(&message, apply_requested),
+                    "import_debug_layouts" => tools::debug_layout_import_error(&message, apply_requested),
+                    _ => message,
+                };
+                return Ok(CallToolResult::error(vec![ContentBlock::text(message)]).into());
+            }
+        };
+        let server = self.for_call();
         // A cancelled request (notifications/cancelled, or the connection closing) sets the flag the debug tools
         // check: waits return early with the target untouched, long reads stop between chunks.
         let cancel = DebugCancel::new();
@@ -1532,7 +1641,7 @@ impl ServerHandler for RampageServer {
             })
         };
         // Analysis is blocking work; keep it off the async runtime.
-        let result = tokio::task::spawn_blocking(move || server.run(&name, arguments, &cancel)).await;
+        let result = tokio::task::spawn_blocking(move || server.run(&name, arguments, &cancel, used)).await;
         watcher.abort();
         let result = result.map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
         Ok(result.into())

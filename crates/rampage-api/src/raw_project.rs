@@ -1232,16 +1232,24 @@ fn cortex_m_base_suggestion(path: &Path, offset: u64, length: u64) -> Option<(u6
 
 /// The Raw selector that reads the Intel HEX or S-record file at `path` without guessing its processor: Cortex-M
 /// (with `vector_table`) when the lowest record run starts with a reset vector table that checks out, a RAM-like
-/// initial stack pointer and a Thumb Reset handler inside the records' code, as `vector_table: true` judges it.
+/// initial stack pointer (no exception for one outside RAM) and a Thumb Reset handler inside the records' code.
 /// `None` for any other file, or records that do not open that way.
 pub fn record_file_request(path: &Path) -> Option<RawProjectRequest> {
+    serde_json::from_value(record_file_selector(path)?).ok()
+}
+
+/// [`record_file_request`] as the `raw` selector object, for a client that records or reports it.
+pub fn record_file_selector(path: &Path) -> Option<serde_json::Value> {
+    use rampage_loaders::raw_vectors::VectorStatus;
     let format = sniff_record_format(path)?;
-    let request: RawProjectRequest =
-        serde_json::from_value(serde_json::json!({ "profile": "cortex-m", "format": format, "vector_table": true }))
-            .ok()?;
+    let selector = serde_json::json!({ "profile": "cortex-m", "format": format, "vector_table": true });
+    let request: RawProjectRequest = serde_json::from_value(selector.clone()).ok()?;
     let binary = open_raw_binary(path, &request).ok()?;
-    binary.raw_code_image()?.vector_table()?.reset()?;
-    Some(request)
+    let table = binary.raw_code_image()?.vector_table()?;
+    table.reset()?;
+    // Nothing is guessed from the file alone: the initial SP must lie in RAM, without the exception an explicit
+    // `vector_table` grants a table whose SP is outside it.
+    (table.vectors.first()?.status == VectorStatus::StackPointer).then_some(selector)
 }
 
 pub fn headerless_guidance_for(path: &Path) -> String {

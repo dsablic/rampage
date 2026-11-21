@@ -99,17 +99,28 @@ pub struct FunctionListing {
 impl Project {
     /// Disassembles `count` instructions from an address or name, or from the entry point.
     pub fn disassemble(&self, at: Option<&str>, count: usize) -> Result<Vec<DisassemblyLine>, ApiError> {
+        let mut from_reset = false;
         let start = match at {
             Some(text) => self.resolve(text)?,
-            None => self
-                .binary
-                .entry
-                .or_else(|| self.raw_reset_vector())
-                .ok_or_else(|| ApiError::Invalid("no entry point; pass an address or symbol".to_owned()))?,
+            None => match self.binary.entry {
+                Some(entry) => entry,
+                None => {
+                    from_reset = true;
+                    self.raw_reset_vector()
+                        .ok_or_else(|| ApiError::Invalid("no entry point; pass an address or symbol".to_owned()))?
+                }
+            },
         };
         let operands = self.operand_listing_context()?;
         let mut lines = self.decode_lines(start, u64::MAX, count, operands.as_ref())?;
         self.name_register_accesses(lines.iter_mut());
+        if from_reset && let Some(first) = lines.first_mut() {
+            let note = "no entry is set: starting at the Reset handler of the vector table at the image start";
+            first.comment = Some(match first.comment.take() {
+                Some(comment) => format!("{note}; {comment}"),
+                None => note.to_owned(),
+            });
+        }
         Ok(lines)
     }
 

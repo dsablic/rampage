@@ -206,15 +206,24 @@ Binary tools take `path`, optional `arch`, and optional `image_offset`/`image_le
 path with the selectors it was opened with (`raw`, or `arch`/`image_offset`/`image_length`), or an Intel HEX or
 S-record file opened by path alone. Two spellings of one Raw interpretation (a profile alias, `0` and `"0x0"`) are
 one target. A call without `path` then works on the connection's only target, with its selectors unless the call
-gives its own. With several targets it is refused with a list of them (path and selectors) to pick from, and with
-none it is refused, saying to pass `path`. An explicit `path` always wins; when the connection has opened that path
-only as one Raw project, a call with the path and no selector reuses its `raw`, so it reaches the same project,
-annotations and imported peripherals. The file tools whose `path` is the file they read (`inspect_data`,
+gives its own (`raw: null` among them, which asks for the native image). With several targets it is refused with a
+list of them (path and selectors) to pick from, and with none it is refused, saying to pass `path`. An explicit
+`path` always wins. When the native open of that path fails for want of an executable header and the connection
+has opened the path only as one Raw project, the call reuses its `raw` (unless it passed `raw: null`), so it
+reaches the same project, annotations and imported peripherals; a file a native loader opens stays native. A
+result whose call was filled in from a target names it: a `session_target` field (path and selectors) on a JSON
+object, or a second content block `session_target: ...` on any other result. A target is recorded when its
+opening call completes, so calls sent in parallel with that call may not see it yet. The file tools whose `path` is the file they read (`inspect_data`,
 `inspect_raw_code`, `inspect_sleigh`, `file_layout`, `probe_compression`, `decode_file_range`,
 `write_decoded_range`, `carve`, `fs_list`, `fs_extract`, `archive_inventory`, `pyinstaller_archive`,
 `wasm_module`, `dex_metadata`, `dex_code`) default it the same way, but do not record targets; `inspect_data`
-also takes the target's selectors. `import_svd` given the .svd file as `path` and no `svd` takes it as `svd` and
-the session's only target as the image. Targets belong to the connection, at most 16, the oldest forgotten first.
+also takes the target's selectors. They read the file itself, so they ignore a Raw target's `offset`/`length`, and
+the byte-level ones do not default to an Intel HEX or S-record target, whose bytes are record text; a HEX or
+S-record file opened by path is recorded with the selector it was read with, so `inspect_data` reads its records.
+`import_svd` given the .svd file as `path` and no `svd` takes it as `svd` and
+the session's only target as the image. Targets belong to the connection, at most 16, the oldest forgotten first
+(a forgotten Raw target is no longer reused for its path). A record file is parsed again on each call that opens it
+by path, before the session finds its project.
 The CLI is unchanged: it always takes the path.
 `image_offset` is not the paging `offset`. `arch` picks a universal Mach-O's slice (default x86_64, then aarch64,
 then x86). `image_offset` (hex `"0x..."` or decimal) opens the ELF, PE or Mach-O image embedded there, such as a
@@ -247,7 +256,8 @@ string holding the JSON text of a list is taken as that list where the schema ad
 Some limits clamp instead of refusing, where the result says what was served: `inspect_data` reads at most 1024
 bytes (a larger `size` adds `truncated: true` and `requested_size`) and uses the pointer width for a `word_size`
 other than 4 or 8 (adding `requested_word_size`); an `evaluate_function` buffer whose `size` is short of its
-content (text counts its NUL) takes the content's length, while a size past 1 MiB is still refused;
+content (text counts its NUL) takes the content's length (its `buffers` row then adds `requested_size`), while a
+size past 1 MiB is still refused;
 `inspect_raw_code`'s `instruction_limit` past 256 and `inspect_sleigh`'s `instruction_limit`/`listing_limit`
 past 1000 read the cap, and decoder and Sleigh window `timeout_ms` past 10000 is 10000. An argument that belongs to another call gets an
 error naming that call, e.g. `svd` on `peripheral_access` (run `import_svd` first).
@@ -959,11 +969,12 @@ seed. Sleigh profiles take a record file with one contiguous run and no `regions
 
 A record file also opens by `path` alone on raw-capable tools when its lowest run starts with a Cortex-M reset
 vector table that checks out as `vector_table: true` judges it (a RAM-like initial stack pointer and a Thumb Reset
-handler inside the records' code): it opens as `{"profile":"cortex-m","format":"ihex"|"srec","vector_table":true}`.
+handler inside the records' code; unlike an explicit `vector_table`, no exception for a stack pointer outside RAM):
+it opens as `{"profile":"cortex-m","format":"ihex"|"srec","vector_table":true}`.
 Any other record file keeps the open error, which names the selector to pass:
 `"raw":{"profile":"<processor>","format":"ihex"}`. A Cortex-M project opened with no entry (no
 `vector_table`, start-address record or `entry`) disassembles from the Reset handler of a vector table at the
-start of its primary region when `disassemble` is given no address.
+start of its primary region when `disassemble` is given no address, saying so in the first line's comment.
 
 ### Scatter-load copies
 

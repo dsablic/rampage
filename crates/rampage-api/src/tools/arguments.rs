@@ -94,7 +94,7 @@ const TOOL_ALIASES: [(&str, &str, &str); 4] = [
 /// not also given, and a string holding a decimal or `0x` hex number becomes that number where the schema admits
 /// only numbers, and a string holding a JSON list becomes that list where the schema admits only lists. Booleans
 /// stay strict: they gate writes (`apply`, `force`). Aliases add nothing to the schema.
-/// inspect_data's `count` counts words of `word_size` bytes when that is given, bytes otherwise.
+/// inspect_data's `count` counts words of `word_size` bytes when that is a width it reads (4 or 8), bytes otherwise.
 pub fn normalize_arguments(name: &str, schema: &Value, arguments: &mut Map<String, Value>) {
     let words = name == "inspect_data" && arguments.contains_key("count") && !arguments.contains_key("size");
     if let Some(admitted) = admitted_arguments(schema) {
@@ -141,7 +141,8 @@ pub fn normalize_arguments(name: &str, schema: &Value, arguments: &mut Map<Strin
         }
     }
     if words
-        && let Some(word_size) = arguments.get("word_size").and_then(Value::as_u64)
+        && let Some(word_size) =
+            arguments.get("word_size").and_then(Value::as_u64).filter(|width| matches!(width, 4 | 8))
         && let Some(count) = arguments.get("size").and_then(Value::as_u64)
     {
         arguments.insert("size".to_owned(), Value::from(count.saturating_mul(word_size)));

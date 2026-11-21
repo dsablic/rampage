@@ -284,6 +284,9 @@ pub struct BufferResult {
     #[serde(serialize_with = "rampage_arch::hex::address")]
     pub address: u64,
     pub size: usize,
+    /// The `size` asked for, when it was short of the content and the buffer took the content's length instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_size: Option<usize>,
     /// Final contents (the first bytes, within the shared budget).
     pub hex: String,
     /// The contents up to the first NUL, when that is printable UTF-8.
@@ -1456,7 +1459,15 @@ impl Project {
                 Prepared::Float { bits, .. } => (*bits, None),
                 Prepared::Buffer(content) => {
                     let address = buffer_addresses[index].expect("buffer address");
-                    buffers.push((index, address, content.len()));
+                    // A size short of the content was enlarged to it; the result says what was asked for.
+                    let requested = match request.args.get(index) {
+                        Some(EvaluateArgument::Detailed(DetailedArgument {
+                            buffer: Some(BufferArgument { size: Some(size), .. }),
+                            ..
+                        })) if *size < content.len() => Some(*size),
+                        _ => None,
+                    };
+                    buffers.push((index, address, content.len(), requested));
                     buffer_index += 1;
                     (address, Some(buffer_index - 1))
                 }
@@ -1732,7 +1743,7 @@ impl Project {
         let mut budget = RETURNED_BUFFER_BYTES;
         let buffers = buffers
             .into_iter()
-            .map(|(argument, address, size)| {
+            .map(|(argument, address, size, requested_size)| {
                 let mut bytes = vec![0; size];
                 let _ = run.machine.ram.read(address, &mut bytes);
                 let shown = size.min(budget);
@@ -1747,6 +1758,7 @@ impl Project {
                     argument,
                     address,
                     size,
+                    requested_size,
                     hex: bytes[..shown].iter().map(|byte| format!("{byte:02x}")).collect(),
                     text,
                     omitted_bytes: size - shown,
