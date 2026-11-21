@@ -34,8 +34,10 @@ and you open it with `entry` instead. A table with an SP in external SDRAM is ke
 
 Start with `binary_info`, which reports the interpretation under `raw` (regions, vector table, pointer tables,
 startup copies, the base check), then `list_functions` and `decompile`. Use `"view": "summary"` when the full
-report is large: `raw` lists keep their first rows with counts. Repeat the same `raw` object on every call; the
-session keeps the project, with its annotations, for that exact interpretation. The CLI takes the same object as
+report is large: `raw` lists keep their first rows with counts. The session keeps the project, with its
+annotations, for that exact interpretation. Over MCP, once it is the only binary the connection has opened, later
+calls may leave out `path` and `raw` (or give the path alone) and reach the same project; with more than one open,
+repeat the `raw` object (see [the session target](mcp.md#inputs-paging-and-decompiler-tokens)). The CLI takes the same object as
 `--raw-json` ([CLI reference](cli-reference.md#raw-projects)).
 
 Only MSP430, AVR8, Cortex-M, MIPS32 and Xtensa decompile; the other Sleigh profiles disassemble. On Cortex-M, `decompile` with

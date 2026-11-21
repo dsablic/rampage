@@ -6,7 +6,9 @@ checksum or CRC over part of the image, and the programming tool expects the ima
 [checked byte patches](patching.md):
 
 1. Open the image: a native file (a static ARM firmware ELF is patched in place), or a Raw project (`raw` selector)
-   of a flat binary, Intel HEX or S-record file.
+   of a flat binary, Intel HEX or S-record file. A Cortex-M HEX or S-record file whose records start with its
+   vector table also opens by path alone, and over MCP later calls may leave out `path` and `raw` once it is the
+   session's only open binary.
 2. `integrity_checks` finds the checksum fields and the ranges they cover, and returns a patch receipt.
 3. `patch_bytes` changes what you need (code directly; data, RAM regions and ELF data sections with `allow_data`).
 4. `integrity_checks` reports which checks no longer hold and, in `fix.writes`, the values that would correct them.

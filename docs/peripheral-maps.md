@@ -6,8 +6,10 @@ importing one names them on every surface.
 
 ## Importing
 
-`import_svd` (group `types`) takes the binary (or a `raw` selector) and `svd`, the path of the `.svd` file. It
-previews by default: the device, counts, the changes it would make and the reader's warnings. With `apply: true` it
+`import_svd` (group `types`) takes the binary (or a `raw` selector) and `svd`, the path of the `.svd` file. Over MCP
+both `path` and `raw` default to the session's only open binary, so `{"svd": "device.svd", "apply": true}` and then
+`peripheral_access` with no arguments work on it; a `.svd` file given as `path` with no `svd` is taken as `svd`.
+It previews by default: the device, counts, the changes it would make and the reader's warnings. With `apply: true` it
 stores each peripheral as an annotation at its base address, replacing any earlier import, in one undo step. A
 native binary keeps them in its annotation log beside the binary; a Raw project keeps them in memory for the
 session and interpretation, like its other annotations, so import again with the same `raw` selector after a

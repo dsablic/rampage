@@ -18,8 +18,8 @@ MCP accepts the ordinary `path`, `arch`, `image_offset` and `image_length` selec
 | Argument | Meaning |
 | --- | --- |
 | `at` | Required image VA or existing metadata name; not an outer-file offset or runtime address. |
-| `size` | 1 through 1024 bytes, default 128. |
-| `word_size` | 4 or 8 bytes; omitted uses the image architecture's pointer width. |
+| `size` | 1 through 1024 bytes, default 128. Over MCP a larger size reads 1024 bytes and adds `truncated: true` and `requested_size`. |
+| `word_size` | 4 or 8 bytes; omitted uses the image architecture's pointer width. Over MCP another width uses the pointer width and adds `requested_word_size`. |
 
 Words start exactly at `at`. No alignment, table boundary, field layout or pointer interpretation is inferred
 from the request. Any remainder shorter than a word is counted in `trailing_bytes` and retained in byte spans.

@@ -204,6 +204,9 @@ pub struct ImportSvdReport {
     pub warnings: Vec<String>,
     #[serde(skip_serializing_if = "is_zero")]
     pub omitted_warnings: usize,
+    /// On a preview: that nothing was applied, and how to apply it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<&'static str>,
 }
 
 fn is_zero(value: &usize) -> bool {
@@ -312,6 +315,10 @@ impl Project {
             descriptions_dropped,
             warnings,
             omitted_warnings,
+            next: (!request.apply).then_some(
+                "a preview: nothing was applied, so peripheral_access, decompile and xrefs do not see the map yet; \
+                 call import_svd again with apply=true",
+            ),
         })
     }
 
@@ -1160,8 +1167,8 @@ impl Project {
         let map = self.peripheral_map();
         if map.is_empty() {
             return Err(ApiError::NotFound(
-                "no peripherals are imported; run import_svd with svd=<the .svd file> and apply=true on this path \
-                 (and raw) first"
+                "no peripherals are imported; run import_svd with svd=<the .svd file> and apply=true (without apply \
+                 it only previews) on this path (and raw) first"
                     .to_owned(),
             ));
         }

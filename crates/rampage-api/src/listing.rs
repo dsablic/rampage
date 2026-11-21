@@ -104,12 +104,24 @@ impl Project {
             None => self
                 .binary
                 .entry
+                .or_else(|| self.raw_reset_vector())
                 .ok_or_else(|| ApiError::Invalid("no entry point; pass an address or symbol".to_owned()))?,
         };
         let operands = self.operand_listing_context()?;
         let mut lines = self.decode_lines(start, u64::MAX, count, operands.as_ref())?;
         self.name_register_accesses(lines.iter_mut());
         Ok(lines)
+    }
+
+    /// For a Raw Cortex-M project opened without an entry (no vector_table, start record or entry), the Reset
+    /// handler of a vector table at the start of its primary code region, when one checks out there.
+    fn raw_reset_vector(&self) -> Option<u64> {
+        let raw = self.binary.raw_code_image()?;
+        if !raw.profile().m_profile() {
+            return None;
+        }
+        let primary = self.binary.image_bytes().get(..usize::try_from(raw.length()).ok()?)?;
+        rampage_loaders::raw_vectors::reset_handler(primary, raw.base())
     }
 
     /// Adds the imported peripheral registers each line loads or stores, or names as a constant, to its comment.

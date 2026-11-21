@@ -111,7 +111,13 @@ async fn archive_tool_is_carve_gated_path_required_and_works_on_nonloadable_zip_
     page(&call(&client, "enable_tools", json!({ "groups": ["carve"] })).await);
     let tools = client.list_all_tools().await.unwrap();
     let tool = tools.iter().find(|tool| tool.name == "archive_inventory").unwrap();
-    assert!(tool.input_schema["required"].as_array().unwrap().contains(&json!("path")));
+    assert!(
+        !tool
+            .input_schema
+            .get("required")
+            .is_some_and(|required| required.as_array().unwrap().contains(&json!("path"))),
+        "path defaults to the session's target"
+    );
     assert!(tool.input_schema["properties"].get("image_offset").is_none());
     let output = page(
         &call(

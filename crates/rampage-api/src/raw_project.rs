@@ -727,11 +727,22 @@ impl RawProjectRequest {
 
     fn binary_image(&self, path: &Path, profile: RawProfile) -> Result<RawImage, ApiError> {
         let Some(base) = self.base_address else {
-            return Err(invalid(
+            // For Cortex-M code the file's own evidence may name the base; it is suggested, never applied.
+            let suggestion = profile
+                .m_profile()
+                .then(|| {
+                    let offset = self.offset.map_or(0, |offset| offset.0);
+                    let length = self.length.map_or(profile.max_bytes() as u64, |length| length.0);
+                    cortex_m_base_suggestion(path, offset, length)
+                })
+                .flatten()
+                .map(|(base, evidence)| format!("; {evidence} suggests base_address \"{base:#x}\""))
+                .unwrap_or_default();
+            return Err(invalid(&format!(
                 "Raw format binary needs base_address, the code-space address of the byte at offset (offset defaults \
                  to 0, length to the rest of the file); format ihex or srec takes the addresses from the records \
-                 instead",
-            ));
+                 instead{suggestion}"
+            )));
         };
         let offset = self.offset.unwrap_or(FileOffset(0));
         let max = profile.max_bytes();
@@ -1201,6 +1212,38 @@ pub fn esp_guidance(path: &Path) -> Option<String> {
     })
 }
 
+/// The load address the evidence in `length` bytes of `path` at `offset` suggests for Cortex-M code, with what it
+/// rests on: the best ranked candidate when a vector table there fits it or its confidence is strong. A suggestion
+/// for an error message, never applied.
+fn cortex_m_base_suggestion(path: &Path, offset: u64, length: u64) -> Option<(u64, &'static str)> {
+    use rampage_loaders::raw_base::{BaseConfidence, BaseMethod, base_candidates};
+    let max = RawProfile::CortexM.max_bytes() as u64;
+    let bytes = file_range_prefix(path, offset, length.min(max))?;
+    let found = base_candidates(&bytes, None, &[]);
+    let best = found.candidates.first()?;
+    if best.methods.contains(&BaseMethod::VectorTable) {
+        Some((best.base_address, "the Cortex-M vector table at its start"))
+    } else if best.confidence == BaseConfidence::Strong {
+        Some((best.base_address, "the file's pointer evidence"))
+    } else {
+        None
+    }
+}
+
+/// The Raw selector that reads the Intel HEX or S-record file at `path` without guessing its processor: Cortex-M
+/// (with `vector_table`) when the lowest record run starts with a reset vector table that checks out, a RAM-like
+/// initial stack pointer and a Thumb Reset handler inside the records' code, as `vector_table: true` judges it.
+/// `None` for any other file, or records that do not open that way.
+pub fn record_file_request(path: &Path) -> Option<RawProjectRequest> {
+    let format = sniff_record_format(path)?;
+    let request: RawProjectRequest =
+        serde_json::from_value(serde_json::json!({ "profile": "cortex-m", "format": format, "vector_table": true }))
+            .ok()?;
+    let binary = open_raw_binary(path, &request).ok()?;
+    binary.raw_code_image()?.vector_table()?.reset()?;
+    Some(request)
+}
+
 pub fn headerless_guidance_for(path: &Path) -> String {
     if let Some(guidance) = crate::filesystem_guidance(path) {
         return guidance;
@@ -1216,8 +1259,20 @@ pub fn headerless_guidance_for(path: &Path) -> String {
     match sniff_record_format(path) {
         Some(format) => {
             let name = if format == "ihex" { "an Intel HEX" } else { "a Motorola S-record" };
+            if record_file_request(path).is_some() {
+                return format!(
+                    "The file looks like {name} file whose lowest record starts with a Cortex-M vector table: \
+                     raw-capable tools (binary_info, disassemble, triage_report, ...) open it by path alone, as \
+                     \"raw\":{{\"profile\":\"cortex-m\",\"format\":\"{format}\",\"vector_table\":true}} does, taking \
+                     every address from the records."
+                );
+            }
             format!(
-                "The file looks like {name} file: read it with \"raw\":{{\"profile\":\"cortex-m\",\"format\":\"{format}\"}}                  (or another profile), which takes every address from the records. {}",
+                "The file looks like {name} file, but its lowest record holds no Cortex-M vector table, so the \
+                 processor is not known from the file: read it with \
+                 \"raw\":{{\"profile\":\"<processor>\",\"format\":\"{format}\"}}, the profile naming the processor \
+                 the code is for (cortex-m, msp430, avr, ...; every profile is listed below), which takes every \
+                 address from the records. {}",
                 headerless_guidance()
             )
         }

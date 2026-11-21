@@ -59,8 +59,9 @@ async fn layout_tool_is_types_gated_and_exposes_review_controls_without_renaming
     for property in ["path", "arch", "image_offset", "image_length", "apply", "review_sha256", "offset", "limit"] {
         assert!(tool.input_schema["properties"].get(property).is_some(), "{property}");
     }
-    let required = tool.input_schema["required"].as_array().unwrap();
-    assert!(required.contains(&json!("path")));
+    let required =
+        tool.input_schema.get("required").and_then(|required| required.as_array()).cloned().unwrap_or_default();
+    assert!(!required.contains(&json!("path")), "path defaults to the session's target");
     assert!(!required.contains(&json!("apply")));
     assert!(!required.contains(&json!("review_sha256")));
     assert_eq!(tool.input_schema["additionalProperties"], false);

@@ -609,6 +609,9 @@ fn image_at(
 }
 
 /// Every tool that works without a loaded binary.
+/// The longest decoder and Sleigh window deadline, in milliseconds.
+const MAX_DECODE_TIMEOUT_MS: u64 = 10_000;
+
 pub fn file_tools() -> Vec<FileTool> {
     vec![
         FileTool {
@@ -629,7 +632,12 @@ pub fn file_tools() -> Vec<FileTool> {
                     .remove("path")
                     .and_then(|value| value.as_str().map(std::path::PathBuf::from))
                     .ok_or("Sleigh path must be a string")?;
-                let request: crate::sleigh_window::SleighWindowRequest = arguments(input)?;
+                let mut request: crate::sleigh_window::SleighWindowRequest = arguments(input)?;
+                // Limits past their cap read the cap, as the listing pages and the report states the limits used.
+                let cap = crate::sleigh_window::MAX_SLEIGH_WINDOW_INSTRUCTIONS;
+                request.instruction_limit = request.instruction_limit.min(cap);
+                request.listing_limit = request.listing_limit.min(cap);
+                request.timeout_ms = request.timeout_ms.min(MAX_DECODE_TIMEOUT_MS);
                 let report = crate::sleigh_window::inspect_sleigh_file_range(&path, &request)
                     .map_err(|error| error_chain(&error))?;
                 serde_json::to_value(report).map_err(|error| error.to_string())
@@ -653,7 +661,9 @@ pub fn file_tools() -> Vec<FileTool> {
                     .remove("path")
                     .and_then(|value| value.as_str().map(std::path::PathBuf::from))
                     .ok_or("raw-code path must be a string")?;
-                let request: crate::RawFileRequest = arguments(input)?;
+                let mut request: crate::RawFileRequest = arguments(input)?;
+                // More instructions than the cap read the cap; the report's continuation says where to go on.
+                request.instruction_limit = request.instruction_limit.min(crate::MAX_RAW_CODE_INSTRUCTIONS);
                 let report = crate::inspect_raw_file(&path, &request).map_err(|error| error_chain(&error))?;
                 serde_json::to_value(report).map_err(|error| error.to_string())
             },
@@ -843,13 +853,24 @@ pub fn file_tools() -> Vec<FileTool> {
                     }
                 };
                 let address = crate::resolve_data_address(&binary, &args.at).map_err(|error| error_chain(&error))?;
-                let report = crate::inspect_native_data(
-                    &binary,
-                    &crate::DataQuery { address, size: args.size.unwrap_or(128), word_size: args.word_size },
-                )
-                .map_err(|error| error_chain(&error))?;
+                // A size past the cap reads the cap, and a word width other than 4 or 8 the pointer width; the
+                // result says what was asked for.
+                let requested = args.size.unwrap_or(128);
+                let size = requested.min(crate::MAX_DATA_BYTES);
+                let word_size = args.word_size.filter(|width| matches!(width, 4 | 8));
+                let report = crate::inspect_native_data(&binary, &crate::DataQuery { address, size, word_size })
+                    .map_err(|error| error_chain(&error))?;
                 let value = serde_json::to_value(report).map_err(|error| error.to_string())?;
-                project_tool_view(value, ToolViewKind::InspectData, args.view).map_err(|error| error_chain(&error))
+                let mut value = project_tool_view(value, ToolViewKind::InspectData, args.view)
+                    .map_err(|error| error_chain(&error))?;
+                if size < requested {
+                    value["truncated"] = serde_json::json!(true);
+                    value["requested_size"] = serde_json::json!(requested);
+                }
+                if let Some(width) = args.word_size.filter(|_| word_size.is_none()) {
+                    value["requested_word_size"] = serde_json::json!(width);
+                }
+                Ok(value)
             },
         },
         FileTool {
@@ -1507,10 +1528,10 @@ struct InspectDataArgs {
     image_length: Option<crate::FileOffset>,
     /// Image address or existing name, not a runtime address or file offset.
     at: String,
-    /// Bytes to inspect (default 128, 1..=1024). Output budgets may require a smaller range.
-    #[schemars(range(min = 1, max = 1024))]
+    /// Bytes to inspect (default 128, 1..=1024; more reads 1024). Output budgets may require a smaller range.
+    #[schemars(range(min = 1))]
     size: Option<usize>,
-    /// Word width in bytes, 4 or 8; omitted uses the image architecture's pointer width.
+    /// Word width in bytes, 4 or 8; omitted (or another width) uses the image architecture's pointer width.
     word_size: Option<u8>,
     #[serde(default)]
     view: ToolView,
@@ -1597,7 +1618,8 @@ impl DecodeSource {
                 .initial_write_offset
                 .unwrap_or_else(|| crate::default_initial_write_offset(self.codec)),
             dictionary_fill: self.dictionary_fill.unwrap_or(0),
-            timeout_ms: self.timeout_ms.unwrap_or(3000),
+            // A deadline past the cap is the cap.
+            timeout_ms: self.timeout_ms.unwrap_or(3000).min(MAX_DECODE_TIMEOUT_MS),
             preview_offset: 0,
             preview_size: 0,
         })

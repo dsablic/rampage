@@ -120,6 +120,10 @@ Prebuilt archives cover macOS on Apple silicon, Linux x64 and Linux ARM64 only; 
 - A Raw selector with `decode` decodes its input again on every call before the session finds the project, and
   `inspect_data` opens Raw images outside the session, so analyst names do not resolve in its `at` and its 16 KiB
   input budget refuses large selectors.
+- An Intel HEX or S-record file opens by path alone only when its lowest record run starts with a Cortex-M vector
+  table that checks out; any other processor needs the `raw` selector with its profile, and nothing is guessed.
+- The MCP session target (a call without `path`) is per connection and kept in memory only: a new connection, or
+  more than one opened binary, needs `path` again. File tools default `path` from it but never record one.
 - Container records (the words before a compressed stream naming its length, decoded size, checksum and address)
   are reported by `probe_compression`, `decode_file_range` and `integrity_checks`, not by `carve` or `file_layout`;
   their roles are inferred from values.

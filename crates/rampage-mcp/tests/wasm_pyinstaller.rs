@@ -53,7 +53,13 @@ async fn format_tools_are_gated_by_the_formats_group_and_need_no_binary() {
     let tools = client.list_all_tools().await.unwrap();
     for name in ["wasm_module", "pyinstaller_archive"] {
         let tool = tools.iter().find(|tool| tool.name == name).unwrap();
-        assert!(tool.input_schema["required"].as_array().unwrap().contains(&json!("path")), "{name}");
+        assert!(
+            !tool
+                .input_schema
+                .get("required")
+                .is_some_and(|required| required.as_array().unwrap().contains(&json!("path"))),
+            "path defaults to the session's target"
+        ); // {name}
     }
 
     let functions =

@@ -892,7 +892,7 @@ async fn unknown_or_missing_arguments_are_refused_naming_the_tool_arguments() {
     let message = text(&guessed);
     assert!(message.contains("unknown field `length` (did you mean `count`?)"), "{message}");
     assert!(!message.contains("`address` (did"), "{message}");
-    assert!(message.contains("Arguments of disassemble:") && message.contains("`path` (required)"), "{message}");
+    assert!(message.contains("Arguments of disassemble:") && message.contains("`path`, "), "{message}");
     assert!(!message.contains('\n'), "one line: {message}");
 
     let missing = call(&client, "decompile", json!({ "path": path })).await;
@@ -969,8 +969,12 @@ async fn per_tool_aliases_are_taken_and_misplaced_arguments_name_the_right_call(
     assert!(message.contains("run import_svd with svd=") && message.contains("peripheral="), "{message}");
     let unimported = call(&client, "peripheral_access", json!({ "path": path, "at": "0x40000000" })).await;
     assert!(text(&unimported).contains("run import_svd with svd="), "{}", text(&unimported));
+    // An .svd file given as `path` is the map, and the session's one binary the image: here the map is missing.
     let import = call(&client, "import_svd", json!({ "path": svd })).await;
-    assert!(text(&import).contains("`path` is the firmware image"), "{}", text(&import));
+    assert!(text(&import).contains("/tmp/device.svd") && !text(&import).contains("missing field"), "{}", text(&import));
+    // With a binary as `path`, a missing `svd` is refused as before.
+    let import = call(&client, "import_svd", json!({ "path": path })).await;
+    assert!(text(&import).contains("missing field `svd`"), "{}", text(&import));
     client.cancel().await.unwrap();
 }
 

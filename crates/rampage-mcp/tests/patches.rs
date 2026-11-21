@@ -85,7 +85,13 @@ async fn mcp_decompile_patch_undo_redo_export_and_reopen_follow_one_effective_re
         let listed = client.list_all_tools().await.unwrap();
         for name in ["patch_bytes", "revert_patch", "list_patches", "export_patched"] {
             let tool = listed.iter().find(|tool| tool.name == name).unwrap();
-            assert!(tool.input_schema["required"].as_array().unwrap().contains(&json!("path")));
+            assert!(
+                !tool
+                    .input_schema
+                    .get("required")
+                    .is_some_and(|required| required.as_array().unwrap().contains(&json!("path"))),
+                "path defaults to the session's target"
+            );
         }
         assert_return(&client, &source, 5).await;
         let baseline = call(&client, "list_patches", json!({"path":source}), false).await;

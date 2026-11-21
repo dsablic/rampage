@@ -223,6 +223,13 @@ pub(crate) fn read_reset_table(
     Ok(table)
 }
 
+/// The Reset handler of the Cortex-M reset vector table at the start of `bytes` mapped at `base`, judged as
+/// `vector_table: true` judges it ([`read_reset_table`] without further RAM regions): `None` when no table there
+/// checks out.
+pub fn reset_handler(bytes: &[u8], base: u64) -> Option<u64> {
+    read_reset_table(bytes, base, base, &|_| false).ok()?.reset()
+}
+
 /// Reads the table at code-space byte `address` of `bytes` mapped at `base`. Refuses a table that is unaligned,
 /// outside the image, or too short for the initial SP and Reset words; individual bad words are refused in the
 /// evidence instead.

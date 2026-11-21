@@ -431,7 +431,17 @@ fn arguments_parse_widths_and_buffers() {
     assert_eq!(bytes, b"ab\0\0");
     let Prepared::Buffer(bytes) = parse(json!({"buffer": {"hex": "0102"}}), 4).unwrap() else { panic!("buffer") };
     assert_eq!(bytes, [1, 2]);
-    assert!(parse(json!({"buffer": {"hex": "010203", "size": 2}}), 4).is_err());
+    // A size short of the content takes the content's length (text with its NUL); 0 and past the cap still fail.
+    let Prepared::Buffer(bytes) = parse(json!({"buffer": {"hex": "010203", "size": 2}}), 4).unwrap() else {
+        panic!("buffer")
+    };
+    assert_eq!(bytes, [1, 2, 3]);
+    let Prepared::Buffer(bytes) = parse(json!({"buffer": {"text": "abcdefgh", "size": 8}}), 4).unwrap() else {
+        panic!("buffer")
+    };
+    assert_eq!(bytes, b"abcdefgh\0");
+    assert!(parse(json!({"buffer": {"size": 0}}), 4).is_err());
+    assert!(parse(json!({"buffer": {"text": "a", "size": 2 << 20}}), 4).is_err());
     assert!(parse(json!({"value": 1, "buffer": {}}), 4).is_err());
 }
 

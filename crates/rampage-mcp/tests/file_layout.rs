@@ -50,7 +50,8 @@ async fn file_layout_is_a_default_core_tool_mapping_a_headerless_image() {
     let client = connect().await;
     let tools = client.list_all_tools().await.unwrap();
     let tool = tools.iter().find(|tool| tool.name == "file_layout").expect("file_layout is served by default");
-    assert_eq!(tool.input_schema["required"], json!(["path"]));
+    // `path` defaults to the session's target.
+    assert!(tool.input_schema.get("required").is_none());
 
     let mut bytes = vec![0xff; 256];
     bytes.extend([0x00, 0x20, 0x00, 0x20, 0x01, 0x01, 0x00, 0x08]);

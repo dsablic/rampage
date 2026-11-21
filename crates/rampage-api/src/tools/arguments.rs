@@ -78,19 +78,22 @@ const ALIASES: [(&str, &str); 9] = [
 ];
 
 /// Unknown argument names that mean one admitted argument of one tool only: (tool, alias, admitted argument).
-const TOOL_ALIASES: [(&str, &str, &str); 3] = [
+const TOOL_ALIASES: [(&str, &str, &str); 4] = [
     // References to a target; `from` lists the references a function makes.
     ("xrefs", "target", "to"),
     // A count of bytes, or of words when word_size is given (see [`normalize_arguments`]).
     ("inspect_data", "count", "size"),
     // `peripheral` takes a name or any address inside the peripheral.
     ("peripheral_access", "at", "peripheral"),
+    // The function's arguments.
+    ("evaluate_function", "arguments", "args"),
 ];
 
 /// Repairs the argument mistakes of a caller working without the schema, before [`check_arguments`]: an unknown
 /// name in [`ALIASES`], or in [`TOOL_ALIASES`] for the tool `name`, becomes its admitted argument when that one is
 /// not also given, and a string holding a decimal or `0x` hex number becomes that number where the schema admits
-/// only numbers. Booleans stay strict: they gate writes (`apply`, `force`). Aliases add nothing to the schema.
+/// only numbers, and a string holding a JSON list becomes that list where the schema admits only lists. Booleans
+/// stay strict: they gate writes (`apply`, `force`). Aliases add nothing to the schema.
 /// inspect_data's `count` counts words of `word_size` bytes when that is given, bytes otherwise.
 pub fn normalize_arguments(name: &str, schema: &Value, arguments: &mut Map<String, Value>) {
     let words = name == "inspect_data" && arguments.contains_key("count") && !arguments.contains_key("size");
@@ -116,6 +119,13 @@ pub fn normalize_arguments(name: &str, schema: &Value, arguments: &mut Map<Strin
             _ => continue,
         };
         if types.contains(&"string") {
+            continue;
+        }
+        // A list sent as the JSON text of one, as some clients send nested arguments.
+        if types.contains(&"array") {
+            if let Ok(list @ Value::Array(_)) = serde_json::from_str::<Value>(text) {
+                *value = list;
+            }
             continue;
         }
         if !types.contains(&"integer") && !types.contains(&"number") {

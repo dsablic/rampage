@@ -141,14 +141,13 @@ async fn native_data_inspection_returns_whole_json_and_rejects_invalid_ranges() 
     assert_eq!(data["spans"][0]["status"], "stored");
     assert_eq!(data["words"].as_array().unwrap().len(), 2);
     assert!(!data["limitations"].as_array().unwrap().is_empty());
-    for arguments in [
-        json!({ "path": path, "at": "main", "size": 0 }),
-        json!({ "path": path, "at": "main", "size": 1025 }),
-        json!({ "path": path, "at": "main", "word_size": 3 }),
-    ] {
-        let refused = call(&client, "inspect_data", arguments).await;
-        assert_eq!(refused.is_error, Some(true));
-    }
+    let refused = call(&client, "inspect_data", json!({ "path": path, "at": "main", "size": 0 })).await;
+    assert_eq!(refused.is_error, Some(true));
+    // A size past the cap reads the cap, and another word width the pointer width, saying what was asked for.
+    let capped = body(&call(&client, "inspect_data", json!({ "path": path, "at": "main", "size": 1025 })).await);
+    assert_eq!((capped["size"].as_u64(), capped["requested_size"].as_u64()), (Some(1024), Some(1025)));
+    let widened = body(&call(&client, "inspect_data", json!({ "path": path, "at": "main", "word_size": 3 })).await);
+    assert_eq!((widened["word_size"].as_u64(), widened["requested_word_size"].as_u64()), (Some(8), Some(3)));
     client.cancel().await.unwrap();
 }
 

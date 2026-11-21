@@ -201,7 +201,7 @@ async fn runtime_opt_in_exposes_canonical_tool_and_original_file_offset_schema()
         );
         assert!(!schema["required"].as_array().unwrap().contains(&json!(name)));
     }
-    for name in ["original", "module", "ranges", "path"] {
+    for name in ["original", "module", "ranges"] {
         assert!(schema["required"].as_array().unwrap().contains(&json!(name)), "{name}");
     }
     assert!(

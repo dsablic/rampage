@@ -66,9 +66,8 @@ async fn pdb_tool_is_types_gated_and_requires_separate_binary_and_pdb_paths() {
     let tools = client.list_all_tools().await.unwrap();
     let tool = tools.iter().find(|tool| tool.name == "import_pdb_names").unwrap();
     let schema = &tool.input_schema;
-    for required in ["path", "pdb"] {
-        assert!(schema["required"].as_array().unwrap().contains(&json!(required)), "{required}");
-    }
+    assert!(!schema["required"].as_array().unwrap().contains(&json!("path")), "path defaults to the session's target");
+    assert!(schema["required"].as_array().unwrap().contains(&json!("pdb")));
     for property in ["arch", "image_offset", "image_length", "apply", "offset", "limit"] {
         assert!(schema["properties"].get(property).is_some(), "{property}");
     }

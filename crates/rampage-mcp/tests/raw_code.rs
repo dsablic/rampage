@@ -30,7 +30,8 @@ async fn raw_code_mapping_requires_explicit_mode_orders_and_rejects_native_selec
     let tools = client.list_all_tools().await.unwrap();
     let tool = tools.iter().find(|tool| tool.name == "inspect_raw_code").unwrap();
     let required = tool.input_schema["required"].as_array().unwrap();
-    for field in ["arch", "mode", "code_byte_order", "data_byte_order", "base_address", "path"] {
+    assert!(!required.contains(&json!("path")), "path defaults to the session's target");
+    for field in ["arch", "mode", "code_byte_order", "data_byte_order", "base_address"] {
         assert!(required.contains(&json!(field)));
     }
     let base = json!({ "path": "/nonexistent/raw-code", "offset": 0, "length": 4, "arch": "arm",

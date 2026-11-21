@@ -122,7 +122,7 @@ pub enum IntegerText {
 pub struct BufferArgument {
     pub hex: Option<String>,
     pub text: Option<String>,
-    /// Bytes, at least the content (default the content, or 256), at most 1 MiB.
+    /// Bytes (default the content, or 256), at most 1 MiB; a smaller size takes the content's.
     pub size: Option<usize>,
 }
 
@@ -439,10 +439,15 @@ fn prepare(argument: &EvaluateArgument, width: u32) -> Result<Prepared, ApiError
                     (None, None) => Vec::new(),
                     (Some(_), Some(_)) => return Err(invalid("a buffer takes hex or text, not both")),
                 };
-                let size = buffer.size.unwrap_or(if content.is_empty() { 256 } else { content.len() });
-                if size < content.len() || size == 0 || size > MAX_BUFFER_BYTES {
+                // A size short of the content (text counts its NUL) takes the content's length.
+                let size = match buffer.size {
+                    Some(size) if size >= content.len() => size,
+                    None if content.is_empty() => 256,
+                    _ => content.len(),
+                };
+                if size == 0 || size > MAX_BUFFER_BYTES {
                     return Err(invalid(format!(
-                        "buffer size must cover its content ({} bytes) and be 1..={MAX_BUFFER_BYTES}",
+                        "buffer size must be 1..={MAX_BUFFER_BYTES} bytes (content: {})",
                         content.len()
                     )));
                 }

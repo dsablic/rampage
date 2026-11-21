@@ -152,8 +152,8 @@ async fn raw_selector_is_offered_only_on_raw_capable_tools() {
             // region's shape) once.
             let text = selector.to_string();
             assert!(!text.contains("$ref") && text.len() < 778, "{} bytes: {text}", text.len());
-            let required = tool.input_schema["required"].as_array().unwrap();
-            assert!(!required.contains(&json!("raw")) && required.contains(&json!("path")));
+            let required = tool.input_schema.get("required").and_then(Value::as_array).cloned().unwrap_or_default();
+            assert!(!required.contains(&json!("raw")) && !required.contains(&json!("path")));
         }
     }
     assert!(tools.iter().any(|tool| tool.name == "list_functions"));

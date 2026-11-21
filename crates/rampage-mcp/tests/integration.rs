@@ -39,6 +39,7 @@ mod raw_project;
 mod runtime_compare;
 mod search;
 mod server;
+mod session_target;
 mod signature_import;
 mod signature_paging;
 mod transfer;
