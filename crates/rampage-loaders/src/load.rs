@@ -163,6 +163,12 @@ pub struct Binary {
     /// ([`Binary::undecoded_isa`]).
     #[serde(skip)]
     undecoded_isa: Option<&'static str>,
+    /// A 32-bit MIPS ELF whose header marks MIPS16e code, which is decoded ([`Binary::mips16`]).
+    #[serde(skip)]
+    mips16: bool,
+    /// The MIPS16e code ranges its symbols mark ([`Binary::mips16_ranges`]).
+    #[serde(skip)]
+    mips16_ranges: Vec<Range<u64>>,
 }
 
 #[derive(Debug)]
@@ -326,6 +332,8 @@ impl Binary {
             elf_m_profile: false,
             xtensa_call0: false,
             undecoded_isa: None,
+            mips16: false,
+            mips16_ranges: Vec::new(),
             raw: Some(raw),
             image: 0..len,
         };
@@ -380,10 +388,28 @@ impl Binary {
         self.format == Format::Raw && !self.raw.as_ref().is_some_and(|raw| raw.profile().native_decoder())
     }
 
-    /// The compressed MIPS instruction set (MIPS16e or microMIPS) the ELF header says the image holds, which rampage
-    /// does not decode: functions in it are not discovered, disassembled or decompiled.
+    /// The compressed MIPS instruction set the ELF header says the image holds when rampage does not decode it
+    /// (microMIPS, or MIPS16e in a 64-bit image): functions in it are not discovered, disassembled or decompiled.
     pub fn undecoded_isa(&self) -> Option<&'static str> {
         self.undecoded_isa
+    }
+
+    /// A 32-bit MIPS ELF whose header marks MIPS16e code: odd code addresses are MIPS16e functions at the even
+    /// address (symbols, exports and the entry already have bit 0 cleared), and `jalx` switches mode.
+    pub fn mips16(&self) -> bool {
+        self.mips16
+    }
+
+    /// Whether code runs in two instruction sets whose mode discovery learns per address: 32-bit ARM (A32 and
+    /// Thumb) or a [`Binary::mips16`] image (MIPS32 and MIPS16e).
+    pub fn has_code_modes(&self) -> bool {
+        self.arch == Arch::Arm || self.mips16
+    }
+
+    /// The MIPS16e code ranges the symbols of a [`Binary::mips16`] image mark: a function's size, or up to the next
+    /// function. Discovery finds others from `jalx` and odd code pointers.
+    pub fn mips16_ranges(&self) -> &[Range<u64>] {
+        &self.mips16_ranges
     }
 
     /// [`Self::undecoded_isa`] as a sentence for results that list or read code.
@@ -551,6 +577,8 @@ impl Binary {
             elf_m_profile: false,
             xtensa_call0: false,
             undecoded_isa: None,
+            mips16: false,
+            mips16_ranges: Vec::new(),
             raw: None,
         })
     }
@@ -861,8 +889,13 @@ impl Binary {
             return Err(LoadError::Unsupported(format!("{wanted} slice; the file contains {arch}")));
         }
         let slices = if slices.is_empty() { vec![arch] } else { slices };
-        // ARM marks Thumb code addresses with the low bit; code itself lives at the even address.
-        let code_address = |address: u64| if arch == Arch::Arm { address & !1 } else { address };
+        let compressed_isa = (format == Format::Elf && matches!(arch, Arch::Mips | Arch::Mips64))
+            .then(|| elf_mips_compressed_isa(&parsed))
+            .flatten();
+        // MIPS16e is decoded in 32-bit images; microMIPS and 64-bit MIPS16e are not.
+        let mips16 = arch == Arch::Mips && compressed_isa == Some("MIPS16e");
+        // ARM marks Thumb code addresses with the low bit, MIPS its MIPS16e ones; code lives at the even address.
+        let code_address = |address: u64| if arch == Arch::Arm || mips16 { address & !1 } else { address };
 
         let segments: Vec<Segment> = parsed
             .segments()
@@ -1006,12 +1039,20 @@ impl Binary {
             text_address.map(|text_address| starts::macho(&parsed, image_bytes, text_address)).unwrap_or_default();
         // Dynamic symbols read through PT_DYNAMIC mark Thumb functions with the low bit, as `.dynsym` ones do.
         let dynamic_functions = dynamic_symbols.iter().filter(|symbol| symbol.is_function() && symbol.is_definition());
-        let marked_starts: Vec<u64> =
-            macho_starts.iter().copied().chain(dynamic_functions.map(|symbol| symbol.value)).collect();
+        let marked = |symbol: &crate::dynsym::DynamicSymbol| symbol.value | u64::from(symbol.other & 0xf0 == 0xf0);
+        let marked_constructors = dynamic.as_ref().map_or(&[][..], |dynamic| dynamic.constructors.as_slice());
+        let marked_starts: Vec<u64> = macho_starts
+            .iter()
+            .copied()
+            .chain(dynamic_functions.map(marked))
+            .chain(marked_constructors.iter().copied().filter(|_| mips16))
+            .collect();
         let thumb = match arch {
             Arch::Arm => thumb_ranges(&parsed, raw_entry, &segments, &sections, &marked_starts),
             _ => Vec::new(),
         };
+        let mips16_ranges =
+            if mips16 { thumb_ranges(&parsed, raw_entry, &segments, &sections, &marked_starts) } else { Vec::new() };
         let entry = raw_entry.map(code_address);
         let mut function_starts: Vec<u64> = macho_starts.into_iter().map(code_address).collect();
         let big_endian = !parsed.is_little_endian();
@@ -1040,15 +1081,14 @@ impl Binary {
         let got_functions = crate::slots::mips_got_functions(&parsed, dynamic.as_ref());
         // Constructors and destructors run from the dynamic section, so nothing else may call them.
         let constructors = dynamic.as_ref().map_or(&[][..], |dynamic| dynamic.constructors.as_slice());
+        // MIPS32 code is 4-byte aligned and MIPS16e code pointers are odd; anything else is not a function.
         let mips = matches!(arch, Arch::Mips | Arch::Mips64);
-        function_starts
-            .extend(constructors.iter().filter(|&&start| !(mips && start & 3 != 0)).map(|&start| code_address(start)));
+        let aligned = |start: u64| !mips || start & 3 == 0 || (mips16 && start & 1 == 1);
+        function_starts.extend(constructors.iter().copied().filter(|&start| aligned(start)).map(code_address));
         let xtensa_abi_note =
             (format == Format::Elf && arch == Arch::Xtensa).then(|| elf_xtensa_call0(&parsed)).flatten();
         let xtensa_call0 = xtensa_abi_note == Some(true);
-        let undecoded_isa = (format == Format::Elf && matches!(arch, Arch::Mips | Arch::Mips64))
-            .then(|| elf_mips_compressed_isa(&parsed))
-            .flatten();
+        let undecoded_isa = compressed_isa.filter(|_| !mips16);
         if let Some(isa) = undecoded_isa {
             warnings.push(undecoded_isa_note(isa));
         }
@@ -1098,6 +1138,8 @@ impl Binary {
             elf_m_profile,
             xtensa_call0,
             undecoded_isa,
+            mips16,
+            mips16_ranges,
             raw: None,
             image,
         };
@@ -1165,10 +1207,11 @@ impl Binary {
             arch: self.arch,
             big_endian: self.code_big_endian,
             data_big_endian: self.big_endian,
-            thumb: self.thumb.clone().into(),
+            thumb: if self.mips16 { self.mips16_ranges.clone().into() } else { self.thumb.clone().into() },
             global_pointer: self.global_pointer,
             got: self.got.clone(),
             m_profile: self.m_profile(),
+            mips16: self.mips16,
         }
     }
 
@@ -1940,11 +1983,12 @@ fn elf_mips_compressed_isa(parsed: &object::File) -> Option<&'static str> {
 }
 
 fn undecoded_isa_note(isa: &str) -> String {
+    let what = if isa == "MIPS16e" { "64-bit MIPS16e code" } else { "microMIPS code" };
     format!(
-        "the ELF header marks {isa} code, which rampage does not decode: functions compiled as {isa} (entered \
-         through jalx or an odd address) are not discovered, listed, disassembled or decompiled, symbols at odd \
-         addresses keep their names but seed no function, and calls into them are not followed. Only the MIPS32 \
-         code is analysed, so function lists, call graphs and diffs are incomplete"
+        "the ELF header marks {what}, which rampage does not decode (32-bit MIPS16e is decoded): functions compiled \
+         as {isa} (entered through jalx or an odd address) are not discovered, listed, disassembled or decompiled, \
+         symbols at odd addresses keep their names but seed no function, and calls into them are not followed. Only \
+         the MIPS32 code is analysed, so function lists, call graphs and diffs are incomplete"
     )
 }
 
@@ -1997,8 +2041,12 @@ fn thumb_ranges(
     }
 
     // (start, size, thumb) of every function the file records.
-    let thumb_def =
-        |flags| matches!(flags, SymbolFlags::MachO { n_desc, .. } if n_desc.0 & object::macho::N_ARM_THUMB_DEF.0 != 0);
+    // MIPS ELF also marks MIPS16e functions with `STO_MIPS16` in `st_other`, which is zero there on ARM.
+    let thumb_def = |flags| match flags {
+        SymbolFlags::MachO { n_desc, .. } => n_desc.0 & object::macho::N_ARM_THUMB_DEF.0 != 0,
+        SymbolFlags::Elf { st_other, .. } => st_other.0 & 0xf0 == 0xf0,
+        _ => false,
+    };
     let mut functions: Vec<(u64, u64, bool)> = parsed
         .symbols()
         .chain(parsed.dynamic_symbols())

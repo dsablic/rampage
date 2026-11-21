@@ -202,7 +202,7 @@ impl Project {
         operands: Option<&OperandListingContext>,
     ) -> Result<Vec<DisassemblyLine>, ApiError> {
         let mut decoder = crate::decoder::project_decoder(self)?;
-        if self.binary.arch == rampage_arch::Arch::Arm {
+        if self.binary.has_code_modes() {
             decoder.set_code_modes(&self.analysis()?.program.code_modes);
         }
         let code = self

@@ -10,10 +10,10 @@ use crate::track::{self, Tracker};
 use crate::{Arch, Disassembler, Flow, Insn as Decoded, Target, UnsupportedArch};
 
 pub struct CapstoneDisassembler {
-    target: Target,
-    engine: Capstone,
+    pub(crate) target: Target,
+    pub(crate) engine: Capstone,
     /// Register values known within a straight-line run.
-    tracker: Tracker,
+    pub(crate) tracker: Tracker,
 }
 
 fn engine(arch: Arch, big_endian: bool) -> Option<Capstone> {

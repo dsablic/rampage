@@ -501,7 +501,7 @@
       "source_notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
       "notice": "gcc-15.2.0-COPYING.RUNTIME.txt",
       "notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-      "scope": "crtbegin/crtend linked into tests/fixtures/mips/router-gnu-mips*.elf from Debian libgcc-12-dev-mips-cross; complete GCC Runtime Library Exception 3.1 text, byte-identical; the toolchain archive ships no license files"
+      "scope": "crtbegin/crtend linked into tests/fixtures/mips/router-gnu-mips*.elf and router16-gnu-mips*.elf from Debian libgcc-12-dev-mips-cross; complete GCC Runtime Library Exception 3.1 text, byte-identical; the toolchain archive ships no license files"
     },
     {
       "profile": "fixture-mips-gnu-libgcc-12.2.0-14cross5-mips",
@@ -512,7 +512,7 @@
       "source_notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
       "notice": "gcc-15.2.0-COPYING3.txt",
       "notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
-      "scope": "crtbegin/crtend linked into tests/fixtures/mips/router-gnu-mips*.elf from Debian libgcc-12-dev-mips-cross; complete GNU GPL version 3 text, byte-identical, which the runtime exception modifies"
+      "scope": "crtbegin/crtend linked into tests/fixtures/mips/router-gnu-mips*.elf and router16-gnu-mips*.elf from Debian libgcc-12-dev-mips-cross; complete GNU GPL version 3 text, byte-identical, which the runtime exception modifies"
     },
     {
       "profile": "fixture-mips-gnu-glibc-2.36-8cross2-mips",
@@ -523,7 +523,7 @@
       "source_notice_sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
       "notice": "portable-glibc-2.40-COPYING.LIB.txt",
       "notice_sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
-      "scope": "crt1/crti/crtn linked into tests/fixtures/mips/router-gnu-mips*.elf from Debian libc6-dev-mips-cross; the LGPL-2.1 text, byte-identical to glibc 2.40's COPYING.LIB"
+      "scope": "crt1/crti/crtn linked into tests/fixtures/mips/router-gnu-mips*.elf and router16-gnu-mips*.elf from Debian libc6-dev-mips-cross; the LGPL-2.1 text, byte-identical to glibc 2.40's COPYING.LIB"
     },
     {
       "profile": "fixture-mips-gnu-libgcc-12.2.0-14cross5-mipsel",
@@ -534,7 +534,7 @@
       "source_notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
       "notice": "gcc-15.2.0-COPYING.RUNTIME.txt",
       "notice_sha256": "9d6b43ce4d8de0c878bf16b54d8e7a10d9bd42b75178153e3af6a815bdc90f74",
-      "scope": "crtbegin/crtend linked into tests/fixtures/mips/router-gnu-mipsel*.elf from Debian libgcc-12-dev-mipsel-cross; complete GCC Runtime Library Exception 3.1 text, byte-identical; the toolchain archive ships no license files"
+      "scope": "crtbegin/crtend linked into tests/fixtures/mips/router-gnu-mipsel*.elf, router16-gnu-mipsel*.elf and libmips16-gnu-mipsel*.so from Debian libgcc-12-dev-mipsel-cross; complete GCC Runtime Library Exception 3.1 text, byte-identical; the toolchain archive ships no license files"
     },
     {
       "profile": "fixture-mips-gnu-libgcc-12.2.0-14cross5-mipsel",
@@ -545,7 +545,7 @@
       "source_notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
       "notice": "gcc-15.2.0-COPYING3.txt",
       "notice_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
-      "scope": "crtbegin/crtend linked into tests/fixtures/mips/router-gnu-mipsel*.elf from Debian libgcc-12-dev-mipsel-cross; complete GNU GPL version 3 text, byte-identical, which the runtime exception modifies"
+      "scope": "crtbegin/crtend linked into tests/fixtures/mips/router-gnu-mipsel*.elf, router16-gnu-mipsel*.elf and libmips16-gnu-mipsel*.so from Debian libgcc-12-dev-mipsel-cross; complete GNU GPL version 3 text, byte-identical, which the runtime exception modifies"
     },
     {
       "profile": "fixture-mips-gnu-glibc-2.36-8cross2-mipsel",
@@ -556,7 +556,7 @@
       "source_notice_sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
       "notice": "portable-glibc-2.40-COPYING.LIB.txt",
       "notice_sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
-      "scope": "crt1/crti/crtn linked into tests/fixtures/mips/router-gnu-mipsel*.elf from Debian libc6-dev-mipsel-cross; the LGPL-2.1 text, byte-identical to glibc 2.40's COPYING.LIB"
+      "scope": "crt1/crti/crtn linked into tests/fixtures/mips/router-gnu-mipsel*.elf, router16-gnu-mipsel*.elf and libmips16-gnu-mipsel*.so from Debian libc6-dev-mipsel-cross; the LGPL-2.1 text, byte-identical to glibc 2.40's COPYING.LIB"
     }
   ]
 }

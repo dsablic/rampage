@@ -664,6 +664,9 @@ fn explore(
                 refs.accessed.push(code);
             } else if memory.is_executable(code) && memory.may_point_to_code(target) {
                 refs.pointers.push(code);
+                if let Some(mode) = memory.code_pointer_mode(target) {
+                    refs.modes.push((insn.address, code, mode));
+                }
             }
         }
     };
@@ -764,10 +767,11 @@ fn explore(
                 break;
             };
             // MIPS and SPARC execute the instruction after a branch before the branch takes effect: it belongs to
-            // the branch's block, and execution falls through past it.
-            if delay_slots > 0 && !matches!(insn.flow, Flow::Next | Flow::Invalid | Flow::Halt) {
+            // the branch's block, and execution falls through past it. MIPS16e branches and compact jumps have none.
+            let slots = decoder.instruction_delay_slots().unwrap_or(delay_slots);
+            if slots > 0 && !matches!(insn.flow, Flow::Next | Flow::Invalid | Flow::Halt) {
                 let mut gated_slot = false;
-                for _ in 0..delay_slots {
+                for _ in 0..slots {
                     let Some(bytes) = memory.code_from(next) else { break };
                     let slot = decoder.decode_with_memory(bytes, next, &|at, size| memory.read_pointer(at, size));
                     let gate = decoder.decode_gate();
@@ -904,7 +908,8 @@ fn explore(
     // An address the function also loads from is data, such as a literal pool `adr` points at.
     let end = function.end();
     let is_local_jump_base = |target: u64| start < target && target <= end && jump_bases.contains(&target);
-    let CodeRefs { pointers, accessed } = code_refs;
+    let CodeRefs { pointers, accessed, modes } = code_refs;
+    mode_hints.extend(modes);
     new_seeds.extend(pointers.into_iter().filter(|&target| !is_local_jump_base(target) && !accessed.contains(&target)));
     Explored {
         decode_gates,
@@ -941,6 +946,8 @@ impl Explored {
 struct CodeRefs {
     pointers: Vec<u64>,
     accessed: Vec<u64>,
+    /// The instruction-set mode a code pointer names, with the instruction it came from: (from, code, mode).
+    modes: Vec<(u64, u64, bool)>,
 }
 
 /// Whether a branch joins the straight-line run from `table`'s comparison to the jump at `jump`, along which the

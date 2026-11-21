@@ -51,10 +51,12 @@ the GCC Runtime Library Exception, which permits distributing compiled programs)
 `crates/rampage-signatures/data/notices`.
 
 The GNU-toolchain MIPS fixtures (`tests/fixtures/mips/router-gnu-*.elf`) exist because only GNU ld makes the
-lazy-binding `.MIPS.stubs` real router userlands have. `tests/fixtures/mips/build-gnu.sh` builds them with
-Debian's MIPS cross GCC at pinned package versions in a digest-pinned `gcc` image, and they link GCC's
-crtbegin/crtend (GPLv3 with the GCC Runtime Library Exception) and glibc's crt1/crti/crtn (LGPL-2.1 with its
-linking exception), whose notices are recorded in the same index.
+lazy-binding `.MIPS.stubs` real router userlands have, and the MIPS16e ones (`router16-gnu-*.elf`,
+`libmips16-gnu-mipsel*.so`) because OpenWrt builds most programs with GCC's `-mips16`.
+`tests/fixtures/mips/build-gnu.sh` and `build-mips16.sh` build them with Debian's MIPS cross GCC at pinned package
+versions in a digest-pinned `gcc` image, and they link GCC's crtbegin/crtend (GPLv3 with the GCC Runtime Library
+Exception) and glibc's crt1/crti/crtn (LGPL-2.1 with its linking exception), whose notices are recorded in the
+same index.
 
 The Xtensa fixtures (`tests/fixtures/xtensa`) are built by `build.sh` with Espressif's `xtensa-esp-elf` GCC (the
 release tarball pinned by SHA-256, downloaded outside the repository) and Debian's `gcc-xtensa-lx106`, in the same

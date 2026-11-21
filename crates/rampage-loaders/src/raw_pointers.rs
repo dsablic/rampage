@@ -358,6 +358,7 @@ impl<'a> Judge<'a> {
         let target = Target {
             thumb: Arc::from(std::iter::once(base..end).collect::<Vec<_>>()),
             m_profile: true,
+            mips16: false,
             ..Target::new(Arch::Arm)
         };
         let decoder = rampage_arch::decoder(&target).expect("the native ARM decoder is always available");

@@ -806,9 +806,12 @@ struct Run<'a> {
     decoder: SleighDecoder,
     machine: Machine<ImageRam<'a>>,
     cache: HashMap<(u64, bool), Rc<Decoded>>,
-    /// ARM: whether the next instruction is Thumb, the decoder's current TMode and the TB register.
+    /// ARM and MIPS16e images: whether the next instruction is in the alternate instruction set (Thumb, MIPS16e),
+    /// the decoder's current mode, the context variable that selects it (`TMode`, `ISA_MODE`) and the register an
+    /// interworking branch records the new mode in (`TB`, `ISAModeSwitch`).
     thumb: bool,
     decoder_thumb: bool,
+    mode_variable: &'static str,
     mode_switch: Option<RegisterStorage>,
     /// The decoder's register space, and trace labels by (offset, size).
     register_space: u32,
@@ -851,7 +854,7 @@ impl Run<'_> {
             return Ok(Rc::clone(decoded));
         }
         if self.decoder_thumb != self.thumb {
-            self.decoder.set_context_variable("TMode", u32::from(self.thumb));
+            self.decoder.set_context_variable(self.mode_variable, u32::from(self.thumb));
             self.decoder_thumb = self.thumb;
         }
         let mut bytes = Vec::with_capacity(16);
@@ -1331,9 +1334,26 @@ impl Project {
 
         let thumb = binary.arch == Arch::Arm
             && (entry & 1 == 1 || binary.thumb.iter().any(|range| range.contains(&(entry & !1))));
-        let entry = if binary.arch == Arch::Arm { entry & !1 } else { entry };
-        // Ghidra's ARM semantics record an interworking branch's instruction set in TB.
-        let mode_switch = if binary.arch == Arch::Arm { decoder.register("TB") } else { None };
+        // A MIPS16e entry: an odd address, a symbol's MIPS16e range, or the mode discovery learned there.
+        let mips16 = binary.mips16() && {
+            let even = entry & !1;
+            let learned = || {
+                self.analysis().is_ok_and(|analysis| {
+                    let modes = &analysis.program.code_modes;
+                    modes.binary_search_by_key(&even, |&(at, _)| at).is_ok_and(|index| modes[index].1)
+                })
+            };
+            entry & 1 == 1 || binary.mips16_ranges().iter().any(|range| range.contains(&even)) || learned()
+        };
+        let thumb = thumb || mips16;
+        let entry = if binary.has_code_modes() { entry & !1 } else { entry };
+        // Ghidra's ARM semantics record an interworking branch's instruction set in TB, its MIPS ones in
+        // ISAModeSwitch.
+        let (mode_variable, mode_switch) = match binary.arch {
+            Arch::Arm => ("TMode", decoder.register("TB")),
+            Arch::Mips if binary.mips16() => ("ISA_MODE", decoder.register("ISAModeSwitch")),
+            _ => ("TMode", None),
+        };
         let mut decoder = decoder;
         if binary.arch == Arch::Arm {
             // Thumb IT blocks set the following instructions' conditions through context commits.
@@ -1346,6 +1366,7 @@ impl Project {
             cache: HashMap::new(),
             thumb,
             decoder_thumb: false,
+            mode_variable,
             mode_switch,
             register_space: space_ids.register,
             labels: HashMap::new(),

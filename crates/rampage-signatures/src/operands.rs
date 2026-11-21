@@ -221,6 +221,7 @@ mod tests {
             global_pointer: None,
             got: None,
             m_profile: false,
+            mips16: false,
         }
     }
 

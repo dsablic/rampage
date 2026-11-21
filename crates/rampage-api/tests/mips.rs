@@ -191,33 +191,53 @@ fn the_got_is_found_without_section_headers() {
     assert!(from.contains(&main), "{from:?}");
 }
 
-/// OpenWrt builds most programs as MIPS16e, which rampage does not decode: an ELF header that marks MIPS16e
-/// (`EF_MIPS_ARCH_ASE_M16`) or microMIPS makes `binary_info` warn and `list_functions` say so, rather than leaving a
-/// short function list to read as the whole program. The fixture is router-mips.elf with only that flag set.
+/// MIPS16e in a 32-bit image is decoded (see mips16.rs). microMIPS, and MIPS16e in a 64-bit image, are not: their
+/// ELF header flag (`EF_MIPS_MICROMIPS`, or `EF_MIPS_ARCH_ASE_M16` on MIPS64) makes `binary_info` warn and
+/// `list_functions` say so, rather than leaving a short function list to read as the whole program. The fixtures
+/// are router-mips.elf and router-mips64.elf with only that flag set.
 #[test]
 fn compressed_instruction_sets_are_reported_as_not_decoded() {
     let plain = project("router-mips");
     assert_eq!(plain.binary.undecoded_isa(), None);
+    let plain_total = plain.functions_page(&rampage_api::FunctionsQuery::default()).unwrap().page.total;
     assert!(plain.functions_page(&rampage_api::FunctionsQuery::default()).unwrap().note.is_none());
-    let bytes = std::fs::read(format!("{DIR}router-mips.elf")).unwrap();
-    for (flag, isa) in [(0x0400_0000u32, "MIPS16e"), (0x0200_0000, "microMIPS")] {
-        let mut flagged = bytes.clone();
-        // e_flags of a big-endian ELF32 header.
-        let flags = u32::from_be_bytes(flagged[0x24..0x28].try_into().unwrap()) | flag;
-        flagged[0x24..0x28].copy_from_slice(&flags.to_be_bytes());
-        let project = Project::new(Binary::from_owned_native_bytes(flagged, rampage_arch::Arch::Mips).unwrap());
+    let flagged = |name: &str, flag: u32, big_endian: bool| {
+        let mut bytes = std::fs::read(format!("{DIR}{name}.elf")).unwrap();
+        // e_flags of a 32-bit (0x24) or 64-bit (0x30) ELF header.
+        let at = if bytes[4] == 2 { 0x30 } else { 0x24 };
+        let word: [u8; 4] = bytes[at..at + 4].try_into().unwrap();
+        let flags = if big_endian { u32::from_be_bytes(word) } else { u32::from_le_bytes(word) } | flag;
+        bytes[at..at + 4].copy_from_slice(&if big_endian { flags.to_be_bytes() } else { flags.to_le_bytes() });
+        let arch = if bytes[4] == 2 { rampage_arch::Arch::Mips64 } else { rampage_arch::Arch::Mips };
+        Project::new(Binary::from_owned_native_bytes(bytes, arch).unwrap())
+    };
+    for (name, flag, isa, what) in [
+        ("router-mips", 0x0200_0000u32, "microMIPS", "microMIPS code"),
+        ("router-mips64", 0x0400_0000, "MIPS16e", "64-bit MIPS16e code"),
+    ] {
+        let project = flagged(name, flag, true);
         assert_eq!(project.binary.undecoded_isa(), Some(isa));
-        let warning = format!("marks {isa} code, which rampage does not decode");
+        assert!(!project.binary.mips16());
+        let warning = format!("marks {what}, which rampage does not decode");
         assert!(project.binary.warnings.iter().any(|text| text.contains(&warning)), "{:?}", project.binary.warnings);
         let page = project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap();
         assert!(page.note.as_deref().is_some_and(|note| note.contains(&warning)), "{:?}", page.note);
         // The MIPS32 code is still analysed.
         assert!(page.page.total > 0);
     }
+    // The MIPS16e flag on a 32-bit image turns MIPS16e decoding on, with no warning; a program with no MIPS16e code
+    // analyses as before.
+    let project = flagged("router-mips", 0x0400_0000, true);
+    assert!(project.binary.mips16() && project.binary.undecoded_isa().is_none());
+    assert!(project.binary.warnings.iter().all(|text| !text.contains("does not decode")));
+    let page = project.functions_page(&rampage_api::FunctionsQuery::default()).unwrap();
+    assert!(page.note.is_none(), "{:?}", page.note);
+    assert_eq!(page.page.total, plain_total);
 }
 
-/// Review: a MIPS16e or microMIPS function symbol carries the ISA bit (an odd address). It must not seed a function
-/// whose bytes are then decoded as MIPS32. The fixture is router-mips-sym.elf with `scale_add`'s symbol made odd.
+/// Review: a MIPS16e or microMIPS function symbol carries the ISA bit (an odd address). In an image whose header
+/// does not mark MIPS16e it must not seed a function whose bytes are then decoded as MIPS32. The fixture is
+/// router-mips-sym.elf with `scale_add`'s symbol made odd.
 #[test]
 fn odd_mips_symbols_seed_no_function() {
     let mut bytes = std::fs::read(format!("{DIR}router-mips-sym.elf")).unwrap();

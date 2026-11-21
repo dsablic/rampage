@@ -42,11 +42,22 @@ pub fn from_symbols(binary: &Binary) -> Vec<Function> {
     let exports = binary.exports.iter().map(|export| (export.address, 0, export.name.as_str()));
     let entry = binary.entry.map(|entry| (entry, 0, "entry"));
 
-    // MIPS32 code is 4-byte aligned; a MIPS symbol, export or entry with the low bits set (the ISA bit GNU tools
-    // set) names MIPS16e or microMIPS code, which is not decoded, so it seeds nothing rather than MIPS32 garbage.
+    // MIPS32 code is 4-byte aligned. In a MIPS16e image the loader has cleared the ISA bit GNU tools set on MIPS16e
+    // functions, which are 2-byte aligned. Elsewhere (microMIPS) a symbol, export or entry with the low bits set
+    // names code that is not decoded, so it seeds nothing rather than MIPS32 garbage.
     let mips = matches!(binary.arch, rampage_arch::Arch::Mips | rampage_arch::Arch::Mips64);
+    let misaligned = |address: u64| match (mips, binary.mips16()) {
+        (false, _) => false,
+        (true, true) => {
+            let ranges = binary.mips16_ranges();
+            let index = ranges.partition_point(|range| range.start <= address);
+            let in_mips16 = index > 0 && address < ranges[index - 1].end;
+            address & 1 != 0 || (address & 3 == 2 && !in_mips16)
+        }
+        (true, false) => address & 3 != 0,
+    };
     for (address, size, name) in symbols.chain(exports).chain(entry) {
-        if !binary.is_code(address) || (mips && address & 3 != 0) {
+        if !binary.is_code(address) || misaligned(address) {
             continue;
         }
         by_address

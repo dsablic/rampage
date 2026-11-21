@@ -270,8 +270,8 @@ pub struct FunctionsPage {
     /// Raw projects whose discovery found very few functions for their code: what to try next.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
-    /// Code in an instruction set rampage does not decode (MIPS16e, microMIPS), and Raw projects whose pointer-table
-    /// scan ran automatically because discovery was sparse: what ran and why.
+    /// Code in an instruction set rampage does not decode (microMIPS, 64-bit MIPS16e), and Raw projects whose
+    /// pointer-table scan ran automatically because discovery was sparse: what ran and why.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }

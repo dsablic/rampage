@@ -352,6 +352,7 @@ mod tests {
             global_pointer: None,
             got: None,
             m_profile: false,
+            mips16: false,
         };
         let image = rampage_signatures::MaskContext::default();
         assert_eq!(database.identify_in(&target, &image, &body, 0x401000), Some("inflate"));
@@ -400,6 +401,7 @@ mod tests {
             global_pointer: None,
             got: None,
             m_profile: false,
+            mips16: false,
         }
     }
 

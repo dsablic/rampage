@@ -34,7 +34,7 @@ pub use metrics::{
 pub const MAX_REQUEST_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_STDOUT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_STDERR_BYTES: usize = 64 * 1024;
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 
 /// Parent-owned cleanup proof, independent of result category and diagnostic metrics. Confirmed covers
 /// the supported owned group and direct-root reap, not descendants outside the supervisor's group boundary.
@@ -125,6 +125,7 @@ pub struct WorkerMapping {
 #[serde(deny_unknown_fields)]
 pub struct WorkerCodeMode {
     pub address: u64,
+    /// The alternate instruction set from here on: Thumb on 32-bit ARM, MIPS16e on MIPS (since protocol 16).
     pub thumb: bool,
 }
 

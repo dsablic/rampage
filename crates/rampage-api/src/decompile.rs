@@ -618,7 +618,7 @@ impl Project {
         }
         let options = slot.options.clone().unwrap_or_else(|| default_options(&self.binary));
         let decompiler = slot.engine.as_mut().expect("just built");
-        let thumb = if self.binary.arch == rampage_arch::Arch::Arm {
+        let thumb = if self.binary.has_code_modes() {
             context::mode_at(&self.binary.target(), &self.analysis()?.program.code_modes, start)
         } else {
             false
@@ -702,7 +702,7 @@ impl Project {
             decompiler.data_organization(),
             decompiler.language_id(),
         )?;
-        if binary.arch == rampage_arch::Arch::Arm {
+        if binary.has_code_modes() {
             let modes = context::arm_points(binary, &self.analysis()?.program.code_modes);
             decompiler.set_code_modes(&modes).map_err(|error| ApiError::Unavailable(error.to_string()))?;
         }
@@ -868,7 +868,7 @@ impl Project {
             Some(address),
             context.admitted,
         )?;
-        let thumb = self.binary.arch == rampage_arch::Arch::Arm
+        let thumb = self.binary.has_code_modes()
             && context::mode_at(&self.binary.target(), &self.analysis()?.program.code_modes, address);
         let code = engine.decompile(address, &name, thumb).map_err(native_decompile_error)?;
         if cancellation.load(std::sync::atomic::Ordering::Relaxed) {

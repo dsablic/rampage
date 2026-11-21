@@ -6,6 +6,8 @@ mod cs;
 mod flow;
 pub mod hex;
 pub mod ir;
+mod mips;
+mod mips16;
 mod mrs;
 mod operand;
 pub mod registers;
@@ -215,7 +217,8 @@ pub struct Target {
     pub big_endian: bool,
     /// The byte order of data, such as literal pools within code.
     pub data_big_endian: bool,
-    /// ARM only: the sorted address ranges that hold Thumb (T32) code.
+    /// The sorted address ranges that hold code in the alternate instruction set: Thumb (T32) on ARM, MIPS16e on
+    /// MIPS (when [`Target::mips16`] is set).
     pub thumb: std::sync::Arc<[std::ops::Range<u64>]>,
     /// The value the ABI keeps in its global-pointer register (MIPS `$gp`, PowerPC64 `r2`, RISC-V `gp`), through
     /// which position-independent code reaches its GOT and data.
@@ -225,6 +228,9 @@ pub struct Target {
     /// ARM only: an ARMv6-M/ARMv7-M(E) processor. All its code is Thumb, there is no A32 state to switch to, and
     /// A-profile-only instructions are UNDEFINED while the M-profile system-register moves decode.
     pub m_profile: bool,
+    /// MIPS only: the image may hold MIPS16e code, which odd code addresses, `jalx` and [`Target::thumb`] select.
+    /// Without it, `jalx` targets are not followed (a microMIPS image, a Raw MIPS image).
+    pub mips16: bool,
 }
 
 /// Pointer-sized entries starting at `address`, as stored in the file (before dynamic relocation).
@@ -277,6 +283,7 @@ impl Target {
             global_pointer: None,
             got: None,
             m_profile: false,
+            mips16: false,
         }
     }
 
@@ -566,6 +573,11 @@ pub trait Disassembler {
     fn delay_slots(&self) -> u8 {
         0
     }
+    /// The delay slots of the transfer just decoded, where they differ by instruction (MIPS16e branches and compact
+    /// jumps have none, its other jumps one); `None` means [`Disassembler::delay_slots`].
+    fn instruction_delay_slots(&self) -> Option<u8> {
+        None
+    }
     /// Renders one instruction as assembly text.
     fn format(&mut self, bytes: &[u8], address: u64) -> String;
 }
@@ -587,6 +599,7 @@ pub fn decoder(target: &Target) -> Result<Box<dyn Disassembler>, UnsupportedArch
         Arch::Aarch64 => Ok(Box::new(a64::A64Disassembler::default())),
         Arch::Arm => Ok(Box::new(aarch32::Aarch32Disassembler::new(target))),
         Arch::Xtensa if !target.big_endian => Ok(Box::new(xtensa::XtensaDisassembler::new())),
+        Arch::Mips if target.mips16 => Ok(Box::new(mips::MipsDisassembler::new(target)?)),
         _ => cs::CapstoneDisassembler::new(target).map(|decoder| Box::new(decoder) as Box<dyn Disassembler>),
     }
 }

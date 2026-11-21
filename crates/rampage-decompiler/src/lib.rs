@@ -911,16 +911,17 @@ impl Decompiler {
         }
     }
 
-    /// Installs ARM context boundaries, which need not be aligned instruction addresses.
+    /// Installs instruction-set context boundaries (Thumb on 32-bit ARM, MIPS16e on 32-bit MIPS), which need not be
+    /// aligned instruction addresses.
     pub fn set_code_modes(&mut self, modes: &[(u64, bool)]) -> Result<(), Error> {
         if modes.is_empty() {
             return Ok(());
         }
-        if self.arch != Arch::Arm
+        if !matches!(self.arch, Arch::Arm | Arch::Mips)
             || modes.iter().any(|&(address, _)| address > u64::from(u32::MAX))
             || modes.windows(2).any(|pair| pair[0].0 >= pair[1].0)
         {
-            return Err(Error::Ghidra("mode points require sorted, unique ARM context boundaries".to_owned()));
+            return Err(Error::Ghidra("mode points require sorted, unique ARM or MIPS context boundaries".to_owned()));
         }
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
         for batch in modes.chunks(4096) {
@@ -937,7 +938,8 @@ impl Decompiler {
     }
 
     /// Decompiles the function at `address` to C. `name`, when non-empty, is used as the function's name.
-    /// `thumb` decodes the function as Thumb on 32-bit ARM; it is ignored on other targets.
+    /// `thumb` decodes the function in the alternate instruction set: Thumb on 32-bit ARM, MIPS16e on 32-bit MIPS; it
+    /// is ignored on other targets.
     pub fn decompile(&mut self, address: u64, name: &str, thumb: bool) -> Result<String, Error> {
         let name = CString::new(name).unwrap_or_default();
         let _guard = FFI_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());

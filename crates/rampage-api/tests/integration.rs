@@ -59,6 +59,7 @@ mod go_types;
 mod jumptable;
 mod lock_mechanisms;
 mod mips;
+mod mips16;
 mod module_references;
 mod packs;
 mod patch_frontends;

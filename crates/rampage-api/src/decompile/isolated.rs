@@ -150,13 +150,13 @@ fn run(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let modes = if binary.arch == rampage_arch::Arch::Arm {
+    let modes = if binary.has_code_modes() {
         context::arm_points(binary, &project.analysis()?.program.code_modes)
     } else {
         Vec::new()
     };
-    let thumb = binary.arch == rampage_arch::Arch::Arm
-        && context::mode_at(&binary.target(), &project.analysis()?.program.code_modes, address);
+    let thumb =
+        binary.has_code_modes() && context::mode_at(&binary.target(), &project.analysis()?.program.code_modes, address);
     crate::debug_layout_import::validate_replay_source(project, annotations)?;
     let mut operations = symbols::plan(project, annotations)?;
     if type_query.is_none() && symbols::requires_import_context(&operations) {

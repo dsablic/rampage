@@ -2706,19 +2706,35 @@ void rampage_decomp_data_organization(void *h, int32_t *pointerSize, int32_t *in
     *longSize = handle->arch->types->getSizeOfLong();
 }
 
+// The context variable that selects a language's alternate instruction set: ARM's TMode (Thumb) or MIPS's
+// ISA_MODE (MIPS16e, as the bundled processor specification sets RELP). Null when the language has neither.
+static const char *alternateIsaVariable(Architecture *arch) {
+    if (arch == nullptr || arch->context == nullptr) return nullptr;
+    for (const char *name : {"TMode", "ISA_MODE"}) {
+        try {
+            arch->context->getVariable(name, Address(arch->getDefaultCodeSpace(), 0));
+            return name;
+        } catch (const LowlevelError &) {}
+    }
+    return nullptr;
+}
+
 const char *rampage_decomp_set_modes(void *h, size_t count, const uint64_t *addresses, const uint8_t *thumb) noexcept {
     Handle *handle = static_cast<Handle *>(h);
     return mutate(handle, [&](bool &nativeMutation) {
+        const char *variable = alternateIsaVariable(handle->arch);
+        if (variable == nullptr) return;
         for (size_t i = 0; i < count; ++i) {
             Address address(handle->arch->getDefaultCodeSpace(), addresses[i]);
             nativeMutation = true;
-            handle->arch->context->setVariable("TMode", address, thumb[i] != 0 ? 1 : 0);
+            handle->arch->context->setVariable(variable, address, thumb[i] != 0 ? 1 : 0);
         }
     });
 }
 
-// Decompiles the function at `addr` to C. When `thumb` is set and the target has a TMode context variable
-// (32-bit ARM), the function is decoded as Thumb. Returns a malloc'd string the caller frees, or null on failure.
+// Decompiles the function at `addr` to C. When `thumb` is set and the target has an alternate instruction set
+// (ARM's TMode, MIPS's ISA_MODE), the function is decoded in it: Thumb or MIPS16e. Returns a malloc'd string the
+// caller frees, or null on failure.
 char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t thumb) noexcept {
     Handle *handle = static_cast<Handle *>(h);
     if (handle->arch == nullptr || handle->poisoned) return nullptr;
@@ -2732,13 +2748,9 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
     handle->results.clear();
     try {
         Address entry(arch->getDefaultCodeSpace(), addr);
-        if (arch->context != nullptr) {
-            try {
-                nativeMutation = true;
-                arch->context->setVariable("TMode", entry, thumb != 0 ? 1 : 0);
-            } catch (LowlevelError &) {
-                // The target has no TMode variable; nothing to set.
-            }
+        if (const char *variable = alternateIsaVariable(arch)) {
+            nativeMutation = true;
+            arch->context->setVariable(variable, entry, thumb != 0 ? 1 : 0);
         }
         nativeMutation = true;
         handle->arch->resetTranslationCache();
@@ -2807,9 +2819,9 @@ char *rampage_decomp_function(void *h, uint64_t addr, const char *name, uint8_t 
                 try {
                     for (uintb target : needed) {
                         uint8_t contextThumb = 0;
-                        if (arch->context != nullptr) {
+                        if (const char *variable = alternateIsaVariable(arch)) {
                             try {
-                                contextThumb = arch->context->getVariable("TMode",
+                                contextThumb = arch->context->getVariable(variable,
                                     Address(arch->getDefaultCodeSpace(), target)) != 0;
                             } catch (const LowlevelError &) {}
                         }

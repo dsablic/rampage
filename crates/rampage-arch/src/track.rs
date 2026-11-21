@@ -109,7 +109,7 @@ fn wrap_native(value: u64, width: Option<TargetWidth>) -> Option<u64> {
     }
 }
 
-fn register_named(engine: &Capstone, name: &str) -> Option<u16> {
+pub(crate) fn register_named(engine: &Capstone, name: &str) -> Option<u16> {
     (1..1024u16).find(|&id| engine.reg_name(RegId(id)).as_deref() == Some(name))
 }
 
@@ -176,6 +176,31 @@ impl Tracker {
     pub(crate) fn begin_function(&mut self, entry: u64) {
         self.begin_run();
         self.at_entry = self.entry_register.map(|_| entry);
+    }
+
+    /// The value a register is known to hold, and whether it is certainly an address.
+    pub(crate) fn value(&self, register: u16) -> Option<(u64, bool)> {
+        self.get(register).map(|value| (value.value, value.address))
+    }
+
+    /// Records that `register` now holds `value` (an address formed or loaded by an instruction the caller
+    /// decoded itself, such as a MIPS16e PC-relative one), after [`Tracker::step`] has forgotten its old value.
+    /// A register found to hold the global pointer keeps it for the rest of the function, as in [`Tracker::step`].
+    pub(crate) fn assign(&mut self, register: u16, value: u64, address: bool) {
+        let value = Value { value, address };
+        self.set(register, value);
+        if let Some(wrapped) = self.wrap(value.value) {
+            let value = Value { value: wrapped, address };
+            if self.is_global_pointer(value) {
+                self.sticky.push((register, value));
+            }
+        }
+    }
+
+    /// A call without a delay slot (MIPS16e `jalrc`) has returned: caller-saved registers have changed already.
+    pub(crate) fn call_returned(&mut self) {
+        self.forget_after = None;
+        self.forget_call();
     }
 
     /// A call: caller-saved registers change, so only the callee-saved function-wide values stay.

@@ -18,6 +18,11 @@ pub trait Memory: Sync {
     fn may_point_to_code(&self, _address: u64) -> bool {
         true
     }
+    /// The instruction-set mode a code pointer to `address` names, when its low bit says (MIPS16e code pointers are
+    /// odd); `None` leaves the mode to what discovery otherwise knows.
+    fn code_pointer_mode(&self, _address: u64) -> Option<bool> {
+        None
+    }
     fn read_pointer(&self, _address: u64, _size: u8) -> Option<u64> {
         None
     }
@@ -58,7 +63,11 @@ impl Memory for Binary {
     }
 
     fn code_address(&self, address: u64) -> u64 {
-        if self.arch == rampage_arch::Arch::Arm { address & !1 } else { address }
+        if self.arch == rampage_arch::Arch::Arm || self.mips16() { address & !1 } else { address }
+    }
+
+    fn code_pointer_mode(&self, address: u64) -> Option<bool> {
+        (self.mips16() && address & 1 == 1).then_some(true)
     }
 
     /// M-profile code (a Cortex-M Raw image or an M-profile ELF) is all Thumb, mixed with constant data. An even
@@ -68,6 +77,11 @@ impl Memory for Binary {
     /// Xtensa functions are 4-byte aligned, and a windowed-ABI one (ESP32) opens with `entry a1, frame`; ESP firmware
     /// keeps strings and tables in executable flash too, so a literal pointing elsewhere is data.
     fn may_point_to_code(&self, address: u64) -> bool {
+        // MIPS32 functions are 4-byte aligned and MIPS16e code pointers odd; an odd one that starts a string is the
+        // string.
+        if self.mips16() {
+            return if address & 1 == 1 { !starts_text(self, address) } else { address & 3 == 0 };
+        }
         if self.arch == rampage_arch::Arch::Xtensa {
             if !address.is_multiple_of(4) || starts_text(self, address) {
                 return false;
