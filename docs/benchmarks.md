@@ -13,6 +13,7 @@ internal milestone numbers they were recorded under.
 
 | Report | Contents |
 | --- | --- |
+| [Suite v4 with radare2's MCP server (Haiku)](benchmarks/r2mcp-haiku-2026-11-21.md) | One `claude-haiku-5-5` pass of suite v4 through r2mcp 1.9.0 (radare2 6.2.6, r2ghidra), beside rampage 1.10.0's: 10/20 against 17/20 strict, most of r2mcp's misses being tools its default set leaves out. |
 | [Flywheel headroom](benchmarks/flywheel-headroom-2026-11-21.md) | What library identification, embedded library identification and parameter type classes still miss, how much of it is reachable, and how much a trivial baseline or one-feature miner takes; picks libid for the unattended code loop. |
 | [Acceptance pass on independently built inputs](benchmarks/acceptance-2026-11-20.md) | The 2026-11-20 acceptance set: OpenWrt, MicroPython ESP32/ESP8266, Debian zlib for mipsel and an F-Droid APK pair through the MCP tools, plus eight Haiku tasks; 17 of 20 checks pass after the fixes it led to. |
 | [Head-to-head suite v3: rampage vs REA](benchmarks/agent-h2h-v3-2026-11-14.md) | 21 tasks (calling conventions, Go, MSVC C++, semantics, switch tables, SQLite symbols, typing) × 3 through `claude-sonnet-5-5`, on the 1.0.0 feature set. |
