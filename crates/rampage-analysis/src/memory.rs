@@ -78,10 +78,14 @@ impl Memory for Binary {
     /// Xtensa functions are 4-byte aligned, and a windowed-ABI one (ESP32) opens with `entry a1, frame`; ESP firmware
     /// keeps strings and tables in executable flash too, so a literal pointing elsewhere is data.
     fn may_point_to_code(&self, address: u64) -> bool {
-        // MIPS32 functions are 4-byte aligned and MIPS16e code pointers odd. Strings share the executable segment
-        // (and MIPS16e literal pools hold their addresses), so a pointer that starts one is the string.
+        // MIPS32 functions are 4-byte aligned and MIPS16e code pointers odd. Strings share the executable segment of
+        // MIPS userland programs (and MIPS16e literal pools hold their addresses), so a pointer that starts one is
+        // the string.
         if self.mips16() {
             return (address & 1 == 1 || address & 3 == 0) && !starts_text(self, address);
+        }
+        if matches!(self.arch, rampage_arch::Arch::Mips | rampage_arch::Arch::Mips64) {
+            return !starts_text(self, address);
         }
         if self.arch == rampage_arch::Arch::Xtensa {
             if !address.is_multiple_of(4) || starts_text(self, address) {
