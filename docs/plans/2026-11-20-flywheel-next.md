@@ -1,7 +1,10 @@
 # Flywheel: how to proceed (2026-11-20)
 
-Status: decided 2026-11-20 (the maintainer delegated the three choices; they are recorded at the end), not
-started. It replaces the open decision in
+Status: decided 2026-11-20 (the maintainer delegated the three choices; they are recorded at the end). Steps 1
+and 2 done 2026-11-21: row proposals are recorded as a null result in the docs, and the
+[headroom measurement](../benchmarks/flywheel-headroom-2026-11-21.md) picks library identification as step 3's
+first target (20,497 reachable dev misses no baseline or miner takes; firmware and types are smaller or less
+firm). It replaces the open decision in
 [the code-candidates proposal](2026-11-08-flywheel-code-candidates.md) and builds on the record in
 [the fast-loop plan](2026-11-05-flywheel-fast-loop.md).
 

@@ -35,7 +35,7 @@ use serde_json::json;
 
 const RUNTIME: &str = "runtime";
 
-/// The baselines precise enough to pass the gate's allowance on dev (about one false positive per 100 names).
+/// The matchers built for the gate (the arm and fuzzy), as against the one-feature miners.
 const PRECISE: [&str; 3] = ["arm", "fuzzy", "fuzzy+propagation"];
 
 /// A one-feature rule table: feature value → (names seen, builds seen).
