@@ -270,6 +270,15 @@ impl Sandbox {
         for path in &self.protect {
             text.push_str(&format!("(deny file-write* (subpath {}))\n", quote(path)));
         }
+        // The allowed paths' ancestors may be looked up (stat, realpath) but not listed or read: cargo and the
+        // loaders canonicalize paths, which walks every component.
+        let mut ancestors: Vec<&Path> = self.allow.iter().flat_map(|path| path.ancestors().skip(1)).collect();
+        ancestors.retain(|ancestor| ancestor.parent().is_some());
+        ancestors.sort();
+        ancestors.dedup();
+        for ancestor in ancestors {
+            text.push_str(&format!("(allow file-read-metadata (literal {}))\n", quote(ancestor)));
+        }
         for path in &self.allow {
             text.push_str(&format!("(allow file-read* file-write* (subpath {}))\n", quote(path)));
         }
@@ -494,6 +503,9 @@ mod tests {
         let allow = profile.find("(allow file-read* file-write* (subpath \"/data/flywheel/code-runs/x/views/train\"))");
         assert!(deny < protect && protect < allow.unwrap(), "{profile}");
         assert!(profile.contains("\"/odd\\\"path\""), "{profile}");
+        // Ancestors of an allowed path can be looked up, not read.
+        assert!(profile.contains("(allow file-read-metadata (literal \"/data/flywheel/code-runs\"))"), "{profile}");
+        assert!(!profile.contains("(literal \"/\")"), "{profile}");
         assert!(profile.starts_with("(version 1)\n(allow default)\n"));
     }
 

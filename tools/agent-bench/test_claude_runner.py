@@ -360,6 +360,7 @@ def attempt(path):
 final = attempt(os.environ["FAKE_FINAL"])
 train = attempt(os.environ["FAKE_TRAIN"])
 sys.stdin.read()
+print("stand-in started", file=sys.stderr, flush=True)
 model = sys.argv[sys.argv.index("--model") + 1]
 added = [sys.argv[index + 1] for index, part in enumerate(sys.argv) if part == "--add-dir"]
 text = f"final={final} train={train}"
@@ -464,6 +465,8 @@ class CodeProfileTest(unittest.TestCase):
             arguments.workdir = workdir
             arguments.claude_bin = str(fake)
             arguments.add_dir = [train]
+            # The transcript lies where the sandboxed session may not write, as the harness keeps it.
+            arguments.transcript = flywheel / "session" / "transcript.jsonl"
             (root / "prompt.md").write_text("task")
             (root / "session.sb").write_text(
                 f'(version 1)\n(allow default)\n(deny file-read* file-write* (subpath "{flywheel}"))\n'
@@ -474,6 +477,8 @@ class CodeProfileTest(unittest.TestCase):
             self.assertNotIn("final truth", result["answer"])
             self.assertIn("train=read:training truth", result["answer"])
             self.assertEqual(result["profile"], "code")
+            stderr = (flywheel / "session" / "transcript.jsonl.stderr").read_text()
+            self.assertIn("stand-in started", stderr)
             # Without the sandbox profile's rule the same stand-in reads the file: the denial is the sandbox's.
             (root / "session.sb").write_text("(version 1)\n(allow default)\n")
             self.assertIn("final=read:final truth", runner.run(arguments)["answer"])

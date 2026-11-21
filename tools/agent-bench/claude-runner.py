@@ -691,10 +691,21 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             env=environment,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=stderr,
+            # A pipe, copied here: in the code profile the transcript lies where the sandboxed session may not
+            # write, and the sandbox checks writes to an inherited file too.
+            stderr=subprocess.PIPE,
             start_new_session=True,
         )
-        assert process.stdin is not None and process.stdout is not None
+        assert process.stdin is not None and process.stdout is not None and process.stderr is not None
+        errors = process.stderr
+
+        def copy_stderr() -> None:
+            for chunk in iter(lambda: errors.read1(65536), b""):
+                stderr.write(chunk)
+            errors.close()
+
+        stderr_copier = threading.Thread(target=copy_stderr, daemon=True)
+        stderr_copier.start()
         process.stdin.write(prompt.encode("utf-8"))
         process.stdin.close()
         expired = threading.Event()
@@ -738,6 +749,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             terminate(process)
             finished.set()
             watcher.join()
+            stderr_copier.join(timeout=10)
             reap(started_below)
     timed_out = expired.is_set()
     duration_ms = round((time.monotonic() - started) * 1000)

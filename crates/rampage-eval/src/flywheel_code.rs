@@ -286,29 +286,55 @@ fn find_program(program: &str) -> Result<PathBuf, String> {
 }
 
 /// Runs `command` with its output in `log`, stopping it (and its process group) after `limit`. Whether it
-/// succeeded in time.
+/// succeeded in time. Output goes through pipes this process copies: a sandboxed command may not write the log's
+/// directory, and the sandbox checks writes to an inherited file too.
 fn run_logged(command: &mut Command, log: &Path, limit: Duration) -> Result<bool, String> {
     use std::os::unix::process::CommandExt;
     let file = std::fs::File::create(log).map_err(|error| format!("{}: {error}", log.display()))?;
-    let copy = file.try_clone().map_err(|error| error.to_string())?;
-    command.stdin(Stdio::null()).stdout(copy).stderr(file).process_group(0);
+    let file = std::sync::Arc::new(Mutex::new(file));
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let shown = format!("{command:?}");
     let mut child = command.spawn().map_err(|error| format!("{shown}: {error}"))?;
+    let copy = |mut source: Box<dyn std::io::Read + Send>| {
+        let file = std::sync::Arc::clone(&file);
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let mut buffer = vec![0; 1 << 16];
+            while let Ok(read) = source.read(&mut buffer) {
+                if read == 0 {
+                    break;
+                }
+                let mut file = file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let _ = file.write_all(&buffer[..read]);
+            }
+        })
+    };
+    let mut copiers = Vec::new();
+    if let Some(stdout) = child.stdout.take() {
+        copiers.push(copy(Box::new(stdout)));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        copiers.push(copy(Box::new(stderr)));
+    }
     let started = Instant::now();
-    loop {
+    let succeeded = loop {
         if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            return Ok(status.success());
+            break status.success();
         }
         if started.elapsed() > limit {
             kill_group(child.id());
             let _ = child.wait();
-            let mut text = std::fs::read_to_string(log).unwrap_or_default();
-            text.push_str(&format!("\n[stopped after {} s]\n", limit.as_secs()));
-            let _ = std::fs::write(log, text);
-            return Ok(false);
+            let note = format!("\n[stopped after {} s]\n", limit.as_secs());
+            let mut file = file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _ = std::io::Write::write_all(&mut *file, note.as_bytes());
+            break false;
         }
         std::thread::sleep(Duration::from_millis(500));
+    };
+    for copier in copiers {
+        let _ = copier.join();
     }
+    Ok(succeeded)
 }
 
 fn kill_group(pid: u32) {
@@ -393,7 +419,9 @@ fn sandboxed_names(
 impl Harness<'_> {
     fn cargo(&self, out_dir: &Path, log: &str, args: &[&str], limit: Duration) -> Result<(bool, PathBuf), String> {
         let log = out_dir.join(log);
-        let sandbox = self.sandbox.allowing(&[&self.gate_worktree, &self.gate_target, out_dir]);
+        // The whole gate directory: cargo creates its target directory through a temporary sibling.
+        let gate_dir = self.gate_target.parent().unwrap_or(&self.gate_target);
+        let sandbox = self.sandbox.allowing(&[gate_dir, &self.gate_worktree, out_dir]);
         let mut command = sandbox.command(&out_dir.join("cargo.sb"), &self.cargo)?;
         command
             .args(args)
@@ -1164,6 +1192,7 @@ pub fn run(args: CodeRunArgs) -> Result<ExitCode, String> {
     );
     let gate_dir = canonical(&args.gate_dir.clone().unwrap_or_else(|| flywheel.join("code-runs/gate")));
     let gate_target = gate_dir.join("target");
+    std::fs::create_dir_all(&gate_target).map_err(|error| format!("{}: {error}", gate_target.display()))?;
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
     let uid = output(Command::new("id").arg("-u")).unwrap_or_default().trim().to_owned();
     // What no agent-influenced process may read: the corpus, the flywheel directory (caches, runs, the ledger, this
@@ -1668,6 +1697,23 @@ mod tests {
         {
             assert!(prompt.contains(needle), "{needle}");
         }
+    }
+
+    /// A sandboxed command's output reaches a log the sandbox denies it: the harness copies it through pipes.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_sandboxed_command_logs_into_a_directory_it_cannot_write() {
+        let root = canonical(&std::env::temp_dir()).join(format!("rampage-code-log-{}", std::process::id()));
+        let denied = root.join("flywheel");
+        std::fs::create_dir_all(&denied).unwrap();
+        let sandbox = Sandbox { deny: vec![denied.clone()], ..Sandbox::default() };
+        let mut command = sandbox.command(&root.join("p.sb"), Path::new("/bin/sh")).unwrap();
+        command.args(["-c", "echo out; echo err >&2; : > \"$0\" && echo WROTE"]).arg(denied.join("x"));
+        let log = denied.join("session.log");
+        assert!(run_logged(&mut command, &log, Duration::from_secs(30)).is_ok());
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert!(text.contains("out") && text.contains("err") && !text.contains("WROTE"), "{text}");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
